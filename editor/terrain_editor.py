@@ -2009,7 +2009,7 @@ class TerrainEditorPanel(QWidget):
         if self.editor and hasattr(self.editor, 'save_state'):
             self.editor.state.terrain_data = self.terrain.to_dict()
             self.editor.save_state()
-        self.terrain.clear_texture_stamps()
+        self.terrain.clear_texture_paint()
         if self.editor and hasattr(self.editor, 'state'):
             self.editor.state.terrain_data = self.terrain.to_dict()
         self.terrain_changed.emit()

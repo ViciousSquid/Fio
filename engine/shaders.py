@@ -1450,6 +1450,7 @@ out vec3 FragPos;
 out mediump vec3 Normal;
 out mediump vec3 VertexColor;
 out vec2 TexCoords;
+out vec2 PaintCoords;
 out mediump vec3 SmoothNormal;
 
 uniform mat4 projection;
@@ -1549,6 +1550,7 @@ void main() {
     SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
 
     TexCoords = p.xz / uTiling;
+    PaintCoords = vec2(float(me.x), float(me.y)) / float(max(res, 1));
     FragPos = p;
     gl_Position = projection * view * vec4(p, 1.0);
 }""",
@@ -1578,6 +1580,7 @@ void main() {
     Normal       = aNormal;
     VertexColor  = aColor;
     TexCoords    = aTexCoord;
+    PaintCoords  = aTexCoord;
     SmoothNormal = aSmoothNormal;
     gl_Position  = projection * view * vec4(aPos, 1.0);
 }""",
@@ -1590,6 +1593,7 @@ in highp vec3 FragPos;
 in vec3 Normal;
 in vec3 VertexColor;
 in highp vec2 TexCoords;
+in highp vec2 PaintCoords;
 in vec3 SmoothNormal;
 
 uniform sampler2D texGrass;
@@ -1598,16 +1602,12 @@ uniform sampler2D texSand;
 uniform sampler2D texSnow;
 uniform int use_textures;
 
-// Terrain texture stamps. The CPU packs up to MAX_TERRAIN_STAMP_TEXTURES
-// source images into one atlas so GL 3.3 only needs one additional sampler.
-#define MAX_TERRAIN_STAMPS 32
-#define MAX_TERRAIN_STAMP_TEXTURES 16
-uniform sampler2D terrainStampAtlas;
-uniform int uStampCount;
-uniform vec4 uStampBounds[MAX_TERRAIN_STAMPS]; // minX, minZ, maxX, maxZ
-uniform vec4 uStampParams[MAX_TERRAIN_STAMPS]; // atlas slot, angle, feather, opacity
-uniform int uStampTextureSize;
-
+// Baked terrain material paint. The editor composites source images into a
+// persistent per-chunk RGBA8 terrain map, so this is one terrain lookup rather
+// than a per-fragment loop over independent stamp/decal records.
+uniform sampler2DArray terrainPaintMap;
+uniform int uPaintLayer;
+uniform int uPaintEnabled;
 
 // Height texture layers. uHeightRange is the terrain's world-space height
 // range; uLayerHeights are the sand->grass, grass->rock and rock->snow
@@ -1697,17 +1697,6 @@ vec3 paletteAt(float t) {
 // Index of the colour band / terrace a height belongs to. Terrace flats sit
 // exactly on multiples of the band height; the offset keeps each riser with
 // the level below it until just under the lip, where the contour line runs.
-highp vec4 sampleTerrainStamp(int slot, vec2 uv) {
-    float cells = 4.0;
-    float cell = 1.0 / cells;
-    float s = float(slot);
-    vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
-    vec2 localUv = fract(uv);
-    vec2 halfTexel = vec2(0.5 / float(uStampTextureSize));
-    localUv = clamp(localUv, halfTexel, vec2(1.0) - halfTexel);
-    return texture(terrainStampAtlas, cellOrigin + localUv * cell);
-}
-
 float bandIndex(highp float y) {
     return floor(y / max(uBandHeight, 1e-3) + 0.12);
 }
@@ -1772,45 +1761,15 @@ void main() {
         texColor = VertexColor * 1.1;
     }
 
-    // ---- Terrain texture stamps --------------------------------------
-    // Stamps are painted with the terrain sculpt brush. New editor stamps use
-    // square authored bounds and therefore render as circular brushes; the
-    // feather parameter softens the edge. The terrain remains a heightfield.
-    for (int i = 0; i < MAX_TERRAIN_STAMPS; ++i) {
-        if (i >= uStampCount) break;
-        vec4 b = uStampBounds[i];
-        vec2 center = (b.xy + b.zw) * 0.5;
-        vec2 halfSize = max((b.zw - b.xy) * 0.5, vec2(1e-4));
-        vec2 delta = FragPos.xz - center;
-        vec2 normDelta = delta / halfSize;
-        float radial = length(normDelta);
-        if (radial > 1.0) continue;
-
-        vec2 uv = normDelta * 0.5 + vec2(0.5);
-        float angle = uStampParams[i].y;
-        if (abs(angle) > 1e-5) {
-            vec2 q = uv - vec2(0.5);
-            float s = sin(angle);
-            float c = cos(angle);
-            uv = vec2(q.x * c - q.y * s, q.x * s + q.y * c) + vec2(0.5);
-        }
-
-        float feather = max(uStampParams[i].z, 0.0);
-        float edgeMask = feather > 0.0
-            ? 1.0 - smoothstep(
-                max(0.0, 1.0 - feather / max(min(halfSize.x, halfSize.y), 1e-3)),
-                1.0,
-                radial)
-            : 1.0;
-
-        int slot = int(uStampParams[i].x + 0.5);
-        if (slot < 0 || slot >= MAX_TERRAIN_STAMP_TEXTURES) continue;
-        vec4 stamp = sampleTerrainStamp(slot, uv);
-        float amount = clamp(uStampParams[i].w * edgeMask * stamp.a, 0.0, 1.0);
-        texColor = mix(texColor, stamp.rgb * 1.1, amount);
+        // ---- Baked terrain material paint -------------------------------
+    if (uPaintEnabled == 1) {
+        vec4 paint = texture(
+            terrainPaintMap, vec3(clamp(PaintCoords, 0.0, 1.0),
+                                  float(uPaintLayer)));
+        texColor = mix(texColor, paint.rgb * 1.1, paint.a);
     }
 
-    // ---- Surface details ---------------------------------------------
+// ---- Surface details ---------------------------------------------
     highp vec2 cellCoord = (FragPos.xz - uGridOrigin) / max(uGridSize, 1e-3);
     if (uCellVariation > 0.0) {
         float jitter = hash(floor(cellCoord) + vec2(0.37, 0.71)) - 0.5;

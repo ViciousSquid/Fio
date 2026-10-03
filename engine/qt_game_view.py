@@ -2921,7 +2921,7 @@ class QtGameView(QOpenGLWidget):
                 if hasattr(self.editor, 'save_state'):
                     self.editor.save_state()
 
-            added = terrain.stamp_texture_at(
+            added = terrain.paint_texture_at(
                 wx, wz, radius, texture_name,
                 feather=self.terrain_sculpt_feather,
             )

@@ -77,34 +77,33 @@ def test_terrain_csg_requires_plain_aabb_brush():
 
 
 
-def test_terrain_texture_stamp_uses_sculpt_brush_footprint():
-    terrain = Terrain(seed=7)
+def test_terrain_texture_paint_is_part_of_terrain_data():
+    terrain = _flat_terrain()
+    source = np.zeros((4, 4, 4), dtype=np.uint8)
+    source[..., :3] = (180, 80, 40)
+    source[..., 3] = 255
+    terrain._load_texture_rgba = lambda _path: source
 
-    assert terrain.stamp_texture_at(
-        100.0, -40.0, 16.0,
-        "assets/textures/road.png",
-        feather=0.25,
-    )
-    assert terrain.texture_stamps == [{
-        "bounds": [84.0, -56.0, 116.0, -24.0],
-        "texture": "assets/textures/road.png",
-        "angle": 0.0,
-        "feather": 4.0,
-        "opacity": 1.0,
-    }]
+    assert terrain.paint_texture_at(
+        0.0, 0.0, 16.0, "synthetic", feather=0.25)
+
+    paint = terrain.texture_paint_maps[(0, 0)]
+    assert tuple(paint[64, 64]) == (180, 80, 40, 255)
 
     data = terrain.to_dict()
-    assert data["texture_stamps"] == terrain.texture_stamps
+    assert data["texture_paint_resolution"] == terrain.TERRAIN_PAINT_RESOLUTION
+    assert data["texture_paint"][0]["coord"] == [0, 0]
+    assert "texture_stamps" not in data
 
-    restored = Terrain(seed=7)
+    restored = _flat_terrain()
     restored.from_dict(data)
-    assert restored.texture_stamps == terrain.texture_stamps
+    np.testing.assert_array_equal(restored.texture_paint_maps[(0, 0)], paint)
 
+def test_terrain_texture_paint_rejects_invalid_brush():
+    terrain = _flat_terrain()
 
-def test_terrain_texture_stamp_rejects_degenerate_rectangle():
-    terrain = Terrain(seed=7)
+    assert not terrain.paint_texture_at(
+        0.0, 0.0, 0.0, "assets/textures/road.png")
+    assert not terrain.paint_texture_at(
+        0.0, 0.0, 16.0, "")
 
-    assert not terrain.add_texture_stamp(
-        [0.0, 0.0, 0.0, 32.0], "assets/textures/road.png")
-    assert not terrain.add_texture_stamp(
-        [0.0, 0.0, 32.0, 32.0], "")

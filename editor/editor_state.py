@@ -703,31 +703,23 @@ class EditorState:
                 list(cut) for cut in self.terrain_data.get('csg_subtractions', [])
                 if isinstance(cut, (list, tuple)) and len(cut) == 6
             ]
-        terrain_texture_stamps = []
+        terrain_texture_paint = []
         if isinstance(self.terrain_data, dict):
-            for stamp in self.terrain_data.get('texture_stamps', []):
-                if not isinstance(stamp, dict):
-                    continue
-                bounds = stamp.get('bounds', [])
-                texture = str(stamp.get('texture', ''))
-                if len(bounds) != 4 or not texture:
-                    continue
-                try:
-                    terrain_texture_stamps.append({
-                        'bounds': [float(v) for v in bounds],
-                        'texture': texture,
-                        'angle': float(stamp.get('angle', 0.0)),
-                        'feather': float(stamp.get('feather', 0.0)),
-                        'opacity': float(stamp.get('opacity', 1.0)),
-                    })
-                except (TypeError, ValueError):
-                    continue
+            entries = self.terrain_data.get('texture_paint', [])
+            if isinstance(entries, list):
+                terrain_texture_paint = [
+                    dict(entry) for entry in entries
+                    if isinstance(entry, dict)
+                    and len(entry.get('coord', [])) == 2
+                    and entry.get('data')
+                ]
+
         return json.dumps({
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
-            'terrain_texture_stamps': terrain_texture_stamps,
+            'terrain_texture_paint': terrain_texture_paint,
         }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
@@ -865,12 +857,12 @@ class EditorState:
             else:
                 self.terrain_data.pop('csg_subtractions', None)
 
-        if 'terrain_texture_stamps' in state and isinstance(self.terrain_data, dict):
-            stamps = state.get('terrain_texture_stamps') or []
-            if stamps:
-                self.terrain_data['texture_stamps'] = [dict(stamp) for stamp in stamps]
+        if 'terrain_texture_paint' in state and isinstance(self.terrain_data, dict):
+            paint = state.get('terrain_texture_paint') or []
+            if paint:
+                self.terrain_data['texture_paint'] = [dict(entry) for entry in paint]
             else:
-                self.terrain_data.pop('texture_stamps', None)
+                self.terrain_data.pop('texture_paint', None)
 
     def undo(self):
         """Step back one operation, making the current scene redoable.

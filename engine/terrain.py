@@ -350,18 +350,18 @@ class Terrain:
     UPDATE_BUDGET_MS = 4.0
     #: Largest colour gradient the heightfield shader holds (MAX_GRADIENT_STOPS).
     MAX_GRADIENT_STOPS = 32
-    MAX_TERRAIN_STAMPS = shaders.MAX_TERRAIN_STAMPS
-    MAX_TERRAIN_STAMP_TEXTURES = shaders.MAX_TERRAIN_STAMP_TEXTURES
-    TERRAIN_STAMP_ATLAS_CELLS = 4
-    TERRAIN_STAMP_ATLAS_CELL_SIZE = 256
+    #: Fixed per-chunk albedo paint resolution. Paint is baked into the terrain
+    #: material, rather than retained as a render-time stamp/decal list.
+    TERRAIN_PAINT_RESOLUTION = 128
+    #: Texture layers per paint-map page; clamped to the driver's limit.
+    PAINT_PAGE_LAYERS = 512
     #: Texture layers per height-grid page; clamped to the driver's limit.
     HEIGHT_PAGE_LAYERS = 512
     #: Every uniform the terrain programs are driven through.
     _UNIFORM_NAMES = (
         'projection', 'view', 'active_lights', 'use_textures', 'lod_level',
         'texGrass', 'texRock', 'texSand', 'texSnow',
-        'terrainStampAtlas', 'uStampCount', 'uStampBounds',
-        'uStampParams', 'uStampTextureSize',
+        'terrainPaintMap', 'uPaintLayer', 'uPaintEnabled',
         'uHeights', 'uChunkI', 'uChunkX', 'uChunkY', 'uTiling', 'uFlatMode',
         'uGradCount', 'uGradH', 'uGradC', 'uGradW', 'uGradD',
     ) + terrain_style.UNIFORM_NAMES
@@ -414,6 +414,16 @@ class Terrain:
         self._height_pages: List[int] = []
         self._page_layers = 0
         self._gpu_version = np.zeros(0, dtype=np.int64)
+        # Baked terrain material paint. Each resident chunk owns one RGBA8
+        # albedo map at TERRAIN_PAINT_RESOLUTION². The source image is sampled
+        # once by the editor and the resulting colour/coverage becomes part
+        # of the terrain data itself.
+        self.texture_paint_maps: Dict[Tuple[int, int], np.ndarray] = {}
+        self._paint_map_versions: Dict[Tuple[int, int], int] = {}
+        self._paint_version_counter = 0
+        self._paint_pages: List[int] = []
+        self._paint_page_layers = 0
+        self._paint_gpu_version = np.zeros(0, dtype=np.int64)
         self._empty_vao = 0
         self._gradient_warned = False
         # Grass is a separate GL 3.3 instanced pass. The CPU scatters tufts,
@@ -471,11 +481,7 @@ class Terrain:
         # authoritative representation: a cut lowers the surface to the cutter's
         # bottom wherever the current surface intersects the cutter volume.
         self.csg_subtractions: List[List[float]] = []
-        # Persistent rectangular terrain texture stamps.
-        self.texture_stamps: List[Dict[str, object]] = []
-        self._stamp_atlas_texture = 0
-        self._stamp_atlas_dirty = True
-        self._stamp_texture_slots: Dict[str, int] = {}
+
         # Heightmap overlay
         self.heightmap_data: Optional[np.ndarray] = None  # 2D float32, 0..1
         self.heightmap_strength: float = 100.0
@@ -1006,7 +1012,7 @@ class Terrain:
         if len(getattr(self, '_grass_count', ())) >= cap:
             return
         for name in ('_grass_vao', '_grass_vbo', '_grass_count', '_gpu_version',
-                     '_block_vao', '_block_vbo', '_block_count'):
+                     '_paint_gpu_version', '_block_vao', '_block_vbo', '_block_count'):
             old = getattr(self, name, np.zeros(0, dtype=np.int64))
             new = np.zeros(cap, dtype=np.int64)
             new[:len(old)] = old
@@ -1030,6 +1036,7 @@ class Terrain:
                 gl.glDeleteBuffers(1, [int(self._block_vbo[slot])])
             self._block_vao[slot] = self._block_vbo[slot] = 0
             self._block_count[slot] = 0
+            self._paint_gpu_version[slot] = 0
 
     def _get_heights_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
         """Surface heights including any terracing."""
@@ -1321,8 +1328,9 @@ class Terrain:
         gl.glUniform1fv(u['uGradW'], limit, W)
         gl.glUniform3fv(u['uGradD'], limit, D)
 
-    def draw_heightfield_slots(self, u, slots, unit, lod_level_loc=-1):
-        """Draw built *slots* from their height grids (the program is current)."""
+    def draw_heightfield_slots(self, u, slots, unit, lod_level_loc=-1,
+                               paint_unit=None):
+        """Draw built terrain chunks with their baked material paint."""
         table = self.table
         stale = slots[self._gpu_version[slots] != table.version[slots]]
         for slot in stale:
@@ -1332,6 +1340,7 @@ class Terrain:
         gl.glBindVertexArray(self._empty_vao)
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
         bound_page = -1
+        bound_paint_page = -1
         triangles = 0
         for slot in slots:
             slot = int(slot)
@@ -1339,6 +1348,25 @@ class Terrain:
             if page != bound_page:
                 gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
                 bound_page = page
+            coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
+            paint_version = self._paint_map_versions.get(coord, 0)
+            if paint_unit is not None:
+                if paint_version:
+                    if self._paint_gpu_version[slot] != paint_version:
+                        self._upload_paint_chunk(slot)
+                    paint_page = slot // self._paint_page_layers
+                    if paint_page != bound_paint_page:
+                        gl.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
+                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
+                                         self._paint_pages[paint_page])
+                        bound_paint_page = paint_page
+                        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+                    gl.glUniform1i(u['uPaintEnabled'], 1)
+                    gl.glUniform1i(u['uPaintLayer'],
+                                   int(slot) % self._paint_page_layers)
+                else:
+                    gl.glUniform1i(u['uPaintEnabled'], 0)
+
             (res, layer), cx, cy = self.chunk_uniforms(slot)
             if lod_level_loc != -1:
                 gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
@@ -1690,16 +1718,12 @@ class Terrain:
         gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
         gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)
         gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(u['texSnow'],  3)
-        stamp_texture_unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
-        height_texture_unit = stamp_texture_unit + 1
-        if self.texture_stamps and self._stamp_atlas_dirty:
-            self._rebuild_stamp_atlas()
-        if self.texture_stamps and self._stamp_atlas_texture:
-            self._upload_stamp_uniforms(u, stamp_texture_unit)
-        else:
-            if u.get('uStampCount', -1) != -1:
-                gl.glUniform1i(u['uStampCount'], 0)
+        height_texture_unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
+        paint_texture_unit = height_texture_unit + 1
         self._upload_appearance_uniforms(u)
+        loc = u.get('terrainPaintMap', -1)
+        if loc != -1:
+            gl.glUniform1i(loc, paint_texture_unit)
         
         # Force textures off if flat_mode is enabled or textures aren't loaded
         textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
@@ -1785,7 +1809,7 @@ class Terrain:
         else:
             self.set_heightfield_frame_uniforms(u, unit)
             self.total_triangles = self.draw_heightfield_slots(
-                u, drawn, unit, lod_level_loc)
+                u, drawn, unit, lod_level_loc, paint_texture_unit)
         self.visible_chunks = int(len(drawn))
         #: The slots drawn this frame, in draw order (tests, Debug Tables).
         self.drawn_slots = drawn
@@ -2297,171 +2321,266 @@ class Terrain:
         bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
         return top * (1 - fy) + bot * fy
 
-    def add_texture_stamp(self, bounds, texture, angle=0.0,
-                          feather=0.0, opacity=1.0) -> bool:
-        """Add a feathered terrain texture stamp for the supplied footprint."""
+    def _touch_texture_paint(self, coord):
+        """Bump the version for one baked terrain paint chunk."""
+        self._paint_version_counter += 1
+        self._paint_map_versions[tuple(coord)] = self._paint_version_counter
+
+    @staticmethod
+    def _load_texture_rgba(path):
+        """Load a paint source into a compact RGBA8 NumPy image."""
         try:
-            values = [float(v) for v in bounds]
+            from PyQt5.QtGui import QImage
+            image = QImage(path)
+            if image.isNull():
+                return None
+            image = image.convertToFormat(QImage.Format_RGBA8888)
+            width = int(image.width())
+            height = int(image.height())
+            stride = int(image.bytesPerLine())
+            bits = image.bits()
+            bits.setsize(stride * height)
+            raw = np.frombuffer(bits, dtype=np.uint8).reshape(height, stride)
+            return raw[:, :width * 4].reshape(height, width, 4).copy()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _sample_paint_image(image, uv_x, uv_z):
+        """Vectorized bilinear RGBA sample for a normalized stamp footprint."""
+        h, w = image.shape[:2]
+        px = np.clip(uv_x, 0.0, 1.0) * max(w - 1, 0)
+        py = (1.0 - np.clip(uv_z, 0.0, 1.0)) * max(h - 1, 0)
+        x0 = np.floor(px).astype(np.int32)
+        y0 = np.floor(py).astype(np.int32)
+        x1 = np.minimum(x0 + 1, max(w - 1, 0))
+        y1 = np.minimum(y0 + 1, max(h - 1, 0))
+        fx = (px - x0)[..., None]
+        fy = (py - y0)[..., None]
+        c00 = image[y0, x0].astype(np.float32)
+        c10 = image[y0, x1].astype(np.float32)
+        c01 = image[y1, x0].astype(np.float32)
+        c11 = image[y1, x1].astype(np.float32)
+        top = c00 * (1.0 - fx) + c10 * fx
+        bottom = c01 * (1.0 - fx) + c11 * fx
+        return (top * (1.0 - fy) + bottom * fy) / 255.0
+
+    def _bake_texture_rect(self, bounds, texture, angle=0.0,
+                           feather=0.0, opacity=1.0):
+        """Bake one source image directly into terrain's per-chunk albedo."""
+        try:
+            min_x, min_z, max_x, max_z = [float(v) for v in bounds]
         except (TypeError, ValueError):
             return False
-        if len(values) != 4:
+        if max_x <= min_x or max_z <= min_z:
             return False
-        min_x, min_z, max_x, max_z = values
-        if max_x < min_x:
-            min_x, max_x = max_x, min_x
-        if max_z < min_z:
-            min_z, max_z = max_z, min_z
-        if max_x - min_x <= 1e-6 or max_z - min_z <= 1e-6:
+        image = self._load_texture_rgba(texture)
+        if image is None:
             return False
-        if not texture or len(self.texture_stamps) >= self.MAX_TERRAIN_STAMPS:
+
+        min_cx = int(math.floor((min_x - self.offset_x) / self.chunk_size))
+        max_cx = int(math.floor((max_x - self.offset_x) / self.chunk_size))
+        min_cz = int(math.floor((min_z - self.offset_z) / self.chunk_size))
+        max_cz = int(math.floor((max_z - self.offset_z) / self.chunk_size))
+        feather_world = max(0.0, float(feather))
+        opacity = float(np.clip(opacity, 0.0, 1.0))
+        angle = float(angle)
+        ca, sa = math.cos(angle), math.sin(angle)
+        stamp_cx = (min_x + max_x) * 0.5
+        stamp_cz = (min_z + max_z) * 0.5
+        half_x = max((max_x - min_x) * 0.5, 1e-6)
+        half_z = max((max_z - min_z) * 0.5, 1e-6)
+        min_radius = max(min(half_x, half_z), 1e-6)
+        edge_inner = float(np.clip(
+            1.0 - feather_world / min_radius, 0.0, 1.0))
+
+        res = self.TERRAIN_PAINT_RESOLUTION
+        cell = self.chunk_size / float(res)
+        changed = False
+        for cx in range(min_cx, max_cx + 1):
+            chunk_min_x = self.offset_x + cx * self.chunk_size
+            ix0 = max(0, int(math.floor((min_x - chunk_min_x) / cell)) - 1)
+            ix1 = min(res - 1, int(math.floor((max_x - chunk_min_x) / cell)) + 1)
+            if ix1 < ix0:
+                continue
+            for cz in range(min_cz, max_cz + 1):
+                chunk_min_z = self.offset_z + cz * self.chunk_size
+                iz0 = max(0, int(math.floor((min_z - chunk_min_z) / cell)) - 1)
+                iz1 = min(res - 1, int(math.floor((max_z - chunk_min_z) / cell)) + 1)
+                if iz1 < iz0:
+                    continue
+
+                xs = chunk_min_x + (np.arange(ix0, ix1 + 1, dtype=np.float32) + 0.5) * cell
+                zs = chunk_min_z + (np.arange(iz0, iz1 + 1, dtype=np.float32) + 0.5) * cell
+                wx, wz = np.meshgrid(xs, zs, indexing='ij')
+                dx = (wx - stamp_cx) / half_x
+                dz = (wz - stamp_cz) / half_z
+                if abs(angle) > 1e-6:
+                    qx = dx * ca + dz * sa
+                    qz = -dx * sa + dz * ca
+                else:
+                    qx, qz = dx, dz
+                radial = np.sqrt(qx * qx + qz * qz)
+                inside = radial <= 1.0
+                if not np.any(inside):
+                    continue
+
+                edge = np.ones_like(radial, dtype=np.float32)
+                if feather_world > 0.0:
+                    edge = 1.0 - np.clip(
+                        (radial - edge_inner) / max(1.0 - edge_inner, 1e-6),
+                        0.0, 1.0)
+                    edge = edge * edge * (3.0 - 2.0 * edge)
+                amount = edge * opacity * inside.astype(np.float32)
+                if not np.any(amount > 1e-6):
+                    continue
+
+                uv_x = 0.5 + qx * 0.5
+                uv_z = 0.5 + qz * 0.5
+                sampled = self._sample_paint_image(image, uv_x, uv_z)
+                src_a = sampled[..., 3] * amount
+                if not np.any(src_a > 1e-6):
+                    continue
+
+                key = (int(cx), int(cz))
+                paint = self.texture_paint_maps.get(key)
+                if paint is None:
+                    paint = np.zeros((res, res, 4), dtype=np.uint8)
+                    self.texture_paint_maps[key] = paint
+                dst = paint[ix0:ix1 + 1, iz0:iz1 + 1].astype(np.float32) / 255.0
+                dst_a = dst[..., 3]
+                out_a = src_a + dst_a * (1.0 - src_a)
+                out_rgb = np.zeros_like(dst[..., :3])
+                valid = out_a > 1e-6
+                out_rgb[valid] = (
+                    sampled[..., :3][valid] * src_a[valid, None]
+                    + dst[..., :3][valid] * dst_a[valid, None] * (1.0 - src_a[valid, None])
+                ) / out_a[valid, None]
+                dst[..., :3] = out_rgb
+                dst[..., 3] = out_a
+                paint[ix0:ix1 + 1, iz0:iz1 + 1] = np.clip(
+                    dst * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                self._touch_texture_paint(key)
+                changed = True
+        return changed
+
+    def paint_texture_at(self, world_x, world_z, radius, texture,
+                         feather=0.25, opacity=1.0, angle=0.0):
+        """Bake the selected texture into the terrain under the sculpt brush."""
+        radius = float(radius)
+        if radius <= 0.0 or not str(texture).strip():
             return False
-        record = {
-            'bounds': [min_x, min_z, max_x, max_z],
-            'texture': str(texture).replace('\\', '/'),
-            'angle': float(angle),
-            'feather': max(0.0, float(feather)),
-            'opacity': float(np.clip(opacity, 0.0, 1.0)),
-        }
-        if record in self.texture_stamps:
-            return False
-        self.texture_stamps.append(record)
-        self._stamp_atlas_dirty = True
-        return True
+        radius = abs(radius)
+        return self._bake_texture_rect(
+            (float(world_x) - radius, float(world_z) - radius,
+             float(world_x) + radius, float(world_z) + radius),
+            str(texture), angle=float(angle),
+            feather=radius * float(np.clip(feather, 0.0, 1.0)),
+            opacity=opacity)
 
     def stamp_texture_at(self, world_x, world_z, radius, texture,
-                         feather=0.25, opacity=1.0, angle=0.0) -> bool:
-        """Paint one circular terrain texture stamp with the sculpt brush."""
-        try:
-            world_x = float(world_x)
-            world_z = float(world_z)
-            radius = float(radius)
-            feather = float(feather)
-        except (TypeError, ValueError):
-            return False
-        if radius <= 1e-6:
-            return False
-        feather = float(np.clip(feather, 0.0, 1.0))
-        return self.add_texture_stamp(
-            [world_x - radius, world_z - radius,
-             world_x + radius, world_z + radius],
-            texture,
-            angle=angle,
-            feather=radius * feather,
-            opacity=opacity,
-        )
+                         feather=0.25, opacity=1.0, angle=0.0):
+        """Compatibility name: this now bakes paint into the terrain itself."""
+        return self.paint_texture_at(
+            world_x, world_z, radius, texture,
+            feather=feather, opacity=opacity, angle=angle)
+
+    def clear_texture_paint(self):
+        """Erase all baked terrain texture paint."""
+        self.texture_paint_maps = {}
+        self._paint_map_versions = {}
+        self._paint_version_counter += 1
+        self._paint_gpu_version[:] = 0
 
     def clear_texture_stamps(self):
-        """Remove all terrain texture stamps."""
-        if not self.texture_stamps:
+        """Compatibility alias for the old stamp tool name."""
+        self.clear_texture_paint()
+
+    def _ensure_paint_page(self, page: int) -> int:
+        if not self._paint_page_layers:
+            limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
+            self._paint_page_layers = max(1, min(self.PAINT_PAGE_LAYERS, limit))
+        while len(self._paint_pages) <= page:
+            tex = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+            gl.glTexImage3D(
+                gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8,
+                self.TERRAIN_PAINT_RESOLUTION, self.TERRAIN_PAINT_RESOLUTION,
+                self._paint_page_layers, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            for pname, value in (
+                (gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
+            self._paint_pages.append(tex)
+        return self._paint_pages[page]
+
+    def _upload_paint_chunk(self, slot: int):
+        table = self.table
+        self._sync_gl_columns()
+        coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
+        paint = self.texture_paint_maps.get(coord)
+        if paint is None:
+            self._paint_gpu_version[slot] = 0
             return
-        self.texture_stamps = []
-        self._stamp_atlas_dirty = True
+        if not self._paint_page_layers:
+            self._ensure_paint_page(0)
+        page, layer = divmod(int(slot), self._paint_page_layers)
+        tex = self._ensure_paint_page(page)
+        data = np.ascontiguousarray(paint, dtype=np.uint8)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+        gl.glTexSubImage3D(
+            gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
+            self.TERRAIN_PAINT_RESOLUTION, self.TERRAIN_PAINT_RESOLUTION, 1,
+            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
+        self._paint_gpu_version[slot] = self._paint_map_versions.get(coord, 0)
 
-    def _stamp_texture_path(self, path: str) -> str:
-        path = str(path)
-        if os.path.isabs(path) and os.path.exists(path):
-            return path
-        if os.path.exists(path):
-            return path
-        return os.path.normpath(os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), '..', path))
-
-    def _rebuild_stamp_atlas(self):
-        """Pack unique stamp textures into one GL 4x4 atlas."""
-        from PyQt5.QtCore import Qt
-        from PyQt5.QtGui import QImage, QPainter
-
-        unique = []
-        for stamp in self.texture_stamps:
-            path = str(stamp.get('texture', ''))
-            if path and path not in unique:
-                unique.append(path)
-            if len(unique) >= self.MAX_TERRAIN_STAMP_TEXTURES:
-                break
-
-        if not unique:
-            self._stamp_texture_slots = {}
-            self._stamp_atlas_dirty = False
-            return
-
-        cell = self.TERRAIN_STAMP_ATLAS_CELL_SIZE
-        cells = self.TERRAIN_STAMP_ATLAS_CELLS
-        atlas_size = cells * cell
-        atlas = QImage(atlas_size, atlas_size, QImage.Format_RGBA8888)
-        atlas.fill(0)
-
-        slots = {}
-        painter = QPainter(atlas)
-        for slot, path in enumerate(unique):
-            image = QImage(self._stamp_texture_path(path))
-            if image.isNull():
+    def _serialize_texture_paint(self):
+        import base64, zlib
+        entries = []
+        for (cx, cz), paint in sorted(self.texture_paint_maps.items()):
+            if paint is None or paint.shape != (
+                    self.TERRAIN_PAINT_RESOLUTION,
+                    self.TERRAIN_PAINT_RESOLUTION, 4):
                 continue
-            image = image.convertToFormat(QImage.Format_RGBA8888)
-            image = image.scaled(
-                cell, cell, Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation)
-            x = max(0, (image.width() - cell) // 2)
-            y = max(0, (image.height() - cell) // 2)
-            image = image.copy(x, y, cell, cell)
-            atlas_x = (slot % cells) * cell
-            atlas_y = (slot // cells) * cell
-            painter.drawImage(atlas_x, atlas_y, image)
-            slots[path] = slot
-        painter.end()
-
-        if not self._stamp_atlas_texture:
-            self._stamp_atlas_texture = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._stamp_atlas_texture)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        data = atlas.constBits()
-        try:
-            nbytes = atlas.sizeInBytes()
-        except AttributeError:
-            nbytes = atlas.byteCount()
-        gl.glTexImage2D(
-            gl.GL_TEXTURE_2D, 0, gl.GL_RGBA,
-            atlas_size, atlas_size, 0,
-            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data.asstring(nbytes))
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        self._stamp_texture_slots = slots
-        self._stamp_atlas_dirty = False
-
-    def _upload_stamp_uniforms(self, u, texture_unit):
-        """Upload authored stamp rectangles for the current terrain frame."""
-        bounds = np.zeros((self.MAX_TERRAIN_STAMPS, 4), dtype=np.float32)
-        params = np.zeros((self.MAX_TERRAIN_STAMPS, 4), dtype=np.float32)
-        valid = 0
-        for stamp in self.texture_stamps[:self.MAX_TERRAIN_STAMPS]:
-            slot = self._stamp_texture_slots.get(str(stamp.get('texture', '')), -1)
-            if slot < 0 or valid >= self.MAX_TERRAIN_STAMPS:
+            if not np.any(paint[..., 3]):
                 continue
-            b = stamp.get('bounds', [])
-            if len(b) != 4:
-                continue
-            bounds[valid] = np.asarray(b, dtype=np.float32)
-            params[valid] = (
-                float(slot),
-                float(stamp.get('angle', 0.0)),
-                float(stamp.get('feather', 0.0)),
-                float(stamp.get('opacity', 1.0)))
-            valid += 1
+            payload = zlib.compress(np.ascontiguousarray(paint).tobytes(), 6)
+            entries.append({
+                'coord': [int(cx), int(cz)],
+                'data': base64.b64encode(payload).decode('ascii'),
+            })
+        return entries
 
-        loc = u.get('uStampCount', -1)
-        if loc != -1: gl.glUniform1i(loc, valid)
-        loc = u.get('uStampBounds', -1)
-        if loc != -1: gl.glUniform4fv(loc, self.MAX_TERRAIN_STAMPS, bounds)
-        loc = u.get('uStampParams', -1)
-        if loc != -1: gl.glUniform4fv(loc, self.MAX_TERRAIN_STAMPS, params)
-        loc = u.get('uStampTextureSize', -1)
-        if loc != -1: gl.glUniform1i(loc, self.TERRAIN_STAMP_ATLAS_CELL_SIZE)
-        loc = u.get('terrainStampAtlas', -1)
-        if loc != -1:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + texture_unit)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._stamp_atlas_texture)
-            gl.glUniform1i(loc, texture_unit)
+    def _restore_texture_paint(self, entries):
+        import base64, zlib
+        self.texture_paint_maps = {}
+        self._paint_map_versions = {}
+        self._paint_version_counter = 0
+        res = self.TERRAIN_PAINT_RESOLUTION
+        expected = res * res * 4
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            coord = entry.get('coord', [])
+            payload = entry.get('data', '')
+            if len(coord) != 2 or not payload:
+                continue
+            try:
+                raw = zlib.decompress(base64.b64decode(payload))
+                if len(raw) != expected:
+                    continue
+                paint = np.frombuffer(raw, dtype=np.uint8).copy().reshape(
+                    res, res, 4)
+                key = (int(coord[0]), int(coord[1]))
+                self.texture_paint_maps[key] = paint
+                self._touch_texture_paint(key)
+            except (TypeError, ValueError, OSError, zlib.error):
+                continue
 
     def cleanup(self):
         self._free_gl(self.table.clear())
@@ -2472,12 +2591,13 @@ class Terrain:
                 pass
             self.block_program = 0
             self.block_uniforms = {}
-        if self._stamp_atlas_texture:
+        if self._paint_pages:
             try:
-                gl.glDeleteTextures(1, [self._stamp_atlas_texture])
+                gl.glDeleteTextures(len(self._paint_pages), self._paint_pages)
             except Exception:
                 pass
-            self._stamp_atlas_texture = 0
+            self._paint_pages = []
+            self._paint_page_layers = 0
         if self._height_pages:
             gl.glDeleteTextures(len(self._height_pages), self._height_pages)
             self._height_pages = []
@@ -2485,6 +2605,7 @@ class Terrain:
             gl.glDeleteVertexArrays(1, [self._empty_vao])
             self._empty_vao = 0
         self._gpu_version[:] = 0
+        self._paint_gpu_version[:] = 0
     
     def to_dict(self) -> dict:
         # While the editor is previewing a Big World fill the live bounds are
@@ -2531,29 +2652,10 @@ class Terrain:
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
         if self.csg_subtractions:
             data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
-        if self.texture_stamps:
-            data['texture_stamps'] = [dict(stamp) for stamp in self.texture_stamps]
-        # Terrain texture stamps
-        self.texture_stamps = []
-        for stamp in data.get('texture_stamps', []):
-            if not isinstance(stamp, dict):
-                continue
-            texture = str(stamp.get('texture', '')).replace('\\', '/').strip()
-            bounds = stamp.get('bounds', [])
-            if len(bounds) != 4 or not texture:
-                continue
-            try:
-                b = [float(v) for v in bounds]
-                self.add_texture_stamp(
-                    b,
-                    texture,
-                    angle=float(stamp.get('angle', 0.0)),
-                    feather=float(stamp.get('feather', 0.0)),
-                    opacity=float(stamp.get('opacity', 1.0)),
-                )
-            except (TypeError, ValueError):
-                continue
-        self._stamp_atlas_dirty = True
+        texture_paint = self._serialize_texture_paint()
+        if texture_paint:
+            data['texture_paint_resolution'] = self.TERRAIN_PAINT_RESOLUTION
+            data['texture_paint'] = texture_paint
 
         # Heightmap settings (image data is NOT saved — only the path is
         # stored by the editor so the user can re-load it)
@@ -2612,6 +2714,27 @@ class Terrain:
         if 'custom_biome' in data:
             self.biome = BiomeConfig.from_dict(data['custom_biome'])
             self.biome.name = biome_display_name(self.biome.name)
+        # Baked terrain texture paint.
+        self._restore_texture_paint(data.get('texture_paint', []))
+        # Migrate old render-time stamps once. The source asset is sampled now
+        # and then discarded; the saved terrain owns the resulting pixels.
+        for stamp in data.get('texture_stamps', []):
+            if not isinstance(stamp, dict):
+                continue
+            texture = str(stamp.get('texture', '')).replace('\\', '/').strip()
+            bounds = stamp.get('bounds', [])
+            if len(bounds) != 4 or not texture:
+                continue
+            try:
+                self._bake_texture_rect(
+                    [float(v) for v in bounds],
+                    texture,
+                    angle=float(stamp.get('angle', 0.0)),
+                    feather=float(stamp.get('feather', 0.0)),
+                    opacity=float(stamp.get('opacity', 1.0)))
+            except (TypeError, ValueError):
+                continue
+
         # Sculpt offsets
         self.sculpt_offsets = {}
         self._touch_sculpt()
