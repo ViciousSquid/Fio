@@ -43,6 +43,25 @@ class _Subscriber:
 # The journal
 # ---------------------------------------------------------------------------
 
+
+
+def test_moved_position_payload_survives_each_subscriber_drain():
+    from engine.change_journal import ChangeJournal, MOVED
+
+    class _Sub:
+        pass
+
+    journal = ChangeJournal()
+    a, b = _Sub(), _Sub()
+    journal.subscribe(a)
+    journal.subscribe(b)
+    thing = object()
+    journal.record(thing, MOVED, (1.25, 2.5, 3.75))
+
+    assert journal.drain(a) == {id(thing): MOVED}
+    assert journal.drain_positions(a) == {id(thing): (1.25, 2.5, 3.75)}
+    assert journal.drain(b) == {id(thing): MOVED}
+    assert journal.drain_positions(b) == {id(thing): (1.25, 2.5, 3.75)}
 def test_each_subscriber_sees_every_change_once():
     journal = ChangeJournal()
     a, b = _Subscriber(), _Subscriber()
