@@ -870,7 +870,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">list</b>{sep}<b style="color:orange;">ents</b>{sep}<b style="color:orange;">ls</b>{sep}<b style="color:orange;">entities</b> — List all entities<br>
 <b style="color:orange;">ent</b>{sep}<b style="color:orange;">info</b> &lt;name&gt; — Show entity details<br>
 <b style="color:orange;">spawn</b> &lt;type&gt; — Spawn a new entity (thing)<br>
-<b style="color:orange;">delete</b>{sep}<b style="color:orange;">kill</b> &lt;name&gt; — Remove an entity from the scene<br>
+<b style="color:orange;">delete</b>{sep}<b style="color:orange;">kill</b> &lt;name&gt; — Remove an entity from the scene; <b style="color:orange;">delete all</b> &lt;type&gt; — Remove all entities of a type (with confirmation)<br>
 <b style="color:orange;">set</b>{sep}<b style="color:orange;">setprop</b> &lt;ent&gt; &lt;prop&gt; &lt;val&gt; — Modify a property<br>
 <b style="color:orange;">get</b>{sep}<b style="color:orange;">getprop</b> &lt;ent&gt; &lt;prop&gt; — Read a property value<br>
 <b style="color:orange;">fire</b>{sep}<b style="color:orange;">ent_fire</b> &lt;ent&gt; &lt;output&gt; [param]<br>
@@ -1802,35 +1802,119 @@ entity to drive them from the I/O system.</i><br>
         else:
             debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: prop, light, or levelchanger")
 
+    @staticmethod
+    def _normalise_delete_type(value):
+        """Normalise an entity type for `delete all <type>` matching."""
+        return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+    def _entities_of_type(self, type_name):
+        """Return every scene entity whose class or serialized type matches."""
+        wanted = self._normalise_delete_type(type_name)
+        if not wanted:
+            return []
+
+        matches = []
+        for brush in self.editor_state.brushes:
+            if (
+                self._normalise_delete_type(brush.get('type', '')) == wanted
+                or self._normalise_delete_type(brush.get('classname', '')) == wanted
+            ):
+                matches.append(brush)
+
+        for thing in self.editor_state.things:
+            properties = getattr(thing, 'properties', {}) or {}
+            if (
+                self._normalise_delete_type(type(thing).__name__) == wanted
+                or self._normalise_delete_type(properties.get('type', '')) == wanted
+            ):
+                matches.append(thing)
+
+        return matches
+
+    def _remove_entities(self, entities):
+        """Remove already-resolved entities using the normal console deletion path."""
+        entities = [entity for entity in entities if (
+            (isinstance(entity, dict) and entity in self.editor_state.brushes)
+            or (not isinstance(entity, dict) and entity in self.editor_state.things)
+        )]
+        if not entities:
+            return 0
+
+        self.editor_state.save_state()
+        deleted_brush = False
+
+        for entity in entities:
+            if isinstance(entity, dict):
+                self.editor_state.brushes.remove(entity)
+                deleted_brush = True
+            else:
+                self.editor_state.things.remove(entity)
+
+        if self._in_play_mode():
+            # The session's entity index would keep simulating (a monster,
+            # a timer) and resolving deleted objects, and its collision set
+            # would keep deleted walls solid.
+            self._rebuild_logic_entity_caches()
+            if deleted_brush:
+                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
+
+        self.main_window.update_all_ui()
+        return len(entities)
+
+    def _confirm_bulk_delete(self, entities, type_name):
+        """Ask before deleting a whole entity type."""
+        display_name = type(entities[0]).__name__ if entities else type_name
+        count = len(entities)
+        noun = "entity" if count == 1 else "entities"
+        try:
+            reply = QMessageBox.question(
+                self.main_window,
+                "Delete all",
+                f"{count} {display_name} {noun} will be deleted.\n\nAre you sure?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            return reply == QMessageBox.Yes
+        except Exception:
+            return False
+
     def cmd_delete(self, args):
+        """Delete one named entity, or every entity of a type.
+
+        Usage:
+            delete <entity_name>
+            delete all <type>
+        """
         if not args:
-            debug_log("Error", "Usage: delete <entity_name>")
+            debug_log("Error", "Usage: delete <entity_name>  or  delete all <type>")
             return
+
+        parts = args.split()
+        if len(parts) >= 2 and parts[0].lower() == "all":
+            type_name = parts[1].strip()
+            entities = self._entities_of_type(type_name)
+            if not entities:
+                debug_log("Info", f"No entities of type '{type_name}' found")
+                return
+
+            if not self._confirm_bulk_delete(entities, type_name):
+                debug_log("Info", "Delete cancelled")
+                return
+
+            count = self._remove_entities(entities)
+            debug_log("Info", f"Deleted {count} {type(entities[0]).__name__} entity(s)")
+            return
+
         name = args.strip()
         entity = self.editor_state.find_entity_by_name(name)
         if not entity:
             debug_log("Error", f"Entity '{name}' not found")
             return
 
-        self.editor_state.save_state()
-        if isinstance(entity, dict):
-            if entity in self.editor_state.brushes:
-                self.editor_state.brushes.remove(entity)
-        else:
-            if entity in self.editor_state.things:
-                self.editor_state.things.remove(entity)
-        if self._in_play_mode():
-            # The session's entity index would keep simulating (a monster,
-            # a timer) and resolving the deleted object, and its collision
-            # set would keep a deleted wall solid.
-            self._rebuild_logic_entity_caches()
-            if isinstance(entity, dict):
-                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
-                if mark is not None:
-                    mark()
-
-        debug_log("Info", f"Deleted entity: {name}")
-        self.main_window.update_all_ui()
+        if self._remove_entities([entity]):
+            debug_log("Info", f"Deleted entity: {name}")
 
     def cmd_list_connections(self, args):
         debug_log("Info", "=== ALL I/O CONNECTIONS ===")
