@@ -1167,10 +1167,10 @@ class MonsterAI:
         before the player.
 
         Answered from the tick's dense batch when there is one, which is the
-        same question asked for every monster at once rather than once per
+        Answered from the tick's dense batch when there is one: the same
+        question is answered for every monster at once rather than once per
         monster. The scalar walk below remains only as a reference/fallback
         for callers that cannot assemble the dense table.
-        was not built for, and wherever the batch cannot be assembled.
         """
         if not my_team or MonsterThing is None:
             return None
