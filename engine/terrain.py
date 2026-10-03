@@ -459,6 +459,11 @@ class Terrain:
         # Sculpt deformation map — sparse dict of (grid_x, grid_z) -> height offset
         self.sculpt_offsets: Dict[Tuple[int, int], float] = {}
         self.sculpt_grid_resolution: float = 4.0  # world units per grid cell
+        # Terrain CSG subtraction volumes. Each entry is an AABB as
+        # [min_x, min_y, min_z, max_x, max_y, max_z]. The heightfield remains the
+        # authoritative representation: a cut lowers the surface to the cutter's
+        # bottom wherever the current surface intersects the cutter volume.
+        self.csg_subtractions: List[List[float]] = []
         # Heightmap overlay
         self.heightmap_data: Optional[np.ndarray] = None  # 2D float32, 0..1
         self.heightmap_strength: float = 100.0
@@ -614,7 +619,8 @@ class Terrain:
         # preserves the same vertical proportions.
         base += self._sample_heightmap_scalar(world_x, world_z, base)
         base += self._sample_sculpt_scalar(world_x, world_z)
-        return base * self.mesh_scale
+        base *= self.mesh_scale
+        return self._apply_csg_subtractions_scalar(world_x, world_z, base)
     
     def get_height_at(self, world_x: float, world_z: float) -> float:
         """Terrain height at a world point, as collision should see it.
@@ -1070,7 +1076,8 @@ class Terrain:
         # after all height sources have been combined.
         result = result + self._sample_heightmap_batch(world_x, world_z, result)
         result = result + self._sample_sculpt_batch(world_x, world_z)
-        return result * self.mesh_scale
+        result = result * self.mesh_scale
+        return self._apply_csg_subtractions_batch(world_x, world_z, result)
     
     def _get_colors_batch(self, heights: np.ndarray, normalized_heights: np.ndarray) -> np.ndarray:
         colors = self.biome.color_gradient
@@ -2072,6 +2079,80 @@ class Terrain:
         self._touch_sculpt()
         self.table.mark_dirty_region(world_x, world_z, radius)
 
+    def _apply_csg_subtractions_scalar(self, world_x: float, world_z: float, height: float) -> float:
+        """Apply authored AABB cutters to one world-space terrain sample.
+
+        Terrain is a heightfield, so CSG can only remove material that intersects
+        the visible surface. A cutter therefore lowers a sample to its bottom
+        plane when the sample lies inside the cutter's XZ footprint and its
+        current surface height is between the cutter's Y bounds.
+        """
+        result = float(height)
+        for min_x, min_y, min_z, max_x, max_y, max_z in self.csg_subtractions:
+            if min_x <= world_x <= max_x and min_z <= world_z <= max_z:
+                if min_y < result < max_y:
+                    result = min(result, min_y)
+        return result
+
+    def _apply_csg_subtractions_batch(
+        self,
+        world_x: np.ndarray,
+        world_z: np.ndarray,
+        heights: np.ndarray,
+    ) -> np.ndarray:
+        """Apply AABB cutters to a batch of world-space height samples."""
+        result = np.asarray(heights, dtype=np.float32).copy()
+        if not self.csg_subtractions:
+            return result
+
+        for min_x, min_y, min_z, max_x, max_y, max_z in self.csg_subtractions:
+            hit = (
+                (world_x >= min_x) & (world_x <= max_x)
+                & (world_z >= min_z) & (world_z <= max_z)
+                & (result > min_y) & (result < max_y)
+            )
+            if np.any(hit):
+                result[hit] = np.minimum(result[hit], np.float32(min_y))
+        return result
+
+    def subtract_aabb(self, min_corner, max_corner) -> bool:
+        """Author a rectangular CSG subtraction against the terrain heightfield.
+
+        Only an axis-aligned box is accepted. The volume is stored as an
+        editable terrain modifier rather than converted into dense sculpt data,
+        so its exact X/Y/Z bounds survive save/load and the chunk heightfield
+        can rebuild from the same source of truth.
+        """
+        lo = np.asarray(min_corner, dtype=np.float64).reshape(3)
+        hi = np.asarray(max_corner, dtype=np.float64).reshape(3)
+        lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
+
+        if np.any((hi - lo) <= 1e-6):
+            return False
+
+        (terrain_min_x, terrain_max_x), (terrain_min_z, terrain_max_z) = self.get_terrain_bounds()
+        if (
+            hi[0] <= terrain_min_x or lo[0] >= terrain_max_x
+            or hi[2] <= terrain_min_z or lo[2] >= terrain_max_z
+        ):
+            return False
+
+        cut = [float(lo[0]), float(lo[1]), float(lo[2]),
+               float(hi[0]), float(hi[1]), float(hi[2])]
+        if cut in self.csg_subtractions:
+            return False
+
+        self.csg_subtractions.append(cut)
+        self.invalidate_height_range()
+
+        centre_x = float((lo[0] + hi[0]) * 0.5)
+        centre_z = float((lo[2] + hi[2]) * 0.5)
+        radius = 0.5 * math.sqrt(
+            float((hi[0] - lo[0]) ** 2 + (hi[2] - lo[2]) ** 2)
+        )
+        self.table.mark_dirty_region(centre_x, centre_z, radius)
+        return True
+
     # =========================================================================
     # HEIGHTMAP OVERLAY
     # =========================================================================
@@ -2255,6 +2336,8 @@ class Terrain:
         if self.sculpt_offsets:
             data['sculpt_offsets'] = [[gx, gz, val] for (gx, gz), val in self.sculpt_offsets.items()]
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
+        if self.csg_subtractions:
+            data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
         # Heightmap settings (image data is NOT saved — only the path is
         # stored by the editor so the user can re-load it)
         if self.heightmap_data is not None:
@@ -2319,6 +2402,24 @@ class Terrain:
         for entry in data.get('sculpt_offsets', []):
             gx, gz, val = entry
             self.sculpt_offsets[(int(gx), int(gz))] = float(val)
+
+        # Terrain CSG cutters
+        self.csg_subtractions = []
+        for cut in data.get('csg_subtractions', []):
+            try:
+                values = [float(v) for v in cut]
+            except (TypeError, ValueError):
+                continue
+            if len(values) != 6:
+                continue
+            lo = np.minimum(values[:3], values[3:])
+            hi = np.maximum(values[:3], values[3:])
+            if np.all((hi - lo) > 1e-6):
+                self.csg_subtractions.append([
+                    float(lo[0]), float(lo[1]), float(lo[2]),
+                    float(hi[0]), float(hi[1]), float(hi[2]),
+                ])
+
         # Heightmap
         if 'heightmap_blob' in data:
             import base64, io
