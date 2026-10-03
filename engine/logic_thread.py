@@ -282,6 +282,11 @@ class LogicThread(threading.Thread):
             except Exception as exc:
                 print(f"[LogicThread] plugin attach skipped: {exc}")
 
+        # Trigger state remains on LogicThread for compatibility; LogicTriggers
+        # owns the algorithms that operate on it.
+        self.fired_once_triggers: set = set()
+        self._reset_trigger_state()
+
         # Logic Gate State
         self.gate_inputs = {}
         
@@ -293,7 +298,9 @@ class LogicThread(threading.Thread):
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
         self.light_fade_states: Dict[int, Dict[str, Any]] = {}
         
-        # Hurt-trigger cadence is consumed by LogicTriggers.
+        # Hurt trigger timers remain on LogicThread for compatibility;
+        # LogicTriggers owns their processing.
+        self.hurt_trigger_timers: Dict[int, float] = {}
         self.HURT_INTERVAL = 0.5
         
         # Collection state
@@ -2776,22 +2783,6 @@ class LogicThread(threading.Thread):
             self.trigger_runtime = runtime
         return runtime
 
-    @property
-    def fired_once_triggers(self):
-        return self._trigger_runtime().fired_once_triggers
-
-    @fired_once_triggers.setter
-    def fired_once_triggers(self, value):
-        self._trigger_runtime().fired_once_triggers = value
-
-    @property
-    def hurt_trigger_timers(self):
-        return self._trigger_runtime().hurt_trigger_timers
-
-    @hurt_trigger_timers.setter
-    def hurt_trigger_timers(self, value):
-        self._trigger_runtime().hurt_trigger_timers = value
-
     def _reset_trigger_state(self):
         return self._trigger_runtime()._reset_trigger_state()
 
@@ -2843,7 +2834,7 @@ class LogicThread(threading.Thread):
         )
 
     # =========================================================================
-
+    # INTERACTIONS
     # =========================================================================
 
     def _refresh_levelchanger_table(self):
