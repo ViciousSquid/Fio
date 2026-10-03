@@ -901,7 +901,7 @@ class TerrainEditorPanel(QWidget):
         action_grid.setSpacing(6)
         self.paint_tool_buttons = {}
         for col, (label, mode) in enumerate((("Sculpt", "sculpt"), ("Stamp", "stamp"))):
-            btn = QPushButton(label)
+            btn = QPushButton(label, brush_group)
             btn.setCheckable(True)
             btn.setMinimumHeight(38)
             btn.setProperty("paintTool", mode)
@@ -929,7 +929,7 @@ class TerrainEditorPanel(QWidget):
             (("Smooth", "smooth"), ("Flatten", "flatten")),
         )):
             for col, (label, mode) in enumerate(modes):
-                btn = QPushButton(label)
+                btn = QPushButton(label, self.sculpt_controls_widget)
                 btn.setCheckable(True)
                 btn.setMinimumHeight(38)
                 btn.setProperty("sculptMode", mode)
@@ -2004,7 +2004,7 @@ class TerrainEditorPanel(QWidget):
 
     def clear_texture_stamps(self):
         """Remove every painted terrain texture stamp."""
-        if not getattr(self.terrain, 'texture_stamps', None):
+        if not getattr(self.terrain, 'texture_paint_maps', None):
             return
         if self.editor and hasattr(self.editor, 'save_state'):
             self.editor.state.terrain_data = self.terrain.to_dict()
@@ -2014,7 +2014,7 @@ class TerrainEditorPanel(QWidget):
             self.editor.state.terrain_data = self.terrain.to_dict()
         self.terrain_changed.emit()
         if self.editor and hasattr(self.editor, 'show_toast'):
-            self.editor.show_toast("Terrain texture stamps cleared")
+            self.editor.show_toast("Terrain texture paint cleared")
 
     def on_sculpt_brush_setting_changed(self, _=None):
         """Called when any sculpt brush setting changes — sync to viewport."""
