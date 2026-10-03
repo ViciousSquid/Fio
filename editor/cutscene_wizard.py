@@ -124,10 +124,18 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.radius.setDecimals(1)
         self.once = QtWidgets.QCheckBox("Play once per game session")
         self.once.setChecked(True)
-        self.restore = QtWidgets.QCheckBox("Restore existing actors after the cutscene")
+        self.restore = QtWidgets.QCheckBox("Restore existing actors after cutscene")
         self.restore.setChecked(True)
         self.stop_escape = QtWidgets.QCheckBox("Escape stops the cutscene")
         self.stop_escape.setChecked(True)
+        checkbox_style = (
+            "QCheckBox::indicator:checked { background-color: #e67e22; "
+            "border: 1px solid #e67e22; }"
+            "QCheckBox::indicator:unchecked { background-color: transparent; "
+            "border: 1px solid #e67e22; }"
+        )
+        for checkbox in (self.once, self.restore, self.stop_escape):
+            checkbox.setStyleSheet(checkbox_style)
         form.addRow("Name", self.name)
         form.addRow("File", self.filename)
         form.addRow("Trigger", self.trigger_mode)
