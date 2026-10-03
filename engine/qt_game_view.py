@@ -2137,10 +2137,14 @@ class QtGameView(QOpenGLWidget):
                     self, '_cached_player_ammo', 0))))
             )
             ammo_x = health_x + metrics.horizontalAdvance(health_text)
+            if style == 3:
+                # Style 3 uses a single compact status line: separate ammo
+                # from health with one font-space and keep the counter white.
+                ammo_x += metrics.horizontalAdvance(" ")
             painter.setFont(ammo_font)
             painter.setPen(self._hud_count_shadow_pen)
             painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
-            painter.setPen(self._hud_ammo_green)
+            painter.setPen(Qt.white if style == 3 else self._hud_ammo_green)
             painter.drawText(ammo_x, health_y, ammo_text)
 
         # The centre-screen crosshair is a first-person aiming reticle: it marks
