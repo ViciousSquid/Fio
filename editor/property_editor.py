@@ -3519,7 +3519,7 @@ class PropertyEditor(QWidget):
             cutscene_files = sorted(
                 os.path.basename(path)
                 for path in glob.glob(
-                    os.path.join(self.editor.root_dir, "cutscenes", "*.json")
+                    os.path.join(getattr(self.editor, "root_dir", _project_root()), "cutscenes", "*.json")
                 )
             )
         except (AttributeError, TypeError, OSError):
