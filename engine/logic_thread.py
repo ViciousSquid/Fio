@@ -3730,6 +3730,12 @@ class LogicThread(threading.Thread):
         return valid[-1]
 
     def _start_json_cutscene(self, entity, filename, data):
+        previous = self.cinematic_state
+        if previous is not None:
+            if previous.get("json_cutscene"):
+                self._finish_json_cutscene(previous, fire_finished=False)
+            else:
+                self.cinematic_state = None
         actors = {}
         actor_initial = {}
         spawned = []
