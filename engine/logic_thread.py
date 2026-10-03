@@ -3681,6 +3681,28 @@ class LogicThread(threading.Thread):
                 t = 1.0 if span <= 1e-9 else max(0.0, min(1.0, (elapsed - left_time) / span))
                 lp = LogicThread._cutscene_vec3(left.get("pos", [0, 0, 0]))
                 rp = LogicThread._cutscene_vec3(right.get("pos", lp), lp)
+
+                # A teleport belongs to the destination keyframe.  Keep the
+                # previous shot completely unchanged until its timestamp, then
+                # cut to the new location.  This makes large cross-map jumps
+                # explicit rather than turning them into a very fast move.
+                if right.get("teleport", False):
+                    if elapsed < right_time:
+                        return {
+                            "pos": list(lp),
+                            "yaw": LogicThread._cutscene_number(left.get("yaw", 0.0)),
+                            "pitch": LogicThread._cutscene_number(left.get("pitch", 0.0)),
+                            "fov": LogicThread._cutscene_number(left.get("fov", 90.0), 90.0),
+                            "look_at": left.get("look_at"),
+                        }
+                    return {
+                        "pos": list(rp),
+                        "yaw": LogicThread._cutscene_number(right.get("yaw", 0.0)),
+                        "pitch": LogicThread._cutscene_number(right.get("pitch", 0.0)),
+                        "fov": LogicThread._cutscene_number(right.get("fov", 90.0), 90.0),
+                        "look_at": right.get("look_at"),
+                    }
+
                 return {
                     "pos": [lp[i] + (rp[i] - lp[i]) * t for i in range(3)],
                     "yaw": LogicThread._cutscene_lerp_angle(
