@@ -68,16 +68,33 @@ def _world(ai_world, monsters):
 # The gate
 # ---------------------------------------------------------------------------
 
-def test_a_small_monster_set_keeps_the_walk(ai_world, monster_factory):
-    """Below the gate the batch costs more to assemble than it saves."""
+def test_a_small_monster_set_uses_the_batch(ai_world, monster_factory):
+    """Nearest-enemy uses the same dense table path for small sets."""
     monsters = _teamed(monster_factory, [
         ((float(i) * 100.0, 0.0, 0.0), {"team": "red" if i % 2 else "blue"})
         for i in range(4)])
     ai, _ = _world(ai_world, monsters)
 
     ai._enemy_ready = False
-    assert ai._enemy_batch(MONSTER_SIGHT_RANGE) is None
-    _agree(ai, monsters, "below the gate")
+    assert ai._enemy_batch(MONSTER_SIGHT_RANGE) is not None
+    _agree(ai, monsters, "small dense field")
+
+
+def test_the_batch_reads_monster_table_columns(ai_world, monster_factory):
+    """The dense query uses the gathered table, not live object positions."""
+    monsters = _teamed(monster_factory, [
+        ((0.0, 0.0, 0.0), {"team": "red"}),
+        ((100.0, 0.0, 0.0), {"team": "blue"}),
+    ])
+    ai, _ = _world(ai_world, monsters)
+
+    ai.table.gather(monsters)
+    monsters[1].pos = [MONSTER_SIGHT_RANGE * 2, 0.0, 0.0]
+    ai._enemy_ready = False
+    nearest = ai._enemy_batch(MONSTER_SIGHT_RANGE)
+
+    assert nearest is not None
+    assert nearest[0] == 1
 
 
 def test_the_batch_is_built_once_per_tick(ai_world, monster_factory):
