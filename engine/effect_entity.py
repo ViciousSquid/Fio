@@ -4,8 +4,9 @@ Effect is a core world primitive: one authored object that describes both a
 procedural visual effect and its emitted dynamic light. FIRE, ORB, EXPLOSION and CUSTOM are behaviours of this same primitive; there is no second explosion
 system.
 
-The class contains authored data only. Rendering/runtime state is projected
-into engine.entity_table and consumed numerically by the renderer.
+The class contains authored data plus non-journaled compatibility mirrors.
+Live simulation runtime is owned by EffectStore; EntityTable projects that dense
+execution state and the renderer consumes it numerically.
 """
 
 from __future__ import annotations
