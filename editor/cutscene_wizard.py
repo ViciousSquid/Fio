@@ -265,6 +265,11 @@ class CutsceneWizard(QtWidgets.QDialog):
         camera_row.addWidget(self.camera_time)
         camera_row.addWidget(QtWidgets.QLabel("Look at"))
         camera_row.addWidget(self.look_at, 1)
+        self.camera_teleport = QtWidgets.QCheckBox("Teleport from previous keyframe")
+        self.camera_teleport.setToolTip(
+            "Cut instantly to this keyframe instead of moving the camera from the previous one."
+        )
+        camera_row.addWidget(self.camera_teleport)
         self.capture_camera_button = QtWidgets.QPushButton("Capture camera position")
         camera_row.addWidget(self.capture_camera_button)
         self.capture_camera_button.clicked.connect(self._capture_camera_keyframe)
@@ -453,6 +458,8 @@ class CutsceneWizard(QtWidgets.QDialog):
                 t = t * t * (3.0 - 2.0 * t)
                 lp = list(left.get("pos", (0, 0, 0)))
                 rp = list(right.get("pos", lp))
+                if right.get("teleport", False):
+                    return list(rp), float(right.get("yaw", 0.0))
                 pos = [lp[i] + (rp[i] - lp[i]) * t for i in range(3)]
                 yaw = float(left.get("yaw", 0.0)) + (
                     float(right.get("yaw", 0.0)) - float(left.get("yaw", 0.0))
@@ -1173,6 +1180,8 @@ class CutsceneWizard(QtWidgets.QDialog):
             "pitch": float(camera.pitch),
             "fov": float(getattr(camera, "fov", 90.0)),
         }
+        if self.camera_teleport.isChecked():
+            frame["teleport"] = True
         aid = self.look_at.currentData()
         if aid:
             frame["look_at"] = {"actor": str(aid)}
@@ -1195,6 +1204,8 @@ class CutsceneWizard(QtWidgets.QDialog):
             look = row.get("look_at", {}).get("actor", "")
             target = self.actor_meta.get(str(look), {}).get("name", "") if look else ""
             suffix = f" — look at {target}" if target else ""
+            if row.get("teleport", False):
+                suffix += " — TELEPORT"
             self.camera_keys_list.addItem(
                 f"{row['time']:.2f}s — camera {row['pos']}{suffix}"
             )
