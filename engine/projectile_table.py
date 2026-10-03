@@ -21,12 +21,12 @@ class ProjectileStore:
     def __init__(self, capacity=16):
         self._capacity = max(1, int(capacity))
         self._count = 0
-        self.pos = np.empty((self._capacity, 3), dtype=np.float64)
-        self.vel = np.empty((self._capacity, 3), dtype=np.float64)
-        self.lifetime = np.empty(self._capacity, dtype=np.float64)
-        self.distance = np.empty(self._capacity, dtype=np.float64)
+        self.pos = np.empty((self._capacity, 3), dtype=np.float32)
+        self.vel = np.empty((self._capacity, 3), dtype=np.float32)
+        self.lifetime = np.empty(self._capacity, dtype=np.float32)
+        self.distance = np.empty(self._capacity, dtype=np.float32)
         self.owner_id = np.empty(self._capacity, dtype=np.int64)
-        self.damage = np.empty(self._capacity, dtype=np.float64)
+        self.damage = np.empty(self._capacity, dtype=np.float32)
 
     def __len__(self):
         return self._count
@@ -60,11 +60,11 @@ class ProjectileStore:
         return i
 
     def add_batch(self, positions, velocities, owners, damages, lifetimes):
-        positions = np.asarray(positions, dtype=np.float64)
-        velocities = np.asarray(velocities, dtype=np.float64)
+        positions = np.asarray(positions, dtype=np.float32)
+        velocities = np.asarray(velocities, dtype=np.float32)
         owners = np.asarray(owners, dtype=np.int64)
-        damages = np.asarray(damages, dtype=np.float64)
-        lifetimes = np.asarray(lifetimes, dtype=np.float64)
+        damages = np.asarray(damages, dtype=np.float32)
+        lifetimes = np.asarray(lifetimes, dtype=np.float32)
         n = len(positions)
         if positions.shape != (n, 3) or velocities.shape != (n, 3):
             raise ValueError("projectile positions and velocities must be (N, 3)")
