@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QComboBox, QPushButton, QGroupBox, QFormLayout, QSlider, QCheckBox,
@@ -1907,29 +1908,6 @@ class TerrainEditorPanel(QWidget):
     def on_sculpt_strength_slider_changed(self, value):
         self.sculpt_strength_value.setText(str(int(value)))
         self._sync_sculpt_to_viewport()
-
-    def apply_sculpt(self):
-        """Apply one sculpt operation at the entered world coordinates."""
-        x = self.sculpt_x_spin.value()
-        z = self.sculpt_z_spin.value()
-        radius = self.sculpt_radius_slider.value()
-        strength = self.sculpt_strength_slider.value()
-        mode = self._sculpt_mode
-
-        self.show_progress("Sculpting terrain…")
-        try:
-            if mode == 'raise':
-                self.terrain.apply_sculpt_at(x, z, radius, strength)
-            elif mode == 'lower':
-                self.terrain.apply_sculpt_at(x, z, radius, -strength)
-            elif mode == 'flatten':
-                self.terrain.flatten_sculpt_at(
-                    x, z, radius, min(strength / 20.0, 1.0)
-                )
-            self._update_sculpt_info()
-            self.terrain_changed.emit()
-        finally:
-            self.hide_progress()
 
     def clear_sculpt(self):
         """Remove all sculpt deformations."""
