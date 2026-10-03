@@ -70,13 +70,13 @@ so it is unit-tested off-device (`python -m unittest discover -s player/tests`).
 
 ## Python baseline
 
-The desktop harness requires CPython 3.14 or newer with the normal
+The desktop harness requires CPython 3.14 with the normal
 GIL-enabled build.
 
 ## Running the desktop dev harness
 
 ```bash
-pip install pygame-ce numpy pyopengl pyglm pillow
+pip install pygame-ce==2.5.8 numpy==2.5.3 pyopengl pyglm pillow
 python -m player.main path/to/game.fiopak
 # options: --width 1600 --height 900 --fps 60 --fullscreen --no-vsync
 ```
@@ -128,7 +128,7 @@ loads a real package; delete that step for an empty bring-up build.
 ### Local build
 
 ```bash
-pip install git+https://github.com/kivy/buildozer
+pip install buildozer==1.6.0
 pip install legacy-cgi setuptools "cython==0.29.34"
 # bundle a game so it ships inside the APK (or skip for an empty build):
 python -m player.tools.make_pak maps/Simple_Map_Test.json -o player/game.fiopak --root .
@@ -171,9 +171,9 @@ p4a recipe yet — this is the one real packaging risk. Two supported paths:
    is wired. The engine's `player.py`/`monster_ai.py` still expect `glm`, so path
    1 is required before those are ported.
 
-The Android build uses the p4a `develop` toolchain with its CPython 3.14
-recipe. Keep `requirements` in `buildozer.spec` in sync with the mobile
-recipes rather than copying the desktop `requirements.txt` verbatim.
+The Android build uses a pinned python-for-android release with its CPython
+3.14 recipe and a local pygame-ce 2.5.8 recipe. Keep the Android requirements
+pinned to the Fio baseline rather than following moving dependency branches.
 
 ## Status
 
