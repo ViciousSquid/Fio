@@ -1518,7 +1518,7 @@ class QtGameView(QOpenGLWidget):
             draw_fn=self._draw_pos_window,
             width=230,
             body_height=78,
-            x=430,
+            x=max(20, self.width() - 250),
             y=20,
             on_close_cb=self._close_pos_window,
         )
