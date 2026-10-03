@@ -274,6 +274,7 @@ class LogicThread(threading.Thread):
         self._hud_health_fade_started = None
         self._hud_health_fade_from = 0.5
         self._hud_health_fade_phase = "idle"
+        self.hud_fade_enabled = True
 
         # RenderState already owns one persistent RenderTable/EntityTable pair.
         # Keep these aliases only for diagnostics and older tests/code that inspect
@@ -1211,6 +1212,19 @@ class LogicThread(threading.Thread):
 
     def set_player(self, player: Optional[Player]):
         self.player = player
+
+    def set_hud_fade_enabled(self, enabled: bool):
+        """Enable or disable the damage-driven health HUD fade."""
+        with self._tick_lock:
+            enabled = bool(enabled)
+            if enabled == self.hud_fade_enabled:
+                return
+            self.hud_fade_enabled = enabled
+            self._hud_health_alpha = 0.5 if enabled else 1.0
+            self._hud_health_fade_started = None
+            self._hud_health_fade_from = self._hud_health_alpha
+            self._hud_health_fade_phase = "idle"
+            self._hud_health_last_value = self.player_health
 
     def set_player2(self, player2: Optional[Player]) -> None:
         """Set or clear Player 2 for split-screen mode."""
@@ -4326,6 +4340,13 @@ class LogicThread(threading.Thread):
 
     def _update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
+        if not getattr(self, "hud_fade_enabled", True):
+            self._hud_health_alpha = 1.0
+            self._hud_health_fade_started = None
+            self._hud_health_fade_from = 1.0
+            self._hud_health_fade_phase = "idle"
+            self._hud_health_last_value = self.player_health
+            return self._hud_health_alpha
 
         def _sample(at):
             phase = self._hud_health_fade_phase
