@@ -7,13 +7,13 @@ import sys
 import sysconfig
 
 
-MINIMUM_PYTHON = (3, 14)
+SUPPORTED_PYTHON = (3, 14)
 
 
 def require_supported_python() -> None:
     """Abort before startup when the interpreter is outside Fio's baseline."""
-    if platform.python_implementation() != "CPython" or sys.version_info < MINIMUM_PYTHON:
-        raise SystemExit("Fio requires CPython 3.14 or newer.")
+    if platform.python_implementation() != "CPython" or sys.version_info[:2] != SUPPORTED_PYTHON:
+        raise SystemExit("Fio requires CPython 3.14.")
 
     # Fio relies on normal GIL-enabled CPython threading semantics. Reject
     # free-threaded builds explicitly, including a 3.14t interpreter.
