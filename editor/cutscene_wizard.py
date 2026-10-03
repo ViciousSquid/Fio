@@ -274,10 +274,14 @@ class CutsceneWizard(QtWidgets.QDialog):
             "Cut instantly to this keyframe instead of moving the camera from the previous one."
         )
         camera_row.addWidget(self.camera_teleport)
-        self.capture_camera_button = QtWidgets.QPushButton("Capture camera position")
-        camera_row.addWidget(self.capture_camera_button)
-        self.capture_camera_button.clicked.connect(self._capture_camera_keyframe)
         cv.addLayout(camera_row)
+        self.capture_camera_button = QtWidgets.QPushButton("Capture camera position")
+        self.capture_camera_button.setStyleSheet(
+            "QPushButton { background: #e67e22; color: white; font-weight: bold; padding: 6px 12px; }"
+            "QPushButton:hover { background: #f39c12; }"
+        )
+        self.capture_camera_button.clicked.connect(self._capture_camera_keyframe)
+        cv.addWidget(self.capture_camera_button)
         self.camera_keys_list = QtWidgets.QListWidget()
         self.camera_keys_list.setMinimumHeight(120)
         cv.addWidget(self.camera_keys_list, 1)
