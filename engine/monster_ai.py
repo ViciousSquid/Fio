@@ -1483,8 +1483,6 @@ class MonsterAI:
         from .monster_constants import (
             MONSTER_PROJECTILE_SPEED,
             MONSTER_PROJECTILE_MAX_DIST,
-            MONSTER_PROJECTILE_SPRITE_SIZE,
-            MONSTER_PROJECTILE_SPRITE,
         )
 
         start_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
