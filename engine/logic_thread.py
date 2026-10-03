@@ -2768,11 +2768,11 @@ class LogicThread(threading.Thread):
 
         self._plugin_emit("portal_transit", portal_from=portal_a, portal_to=portal_b)
 
-    def _transit_projectile_through_portals(self, proj, prev_pos):
-        """Teleport a monster projectile through the cached portal relations."""
+    def _transit_projectile_through_portals(self, projectiles, index, prev_pos):
+        """Teleport one dense projectile through the cached portal relations."""
         if Portal is None or not len(self._portal_things):
             return
-        cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
+        cur = tuple(projectiles.pos[index])
         for portal_index, portal_slot in enumerate(self._portal_slots):
             portal_a = self._portal_things[portal_index]
             if not portal_a.is_active():
@@ -2785,22 +2785,23 @@ class LogicThread(threading.Thread):
             portal_b = self._portal_target_things[portal_index]
             if portal_b is None or not portal_b.is_active():
                 continue
-            if self._segment_crosses_aperture(
-                    portal_a, prev_pos, cur) is None:
+            if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
                 continue
             npx, npy, npz = portal_map_point(
                 portal_a.pos, portal_a.get_basis(),
-                portal_b.pos, portal_b.get_basis(),
-                (cur[0], cur[1], cur[2]))
-            nvx, nvy, nvz = portal_map_direction(
+                portal_b.pos, portal_b.get_basis(), cur)
+            direction = portal_map_direction(
                 portal_a.get_basis(), portal_b.get_basis(),
-                (proj['vel'][0], proj['vel'][1], proj['vel'][2]))
+                tuple(projectiles.vel[index]))
             bnx, bny, bnz = portal_b.get_normal()
-            proj['pos'][0] = npx + bnx * Portal.EXIT_CLEARANCE
-            proj['pos'][1] = npy + bny * Portal.EXIT_CLEARANCE
-            proj['pos'][2] = npz + bnz * Portal.EXIT_CLEARANCE
-            proj['vel'][0], proj['vel'][1], proj['vel'][2] = nvx, nvy, nvz
+            projectiles.pos[index] = (
+                npx + bnx * Portal.EXIT_CLEARANCE,
+                npy + bny * Portal.EXIT_CLEARANCE,
+                npz + bnz * Portal.EXIT_CLEARANCE,
+            )
+            projectiles.vel[index] = direction
             break
+
 
     # =========================================================================
     # LOGIC TIMER UPDATE
@@ -4004,18 +4005,14 @@ class LogicThread(threading.Thread):
     # MONSTER PROJECTILES (flying monster ranged attacks)
     # =========================================================================
     def _projectile_store(self):
-        """Return the dense projectile store, importing legacy lists once."""
-        store = self._monster_projectiles
-        if not isinstance(store, ProjectileStore):
-            store = ProjectileStore(store)
-            self._monster_projectiles = store
-        store.sync_if_dirty()
-        return store
+        return self._monster_projectiles
 
-    def _add_monster_projectile(self, projectile):
-        """Thread-safe spawn path used by MonsterAI."""
+    def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
+        """Add one projectile directly to the dense numeric store."""
         with self._monster_lock:
-            self._projectile_store().append(projectile)
+            return self._monster_projectiles.add(
+                pos, vel, owner_id, damage, lifetime
+            )
 
 
     #: Monster hit sphere for projectiles: centred 64 units above the
