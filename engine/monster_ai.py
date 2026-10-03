@@ -1166,7 +1166,6 @@ class MonsterAI:
         Returns the monster or None.  Team-based enemies are targeted first
         before the player.
 
-        Answered from the tick's dense batch when there is one, which is the
         Answered from the tick's dense batch when there is one: the same
         question is answered for every monster at once rather than once per
         monster. The scalar walk below remains only as a reference/fallback
