@@ -41,6 +41,7 @@ def test_effect_store_preserves_runtime_state_when_authoring_rows_reorder():
     store.begin_session([first, second])
 
     first_phase = float(store.phase[0])
+    store.trigger_explosion(second, 123.456)
 
     store.rebuild([second, first])
 
