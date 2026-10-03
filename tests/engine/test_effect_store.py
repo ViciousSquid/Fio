@@ -5,7 +5,8 @@ pytestmark = pytest.mark.qt
 
 from editor.things import Effect
 from editor.io_handlers import register_all_input_handlers
-from engine.io_system import IOManager
+from editor.io_system import IOManager
+from types import SimpleNamespace
 from engine.effect_table import (
     FAMILY_CUSTOM,
     FAMILY_EXPLOSION,
@@ -92,10 +93,10 @@ def test_effect_inputs_update_the_logic_owned_store():
 
     io = IOManager()
     register_all_input_handlers(io)
-    logic = __import__("types").SimpleNamespace(
+    logic = SimpleNamespace(
         effect_store=store,
         game_state=None,
-        io_manager=__import__("types").SimpleNamespace(
+        io_manager=SimpleNamespace(
             get_game_state=lambda: None,
             fire_output=lambda *args, **kwargs: None,
         ),
