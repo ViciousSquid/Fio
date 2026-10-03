@@ -4,11 +4,12 @@ from PyQt5.QtWidgets import (
     QMessageBox, QComboBox, QGridLayout, QToolButton, QButtonGroup
 )
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtGui import QIcon, QPixmap, QFont, QFontDatabase
 import sys
 import os
 
 from engine import shaders
+from engine.hud_fonts import HUD_FONT_FILES, HUD_FONT_FALLBACKS, HUD_FONT_LABELS
 from engine.glasses import (
     DEFAULT_GLASSES, GLASSES_STYLES, glasses_path, normalize_glasses,
 )
@@ -492,7 +493,100 @@ class SettingsWindow(QDialog):
         group_layout.addLayout(grid)
         group.setLayout(group_layout)
         layout.addWidget(group)
+
+        hud_group = QGroupBox("HUD font")
+        hud_layout = QVBoxLayout()
+        hud_note = QLabel(
+            "Choose the default font used by the HUD. Maps can override this during play."
+        )
+        hud_note.setStyleSheet("color: #9fb7b5;")
+        hud_layout.addWidget(hud_note)
+
+        hud_grid = QGridLayout()
+        hud_grid.setSpacing(8)
+        self.hud_font_buttons = QButtonGroup(self)
+        self.hud_font_buttons.setExclusive(True)
+        self._hud_font_button_for = {}
+        self._hud_font_families = self._load_hud_font_families()
+
+        for index, style in enumerate(HUD_FONT_FILES):
+            button = QToolButton()
+            button.setCheckable(True)
+            button.setToolTip(HUD_FONT_LABELS[style])
+            button.setText("123 456 789")
+            button.setFont(QFont(self._hud_font_families[style], 18))
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setMinimumSize(180, 64)
+            button.setProperty("hud_font_style", style)
+            button.setStyleSheet("""
+                QToolButton {
+                    background-color: #d8e2e1;
+                    color: #1e2b2a;
+                    border: 2px solid #555;
+                    border-radius: 6px;
+                    padding: 6px;
+                }
+                QToolButton:hover { border: 2px solid #4A6B73; }
+                QToolButton:checked { border: 3px solid #F08000; }
+            """)
+            self.hud_font_buttons.addButton(button, index)
+            self._hud_font_button_for[style] = button
+
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(0, 0, 0, 0)
+            card_layout.setSpacing(2)
+            card_layout.addWidget(button)
+            label = QLabel(HUD_FONT_LABELS[style])
+            label.setAlignment(Qt.AlignCenter)
+            card_layout.addWidget(label)
+            hud_grid.addWidget(card, index // 2, index % 2)
+
+        hud_layout.addLayout(hud_grid)
+        hud_group.setLayout(hud_layout)
+        layout.addWidget(hud_group)
         layout.addStretch()
+
+    def _load_hud_font_families(self):
+        families = {}
+        fonts_dir = os.path.join(os.getcwd(), "assets", "fonts")
+        for style, filename in HUD_FONT_FILES.items():
+            family = HUD_FONT_FALLBACKS[style]
+            try:
+                path = os.path.join(fonts_dir, filename)
+                if os.path.isfile(path):
+                    font_id = QFontDatabase.addApplicationFont(path)
+                    if font_id >= 0:
+                        names = QFontDatabase.applicationFontFamilies(font_id)
+                        if names:
+                            family = names[0]
+            except OSError:
+                pass
+            families[style] = family
+        return families
+
+    def _set_hud_font(self, selector):
+        selector = str(selector or "").strip()
+        selected = 1
+        for style, filename in HUD_FONT_FILES.items():
+            if selector.lower() in (
+                filename.lower(),
+                os.path.splitext(filename)[0].lower(),
+                HUD_FONT_FALLBACKS[style].lower(),
+            ):
+                selected = style
+                break
+        button = self._hud_font_button_for.get(selected)
+        if button is not None:
+            button.setChecked(True)
+
+    def selected_hud_font(self):
+        """Return the bundled HUD font filename currently selected."""
+        button = self.hud_font_buttons.checkedButton()
+        if button is None:
+            return HUD_FONT_FILES[1]
+        style = int(button.property("hud_font_style"))
+        return HUD_FONT_FILES.get(style, HUD_FONT_FILES[1])
 
     def _set_glasses(self, style):
         button = self._glasses_button_for.get(normalize_glasses(style))
@@ -595,6 +689,7 @@ class SettingsWindow(QDialog):
         )
         self._set_glasses(self.config.get(
             'Appearance', 'glasses', fallback=DEFAULT_GLASSES))
+        self._set_hud_font(self.config.get('Display', 'hudfont', fallback=HUD_FONT_FILES[1]))
 
         save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
         idx = self.save_mode_combo.findData(save_mode)
@@ -707,6 +802,7 @@ class SettingsWindow(QDialog):
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
         self.config.set('Display', 'show_glasses', str(self.show_glasses_checkbox.isChecked()))
+        self.config.set('Display', 'hudfont', self.selected_hud_font())
 
         if not self.config.has_section('Appearance'):
             self.config.add_section('Appearance')
