@@ -349,12 +349,18 @@ class Terrain:
     UPDATE_BUDGET_MS = 4.0
     #: Largest colour gradient the heightfield shader holds (MAX_GRADIENT_STOPS).
     MAX_GRADIENT_STOPS = 32
+    MAX_TERRAIN_STAMPS = shaders.MAX_TERRAIN_STAMPS
+    MAX_TERRAIN_STAMP_TEXTURES = shaders.MAX_TERRAIN_STAMP_TEXTURES
+    TERRAIN_STAMP_ATLAS_CELLS = 4
+    TERRAIN_STAMP_ATLAS_CELL_SIZE = 256
     #: Texture layers per height-grid page; clamped to the driver's limit.
     HEIGHT_PAGE_LAYERS = 512
     #: Every uniform the terrain programs are driven through.
     _UNIFORM_NAMES = (
         'projection', 'view', 'active_lights', 'use_textures', 'lod_level',
         'texGrass', 'texRock', 'texSand', 'texSnow',
+        'terrainStampAtlas', 'uStampCount', 'uStampBounds',
+        'uStampParams', 'uStampTextureSize',
         'uHeights', 'uChunkI', 'uChunkX', 'uChunkY', 'uTiling', 'uFlatMode',
         'uGradCount', 'uGradH', 'uGradC', 'uGradW', 'uGradD',
     ) + terrain_style.UNIFORM_NAMES
@@ -464,6 +470,11 @@ class Terrain:
         # authoritative representation: a cut lowers the surface to the cutter's
         # bottom wherever the current surface intersects the cutter volume.
         self.csg_subtractions: List[List[float]] = []
+        # Persistent rectangular terrain texture stamps.
+        self.texture_stamps: List[Dict[str, object]] = []
+        self._stamp_atlas_texture = 0
+        self._stamp_atlas_dirty = True
+        self._stamp_texture_slots: Dict[str, int] = {}
         # Heightmap overlay
         self.heightmap_data: Optional[np.ndarray] = None  # 2D float32, 0..1
         self.heightmap_strength: float = 100.0
@@ -1678,6 +1689,15 @@ class Terrain:
         gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
         gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)
         gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(u['texSnow'],  3)
+        stamp_texture_unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
+        height_texture_unit = stamp_texture_unit + 1
+        if self.texture_stamps and self._stamp_atlas_dirty:
+            self._rebuild_stamp_atlas()
+        if self.texture_stamps and self._stamp_atlas_texture:
+            self._upload_stamp_uniforms(u, stamp_texture_unit)
+        else:
+            if u.get('uStampCount', -1) != -1:
+                gl.glUniform1i(u['uStampCount'], 0)
         self._upload_appearance_uniforms(u)
         
         # Force textures off if flat_mode is enabled or textures aren't loaded
@@ -1757,7 +1777,7 @@ class Terrain:
 
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         # The height grids live in texture units above the shadow cube-maps.
-        unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
+        unit = height_texture_unit
         drawn = slots[visible & table.built[slots]]
         if blocks:
             self.total_triangles = self.draw_block_slots(drawn)
@@ -2276,6 +2296,150 @@ class Terrain:
         bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
         return top * (1 - fy) + bot * fy
 
+    def add_texture_stamp(self, bounds, texture, angle=0.0,
+                          feather=0.0, opacity=1.0) -> bool:
+        """Add a rectangular texture stamp to the terrain."""
+        try:
+            values = [float(v) for v in bounds]
+        except (TypeError, ValueError):
+            return False
+        if len(values) != 4:
+            return False
+        min_x, min_z, max_x, max_z = values
+        if max_x < min_x:
+            min_x, max_x = max_x, min_x
+        if max_z < min_z:
+            min_z, max_z = max_z, min_z
+        if max_x - min_x <= 1e-6 or max_z - min_z <= 1e-6:
+            return False
+        if not texture or len(self.texture_stamps) >= self.MAX_TERRAIN_STAMPS:
+            return False
+        record = {
+            'bounds': [min_x, min_z, max_x, max_z],
+            'texture': str(texture).replace('\\', '/'),
+            'angle': float(angle),
+            'feather': max(0.0, float(feather)),
+            'opacity': float(np.clip(opacity, 0.0, 1.0)),
+        }
+        if record in self.texture_stamps:
+            return False
+        self.texture_stamps.append(record)
+        self._stamp_atlas_dirty = True
+        return True
+
+    def clear_texture_stamps(self):
+        """Remove all terrain texture stamps."""
+        if not self.texture_stamps:
+            return
+        self.texture_stamps = []
+        self._stamp_atlas_dirty = True
+
+    def _stamp_texture_path(self, path: str) -> str:
+        path = str(path)
+        if os.path.isabs(path) and os.path.exists(path):
+            return path
+        if os.path.exists(path):
+            return path
+        return os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', path))
+
+    def _rebuild_stamp_atlas(self):
+        """Pack unique stamp textures into one GL 4x4 atlas."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+
+        unique = []
+        for stamp in self.texture_stamps:
+            path = str(stamp.get('texture', ''))
+            if path and path not in unique:
+                unique.append(path)
+            if len(unique) >= self.MAX_TERRAIN_STAMP_TEXTURES:
+                break
+
+        if not unique:
+            self._stamp_texture_slots = {}
+            self._stamp_atlas_dirty = False
+            return
+
+        cell = self.TERRAIN_STAMP_ATLAS_CELL_SIZE
+        cells = self.TERRAIN_STAMP_ATLAS_CELLS
+        atlas_size = cells * cell
+        atlas = QImage(atlas_size, atlas_size, QImage.Format_RGBA8888)
+        atlas.fill(0)
+
+        slots = {}
+        painter = QPainter(atlas)
+        for slot, path in enumerate(unique):
+            image = QImage(self._stamp_texture_path(path))
+            if image.isNull():
+                continue
+            image = image.convertToFormat(QImage.Format_RGBA8888)
+            image = image.scaled(
+                cell, cell, Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation)
+            x = max(0, (image.width() - cell) // 2)
+            y = max(0, (image.height() - cell) // 2)
+            image = image.copy(x, y, cell, cell)
+            atlas_x = (slot % cells) * cell
+            atlas_y = (slot // cells) * cell
+            painter.drawImage(atlas_x, atlas_y, image)
+            slots[path] = slot
+        painter.end()
+
+        if not self._stamp_atlas_texture:
+            self._stamp_atlas_texture = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._stamp_atlas_texture)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        data = atlas.constBits()
+        try:
+            nbytes = atlas.sizeInBytes()
+        except AttributeError:
+            nbytes = atlas.byteCount()
+        gl.glTexImage2D(
+            gl.GL_TEXTURE_2D, 0, gl.GL_RGBA,
+            atlas_size, atlas_size, 0,
+            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data.asstring(nbytes))
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        self._stamp_texture_slots = slots
+        self._stamp_atlas_dirty = False
+
+    def _upload_stamp_uniforms(self, u, texture_unit):
+        """Upload authored stamp rectangles for the current terrain frame."""
+        bounds = np.zeros((self.MAX_TERRAIN_STAMPS, 4), dtype=np.float32)
+        params = np.zeros((self.MAX_TERRAIN_STAMPS, 4), dtype=np.float32)
+        valid = 0
+        for stamp in self.texture_stamps[:self.MAX_TERRAIN_STAMPS]:
+            slot = self._stamp_texture_slots.get(str(stamp.get('texture', '')), -1)
+            if slot < 0 or valid >= self.MAX_TERRAIN_STAMPS:
+                continue
+            b = stamp.get('bounds', [])
+            if len(b) != 4:
+                continue
+            bounds[valid] = np.asarray(b, dtype=np.float32)
+            params[valid] = (
+                float(slot),
+                float(stamp.get('angle', 0.0)),
+                float(stamp.get('feather', 0.0)),
+                float(stamp.get('opacity', 1.0)))
+            valid += 1
+
+        loc = u.get('uStampCount', -1)
+        if loc != -1: gl.glUniform1i(loc, valid)
+        loc = u.get('uStampBounds', -1)
+        if loc != -1: gl.glUniform4fv(loc, self.MAX_TERRAIN_STAMPS, bounds)
+        loc = u.get('uStampParams', -1)
+        if loc != -1: gl.glUniform4fv(loc, self.MAX_TERRAIN_STAMPS, params)
+        loc = u.get('uStampTextureSize', -1)
+        if loc != -1: gl.glUniform1i(loc, self.TERRAIN_STAMP_ATLAS_CELL_SIZE)
+        loc = u.get('terrainStampAtlas', -1)
+        if loc != -1:
+            gl.glActiveTexture(gl.GL_TEXTURE0 + texture_unit)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self._stamp_atlas_texture)
+            gl.glUniform1i(loc, texture_unit)
+
     def cleanup(self):
         self._free_gl(self.table.clear())
         if self.block_program:
@@ -2285,6 +2449,12 @@ class Terrain:
                 pass
             self.block_program = 0
             self.block_uniforms = {}
+        if self._stamp_atlas_texture:
+            try:
+                gl.glDeleteTextures(1, [self._stamp_atlas_texture])
+            except Exception:
+                pass
+            self._stamp_atlas_texture = 0
         if self._height_pages:
             gl.glDeleteTextures(len(self._height_pages), self._height_pages)
             self._height_pages = []
@@ -2338,6 +2508,30 @@ class Terrain:
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
         if self.csg_subtractions:
             data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
+        if self.texture_stamps:
+            data['texture_stamps'] = [dict(stamp) for stamp in self.texture_stamps]
+        # Terrain texture stamps
+        self.texture_stamps = []
+        for stamp in data.get('texture_stamps', []):
+            if not isinstance(stamp, dict):
+                continue
+            texture = str(stamp.get('texture', '')).replace('\\', '/').strip()
+            bounds = stamp.get('bounds', [])
+            if len(bounds) != 4 or not texture:
+                continue
+            try:
+                b = [float(v) for v in bounds]
+                self.add_texture_stamp(
+                    b,
+                    texture,
+                    angle=float(stamp.get('angle', 0.0)),
+                    feather=float(stamp.get('feather', 0.0)),
+                    opacity=float(stamp.get('opacity', 1.0)),
+                )
+            except (TypeError, ValueError):
+                continue
+        self._stamp_atlas_dirty = True
+
         # Heightmap settings (image data is NOT saved — only the path is
         # stored by the editor so the user can re-load it)
         if self.heightmap_data is not None:
