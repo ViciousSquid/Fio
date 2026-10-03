@@ -1516,7 +1516,7 @@ class QtGameView(QOpenGLWidget):
             title="Pos",
             draw_fn=self._draw_pos_window,
             width=230,
-            body_height=78,
+            body_height=92,
             x=max(20, self.width() - 250),
             y=20,
             on_close_cb=self._close_pos_window,
@@ -1550,7 +1550,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(axis_x, baseline, axis)
             painter.setPen(value_color)
             painter.drawText(value_x, baseline, f"{value:.3f}")
-            baseline += 19
+            baseline += 26
 
     def _paint_frame(self, render_state):
         """Draw one frame from *render_state* (None when not threaded)."""
