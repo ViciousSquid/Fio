@@ -4114,12 +4114,8 @@ class LogicThread(threading.Thread):
         return hits
 
     def _update_monster_projectiles(self, delta: float):
-        """Advance monster projectiles using persistent dense numeric columns.
+        """Advance monster projectiles entirely through dense numeric columns."""
 
-        The compatibility records still expose pos/vel/lifetime fields, but the
-        60 Hz simulation no longer rebuilds numeric arrays from those
-        dictionaries. Only sparse collision side effects cross back into Python.
-        """
         with self._monster_lock:
             projectiles = self._projectile_store()
             if not projectiles:
@@ -4258,9 +4254,7 @@ class LogicThread(threading.Thread):
                     keep[i] = False
     
             survivors = np.flatnonzero(keep)
-            projectiles.replace_active(
-                survivors, pos, vel, lifetime, travelled
-            )
+            projectiles.compact(survivors, pos, vel, lifetime, travelled)
     
             # Published as an independent snapshot so the renderer can keep
             # consuming its frame even while the next logic tick mutates the store.
