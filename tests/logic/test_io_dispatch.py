@@ -708,7 +708,7 @@ def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
     }
 
     assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 0.5)
+    LogicThread._update_cinematic_camera(logic, 1.0)
 
     assert logic.cinematic_state is None
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
