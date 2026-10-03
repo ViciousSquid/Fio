@@ -174,12 +174,12 @@ class CutsceneRuntime:
         return valid[-1]
 
     def _start_json_cutscene(self, entity, filename, data):
-        previous = self.logic.state
+        previous = self.state
         if previous is not None:
             if previous.get("json_cutscene"):
                 self.logic._finish_json_cutscene(previous, fire_finished=False)
             else:
-                self.logic.state = None
+                self.state = None
         actors = {}
         actor_initial = {}
         spawned = []
@@ -288,7 +288,7 @@ class CutsceneRuntime:
             duration = 1e-6
 
         settings = data.get("settings") or {}
-        self.logic.state = {
+        self.state = {
             "active": True,
             "paused": False,
             "entity": entity,
@@ -317,10 +317,10 @@ class CutsceneRuntime:
         }
         if camera_rows:
             first = camera_rows[0]
-            self.logic.state["cam_pos"] = self.logic._cutscene_vec3(first.get("pos"))
-            self.logic.state["cam_angle"] = self.logic._cutscene_number(first.get("yaw", 0.0))
-            self.logic.state["cam_pitch"] = self.logic._cutscene_number(first.get("pitch", 0.0))
-            self.logic.state["fov"] = max(
+            self.state["cam_pos"] = self.logic._cutscene_vec3(first.get("pos"))
+            self.state["cam_angle"] = self.logic._cutscene_number(first.get("yaw", 0.0))
+            self.state["cam_pitch"] = self.logic._cutscene_number(first.get("pitch", 0.0))
+            self.state["fov"] = max(
                 1.0,
                 min(179.0, self.logic._cutscene_number(first.get("fov", 90.0), 90.0)),
             )
@@ -447,7 +447,7 @@ class CutsceneRuntime:
             self.logic.io_manager.fire_output(entity, "OnFinished")
 
     def _update_json_cutscene(self, delta):
-        cs = self.logic.state
+        cs = self.state
         cs["elapsed"] = float(cs.get("elapsed", 0.0)) + max(0.0, float(delta))
         elapsed = cs["elapsed"]
         camera_keys = cs.get("camera_keys") or []
@@ -529,7 +529,7 @@ class CutsceneRuntime:
 
     def _fire_cinematic_io_events(self):
         """Fire timed cutscene I/O events, accepting both authored schemas."""
-        cs = self.logic.state
+        cs = self.state
         if not cs or not cs.get('active') or not self.logic.io_manager:
             return bool(cs and cs.get('active'))
 
@@ -597,12 +597,12 @@ class CutsceneRuntime:
                     )
 
             # An input/output may stop, replace or otherwise mutate the cinematic.
-            if self.logic.state is not cs:
+            if self.state is not cs:
                 return False
         return True
 
     def _update_cinematic_camera(self, delta: float):
-        cs = self.logic.state
+        cs = self.state
         if not cs or not cs.get('active') or cs.get('paused'):
             return
 
@@ -618,7 +618,7 @@ class CutsceneRuntime:
         if node is None:
             debug_log("IO", f"CinematicCamera: node '{node_name}' not found — aborting")
             entity = cs.get('entity')
-            self.logic.state = None
+            self.state = None
             if entity and self.logic.io_manager:
                 self.logic.io_manager.fire_output(entity, 'OnFinished')
             return
@@ -717,7 +717,7 @@ class CutsceneRuntime:
                 self.logic.io_manager.fire_output(cs['entity'], 'OnReachNode')
 
             # Arrival outputs may mutate the cinematic state.
-            if self.logic.state is not cs:
+            if self.state is not cs:
                 return
 
             next_name = node.get_next_node_name()
@@ -727,7 +727,7 @@ class CutsceneRuntime:
                 cs['lerp_t'] = 0.0
             else:
                 entity = cs['entity']
-                self.logic.state = None
+                self.state = None
                 if self.logic.io_manager:
                     self.logic.io_manager.fire_output(entity, 'OnFinished')
 
