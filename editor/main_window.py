@@ -1879,10 +1879,6 @@ class MainWindow(QMainWindow):
             self.view_3d.player1_glasses = normalize_glasses(self.config.get(
                 'Appearance', 'glasses', fallback=DEFAULT_GLASSES
             ))
-            # Apply the persistent HUD font immediately when outside Play.
-            # During Play, a map may have intentionally overridden the HUD.
-            if not self.view_3d.play_mode and hasattr(self.view_3d, '_reload_hud_settings'):
-                self.view_3d._reload_hud_settings()
             self.view_3d.update()
                 
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
