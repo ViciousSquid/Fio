@@ -29,11 +29,11 @@ from .brush_geometry import build_collision_mesh, brush_has_geometry
 from .prop_runtime import PropSession
 from .change_journal import JOURNAL, STATE, moved, touch
 from .entity_table import ENT_PROP
-from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
 from .logic_parenting import LogicParenting
+from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYER_EXIT_EPSILON
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
@@ -110,12 +110,6 @@ Key_Space = 0x20
 Key_C = 0x43
 Key_Shift = 0x01000020
 Key_Control = 0x01000021
-
-# Portal transit cooldown — prevents the player from oscillating back and
-# forth between two portals if they are very close together (seconds).
-_PORTAL_TRANSIT_COOLDOWN = 0.5
-# Keep the camera continuous across a portal plane; collision handles any later correction.
-_PORTAL_PLAYER_EXIT_EPSILON = 0.05
 
 # Noise "loudness" multipliers scale a monster's hearing range per event.
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
@@ -372,6 +366,8 @@ class LogicThread(threading.Thread):
         self.cutscene_runtime = CutsceneRuntime(self)
         # LogicTriggers owns trigger detection and activation logic.
         self.trigger_runtime = LogicTriggers(self)
+        # LogicPortals owns portal topology, transit and fade runtime.
+        self.portal_runtime = LogicPortals(self, portal_type=Portal)
 
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
@@ -597,43 +593,13 @@ class LogicThread(threading.Thread):
             self.mark_collision_dirty()
         self._rebuild_portal_links()
 
-    def _rebuild_portal_links(self):
-        """Resolve every portal's ``portal_target`` name to its paired portal.
+    def _portal_runtime(self):
+        """Return the portal runtime subsystem."""
+        return self.portal_runtime
 
-        Part of :meth:`_build_entity_caches`, and called on its own by the
-        portal SetTarget input: transit reads these lists, so a retargeted
-        portal kept sending the player to its old partner.
-        """
-        # PERF: portals, for the same reason again.  _update_portals ticks every
-        # portal's fade every frame, but the traversal relation itself is also
-        # cached numerically.  The slot space is exactly enumerate(self.things),
-        # which is the EntityTable slot space published to the renderer.
-        self._portal_things = []
-        self._portal_target_things = []
-        portal_slots = []
-        portal_target_slots = []
-        name_to_slot = {
-            t.properties.get('name'): slot
-            for slot, t in enumerate(self.things)
-            if t.properties.get('name')
-        }
-        for slot, t in enumerate(self.things):
-            if not (Portal and isinstance(t, Portal)):
-                continue
-            self._portal_things.append(t)
-            portal_slots.append(slot)
-            target_name = t.properties.get('portal_target', '')
-            target_slot = name_to_slot.get(target_name, -1)
-            if (target_slot >= 0 and Portal
-                    and isinstance(self.things[target_slot], Portal)):
-                portal_target_slots.append(target_slot)
-                self._portal_target_things.append(self.things[target_slot])
-            else:
-                portal_target_slots.append(-1)
-                self._portal_target_things.append(None)
-        self._portal_slots = np.asarray(portal_slots, dtype=np.int32)
-        self._portal_target_slots = np.asarray(
-            portal_target_slots, dtype=np.int32)
+    def _rebuild_portal_links(self):
+        """Rebuild cached portal target/slot relations."""
+        return self._portal_runtime().rebuild_links()
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1356,17 +1322,8 @@ class LogicThread(threading.Thread):
             self._hud_health_fade_from = 0.0
             self._hud_health_fade_phase = "in"
 
-            # Reset portal transit state
-            self._portal_cooldowns.clear()
-            self._portal_prev_player_pos = None
-
-            # Reset portal fade state so portals start at the correct opacity
-            if Portal is not None:
-                for t in self.things:
-                    if isinstance(t, Portal):
-                        _a = t.is_active()
-                        t._fade_alpha = 1.0 if _a else 0.0
-                        t._fade_target = t._fade_alpha
+                # Reset portal runtime state (transit + fade state).
+            self._portal_runtime().reset_session()
 
             self.level_complete_ui = None
 
@@ -1449,17 +1406,8 @@ class LogicThread(threading.Thread):
             self._hud_health_fade_from = 0.5
             self._hud_health_fade_phase = "idle"
 
-            # Reset portal transit state
-            self._portal_cooldowns.clear()
-            self._portal_prev_player_pos = None
-
-            # Reset portal fade state to match 'active' property (editor view stays correct)
-            if Portal is not None:
-                for t in self.things:
-                    if isinstance(t, Portal):
-                        _a = t.is_active()
-                        t._fade_alpha = 1.0 if _a else 0.0
-                        t._fade_target = t._fade_alpha
+                # Reset portal runtime state (transit + fade state).
+            self._portal_runtime().reset_session()
 
             self.level_complete_ui = None
 
@@ -2321,178 +2269,27 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def note_player_teleported(self):
-        """The player moved without travelling there (a teleport, a load).
-
-        Portal transit tests the segment from last tick's position to this
-        one, so a teleport whose straight line happened to cross an aperture
-        was read as walking through it: the player arrived at the paired
-        portal instead of the destination.
-        """
-        self._portal_prev_player_pos = None
+        """Invalidate the previous portal segment after a non-portal teleport."""
+        return self._portal_runtime().note_player_teleported()
 
     def _update_portals(self, delta: float):
-        """
-        Detect and execute player transit through active portal pairs.
-
-        Portal links are integer slot relations resolved at topology-cache
-        rebuild time; the per-tick traversal no longer resolves portal names.
-        """
-        if Portal is None or not self.player:
-            return
-        if not len(self._portal_things):
-            return
-
-        for portal in self._portal_things:
-            portal.tick_fade(delta)
-
-        for pid in list(self._portal_cooldowns):
-            self._portal_cooldowns[pid] -= delta
-            if self._portal_cooldowns[pid] <= 0.0:
-                del self._portal_cooldowns[pid]
-
-        cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
-        prev = self._portal_prev_player_pos
-        if prev is None:
-            prev = cur
-
-
-        for portal_index, portal_slot in enumerate(self._portal_slots):
-            portal_a = self._portal_things[portal_index]
-            if not portal_a.is_active():
-                continue
-            if portal_index >= len(self._portal_target_slots):
-                continue
-            target_slot = int(self._portal_target_slots[portal_index])
-            if target_slot < 0:
-                continue
-            portal_b = self._portal_target_things[portal_index]
-            if portal_b is None or not portal_b.is_active():
-                continue
-            if id(portal_a) in self._portal_cooldowns:
-                continue
-
-            hit = self._segment_crosses_aperture(portal_a, prev, cur)
-            if hit is not None:
-                self._execute_portal_transit(portal_a, portal_b)
-                cd = getattr(
-                    Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
-                self._portal_cooldowns[id(portal_a)] = cd
-                self._portal_cooldowns[id(portal_b)] = cd
-                if self.io_manager:
-                    self.io_manager.fire_output(portal_a, 'OnTeleport')
-                    self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
-                debug_log(
-                    "Portal",
-                    f"Player transited '{portal_a.properties.get('name')}' "
-                    f"→ '{portal_b.properties.get('name')}'"
-                )
-                break
-
-        self._portal_prev_player_pos = (
-            float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z)
-        )
+        """Advance portal fade/transit runtime for one simulation tick."""
+        return self._portal_runtime().update(delta)
 
     @staticmethod
     def _segment_crosses_aperture(portal, prev, cur):
-        """Return the world crossing point if the segment prev→cur passes
-        through ``portal`` front-to-back within its aperture, else None.
-
-        Testing the actual segment/plane intersection (rather than the endpoint)
-        stops fast movers from tunnelling through a small aperture between
-        frames.
-        """
-        nx, ny, nz = portal.get_normal()
-        ox, oy, oz = portal.pos
-        s_prev = (prev[0] - ox) * nx + (prev[1] - oy) * ny + (prev[2] - oz) * nz
-        s_cur  = (cur[0]  - ox) * nx + (cur[1]  - oy) * ny + (cur[2]  - oz) * nz
-        # Only a front(>=0) → back(<0) crossing counts.
-        if not (s_prev >= 0.0 and s_cur < 0.0):
-            return None
-        denom = s_prev - s_cur
-        t = s_prev / denom if denom > 1e-9 else 0.0
-        t = min(1.0, max(0.0, t))
-        hit = (prev[0] + (cur[0] - prev[0]) * t,
-               prev[1] + (cur[1] - prev[1]) * t,
-               prev[2] + (cur[2] - prev[2]) * t)
-        if portal.contains_point(hit[0], hit[1], hit[2], margin=0.0):
-            return hit
-        return None
+        """Compatibility wrapper for the portal crossing predicate."""
+        return LogicPortals._segment_crosses_aperture(portal, prev, cur)
 
     def _execute_portal_transit(self, portal_a, portal_b):
-        """Teleport the player through portal_a to portal_b using the portal's
-        shared link transform, so this exactly matches the view the renderer
-        draws through the aperture.  Position, velocity and look direction are
-        all carried through, including pitch for tilted/floor portals."""
-        p = self.player.pos
-        # Position and velocity through the shared transform.
-        tx, ty, tz = portal_map_point(
-            portal_a.pos, portal_a.get_basis(),
-            portal_b.pos, portal_b.get_basis(),
-            (float(p.x), float(p.y), float(p.z)))
-        vx, vy, vz = portal_map_direction(
-            portal_a.get_basis(), portal_b.get_basis(),
-            (float(self.player.velocity.x), float(self.player.velocity.y), float(self.player.velocity.z)))
-
-        # Preserve the mapped position.  A body-sized exit offset makes the
-        # camera visibly jump when walking through an otherwise door-like portal.
-        # The portal plane itself is the transition surface; the collision system
-        # owns any subsequent world penetration correction.
-        bnx, bny, bnz = portal_b.get_normal()
-        epsilon = _PORTAL_PLAYER_EXIT_EPSILON
-        self.player.pos = glm.vec3(tx + bnx * epsilon,
-                                   ty + bny * epsilon,
-                                   tz + bnz * epsilon)
-        self.player.velocity = glm.vec3(vx, vy, vz)
-
-        # Re-derive yaw (and pitch) from the transformed look direction so the
-        # camera comes out pointing the right way even for pitched portals.
-        angle = float(self.player.angle)
-        pitch = float(getattr(self.player, 'pitch', 0.0))
-        fx = math.sin(angle) * math.cos(pitch)
-        fy = math.sin(pitch)
-        fz = math.cos(angle) * math.cos(pitch)
-        mfx, mfy, mfz = portal_map_direction(
-            portal_a.get_basis(), portal_b.get_basis(), (fx, fy, fz))
-        self.player.angle = math.atan2(mfx, mfz)
-        if hasattr(self.player, 'pitch'):
-            self.player.pitch = math.asin(max(-1.0, min(1.0, mfy)))
-
-        self._plugin_emit("portal_transit", portal_from=portal_a, portal_to=portal_b)
+        """Compatibility wrapper for player portal transit."""
+        return self._portal_runtime()._execute_player_transit(portal_a, portal_b)
 
     def _transit_projectile_through_portals(self, projectiles, index, prev_pos):
-        """Teleport one dense projectile through the cached portal relations."""
-        if Portal is None or not len(self._portal_things):
-            return
-        cur = tuple(projectiles.pos[index])
-        for portal_index, portal_slot in enumerate(self._portal_slots):
-            portal_a = self._portal_things[portal_index]
-            if not portal_a.is_active():
-                continue
-            if portal_index >= len(self._portal_target_slots):
-                continue
-            target_slot = int(self._portal_target_slots[portal_index])
-            if target_slot < 0:
-                continue
-            portal_b = self._portal_target_things[portal_index]
-            if portal_b is None or not portal_b.is_active():
-                continue
-            if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
-                continue
-            npx, npy, npz = portal_map_point(
-                portal_a.pos, portal_a.get_basis(),
-                portal_b.pos, portal_b.get_basis(), cur)
-            direction = portal_map_direction(
-                portal_a.get_basis(), portal_b.get_basis(),
-                tuple(projectiles.vel[index]))
-            bnx, bny, bnz = portal_b.get_normal()
-            projectiles.pos[index] = (
-                npx + bnx * Portal.EXIT_CLEARANCE,
-                npy + bny * Portal.EXIT_CLEARANCE,
-                npz + bnz * Portal.EXIT_CLEARANCE,
-            )
-            projectiles.vel[index] = direction
-            break
-
+        """Compatibility wrapper for dense projectile portal transit."""
+        return self._portal_runtime().transit_projectile_through_portals(
+            projectiles, index, prev_pos
+        )
 
     # =========================================================================
     # LOGIC TIMER UPDATE
