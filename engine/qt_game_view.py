@@ -73,6 +73,7 @@ from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole, debug_log
 from .sysmon import SysMon
+from .floating_windows import CallbackWindow, WindowManager
 
 # Pygame for gamepad support
 import pygame
@@ -145,6 +146,9 @@ class QtGameView(QOpenGLWidget):
         self.show_visibility_debug = False
         self.grid_visible = True
         self.sysmon = SysMon(self)
+        # SysMon-style floating tools share one lightweight window manager.
+        self.floating_windows = WindowManager()
+        self.pos_window = None
 
 
         self.sound_pool = {}
@@ -1501,6 +1505,54 @@ class QtGameView(QOpenGLWidget):
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
 
+    def show_pos_window(self):
+        """Open or raise the live camera-position floating window."""
+        if self.pos_window is not None and self.pos_window.active:
+            self.floating_windows.raise_(self.pos_window)
+            self.update()
+            return
+
+        self.pos_window = CallbackWindow(
+            key="pos",
+            title="Pos",
+            draw_fn=self._draw_pos_window,
+            width=230,
+            body_height=78,
+            x=430,
+            y=20,
+            on_close_cb=self._close_pos_window,
+        )
+        self.floating_windows.add(self.pos_window)
+        self.update()
+
+    def _close_pos_window(self):
+        self.pos_window = None
+        self.update()
+
+    def _draw_pos_window(self, painter, x, y, w, h):
+        """Draw only the current camera coordinates inside the Pos window."""
+        p = self.camera.pos
+        values = (
+            ("X", float(p.x)),
+            ("Y", float(p.y)),
+            ("Z", float(p.z)),
+        )
+        font = QFont("Arial", 11)
+        font.setStyleHint(QFont.Monospace)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        axis_color = QColor(240, 128, 0)
+        value_color = QColor(255, 255, 255)
+        baseline = y + 21
+        axis_x = x + 12
+        value_x = axis_x + metrics.horizontalAdvance("X  ")
+        for axis, value in values:
+            painter.setPen(axis_color)
+            painter.drawText(axis_x, baseline, axis)
+            painter.setPen(value_color)
+            painter.drawText(value_x, baseline, f"{value:.3f}")
+            baseline += 19
+
     def _paint_frame(self, render_state):
         """Draw one frame from *render_state* (None when not threaded)."""
         # Keep all direct OpenGL rendering inside Qt's native-painting boundary.
@@ -1919,6 +1971,8 @@ class QtGameView(QOpenGLWidget):
                 painter, self.fps, self.logic_thread, self.renderer,
                 self.editor.state, getattr(self.editor, 'terrain', None)
             )
+
+        self.floating_windows.draw_all(painter)
 
         # Live terrain sculpting hint: draw this inside the 3D viewport rather
         # than using the editor toast system. This is intentionally styled as
@@ -3221,6 +3275,10 @@ class QtGameView(QOpenGLWidget):
             self.terrain_sculpt_painting = True
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
+        if not self.play_mode and self.floating_windows.handle_mouse_press(event):
+            if any(getattr(w, "dragging", False) for w in self.floating_windows.windows):
+                self.setCursor(Qt.ClosedHandCursor)
+            return
         if self.sysmon.handle_mouse_press(event, self.play_mode):
             if self.sysmon.dragging:
                 self.setCursor(Qt.ClosedHandCursor)
@@ -3325,6 +3383,10 @@ class QtGameView(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if not self.play_mode and self.floating_windows.handle_mouse_move(
+                event, self.width(), self.height()):
+            self.update()
+            return
         if self.sysmon.handle_mouse_move(event, self.play_mode, self.width(), self.height()):
             self.update()
             return
@@ -3408,6 +3470,9 @@ class QtGameView(QOpenGLWidget):
             self.editor.apply_texture_to_specific_face(brush, face)
             if hasattr(self.editor, 'show_surface_inspector'):
                 self.editor.show_surface_inspector(brush, face)
+            return
+        if not self.play_mode and self.floating_windows.handle_mouse_release(event):
+            self.setCursor(Qt.ArrowCursor)
             return
         if self.sysmon.handle_mouse_release(event, self.play_mode):
             self.setCursor(Qt.ArrowCursor)
