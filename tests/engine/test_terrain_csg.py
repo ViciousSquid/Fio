@@ -74,3 +74,39 @@ def test_terrain_csg_requires_plain_aabb_brush():
 
     assert is_plain_aabb_brush(plain)
     assert not is_plain_aabb_brush(custom)
+
+
+
+def test_terrain_texture_stamp_normalizes_and_serializes():
+    terrain = Terrain(seed=7)
+
+    assert terrain.add_texture_stamp(
+        [64.0, 32.0, -64.0, -32.0],
+        "assets/textures/road.png",
+        angle=0.5,
+        feather=4.0,
+        opacity=0.75,
+    )
+    assert terrain.texture_stamps == [{
+        "bounds": [-64.0, -32.0, 64.0, 32.0],
+        "texture": "assets/textures/road.png",
+        "angle": 0.5,
+        "feather": 4.0,
+        "opacity": 0.75,
+    }]
+
+    data = terrain.to_dict()
+    assert data["texture_stamps"] == terrain.texture_stamps
+
+    restored = Terrain(seed=7)
+    restored.from_dict(data)
+    assert restored.texture_stamps == terrain.texture_stamps
+
+
+def test_terrain_texture_stamp_rejects_degenerate_rectangle():
+    terrain = Terrain(seed=7)
+
+    assert not terrain.add_texture_stamp(
+        [0.0, 0.0, 0.0, 32.0], "assets/textures/road.png")
+    assert not terrain.add_texture_stamp(
+        [0.0, 0.0, 32.0, 32.0], "")
