@@ -34,6 +34,7 @@ from .portal_transform import map_point as portal_map_point, map_direction as po
 from .effect_entity import Effect
 from .cutscene_runtime import CutsceneRuntime
 from .projectile_table import ProjectileStore
+from .effect_table import EffectStore
 
 _NO_LEGACY_CUTSCENE_STATE = object()
 
@@ -483,7 +484,10 @@ class LogicThread(threading.Thread):
         # surface is retained for compatibility, while numeric simulation state
         # lives in ProjectileStore's persistent NumPy columns.
         self._monster_projectiles: ProjectileStore = ProjectileStore()
-        #: Their positions as the ``(N, 3)`` float32 array each frame publishes.
+        #: Dense execution state for Effect primitives. Authoring Effects remain
+        #: in editor_state.things; this store owns their runtime phase and origin.
+        self.effect_store: EffectStore = EffectStore()
+        #: Their positions as the (N, 3) float32 array each frame publishes.
         self._projectile_positions = _NO_PROJECTILES
 
         # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
@@ -1338,13 +1342,10 @@ class LogicThread(threading.Thread):
             ]
             self._refresh_collision_brushes_cache()
 
-            # Reset transient Effect playback so every Play Mode session
-            # starts its animations from a fresh runtime origin. The origin itself
-            # is stored on Effect objects and then projected into both render
-            # buffers, preventing A/B buffer phase jumps.
-            for thing in self.things:
-                if isinstance(thing, Effect):
-                    thing.reset_runtime()
+
+            # Reset dense Effect execution state for this Play Mode session.
+            # Runtime phase, origin and active state stay out of authoring objects.
+            self.effect_store.begin_session(self.things)
 
             # Reset player stats
             self.player_health = 100
@@ -5011,6 +5012,7 @@ class LogicThread(threading.Thread):
             world_epoch,
             dirty_objects=render_dirty,
             effect_runtime=self.play_mode,
+            effect_store=self.effect_store,
             peer=peer_etable,
             peer_dirty=self._peer_render_dirty(
                 render_dirty, peer_etable, snapshot_epoch),
