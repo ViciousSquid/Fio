@@ -511,9 +511,13 @@ class CutsceneWizard(QtWidgets.QDialog):
                     lt = float(left.get("time", 0.0)); rt = float(right.get("time", 0.0))
                     if lt <= self._preview_time <= rt:
                         t = max(0.0, min(1.0, (self._preview_time - lt) / max(1e-6, rt - lt)))
-                        t = t * t * (3.0 - 2.0 * t)
-                        pitch = float(left.get("pitch", 0.0)) + (float(right.get("pitch", 0.0)) - float(left.get("pitch", 0.0))) * t
-                        fov = float(left.get("fov", 90.0)) + (float(right.get("fov", 90.0)) - float(left.get("fov", 90.0))) * t
+                        if right.get("teleport", False):
+                            pitch = float(right.get("pitch", 0.0))
+                            fov = float(right.get("fov", 90.0))
+                        else:
+                            t = t * t * (3.0 - 2.0 * t)
+                            pitch = float(left.get("pitch", 0.0)) + (float(right.get("pitch", 0.0)) - float(left.get("pitch", 0.0))) * t
+                            fov = float(left.get("fov", 90.0)) + (float(right.get("fov", 90.0)) - float(left.get("fov", 90.0))) * t
                         break
             camera = self.main_window.view_3d.camera
             camera.pos = glm.vec3(*pos)
