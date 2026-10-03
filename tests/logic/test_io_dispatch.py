@@ -737,7 +737,7 @@ def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
         "actors": [{"id": "actor-1", "name": "Actor"}],
         "actor_tracks": {},
         "events": [{
-            "time": 0.25,
+            "time": 0.05,
             "type": "io",
             "source_id": "source-1",
             "source_name": "Source",
