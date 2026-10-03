@@ -2140,7 +2140,7 @@ class QtGameView(QOpenGLWidget):
             if style == 3:
                 # Style 3 uses a single compact status line: separate ammo
                 # from health with one font-space and keep the counter white.
-                ammo_x += metrics.horizontalAdvance(" ")
+                ammo_x += 2 * metrics.horizontalAdvance(" ")
             painter.setFont(ammo_font)
             painter.setPen(self._hud_count_shadow_pen)
             painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
