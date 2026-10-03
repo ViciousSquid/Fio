@@ -812,7 +812,10 @@ def test_logic_camera_json_cutscene_stop_restores_actor():
     recorder = _CutsceneEntityRecorder()
     logic = _json_cutscene_logic(camera, [actor], recorder)
     data = {
-        "camera": [{"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90}],
+        "camera": [
+            {"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90},
+            {"time": 1.0, "pos": [0, 10, 10], "yaw": 0, "pitch": 0, "fov": 90},
+        ],
         "actors": [{"id": "actor-1", "name": "Actor"}],
         "actor_tracks": {"actor-1": [{"time": 0.0, "pos": [20, 0, 0], "yaw": 0}]},
         "events": [],
