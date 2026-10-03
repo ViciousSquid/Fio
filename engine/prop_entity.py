@@ -99,7 +99,7 @@ PROP_DEFAULTS = {
 
     # Collection behaviour.
     'collect_enabled': False,
-    'collect_type': 'health',
+    'collect_type': 'weapon',
     'collect_value': 25,
     'collect_activation': 'walk_over',
     'collect_collected': False,
