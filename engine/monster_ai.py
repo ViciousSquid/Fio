@@ -105,7 +105,7 @@ class MonsterAI:
         self._enemy_rows = {}          # id(monster) -> row
         self._enemy_answered = np.zeros(0, dtype=bool)  # rows the batch answered
         self._enemy_monsters = ()      # row -> monster
-        self._enemy_teams = ()         # row -> its team string
+        self._enemy_team_codes = {}    # team string -> MonsterTable team code
         self._enemy_nearest = None     # row -> nearest enemy row, or -1
         self._enemy_range = None       # the range the batch was built for
         self._enemy_ready = False      # has this tick's batch been attempted
@@ -136,7 +136,7 @@ class MonsterAI:
         self.table.rays_cast = self.table.python_rows = 0
         self._enemy_rows = {}
         self._enemy_monsters = ()
-        self._enemy_teams = ()
+        self._enemy_team_codes = {}
         self._enemy_nearest = None
         self._enemy_ready = False
         self._tick_monsters = None
@@ -1183,8 +1183,9 @@ class MonsterAI:
         if self._enemy_batch(max_range) is not None:
             row = self._enemy_rows.get(id(thing))
             # The team is re-checked because it is the caller's argument, not
-            # necessarily the property the batch read.
-            if (row is not None and self._enemy_teams[row] == my_team
+            team_code = self._enemy_team_codes.get(my_team, -1)
+            if (row is not None and self.table.team[row] == team_code
+                    and self._enemy_answered[row]):
                     and self._enemy_answered[row]):
                 nearest = int(self._enemy_nearest[row])
                 return self._enemy_monsters[nearest] if nearest >= 0 else None
@@ -1194,33 +1195,14 @@ class MonsterAI:
     def _enemy_batch(self, max_range: float):
         """This tick's nearest enemy for every monster, as one dense pass.
 
-        The shape the scalar search always had was ``for A: for B: distance``,
-        which is the same arithmetic N times over rather than once over N --
-        22 ms per tick at 240 monsters, and quadratic beyond that. Written as
-        arrays it is one squared-distance matrix, three masks and an
-        ``argmin``: 0.74 ms at the same count, and the answer agrees.
+        MonsterTable already contains the gathered positions, team codes,
+        and alive/hidden flags for this tick. The kernel consumes those
+        columns directly: one float32 squared-distance matrix, one validity
+        mask, and one argmin. There is no per-monster candidate walk and no
+        Python loop over teams.
 
-        Built at most once per tick, on the first query, so a map whose
-        monsters have no teams never builds one. Returns the nearest-enemy row
-        array, or ``None`` when the caller should walk instead.
-
-        **Positions are read live here, not from the projection's column.**
-        ``EntityTable.pos`` is refreshed by the logic thread in its render
-        pass, and the AI runs on its own thread at its own rate: measured, that
-        leaves the column up to 2.5 units behind a settled monster and 11
-        behind a falling one, and in a context where no render pass runs at all
-        -- a head-less test, the standalone player -- it would never be
-        refreshed. The projection still supplies what it is good for, which is
-        the row set and its order: ``monster_slots`` is the same monsters in
-        the same order as ``_monster_things``, and that order is what makes
-        ``argmin`` break ties exactly as ``<`` did.
-
-        The distance is ``|a|^2 + |b|^2 - 2ab`` in float64, where the scalar
-        path subtracts two ``glm.vec3`` in float32. That is not bit-identical
-        and is deliberately the more precise of the two: a pair whose ordering
-        the two disagree about is a pair the float32 path was resolving with
-        its own rounding error. Checked against the scalar answer over random
-        scenes and over constructed exact ties.
+        A direct helper call outside the dense update gathers the table first;
+        the play-mode hot path has already gathered it in _update_dense.
         """
         if self._enemy_ready:
             return self._enemy_nearest if self._enemy_range == max_range else None
@@ -1231,113 +1213,80 @@ class MonsterAI:
         monsters = getattr(self, '_tick_monsters', None)
         if monsters is None:
             monsters = getattr(self.lt, '_monster_things', None)
-        if not monsters or len(monsters) < self.ENEMY_BATCH_MIN_MONSTERS:
+        if monsters is None:
+            monsters = getattr(self.lt, 'things', None)
+        if not monsters:
             return None
 
-        count = len(monsters)
-        if len(self._enemy_pos) < count:
-            self._enemy_pos = np.empty((max(count, 32), 3), dtype=np.float64)
-        pos = self._enemy_pos[:count]
+        table = self.table
+        same_rows = (
+            table.count == len(monsters)
+            and all(a is b for a, b in zip(table.monsters, monsters))
+        )
+        if not same_rows:
+            table.gather(monsters)
 
-        teams = []
-        codes = {}
-        team_id = np.empty(count, dtype=np.int32)
-        alive = np.empty(count, dtype=bool)
-        rows = {}
-        try:
-            pos[:] = [m.pos for m in monsters]
-        except (ValueError, TypeError):
-            # A monster whose pos is not a 3-vector: leave it to the walk.
+        count = table.count
+        if not count:
             return None
-        for row, monster in enumerate(monsters):
-            props = monster.properties
-            team = props.get('team', '')
-            teams.append(team)
-            if team:
-                code = codes.get(team)
-                if code is None:
-                    code = codes[team] = len(codes)
-                team_id[row] = code
-            else:
-                team_id[row] = -1
-            alive[row] = not (props.get('dead', False)
-                              or props.get('hidden', False))
-            rows[id(monster)] = row
 
-        self._enemy_rows = rows
+        team_id = table.team[:count]
+        alive = ~(table.dead[:count] | table.hidden[:count])
+
+        self._enemy_rows = table.row_of
+        self._enemy_monsters = table.monsters
+        self._enemy_team_codes = {
+            name: code for code, name in enumerate(table.team_names)
+        }
         self._enemy_answered = alive & (team_id >= 0)
-        self._enemy_monsters = monsters
-        self._enemy_teams = teams
         self._enemy_nearest = self._nearest_enemy_rows(
-            pos, team_id, alive, max_range)
+            table.pos[:count], team_id, alive, max_range)
         return self._enemy_nearest
 
     @staticmethod
     def _nearest_enemy_rows(pos, team_id, alive, max_range):
-        """``row -> nearest enemy row``, or -1. The whole kernel.
+        """Return each row's nearest living enemy row, or -1.
 
-        The arithmetic is float32 component-wise, because that is what the walk
-        does: ``glm.vec3(a) - glm.vec3(b)`` is float32, and ``glm.dot`` is
-        ``x*x + y*y + z*z`` in float32. Two enemies the walk cannot tell apart
-        are an exact tie it resolves by order, and ``argmin`` resolves the same
-        way -- but only if they are still exactly equal here.
-
-        Getting that wrong is not theoretical: a float64 batch separated a pair
-        the walk tied (22509.0000000000 against 22508.9988555908) and picked
-        the other monster. Nor is rounding the float64 *result* to float32
-        enough -- it lands on 22508.998, where the float32 computation lands on
-        22509.0. The precision has to be in the inputs and the intermediates,
-        not just the answer.
-
-        One block per team rather than one ``(M, M)`` matrix: a monster's
-        candidates are only the living, teamed monsters of *other* teams, so
-        each team's rows are measured against exactly those columns. With two
-        teams that is half the matrix and none of the mask planes -- and it is
-        the number of large NumPy operations that matters here, not just their
-        size: each one releases the GIL, and in a live session every release
-        can wait out a switch interval to get it back (15.8 ms standalone was
-        80 ms in the running game at 1000 monsters). Columns keep their
-        ascending order, so ``argmin`` still breaks exact ties by row order.
-        A teamless row is answered too, against every teamed monster, exactly
-        as the single matrix answered it (its caller ignores it).
+        The candidate mask is entirely derived from the dense team and alive
+        columns. Self rows and same-team rows are masked out before one
+        float32 squared-distance argmin across the table. This preserves the
+        glm path's float32 precision and first-row tie behaviour.
         """
         count = len(pos)
-        p = np.asarray(pos, dtype=np.float32)
         nearest = np.full(count, -1, dtype=np.int32)
         if not count:
             return nearest
-        limit = np.float32(max_range) * np.float32(max_range)
-        targets = alive & (team_id >= 0)       # who can be anybody's enemy
-        # Only the living teamed rows are answered: nobody asks about a dead
-        # or teamless monster, and at 1000 monsters in a long fight that is
-        # a large share of the matrix. (The object-level query falls back to
-        # the walk for a row the batch did not answer.)
-        for code in np.unique(team_id[targets]):
-            rows = np.flatnonzero(targets & (team_id == code))
-            cols = np.flatnonzero(targets & (team_id != code))
-            if not len(cols):
-                continue
-            a = p[rows]
-            b = p[cols]
-            # x*x + y*y + z*z, in float32, in that order, in place: nine
-            # (rows, cols) operations and two buffers where the plain
-            # expression made fifteen passes and eight temporaries.
-            distance = np.subtract.outer(a[:, 0], b[:, 0])
-            np.multiply(distance, distance, out=distance)
-            term = np.subtract.outer(a[:, 1], b[:, 1])
-            np.multiply(term, term, out=term)
-            distance += term
-            np.subtract.outer(a[:, 2], b[:, 2], out=term)
-            np.multiply(term, term, out=term)
-            distance += term
-            # The first minimum, then the range: the same answer as masking
-            # out-of-range entries first, since an in-range minimum is the
-            # overall minimum -- without a pass to build and apply the mask.
-            best = np.argmin(distance, axis=1)
-            found = distance[np.arange(len(rows)), best] <= limit
-            nearest[rows] = np.where(found, cols[best], -1)
-        return nearest
 
+        p = np.asarray(pos, dtype=np.float32)
+        team = np.asarray(team_id[:count], dtype=np.int32)
+        active = np.asarray(alive[:count], dtype=bool) & (team >= 0)
+        if not active.any():
+            return nearest
+
+        limit = np.float32(max_range) * np.float32(max_range)
+
+        distance = np.subtract.outer(p[:, 0], p[:, 0])
+        np.multiply(distance, distance, out=distance)
+        term = np.subtract.outer(p[:, 1], p[:, 1])
+        np.multiply(term, term, out=term)
+        distance += term
+        np.subtract.outer(p[:, 2], p[:, 2], out=term)
+        np.multiply(term, term, out=term)
+        distance += term
+
+        candidate = (
+            active[:, None]
+            & active[None, :]
+            & (team[:, None] != team[None, :])
+        )
+        np.fill_diagonal(candidate, False)
+        distance[~candidate] = np.inf
+
+        best = np.argmin(distance, axis=1)
+        best_dist = distance[np.arange(count), best]
+        found = active & (best_dist <= limit)
+        nearest[found] = best[found]
+        return nearest
     def _find_closest_enemy_scalar(self, thing, my_team: str, max_range: float):
         """The per-monster walk: the batch's reference, and its fallback."""
         my_pos = glm.vec3(thing.pos)
