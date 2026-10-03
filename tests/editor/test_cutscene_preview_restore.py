@@ -56,7 +56,7 @@ class _Camera:
 def _fake_wizard():
     actor = _Actor((10, 20, 30), 45.0)
     camera = _Camera()
-    return types.SimpleNamespace(
+    wizard = types.SimpleNamespace(
         _preview_rate=1.0,
         _preview_time=0.98,
         _preview_duration=1.0,
@@ -81,6 +81,10 @@ def _fake_wizard():
             update_all_ui=lambda: None,
         ),
     )
+    wizard._preview_stop_and_restore = types.MethodType(
+        CutsceneWizard._preview_stop_and_restore, wizard
+    )
+    return wizard
 
 
 def _pos(obj):
@@ -196,8 +200,10 @@ def test_removing_actor_cleans_all_cutscene_references():
     assert "gone" not in wizard.actor_tracks
     assert wizard.actor_tracks["survivor"][0].get("target_id") is None
     assert all(row.get("look_at", {}).get("actor") != "gone" for row in wizard.camera_keys)
-    assert len(wizard.events) == 2
+    assert len(wizard.events) == 3
     fight = next(e for e in wizard.events if e["type"] == "fight")
     assert fight["attackers"] == ["survivor"]
     dialogue = next(e for e in wizard.events if e["type"] == "dialogue")
     assert dialogue["speaker_id"] == ""
+    message = next(e for e in wizard.events if e["type"] == "message")
+    assert message["text"] == "Still here"
