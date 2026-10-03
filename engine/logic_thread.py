@@ -21,12 +21,11 @@ import math
 import os
 import random
 
-from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
+from .threaded_game_state import ThreadedGameState
 from .player import Player
 from .camera import Camera
 from .prop_runtime import PropSession
-from .change_journal import JOURNAL, STATE, moved, touch
-from .entity_table import ENT_PROP
+from .change_journal import moved, touch
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
@@ -37,6 +36,7 @@ from .logic_combat import LogicCombat, NO_PROJECTILES as _NO_PROJECTILES
 from .logic_timing import LogicTiming
 from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
 from .logic_world import LogicWorld
+from .logic_render import LogicRender
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -213,6 +213,8 @@ class LogicThread(threading.Thread):
         self._last_edited = {}
 
         self._editor_mouselook_active = False
+        # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
+        self.render_runtime = LogicRender(self)
         
         # Player stats
         self.player_health = 100
@@ -2058,526 +2060,32 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _extract_frustum_planes(self, proj_view: glm.mat4):
-        m = proj_view
-        planes = []
-        planes.append(self._normalize_plane(m[0][3] + m[0][0], m[1][3] + m[1][0], m[2][3] + m[2][0], m[3][3] + m[3][0]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][0], m[1][3] - m[1][0], m[2][3] - m[2][0], m[3][3] - m[3][0]))
-        planes.append(self._normalize_plane(m[0][3] + m[0][1], m[1][3] + m[1][1], m[2][3] + m[2][1], m[3][3] + m[3][1]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][1], m[1][3] - m[1][1], m[2][3] - m[2][1], m[3][3] - m[3][1]))
-        planes.append(self._normalize_plane(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2]))
-        planes.append(self._normalize_plane(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]))
-        return planes
+        return self.render_runtime.extract_frustum_planes(proj_view)
 
     def _normalize_plane(self, a, b, c, d):
-        length = math.sqrt(a*a + b*b + c*c)
-        if length < 1e-8:
-            return (0, 0, 0, 0)
-        return (a/length, b/length, c/length, d/length)
+        return self.render_runtime.normalize_plane(a, b, c, d)
 
     def _aabb_in_frustum(self, planes, center, half_size):
-        for plane in planes:
-            a, b, c, d = plane
-            px = center[0] + half_size[0] if a >= 0 else center[0] - half_size[0]
-            py = center[1] + half_size[1] if b >= 0 else center[1] - half_size[1]
-            pz = center[2] + half_size[2] if c >= 0 else center[2] - half_size[2]
-            if a*px + b*py + c*pz + d < 0:
-                return False
-        return True
+        return self.render_runtime.aabb_in_frustum(planes, center, half_size)
 
     def _aabb_in_frustum_batch(self, planes, centers, halves):
-        """Vectorized equivalent of calling _aabb_in_frustum for every
-        (center, half_size) pair. Returns a NumPy boolean array, True where
-        the AABB is (at least partially) inside the frustum.
-
-        PERF: replaces a per-brush, per-plane Python loop (thousands of
-        scalar float ops per tick for a level with hundreds of brushes) with
-        two NumPy matmuls over the whole brush batch and all six planes at
-        once — no per-plane Python iteration or temporary-array allocation.
-        """
-        c = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
-        h = np.asarray(halves, dtype=np.float64).reshape(-1, 3)
-        if c.size == 0:
-            return np.ones(len(centers), dtype=bool)
-        return self._aabb_in_frustum_bounds(planes, np.concatenate((c, h), axis=1))
+        return self.render_runtime.aabb_in_frustum_batch(planes, centers, halves)
 
     @staticmethod
     def _aabb_in_frustum_bounds(planes, bounds):
-        """The frustum test over ``[centre | half]`` rows, as one product.
-
-        Positive-vertex distance for every (box, plane) pair, branch-free:
-        ``dot(n, c + sign(n)*h) + d == dot([n, |n|], [c, h]) + d``. One
-        product, one compare and one reduction: each NumPy call on a big array
-        releases and re-takes the GIL, and with the AI and UI threads running
-        every re-take can wait, so the count of calls is what this is shaped
-        by, as much as the arithmetic.
-
-        Evaluated plane-major, ``(6, 6) x (6, N)``: the six per-plane results
-        for a box are then six rows apart, and the reduction is five
-        elementwise ANDs over contiguous rows. Box-major, ``.all(axis=1)``
-        reduced six adjacent bytes at a time, which cost three times the
-        product itself (24k rows: 0.97 ms, against 0.20 ms this way, for the
-        same answers).
-        """
-        p = np.asarray(planes, dtype=np.float64)        # (6, 4)
-        normals = p[:, :3]
-        weights = np.concatenate((normals, np.abs(normals)), axis=1)   # (6, 6)
-        return (weights @ bounds.T >= -p[:, 3:]).all(axis=0)
+        return LogicRender.aabb_in_frustum_bounds(planes, bounds)
 
     # =========================================================================
     # RENDER STATE PREPARATION
     # =========================================================================
 
     def _update_hud_health_alpha(self, now: float) -> float:
-        """Advance the health HUD fade state machine and return its alpha."""
-        if not getattr(self, "hud_fade_enabled", True):
-            self._hud_health_alpha = 1.0
-            self._hud_health_fade_started = None
-            self._hud_health_fade_from = 1.0
-            self._hud_health_fade_phase = "idle"
-            self._hud_health_last_value = self.player_health
-            return self._hud_health_alpha
-
-        def _sample(at):
-            phase = self._hud_health_fade_phase
-            if phase == "in":
-                started = self._hud_health_fade_started
-                if started is None:
-                    self._hud_health_alpha = 1.0
-                    self._hud_health_fade_from = 1.0
-                    self._hud_health_fade_started = at
-                    self._hud_health_fade_phase = "out"
-                    return self._hud_health_alpha
-
-                elapsed = max(0.0, at - started)
-                # Treat the exact scheduled endpoint as the completed fade-in.
-                # This keeps the state transition deterministic when callers sample
-                # at ``started + duration`` and the perf-counter subtraction lands
-                # one ULP below the nominal duration.
-                if elapsed + 1e-12 < self._hud_health_fade_in_duration:
-                    t = elapsed / self._hud_health_fade_in_duration
-                    self._hud_health_alpha = (
-                        self._hud_health_fade_from
-                        + (1.0 - self._hud_health_fade_from) * t
-                    )
-                    return self._hud_health_alpha
-
-                self._hud_health_alpha = 1.0
-                self._hud_health_fade_from = 1.0
-                self._hud_health_fade_phase = "out"
-                out_elapsed = elapsed - self._hud_health_fade_in_duration
-            elif phase == "out":
-                started = self._hud_health_fade_started
-                if started is None:
-                    self._hud_health_alpha = 0.5
-                    self._hud_health_fade_phase = "idle"
-                    return self._hud_health_alpha
-                out_elapsed = max(
-                    0.0,
-                    at - started - self._hud_health_fade_in_duration,
-                )
-            else:
-                self._hud_health_alpha = 0.5
-                return self._hud_health_alpha
-
-            # Treat the exact end of the fade as a completed state before
-            # normalising the duration.  This avoids a one-ULP floating-point
-            # remainder leaving the state machine in "out" while alpha is
-            # already at the idle value.
-            if out_elapsed >= self._hud_health_fade_out_duration:
-                self._hud_health_alpha = 0.5
-                self._hud_health_fade_started = None
-                self._hud_health_fade_phase = "idle"
-                return self._hud_health_alpha
-
-            t = max(
-                0.0,
-                min(
-                    1.0,
-                    out_elapsed / self._hud_health_fade_out_duration,
-                ),
-            )
-            self._hud_health_alpha = 1.0 - (0.5 * t)
-            return self._hud_health_alpha
-
-        health = self.player_health
-        health_changed = (
-            self._hud_health_last_value is not None
-            and health != self._hud_health_last_value
-        )
-
-        # A health change restarts the fast fade from the opacity that was
-        # actually visible at the moment of the change. Sample the old phase
-        # first; otherwise a second change during fade-out would incorrectly
-        # restart from the stale alpha left by the previous call.
-        if health_changed:
-            _sample(now)
-            self._hud_health_last_value = health
-            self._hud_health_fade_started = now
-            self._hud_health_fade_from = self._hud_health_alpha
-            self._hud_health_fade_phase = "in"
-
-        elif self._hud_health_last_value is None:
-            self._hud_health_last_value = health
-
-        return _sample(now)
+        return self.render_runtime.update_hud_health_alpha(now)
 
     def _peer_render_dirty(self, own_dirty, peer_table, snapshot_epoch):
-        """What changed since *peer_table*'s epoch, when a table must rebuild.
-
-        Only asked when this buffer's own journal replay is a global rebuild
-        (``own_dirty is None``); ``None`` when the peer is no help either.
-        """
-        if own_dirty is not None or peer_table is None:
-            return None
-        peer_epoch = getattr(peer_table, '_epoch', None)
-        if peer_epoch is None:
-            return None
-        return self.editor_state.render_dirty_since(
-            peer_epoch, through_epoch=snapshot_epoch)[1]
+        return self.render_runtime.peer_render_dirty(
+            own_dirty, peer_table, snapshot_epoch
+        )
 
     def _prepare_render_state(self):
-        started = time.perf_counter()
-        write_state = self.game_state.get_write_state()
-        write_state.is_play_mode = self.play_mode
-
-        if self.play_mode and self.player:
-            cs = self.cinematic_state
-            if cs and 'cam_pos' in cs:
-                cam_pos = glm.vec3(*cs['cam_pos'])
-                cam_angle = cs.get('cam_angle', 0.0)
-                cam_pitch = cs.get('cam_pitch', 0.0)
-                # Deliberate cinematic convention: cam_angle/cam_pitch are
-                # Camera yaw/pitch, not the Player's angle convention below.
-                # JSON cutscenes store authored Camera yaw verbatim, and the
-                # legacy PathNode path-facing producer retains its historical
-                # player-angle convention. Do not "correct" this by adding a
-                # pi/2 conversion here; that would silently change authored
-                # cutscene camera orientation and legacy compatibility.
-                direction = glm.vec3(
-                    math.cos(cam_angle) * math.cos(cam_pitch),
-                    math.sin(cam_pitch),
-                    math.sin(cam_angle) * math.cos(cam_pitch),
-                )
-                view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
-                write_state.player_pos = cam_pos
-                write_state.player_angle = cam_angle
-                write_state.player_pitch = cam_pitch
-                fov = cs['fov'] if cs.get('fov') else 90.0
-            else:
-                player_pos = glm.vec3(self.player.pos.x, self.player.pos.y, self.player.pos.z)
-                player_angle = self.player.angle
-                player_pitch = self.player.pitch
-                camera_height = self.player.camera_height
-                ct = self.camera_transition
-                if ct:
-                    # Tween between First Person and Overhead. Both endpoints are
-                    # rebuilt from the live player pose each frame, so the swoop
-                    # tracks movement; smoothstep easing gives a soft in/out. The
-                    # frustum planes below derive from this blended view_matrix,
-                    # so culling stays correct throughout the transition.
-                    dur = ct['duration']
-                    t = 1.0 if dur <= 0.0 else max(0.0, min(1.0, ct['elapsed'] / dur))
-                    t = t * t * (3.0 - 2.0 * t)  # smoothstep
-                    a = self.camera._camera_for_mode(ct['from_overhead'], player_pos,
-                                              player_angle, player_pitch, camera_height)
-                    b = self.camera._camera_for_mode(ct['to_overhead'], player_pos,
-                                              player_angle, player_pitch, camera_height)
-                    cam_pos = a[0] + (b[0] - a[0]) * t
-                    direction = a[1] + (b[1] - a[1]) * t
-                    if glm.length(direction) < 1e-8:
-                        direction = b[1]
-                    direction = glm.normalize(direction)
-                    up_vec = self.camera._safe_up(direction, a[2] + (b[2] - a[2]) * t)
-                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
-                    fov = a[3] + (b[3] - a[3]) * t
-                elif self.is_overhead():
-                    # Native top-down camera. The frustum planes below are built
-                    # from this view_matrix, so overhead culling is correct; the
-                    # up hint is horizontal, avoiding the straight-down lookAt
-                    # degeneracy that would corrupt the view and every plane.
-                    cam_pos, direction, up_vec = self.camera._overhead_camera(player_pos, player_angle)
-                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
-                    fov = self.frustum_fov
-                else:
-                    cam_pos = player_pos + glm.vec3(0, camera_height, 0)
-                    direction = glm.vec3(
-                        math.sin(player_angle) * math.cos(player_pitch),
-                        math.sin(player_pitch),
-                        math.cos(player_angle) * math.cos(player_pitch),
-                    )
-                    view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
-                    fov = self.frustum_fov
-                write_state.player_pos = player_pos
-                write_state.player_angle = player_angle
-                write_state.player_pitch = player_pitch
-        else:
-            write_state.editor_camera_pos = glm.vec3(self.editor_camera.pos)
-            write_state.editor_camera_yaw = self.editor_camera.yaw
-            write_state.editor_camera_pitch = self.editor_camera.pitch
-            write_state.editor_camera_fov = self.editor_camera.fov
-            view_matrix = self.editor_camera.get_view_matrix()
-            fov = self.editor_camera.fov
-
-        write_state.camera_view_matrix = view_matrix
-
-        # LogicCamera owns the view while cinematic_state exists, including
-        # paused cinematics. Publish HUD state so the render thread never needs
-        # to inspect LogicThread directly.
-        cinematic_active = bool(self.cinematic_state)
-        now = time.perf_counter()
-        if cinematic_active:
-            self._hud_cinematic_last_active = True
-            self._hud_cinematic_fade_started = None
-            hud_alpha = 0.0
-        elif self._hud_cinematic_last_active:
-            self._hud_cinematic_last_active = False
-            self._hud_cinematic_fade_started = now
-            hud_alpha = 0.0
-        elif self._hud_cinematic_fade_started is not None:
-            hud_alpha = min(
-                1.0, max(0.0, (now - self._hud_cinematic_fade_started) / 4.0)
-            )
-            if hud_alpha >= 1.0:
-                self._hud_cinematic_fade_started = None
-        else:
-            hud_alpha = 1.0
-
-        health_hud_alpha = self._update_hud_health_alpha(now)
-
-        write_state.cinematic_camera_active = cinematic_active
-        write_state.hud_alpha = hud_alpha
-        write_state.hud_health_alpha = health_hud_alpha
-        write_state.player_health = self.player_health
-        write_state.player_max_health = self.player_max_health
-        write_state.player_dead = self.player_dead
-        write_state.player_ammo = max(0, int(getattr(self, "player_ammo", 0)))
-        if self.play_mode and self.player and not self.cinematic_state:
-            write_state.player_underwater = bool(getattr(self.player, 'eye_underwater', False))
-            write_state.underwater_tint = list(getattr(self.player, 'water_tint', [0.0, 0.4, 0.6]))
-        else:
-            write_state.player_underwater = False
-        write_state.collected_keys = set(self.collected_keys)
-        write_state.hud_message = self.current_hud_message
-        write_state.hud_prompt_key = self.current_hud_key_name
-        write_state.active_weapon = self.active_weapon
-        write_state.muzzle_flash_active = self.muzzle_flash_active
-        if self.active_weapon == "gun1":
-            write_state.shot_ready = True
-        elif self.active_weapon == "gun2":
-            now = time.perf_counter()
-            try:
-                ammo = max(0, int(getattr(self, "player_ammo", 0)))
-            except (TypeError, ValueError):
-                ammo = 0
-            write_state.shot_ready = (
-                ammo > 0
-                and (now - float(getattr(
-                    self, "_last_player_shot_time", float("-inf")
-                ))) >= 1.0
-            )
-        else:
-            write_state.shot_ready = False
-        write_state.camera_transition_active = bool(self.camera_transition)
-
-        if self.play_mode and getattr(self, '_monster_projectiles', None):
-            self._publish_projectile_render_snapshot()
-        else:
-            self._projectile_positions = _NO_PROJECTILES
-        write_state.projectiles = self._projectile_positions
-        write_state.monster_debug_active = self.monster_ai.monster_debug_active
-        write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
-
-        current_time = time.perf_counter()
-        write_state.bullet_marks = [
-            {'pos': [m['pos'].x, m['pos'].y, m['pos'].z],
-             'alpha': max(0.0, 1.0 - (current_time - m['time']) / self.BULLET_FADE_TIME)}
-            for m in self.bullet_marks
-            if current_time - m['time'] < self.BULLET_FADE_TIME
-        ]
-
-        _far = self.view_distance.far_plane if self.view_distance is not None else 10000.0
-        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, _far)
-        proj_view = projection * view_matrix
-        frustum_planes = self._extract_frustum_planes(proj_view)
-
-        brushes = self.brushes
-
-        # ---- T3: the dense render projection ----------------------------
-        # Each RenderState owns its own dense projections.  The active write
-        # buffer is the only table the logic thread may mutate; the renderer can
-        # therefore continue consuming the previously published read buffer
-        # without observing torn material/transform/classification columns.
-        table = write_state.render_table
-        etable = write_state.entity_table
-        self._render_table = table
-        self._entity_table = etable
-        # Capture the live journal epoch for this frame boundary, then replay
-        # every precise invalidation newer than this write buffer's own epoch.
-        # The two RenderState buffers alternate ownership, so the first buffer
-        # can consume the live journal before the second reaches the edit.
-        render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
-        snapshot_epoch, _current_dirty = render_dirty_snapshot
-        table_epoch = getattr(table, "_epoch", None)
-        world_epoch, render_dirty = self.editor_state.render_dirty_since(
-            table_epoch, through_epoch=snapshot_epoch
-        )
-        # Rows are named by the brush's UUID, so ids have to exist before the
-        # table reconciles -- but only then, not on every frame.
-        # Stable ids are needed when rows are first created/replaced, not
-        # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
-        # A brush without one can only have arrived with a change to the row
-        # set, so only then is the scene walked.
-        if (len(brushes) != table.count
-                and any(b.get('id') is None for b in brushes)):
-            self.editor_state.ensure_entity_ids()
-        # In the editor, a tool drags the selection by writing its dicts in
-        # place for many frames after one undo checkpoint: those rows are the
-        # only ones re-read every frame. Everything else changes through a
-        # journal (see RenderTable.begin_frame).
-        edited = () if self.play_mode else self.editor_state.edited_objects()
-        # An edited row is re-read only by the buffer being written, so when an
-        # object leaves the edited set (a deselect after a drag, entering
-        # play) the other buffer still holds whatever it last saw and the two
-        # published frames would alternate between old and new transforms.
-        # Journal the leavers: every table drains its own copy of the journal.
-        edited_ids = {id(obj): obj for obj in edited}
-        left = [obj for oid, obj in getattr(self, '_last_edited', {}).items()
-                if oid not in edited_ids]
-        if left:
-            JOURNAL.record_many(left, STATE)
-        self._last_edited = edited_ids
-        peer = self.game_state.peer_state()
-        peer_table = peer.render_table if peer is not write_state else None
-        table.begin_frame(
-            brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
-            peer=peer_table,
-            peer_dirty=self._peer_render_dirty(
-                render_dirty, peer_table, snapshot_epoch))
-        if self.play_mode:
-            # Every mover and door position, as two array stores.
-            self._movers().publish(self, table)
-        # The table owns its row objects; each buffer owns its table.
-        refs = table.refs
-        total_count = table.count
-
-        # ---- T4: visibility, as masks over the table ---------------------
-        keep, all_slots = table.shown()
-        if self.culling_enabled and total_count:
-            visible_slots = np.flatnonzero(keep & self._aabb_in_frustum_bounds(
-                frustum_planes, table.bounds[:total_count]))
-        else:
-            visible_slots = all_slots
-        # Published as views over the slots, not as lists: the conversion back
-        # to Python objects happens only if something actually reads one, and
-        # on the main camera path nothing does.
-        all_brushes = PublishedBrushes(refs, all_slots)
-        visible_brushes = PublishedBrushes(refs, visible_slots)
-        culled_count = total_count - len(visible_slots)
-
-        # The numerical result itself, published rather than thrown away: the
-        # slots index every column of the table, so the renderer can classify,
-        # sort and batch without reconstructing anything.
-        write_state.render_table = table
-        write_state.render_refs = refs
-        write_state.visible_brush_slots = visible_slots
-        write_state.all_brush_slots = all_slots
-
-        write_state.visible_brushes = visible_brushes
-        write_state.all_brushes = all_brushes
-        write_state.total_brushes = total_count
-        write_state.culled_brushes = culled_count
-
-        # ---- the entity half of the projection ---------------------------
-        # What used to be one Python pass per entity per frame -- two NumPy
-        # scalar stores, three isinstance tests and a list append each -- is a
-        # bulk position store, a live `hidden` read, and masks over columns.
-        # No lock: begin_frame freezes the entity list with one atomic copy
-        # and builds everything from that, and the change journal is
-        # thread-safe. Taking the monster lock here used to make every frame
-        # wait out whatever AI update was running.
-        things = self.things
-        # etable is the table owned by the current write buffer.  It is the
-        # only EntityTable touched until request_swap publishes this frame.
-        etable = write_state.entity_table
-        self._entity_table = etable
-        peer_etable = peer.entity_table if peer is not write_state else None
-        thing_hidden = etable.begin_frame(
-            things,
-            world_epoch,
-            dirty_objects=render_dirty,
-            effect_runtime=self.play_mode,
-            effect_store=self.effect_store,
-            peer=peer_etable,
-            peer_dirty=self._peer_render_dirty(
-                render_dirty, peer_etable, snapshot_epoch),
-        )
-        erefs = etable.refs
-        entity_things = etable.things
-        thing_count = etable.count
-
-        self.editor_state.clear_render_dirty(render_dirty_snapshot)
-
-        # A collected Prop is not published. The dense Prop registry owns
-        # collection state, so the renderer filters only Prop rows rather than
-        # walking the whole Thing list.
-        visible_thing_slots = etable.all_slots
-        collected = self._props.collected_ids if self._props is not None else set()
-        if self.play_mode and collected:
-            # class_bits is a capacity-sized array, while etable.things
-            # contains only the live dense rows.  Never let stale bits in the
-            # spare capacity turn into entity slots.
-            prop_slots = np.flatnonzero(
-                (etable.class_bits[:thing_count] & ENT_PROP) != 0
-            )
-            dropped = [int(i) for i in prop_slots
-                       if id(entity_things[int(i)]) in collected]
-            if dropped:
-                keep_things = np.ones(thing_count, dtype=bool)
-                keep_things[dropped] = False
-                visible_thing_slots = np.flatnonzero(keep_things)
-
-        # Lights still need their authored object state (colour, intensity,
-        # state, etc.) during GL setup, but do not materialise them on the logic
-        # thread. Keep the dense selection published and let the actual light
-        # consumer materialise it when required.
-        all_lights = PublishedEntities(erefs, etable.light_slots)
-        # Keep the dense slot selection authoritative. Object materialisation is
-        # deferred until a legacy/secondary consumer actually iterates it.
-        visible_things = PublishedEntities(erefs, visible_thing_slots)
-
-        write_state.visible_things = visible_things
-        write_state.all_lights = all_lights
-        # Portal existence is a numeric projection fact; the renderer reads
-        # the published portal slot vector directly.
-        write_state.has_portals = bool(len(etable.portal_slots))
-        write_state.entity_table = etable
-        write_state.entity_refs = erefs
-        write_state.visible_thing_slots = visible_thing_slots
-        write_state.thing_hidden = thing_hidden
-        write_state.timestamp = time.perf_counter()
-
-        # ── Player 2 render state ─────────────────────────────────────────────
-        if self.play_mode and self.player2:
-            p2_pos   = glm.vec3(self.player2.pos)
-            p2_cam   = p2_pos + glm.vec3(0, self.player2.camera_height, 0)
-            p2_angle = self.player2.angle
-            p2_pitch = self.player2.pitch
-            p2_dir   = glm.vec3(
-                math.sin(p2_angle) * math.cos(p2_pitch),
-                math.sin(p2_pitch),
-                math.cos(p2_angle) * math.cos(p2_pitch),
-            )
-            write_state.player2_pos        = p2_pos
-            write_state.player2_angle       = p2_angle
-            write_state.player2_pitch       = p2_pitch
-            write_state.player2_view_matrix = glm.lookAt(
-                p2_cam, p2_cam + p2_dir, glm.vec3(0, 1, 0))
-            write_state.player2_health      = self.player2_health
-            write_state.player2_max_health  = self.player2_max_health
-            write_state.player2_dead        = self.player2_dead
-            write_state.player2_underwater  = bool(getattr(self.player2, 'eye_underwater', False))
-            write_state.splitscreen_active  = True
-        else:
-            write_state.splitscreen_active  = False
-        write_state.level_complete_ui = self.level_complete_ui
-        write_state.prepare_ms = (time.perf_counter() - started) * 1000.0
+        return self.render_runtime.prepare_render_state()
