@@ -13,7 +13,7 @@ import random
 import glm
 import numpy as np
 
-from .brush_geometry import brush_aabb_bounds
+from .constants import brush_aabb_bounds
 try:
     from editor.debug_console import debug_log
 except ImportError:
@@ -105,16 +105,16 @@ class LogicTriggers:
         fresh('_nonplayer_trigger_contacts', dict)
         # Scheduler: wakes every TRIGGER_POLL_TICK and polls only triggers
         # whose own interval has elapsed; never scans at the 60 Hz tick rate.
-        logic._trigger_poll_elapsed = 0.0
+        self.logic._trigger_poll_elapsed = 0.0
         fresh('_trigger_poll_elapsed_by_bid', dict)
         # Each use-key press gets a generation number consumed independently
         # per trigger, so a fast trigger cannot steal a slower one's press.
-        logic._trigger_use_generation = 0
+        self.logic._trigger_use_generation = 0
         fresh('_trigger_use_seen', dict)
         # Evaluated per tick by _sample_use_prompt; kept as an attribute only
         # so the render state and tests can read the frame's current prompt.
-        logic._trigger_use_prompt = ""
-        logic._refresh_use_triggers()
+        self.logic._trigger_use_prompt = ""
+        self.logic._refresh_use_triggers()
 
     @staticmethod
     def use_trigger_contains(distance_sq, use_radius):
@@ -150,22 +150,22 @@ class LogicTriggers:
         """
         # Tolerates being called before the trigger list exists: state reset
         # runs during construction, ahead of the first cache build.
-        logic._use_trigger_entries = [
+        self.logic._use_trigger_entries = [
             (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
             if _trigger_activation(brush) == 'use'
         ]
 
     def _use_prompt_candidates(self):
         """(bid, brush, centre, radius) for every use trigger a prompt may name."""
-        for bid, brush in logic._use_trigger_entries:
+        for bid, brush in self.logic._use_trigger_entries:
             if brush.get('disabled', False):
                 continue
-            if 'player' not in logic._trigger_filters(brush):
+            if 'player' not in self.logic._trigger_filters(brush):
                 continue
             # A spent 'once' trigger does nothing, so it must not keep
             # advertising itself -- 2.4.2 suppressed the prompt for exactly
             # this case and the rewrite dropped the check.
-            if _trigger_is_once(brush) and bid in logic.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.logic.fired_once_triggers:
                 continue
             centre = brush.get('pos', (0.0, 0.0, 0.0))
             yield (bid, brush,
@@ -182,11 +182,11 @@ class LogicTriggers:
         moment the player moves or turns instead of up to a poll interval
         later. The arithmetic is one batched pass over that subset.
         """
-        player = logic.player
-        if player is None or not logic._use_trigger_entries:
+        player = self.logic.player
+        if player is None or not self.logic._use_trigger_entries:
             return ""
 
-        candidates = list(logic._use_prompt_candidates())
+        candidates = list(self.logic._use_prompt_candidates())
         if not candidates:
             return ""
 
@@ -198,7 +198,7 @@ class LogicTriggers:
 
         offset = centres - origin
         distance_sq = np.einsum('ij,ij->i', offset, offset)
-        in_range = logic.use_trigger_contains(distance_sq, radii)
+        in_range = self.logic.use_trigger_contains(distance_sq, radii)
         if not in_range.any():
             return ""
 
@@ -235,15 +235,15 @@ class LogicTriggers:
         polling interval has elapsed are included in the NumPy broad-phase.
         With the default 1.0 s setting this preserves the old 1 Hz workload.
         """
-        if not logic.player:
+        if not self.logic.player:
             return
 
         if use_key_pressed:
-            logic._trigger_use_generation += 1
+            self.logic._trigger_use_generation += 1
 
         if trigger_ids is None:
             trigger_ids = {
-                bid for bid, _ in logic._trigger_brushes
+                bid for bid, _ in self.logic._trigger_brushes
             }
         else:
             trigger_ids = set(trigger_ids)
@@ -254,12 +254,12 @@ class LogicTriggers:
         # The use-activated subset can change if a brush's activation mode is
         # edited mid-session; refreshing it here keeps the per-tick prompt pass
         # correct without walking the whole trigger list every frame.
-        logic._refresh_use_triggers()
+        self.logic._refresh_use_triggers()
 
         # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
         polled_ids = set()
-        for bid, brush in logic._trigger_brushes:
+        for bid, brush in self.logic._trigger_brushes:
             if bid not in trigger_ids:
                 continue
 
@@ -282,7 +282,7 @@ class LogicTriggers:
             else:
                 bounds = brush_aabb_bounds(brush)
 
-            filters = logic._trigger_filters(brush)
+            filters = self.logic._trigger_filters(brush)
             filter_mask = (
                 (1 if 'player' in filters else 0) |
                 (2 if 'props' in filters else 0) |
@@ -295,17 +295,17 @@ class LogicTriggers:
 
         # Preserve contacts for triggers that were not due. Replace only the
         # state belonging to triggers sampled on this pass.
-        new_contacts = dict(logic._trigger_contacts)
+        new_contacts = dict(self.logic._trigger_contacts)
         for bid in polled_ids:
             new_contacts.pop(bid, None)
 
         if not trigger_entries:
-            logic._trigger_contacts = new_contacts
-            logic.player_in_triggers = {
+            self.logic._trigger_contacts = new_contacts
+            self.logic.player_in_triggers = {
                 bid for bid, contacts in new_contacts.items()
                 if any(entity_type == 'player' for entity_type, _ in contacts)
             }
-            logic._nonplayer_trigger_contacts = {
+            self.logic._nonplayer_trigger_contacts = {
                 bid: {
                     contact for contact in contacts
                     if contact[0] != 'player'
@@ -319,17 +319,17 @@ class LogicTriggers:
         # Snapshot ALL eligible entities into one compact array.
         # The first row is always the player; props and monsters follow.
         # ------------------------------------------------------------------
-        entities = [logic.player]
+        entities = [self.logic.player]
         entity_types = [1]  # player
-        entity_ids = [id(logic.player)]
+        entity_ids = [id(self.logic.player)]
 
-        for entity in (logic._props.props if logic._props is not None else ()):
+        for entity in (self.logic._props.props if self.logic._props is not None else ()):
             if not getattr(entity, 'properties', {}).get('disabled', False):
                 entities.append(entity)
                 entity_types.append(2)
                 entity_ids.append(id(entity))
 
-        for entity in logic._monster_things:
+        for entity in self.logic._monster_things:
             if not getattr(entity, 'properties', {}).get('disabled', False):
                 entities.append(entity)
                 entity_types.append(4)
@@ -382,7 +382,7 @@ class LogicTriggers:
                 (category, entity_ids[int(entity_index)])
             )
 
-        old_contacts = logic._trigger_contacts
+        old_contacts = self.logic._trigger_contacts
 
         # ------------------------------------------------------------------
         # Only changed contacts generate trigger enter/exit I/O.
@@ -395,16 +395,16 @@ class LogicTriggers:
             exited = old - new
 
             if entered:
-                brush = logic._trigger_brush_by_bid.get(bid)
+                brush = self.logic._trigger_brush_by_bid.get(bid)
                 if brush:
                     for activator_type, entity_id in entered:
                         if activator_type == 'player':
-                            activator = logic.player
+                            activator = self.logic.player
                         elif activator_type == 'props':
-                            activator = (logic._props.by_id(entity_id)
-                                         if logic._props is not None else None)
+                            activator = (self.logic._props.by_id(entity_id)
+                                         if self.logic._props is not None else None)
                         else:
-                            activator = logic._monster_by_id.get(entity_id)
+                            activator = self.logic._monster_by_id.get(entity_id)
 
                         if activator is not None:
                             # Use triggers are activation-driven rather than
@@ -412,7 +412,7 @@ class LogicTriggers:
                             # handled below, but it must not fire OnStartTouch
                             # merely because the player entered its AABB.
                             if _trigger_activation(brush) != 'use':
-                                logic._on_trigger_enter(
+                                self.logic._on_trigger_enter(
                                     brush,
                                     bid,
                                     activator_type=activator_type,
@@ -420,20 +420,20 @@ class LogicTriggers:
                                 )
 
             if exited:
-                brush = logic._trigger_brush_by_bid.get(bid)
+                brush = self.logic._trigger_brush_by_bid.get(bid)
                 if brush:
                     for activator_type, entity_id in exited:
                         if activator_type == 'player':
-                            activator = logic.player
+                            activator = self.logic.player
                         elif activator_type == 'props':
-                            activator = (logic._props.by_id(entity_id)
-                                         if logic._props is not None else None)
+                            activator = (self.logic._props.by_id(entity_id)
+                                         if self.logic._props is not None else None)
                         else:
-                            activator = logic._monster_by_id.get(entity_id)
+                            activator = self.logic._monster_by_id.get(entity_id)
 
                         if activator is not None:
                             if _trigger_activation(brush) != 'use':
-                                logic._on_trigger_exit(
+                                self.logic._on_trigger_exit(
                                     brush,                                    bid,
                                     activator_type=activator_type,
                                     activator_entity=activator,
@@ -441,16 +441,16 @@ class LogicTriggers:
 
                     # A player leaving a hurt trigger clears its cadence.
                     if any(entity_type == 'player' for entity_type, _ in exited):
-                        logic.hurt_trigger_timers.pop(bid, None)
+                        self.logic.hurt_trigger_timers.pop(bid, None)
 
-        logic._trigger_contacts = new_contacts
+        self.logic._trigger_contacts = new_contacts
 
         # Maintain the legacy mirrors from the same sampled contact state.
-        logic.player_in_triggers = {
+        self.logic.player_in_triggers = {
             bid for bid, contacts in new_contacts.items()
             if any(entity_type == 'player' for entity_type, _ in contacts)
         }
-        logic._nonplayer_trigger_contacts = {
+        self.logic._nonplayer_trigger_contacts = {
             bid: {
                 contact for contact in contacts
                 if contact[0] != 'player'
@@ -469,10 +469,10 @@ class LogicTriggers:
             if activation != 'use':
                 continue
 
-            generation = logic._trigger_use_generation
-            last_seen = logic._trigger_use_seen.get(bid, generation)
+            generation = self.logic._trigger_use_generation
+            last_seen = self.logic._trigger_use_seen.get(bid, generation)
             use_edge = last_seen < generation
-            logic._trigger_use_seen[bid] = generation
+            self.logic._trigger_use_seen[bid] = generation
 
             if not inside[0, trigger_index]:
                 continue
@@ -488,26 +488,26 @@ class LogicTriggers:
             # The sphere is what decides; the broad-phase box only nominated
             # this trigger as a candidate. Same predicate the prompt uses, so
             # what the player is shown and what pressing E does cannot drift.
-            if not logic.use_trigger_contains(
+            if not self.logic.use_trigger_contains(
                     distance_sq, float(brush.get('use_radius', 96.0))):
                 continue
             if distance_sq > 1.0e-8:
                 to_trigger = offset / math.sqrt(distance_sq)
                 p_forward = np.asarray(
-                    [math.sin(logic.player.angle), 0.0, math.cos(logic.player.angle)],
+                    [math.sin(self.logic.player.angle), 0.0, math.cos(self.logic.player.angle)],
                     dtype=np.float32,
                 )
                 if float(np.dot(p_forward, to_trigger)) <= 0.5:
                     continue
 
-            if _trigger_is_once(brush) and bid in logic.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.logic.fired_once_triggers:
                 continue
 
-            logic._on_trigger_enter(
+            self.logic._on_trigger_enter(
                 brush,
                 bid,
                 activator_type='player',
-                activator_entity=logic.player,
+                activator_entity=self.logic.player,
             )
 
         # ------------------------------------------------------------------
@@ -515,18 +515,18 @@ class LogicTriggers:
         # this pass, never on the 60 Hz logic path.
         # ------------------------------------------------------------------
         for bid in polled_ids:
-            if bid not in logic.player_in_triggers:
+            if bid not in self.logic.player_in_triggers:
                 continue
-            brush = logic._trigger_brush_by_bid.get(bid)
+            brush = self.logic._trigger_brush_by_bid.get(bid)
             if (
                 brush
                 and brush.get('trigger_action') == 'hurt'
                 and _trigger_activation(brush) != 'use'
             ):
-                logic._process_hurt_trigger(
+                self.logic._process_hurt_trigger(
                     brush,
                     bid,
-                    logic._trigger_poll_interval(brush),
+                    self.logic._trigger_poll_interval(brush),
                 )
 
         # Use prompts are no longer sampled here: _sample_use_prompt evaluates
@@ -537,7 +537,7 @@ class LogicTriggers:
     def _handle_triggers(self, use_key_pressed: bool, delta=None):
         """Schedule trigger polls without scanning occupancy at 60 Hz."""
         if use_key_pressed:
-            logic._trigger_use_generation += 1
+            self.logic._trigger_use_generation += 1
 
         # The use prompt is evaluated here, every tick, against the live player
         # position and angle -- not republished from the last poll. Sampling it
@@ -551,54 +551,54 @@ class LogicTriggers:
         # stages had just set, which is what silently removed "NEED: <key>",
         # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
         # "[E] Complete Level" and "[E] Drop" from the HUD.
-        logic._trigger_use_prompt = logic._sample_use_prompt()
-        if logic._trigger_use_prompt:
-            logic.current_hud_message = logic._trigger_use_prompt
+        self.logic._trigger_use_prompt = self.logic._sample_use_prompt()
+        if self.logic._trigger_use_prompt:
+            self.logic.current_hud_message = self.logic._trigger_use_prompt
 
-        step = float(delta) if delta is not None else float(logic.TICK_DURATION)
-        logic._trigger_poll_elapsed += max(0.0, step)
+        step = float(delta) if delta is not None else float(self.logic.TICK_DURATION)
+        self.logic._trigger_poll_elapsed += max(0.0, step)
 
-        scheduler_tick = logic.TRIGGER_POLL_TICK
+        scheduler_tick = self.logic.TRIGGER_POLL_TICK
         # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
         # push every poll one logic tick late (same epsilon as per-trigger).
-        while logic._trigger_poll_elapsed + logic.TRIGGER_POLL_EPSILON >= scheduler_tick:
-            logic._trigger_poll_elapsed = max(0.0, logic._trigger_poll_elapsed - scheduler_tick)
+        while self.logic._trigger_poll_elapsed + self.logic.TRIGGER_POLL_EPSILON >= scheduler_tick:
+            self.logic._trigger_poll_elapsed = max(0.0, self.logic._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
-            for bid, brush in logic._trigger_brushes:
+            for bid, brush in self.logic._trigger_brushes:
                 elapsed = (
-                    logic._trigger_poll_elapsed_by_bid.get(bid, 0.0)
+                    self.logic._trigger_poll_elapsed_by_bid.get(bid, 0.0)
                     + scheduler_tick
                 )
-                interval = logic._trigger_poll_interval(brush)
-                if elapsed + logic.TRIGGER_POLL_EPSILON >= interval:
+                interval = self.logic._trigger_poll_interval(brush)
+                if elapsed + self.logic.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
-                logic._trigger_poll_elapsed_by_bid[bid] = elapsed
+                self.logic._trigger_poll_elapsed_by_bid[bid] = elapsed
 
             if due_ids:
-                logic._poll_triggers(trigger_ids=due_ids)
+                self.logic._poll_triggers(trigger_ids=due_ids)
 
     def _apply_player_damage(self, damage):
-        with logic._player_damage_lock:
-            if logic.god_mode:
+        with self.logic._player_damage_lock:
+            if self.logic.god_mode:
                 return
-            was_alive = logic.player_health > 0
-            logic.player_health = max(0, logic.player_health - damage)
-            if logic.buddha_mode and logic.player_health < 2:
-                logic.player_health = 2
-            became_dead = was_alive and logic.player_health <= 0
+            was_alive = self.logic.player_health > 0
+            self.logic.player_health = max(0, self.logic.player_health - damage)
+            if self.logic.buddha_mode and self.logic.player_health < 2:
+                self.logic.player_health = 2
+            became_dead = was_alive and self.logic.player_health <= 0
             took_damage = was_alive and damage > 0
 
             # Queue the pain response at the instant damage is applied. Copy the
             # player position so subsequent movement cannot move the sound
             # source before the render thread consumes the request.
             pain_position = None
-            if took_damage and logic.player:
+            if took_damage and self.logic.player:
                 pain_position = (
-                    float(logic.player.pos.x),
-                    float(logic.player.pos.y),
-                    float(logic.player.pos.z),
+                    float(self.logic.player.pos.x),
+                    float(self.logic.player.pos.y),
+                    float(self.logic.player.pos.z),
                 )
 
         if took_damage and pain_position is not None:
@@ -607,7 +607,7 @@ class LogicTriggers:
                 "assets/sounds/pain02.mp3",
                 "assets/sounds/pain03.mp3",
             ))
-            logic.game_state.queue_sound({
+            self.logic.game_state.queue_sound({
                 "file": pain_file,
                 "volume": 1.0,
                 "position": pain_position,
@@ -615,9 +615,9 @@ class LogicTriggers:
             })
 
         # Emit outside the lock so a handler can't deadlock on the damage path.
-        logic._plugin_emit("player_damage", damage=damage, health=logic.player_health)
+        self.logic._plugin_emit("player_damage", damage=damage, health=self.logic.player_health)
         if became_dead:
-            logic._plugin_emit("player_death")
+            self.logic._plugin_emit("player_death")
 
     def _on_trigger_enter(
         self,
@@ -629,7 +629,7 @@ class LogicTriggers:
         # Authored as 'Once'/'Multiple' by the editor and the shipped maps; the
         # raw compare against 'once' made every Once trigger fire on each entry.
         once = _trigger_is_once(brush)
-        if once and trigger_id in logic.fired_once_triggers:
+        if once and trigger_id in self.logic.fired_once_triggers:
             return
 
         action = brush.get('trigger_action', 'target')
@@ -637,14 +637,14 @@ class LogicTriggers:
         if action == 'teleport':
             target_node_name = brush.get('target_node', '')
             if target_node_name:
-                node = logic._find_path_node_by_name(target_node_name)
-                if node and (activator_entity or logic.player):
-                    activator = activator_entity or logic.player
+                node = self.logic._find_path_node_by_name(target_node_name)
+                if node and (activator_entity or self.logic.player):
+                    activator = activator_entity or self.logic.player
                     dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-                    if activator is logic.player:
-                        logic.player.pos = dest
-                        logic.player.velocity = glm.vec3(0, 0, 0)
-                        logic.note_player_teleported()
+                    if activator is self.logic.player:
+                        self.logic.player.pos = dest
+                        self.logic.player.velocity = glm.vec3(0, 0, 0)
+                        self.logic.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
                         physics_world = getattr(self, '_physics_world', None)
@@ -653,8 +653,8 @@ class LogicTriggers:
                                 physics_world.sync_entity_position(activator, wake=True)
                             except (AttributeError, TypeError, ValueError):
                                 pass
-                    if logic.io_manager:
-                        logic.io_manager.fire_output(
+                    if self.logic.io_manager:
+                        self.logic.io_manager.fire_output(
                             brush, 'OnTeleport', activator_entity=activator
                         )
                     debug_log("IO", f"Trigger teleported {activator_type} → '{target_node_name}' "
@@ -666,15 +666,15 @@ class LogicTriggers:
             # Only the player has damage/health semantics at present.
             if activator_type == 'player':
                 damage = _trigger_damage(brush)
-                logic._apply_player_damage(damage)
-                logic.hurt_trigger_timers[trigger_id] = logic.HURT_INTERVAL
+                self.logic._apply_player_damage(damage)
+                self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
         elif action == 'target':
-            if logic.io_manager:
-                logic.io_manager.fire_output(
+            if self.logic.io_manager:
+                self.logic.io_manager.fire_output(
                     brush, 'OnStartTouch', activator_entity=activator_entity
                 )
-                logic.io_manager.fire_output(
+                self.logic.io_manager.fire_output(
                     brush, 'OnTrigger', activator_entity=activator_entity
                 )
 
@@ -682,9 +682,9 @@ class LogicTriggers:
         # console's quicksave/quickload own the save slot, one frame later.
         save = _trigger_save(brush)
         if save:
-            logic.game_state.queue_console_command(save)
+            self.logic.game_state.queue_console_command(save)
 
-        logic._plugin_emit(
+        self.logic._plugin_emit(
             "trigger_enter",
             trigger=brush,
             action=action,
@@ -692,7 +692,7 @@ class LogicTriggers:
             activator_type=activator_type,
         )
         if once:
-            logic.fired_once_triggers.add(trigger_id)
+            self.logic.fired_once_triggers.add(trigger_id)
 
     def _on_trigger_exit(
         self,
@@ -701,11 +701,11 @@ class LogicTriggers:
         activator_type='player',
         activator_entity=None,
     ):
-        if logic.io_manager:
-            logic.io_manager.fire_output(
+        if self.logic.io_manager:
+            self.logic.io_manager.fire_output(
                 brush, 'OnEndTouch', activator_entity=activator_entity
             )
-        logic._plugin_emit(
+        self.logic._plugin_emit(
             "trigger_exit",
             trigger=brush,
             trigger_id=trigger_id,
@@ -713,11 +713,11 @@ class LogicTriggers:
         )
 
     def _process_hurt_trigger(self, brush: dict, trigger_id: int, poll_interval=1.0):
-        if trigger_id in logic.hurt_trigger_timers:
-            logic.hurt_trigger_timers[trigger_id] -= float(poll_interval)
-            if logic.hurt_trigger_timers[trigger_id] <= 0:
+        if trigger_id in self.logic.hurt_trigger_timers:
+            self.logic.hurt_trigger_timers[trigger_id] -= float(poll_interval)
+            if self.logic.hurt_trigger_timers[trigger_id] <= 0:
                 damage = _trigger_damage(brush)
-                logic._apply_player_damage(damage)
-                logic.hurt_trigger_timers[trigger_id] = logic.HURT_INTERVAL
+                self.logic._apply_player_damage(damage)
+                self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
 
