@@ -105,8 +105,12 @@ def _snapshot(ai, logic):
                 state['shoot_timer'], state['anim_timer'], state['in_sight'],
                 state.get('vel_y')),
         ))
-    return (monsters, list(logic.damage_applied),
-            [(tuple(pr['pos']), tuple(pr['vel'])) for pr in logic._monster_projectiles])
+    store = logic._monster_projectiles
+    projectiles = [
+        (tuple(store.pos[i]), tuple(store.vel[i]), float(store.damage[i]))
+        for i in range(len(store))
+    ]
+    return (monsters, list(logic.damage_applied), projectiles)
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
