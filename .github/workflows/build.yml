@@ -7,6 +7,10 @@ permissions:
   contents: write
 
 jobs:
+  tests:
+    name: Required tests (exact build commit)
+    uses: ./.github/workflows/tests.yml
+
   build-windows:
     runs-on: windows-latest
 
@@ -347,6 +351,7 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - tests
       - build-windows
       - build-macos
       - build-linux
