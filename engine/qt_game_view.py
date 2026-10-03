@@ -6,7 +6,7 @@ import numpy as np
 import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -95,8 +95,10 @@ def perspective_projection(fov, aspect, near, far):
 
 
 class QtGameView(QOpenGLWidget):
+    _logic_tick_fault_signal = pyqtSignal(str)
     def __init__(self, editor):
         super().__init__(editor)
+        self._logic_tick_fault_signal.connect(self._handle_logic_tick_fault)
 
         fmt = QSurfaceFormat()
         fmt.setVersion(3, 3)
@@ -1014,10 +1016,18 @@ class QtGameView(QOpenGLWidget):
                 if f.lower().endswith(('.jpg', '.png')):
                     self.renderer.load_texture(os.path.join('terrain', f), 'textures')
 
+    def _handle_logic_tick_fault(self, message):
+        """Run fatal-tick play teardown on QtGameView's GUI thread."""
+        if self.play_mode:
+            self.toggle_play_mode(None, None)
+        if message:
+            self._play_mode_hint = "Logic tick failed; Play Mode stopped"
+
     def _start_logic_thread(self):
         if self._thread_started:
             return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
+        self.logic_thread.set_gui_fault_teardown(self._logic_tick_fault_signal.emit)
         if hasattr(self.logic_thread, "set_hud_fade_enabled"):
             self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
