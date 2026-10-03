@@ -13,13 +13,15 @@ import math
 class LogicParenting:
     """Runtime for lights and portals parented to mover brushes."""
 
-    def __init__(self, logic):
+    def __init__(self, logic, *, light_type=None, portal_type=None):
         self.logic = logic
+        self.light_type = light_type
+        self.portal_type = portal_type
 
     def _init_parented_lights(self):
         logic = self.logic
         logic._parented_lights = []
-        Light = getattr(logic, "Light", None)
+        Light = self.light_type
         if not Light:
             return
 
@@ -77,7 +79,7 @@ class LogicParenting:
     def _init_parented_portals(self):
         logic = self.logic
         logic._parented_portals = []
-        Portal = getattr(logic, "Portal", None)
+        Portal = self.portal_type
         if Portal is None:
             return
 
