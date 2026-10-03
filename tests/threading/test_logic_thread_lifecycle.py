@@ -17,9 +17,9 @@ import threading
 import time
 
 import pytest
-from PyQt5.QtCore import QCoreApplication, QObject, pyqtSignal, pyqtSlot
 
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
+from PyQt5.QtCore import QCoreApplication, QObject, pyqtSignal, pyqtSlot  # noqa: E402
 
 from editor.editor_state import EditorState          # noqa: E402
 from editor.things import Light, Monster, PlayerStart  # noqa: E402
