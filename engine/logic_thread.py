@@ -3798,6 +3798,16 @@ class LogicThread(threading.Thread):
             "io_events": [event for event in events if event.get("type") == "io"],
             "next_io_event": 0,
         }
+        if camera_rows:
+            first = camera_rows[0]
+            self.cinematic_state["cam_pos"] = self._cutscene_vec3(first.get("pos"))
+            self.cinematic_state["cam_angle"] = self._cutscene_number(first.get("yaw", 0.0))
+            self.cinematic_state["cam_pitch"] = self._cutscene_number(first.get("pitch", 0.0))
+            self.cinematic_state["fov"] = max(
+                1.0,
+                min(179.0, self._cutscene_number(first.get("fov", 90.0), 90.0)),
+            )
+
         return True
 
     def _finish_json_cutscene(self, cs, fire_finished=True):
