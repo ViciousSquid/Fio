@@ -37,6 +37,7 @@ from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
 from .logic_world import LogicWorld
 from .logic_render import LogicRender
 from .logic_session import LogicSession
+from .logic_interaction import LogicInteraction
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -207,6 +208,7 @@ class LogicThread(threading.Thread):
         # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
         self.render_runtime = LogicRender(self)
         self.session_runtime = LogicSession(self)
+        self.interaction_runtime = LogicInteraction(self)
         
         # Player stats
         self.player_health = 100
@@ -1406,114 +1408,7 @@ class LogicThread(threading.Thread):
         return self._world_runtime().refresh_levelchanger_table()
 
     def _handle_interactions(self, use_key_pressed: bool):
-        self.current_hud_message = ""
-        self.current_hud_key_name = None
-        reach_distance = 80.0
-        px, py, pz = self.player.pos
-        
-        found_door_idx = -1
-        found_door_brush = None
-        for i, brush in self.doors:
-            pos = brush['pos']
-            size = brush['size']
-            dx = abs(pos[0] - px)
-            dy = abs(pos[1] - py)
-            dz = abs(pos[2] - pz)
-            if (dx < size[0]/2 + reach_distance and 
-                dz < size[2]/2 + reach_distance and 
-                dy < size[1]/2 + 64):
-                found_door_idx = i
-                found_door_brush = brush
-                break
-
-        door_consumed_use = False
-        if found_door_brush:
-            door_state = self.door_states.get(found_door_idx, {}).get('state', 'closed')
-
-            if door_state == 'closed':
-                if found_door_brush.get('door_auto_open', False):
-                    is_locked = found_door_brush.get('door_locked', False)
-                    needs_key = found_door_brush.get('door_needs_key', False)
-                    if not is_locked and not needs_key:
-                        self._trigger_door_open(found_door_idx, found_door_brush)
-                else:
-                    is_locked = found_door_brush.get('door_locked', False)
-                    needs_key = found_door_brush.get('door_needs_key', False)
-                    key_name = found_door_brush.get('door_key_name', '')
-                    
-                    if is_locked:
-                        self.current_hud_message = "Locked"
-                        if use_key_pressed and self.io_manager:
-                            self.io_manager.fire_output(found_door_brush, 'OnLockedUse')
-                        door_consumed_use = use_key_pressed
-                    elif needs_key:
-                        has_key = key_name in self.collected_keys
-                        if has_key:
-                            self.current_hud_message = "[E] Use"
-                            self.current_hud_key_name = key_name or None
-                            if use_key_pressed:
-                                self._trigger_door_open(found_door_idx, found_door_brush)
-                                door_consumed_use = True
-                        else:
-                            self.current_hud_message = "Need"
-                            self.current_hud_key_name = key_name or None
-                    else:
-                        self.current_hud_message = "[E] Open"
-                        if use_key_pressed:
-                            self._trigger_door_open(found_door_idx, found_door_brush)
-                            door_consumed_use = True
-
-
-        if not door_consumed_use and self._levelchanger_things:
-            # Radius activation is squared, removing the old per-entry
-            # glm.distance() sqrt. Facing is also tested without per-row
-            # normalisation: forward_dot > 0 and forward_dot² > 0.25*d².
-            centres = getattr(self, '_levelchanger_centres', None)
-            radii = getattr(self, '_levelchanger_radii', None)
-            eligible = getattr(self, '_levelchanger_eligible', None)
-            if (
-                centres is None
-                or radii is None
-                or eligible is None
-                or len(centres) != len(self._levelchanger_things)
-            ):
-                self._refresh_levelchanger_table()
-                centres = self._levelchanger_centres
-                radii = self._levelchanger_radii
-                eligible = self._levelchanger_eligible
-
-            player_pos = np.asarray((px, py, pz), dtype=np.float32)
-            offsets = centres - player_pos
-            distance_sq = np.einsum('ij,ij->i', offsets, offsets)
-            in_range = eligible & (distance_sq < radii * radii)
-
-            if in_range.any():
-                forward = np.asarray(
-                    (math.sin(self.player.angle), 0.0, math.cos(self.player.angle)),
-                    dtype=np.float32,
-                )
-                forward_dot = offsets @ forward
-                facing = (
-                    (forward_dot > 0.0)
-                    & (forward_dot * forward_dot > (0.25 * distance_sq))
-                )
-                candidates = np.flatnonzero(in_range & facing)
-                if candidates.size:
-                    # Preserve authored list order: first matching row wins.
-                    row = int(candidates[0])
-                    thing = self._levelchanger_things[row]
-                    self.current_hud_message = "[E] Complete Level"
-                    if use_key_pressed:
-                        target_map = thing.properties.get('target_map', '')
-                        self.level_complete_ui = {
-                            'active': True,
-                            'target_map': target_map,
-                            'title': 'Complete',
-                            'button_text': 'Continue'
-                        }
-                        if self.io_manager:
-                            self.io_manager.fire_output(thing, 'OnUse')
-                    return
+        return self.interaction_runtime.handle(use_key_pressed)
 
     # =========================================================================
     # MOVER/DOOR UPDATES
