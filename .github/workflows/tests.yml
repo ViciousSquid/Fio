@@ -34,7 +34,7 @@ jobs:
       - name: Install the dependency-light half
         # No PyQt5 and no PyOpenGL: this job proves how much of Fio is testable
         # without the desktop dependency set at all.
-        run: pip install pytest numpy PyGLM
+        run: pip install pytest "numpy==2.5.3" PyGLM
       - name: Run the tests that need no Qt, no OpenGL, no display
         env:
           FIO_HEADLESS_TIER: '1'
