@@ -3525,9 +3525,9 @@ class PropertyEditor(QWidget):
         except (AttributeError, TypeError, OSError):
             cutscene_files = []
         for filename in cutscene_files:
-            cutscene.addItem(filename)
+            cutscene.addItem(f"cutscenes/{filename}")
 
-        current_cutscene = str(thing.properties.get('cutscene_file', '') or '')
+        current_cutscene = str(thing.properties.get('cutscene_file', '') or '').replace("\\", "/")
         if current_cutscene:
             idx = cutscene.findText(current_cutscene)
             if idx >= 0:
@@ -3537,7 +3537,7 @@ class PropertyEditor(QWidget):
 
         def _on_cutscene(text):
             clean = text.strip()
-            thing.properties['cutscene_file'] = '' if clean == '(none)' else clean
+            self.update_object_prop('cutscene_file', '' if clean == '(none)' else clean)
 
         cutscene.currentTextChanged.connect(_on_cutscene)
         cutscene.setToolTip(
