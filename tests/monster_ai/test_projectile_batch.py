@@ -32,6 +32,7 @@ class _Host:
     PROJECTILE_MONSTER_RADIUS = LogicThread.PROJECTILE_MONSTER_RADIUS
     PROJECTILE_PLAYER_RADIUS = LogicThread.PROJECTILE_PLAYER_RADIUS
     _update_monster_projectiles = LogicThread._update_monster_projectiles
+    _update_monster_projectiles_scalar = LogicThread._update_monster_projectiles_scalar
     _update_monster_projectiles_dense = LogicThread._update_monster_projectiles_dense
     _projectile_monster_candidates = LogicThread._projectile_monster_candidates
     _projectile_wall_candidates = LogicThread._projectile_wall_candidates
