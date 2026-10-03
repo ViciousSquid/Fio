@@ -249,7 +249,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         # -----------------------------------------------------------------
         camera_page = QtWidgets.QWidget()
         camera_layout = QtWidgets.QVBoxLayout(camera_page)
-        camera_box = QtWidgets.QGroupBox("Camera keyframes")
+        camera_box = QtWidgets.QGroupBox("Keyframes")
         cv = QtWidgets.QVBoxLayout(camera_box)
         camera_help = QtWidgets.QLabel(
             "Move the editor camera to the shot you want, choose a time, then "
@@ -296,14 +296,14 @@ class CutsceneWizard(QtWidgets.QDialog):
         set_camera_time_button = QtWidgets.QPushButton("Set selected time")
         set_camera_time_button.clicked.connect(self._set_selected_camera_keyframe_time)
         camera_buttons.addWidget(set_camera_time_button)
-        delete_camera_button = QtWidgets.QPushButton("Remove selected camera keyframe")
+        delete_camera_button = QtWidgets.QPushButton("Remove selected keyframe")
         delete_camera_button.clicked.connect(self._remove_selected_camera_keyframe)
         camera_buttons.addWidget(delete_camera_button)
         camera_buttons.addStretch(1)
         cv.addLayout(camera_buttons)
         self.camera_keys_list.currentRowChanged.connect(self._camera_keyframe_selected)
         camera_layout.addWidget(camera_box, 1)
-        tabs.addTab(camera_page, "Camera Keyframes")
+        tabs.addTab(camera_page, "Keyframes")
 
         # -----------------------------------------------------------------
         # Events / dialogue. Advanced functionality remains available, but
@@ -1489,7 +1489,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         if not isinstance(data, dict) or not isinstance(data.get("camera"), list):
             QtWidgets.QMessageBox.warning(
                 self, "Invalid cutscene",
-                "This file is not a valid Fio cutscene (camera keyframes are missing).",
+                "This file is not a valid Fio cutscene (keyframes are missing).",
             )
             return
 
@@ -1643,7 +1643,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_stop_and_restore()
         if not self.camera_keys:
             QtWidgets.QMessageBox.warning(
-                self, "No camera keyframes", "Capture at least one camera position."
+                self, "No keyframes", "Capture at least one camera position."
             )
             return None
         if not self.actor_meta and not self.events:
