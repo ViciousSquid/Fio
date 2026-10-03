@@ -208,10 +208,9 @@ def test_projectiles_are_published_on_a_frame_that_runs_no_tick():
     """Projectile positions were written into the write buffer only inside a
     tick, so the render loop's zero-tick frames published none: flicker."""
     _state, game_state, logic = _play()
-    logic._monster_projectiles = [
-        {"pos": [0.0, 50.0, 100.0 + i], "vel": [0.0, 0.0, 10.0], "owner_id": 0,
-         "lifetime": 50.0, "damage": 1, "distance_travelled": 0.0}
-        for i in range(3)]
+    for i in range(3):
+        logic._monster_projectiles.add(
+            (0.0, 50.0, 100.0 + i), (0.0, 0.0, 10.0), 0, 1, 50.0)
     try:
         counts = []
         for accumulator in (logic.TICK_DURATION, 0.0, logic.TICK_DURATION, 0.0):
