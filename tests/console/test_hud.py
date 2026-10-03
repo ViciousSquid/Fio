@@ -75,43 +75,41 @@ class _MainWindow:
         self.save_count += 1
 
 
-def test_hudstyle_changes_runtime_and_persists():
+def test_hudstyle_changes_runtime_without_persisting():
     window = _MainWindow()
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command("hudstyle 2")
 
     assert window.view_3d.style_calls == [(2, None)]
-    assert window.config.get("Display", "hudstyle") == "2"
+    assert not window.config.has_option("Display", "hudstyle")
     assert window.config.getboolean("Display", "show_hud") is True
-    assert window.save_count == 1
+    assert window.save_count == 0
 
 
-def test_hudstyle_zero_hides_and_persists():
+def test_hudstyle_zero_hides_runtime_without_persisting():
     window = _MainWindow()
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command("hudstyle 0")
 
     assert window.view_3d.style_calls == [(0, None)]
-    assert window.config.get("Display", "hudstyle") == "0"
-    assert window.config.getboolean("Display", "show_hud") is False
+    assert not window.config.has_option("Display", "hudstyle")
+    assert window.config.getboolean("Display", "show_hud") is True
+    assert window.save_count == 0
 
 
 def test_map_hudstyle_is_runtime_only():
     window = _MainWindow()
     handler = ConsoleCommandHandler(window)
 
-    handler.handle_command("hudstyle 2")
-    saves = window.save_count
-
     handler.handle_command(
         'hudstyle 4 "LCDAT&TPhoneTimeDate.ttf"', from_map=True
     )
 
-    assert window.view_3d.style_calls[-1] == (4, "LCDAT&TPhoneTimeDate.ttf")
-    assert window.config.get("Display", "hudstyle") == "2"
-    assert window.save_count == saves
+    assert window.view_3d.style_calls == [(4, "LCDAT&TPhoneTimeDate.ttf")]
+    assert not window.config.has_option("Display", "hudstyle")
+    assert window.save_count == 0
 
 
 def test_hudopacity_changes_runtime_and_persists():
@@ -153,3 +151,35 @@ def test_message_commands_reach_play_view_overlay(command, attribute, expected):
     handler.handle_command(command)
 
     assert getattr(window.view_3d, attribute) == [expected]
+
+
+def test_hudstyle_is_not_shipped_in_settings_ini():
+    from tests.helpers.paths import REPO_ROOT
+
+    settings = configparser.ConfigParser()
+    settings.read(REPO_ROOT / "settings.ini")
+
+    assert not settings.has_option("Display", "hudstyle")
+
+
+def test_reload_hud_settings_ignores_legacy_hudstyle():
+    from types import SimpleNamespace
+    from engine.qt_game_view import QtGameView
+
+    config = configparser.ConfigParser()
+    config.add_section("Display")
+    config.set("Display", "hudstyle", "4")
+    config.set("Display", "hudopacity", "80")
+    config.set("Display", "hudfade", "False")
+
+    view = QtGameView.__new__(QtGameView)
+    view.editor = SimpleNamespace(config=config)
+    view.logic_thread = None
+    view._refresh_hud_status_font = lambda: None
+
+    view._reload_hud_settings()
+
+    assert view._hud_style == 1
+    assert view._hud_font_override is None
+    assert view._hud_opacity == 80.0
+    assert view._hud_fade_enabled is False
