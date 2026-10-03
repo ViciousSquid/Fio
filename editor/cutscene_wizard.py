@@ -103,6 +103,9 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.resize(980, 720)
 
         tabs = QtWidgets.QTabWidget()
+        tabs.setStyleSheet(
+            "QTabBar::tab:selected { border-bottom: 2px solid #e67e22; }"
+        )
         root.addWidget(tabs, 1)
 
         # -----------------------------------------------------------------
