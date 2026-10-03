@@ -826,6 +826,50 @@ class LogicThread(threading.Thread):
     def _trigger_door_open(self, door_idx: int, brush: dict):
         return self._mover_runtime()._trigger_door_open(door_idx, brush)
 
+    # COLLISION RUNTIME
+    # =========================================================================
+
+    def _collision_runtime(self):
+        """Return the extracted collision runtime, creating it for lightweight test doubles."""
+        runtime = getattr(self, "collision_runtime", None)
+        if runtime is None:
+            runtime = LogicCollision(self)
+            self.collision_runtime = runtime
+        return runtime
+
+    def _angled_brush_is_solid(self, brush):
+        return self._collision_runtime().angled_brush_is_solid(brush)
+
+    @classmethod
+    def _clear_brush_collision(cls, brush):
+        return LogicCollision.clear_brush_collision(brush)
+
+    def _prepare_angled_brush_collision(self):
+        return self._collision_runtime().prepare_angled_brush_collision()
+
+    def _clear_angled_brush_collision(self):
+        return self._collision_runtime().clear_angled_brush_collision()
+
+    def _build_model_collision_brushes(self):
+        return self._collision_runtime().build_model_collision_brushes()
+
+    def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
+        return self._collision_runtime().compute_model_collision_mesh(
+            model_path, world_pos, scale, rotation
+        )
+
+    def _compute_mesh_bounds(self, mesh_tris):
+        return self._collision_runtime().compute_mesh_bounds(mesh_tris)
+
+    def _compute_model_bounds(self, model_path):
+        return self._collision_runtime().compute_model_bounds(model_path)
+
+    def _toggle_model_collision(self, enabled: bool = None):
+        return self._collision_runtime().toggle_model_collision(enabled)
+
+    def _refresh_collision_brushes_cache(self):
+        return self._collision_runtime().refresh_collision_brushes_cache()
+
     # MAIN LOOP
     # =========================================================================
             
