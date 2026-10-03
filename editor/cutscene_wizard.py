@@ -420,10 +420,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         if screen is not None:
             available = screen.availableGeometry()
             frame = self.frameGeometry()
-            if frame.bottom() > available.bottom():
-                frame.moveBottom(available.bottom())
-            if frame.top() < available.top():
-                frame.moveTop(available.top())
+            frame.moveTop(available.top())
             self.move(frame.topLeft())
         self.raise_()
         self.activateWindow()
