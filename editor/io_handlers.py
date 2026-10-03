@@ -196,17 +196,19 @@ def register_all_input_handlers(io_manager: IOManager):
             return None
         return textures[int(value) - 1]
 
-    # Every Effect input writes the Effect itself -- its authored properties
-    # and, for SetType and Explode, its playback runtime -- and nothing else.
-    # The I/O dispatcher journals the target afterwards, and each render buffer
-    # re-resolves the row from the entity. Writing a render table from here
-    # would reach only the one buffer the logic thread happened to be holding.
+    # Effect inputs update authored state on the Effect. SetType and Explode
+    # also update the LogicThread-owned EffectStore execution state. No render
+    # table is written directly, so both render buffers consume the same
+    # execution state.
 
     def effect_set_type(entity, param, logic):
         """Set the Effect TYPE by name and notify connected outputs."""
         effect_type = str(param or "").strip().upper()
         if not entity.set_effect_type(effect_type):
             return
+        effect_store = getattr(logic, "effect_store", None)
+        if effect_store is not None:
+            effect_store.set_type(entity, effect_type)
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
         )
@@ -243,8 +245,12 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def effect_explode(entity, param, logic):
         """Switch an Effect to EXPLOSION permanently and play it once."""
-        if not entity.trigger_explosion(time.perf_counter()):
+        now = time.perf_counter()
+        if not entity.trigger_explosion(now):
             return
+        effect_store = getattr(logic, "effect_store", None)
+        if effect_store is not None:
+            effect_store.trigger_explosion(entity, now)
 
         game_state = getattr(logic, 'game_state', None)
         if game_state is None and hasattr(logic, 'io_manager'):
