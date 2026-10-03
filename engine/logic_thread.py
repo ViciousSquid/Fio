@@ -500,6 +500,9 @@ class LogicThread(threading.Thread):
         # continuing from a partially mutated world. The current play session
         # is torn down cleanly and the editor remains usable.
         self._tick_faulted = False
+        #: GUI-thread callback used only to marshal fatal tick teardown.
+        #: The engine stays Qt-free; QtGameView supplies a bound signal emitter.
+        self._gui_fault_teardown = None
         self._tick_fault_message = ""
 
     @property
@@ -2240,13 +2243,26 @@ class LogicThread(threading.Thread):
                         "LogicThread",
                         "Fatal simulation tick failure; ending play session:\n" + trace,
                     )
-                    try:
-                        self._apply_play_mode(False)
-                    except Exception:
+                    # Qt/editor teardown must not run on this worker thread.
+                    # Stop gameplay immediately, then let the GUI thread run
+                    # the normal QtGameView play-mode teardown path.
+                    self.play_mode = False
+                    callback = getattr(self, "_gui_fault_teardown", None)
+                    if callback is not None:
+                        try:
+                            callback(trace)
+                        except Exception:
+                            debug_log(
+                                "LogicThread",
+                                "Could not queue GUI teardown after tick failure:\n"
+                                + traceback.format_exc(),
+                            )
+                    else:
+                        # Headless hosts have no GUI teardown path. Do not
+                        # invoke _apply_play_mode(False) from this thread.
                         debug_log(
                             "LogicThread",
-                            "Play-session teardown after tick failure also failed:\n"
-                            + traceback.format_exc(),
+                            "No GUI teardown callback is registered after tick failure",
                         )
                     # Discard accumulated play-mode time. The next frame starts
                     # from a clean editor-mode state rather than replaying stale
@@ -2275,6 +2291,13 @@ class LogicThread(threading.Thread):
                     debug_log("LogicThread",
                               "Unhandled exception preparing a frame:\n" + trace)
         return accumulator
+
+    def set_gui_fault_teardown(self, callback):
+        """Register the GUI callback used to marshal fatal-tick teardown.
+
+        The callback is generic so the logic thread does not import or touch Qt.
+        """
+        self._gui_fault_teardown = callback
 
     def stop(self):
         self.running = False
