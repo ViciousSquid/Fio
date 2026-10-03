@@ -848,6 +848,17 @@ def brush_has_geometry(brush):
     return bool(geo and geo.get('planes'))
 
 
+def is_plain_aabb_brush(brush):
+    """True only for the compact, axis-aligned pos/size brush form.
+
+    A custom convex brush can still happen to have six axis-aligned faces, but
+    once it carries authored geometry it is no longer the plain AABB cutter used
+    by terrain CSG. This keeps terrain subtraction deliberately narrower than the
+    general brush CSG system.
+    """
+    return isinstance(brush, dict) and not brush_has_geometry(brush)
+
+
 def geometry_signature(brush):
     """Cheap hashable signature of a brush's derived surface, for cache keys.
 
