@@ -503,6 +503,7 @@ class LogicThread(threading.Thread):
         #: GUI-thread callback used only to marshal fatal tick teardown.
         #: The engine stays Qt-free; QtGameView supplies a bound signal emitter.
         self._gui_fault_teardown = None
+        self._gui_fault_teardown_requested = False
         self._tick_fault_message = ""
 
     @property
@@ -1311,6 +1312,7 @@ class LogicThread(threading.Thread):
         if enabled:
             # A new Play session clears any previous fault marker.
             self._tick_faulted = False
+            self._gui_fault_teardown_requested = False
             self._tick_fault_message = ""
             # Read P2 turn sensitivity from editor config
             if hasattr(self.editor_state, 'config'):
@@ -2248,7 +2250,8 @@ class LogicThread(threading.Thread):
                     # the normal QtGameView play-mode teardown path.
                     self.play_mode = False
                     callback = getattr(self, "_gui_fault_teardown", None)
-                    if callback is not None:
+                    if callback is not None and not self._gui_fault_teardown_requested:
+                        self._gui_fault_teardown_requested = True
                         try:
                             callback(trace)
                         except Exception:
