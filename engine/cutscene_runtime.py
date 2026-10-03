@@ -128,8 +128,8 @@ class CutsceneRuntime:
             if elapsed <= right_time:
                 span = right_time - left_time
                 t = 1.0 if span <= 1e-9 else max(0.0, min(1.0, (elapsed - left_time) / span))
-                lp = LogicThread._cutscene_vec3(left.get("pos", [0, 0, 0]))
-                rp = LogicThread._cutscene_vec3(right.get("pos", lp), lp)
+                lp = CutsceneRuntime._cutscene_vec3(left.get("pos", [0, 0, 0]))
+                rp = CutsceneRuntime._cutscene_vec3(right.get("pos", lp), lp)
 
                 # A teleport belongs to the destination keyframe.  Keep the
                 # previous shot completely unchanged until its timestamp, then
@@ -154,7 +154,7 @@ class CutsceneRuntime:
 
                 return {
                     "pos": [lp[i] + (rp[i] - lp[i]) * t for i in range(3)],
-                    "yaw": LogicThread._cutscene_lerp_angle(
+                    "yaw": CutsceneRuntime._cutscene_lerp_angle(
                         CutsceneRuntime._cutscene_number(left.get("yaw", 0.0)),
                         CutsceneRuntime._cutscene_number(right.get("yaw", 0.0)),
                         t,
@@ -205,10 +205,10 @@ class CutsceneRuntime:
                 props["_cutscene_runtime"] = True
                 try:
                     actor = cls(
-                        pos=self.logic._cutscene_vec3(definition.get("pos")),
+                        pos=self._cutscene_vec3(definition.get("pos")),
                         properties=props,
                     )
-                    self.logic._set_cutscene_yaw(actor, self.logic._cutscene_number(definition.get("yaw", 0.0)))
+                    self._set_cutscene_yaw(actor, self._cutscene_number(definition.get("yaw", 0.0)))
                     self.logic.things.append(actor)
                     spawned.append(actor)
                 except Exception as exc:
@@ -219,8 +219,8 @@ class CutsceneRuntime:
                 continue
             actor_initial[aid] = {
                 "entity": actor,
-                "pos": self.logic._cutscene_vec3(actor.pos),
-                "yaw": self.logic._cutscene_yaw(actor),
+                "pos": self._cutscene_vec3(actor.pos),
+                "yaw": self._cutscene_yaw(actor),
                 "had_disabled": "disabled" in actor.properties,
                 "disabled": actor.properties.get("disabled", False),
             }
@@ -241,17 +241,17 @@ class CutsceneRuntime:
                 continue
             row = dict(source_row)
             row["yaw"] = math.radians(
-                self.logic._cutscene_number(row.get("yaw", 0.0))
+                self._cutscene_number(row.get("yaw", 0.0))
             )
             row["pitch"] = math.radians(
-                self.logic._cutscene_number(row.get("pitch", 0.0))
+                self._cutscene_number(row.get("pitch", 0.0))
             )
             camera_rows.append(row)
-        camera_rows.sort(key=lambda row: self.logic._cutscene_number(row.get("time", 0.0)))
+        camera_rows.sort(key=lambda row: self._cutscene_number(row.get("time", 0.0)))
         actor_tracks = {
             str(aid): sorted(
                 [row for row in rows or [] if isinstance(row, dict)],
-                key=lambda row: self.logic._cutscene_number(row.get("time", 0.0)),
+                key=lambda row: self._cutscene_number(row.get("time", 0.0)),
             )
             for aid, rows in (data.get("actor_tracks") or {}).items()
             if isinstance(rows, list)
@@ -265,20 +265,20 @@ class CutsceneRuntime:
         # They are not interchangeable.  The former executes an input directly
         # on the target; the latter fires an output from the source and therefore
         # traverses the map's authored I/O connections.
-        events.sort(key=lambda event: self.logic._cutscene_number(event.get("time", 0.0)))
+        events.sort(key=lambda event: self._cutscene_number(event.get("time", 0.0)))
         duration = 0.0
         for row in camera_rows:
-            duration = max(duration, self.logic._cutscene_number(row.get("time", 0.0)))
+            duration = max(duration, self._cutscene_number(row.get("time", 0.0)))
         for rows in actor_tracks.values():
             for row in rows:
-                duration = max(duration, self.logic._cutscene_number(row.get("time", 0.0)))
+                duration = max(duration, self._cutscene_number(row.get("time", 0.0)))
         for event in events:
-            duration = max(duration, self.logic._cutscene_number(event.get("time", 0.0)))
+            duration = max(duration, self._cutscene_number(event.get("time", 0.0)))
             if event.get("type") == "fight":
                 duration = max(
                     duration,
-                    self.logic._cutscene_number(event.get("time", 0.0))
-                    + max(0.0, self.logic._cutscene_number(event.get("duration", 0.0))),
+                    self._cutscene_number(event.get("time", 0.0))
+                    + max(0.0, self._cutscene_number(event.get("duration", 0.0))),
                 )
 
         # A single keyframe at t=0 is still a real cutscene state.  Keep it
@@ -317,12 +317,12 @@ class CutsceneRuntime:
         }
         if camera_rows:
             first = camera_rows[0]
-            self.state["cam_pos"] = self.logic._cutscene_vec3(first.get("pos"))
-            self.state["cam_angle"] = self.logic._cutscene_number(first.get("yaw", 0.0))
-            self.state["cam_pitch"] = self.logic._cutscene_number(first.get("pitch", 0.0))
+            self.state["cam_pos"] = self._cutscene_vec3(first.get("pos"))
+            self.state["cam_angle"] = self._cutscene_number(first.get("yaw", 0.0))
+            self.state["cam_pitch"] = self._cutscene_number(first.get("pitch", 0.0))
             self.state["fov"] = max(
                 1.0,
-                min(179.0, self.logic._cutscene_number(first.get("fov", 90.0), 90.0)),
+                min(179.0, self._cutscene_number(first.get("fov", 90.0), 90.0)),
             )
 
         return True
@@ -353,8 +353,8 @@ class CutsceneRuntime:
     def _update_json_fights(self, cs, elapsed):
         """Temporarily hand fight participants to the native MonsterAI."""
         for index, event in enumerate(cs.get("fight_events") or []):
-            start = self.logic._cutscene_number(event.get("time", 0.0))
-            duration = max(0.0, self.logic._cutscene_number(event.get("duration", 0.0)))
+            start = self._cutscene_number(event.get("time", 0.0))
+            duration = max(0.0, self._cutscene_number(event.get("duration", 0.0)))
             end = start + duration
             active = cs.setdefault("active_fights", {}).get(index)
 
@@ -425,8 +425,8 @@ class CutsceneRuntime:
                 continue
             if cs.get("restore_actors", True):
                 actor.pos = list(snapshot.get("pos", actor.pos))
-                self.logic._set_cutscene_yaw(
-                    actor, snapshot.get("yaw", self.logic._cutscene_yaw(actor))
+                self._set_cutscene_yaw(
+                    actor, snapshot.get("yaw", self._cutscene_yaw(actor))
                 )
             if snapshot.get("had_disabled"):
                 actor.properties["disabled"] = snapshot["disabled"]
@@ -452,14 +452,14 @@ class CutsceneRuntime:
         elapsed = cs["elapsed"]
         camera_keys = cs.get("camera_keys") or []
         if camera_keys:
-            frame = self.logic._cutscene_sample(camera_keys, elapsed)
+            frame = self._cutscene_sample(camera_keys, elapsed)
             if frame:
-                cs["cam_pos"] = self.logic._cutscene_vec3(frame.get("pos"))
-                cs["cam_angle"] = self.logic._cutscene_number(frame.get("yaw", 0.0))
-                cs["cam_pitch"] = self.logic._cutscene_number(frame.get("pitch", 0.0))
+                cs["cam_pos"] = self._cutscene_vec3(frame.get("pos"))
+                cs["cam_angle"] = self._cutscene_number(frame.get("yaw", 0.0))
+                cs["cam_pitch"] = self._cutscene_number(frame.get("pitch", 0.0))
                 cs["fov"] = max(
                     1.0,
-                    min(179.0, self.logic._cutscene_number(frame.get("fov", 90.0), 90.0)),
+                    min(179.0, self._cutscene_number(frame.get("fov", 90.0), 90.0)),
                 )
                 look_at = frame.get("look_at")
                 if isinstance(look_at, dict):
@@ -468,7 +468,7 @@ class CutsceneRuntime:
                     if target is None:
                         target = self.logic._find_entity_by_id(target_id)
                     if target is not None:
-                        target_pos = self.logic._cutscene_vec3(target.pos)
+                        target_pos = self._cutscene_vec3(target.pos)
                         diff = np.asarray(target_pos, dtype=float) - np.asarray(cs["cam_pos"], dtype=float)
                         dist = np.linalg.norm(diff)
                         if dist > 0.01:
@@ -482,18 +482,18 @@ class CutsceneRuntime:
             if actor is None:
                 continue
             snapshot = (cs.get("actor_initial") or {}).get(aid, {})
-            frame = self.logic._cutscene_sample(
+            frame = self._cutscene_sample(
                 rows,
                 elapsed,
                 initial_pos=snapshot.get("pos"),
                 initial_yaw=snapshot.get("yaw", 0.0),
             )
             if frame and not frame.get("_before"):
-                actor.pos = self.logic._cutscene_vec3(frame.get("pos"), actor.pos)
-                self.logic._set_cutscene_yaw(
-                    actor, self.logic._cutscene_number(frame.get("yaw", 0.0))
+                actor.pos = self._cutscene_vec3(frame.get("pos"), actor.pos)
+                self._set_cutscene_yaw(
+                    actor, self._cutscene_number(frame.get("yaw", 0.0))
                 )
-                physics_world = getattr(self, "_physics_world", None)
+                physics_world = getattr(self.logic, "_physics_world", None)
                 if physics_world is not None:
                     try:
                         physics_world.sync_entity_position(actor, wake=True)
@@ -513,10 +513,10 @@ class CutsceneRuntime:
                     line = "message"
                 self._message_queue.put((line, text))
 
-        if not self.logic._fire_cinematic_io_events():
+        if not self._fire_cinematic_io_events():
             return
         if elapsed >= float(cs.get("duration", 0.0)):
-            self.logic._finish_json_cutscene(cs)
+            self._finish_json_cutscene(cs)
 
     def consume_cinematic_messages(self):
         """Return queued cutscene HUD messages for the GUI thread."""
@@ -607,7 +607,7 @@ class CutsceneRuntime:
             return
 
         if cs.get('json_cutscene'):
-            self.logic._update_json_cutscene(delta)
+            self._update_json_cutscene(delta)
             return
 
         cs['elapsed'] = float(cs.get('elapsed', 0.0)) + max(0.0, float(delta))
