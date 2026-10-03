@@ -1282,6 +1282,9 @@ class LogicThread(threading.Thread):
         self.overhead_height_limit = None
 
         if enabled:
+            # A new Play session clears any previous fault marker.
+            self._tick_faulted = False
+            self._tick_fault_message = ""
             # Read P2 turn sensitivity from editor config
             if hasattr(self.editor_state, 'config'):
                 self.p2_turn_sensitivity = float(
