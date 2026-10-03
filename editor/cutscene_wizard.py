@@ -1436,6 +1436,10 @@ class CutsceneWizard(QtWidgets.QDialog):
 
         self._preview_stop_and_restore()
         self._delete_temporary_actors()
+        # _delete_temporary_actors() marks the previous authoring session as
+        # cleaned. Loading a new cutscene starts a fresh authoring session, so
+        # its recreated spawn actors must be eligible for cleanup on Apply/Cancel.
+        self._cleaned = False
         self.actor_meta.clear()
         self.actor_objects.clear()
         self.temporary_actor_ids.clear()
