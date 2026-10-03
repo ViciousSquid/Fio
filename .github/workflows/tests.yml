@@ -18,18 +18,18 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-      - name: Verify CPython 3.14 GIL-enabled baseline
+      - name: Verify CPython 3.14+ GIL-enabled baseline
         run: |
           python - <<'PY'
           import sys
           import sysconfig
 
           assert sys.implementation.name == "cpython"
-          assert sys.version_info[:2] == (3, 14)
+          assert sys.version_info[:2] >= (3, 14)
           assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
           assert sys._is_gil_enabled()
           print(sys.version)
-          print("Fio requires the normal GIL-enabled CPython baseline.")
+          print("Fio requires CPython 3.14+ with the normal GIL-enabled build.")
           PY
       - name: Install the headless runtime baseline
         run: |
