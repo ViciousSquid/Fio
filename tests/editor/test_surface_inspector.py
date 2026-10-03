@@ -975,6 +975,7 @@ class FakeEditorWindow(QWidget):
         self.state.selected_objects = []
         self.surface_inspector = None
         self.view_3d = _StubView()
+        self.view_3d.play_mode = False
         self.toasts = []
         self.asset_browser = _StubBrowser()
         self.root_dir = os.getcwd()
@@ -994,6 +995,15 @@ class FakeEditorWindow(QWidget):
 
 class _StubView:
     hovered_face_info = None
+
+
+def test_surface_inspector_shortcut_is_ignored_during_play_mode(qt_app):
+    host = FakeEditorWindow()
+    host.view_3d.play_mode = True
+
+    host.toggle_surface_inspector()
+
+    assert host.surface_inspector is None
 
 
 def test_the_shortcut_opens_the_panel_with_nothing_selected(qt_app):
