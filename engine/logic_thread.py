@@ -3693,6 +3693,7 @@ class LogicThread(threading.Thread):
                         + (LogicThread._cutscene_number(right.get("fov", 90.0), 90.0)
                            - LogicThread._cutscene_number(left.get("fov", 90.0), 90.0)) * t
                     ),
+                    "look_at": left.get("look_at"),
                 }
         return valid[-1]
 
