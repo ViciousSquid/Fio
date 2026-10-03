@@ -4981,10 +4981,14 @@ class LogicThread(threading.Thread):
                 cam_pos = glm.vec3(*cs['cam_pos'])
                 cam_angle = cs.get('cam_angle', 0.0)
                 cam_pitch = cs.get('cam_pitch', 0.0)
+                # cam_angle/cam_pitch are Camera yaw/pitch, not the
+                # Player's angle convention below.  Camera.get_front_vector()
+                # uses (cos(yaw), sin(pitch), sin(yaw)); using the player
+                # convention here rotates authored cutscene views.
                 direction = glm.vec3(
-                    math.sin(cam_angle) * math.cos(cam_pitch),
-                    math.sin(cam_pitch),
                     math.cos(cam_angle) * math.cos(cam_pitch),
+                    math.sin(cam_pitch),
+                    math.sin(cam_angle) * math.cos(cam_pitch),
                 )
                 view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
                 write_state.player_pos = cam_pos
