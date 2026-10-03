@@ -104,6 +104,23 @@ class EffectStore:
         pos = thing.pos
         return (float(pos[0]), float(pos[1]), float(pos[2]))
 
+    def _append(self, thing):
+        index = self._count
+        self._ensure_capacity(index + 1)
+        props = thing.properties
+        self._index_by_object[id(thing)] = index
+        self.ids.append(props.get("id"))
+        self.pos[index] = self._position(thing)
+        self.lifetime[index] = self._lifetime(thing)
+        self.family_id[index] = effect_family(
+            props.get("effect_type", EFFECT_FIRE)
+        )
+        self.phase[index] = random.random()
+        self.spawn_time[index] = 0.0
+        self.active[index] = self.family_id[index] != FAMILY_EXPLOSION
+        self._count = index + 1
+        return index
+
     def clear(self):
         """Drop all execution rows without retaining authoring objects."""
         self._count = 0
@@ -165,8 +182,7 @@ class EffectStore:
         """Refresh cold authoring-derived state for one Effect row."""
         index = self.index_of(thing)
         if index < 0:
-            self.rebuild([thing])
-            return self.index_of(thing)
+            return self._append(thing)
 
         props = getattr(thing, "properties", {})
         self.pos[index] = self._position(thing)
