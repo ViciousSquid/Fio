@@ -1278,7 +1278,7 @@ class MonsterAI:
             )
         ):
             return MonsterAI._nearest_enemy_rows_monolithic(
-                p, team, active_rows, np.float32(max_range) ** np.float32(2)
+                p, team, active_rows, np.float32(max_range) * np.float32(max_range)
             )
 
         return MonsterAI._nearest_enemy_rows_by_team(
