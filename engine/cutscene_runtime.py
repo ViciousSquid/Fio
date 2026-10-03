@@ -441,7 +441,8 @@ class CutsceneRuntime:
                 pass
         if spawned:
             self.logic._build_entity_caches()
-        entity = cs.get("entity")        self.logic.state = None
+        entity = cs.get("entity")
+        self.state = None
         if fire_finished and entity is not None and self.logic.io_manager:
             self.logic.io_manager.fire_output(entity, "OnFinished")
 

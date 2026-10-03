@@ -186,14 +186,14 @@ jobs:
           python - <<'PY'
           import numpy
           import pygame
-          import PyQt5
+          from PyQt5 import QtCore
           import OpenGL
 
           assert numpy.__version__ == "2.5.3"
           assert pygame.version.ver == "2.5.8"
           print("NumPy:", numpy.__version__)
           print("pygame-ce:", pygame.version.ver)
-          print("PyQt5:", PyQt5.QtCore.PYQT_VERSION_STR)
+          print("PyQt5:", QtCore.PYQT_VERSION_STR)
           print("PyOpenGL import: OK")
           PY
       - name: Launch Fio
