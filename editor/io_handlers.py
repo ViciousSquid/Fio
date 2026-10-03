@@ -1171,7 +1171,13 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def camera_start(entity, param, logic):
-        """Begin a LogicCamera cutscene or its legacy PathNode sequence."""
+        """Begin a LogicCamera cutscene or its legacy PathNode sequence.
+
+        Clean up an active JSON cutscene without OnFinished before starting.
+        A configured JSON file takes precedence; load/start failure returns
+        without falling back to the path. On success, fire OnStart and due I/O
+        events. The input parameter is unused.
+        """
         # Starting any camera must cleanly replace an active JSON cutscene.
         # Otherwise its temporary actors and restored runtime state would leak.
         previous = getattr(logic, 'cinematic_state', None)
@@ -1261,7 +1267,11 @@ def register_all_input_handlers(io_manager: IOManager):
             logic._fire_cinematic_io_events()
 
     def camera_stop(entity, param, logic):
-        """Abort and return camera to the player."""
+        """Abort the current cinematic without OnFinished and return to player view.
+
+        For JSON cutscenes, remove spawned actors and restore runtime state;
+        restore existing actor poses only when the cutscene enables restoration.
+        """
         cs = getattr(logic, 'cinematic_state', None)
         if cs and cs.get('json_cutscene') and hasattr(logic, '_finish_json_cutscene'):
             logic._finish_json_cutscene(cs, fire_finished=False)

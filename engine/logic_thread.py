@@ -200,6 +200,11 @@ class LogicThread(threading.Thread):
     def __init__(self, game_state: ThreadedGameState, 
                  editor_state, 
                  visibility_system: Optional[Any] = None):
+        """Initialize a daemon logic thread for the shared game and editor states.
+
+        Set up simulation state, I/O handlers, and available plugins. The thread
+        is not started by construction.
+        """
         super().__init__(daemon=True)
         # Serialises the simulation with everything that rebuilds or reads the
         # world from another thread.  The run loop holds it for each frame's
@@ -1207,6 +1212,12 @@ class LogicThread(threading.Thread):
             self._apply_play_mode(enabled)
 
     def _apply_play_mode(self, enabled: bool):
+        """Initialize or tear down a play session while the caller holds the tick lock.
+
+        Entering resets gameplay state, builds runtime caches, fires spawn outputs,
+        and starts monster AI. Leaving also cleans up an active JSON cutscene
+        without firing OnFinished. Notify plugins after the core transition.
+        """
         self.play_mode = enabled
         # A pause belongs to the session that took it: a new session, or the
         # editor after one, never starts frozen by a request nobody released.
@@ -3589,7 +3600,11 @@ class LogicThread(threading.Thread):
         self._movers().tick_movers(self, delta)
 
     def _cutscene_file_path(self, filename):
-        """Resolve an authored cutscene path without allowing it outside cutscenes/."""
+        """Return an existing real path inside cutscenes/, or None if rejected.
+
+        Relative filenames are resolved from the project root, for example
+        cutscenes/scene.json. Absolute paths must also stay inside cutscenes/.
+        """
         raw = str(filename or "").strip().replace("\\", "/")
         if not raw:
             return None
@@ -3607,6 +3622,10 @@ class LogicThread(threading.Thread):
         return candidate
 
     def _load_cutscene_file(self, filename):
+        """Return parsed cutscene data, or None for an invalid path, read, or JSON.
+
+        Require an object with a camera list; nested fields are not validated here.
+        """
         path = self._cutscene_file_path(filename)
         if path is None:
             debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
@@ -3625,6 +3644,11 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _cutscene_number(value, default=0.0):
+        """Convert value to a finite float, or return float(default) as a fallback.
+
+        TypeError and ValueError converting value are caught, as are nonfinite
+        results. Conversion errors from default and OverflowError propagate.
+        """
         try:
             value = float(value)
         except (TypeError, ValueError):
@@ -3635,6 +3659,12 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _cutscene_vec3(value, default=None):
+        """Return three finite floats, or a copy of default (zero vector if omitted).
+
+        Wrong lengths, nonfinite values, and TypeError, ValueError, or IndexError
+        converting value use the fallback. It is copied without validation;
+        errors copying default and conversion OverflowError propagate.
+        """
         if default is None:
             default = [0.0, 0.0, 0.0]
         try:
@@ -3649,10 +3679,12 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _cutscene_yaw(entity):
+        """Return actor yaw in radians from angle, falling back to its yaw property or zero."""
         return float(getattr(entity, "angle", entity.properties.get("yaw", 0.0)))
 
     @staticmethod
     def _set_cutscene_yaw(entity, yaw):
+        """Assign yaw in radians to the actor angle attribute or its yaw property."""
         yaw = float(yaw)
         if hasattr(entity, "angle"):
             entity.angle = yaw
@@ -3661,12 +3693,23 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _cutscene_lerp_angle(a, b, t):
+        """Interpolate radians along the shortest signed arc using the unclamped fraction t."""
         delta = ((float(b) - float(a) + math.pi) % (2.0 * math.pi)) - math.pi
         return float(a) + delta * t
 
     @staticmethod
     def _cutscene_sample(rows, elapsed, initial_pos=None, initial_yaw=0.0):
-        """Sample one actor/camera track with linear interpolation."""
+        """Sample an actor/camera track at elapsed seconds with linear interpolation.
+
+        Ignore non-dictionary rows; return None if none remain. Before the first
+        key, return the initial pose with _before=True when initial_pos is supplied,
+        otherwise hold the first key. Hold the last key after the track ends.
+
+        Yaw interpolates along the shortest arc in radians; camera pitch is in
+        radians and FOV in degrees. A destination teleport holds the prior shot
+        until its timestamp. Interpolated samples retain the left key's look_at.
+        Endpoint samples may be the original row dictionaries.
+        """
         valid = [row for row in rows if isinstance(row, dict)]
         if not valid:
             return None
@@ -3730,6 +3773,18 @@ class LogicThread(threading.Thread):
         return valid[-1]
 
     def _start_json_cutscene(self, entity, filename, data):
+        """Replace the current cinematic with parsed JSON data and return True.
+
+        Resolve actors by ID, spawning embedded definitions when needed, and
+        save their poses and disabled flags before disabling them for playback.
+        Missing actors and failed spawns are skipped. Camera yaw/pitch are authored
+        in degrees and converted to radians; actor yaw is already in radians.
+        Track and event times are seconds, with fight ends extending duration.
+
+        OnStart and initial I/O dispatch are the caller's responsibility. This is
+        not full schema validation: malformed nested data can raise AttributeError,
+        TypeError, or ValueError after actors or the previous cinematic have changed.
+        """
         previous = self.cinematic_state
         if previous is not None:
             if previous.get("json_cutscene"):
@@ -3884,6 +3939,7 @@ class LogicThread(threading.Thread):
         return True
 
     def _restore_json_fights(self, cs):
+        """Restore saved combat properties for actors still in the scene and clear active fights."""
         for snapshots in (cs.get("active_fights") or {}).values():
             for actor, snapshot in snapshots:
                 if actor not in self.things:
@@ -3974,6 +4030,12 @@ class LogicThread(threading.Thread):
                 cs["active_fights"].pop(index, None)
 
     def _finish_json_cutscene(self, cs, fire_finished=True):
+        """End a JSON cinematic, remove spawned actors, and clear cinematic state.
+
+        Restore saved fight and disabled state for surviving actors; restore their
+        poses only when restore_actors is enabled. Fire OnFinished when requested
+        and an owning entity and I/O manager are available.
+        """
         self._restore_json_fights(cs)
         for aid, snapshot in (cs.get("actor_initial") or {}).items():
             actor = snapshot.get("entity")
@@ -4003,6 +4065,12 @@ class LogicThread(threading.Thread):
             self.io_manager.fire_output(entity, "OnFinished")
 
     def _update_json_cutscene(self, delta):
+        """Advance an existing JSON cinematic by delta seconds, clamping negative delta to zero.
+
+        Update camera and actor poses, fights, and due messages and I/O. Messages
+        are trimmed to 50 characters and queued for the GUI. Finish at the duration
+        unless I/O has stopped or replaced the cinematic; callers handle pausing.
+        """
         cs = self.cinematic_state
         cs["elapsed"] = float(cs.get("elapsed", 0.0)) + max(0.0, float(delta))
         elapsed = cs["elapsed"]
@@ -4075,7 +4143,7 @@ class LogicThread(threading.Thread):
             self._finish_json_cutscene(cs)
 
     def consume_cinematic_messages(self):
-        """Return queued cutscene HUD messages for the GUI thread."""
+        """Drain and return queued (line, text) HUD messages for the GUI without blocking."""
         messages = []
         while True:
             try:
@@ -4084,7 +4152,15 @@ class LogicThread(threading.Thread):
                 return messages
 
     def _fire_cinematic_io_events(self):
-        """Fire timed cutscene I/O events, accepting both authored schemas."""
+        """Dispatch due I/O once, using elapsed cutscene time in seconds.
+
+        Direct target/input events execute inputs; legacy source/output events
+        traverse authored connections. Missing targets or unsupported events are
+        consumed without dispatch. Return False if no active cinematic exists or
+        dispatch replaces or clears its state; otherwise return True. Without an
+        I/O manager, leave pending events untouched. Exceptions escaping the I/O
+        manager propagate after the event cursor has advanced.
+        """
         cs = self.cinematic_state
         if not cs or not cs.get('active') or not self.io_manager:
             return bool(cs and cs.get('active'))
@@ -4158,6 +4234,11 @@ class LogicThread(threading.Thread):
         return True
 
     def _update_cinematic_camera(self, delta: float):
+        """Advance an active, unpaused JSON or PathNode cinematic by delta seconds.
+
+        Dispatch due I/O and update the camera pose. Path playback fires node
+        arrival outputs and OnFinished at the end or when a node is missing.
+        """
         cs = self.cinematic_state
         if not cs or not cs.get('active') or cs.get('paused'):
             return
@@ -4985,9 +5066,14 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _update_hud_health_alpha(self, now: float) -> float:
-        """Advance the health HUD fade state machine and return its alpha."""
+        """Advance the health HUD fade state machine and return its alpha.
+
+        now uses perf_counter seconds. Health changes restart a fade from the
+        current opacity to full opacity, followed by a fade to the 0.5 idle level.
+        """
 
         def _sample(at):
+            """Advance the fade at the supplied perf_counter time in seconds and return opacity."""
             phase = self._hud_health_fade_phase
             if phase == "in":
                 started = self._hud_health_fade_started
@@ -5086,6 +5172,12 @@ class LogicThread(threading.Thread):
             peer_epoch, through_epoch=snapshot_epoch)[1]
 
     def _prepare_render_state(self):
+        """Populate the writable render buffer from the current simulation or editor view.
+
+        Use cinematic camera yaw/pitch in radians when active, with zero yaw along
+        positive X. Update HUD fades, visibility projections, and render journal
+        state; the caller publishes the buffer.
+        """
         started = time.perf_counter()
         write_state = self.game_state.get_write_state()
         write_state.is_play_mode = self.play_mode

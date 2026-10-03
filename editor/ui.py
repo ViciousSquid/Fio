@@ -223,6 +223,7 @@ class Ui_MainWindow(object):
         self.create_status_bar(MainWindow)
 
     def create_menu_bar(self, MainWindow):
+        """Build the editor menus and connect their actions and shortcuts to MainWindow."""
         menubar = MainWindow.menuBar()
         menubar.setStyleSheet("""
             QMenuBar::item:selected {

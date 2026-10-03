@@ -377,7 +377,11 @@ class EditorState:
         self.save_state()
 
     def get_level_data(self):
-        """Serializes the current scene state into a dictionary."""
+        """Serializes the current scene state into a dictionary.
+
+        Exclude temporary cutscene authoring actors and initialize the map's
+        creation timestamp if it has not been set.
+        """
         data = {
             'version': 3,  # Version 3 adds stable entity IDs and logic graph layout
             'brushes': self._serialize_brushes(),

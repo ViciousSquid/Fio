@@ -848,6 +848,7 @@ class ConsoleCommandHandler:
 
     def cmd_help(self, args):
         
+        """Display built-in command help and any available plugin command descriptions."""
         sep = '<span style="color:white;"> / </span>'
         
         help_text = f"""
@@ -1804,11 +1805,16 @@ entity to drive them from the I/O system.</i><br>
 
     @staticmethod
     def _normalise_delete_type(value):
-        """Normalise an entity type for `delete all <type>` matching."""
+        """Return a lowercase alphanumeric key for delete-all type matching."""
         return "".join(ch for ch in str(value).lower() if ch.isalnum())
 
     def _entities_of_type(self, type_name):
-        """Return every scene entity whose class or serialized type matches."""
+        """Return every scene entity whose class or serialized type matches.
+
+        Match case-insensitively, ignoring nonalphanumeric characters, and also
+        recognize brush trigger/mover/door flags and classnames. An empty normalized
+        type matches nothing.
+        """
         wanted = self._normalise_delete_type(type_name)
         if not wanted:
             return []
@@ -1839,7 +1845,13 @@ entity to drive them from the I/O system.</i><br>
         return matches
 
     def _remove_entities(self, entities):
-        """Remove already-resolved entities using the normal console deletion path."""
+        """Remove resolved scene entities and return the number removed.
+
+        Ignore entities no longer in the scene. Save one undo checkpoint for a
+        nonempty deletion, update play-mode caches under the tick lock when
+        available, and refresh the UI. In play mode, brush deletion also invalidates
+        collision when supported.
+        """
         entities = [entity for entity in entities if (
             (isinstance(entity, dict) and entity in self.editor_state.brushes)
             or (not isinstance(entity, dict) and entity in self.editor_state.things)
@@ -1874,7 +1886,7 @@ entity to drive them from the I/O system.</i><br>
         return len(entities)
 
     def _confirm_bulk_delete(self, entities, type_name):
-        """Ask before deleting a whole entity type."""
+        """Return True only for explicit deletion confirmation; dialog failures return False."""
         display_names = {
             "trigger": "Trigger",
             "mover": "Mover",
@@ -1902,11 +1914,14 @@ entity to drive them from the I/O system.</i><br>
             return False
 
     def cmd_delete(self, args):
-        """Delete one named entity, or every entity of a type.
+        """Delete one named entity, or every entity of a type after confirmation.
 
         Usage:
             delete <entity_name>
             delete all <type>
+
+        Missing matches and canceled confirmation leave the scene unchanged.
+        Successful deletion saves an undo checkpoint and refreshes the editor.
         """
         if not args:
             debug_log("Error", "Usage: delete <entity_name>  or  delete all <type>")

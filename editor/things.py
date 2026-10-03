@@ -1187,6 +1187,7 @@ class LogicCamera(Thing):
     pixmap_path = "assets/sprites/logic_camera.png"
 
     def __init__(self, pos=None, properties=None):
+        """Initialize a logic camera, filling missing playback defaults in properties."""
         super().__init__(pos, properties)
         self.properties['type'] = 'logic_camera'
         # Optional authored cutscene JSON. When set, this takes precedence over PathNode playback.

@@ -3503,6 +3503,7 @@ class PropertyEditor(QWidget):
         tab_layout.addWidget(group)
 
     def _build_logic_camera_group(self, tab_layout, thing):
+        """Add editable JSON cutscene and legacy path camera settings to the tab layout."""
         group = QGroupBox("Cinematic Camera")
         group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
         form = QFormLayout(group)
@@ -3536,6 +3537,7 @@ class PropertyEditor(QWidget):
                 cutscene.setEditText(current_cutscene)
 
         def _on_cutscene(text):
+            """Store the trimmed cutscene path, converting the (none) choice to an empty value."""
             clean = text.strip()
             self.update_object_prop('cutscene_file', '' if clean == '(none)' else clean)
 
