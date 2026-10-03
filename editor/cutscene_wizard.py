@@ -367,7 +367,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.summary = QtWidgets.QLabel("No actors created yet.")
         self.summary.setWordWrap(True)
         footer.addWidget(self.summary, 1)
-        self.load_button = QtWidgets.QPushButton("Load Cutscene")
+        self.load_button = QtWidgets.QPushButton("Load")
         self.save_button = QtWidgets.QPushButton("Save")
         self.apply_button = QtWidgets.QPushButton("Apply to Map")
         self.cancel_button = QtWidgets.QPushButton("Cancel")
