@@ -33,6 +33,7 @@ from .portal_transform import map_point as portal_map_point, map_direction as po
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
+from .logic_parenting import LogicParenting
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
@@ -2855,112 +2856,36 @@ class LogicThread(threading.Thread):
     def _update_doors(self, delta: float):
         return self._mover_runtime()._update_doors(delta)
 
-    # PARENTED LIGHTS
     # =========================================================================
+    # PARENTED ENTITY RUNTIME
+    # =========================================================================
+
+    def _parenting_runtime(self):
+        """Return the parented light/portal runtime for this LogicThread."""
+        runtime = getattr(self, "parenting_runtime", None)
+        if runtime is None:
+            runtime = LogicParenting(self, light_type=Light, portal_type=Portal)
+            self.parenting_runtime = runtime
+        return runtime
 
     def _init_parented_lights(self):
-        self._parented_lights = []
-        if not Light:
-            return
-        for thing in self.things:
-            if not isinstance(thing, Light):
-                continue
-            parent_name = thing.properties.get('parent_mover', '')
-            if not parent_name:
-                continue
-            brush = None
-            for b in self.brushes:
-                if b.get('is_mover') and b.get('name') == parent_name:
-                    brush = b
-                    break
-            if brush is None:
-                print(f"[Light] Warning: parent_mover '{parent_name}' not found for light '{thing.name}'")
-                continue
-            thing.properties['_original_pos'] = list(thing.pos)
-            offset = thing.properties.get('parent_offset')
-            if not offset or offset == [0.0, 0.0, 0.0]:
-                offset = [
-                    thing.pos[0] - brush['pos'][0],
-                    thing.pos[1] - brush['pos'][1],
-                    thing.pos[2] - brush['pos'][2],
-                ]
-                thing.properties['parent_offset'] = offset
-            self._parented_lights.append((thing, brush, offset))
+        return self._parenting_runtime()._init_parented_lights()
 
     def _reset_parented_lights(self):
-        for light, _brush, _offset in self._parented_lights:
-            original = light.properties.pop('_original_pos', None)
-            if original is not None:
-                light.pos = list(original)
-        self._parented_lights = []
+        return self._parenting_runtime()._reset_parented_lights()
 
     def _update_parented_lights(self):
-        for light, brush, offset in self._parented_lights:
-            bpos = brush['pos']
-            light.pos = [bpos[0] + offset[0], bpos[1] + offset[1],
-                         bpos[2] + offset[2]]
-
-
-    # =========================================================================
-    # PARENTED PORTALS (FIX: full transformation including rotation)
-    # =========================================================================
+        return self._parenting_runtime()._update_parented_lights()
 
     def _init_parented_portals(self):
-        self._parented_portals = []
-        if Portal is None:
-            return
-        for thing in self.things:
-            if not isinstance(thing, Portal):
-                continue
-            parent_name = thing.properties.get('parent_mover', '')
-            if not parent_name:
-                continue
-            brush = None
-            for b in self.brushes:
-                if b.get('is_mover') and b.get('name') == parent_name:
-                    brush = b
-                    break
-            if brush is None:
-                print(f"[Portal] Warning: parent_mover '{parent_name}' not found for portal '{thing.properties.get('name', '')}'")
-                continue
-
-            thing.properties['_original_pos'] = list(thing.pos)
-            thing.properties['_original_yaw'] = thing.get_yaw_degrees()
-
-            if thing.properties.get('parent_local_pos') is None:
-                mover_yaw = brush.get('rotation_yaw', 0.0)
-                thing.set_parent_local_transform(brush['pos'], mover_yaw)
-
-            local_pos = thing.get_parent_local_pos()
-            local_yaw = thing.get_parent_local_yaw()
-
-            self._parented_portals.append((thing, brush, local_pos, local_yaw))
+        return self._parenting_runtime()._init_parented_portals()
 
     def _reset_parented_portals(self):
-        for portal, _brush, _local_pos, _local_yaw in self._parented_portals:
-            original = portal.properties.pop('_original_pos', None)
-            if original is not None:
-                portal.pos = list(original)
-            original_yaw = portal.properties.pop('_original_yaw', None)
-            if original_yaw is not None:
-                portal.set_yaw_degrees(original_yaw)
-        self._parented_portals = []
+        return self._parenting_runtime()._reset_parented_portals()
 
     def _update_parented_portals(self):
-        for portal, brush, local_pos, local_yaw in self._parented_portals:
-            mover_pos = brush['pos']
-            mover_yaw = brush.get('rotation_yaw', 0.0)
+        return self._parenting_runtime()._update_parented_portals()
 
-            yaw_rad = math.radians(mover_yaw)
-            cos_y = math.cos(yaw_rad)
-            sin_y = math.sin(yaw_rad)
-            world_x = mover_pos[0] + local_pos[0] * cos_y - local_pos[2] * sin_y
-            world_z = mover_pos[2] + local_pos[0] * sin_y + local_pos[2] * cos_y
-            portal.pos = [world_x, mover_pos[1] + local_pos[1], world_z]
-
-            portal.set_yaw_degrees(mover_yaw + local_yaw)
-
-    # =========================================================================
     # PLAYER SHOOTING
     # =========================================================================
 
