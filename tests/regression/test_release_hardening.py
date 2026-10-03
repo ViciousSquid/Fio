@@ -70,7 +70,7 @@ def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
 def test_leaving_play_publishes_no_projectiles(logic):
     thread = logic()
     thread.play_mode = True
-    thread._monster_projectiles = [_projectile()]
+    _add_projectile(thread)
     thread._update_monster_projectiles(thread.TICK_DURATION)
     thread.play_mode = False
     thread._step_frame(0.0)
