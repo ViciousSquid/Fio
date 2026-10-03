@@ -548,6 +548,12 @@ class DebugConsole(QWidget):
         self.hide_pathfinding_cb.toggled.connect(self._refresh_console)
         fp_layout.addWidget(self.hide_pathfinding_cb)
 
+        self.hide_cutscenes_cb = QCheckBox("Cutscenes")
+        self.hide_cutscenes_cb.setToolTip("Hide cutscene load / error messages")
+        self.hide_cutscenes_cb.setStyleSheet(cb_style)
+        self.hide_cutscenes_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_cutscenes_cb)
+
         self.hide_plugins_cb = QCheckBox("Plugins")
         self.hide_plugins_cb.setToolTip("Hide plugin load / error / debug messages")
         self.hide_plugins_cb.setStyleSheet(cb_style)
@@ -851,6 +857,9 @@ class DebugConsole(QWidget):
             return
 
         # 2d. Filter Plugins messages when "Plugins" checkbox is checked
+        if self.hide_cutscenes_cb.isChecked() and category == 'Cutscene':
+            return
+
         if self.hide_plugins_cb.isChecked() and category == 'Plugins':
             return
 
