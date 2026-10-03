@@ -5096,10 +5096,13 @@ class LogicThread(threading.Thread):
                 cam_pos = glm.vec3(*cs['cam_pos'])
                 cam_angle = cs.get('cam_angle', 0.0)
                 cam_pitch = cs.get('cam_pitch', 0.0)
-                # cam_angle/cam_pitch are Camera yaw/pitch, not the
-                # Player's angle convention below.  Camera.get_front_vector()
-                # uses (cos(yaw), sin(pitch), sin(yaw)); using the player
-                # convention here rotates authored cutscene views.
+                # Deliberate cinematic convention: cam_angle/cam_pitch are
+                # Camera yaw/pitch, not the Player's angle convention below.
+                # JSON cutscenes store authored Camera yaw verbatim, and the
+                # legacy PathNode path-facing producer retains its historical
+                # player-angle convention. Do not "correct" this by adding a
+                # pi/2 conversion here; that would silently change authored
+                # cutscene camera orientation and legacy compatibility.
                 direction = glm.vec3(
                     math.cos(cam_angle) * math.cos(cam_pitch),
                     math.sin(cam_pitch),
