@@ -3819,8 +3819,6 @@ class LogicThread(threading.Thread):
                 pass
         if spawned:
             self._build_entity_caches()
-            if hasattr(self, "monster_ai"):
-                self.monster_ai.forget_monsters()
         entity = cs.get("entity")
         self.cinematic_state = None
         if entity is not None and self.io_manager:
