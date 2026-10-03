@@ -36,6 +36,7 @@ from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage,
 from .logic_combat import LogicCombat, NO_PROJECTILES as _NO_PROJECTILES
 from .logic_timing import LogicTiming
 from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
+from .logic_world import LogicWorld
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -371,6 +372,14 @@ class LogicThread(threading.Thread):
         self.timing_runtime = LogicTiming(self)
         # LogicCollision owns world/model collision geometry and cache rebuilding.
         self.collision_runtime = LogicCollision(self)
+        # LogicWorld owns entity lookup/index caches and LevelChanger data.
+        self.world_runtime = LogicWorld(
+            self,
+            levelchanger_type=LevelChanger,
+            monster_type=MonsterThing,
+            timer_type=LogicTimer,
+            path_node_type=PathNode,
+        )
 
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
@@ -523,78 +532,13 @@ class LogicThread(threading.Thread):
     # ENTITY LOOKUP (for I/O system)
     # =========================================================================
     
+    def _world_runtime(self):
+        """Return the world/entity indexing runtime."""
+        return self.world_runtime
+
     def _build_entity_caches(self):
-        """Build O(1) lookup dicts for I/O entity resolution.
-
-        Also precomputes per-tick filtered entity lists (trigger brushes,
-        Props, level changers) so hot-path tick handlers don't have to
-        linearly rescan the full brush/thing lists every frame — these are
-        rebuilt here (play-mode enter, and whenever a thing is spawned) since
-        that's the only time the underlying brush/thing collections change.
-        """
-        self._name_cache = {}
-        self._id_cache   = {}
-        for b in self.brushes:
-            n = b.get('name')
-            if n:
-                self._name_cache[n] = b
-            i = b.get('id')
-            if i:
-                self._id_cache[i] = b
-        for t in self.things:
-            n = t.properties.get('name')
-            if n:
-                self._name_cache[n] = t
-            i = t.properties.get('id')
-            if i:
-                self._id_cache[i] = t
-
-        # PERF: precomputed trigger-brush list + bid lookup for _handle_triggers
-        self._trigger_brushes = [
-            (b.get('id') or i, b) for i, b in enumerate(self.brushes) if b.get('is_trigger')
-        ]
-        self._trigger_brush_by_bid = dict(self._trigger_brushes)
-        self._refresh_use_triggers()
-
-        # Props are not cached here. PropSession is the registry for the Prop
-        # domain and a second list would be a competing copy of it; this is the
-        # point at which it re-derives itself from the thing list, alongside
-        # every other entity cache, and the engine reads Props back off it.
-        if self._props is not None:
-            self._props.rebuild(self.things)
-        self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
-        self._refresh_levelchanger_table()
-
-        # PERF: precomputed monster list + id lookup, used by MonsterAI so it
-        # doesn't have to isinstance-scan the full (brushes+things) list of
-        # every entity in the level on every AI tick.
-        self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
-        self._monster_by_id = {id(t): t for t in self._monster_things}
-        # AI state of monsters that have left the world: keyed by id(), so a
-        # monster spawned into a freed address would inherit it.
-        live = self._monster_by_id
-        with self._monster_lock:
-            states = self.monster_ai.monster_states
-            for key in [key for key in states if key not in live]:
-                del states[key]
-
-        # PERF: the timer list, for the same reason — _update_logic_timers is
-        # the one per-frame path the logic system has, and it should walk the
-        # timers, not the level.
-        self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
-
-        # The row sets this index describes; see _watch_world_rows.
-        self._indexed_things = tuple(self.things)
-        self._indexed_brushes = tuple(self.brushes)
-        # Door/mover state is keyed by brush index. Whoever changed the brush
-        # list -- the editor, or a console delete that rebuilds this index
-        # itself -- the states are re-keyed here: the row watcher compares
-        # against _indexed_brushes, which the line above has just moved on.
-        if (self.play_mode and self._moving_rows is not None
-                and self._indexed_brushes != self._moving_rows):
-            self._reindex_moving_brushes()
-            self.mark_collision_dirty()
-        self._rebuild_portal_links()
+        """Compatibility wrapper for world/entity index rebuilding."""
+        return self._world_runtime().build_entity_caches()
 
     def _portal_runtime(self):
         """Return the portal runtime subsystem."""
@@ -605,103 +549,20 @@ class LogicThread(threading.Thread):
         return self._portal_runtime().rebuild_links()
 
     def _find_entity_by_name(self, name: str):
-        if not name:
-            return None
-        if not self.play_mode:
-            return self._scan_entity('name', name)
-        return self._name_cache.get(name)
+        """Compatibility wrapper for live/session name lookup."""
+        return self._world_runtime().find_entity_by_name(name)
 
     def _find_entity_by_id(self, entity_id: str):
-        if not entity_id:
-            return None
-        if not self.play_mode:
-            return self._scan_entity('id', entity_id)
-        return self._id_cache.get(entity_id)
+        """Compatibility wrapper for live/session id lookup."""
+        return self._world_runtime().find_entity_by_id(entity_id)
 
     def _scan_entity(self, key, value):
-        """Look an entity up in the live world, outside a play session.
-
-        The caches are built when Play starts. The console's ``ent_fire``,
-        ``send`` and ``trigger`` dispatch through the same I/O manager in the
-        editor, where the caches are empty (never played) or hold the objects
-        of the last session -- replaced by a restore or a map load -- so an
-        input either failed with "not found" or landed on an object no longer
-        in the world. Same precedence as the cache build: last one wins,
-        entities over brushes.
-        """
-        for thing in reversed(self.things):
-            if thing.properties.get(key) == value:
-                return thing
-        for brush in reversed(self.brushes):
-            if brush.get(key) == value:
-                return brush
-        return None
+        """Compatibility wrapper for editor-world entity scanning."""
+        return self._world_runtime().scan_entity(key, value)
 
     def _find_path_node_by_name(self, name: str):
-        """Return PathNode thing with given name, or None."""
-        if not name or PathNode is None:
-            return None
-        entity = self._name_cache.get(name)
-        if entity is not None and isinstance(entity, PathNode):
-            return entity
-        for t in self.things:
-            if isinstance(t, PathNode) and t.properties.get('name', '') == name:
-                return t
-        return None
-
-    def _collision_runtime(self):
-        """Return the collision runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "collision_runtime", None)
-        if runtime is None:
-            runtime = LogicCollision(self)
-            try:
-                self.collision_runtime = runtime
-            except Exception:
-                pass
-        return runtime
-
-    def _angled_brush_is_solid(self, brush):
-        """Compatibility wrapper for angled-brush collision classification."""
-        return self._collision_runtime().angled_brush_is_solid(brush)
-
-    def _prepare_angled_brush_collision(self):
-        """Compatibility wrapper for angled-brush collision preparation."""
-        return self._collision_runtime().prepare_angled_brush_collision()
-
-    @classmethod
-    def _clear_brush_collision(cls, brush):
-        """Compatibility wrapper for clearing brush collision runtime keys."""
-        return LogicCollision.clear_brush_collision(brush)
-
-    def _clear_angled_brush_collision(self):
-        """Compatibility wrapper for clearing angled-brush collision data."""
-        return self._collision_runtime().clear_angled_brush_collision()
-
-    def _build_model_collision_brushes(self):
-        """Compatibility wrapper for model collision generation."""
-        return self._collision_runtime().build_model_collision_brushes()
-
-    def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
-        """Compatibility wrapper for model mesh collision generation."""
-        return self._collision_runtime().compute_model_collision_mesh(
-            model_path, world_pos, scale, rotation
-        )
-
-    def _compute_mesh_bounds(self, mesh_tris):
-        """Compatibility wrapper for collision mesh bounds."""
-        return self._collision_runtime().compute_mesh_bounds(mesh_tris)
-
-    def _compute_model_bounds(self, model_path):
-        """Compatibility wrapper for model AABB bounds."""
-        return self._collision_runtime().compute_model_bounds(model_path)
-
-    def toggle_model_collision(self, enabled: bool = None) -> bool:
-        """Compatibility wrapper for model collision toggling."""
-        return self._collision_runtime().toggle_model_collision(enabled)
-
-    def _refresh_collision_brushes_cache(self):
-        """Compatibility wrapper for the combined collision-brush cache."""
-        return self._collision_runtime().refresh_collision_brushes_cache()
+        """Compatibility wrapper for PathNode lookup."""
+        return self._world_runtime().find_path_node_by_name(name)
 
     # -- visibility invalidation ------------------------------------------
     #
@@ -1143,25 +1004,7 @@ class LogicThread(threading.Thread):
         them reached those instead of the live ones. Outside play the entity
         finders read the live world (see :meth:`_scan_entity`).
         """
-        self._name_cache = {}
-        self._id_cache = {}
-        self._indexed_things = ()
-        self._indexed_brushes = ()
-        self._moving_rows = None
-        self._monster_by_id = {}
-        self._monster_things = []
-        self._timer_things = []
-        self._levelchanger_things = []
-        self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
-        self._levelchanger_radii = np.empty(0, dtype=np.float32)
-        self._levelchanger_eligible = np.empty(0, dtype=bool)
-        self._trigger_brushes = []
-        self._trigger_brush_by_bid = {}
-        self._use_trigger_entries = []
-        self._portal_things = []
-        self._portal_target_things = []
-        self._portal_slots = np.empty(0, dtype=np.int32)
-        self._portal_target_slots = np.empty(0, dtype=np.int32)
+        self._world_runtime().release_session_indexes()
         self._collision_brushes_cache = []
         self._model_collision_brushes = []
         self._physics_body_brushes = []
@@ -1983,31 +1826,8 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _refresh_levelchanger_table(self):
-        """Pack LevelChanger activation geometry into dense numeric columns."""
-        things = getattr(self, '_levelchanger_things', ())
-        count = len(things)
-        if not count:
-            self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
-            self._levelchanger_radii = np.empty(0, dtype=np.float32)
-            self._levelchanger_eligible = np.empty(0, dtype=bool)
-            return
-
-        self._levelchanger_centres = np.asarray(
-            [thing.pos for thing in things],
-            dtype=np.float32,
-        ).reshape(count, 3)
-        self._levelchanger_radii = np.asarray(
-            [float(thing.properties.get('radius', 128.0)) for thing in things],
-            dtype=np.float32,
-        )
-        self._levelchanger_eligible = np.asarray(
-            [
-                not thing.properties.get('disabled', False)
-                and thing.properties.get('usable', True)
-                for thing in things
-            ],
-            dtype=bool,
-        )
+        """Compatibility wrapper for dense LevelChanger geometry."""
+        return self._world_runtime().refresh_levelchanger_table()
 
     def _handle_interactions(self, use_key_pressed: bool):
         self.current_hud_message = ""
