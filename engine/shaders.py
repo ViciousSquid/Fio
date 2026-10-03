@@ -1764,7 +1764,7 @@ void main() {
         // ---- Baked terrain material paint -------------------------------
     if (uPaintEnabled == 1) {
         vec4 paint = texture(
-            terrainPaintMap, vec3(clamp(PaintCoords, 0.0, 1.0),
+            terrainPaintMap, vec3(clamp(PaintCoords.yx, 0.0, 1.0),
                                   float(uPaintLayer)));
         texColor = mix(texColor, paint.rgb * 1.1, paint.a);
     }

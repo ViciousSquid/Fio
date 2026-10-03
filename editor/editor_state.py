@@ -847,9 +847,9 @@ class EditorState:
             index = state.get('selected_index', -1)
             self._restore_selection([[kind, index, '']] if kind else [])
 
-        # Terrain CSG is intentionally the only terrain field included in the
-        # lightweight editor history. Full terrain_data may contain large
-        # heightmap blobs and is not suitable for every undo checkpoint.
+        # Terrain CSG and baked texture paint are the terrain fields included
+        # in lightweight editor history. Heightmaps remain outside checkpoints
+        # because their full blobs are much larger.
         if 'terrain_csg_subtractions' in state and isinstance(self.terrain_data, dict):
             cuts = state.get('terrain_csg_subtractions') or []
             if cuts:

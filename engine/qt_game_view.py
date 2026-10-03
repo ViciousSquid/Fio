@@ -2914,8 +2914,8 @@ class QtGameView(QOpenGLWidget):
                 else abs_texture.replace(os.sep, '/')
             )
 
-            # One stamp is one undo step. The compact terrain snapshot already
-            # carries the persistent stamp list.
+            # One paint click is one undo step. The compact terrain snapshot
+            # already carries the baked terrain material data.
             if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
                 self.editor.state.terrain_data = terrain.to_dict()
                 if hasattr(self.editor, 'save_state'):
@@ -2930,13 +2930,13 @@ class QtGameView(QOpenGLWidget):
                         self.editor.state, 'discard_last_checkpoint'):
                     self.editor.state.discard_last_checkpoint()
                 if hasattr(self.editor, 'show_toast'):
-                    self.editor.show_toast("Texture stamp was not added", is_error=True)
+                    self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
                 return
 
             if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
                 self.editor.state.terrain_data = terrain.to_dict()
             if hasattr(self.editor, 'show_toast'):
-                self.editor.show_toast(f"Stamped {os.path.basename(texture_path)}")
+                self.editor.show_toast(f"Painted {os.path.basename(texture_path)}")
             self.update()
             return
 
