@@ -697,10 +697,17 @@ class EditorState:
 
     def snapshot(self):
         """The scene as it stands right now, as a JSON checkpoint string."""
+        terrain_csg = []
+        if isinstance(self.terrain_data, dict):
+            terrain_csg = [
+                list(cut) for cut in self.terrain_data.get('csg_subtractions', [])
+                if isinstance(cut, (list, tuple)) and len(cut) == 6
+            ]
         return json.dumps({
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
+            'terrain_csg_subtractions': terrain_csg,
         }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
@@ -827,6 +834,16 @@ class EditorState:
             kind = state.get('selected_type')
             index = state.get('selected_index', -1)
             self._restore_selection([[kind, index, '']] if kind else [])
+
+        # Terrain CSG is intentionally the only terrain field included in the
+        # lightweight editor history. Full terrain_data may contain large
+        # heightmap blobs and is not suitable for every undo checkpoint.
+        if 'terrain_csg_subtractions' in state and isinstance(self.terrain_data, dict):
+            cuts = state.get('terrain_csg_subtractions') or []
+            if cuts:
+                self.terrain_data['csg_subtractions'] = [list(cut) for cut in cuts]
+            else:
+                self.terrain_data.pop('csg_subtractions', None)
 
     def undo(self):
         """Step back one operation, making the current scene redoable.
