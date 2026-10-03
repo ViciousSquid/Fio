@@ -81,6 +81,8 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.events = []
         self._saved = False
         self._cleaned = False
+        self._saved_signature = None
+        self._close_prompt_active = False
 
         # Editor-side cutscene preview transport. This previews choreography
         # without firing gameplay combat or permanently changing the map.
@@ -453,6 +455,47 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._update_waypoint_controls()
         self._refresh_summary()
         self._load_first_cutscene()
+        if self._saved_signature is None:
+            self._saved_signature = self._cutscene_signature()
+
+    def _cutscene_signature(self):
+        """Return a stable representation of the authored cutscene state."""
+        data = self._build_cutscene_data()
+        data.pop("id", None)
+        return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
+    def _has_unsaved_changes(self):
+        return self._saved_signature != self._cutscene_signature()
+
+    def _confirm_close(self):
+        if self._close_prompt_active or not self._has_unsaved_changes():
+            return True
+
+        self._close_prompt_active = True
+        try:
+            box = QtWidgets.QMessageBox(self)
+            box.setIcon(QtWidgets.QMessageBox.Warning)
+            box.setWindowTitle("Unsaved cutscene changes!")
+            box.setText("Unsaved cutscene changes!")
+            box.setInformativeText("Do you want to save them before closing?")
+            save_button = box.addButton("Save", QtWidgets.QMessageBox.AcceptRole)
+            discard_button = box.addButton("Discard", QtWidgets.QMessageBox.DestructiveRole)
+            cancel_button = box.addButton("Cancel", QtWidgets.QMessageBox.RejectRole)
+            box.setDefaultButton(save_button)
+            box.exec_()
+
+            clicked = box.clickedButton()
+            if clicked is save_button:
+                self._save_and_close()
+                return False
+            if clicked is discard_button:
+                self._preview_stop_and_restore()
+                self._cleanup_after_cancel()
+                self._saved = False
+                return True
+            return False
+        finally:
+            self._close_prompt_active = False
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1747,6 +1790,8 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_camera_list()
         self._refresh_event_list()
         self._refresh_summary()
+        self._saved = True
+        self._saved_signature = self._cutscene_signature()
         self.main_window.update_all_ui()
         self.main_window.show_toast(f"Loaded cutscene {Path(filename).name}")
 
@@ -1857,6 +1902,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         if not self._write_cutscene(filename, prompt_overwrite=True):
             return
         self._saved = True
+        self._saved_signature = self._cutscene_signature()
         self._delete_temporary_actors()
         self.main_window.show_toast(f"Saved cutscene {filename}")
         super().accept()
@@ -1871,17 +1917,23 @@ class CutsceneWizard(QtWidgets.QDialog):
         if not self._write_cutscene(filename, prompt_overwrite=False):
             return
         self._apply_logic_camera(filename)
+        self._saved = True
+        self._saved_signature = self._cutscene_signature()
 
     def reject(self):
+        if not self._confirm_close():
+            return
         self._preview_stop_and_restore()
         self._cleanup_after_cancel()
         super().reject()
 
     def closeEvent(self, event):
+        if not self._confirm_close():
+            event.ignore()
+            return
         self._preview_stop_and_restore()
-        if not self._saved:
-            self._cleanup_after_cancel()
-        super().closeEvent(event)
+        self._cleanup_after_cancel()
+        event.accept()
 
 
 # Backwards-compatible class name retained for MainWindow.open_cutscene_wizard.
