@@ -47,7 +47,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Current Buildozer guidance for the Android CPython 3.14 toolchain.
-          pip install git+https://github.com/kivy/buildozer
+          pip install buildozer==1.6.0
           pip install legacy-cgi setuptools "cython==0.29.34"
 
       # Cache the Android SDK/NDK + p4a build dir so reruns are fast.
