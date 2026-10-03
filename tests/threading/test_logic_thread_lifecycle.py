@@ -304,6 +304,22 @@ def test_health_hud_fades_in_on_spawn_then_settles_at_50_percent(logic):
         thread.set_play_mode(False)
 
 
+def test_disabling_health_hud_fade_keeps_full_alpha_after_damage(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        thread.set_hud_fade_enabled(False)
+        thread.player_health = 25
+
+        alpha = thread._update_hud_health_alpha(thread._hud_health_fade_started + 0.1)
+
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "idle"
+        assert thread._hud_health_fade_started is None
+    finally:
+        thread.set_play_mode(False)
+
+
 def test_health_change_uses_fast_fade_in_then_slow_fade_out(logic):
     thread = logic(brushes=room())
     thread.set_play_mode(True)
