@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .soa import grow_soa_arrays
+
 
 class ProjectileStore:
     """Dense SoA store for monster projectiles."""
@@ -38,14 +40,23 @@ class ProjectileStore:
     def _ensure_capacity(self, required):
         if required <= self._capacity:
             return
-        new_capacity = max(required, self._capacity * 2)
-        self.pos = np.resize(self.pos, (new_capacity, 3))
-        self.vel = np.resize(self.vel, (new_capacity, 3))
-        self.lifetime = np.resize(self.lifetime, new_capacity)
-        self.distance = np.resize(self.distance, new_capacity)
-        self.owner_id = np.resize(self.owner_id, new_capacity)
-        self.damage = np.resize(self.damage, new_capacity)
-        self._capacity = new_capacity
+        self._capacity, (
+            self.pos,
+            self.vel,
+            self.lifetime,
+            self.distance,
+            self.owner_id,
+            self.damage,
+        ) = grow_soa_arrays(
+            required,
+            self._capacity,
+            self.pos,
+            self.vel,
+            self.lifetime,
+            self.distance,
+            self.owner_id,
+            self.damage,
+        )
 
     def add(self, pos, vel, owner_id, damage, lifetime):
         i = self._count
