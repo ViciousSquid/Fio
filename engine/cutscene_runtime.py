@@ -177,7 +177,7 @@ class CutsceneRuntime:
         previous = self.state
         if previous is not None:
             if previous.get("json_cutscene"):
-                self.logic._finish_json_cutscene(previous, fire_finished=False)
+                self._finish_json_cutscene(previous, fire_finished=False)
             else:
                 self.state = None
         actors = {}
@@ -611,7 +611,7 @@ class CutsceneRuntime:
             return
 
         cs['elapsed'] = float(cs.get('elapsed', 0.0)) + max(0.0, float(delta))
-        if not self.logic._fire_cinematic_io_events():
+        if not self._fire_cinematic_io_events():
             return
         node_name = cs['current_node']
         node = self.logic._find_path_node_by_name(node_name)
