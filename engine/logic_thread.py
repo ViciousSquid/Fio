@@ -35,7 +35,6 @@ from .cutscene_runtime import CutsceneRuntime
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
-_NO_LEGACY_CUTSCENE_STATE = object()
 
 # Import Thing subclasses for type checking
 try:
