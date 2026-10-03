@@ -4152,7 +4152,8 @@ class LogicThread(threading.Thread):
 
         grid = getattr(self, '_spatial_grid', None)
         all_collision_brushes = self._collision_brushes_cache
-        survivors = []        with self._monster_lock:
+        survivors = []
+        with self._monster_lock:
             live_rows = np.flatnonzero(live)
             owners = [projectiles[i]['owner_id'] for i in live_rows]
             monsters, mq, mrow = self._projectile_monster_candidates(
