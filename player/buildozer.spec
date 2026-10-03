@@ -39,7 +39,7 @@ version = 0.1.0
 #   numpy   -> vector/matrix math and geometry batching (has a p4a recipe)
 #   pyopengl-> GL ES entry points
 #   pillow  -> texture decoding from streamed asset bytes
-requirements = python3,pygame,numpy==2.5.3,pyopengl,pillow
+requirements = python3,numpy==2.5.3,pygame-ce==2.5.8,pyopengl,pillow
 
 orientation = landscape
 fullscreen = 1
@@ -50,9 +50,12 @@ fullscreen = 1
 android.entrypoint = org.kivy.android.PythonActivity
 
 # --- CPython 3.14 Android toolchain ---
-# The current python-for-android development branch carries the CPython 3.14
-# recipe. Keep the Android toolchain aligned with the supported 3.14 setup.
-p4a.branch = develop
+# Pin the stable p4a release used for the Fio Android baseline. The pygame-ce
+# recipe is supplied locally because the upstream recipe is not pinned to the
+# exact desktop baseline version.
+p4a.branch = master
+p4a.commit = 58d2114
+p4a.local_recipes = ./p4a-recipes
 android.ndk = 29
 
 # --- Android platform ---
