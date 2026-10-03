@@ -1168,8 +1168,8 @@ class MonsterAI:
 
         Answered from the tick's dense batch when there is one, which is the
         same question asked for every monster at once rather than once per
-        monster; :meth:`_enemy_batch` builds it. The walk below is what runs
-        for a small monster set, for a caller asking about a range the batch
+        monster. The scalar walk below remains only as a reference/fallback
+        for callers that cannot assemble the dense table.
         was not built for, and wherever the batch cannot be assembled.
         """
         if not my_team or MonsterThing is None:
@@ -1191,9 +1191,9 @@ class MonsterAI:
 
         MonsterTable already contains the gathered positions, team codes,
         and alive/hidden flags for this tick. The kernel consumes those
-        columns directly: one float32 squared-distance matrix, one validity
-        mask, and one argmin. There is no per-monster candidate walk and no
-        Python loop over teams.
+        columns directly in vectorized team blocks: squared distances, a
+        team mask, and an argmin per block. There is no per-monster
+        candidate walk.
 
         A direct helper call outside the dense update gathers the table first;
         the play-mode hot path has already gathered it in _update_dense.
@@ -1237,7 +1237,6 @@ class MonsterAI:
             table.pos[:count], team_id, alive, max_range)
         return self._enemy_nearest
 
-    @staticmethod
     @staticmethod
     def _nearest_enemy_rows(pos, team_id, alive, max_range):
         """Return each row's nearest living enemy row, or -1, in dense batches.
