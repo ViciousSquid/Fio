@@ -36,6 +36,7 @@ from .logic_parenting import LogicParenting
 from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYER_EXIT_EPSILON
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
 from .logic_combat import LogicCombat, NO_PROJECTILES as _NO_PROJECTILES
+from .logic_timing import LogicTiming
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -366,6 +367,8 @@ class LogicThread(threading.Thread):
         self.portal_runtime = LogicPortals(self, portal_type=Portal)
         # LogicCombat owns weapons, projectiles, bullet marks and noise.
         self.combat_runtime = LogicCombat(self)
+        # LogicTiming owns timer and light-fade advancement.
+        self.timing_runtime = LogicTiming(self)
 
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
@@ -1662,29 +1665,13 @@ class LogicThread(threading.Thread):
 
     @staticmethod
     def _timer_key(thing):
-        """A timer's countdown is filed under its UUID, not its memory address.
-
-        ``id(thing)`` is not an identity: it changes on every load, so a
-        countdown could never be saved, and CPython reuses addresses, so a
-        freed entity's slot could be inherited by an unrelated one.
-        """
-        return thing.properties.get('id') or thing.properties.get('name', '')
+        """Compatibility wrapper for stable timer identity."""
+        return LogicTiming.timer_key(thing)
 
     def _init_logic_timers(self):
-        if not LogicTimer:
-            return
-        for thing in self._timer_things:
-            if thing.properties.get('start_on', False):
-                try:
-                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
-                except (TypeError, ValueError):
-                    interval = 1.0
-                thing.properties['timer_enabled'] = True
-                self.timer_states[self._timer_key(thing)] = {
-                    'remaining': interval,
-                    'interval': interval
-                }
-    
+        """Compatibility wrapper for timer initialisation."""
+        return self.timing_runtime.init_logic_timers()
+
     def set_terrain(self, terrain):
         self.terrain = terrain
     
@@ -2294,81 +2281,12 @@ class LogicThread(threading.Thread):
     # =========================================================================
     
     def _update_logic_timers(self, delta: float):
-        """Advance the running timers.  The only clock Fio's logic has.
-
-        Walks a precomputed list of timer entities rather than isinstance-testing
-        every thing in the level each frame, and an *enabled* timer is the only
-        thing it touches — a level full of timers that are switched off costs a
-        flag read each, and a level with none costs nothing at all.
-
-        This is not a logic tick: no state is scanned, no condition is
-        evaluated, and nothing else in the logic system has a per-frame path.
-        Time is simply the one event source that has to come from somewhere.
-        """
-        if not self._timer_things:
-            return
-
-        for thing in self._timer_things:
-            if not thing.properties.get('timer_enabled', False):
-                continue
-            key = self._timer_key(thing)
-            state = self.timer_states.get(key)
-            if state is None:
-                try:
-                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
-                except (TypeError, ValueError):
-                    interval = 1.0
-                state = {'remaining': interval, 'interval': interval}
-                self.timer_states[key] = state
-            state['remaining'] -= delta
-            if state['remaining'] > 0:
-                continue
-
-            if self.io_manager:
-                self.io_manager.fire_output(thing, 'OnTimer')
-            # A one-shot timer stops itself rather than being stopped by the
-            # chain it drives, so a map does not have to remember to wire the
-            # Disable back — and OnFinished says it happened, for a chain that
-            # wants to know.
-            if thing.properties.get('one_shot', False):
-                thing.properties['timer_enabled'] = False
-                self.timer_states.pop(key, None)
-                if self.io_manager:
-                    self.io_manager.fire_output(thing, 'OnFinished')
-            else:
-                state['remaining'] = state['interval']
-
-    # =========================================================================
-    # LIGHT FADE UPDATE
-    # =========================================================================
+        """Compatibility wrapper for logic_timer advancement."""
+        return self.timing_runtime.update_logic_timers(delta)
 
     def _update_light_fades(self, delta: float):
-        """Advance any active light FadeIn/FadeOut transitions.
-
-        Fade state is created by the light 'fadein'/'fadeout' I/O handlers.
-        Each frame we lerp the light's intensity toward its target; when the
-        transition completes we snap to the target and, for a fade-out, turn
-        the light off and fire OnTurnedOff.
-        """
-        if not self.light_fade_states:
-            return
-        finished = []
-        for key, st in self.light_fade_states.items():
-            entity = st['entity']
-            st['elapsed'] += delta
-            duration = st['duration']
-            t = 1.0 if duration <= 0.0 else min(1.0, st['elapsed'] / duration)
-            entity.properties['intensity'] = st['from'] + (st['to'] - st['from']) * t
-            touch(entity)
-            if t >= 1.0:
-                entity.properties['intensity'] = st['to']
-                if st['end_off']:
-                    entity.properties['state'] = 'off'
-                    if self.io_manager:
-                        self.io_manager.fire_output(entity, 'OnTurnedOff')
-                finished.append(key)
-        for key in finished:
-            self.light_fade_states.pop(key, None)
+        """Compatibility wrapper for light FadeIn/FadeOut advancement."""
+        return self.timing_runtime.update_light_fades(delta)
 
     # =========================================================================
     # TRIGGER HANDLING
