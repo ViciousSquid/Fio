@@ -834,6 +834,41 @@ def test_logic_camera_json_cutscene_stop_restores_actor():
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
 
 
+def test_logic_camera_start_uses_cutscene_file_runtime():
+    from types import SimpleNamespace
+    from editor.io_handlers import register_all_input_handlers
+    from editor.things import LogicCamera
+
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"name": "Camera", "cutscene_file": "cutscenes/test.json"},
+    )
+    manager = IOManager()
+    register_all_input_handlers(manager)
+    recorder = _CutsceneEntityRecorder()
+    started = []
+
+    def _load(filename):
+        assert filename == "cutscenes/test.json"
+        return {"camera": [{"time": 0.0, "pos": [0, 0, 0]}]}
+
+    def _start(entity, filename, data):
+        started.append((entity, filename, data))
+        return True
+
+    logic = SimpleNamespace(
+        io_manager=recorder,
+        _load_cutscene_file=_load,
+        _start_json_cutscene=_start,
+        _fire_cinematic_io_events=lambda: True,
+    )
+    manager._input_handlers[("logic_camera", "start")](camera, "", logic)
+
+    assert len(started) == 1
+    assert started[0][1] == "cutscenes/test.json"
+    assert [name for _, name, _ in recorder.calls] == ["OnStart"]
+
+
 # ---------------------------------------------------------------------------
 # LogicCamera path arrival and LookAt
 # ---------------------------------------------------------------------------
