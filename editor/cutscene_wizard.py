@@ -241,10 +241,10 @@ class CutsceneWizard(QtWidgets.QDialog):
         wv.addLayout(target_row)
 
         waypoint_buttons = QtWidgets.QHBoxLayout()
-        self.add_waypoint_button = QtWidgets.QPushButton("Capture waypoint")
+        self.add_waypoint_button = QtWidgets.QPushButton("Capture")
         self.add_waypoint_button.setDefault(True)
-        self.capture_now_button = QtWidgets.QPushButton("Capture current position (shortcut)")
-        self.remove_waypoint_button = QtWidgets.QPushButton("Remove selected waypoint")
+        self.capture_now_button = QtWidgets.QPushButton("Position")
+        self.remove_waypoint_button = QtWidgets.QPushButton("Remove")
         waypoint_buttons.addWidget(self.add_waypoint_button)
         waypoint_buttons.addWidget(self.capture_now_button)
         waypoint_buttons.addWidget(self.remove_waypoint_button)
