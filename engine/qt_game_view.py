@@ -2380,7 +2380,7 @@ class QtGameView(QOpenGLWidget):
             # Convert editor angle (0° = east) to game angle (0° = north).
             # Do not add another 180° flip: that would make every PlayerStart
             # spawn facing exactly opposite to its authored direction.
-            player_angle_rad = np.radians(90.0 - player_start_angle)
+            player_angle_rad = np.radians(90.0 - player_start_angle) + np.pi
 
             self.player = Player(
                 player_start_pos[0], player_start_pos[2],
