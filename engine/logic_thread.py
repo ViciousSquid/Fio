@@ -525,14 +525,22 @@ class LogicThread(threading.Thread):
     # CUTSCENE RUNTIME
     # =========================================================================
 
+    def _cutscene_runtime(self):
+        """Return the runtime, including for lightweight __new__ test doubles."""
+        runtime = getattr(self, "cutscene_runtime", None)
+        if runtime is None:
+            runtime = CutsceneRuntime(self)
+            self.cutscene_runtime = runtime
+        return runtime
+
     @property
     def cinematic_state(self):
         """Compatibility view of the active cutscene state."""
-        return self.cutscene_runtime.state
+        return self._cutscene_runtime().state
 
     @cinematic_state.setter
     def cinematic_state(self, value):
-        self.cutscene_runtime.state = value
+        self._cutscene_runtime().state = value
 
     def _load_cutscene_file(self, filename):
         return self.cutscene_runtime._load_cutscene_file(filename)
