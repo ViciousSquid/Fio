@@ -49,18 +49,16 @@ fullscreen = 1
 # launches on device while the same file still opens the editor on desktop.
 android.entrypoint = org.kivy.android.PythonActivity
 
-# --- Toolchain pin (IMPORTANT) ---
-# python-for-android master builds CPython 3.14, but its bundled pygame recipe
-# is still pygame 2.1.0, which cannot compile on Python >= 3.12 (fatal error:
-# 'longintrepr.h' file not found). Pin p4a to the last release that builds
-# CPython 3.10, where pygame 2.1.0 compiles cleanly, and pin the matching NDK.
-p4a.branch = v2023.09.16
-android.ndk = 25b
+# --- CPython 3.14 Android toolchain ---
+# The current python-for-android development branch carries the CPython 3.14
+# recipe. Keep the Android toolchain aligned with the supported 3.14 setup.
+p4a.branch = develop
+android.ndk = 29
 
 # --- Android platform ---
 # minapi 24 = Android 7.0; GLES 3.x is universal by then. NOTE: buildozer does
 # NOT strip inline comments from value lines, so keep comments on their own line.
-android.api = 34
+android.api = 36
 android.minapi = 24
 android.ndk_api = 24
 # arm64-v8a covers essentially all modern phones and keeps CI fast. Add

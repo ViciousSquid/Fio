@@ -21,6 +21,7 @@ import sys
 from .fiopak import FioPackage, PackageError
 from .platform.base import HostConfig
 from .app import FioPlayerApp, is_android
+from python_runtime import require_supported_python
 
 
 def _default_package_path() -> str | None:
@@ -49,6 +50,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def main(argv=None) -> int:
+    require_supported_python()
     args = parse_args(argv)
 
     package_path = args.package or _default_package_path()

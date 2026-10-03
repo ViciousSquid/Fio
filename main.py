@@ -4,6 +4,8 @@
 import sys
 import os
 
+from python_runtime import require_supported_python
+
 
 os.environ["QT_PLUGIN_PATH"] = ""
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
@@ -119,6 +121,7 @@ dark_stylesheet = """
 """
 
 if __name__ == "__main__":
+    require_supported_python()
 
     # ---------------------------------------------------------
     # Android / standalone player entry point.

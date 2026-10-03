@@ -16,8 +16,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
           cache: pip
+      - name: Verify CPython 3.14 GIL-enabled baseline
+        run: |
+          python - <<'PY'
+          import sys
+          import sysconfig
+
+          assert sys.implementation.name == "cpython"
+          assert sys.version_info >= (3, 14)
+          assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
+          assert sys._is_gil_enabled()
+          print(sys.version)
+          print("Fio requires the normal GIL-enabled CPython baseline.")
+
       - name: Install the dependency-light half
         # No PyQt5 and no PyOpenGL: this job proves how much of Fio is testable
         # without the desktop dependency set at all.
@@ -34,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
           cache: pip
       - name: Install Qt's platform-plugin libraries
         run: |
@@ -60,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
           cache: pip
       - name: Install Mesa and a virtual display
         run: |
@@ -88,7 +101,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.14'
           cache: pip
       - name: Install Mesa and a virtual display
         run: |
@@ -113,3 +126,72 @@ jobs:
           name: renderer-benchmark
           path: benchmark.json
           if-no-files-found: ignore
+
+
+  launch:
+    name: Fio launch (CPython 3.14, Qt + software GL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install Qt/OpenGL runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+      - name: Install Fio dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify CPython 3.14 GIL-enabled baseline
+        run: |
+          python - <<'PY'
+          import sys
+          import sysconfig
+
+          assert sys.implementation.name == "cpython"
+          assert sys.version_info >= (3, 14)
+          assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
+          assert sys._is_gil_enabled()
+          print(sys.version)
+          PY
+      - name: Launch Fio
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          QT_QPA_PLATFORM: xcb
+        run: |
+          xvfb-run -a python - <<'PY'
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import time
+
+          log_path = pathlib.Path("fio-launch.log")
+          with log_path.open("w", encoding="utf-8") as log:
+              proc = subprocess.Popen(
+                  [sys.executable, "main.py"],
+                  stdout=log,
+                  stderr=subprocess.STDOUT,
+                  env=os.environ.copy(),
+              )
+              try:
+                  time.sleep(12)
+                  returncode = proc.poll()
+                  if returncode is not None:
+                      raise SystemExit(
+                          f"Fio exited during launch with code {returncode}.\n"
+                          + log_path.read_text(encoding="utf-8")
+                      )
+                  print("Fio remained running for 12 seconds: launch succeeded.")
+              finally:
+                  if proc.poll() is None:
+                      proc.terminate()
+                  try:
+                      proc.wait(timeout=5)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait()
+          PY
