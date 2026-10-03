@@ -1171,7 +1171,18 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def camera_start(entity, param, logic):
-        """Begin the cinematic camera sequence along a PathNode chain."""
+        """Begin a LogicCamera cutscene or its legacy PathNode sequence."""
+        cutscene_file = str(entity.properties.get('cutscene_file', '') or '').strip()
+        if cutscene_file and hasattr(logic, '_load_cutscene_file') and hasattr(logic, '_start_json_cutscene'):
+            data = logic._load_cutscene_file(cutscene_file)
+            if data is None or not logic._start_json_cutscene(entity, cutscene_file, data):
+                return
+            if logic.io_manager:
+                logic.io_manager.fire_output(entity, 'OnStart')
+            if hasattr(logic, '_fire_cinematic_io_events'):
+                logic._fire_cinematic_io_events()
+            return
+
         target = entity.properties.get('path_target', '')
         node = logic._find_path_node_by_name(target)
         if not node:
@@ -1223,7 +1234,11 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def camera_stop(entity, param, logic):
         """Abort and return camera to the player."""
-        logic.cinematic_state = None
+        cs = getattr(logic, 'cinematic_state', None)
+        if cs and cs.get('json_cutscene') and hasattr(logic, '_finish_json_cutscene'):
+            logic._finish_json_cutscene(cs)
+        else:
+            logic.cinematic_state = None
 
     def camera_pause(entity, param, logic):
         """Freeze camera at current chain position."""
