@@ -594,6 +594,8 @@ def test_portal_candidate_keeps_a_disabled_portal_during_fade_out():
     a._fade_alpha = 0.5
 
     table = _synced([a, b])
+    pytest.importorskip("OpenGL")
+    from engine.renderer_core import BaseRenderer
     renderer = BaseRenderer.__new__(BaseRenderer)
     slots = np.arange(2, dtype=np.int32)
 
