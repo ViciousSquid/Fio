@@ -3797,6 +3797,11 @@ class LogicThread(threading.Thread):
             "duration": duration,
             "io_events": [event for event in events if event.get("type") == "io"],
             "next_io_event": 0,
+            "fight_events": [
+                event for event in events
+                if event.get("type") == "fight"
+            ],
+            "active_fights": {},
         }
         if camera_rows:
             first = camera_rows[0]
@@ -3810,7 +3815,98 @@ class LogicThread(threading.Thread):
 
         return True
 
+    def _restore_json_fights(self, cs):
+        for snapshots in (cs.get("active_fights") or {}).values():
+            for actor, snapshot in snapshots:
+                if actor not in self.things:
+                    continue
+                if snapshot.get("had_disabled"):
+                    actor.properties["disabled"] = snapshot["disabled"]
+                else:
+                    actor.properties.pop("disabled", None)
+                if snapshot.get("had_awake"):
+                    actor.properties["awake"] = snapshot["awake"]
+                else:
+                    actor.properties.pop("awake", None)
+                if snapshot.get("had_aggro"):
+                    actor.properties["_aggro_target"] = snapshot["aggro"]
+                else:
+                    actor.properties.pop("_aggro_target", None)
+                if snapshot.get("had_target_name"):
+                    actor.properties["target_name"] = snapshot["target_name"]
+                else:
+                    actor.properties.pop("target_name", None)
+        cs["active_fights"] = {}
+
+    def _update_json_fights(self, cs, elapsed):
+        """Temporarily hand fight participants to the native MonsterAI."""
+        for index, event in enumerate(cs.get("fight_events") or []):
+            start = self._cutscene_number(event.get("time", 0.0))
+            duration = max(0.0, self._cutscene_number(event.get("duration", 0.0)))
+            end = start + duration
+            active = cs.setdefault("active_fights", {}).get(index)
+
+            if start <= elapsed < end and active is None:
+                snapshots = []
+                defenders = [
+                    (cs.get("actors") or {}).get(str(aid))
+                    or self._find_entity_by_id(str(aid))
+                    for aid in event.get("defenders", []) or []
+                ]
+                defenders = [thing for thing in defenders if thing is not None]
+                if not defenders:
+                    continue
+                target = defenders[0]
+                for aid in event.get("attackers", []) or []:
+                    actor = (
+                        (cs.get("actors") or {}).get(str(aid))
+                        or self._find_entity_by_id(str(aid))
+                    )
+                    if actor is None or not (
+                        MonsterThing is not None and isinstance(actor, MonsterThing)
+                    ):
+                        continue
+                    props = actor.properties
+                    snapshot = {
+                        "had_disabled": "disabled" in props,
+                        "disabled": props.get("disabled", False),
+                        "had_awake": "awake" in props,
+                        "awake": props.get("awake", False),
+                        "had_aggro": "_aggro_target" in props,
+                        "aggro": props.get("_aggro_target"),
+                        "had_target_name": "target_name" in props,
+                        "target_name": props.get("target_name"),
+                    }
+                    snapshots.append((actor, snapshot))
+                    props["disabled"] = False
+                    props["awake"] = True
+                    props["_aggro_target"] = id(target)
+                    props.pop("target_name", None)
+                cs["active_fights"][index] = snapshots
+
+            elif active is not None and elapsed >= end:
+                for actor, snapshot in active:
+                    props = actor.properties
+                    if snapshot.get("had_disabled"):
+                        props["disabled"] = snapshot["disabled"]
+                    else:
+                        props.pop("disabled", None)
+                    if snapshot.get("had_awake"):
+                        props["awake"] = snapshot["awake"]
+                    else:
+                        props.pop("awake", None)
+                    if snapshot.get("had_aggro"):
+                        props["_aggro_target"] = snapshot["aggro"]
+                    else:
+                        props.pop("_aggro_target", None)
+                    if snapshot.get("had_target_name"):
+                        props["target_name"] = snapshot["target_name"]
+                    else:
+                        props.pop("target_name", None)
+                cs["active_fights"].pop(index, None)
+
     def _finish_json_cutscene(self, cs, fire_finished=True):
+        self._restore_json_fights(cs)
         for aid, snapshot in (cs.get("actor_initial") or {}).items():
             actor = snapshot.get("entity")
             if actor is None or actor not in self.things:
@@ -3866,6 +3962,8 @@ class LogicThread(threading.Thread):
                         if dist > 0.01:
                             cs["cam_angle"] = math.atan2(diff[0], diff[2])
                             cs["cam_pitch"] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+
+        self._update_json_fights(cs, elapsed)
 
         for aid, rows in (cs.get("actor_tracks") or {}).items():
             actor = (cs.get("actors") or {}).get(aid)
