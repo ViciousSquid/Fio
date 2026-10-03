@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from engine.cutscene_runtime import CutsceneRuntime
 from engine.logic_thread import LogicThread
 
 
@@ -18,6 +19,7 @@ class CutsceneWorld:
     def __init__(self):
         self.source = SimpleNamespace(properties={"id": "source-1", "name": "Door"})
         self.io_manager = RecordingIO(self)
+        self.runtime = CutsceneRuntime(self)
         self.cinematic_state = {
             "active": True,
             "elapsed": 0.0,
@@ -27,6 +29,18 @@ class CutsceneWorld:
             ],
             "next_io_event": 0,
         }
+        self.runtime.state = self.cinematic_state
+
+    def _cutscene_runtime(self):
+        return self.runtime
+
+    @property
+    def cinematic_state(self):
+        return self.runtime.state
+
+    @cinematic_state.setter
+    def cinematic_state(self, value):
+        self.runtime.state = value
 
     def _find_entity_by_id(self, entity_id):
         return self.source if entity_id == "source-1" else None
