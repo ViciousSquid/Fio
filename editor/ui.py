@@ -412,17 +412,16 @@ class Ui_MainWindow(object):
         autocaulk_action.triggered.connect(MainWindow.autocaulk)
         MainWindow.tools_menu.addAction(autocaulk_action)
 
+        MainWindow.cutscene_wizard_action = QAction('Cutscenes...', MainWindow)
+        MainWindow.cutscene_wizard_action.setShortcut('Ctrl+Shift+C')
+        MainWindow.cutscene_wizard_action.setToolTip('Author a camera-and-actor cutscene from the 3D view')
+        MainWindow.cutscene_wizard_action.triggered.connect(MainWindow.open_cutscene_wizard)
         MainWindow.tools_menu.addAction(MainWindow.cutscene_wizard_action)
 
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
         MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
         MainWindow.logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
-
-        MainWindow.cutscene_wizard_action = QAction('Cutscenes...', MainWindow)
-        MainWindow.cutscene_wizard_action.setShortcut('Ctrl+Shift+C')
-        MainWindow.cutscene_wizard_action.setToolTip('Author a camera-and-actor cutscene from the 3D view')
-        MainWindow.cutscene_wizard_action.triggered.connect(MainWindow.open_cutscene_wizard)
 
         MainWindow.logic_wizard_action = QAction('Logic Wizard…', MainWindow)
         MainWindow.logic_wizard_action.setShortcut('Ctrl+Shift+W')
@@ -828,4 +827,3 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(self.notification_label)
         
         status_bar.addPermanentWidget(bottom_widget, 1)
-
