@@ -347,10 +347,12 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.summary = QtWidgets.QLabel("No actors created yet.")
         self.summary.setWordWrap(True)
         footer.addWidget(self.summary, 1)
-        self.save_button = QtWidgets.QPushButton("Save Cutscene")
+        self.load_button = QtWidgets.QPushButton("Load Cutscene")
+        self.save_button = QtWidgets.QPushButton("Save / Apply to Map")
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.save_button.setDefault(True)
         self.cancel_button.setDefault(False)
+        footer.addWidget(self.load_button)
         footer.addWidget(self.save_button)
         footer.addWidget(self.cancel_button)
         root.addLayout(footer)
@@ -401,6 +403,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.waypoint_action.currentIndexChanged.connect(
             lambda _index: self._update_waypoint_controls()
         )
+        self.load_button.clicked.connect(self._load_cutscene)
         self.save_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
 
@@ -1377,6 +1380,163 @@ class CutsceneWizard(QtWidgets.QDialog):
         # edits while this modeless panel was open.
         self._delete_temporary_actors()
 
+    def _current_map_name(self):
+        path = getattr(self.main_window, "file_path", "") or ""
+        return Path(path).name if path else ""
+
+    def _find_map_actor(self, aid):
+        aid = str(aid or "")
+        if not aid:
+            return None
+        for obj in getattr(self.main_window.state, "things", []) or []:
+            if str(getattr(obj, "properties", {}).get("id", "")) == aid:
+                return obj
+        return None
+
+    def _existing_logic_camera(self, cutscene_file):
+        wanted = str(cutscene_file or "").replace("\\", "/")
+        for obj in getattr(self.main_window.state, "things", []) or []:
+            if obj.__class__.__name__ != "LogicCamera":
+                continue
+            current = str(getattr(obj, "properties", {}).get("cutscene_file", "") or "").replace("\\", "/")
+            if current == wanted:
+                return obj
+        return None
+
+    def _load_cutscene(self):
+        start_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load Cutscene", str(start_dir),
+            "Cutscene JSON (*.json);;All files (*)",
+        )
+        if not filename:
+            return
+        try:
+            data = json.loads(Path(filename).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Load failed", f"The cutscene could not be read:\n{exc}")
+            return
+        if not isinstance(data, dict) or not isinstance(data.get("camera"), list):
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid cutscene",
+                "This file is not a valid Fio cutscene (camera keyframes are missing).",
+            )
+            return
+
+        saved_map = str((data.get("map") or {}).get("file", "") or "")
+        current_map = self._current_map_name()
+        if saved_map and current_map and saved_map.lower() != current_map.lower():
+            result = QtWidgets.QMessageBox.question(
+                self, "Different map",
+                f"This cutscene was created for '{saved_map}', but the current map is "
+                f"'{current_map}'.\n\nLoad it into the current map anyway?",
+            )
+            if result != QtWidgets.QMessageBox.Yes:
+                return
+
+        self._preview_stop_and_restore()
+        self._delete_temporary_actors()
+        self.actor_meta.clear()
+        self.actor_objects.clear()
+        self.temporary_actor_ids.clear()
+        self.actor_tracks = {
+            str(aid): list(rows or [])
+            for aid, rows in (data.get("actor_tracks") or {}).items()
+            if isinstance(rows, list)
+        }
+        self.camera_keys = list(data.get("camera") or [])
+        self.events = list(data.get("events") or [])
+        self.name.setText(str(data.get("name") or "Cutscene"))
+        self.filename.setText(Path(filename).name)
+
+        settings = data.get("settings") or {}
+        self.restore.setChecked(bool(settings.get("restore_actors", True)))
+        self.stop_escape.setChecked(bool(settings.get("stop_on_escape", True)))
+        trigger = self.trigger_mode.findData(settings.get("trigger_mode", "manual"))
+        self.trigger_mode.setCurrentIndex(trigger if trigger >= 0 else 0)
+        self.radius.setValue(float(settings.get("trigger_radius", 180.0)))
+        self.once.setChecked(bool(settings.get("trigger_once", True)))
+
+        for row in data.get("actors") or []:
+            if not isinstance(row, dict):
+                continue
+            aid = str(row.get("id", "") or "")
+            if not aid:
+                continue
+            name = str(row.get("name") or aid)
+            definition = row.get("definition") if row.get("spawn") else None
+            actor = self._find_map_actor(aid)
+            if actor is None and isinstance(definition, dict):
+                try:
+                    from .things import Monster
+                    actor_props = dict(definition.get("properties") or {})
+                    actor_props["id"] = aid
+                    actor_props["_cutscene_temporary"] = True
+                    actor = Monster(
+                        pos=definition.get("pos") or [0.0, 0.0, 0.0],
+                        properties=actor_props,
+                    )
+                    actor.angle = float(definition.get("yaw", 0.0))
+                    self.main_window.state.things.append(actor)
+                    self.actor_objects[aid] = actor
+                    self.temporary_actor_ids.add(aid)
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Actor load failed",
+                        f"Could not recreate actor '{name}': {exc}",
+                    )
+                    actor = None
+            if actor is not None:
+                self.actor_objects[aid] = actor
+                if aid in self.temporary_actor_ids:
+                    actor.properties["_cutscene_temporary"] = True
+            self.actor_meta[aid] = {
+                "id": aid, "name": name, "spawn": bool(row.get("spawn")),
+            }
+
+        self._refresh_actor_lists()
+        self._refresh_actor_keys_list()
+        self._refresh_camera_list()
+        self._refresh_event_list()
+        self._refresh_summary()
+        self.main_window.update_all_ui()
+        self.main_window.show_toast(f"Loaded cutscene {Path(filename).name}")
+
+    def _apply_logic_camera(self, filename):
+        from .things import LogicCamera
+        cutscene_file = str(Path(CUTSCENE_DIR) / Path(filename).name).replace("\\", "/")
+        camera = self._existing_logic_camera(cutscene_file)
+        if self.camera_keys:
+            pos = list(self.camera_keys[0].get("pos", [0.0, 0.0, 0.0]))
+        else:
+            pos = _v3(self.main_window.view_3d.camera.pos)
+        props = {
+            "type": "logic_camera",
+            "id": str(camera.properties.get("id")) if camera is not None else str(uuid.uuid4()),
+            "name": self.name.text().strip() or "Cutscene Camera",
+            "cutscene_file": cutscene_file,
+            "cutscene_trigger_mode": self.trigger_mode.currentData(),
+            "cutscene_trigger_radius": float(self.radius.value()),
+            "cutscene_once": self.once.isChecked(),
+            "cutscene_restore_actors": self.restore.isChecked(),
+            "cutscene_stop_on_escape": self.stop_escape.isChecked(),
+            "cutscene_io_events": [dict(e) for e in self.events if e.get("type") == "io"],
+        }
+        if camera is None:
+            camera = LogicCamera(pos=pos, properties=props)
+            self.main_window.state.things.append(camera)
+        else:
+            camera.pos = glm.vec3(*pos)
+            camera.properties.update(props)
+        self._delete_temporary_actors()
+        self.main_window.state.save_state()
+        self.main_window.set_selected_object(camera)
+        self.main_window.unsaved_changes = True
+        self.main_window.update_all_ui()
+        self._saved = True
+        self.main_window.show_toast(f"Applied cutscene {Path(filename).name} to current map")
+        return camera
+
     def accept(self):
         self._preview_stop_and_restore()
         if not self.camera_keys:
@@ -1424,9 +1584,15 @@ class CutsceneWizard(QtWidgets.QDialog):
                 self.events,
                 key=lambda x: x.get("time", 0)
             ),
+            "map": {
+                "file": self._current_map_name(),
+            },
             "settings": {
                 "restore_actors": self.restore.isChecked(),
                 "stop_on_escape": self.stop_escape.isChecked(),
+                "trigger_mode": self.trigger_mode.currentData(),
+                "trigger_radius": float(self.radius.value()),
+                "trigger_once": self.once.isChecked(),
             },
         }
 
@@ -1436,35 +1602,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "Save failed", f"The cutscene JSON could not be written:\n{exc}")
             return
 
-        # Fio has a native LogicCamera entity; attach the authoring metadata to
-        # one so the saved map carries a concrete cinematic anchor without
-        # introducing a game-specific entity type into the generic editor.
-        from .things import LogicCamera
-        selected = _selected_actors(self.main_window)
-        pos = _v3(selected[0].pos) if selected else _v3(self.main_window.view_3d.camera.pos)
-        props = {
-            "type": "logic_camera",
-            "id": str(uuid.uuid4()),
-            "name": self.name.text().strip() or "Cutscene Camera",
-            "cutscene_file": str(Path(CUTSCENE_DIR) / filename).replace("\\", "/"),
-            "cutscene_trigger_mode": self.trigger_mode.currentData(),
-            "cutscene_trigger_radius": float(self.radius.value()),
-            "cutscene_once": self.once.isChecked(),
-            "cutscene_restore_actors": self.restore.isChecked(),
-            "cutscene_stop_on_escape": self.stop_escape.isChecked(),
-            "cutscene_io_events": [dict(e) for e in self.events if e.get("type") == "io"],
-        }
-        scene = LogicCamera(pos=pos, properties=props)
-        # Capture the undo checkpoint after temporary authoring actors are gone.
-        # They are embedded in the cutscene JSON, not part of the map operation.
-        self._delete_temporary_actors()
-        self.main_window.state.save_state()
-        self.main_window.state.things.append(scene)
-        self.main_window.set_selected_object(scene)
-        self.main_window.unsaved_changes = True
-        self.main_window.update_all_ui()
-        self._saved = True
-        self.main_window.show_toast(f"Created cutscene {filename}")
+        self._apply_logic_camera(filename)
         super().accept()
 
     def reject(self):
