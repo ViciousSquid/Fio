@@ -1045,7 +1045,8 @@ class TerrainEditorPanel(QWidget):
         self._update_sculpt_info()
         sculpt_layout.addStretch()
 
-        tabs.addTab(sculpt_tab, "Sculpt/Stamp")
+        self._sculpt_stamp_tab_index = tabs.addTab(sculpt_tab, "Sculpt/Stamp")
+        tabs.currentChanged.connect(self._on_terrain_tab_changed)
 
         # The tab widget must itself be inserted into the content layout.
         # Without this, all of the tab pages exist but QTabWidget is never
@@ -1452,9 +1453,7 @@ class TerrainEditorPanel(QWidget):
         self._update_sculpt_info()
         self.set_sculpt_mode("raise")
         self.set_paint_tool_mode("sculpt")
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
-        if view_3d is not None and not getattr(view_3d, 'play_mode', False):
-            view_3d.set_terrain_sculpt_active(True)
+        self._sync_terrain_brush_activation()
 
         self._load_appearance_ui()
 
@@ -1878,12 +1877,26 @@ class TerrainEditorPanel(QWidget):
         self.stamp_controls_widget.setVisible(mode == "stamp")
         self._update_stamp_texture_label()
         self._sync_sculpt_to_viewport()
+        self._sync_terrain_brush_activation()
 
+    def _on_terrain_tab_changed(self, _index):
+        """Enable the terrain brush only while Sculpt/Stamp is the active tab."""
+        self._sync_terrain_brush_activation()
+
+    def _sync_terrain_brush_activation(self):
         view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
-        if view_3d is not None and not getattr(view_3d, 'play_mode', False):
-            view_3d.set_terrain_sculpt_active(True)
+        if view_3d is None or getattr(view_3d, 'play_mode', False):
+            return
+        tabs = getattr(self, '_terrain_tabs', None)
+        tab_index = getattr(self, '_sculpt_stamp_tab_index', -1)
+        tab_visible = (
+            tabs is not None
+            and tabs.isVisible()
+            and tabs.currentIndex() == tab_index
+        )
+        view_3d.set_terrain_sculpt_active(bool(self.isVisible() and tab_visible))
 
-    def _update_stamp_texture_label(self):
+    def _update_stamp_texture_label():
         browser = getattr(self.editor, 'asset_browser', None) if self.editor else None
         path = browser.get_selected_filepath() if browser is not None else None
         if path:
@@ -1972,6 +1985,10 @@ class TerrainEditorPanel(QWidget):
             view_3d.set_terrain_sculpt_active(False)
         if self.editor and hasattr(self.editor, '_close_current_overlay'):
             self.editor._close_current_overlay()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_terrain_brush_activation()
 
     def closeEvent(self, event):
         """Disable the terrain brush when the panel is closed."""
