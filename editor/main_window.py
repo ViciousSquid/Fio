@@ -2247,6 +2247,9 @@ class MainWindow(QMainWindow):
         such as Ctrl+Z reach this toggle, even if Qt delivers the QAction while
         another shortcut is being processed.
         """
+        if getattr(self.view_3d, 'play_mode', False):
+            return
+
         modifiers = QApplication.keyboardModifiers()
         if modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
             return
