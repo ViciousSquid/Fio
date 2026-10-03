@@ -537,7 +537,7 @@ def test_a_distant_flying_monster_spawns_a_projectile(monster_factory, ai_world)
     # It must be aimed at the player, i.e. travelling in -X.
     assert projectile.vel[0, 0] < 0, (
         "projectile velocity %s does not point back toward the player at the "
-        "origin" % (projectile["vel"],))
+        "origin" % (projectile.vel[0],))
 
 
 def test_a_flying_monster_in_biting_range_bites_instead(monster_factory, ai_world):
@@ -549,7 +549,7 @@ def test_a_flying_monster_in_biting_range_bites_instead(monster_factory, ai_worl
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
 
-    assert logic._monster_projectiles == [], \
+    assert len(logic._monster_projectiles) == 0, \
         "a biting flier should not also spawn a projectile"
     assert logic.damage_applied == [int(10 * MONSTER_BITE_DAMAGE_MULT)], (
         "a bite does %sx damage; expected %d, got %s"
