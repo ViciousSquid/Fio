@@ -1,0 +1,406 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                0.0,
+                416.0,
+                16.0
+            ],
+            "size": [
+                832.0,
+                64.0,
+                800.0
+            ],
+            "textures": {
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
+            },
+            "is_trigger": false,
+            "id": "5a216649-7267-4de6-9584-d704d0bddc00",
+            "uv_scale": {
+                "north": [
+                    1.625,
+                    0.125
+                ],
+                "south": [
+                    1.625,
+                    0.125
+                ],
+                "east": [
+                    1.5625,
+                    0.125
+                ],
+                "west": [
+                    1.5625,
+                    0.125
+                ],
+                "top": [
+                    1.625,
+                    1.5625
+                ],
+                "down": [
+                    1.625,
+                    1.5625
+                ]
+            }
+        },
+        {
+            "pos": [
+                16.0,
+                192.0,
+                -368.0
+            ],
+            "size": [
+                800.0,
+                512.0,
+                48.0
+            ],
+            "textures": {
+                "north": "Dev/256.jpg",
+                "south": "Dev/256.jpg",
+                "east": "Dev/256.jpg",
+                "west": "Dev/256.jpg",
+                "top": "Dev/256.jpg",
+                "down": "Dev/256.jpg"
+            },
+            "is_trigger": false,
+            "id": "e5f0c8d3-946e-42c6-897c-8a2a1e634bcd",
+            "uv_scale": {
+                "north": [
+                    3.125,
+                    2.0
+                ],
+                "south": [
+                    3.125,
+                    2.0
+                ],
+                "east": [
+                    0.1875,
+                    2.0
+                ],
+                "west": [
+                    0.1875,
+                    2.0
+                ],
+                "top": [
+                    3.125,
+                    0.1875
+                ],
+                "down": [
+                    3.125,
+                    0.1875
+                ]
+            }
+        },
+        {
+            "pos": [
+                24.0,
+                192.0,
+                384.0
+            ],
+            "size": [
+                816.0,
+                512.0,
+                96.0
+            ],
+            "textures": {
+                "north": "Dev/128.jpg",
+                "south": "Dev/128.jpg",
+                "east": "Dev/128.jpg",
+                "west": "Dev/128.jpg",
+                "top": "Dev/128.jpg",
+                "down": "Dev/128.jpg"
+            },
+            "is_trigger": false,
+            "id": "d37d97b9-84b3-4d92-b2be-6d49e733cf62",
+            "uv_scale": {
+                "north": [
+                    6.375,
+                    4.0
+                ],
+                "south": [
+                    6.375,
+                    4.0
+                ],
+                "east": [
+                    0.75,
+                    4.0
+                ],
+                "west": [
+                    0.75,
+                    4.0
+                ],
+                "top": [
+                    6.375,
+                    0.75
+                ],
+                "down": [
+                    6.375,
+                    0.75
+                ]
+            }
+        },
+        {
+            "pos": [
+                -440.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                112.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
+            },
+            "is_trigger": false,
+            "id": "28efe594-a7bb-44f9-95df-1b6803ef600e",
+            "uv_scale": {}
+        },
+        {
+            "pos": [
+                464.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                96.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
+            },
+            "is_trigger": false,
+            "id": "1d161fc1-7fe0-417b-a40b-2109b84329fd"
+        },
+        {
+            "pos": [
+                8.0,
+                -96.0,
+                16.0
+            ],
+            "size": [
+                1008.0,
+                64.0,
+                832.0
+            ],
+            "textures": {
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
+            },
+            "is_trigger": false,
+            "lock": false,
+            "id": "688dbba0-de88-4159-9c9b-19be29bedbed",
+            "uv_scale": {
+                "north": [
+                    1.96875,
+                    0.125
+                ],
+                "south": [
+                    1.96875,
+                    0.125
+                ],
+                "east": [
+                    1.625,
+                    0.125
+                ],
+                "west": [
+                    1.625,
+                    0.125
+                ],
+                "top": [
+                    1.96875,
+                    1.625
+                ],
+                "down": [
+                    1.96875,
+                    1.625
+                ]
+            }
+        },
+        {
+            "pos": [
+                304.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                208.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false,
+            "id": "f31666cf-f2b6-4e0e-a4d0-e0eebd2ca30a"
+        },
+        {
+            "pos": [
+                144.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                128.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "target": "Light_2",
+            "id": "4793b933-f99c-4c21-bf66-d38e49d9d022",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Light_2",
+                    "input": "Toggle",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "53e6fc4d-aef0-4109-98cf-7695c304ee85"
+                }
+            ]
+        },
+        {
+            "pos": [
+                -320.0,
+                0.0,
+                -272.0
+            ],
+            "size": [
+                128.0,
+                128,
+                128.0
+            ],
+            "textures": {
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg",
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg"
+            },
+            "id": "1426032a-abe2-4217-ba03-29d6ee3955d9"
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                32.0,
+                160.0,
+                -16.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "color": [
+                    255,
+                    255,
+                    200
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "53e6fc4d-aef0-4109-98cf-7695c304ee85",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                40,
+                -160.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0.0,
+                "id": "e107abe6-ff24-4ac6-bf74-264baeb3e5bf",
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                224.0,
+                224.0,
+                208.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": [
+                    129,
+                    1,
+                    3
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "c1715bc7-ae35-4ef9-bdb1-a023fea2cfa0",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        }
+    ],
+    "created": "2026-09-21T01:28:43"
+}

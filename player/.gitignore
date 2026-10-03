@@ -1,0 +1,13 @@
+# Buildozer / python-for-android build artifacts
+.buildozer/
+bin/
+*.apk
+*.aab
+*.keystore
+
+# Bundled game package (built locally from the editor / tests)
+game.fiopak
+
+# Python
+__pycache__/
+*.pyc

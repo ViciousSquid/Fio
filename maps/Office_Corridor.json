@@ -1,0 +1,804 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                64.0,
+                432.0,
+                576.0
+            ],
+            "size": [
+                1152.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "e556e852-746c-4527-87e6-ec170d3a295b"
+        },
+        {
+            "pos": [
+                -448.0,
+                432.0,
+                -64.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                1152.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "2184a3a9-24ed-4e75-96c6-72a50b09487c"
+        },
+        {
+            "pos": [
+                576.0,
+                432.0,
+                -64.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                1152.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "139f473a-9de4-478b-b3fa-90a741494613"
+        },
+        {
+            "pos": [
+                -1152.0,
+                432.0,
+                -704.0
+            ],
+            "size": [
+                1536.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "0b54c044-ced7-4533-8101-b51073ce3ad1"
+        },
+        {
+            "pos": [
+                1472.0,
+                432.0,
+                -704.0
+            ],
+            "size": [
+                1920.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "7185b2e3-f18d-4087-a962-5d9dc1e1a56f"
+        },
+        {
+            "pos": [
+                704.0,
+                0,
+                -1216.0
+            ],
+            "size": [
+                5248.0,
+                128,
+                896.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "1d9f39e6-1f14-44ac-882f-70c11ec78484"
+        },
+        {
+            "pos": [
+                64.0,
+                0,
+                -128.0
+            ],
+            "size": [
+                896.0,
+                128,
+                1280.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "578001fb-e8b7-42ee-931d-11fd0b76a1e5"
+        },
+        {
+            "pos": [
+                768.0,
+                432.0,
+                -1728.0
+            ],
+            "size": [
+                5376.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "cfa15b28-cc11-452d-ab53-1fb76ba4c0f5"
+        },
+        {
+            "pos": [
+                2368.0,
+                432.0,
+                512.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                2304.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "e3078df5-c102-4bcd-a719-7b5775d77087"
+        },
+        {
+            "pos": [
+                2880.0,
+                0,
+                1792.0
+            ],
+            "size": [
+                896.0,
+                128,
+                5120.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "80a69450-29db-47dc-bdad-1e4656577de5"
+        },
+        {
+            "pos": [
+                3392.0,
+                432.0,
+                1344.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                6016.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "c6641316-5aa8-43b3-8bde-c4e9af88f3e6"
+        },
+        {
+            "pos": [
+                -1984.0,
+                464.0,
+                -1216.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                1152.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "1796eb1f-61be-4d01-935e-f441c28a9b62"
+        },
+        {
+            "pos": [
+                64.0,
+                344.0,
+                528.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "6d7c3fd6-c5bb-4d67-8060-f1516a1e4da2"
+        },
+        {
+            "pos": [
+                -1152.0,
+                344.0,
+                -752.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "ec6af4ee-f38e-4dc0-81e3-1b8e9575cacd"
+        },
+        {
+            "pos": [
+                -1152.0,
+                344.0,
+                -1680.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "819c2780-13f2-4e2b-8504-b05e0f654e32"
+        },
+        {
+            "pos": [
+                0.0,
+                344.0,
+                -1680.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "0828db08-371e-414b-8382-e8b30e17bda8"
+        },
+        {
+            "pos": [
+                1168.0,
+                344.0,
+                -1680.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "023d14e3-bb78-4669-95bb-ce14e570afec"
+        },
+        {
+            "pos": [
+                2320.0,
+                344.0,
+                -1680.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "7a170d78-3873-49da-a1a8-d7d897bcc5da"
+        },
+        {
+            "pos": [
+                2880.0,
+                432.0,
+                4480.0
+            ],
+            "size": [
+                1152.0,
+                992.0,
+                256.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "fccec6a7-674f-48e6-9603-d5f8e62cfc92"
+        },
+        {
+            "pos": [
+                1536.0,
+                432.0,
+                1600.0
+            ],
+            "size": [
+                1536.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "cf22bdd6-5c4f-4846-b249-aae010dc8db7"
+        },
+        {
+            "pos": [
+                1600.0,
+                0,
+                2112.0
+            ],
+            "size": [
+                1664.0,
+                128,
+                896.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "0942acd6-7638-4c4c-9aa6-5caffb81c826"
+        },
+        {
+            "pos": [
+                2112.0,
+                432.0,
+                2624.0
+            ],
+            "size": [
+                2688.0,
+                992.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": false,
+            "id": "e8886b68-1fdc-4bc0-b497-6cc9f0a3c802"
+        },
+        {
+            "pos": [
+                704.0,
+                432.0,
+                2112.0
+            ],
+            "size": [
+                128.0,
+                992.0,
+                1152.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "00aa02f7-25ad-453c-90d6-b4cf72c832d5"
+        },
+        {
+            "pos": [
+                1552.0,
+                344.0,
+                1648.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "d7f56b1f-5f1e-4396-aa77-8276ce03c4ef"
+        },
+        {
+            "pos": [
+                1552.0,
+                344.0,
+                2576.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "52fc55f4-ce74-4a96-9122-e06656b5de61"
+        },
+        {
+            "pos": [
+                2944.0,
+                344.0,
+                2576.0
+            ],
+            "size": [
+                288.0,
+                560.0,
+                64.0
+            ],
+            "textures": {
+                "north": "door012.png",
+                "south": "door012.png",
+                "east": "door012.png",
+                "west": "door012.png",
+                "top": "door012.png",
+                "down": "door012.png"
+            },
+            "id": "f4774623-a9bd-471a-8629-b79359c5597b"
+        },
+        {
+            "pos": [
+                64.0,
+                144.0,
+                448.0
+            ],
+            "size": [
+                288.0,
+                160.0,
+                80.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "id": "adbc3681-8f2b-4fcd-8d52-e7c5d8a36437",
+            "io_connections": [
+                {
+                    "output": "OnStartTouch",
+                    "target": "LevelChanger_1",
+                    "input": "Trigger",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                16.0,
+                480.0,
+                -224.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.5,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "2d7f280b-48d5-4ba2-9b66-ce9c2cd39bb0"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -1152,
+                448,
+                -1216
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "35b179cc-c623-4faf-91f6-c0558b232197"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                1136,
+                416,
+                -1216
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "4845eaff-e465-440e-9522-b3ece680b155"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                2848,
+                512,
+                -1200
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_4",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "51036aba-0ec2-48e4-a0e4-22618be862ab"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                2880,
+                496,
+                880
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_5",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "173ca8ec-ffef-421e-ac92-68badce7bd09"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                304.0,
+                -992.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0.0,
+                "id": "5f4a744c-0acf-4862-98ec-e02efbcb407e"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                2800,
+                656,
+                2160
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_7",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "87399b46-cc8e-4293-aae7-3afb73dc3830"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                1312.0,
+                480,
+                2112.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_8",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "65d21057-7a1b-410c-98d6-76ff7b801cf2"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "levelchanger",
+            "pos": [
+                -32.0,
+                288.0,
+                448.0
+            ],
+            "properties": {
+                "type": "levelchanger",
+                "name": "LevelChanger_1",
+                "target_map": "Simple_Map_Test.json",
+                "delay": 0.0,
+                "fade_time": 0.5,
+                "show_radius": false,
+                "radius": 128.0,
+                "id": "8e3f4a55-6824-4063-b67a-541b820551b4"
+            },
+            "io_connections": []
+        }
+    ]
+}

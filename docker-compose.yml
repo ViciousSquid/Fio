@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  fio-editor:
+    build: .
+    container_name: fio_container
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    # Grants access to the GPU for OpenGL rendering
+    devices:
+      - /dev/dri:/dev/dri
+    # Allows the container to access the host X server
+    network_mode: host
