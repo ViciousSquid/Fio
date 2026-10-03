@@ -19,7 +19,10 @@ from editor.things import (
 from engine.player import Player
 
 from .renderer_F   import Renderer_F
-from .hud_fonts import HUD_FONT_FILES, HUD_FONT_FALLBACKS
+from .hud_fonts import (
+    HUD_FONT_FILES as _HUD_FONT_FILES,
+    HUD_FONT_FALLBACKS as _HUD_FONT_FALLBACKS,
+)
 _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
 }
