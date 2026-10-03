@@ -24,7 +24,7 @@ jobs:
           import sysconfig
 
           assert sys.implementation.name == "cpython"
-          assert sys.version_info >= (3, 14)
+          assert sys.version_info[:2] == (3, 14)
           assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
           assert sys._is_gil_enabled()
           print(sys.version)
