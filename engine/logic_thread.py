@@ -3588,8 +3588,11 @@ class LogicThread(threading.Thread):
         raw = str(filename or "").strip().replace("\\", "/")
         if not raw:
             return None
-        root = os.path.realpath(os.path.join(os.getcwd(), "cutscenes"))
-        candidate = os.path.realpath(os.path.join(os.getcwd(), raw))
+        project_root = os.path.realpath(
+            getattr(self, "root_dir", os.path.dirname(os.path.dirname(__file__)))
+        )
+        root = os.path.realpath(os.path.join(project_root, "cutscenes"))
+        candidate = os.path.realpath(os.path.join(project_root, raw))
         try:
             inside = os.path.commonpath((root, candidate)) == root
         except ValueError:
