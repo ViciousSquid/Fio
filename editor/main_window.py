@@ -888,7 +888,8 @@ class MainWindow(QMainWindow):
             timer.stop()
 
     def show_toast(self, message, is_error=False, duration=None):
-        self._stop_camera_position_toast()\n        """Displays a notification"""
+        self._stop_camera_position_toast()
+        """Displays a notification"""
         if self.config.getboolean('Display', 'disable_toasts', fallback=False):
             return
         
