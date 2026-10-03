@@ -16,6 +16,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="engine.logic_thread imports the editor tier")
 
+from engine.logic_camera import LogicCamera              # noqa: E402
 from engine.logic_thread import LogicThread               # noqa: E402
 from engine.monster_ai import MonsterAI                   # noqa: E402
 from engine.spatial import SIM_TIER_KEY, TIER_DORMANT     # noqa: E402
@@ -23,23 +24,22 @@ from engine.spatial import SIM_TIER_KEY, TIER_DORMANT     # noqa: E402
 TICK = 1.0 / 30.0
 
 
-class _Camera:
-    """What overhead_ground_footprint reads off the logic thread."""
-    overhead_ground_footprint = LogicThread.overhead_ground_footprint
-    _overhead_camera = LogicThread._overhead_camera
-    _safe_up = staticmethod(LogicThread._safe_up)
-    set_frustum_fov = LogicThread.set_frustum_fov
-    effective_overhead_height = LogicThread.effective_overhead_height
+class _Camera(LogicCamera):
+    """Small LogicCamera configured for focused footprint tests."""
 
     def __init__(self, aspect=16 / 9, height=800.0, tilt=0.0, overhead=True,
                  orientation="north", fov=90.0):
+        super().__init__()
         self.frustum_aspect = aspect
         self.frustum_fov = fov
         self.overhead_height = height
         self.overhead_height_limit = None
         self.overhead_tilt = tilt
         self.overhead_orientation = orientation
-        self.player = types.SimpleNamespace(pos=glm.vec3(100.0, 50.0, -40.0), angle=0.0)
+        self.player = types.SimpleNamespace(
+            pos=glm.vec3(100.0, 50.0, -40.0),
+            angle=0.0,
+        )
         self._overhead = overhead
 
     def is_overhead(self):
