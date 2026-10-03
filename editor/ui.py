@@ -419,7 +419,7 @@ class Ui_MainWindow(object):
         MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
         MainWindow.logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
 
-        MainWindow.cutscene_wizard_action = QAction('Cutscene Wizard…', MainWindow)
+        MainWindow.cutscene_wizard_action = QAction('Cutscenes...', MainWindow)
         MainWindow.cutscene_wizard_action.setShortcut('Ctrl+Shift+C')
         MainWindow.cutscene_wizard_action.setToolTip('Author a camera-and-actor cutscene from the 3D view')
         MainWindow.cutscene_wizard_action.triggered.connect(MainWindow.open_cutscene_wizard)
