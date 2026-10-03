@@ -2521,7 +2521,29 @@ class MainWindow(QMainWindow):
         self.components.prune(self.state.brushes)
         self.components.invalidate()
         self._rebind_face_targets()
+        self._resync_terrain_after_history()
         self.invalidate_entity_caches()
+
+    def _resync_terrain_after_history(self):
+        """Reload the live terrain only when an undo/redo changed its CSG cuts."""
+        terrain = getattr(self, 'terrain', None)
+        terrain_data = getattr(self.state, 'terrain_data', None)
+        if terrain is None or not isinstance(terrain_data, dict):
+            return
+
+        wanted = [
+            list(cut) for cut in terrain_data.get('csg_subtractions', [])
+            if isinstance(cut, (list, tuple)) and len(cut) == 6
+        ]
+        current = [list(cut) for cut in getattr(terrain, 'csg_subtractions', [])]
+        if current == wanted:
+            return
+
+        terrain.from_dict(terrain_data)
+        if getattr(self.view_3d, 'renderer', None):
+            self.view_3d.renderer.setup_terrain_shader(terrain)
+        if getattr(self.view_3d, 'logic_thread', None):
+            self.view_3d.logic_thread.set_terrain(terrain)
 
     def _rebind_face_targets(self):
         """Re-point the face-texturing targets at the live scene.
