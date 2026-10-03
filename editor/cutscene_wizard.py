@@ -1022,6 +1022,21 @@ class CutsceneWizard(QtWidgets.QDialog):
 
         if aid in self.temporary_actor_ids:
             state = self.main_window.state
+
+            # Clear both editor selection fields before rebuilding the actor
+            # references. Otherwise the removed temporary actor can remain in
+            # selection and be captured again by "+ Selected".
+            if hasattr(state, "selected_objects"):
+                state.selected_objects = [
+                    actor for actor in (state.selected_objects or [])
+                    if str(getattr(actor, "properties", {}).get("id", "")) != aid
+                ]
+            if (
+                getattr(state, "selected_object", None) is not None
+                and str(getattr(state.selected_object, "properties", {}).get("id", "")) == aid
+            ):
+                state.selected_object = None
+
             state.things[:] = [
                 actor for actor in state.things
                 if not (
