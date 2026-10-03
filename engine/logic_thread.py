@@ -573,9 +573,15 @@ class LogicThread(threading.Thread):
 
     def _fire_cinematic_io_events(self):
         runtime = self._cutscene_runtime()
+        legacy_before = self.__dict__.get("cinematic_state", _NO_LEGACY_CUTSCENE_STATE)
         result = runtime._fire_cinematic_io_events()
         if "cinematic_state" in self.__dict__:
-            self.__dict__["cinematic_state"] = runtime.state
+            legacy_after = self.__dict__["cinematic_state"]
+            if legacy_after is not legacy_before:
+                runtime.state = legacy_after
+                result = bool(result and runtime.state is not None)
+            else:
+                self.__dict__["cinematic_state"] = runtime.state
         return result
 
     def _update_cinematic_camera(self, delta):
@@ -583,6 +589,8 @@ class LogicThread(threading.Thread):
 
     def consume_cinematic_messages(self):
         return self.cutscene_runtime.consume_cinematic_messages()
+
+    _NO_LEGACY_CUTSCENE_STATE = object()
 
     # Preserve the private helper surface used by older tests/tools.
     _cutscene_number = staticmethod(CutsceneRuntime._cutscene_number)
