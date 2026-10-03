@@ -1,0 +1,237 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -496.0,
+                24.0,
+                48.0
+            ],
+            "size": [
+                32.0,
+                816.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "id": "86335b59-a664-4bec-9609-b021385ba645"
+        },
+        {
+            "pos": [
+                496.0,
+                24.0,
+                48.0
+            ],
+            "size": [
+                32.0,
+                816.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "id": "8050e00a-ffa9-4c3a-a6b3-b0c2d3d0cbb3"
+        },
+        {
+            "pos": [
+                0.0,
+                -368.0,
+                48.0
+            ],
+            "size": [
+                960.0,
+                32.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg",
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg"
+            },
+            "id": "323afe8f-90a0-40b7-8e11-4bdac278e40e"
+        },
+        {
+            "pos": [
+                0.0,
+                416.0,
+                48.0
+            ],
+            "size": [
+                960.0,
+                32.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "hidden": false,
+            "id": "bf4e22c0-7098-40ca-a4ac-1929b9236044"
+        },
+        {
+            "pos": [
+                0.0,
+                24.0,
+                -368.0
+            ],
+            "size": [
+                960.0,
+                752.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "id": "95c26d65-708b-46b9-b45c-585c4e50ca9b"
+        },
+        {
+            "pos": [
+                0.0,
+                24.0,
+                464.0
+            ],
+            "size": [
+                960.0,
+                752.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "id": "efa3a4d9-7de7-4b10-bc77-ca3f77eba5a6"
+        },
+        {
+            "pos": [
+                320.0,
+                -288.0,
+                -192.0
+            ],
+            "size": [
+                136.0,
+                128,
+                128.0
+            ],
+            "textures": {
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg",
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg"
+            },
+            "id": "23e404b2-7606-4473-8041-2a04a402bc1c"
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                40,
+                16.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "86e01c9a-66c9-442c-b5be-cd22e4c07d2c",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "speaker",
+            "pos": [
+                0.0,
+                -192.0,
+                64.0
+            ],
+            "properties": {
+                "type": "speaker",
+                "name": "Speaker_1",
+                "sound_file": "sounds/engine-room.wav",
+                "radius": 512.0,
+                "global": true,
+                "show_radius": false,
+                "volume": 0.75,
+                "looping": true,
+                "play_on_start": true,
+                "state": "on",
+                "id": "cbc513bd-7671-4904-812e-920970299521"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -144.0,
+                -256.0,
+                176.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0.0,
+                "id": "df6fecb2-ae81-49b9-9d1d-130544a40d2c"
+            },
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "Speaker_1",
+                    "input": "PlaySound",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
+        }
+    ]
+}

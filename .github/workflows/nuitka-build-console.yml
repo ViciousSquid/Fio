@@ -1,0 +1,59 @@
+name: Nuitka Build Windows (Console)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install nuitka zstandard
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka `
+            --standalone `
+            --output-filename=Fio `
+            --assume-yes-for-downloads `
+            --plugin-enable=pyqt5 `
+            --include-qt-plugins=sensible,platforms,styles,imageformats `
+            --include-package=engine `
+            --include-package=editor `
+            --include-package=PIL `
+            --include-data-dir=assets=assets `
+            --include-package=plugins `
+            --include-package-data=plugins `
+            --include-data-dir=tools=tools `
+            --include-data-dir=maps=maps `
+            --include-data-files=settings.ini=settings.ini `
+            --include-data-files=editor/version.txt=editor/version.txt `
+            --windows-icon-from-ico=assets/icon.ico `
+            --windows-console-mode=force `
+            --output-dir=build `
+            main.py
+
+      - name: Validate executable exists
+        shell: pwsh
+        run: |
+          if (Test-Path "build/main.dist/Fio.exe") {
+            Write-Host "Build successful - Fio.exe found"
+          } else {
+            Write-Error "Build failed: Fio.exe not found"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fio-windows-console
+          path: build/main.dist/
