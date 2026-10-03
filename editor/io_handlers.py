@@ -1172,6 +1172,12 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def camera_start(entity, param, logic):
         """Begin a LogicCamera cutscene or its legacy PathNode sequence."""
+        # Starting any camera must cleanly replace an active JSON cutscene.
+        # Otherwise its temporary actors and restored runtime state would leak.
+        previous = getattr(logic, 'cinematic_state', None)
+        if previous is not None and previous.get('json_cutscene'):
+            if hasattr(logic, '_finish_json_cutscene'):
+                logic._finish_json_cutscene(previous, fire_finished=False)
         cutscene_file = str(entity.properties.get('cutscene_file', '') or '').strip()
         if cutscene_file and hasattr(logic, '_load_cutscene_file') and hasattr(logic, '_start_json_cutscene'):
             data = logic._load_cutscene_file(cutscene_file)
