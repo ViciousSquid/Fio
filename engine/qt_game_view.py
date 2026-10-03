@@ -2876,7 +2876,7 @@ class QtGameView(QOpenGLWidget):
 
     def _draw_terrain_brush_cursor(self, painter):
         """Draw a screen-space circle representing the world-space brush."""
-        if not self.terrain_sculpt_active or self.play_mode:
+        if not self.terrain_sculpt_active or self.play_mode or self.mouselook_active:
             return
         pos = self._terrain_brush_mouse_pos
         if pos.x() < 0 or pos.y() < 0:
@@ -3480,7 +3480,8 @@ class QtGameView(QOpenGLWidget):
                 if self._begin_face_mode_drag(event.pos()):
                     return
                 self._face_mode_press = None
-        if self.terrain_sculpt_active and not self.play_mode:
+        if (self.terrain_sculpt_active and not self.play_mode
+                and not (event.buttons() & Qt.RightButton)):
             self._terrain_brush_mouse_pos = event.pos()
             self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
             self.update()
