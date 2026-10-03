@@ -155,6 +155,8 @@ MAX_LIGHTS_ARM = 16
 # renderer clamps `active_lights` to match (see BaseRenderer._shader_light_cap).
 MAX_LIGHTS_WATER = 8
 MAX_LIGHTS_TERRAIN = 8
+MAX_TERRAIN_STAMPS = 32
+MAX_TERRAIN_STAMP_TEXTURES = 16
 
 # GL 3.3 UBO binding used by every lighting shader.  The binding is assigned
 # from Python with glUniformBlockBinding rather than using a GLSL 4.2-style
@@ -1596,6 +1598,15 @@ uniform sampler2D texSand;
 uniform sampler2D texSnow;
 uniform int use_textures;
 
+// Terrain texture stamps. The CPU packs up to MAX_TERRAIN_STAMP_TEXTURES
+// source images into one atlas so GL 3.3 only needs one additional sampler.
+uniform sampler2D terrainStampAtlas;
+uniform int uStampCount;
+uniform vec4 uStampBounds[MAX_TERRAIN_STAMPS]; // minX, minZ, maxX, maxZ
+uniform vec4 uStampParams[MAX_TERRAIN_STAMPS]; // atlas slot, angle, feather, opacity
+uniform int uStampTextureSize;
+
+
 // Height texture layers. uHeightRange is the terrain's world-space height
 // range; uLayerHeights are the sand->grass, grass->rock and rock->snow
 // boundaries as fractions of it.
@@ -1684,7 +1695,25 @@ vec3 paletteAt(float t) {
 // Index of the colour band / terrace a height belongs to. Terrace flats sit
 // exactly on multiples of the band height; the offset keeps each riser with
 // the level below it until just under the lip, where the contour line runs.
-highp float bandIndex(highp float y) {
+highp vec3 sampleTerrainStamp(int slot, vec2 uv) {
+    float cells = 4.0;
+    float cell = 1.0 / cells;
+    float s = float(slot);
+    vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
+    vec2 localUv = fract(uv);
+    return texture(terrainStampAtlas, cellOrigin + localUv * cell).rgb;
+}
+
+float sampleTerrainStampAlpha(int slot, vec2 uv) {
+    float cells = 4.0;
+    float cell = 1.0 / cells;
+    float s = float(slot);
+    vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
+    vec2 localUv = fract(uv);
+    return texture(terrainStampAtlas, cellOrigin + localUv * cell).a;
+}
+
+float bandIndex(highp float y) {
     return floor(y / max(uBandHeight, 1e-3) + 0.12);
 }
 
@@ -1746,6 +1775,43 @@ void main() {
         texColor = splatColor * 1.1;
     } else {
         texColor = VertexColor * 1.1;
+    }
+
+    // ---- Terrain texture stamps --------------------------------------
+    // Stamps are world-space X/Z rectangles. Resizing the editor AABB changes
+    // the rectangle, so the same texture is naturally elongated for roads,
+    // paths, clearings, etc. The surface remains the terrain heightfield.
+    for (int i = 0; i < MAX_TERRAIN_STAMPS; ++i) {
+        if (i >= uStampCount) break;
+        vec4 b = uStampBounds[i];
+        if (FragPos.x < b.x || FragPos.x > b.z ||
+            FragPos.z < b.y || FragPos.z > b.w) {
+            continue;
+        }
+
+        vec2 size = max(b.zw - b.xy, vec2(1e-4));
+        vec2 uv = (FragPos.xz - b.xy) / size;
+
+        float angle = uStampParams[i].y;
+        if (abs(angle) > 1e-5) {
+            vec2 q = uv - vec2(0.5);
+            float s = sin(angle);
+            float c = cos(angle);
+            uv = vec2(q.x * c - q.y * s, q.x * s + q.y * c) + vec2(0.5);
+        }
+
+        float feather = max(uStampParams[i].z, 0.0);
+        float edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+        float edgeMask = feather > 0.0
+            ? smoothstep(0.0, feather / max(max(size.x, size.y), 1e-3), edge)
+            : 1.0;
+
+        int slot = int(uStampParams[i].x + 0.5);
+        if (slot < 0 || slot >= MAX_TERRAIN_STAMP_TEXTURES) continue;
+        vec3 stampColor = sampleTerrainStamp(slot, uv);
+        float stampAlpha = sampleTerrainStampAlpha(slot, uv);
+        float amount = clamp(uStampParams[i].w * edgeMask * stampAlpha, 0.0, 1.0);
+        texColor = mix(texColor, stampColor * 1.1, amount);
     }
 
     // ---- Surface details ---------------------------------------------
