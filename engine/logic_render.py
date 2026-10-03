@@ -16,7 +16,7 @@ import numpy as np
 from .threaded_game_state import PublishedBrushes, PublishedEntities
 from .change_journal import JOURNAL, STATE
 from .entity_table import ENT_PROP
-from .projectile_table import NO_PROJECTILES as _NO_PROJECTILES
+from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
 
 
 class LogicRender:
