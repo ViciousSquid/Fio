@@ -865,6 +865,13 @@ class EditorState:
             else:
                 self.terrain_data.pop('csg_subtractions', None)
 
+        if 'terrain_texture_stamps' in state and isinstance(self.terrain_data, dict):
+            stamps = state.get('terrain_texture_stamps') or []
+            if stamps:
+                self.terrain_data['texture_stamps'] = [dict(stamp) for stamp in stamps]
+            else:
+                self.terrain_data.pop('texture_stamps', None)
+
     def undo(self):
         """Step back one operation, making the current scene redoable.
 
