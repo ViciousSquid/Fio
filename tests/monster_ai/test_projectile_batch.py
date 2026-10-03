@@ -35,6 +35,9 @@ class _Host:
     _projectile_monster_candidates = LogicThread._projectile_monster_candidates
     _projectile_wall_candidates = LogicThread._projectile_wall_candidates
     _projectile_store = LogicThread._projectile_store
+    # These tests are specifically the batched/dense collision surface.
+    # Force the dense branch regardless of the number of fixtures.
+    PROJECTILE_DENSE_THRESHOLD = 0
 
     def __init__(self, things, projectiles):
         self.things = things
@@ -91,6 +94,23 @@ def test_projectile_store_is_numeric_and_dense():
     assert store.owner_id.dtype == np.int64
     assert store.damage[0] == 8
     assert store.lifetime[0] == 9
+
+
+def test_small_projectile_set_uses_scalar_path_but_matches_dense():
+    owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
+    target = make_thing(Monster, "target", (10, 0, 0), team="blue")
+    things = [owner, target]
+    projectile = ((0, 64, 0), owner)
+
+    dense = _Host(things, [projectile])
+    scalar = _Host(things, [projectile])
+    scalar.PROJECTILE_DENSE_THRESHOLD = 100
+
+    dense._update_monster_projectiles(0.0)
+    scalar._update_monster_projectiles(0.0)
+
+    assert dense.hits == scalar.hits == ["target"]
+    assert len(dense._monster_projectiles) == len(scalar._monster_projectiles) == 0
 
 
 def test_the_first_eligible_monster_in_order_is_hit():
