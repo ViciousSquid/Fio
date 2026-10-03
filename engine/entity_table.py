@@ -768,8 +768,8 @@ class EntityTable:
         return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False, effect_store=None,
-                    peer=None, peer_dirty=None):
+                    effect_runtime=False, peer=None, peer_dirty=None,
+                    effect_store=None):
         """Bring the table into line with *things*; return the ``hidden`` mask.
 
         Nothing here visits an entity that has not changed. The row set is
