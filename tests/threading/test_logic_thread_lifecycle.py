@@ -311,7 +311,10 @@ def test_disabling_health_hud_fade_keeps_full_alpha_after_damage(logic):
         thread.set_hud_fade_enabled(False)
         thread.player_health = 25
 
-        alpha = thread._update_hud_health_alpha(thread._hud_health_fade_started + 0.1)
+        # Disabled fade mode clears the timing marker deliberately;
+        # sampling a timestamp is irrelevant because the disabled branch is
+        # immediately forced to full opacity.
+        alpha = thread._update_hud_health_alpha(0.0)
 
         assert alpha == pytest.approx(1.0)
         assert thread._hud_health_fade_phase == "idle"
