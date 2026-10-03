@@ -412,7 +412,7 @@ class Ui_MainWindow(object):
         autocaulk_action.triggered.connect(MainWindow.autocaulk)
         MainWindow.tools_menu.addAction(autocaulk_action)
 
-        # Benchmark action is inserted by MainWindow immediately below Autocaulk.
+        MainWindow.tools_menu.addAction(MainWindow.cutscene_wizard_action)
 
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
@@ -451,7 +451,6 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
-        MainWindow.tools_menu.addAction(MainWindow.cutscene_wizard_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
@@ -829,5 +828,4 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(self.notification_label)
         
         status_bar.addPermanentWidget(bottom_widget, 1)
-
 
