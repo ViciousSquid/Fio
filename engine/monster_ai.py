@@ -582,17 +582,24 @@ class MonsterAI:
         if teamed.any():
             if nearest is None:
                 nearest = self._enemy_batch(MONSTER_SIGHT_RANGE)
-            for i in np.flatnonzero(teamed):
-                row = rows[i]
-                if nearest is not None:
-                    enemy = int(nearest[row])
-                else:
+            teamed_idx = np.flatnonzero(teamed)
+            if nearest is not None:
+                query_rows = rows[teamed_idx]
+                enemy_rows = nearest[query_rows]
+                valid = enemy_rows >= 0
+                target[teamed_idx[valid]] = enemy_rows[valid]
+            else:
+                # Only the exceptional no-table path retains the scalar
+                # reference implementation. Normal dense ticks already
+                # have their MonsterTable gathered.
+                for i in teamed_idx:
+                    row = rows[i]
                     found = self._find_closest_enemy_team_monster(
                         monsters[row], props[row].get('team', ''), player_pos,
                         MONSTER_SIGHT_RANGE)
                     enemy = t.row_of[id(found)] if found is not None else -1
-                if enemy >= 0:
-                    target[i] = enemy
+                    if enemy >= 0:
+                        target[i] = enemy
         monster_target = target >= 0
         target_pos[monster_target] = t.pos[target[monster_target]].astype(np.float32)
         t.target[rows] = target
