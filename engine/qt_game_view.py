@@ -33,7 +33,7 @@ _HUD_FONT_FALLBACKS = {
     1: "Rushford Clean",
     2: "O.K. Retro",
     3: "HornetDisplay",
-    4: "LCD AT&T Phone Time Date",
+    4: "LCD AT&T Phone Time/Date",
 }
 
 
