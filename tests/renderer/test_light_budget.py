@@ -177,8 +177,11 @@ def test_the_old_settings_key_is_still_honoured():
 
 def test_shadow_shader_uses_the_authoritative_capacity():
     source = shaders.SHADOW_GLSL
-    assert f"#define MAX_SHADOW_LIGHTS {shaders.MAX_SHADOW_LIGHTS}" in source
-    for index in range(shaders.MAX_SHADOW_LIGHTS):
+    capacity = shaders.MAX_SHADOW_LIGHTS
+    assert capacity == 8
+    assert f"#define MAX_SHADOW_LIGHTS {capacity}" in source
+    assert f"uniform samplerCube shadowMaps[{capacity}];" in source
+    for index in range(capacity):
         assert f"shadowMaps[{index}]" in source
 
 
