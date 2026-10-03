@@ -1736,6 +1736,16 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
         if self.play_mode:
+            logic_thread = getattr(self, "logic_thread", None)
+            consume_messages = getattr(logic_thread, "consume_cinematic_messages", None)
+            if callable(consume_messages):
+                for line, text in consume_messages():
+                    if line == "message2":
+                        self.show_view_message2(text)
+                    elif line == "message3":
+                        self.show_view_message3(text)
+                    else:
+                        self.show_view_message(text)
             self._draw_view_message(painter, self.width(), self.height())
             self._draw_view_message2(painter, self.width(), self.height())
             self._draw_view_message3(painter, self.width(), self.height())
@@ -2377,7 +2387,9 @@ class QtGameView(QOpenGLWidget):
             self.last_mouse_pos = self.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
 
-            # Convert editor angle (0° = east) to game angle (0° = north) and flip 180°
+            # Convert editor angle (0° = east) to game angle (0° = north).
+            # Do not add another 180° flip: that would make every PlayerStart
+            # spawn facing exactly opposite to its authored direction.
             player_angle_rad = np.radians(90.0 - player_start_angle) + np.pi
 
             self.player = Player(

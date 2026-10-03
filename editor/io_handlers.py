@@ -1171,7 +1171,24 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def camera_start(entity, param, logic):
-        """Begin the cinematic camera sequence along a PathNode chain."""
+        """Begin a LogicCamera cutscene or its legacy PathNode sequence."""
+        # Starting any camera must cleanly replace an active JSON cutscene.
+        # Otherwise its temporary actors and restored runtime state would leak.
+        previous = getattr(logic, 'cinematic_state', None)
+        if previous is not None and previous.get('json_cutscene'):
+            if hasattr(logic, '_finish_json_cutscene'):
+                logic._finish_json_cutscene(previous, fire_finished=False)
+        cutscene_file = str(entity.properties.get('cutscene_file', '') or '').strip()
+        if cutscene_file and hasattr(logic, '_load_cutscene_file') and hasattr(logic, '_start_json_cutscene'):
+            data = logic._load_cutscene_file(cutscene_file)
+            if data is None or not logic._start_json_cutscene(entity, cutscene_file, data):
+                return
+            if logic.io_manager:
+                logic.io_manager.fire_output(entity, 'OnStart')
+            if hasattr(logic, '_fire_cinematic_io_events'):
+                logic._fire_cinematic_io_events()
+            return
+
         target = entity.properties.get('path_target', '')
         node = logic._find_path_node_by_name(target)
         if not node:
@@ -1180,6 +1197,50 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         speed = float(entity.properties.get('speed', 200.0))
         fov   = float(entity.properties.get('fov_override', 0.0))
+        io_events = []
+        for event in entity.properties.get('cutscene_io_events', []) or []:
+            if not isinstance(event, dict) or event.get('type') != 'io':
+                continue
+            try:
+                event_time = max(0.0, float(event.get('time', 0.0)))
+            except (TypeError, ValueError):
+                continue
+            # Cutscene events have two valid schemas:
+            # - direct input: target_id/target_name + input
+            # - legacy output: source_id/source_name + output
+            # Preserve either shape so switching a LogicCamera from a JSON
+            # cutscene back to a PathNode does not silently discard its events.
+            target_id = str(event.get('target_id', '') or '')
+            target_name = str(event.get('target_name', '') or '')
+            input_name = str(event.get('input', '') or '').strip()
+            source_id = str(event.get('source_id', '') or '')
+            source_name = str(event.get('source_name', '') or '')
+            output = str(event.get('output', '') or '').strip()
+
+            is_direct_input = bool((target_id or target_name) and input_name)
+            is_legacy_output = bool((source_id or source_name) and output)
+            if not (is_direct_input or is_legacy_output):
+                continue
+
+            io_event = {
+                'time': event_time,
+                'parameter': event.get('parameter'),
+            }
+            if is_direct_input:
+                io_event.update({
+                    'target_id': target_id,
+                    'target_name': target_name,
+                    'input': input_name,
+                })
+            else:
+                io_event.update({
+                    'source_id': source_id,
+                    'source_name': source_name,
+                    'output': output,
+                })
+            io_events.append(io_event)
+        io_events.sort(key=lambda event: event['time'])
+
         logic.cinematic_state = {
             'active':       True,
             'paused':       False,
@@ -1190,13 +1251,22 @@ def register_all_input_handlers(io_manager: IOManager):
             'speed':        speed,
             'fov':          fov if fov > 0 else None,
             'look_ahead':   entity.properties.get('look_ahead', True),
+            'elapsed':      0.0,
+            'io_events':    io_events,
+            'next_io_event': 0,
         }
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnStart')
+        if hasattr(logic, '_fire_cinematic_io_events'):
+            logic._fire_cinematic_io_events()
 
     def camera_stop(entity, param, logic):
         """Abort and return camera to the player."""
-        logic.cinematic_state = None
+        cs = getattr(logic, 'cinematic_state', None)
+        if cs and cs.get('json_cutscene') and hasattr(logic, '_finish_json_cutscene'):
+            logic._finish_json_cutscene(cs, fire_finished=False)
+        else:
+            logic.cinematic_state = None
 
     def camera_pause(entity, param, logic):
         """Freeze camera at current chain position."""

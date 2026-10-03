@@ -216,6 +216,7 @@ class DebugConsole(QWidget):
         'MonsterAI': '#FF7043', # Deep orange — monster combat / sight / attack
         'Pathfinding': '#26A69A', # Teal — monster patrol / navigation
         'Plugins': '#42A5F5',   # Blue — plugin debug / init (default; loads/errors recoloured per-message)
+        'Cutscene': '#66BB6A',  # Cutscene loads/errors are recoloured per-message
     }
 
     # Per-message colours for the 'Plugins' category. All plugin messages share
@@ -224,6 +225,8 @@ class DebugConsole(QWidget):
     PLUGIN_LOAD_COLOR  = '#66BB6A'  # Green — loaded / enabled / bundled
     PLUGIN_ERROR_COLOR = '#EF5350'  # Red — failures / errors
     PLUGIN_DEBUG_COLOR = '#42A5F5'  # Blue — debug / init messages
+    CUTSCENE_LOAD_COLOR = '#66BB6A'  # Green — successful cutscene load
+    CUTSCENE_ERROR_COLOR = '#EF5350'  # Red — missing/invalid/failed cutscene
 
     # Substrings that mark a plugin message as an error (red) or a load (green).
     # Checked case-insensitively; errors take precedence over loads.
@@ -547,6 +550,12 @@ class DebugConsole(QWidget):
         self.hide_pathfinding_cb.toggled.connect(self._refresh_console)
         fp_layout.addWidget(self.hide_pathfinding_cb)
 
+        self.hide_cutscenes_cb = QCheckBox("Cutscenes")
+        self.hide_cutscenes_cb.setToolTip("Hide cutscene load / error messages")
+        self.hide_cutscenes_cb.setStyleSheet(cb_style)
+        self.hide_cutscenes_cb.toggled.connect(self._refresh_console)
+        fp_layout.addWidget(self.hide_cutscenes_cb)
+
         self.hide_plugins_cb = QCheckBox("Plugins")
         self.hide_plugins_cb.setToolTip("Hide plugin load / error / debug messages")
         self.hide_plugins_cb.setStyleSheet(cb_style)
@@ -850,6 +859,9 @@ class DebugConsole(QWidget):
             return
 
         # 2d. Filter Plugins messages when "Plugins" checkbox is checked
+        if self.hide_cutscenes_cb.isChecked() and category == 'Cutscene':
+            return
+
         if self.hide_plugins_cb.isChecked() and category == 'Plugins':
             return
 
@@ -867,6 +879,12 @@ class DebugConsole(QWidget):
         # loads read green, errors red, and debug/init stay blue.
         if filter_category == 'Plugins':
             color = self._plugin_message_color(message)
+        elif filter_category == 'Cutscene':
+            color = (
+                self.CUTSCENE_ERROR_COLOR
+                if message.upper().startswith('[CUTSCENE] FAILED:')
+                else self.CUTSCENE_LOAD_COLOR
+            )
 
         # --- HIGHLIGHTING LOGIC ---
 

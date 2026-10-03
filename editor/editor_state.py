@@ -381,7 +381,13 @@ class EditorState:
         data = {
             'version': 3,  # Version 3 adds stable entity IDs and logic graph layout
             'brushes': self._serialize_brushes(),
-            'things': [t.to_dict() for t in self.things]
+            # Cutscene Wizard actors are live authoring entities. Their actual
+            # definitions live in the cutscene JSON and must never leak into
+            # the map when the user saves while the modeless wizard is open.
+            'things': [
+                t.to_dict() for t in self.things
+                if not bool(getattr(t, 'properties', {}).get('_cutscene_temporary'))
+            ]
         }
 
         # When this map was first written. Set once and carried forward on every

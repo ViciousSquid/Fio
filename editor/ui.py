@@ -412,7 +412,11 @@ class Ui_MainWindow(object):
         autocaulk_action.triggered.connect(MainWindow.autocaulk)
         MainWindow.tools_menu.addAction(autocaulk_action)
 
-        # Benchmark action is inserted by MainWindow immediately below Autocaulk.
+        MainWindow.cutscene_wizard_action = QAction('Cutscenes...', MainWindow)
+        MainWindow.cutscene_wizard_action.setShortcut('Ctrl+Shift+C')
+        MainWindow.cutscene_wizard_action.setToolTip('Author a camera-and-actor cutscene from the 3D view')
+        MainWindow.cutscene_wizard_action.triggered.connect(MainWindow.open_cutscene_wizard)
+        MainWindow.tools_menu.addAction(MainWindow.cutscene_wizard_action)
 
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
@@ -701,6 +705,15 @@ class Ui_MainWindow(object):
         terrain_menu = QMenu(MainWindow)
         terrain_menu.addAction(MainWindow.terrain_action)
         terrain_menu.addAction(MainWindow.procedural_action)
+        MainWindow.cutscenes_btn = make_btn(
+            "assets/sprites/logic_camera.png", "Cutscenes",
+            on_click=MainWindow.open_cutscene_wizard, checkable=True,
+            checked=False, bottom_color=group_3_color, toggle_strip=True)
+        MainWindow.cutscenes_btn.setChecked(False)
+        MainWindow.cutscenes_btn.clicked.connect(
+            lambda: MainWindow.cutscenes_btn.setChecked(
+                getattr(MainWindow, "_cutscene_wizard_active", False)))
+
         terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
         terrain_btn.clicked.connect(lambda: terrain_menu.popup(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
@@ -823,5 +836,3 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(self.notification_label)
         
         status_bar.addPermanentWidget(bottom_widget, 1)
-
-

@@ -280,4 +280,4 @@ def test_the_greyed_strip_is_used_by_the_toggles_and_nothing_else(toolbar):
     greyed = {b for b in toolbar.tool_toolbar.findChildren(QPushButton)
               if 'border-bottom: 3px solid %s;' % GREY in b.styleSheet()}
 
-    assert greyed == set(_group_buttons(toolbar)) | {toolbar.grid_btn}
+    assert greyed == set(_group_buttons(toolbar)) | {toolbar.grid_btn, toolbar.cutscenes_btn}

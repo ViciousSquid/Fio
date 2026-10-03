@@ -3,14 +3,14 @@
     "brushes": [
         {
             "pos": [
-                -792,
+                -792.0,
                 232,
-                464
+                504.0
             ],
             "size": [
-                80,
+                80.0,
                 592,
-                352
+                432.0
             ],
             "operation": "add",
             "textures": {
@@ -189,14 +189,14 @@
         },
         {
             "pos": [
-                -96,
+                128.0,
                 232,
-                680
+                680.0
             ],
             "size": [
-                1472,
+                1024.0,
                 592,
-                80
+                80.0
             ],
             "operation": "add",
             "textures": {
@@ -366,14 +366,14 @@
         },
         {
             "pos": [
-                -568,
+                -568.0,
                 8,
-                560
+                600.0
             ],
             "size": [
-                368,
+                368.0,
                 144,
-                160
+                240.0
             ],
             "textures": {
                 "north": "default.png",
@@ -449,7 +449,7 @@
                 "south": "Metal_08-512x512.png",
                 "east": "default.png",
                 "west": "Metal_08-512x512.png",
-                "top": "Metal_08-512x512.png",
+                "top": "Stone_09-512x512.png",
                 "down": "Metal_08-512x512.png"
             },
             "id": "5b10b49b-9b6c-45d9-91ee-0b6f06970590",
@@ -482,7 +482,7 @@
                             0
                         ],
                         "d": 96,
-                        "texture": "Metal_08-512x512.png",
+                        "texture": "Stone_09-512x512.png",
                         "face": "top"
                     },
                     {
@@ -541,8 +541,8 @@
                     0
                 ],
                 "top": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "down": [
                     0,
@@ -563,8 +563,8 @@
                     0.25
                 ],
                 "top": [
-                    0.25,
-                    0.25
+                    2.625,
+                    1.3125
                 ],
                 "down": [
                     0.25,
@@ -581,12 +581,14 @@
             },
             "uv_angle": {
                 "west": 0,
-                "top": 0,
+                "top": 0.0,
                 "down": 0,
                 "north": 0,
                 "south": 0
             },
-            "uv_natural": {},
+            "uv_natural": {
+                "top": true
+            },
             "hidden": false
         },
         {
@@ -1688,18 +1690,18 @@
         },
         {
             "pos": [
-                -1048,
+                -800.0,
                 352,
-                896
+                896.0
             ],
             "size": [
-                464,
+                960.0,
                 832,
-                352
+                352.0
             ],
             "textures": {
                 "north": "default.png",
-                "south": "default.png",
+                "south": "concrete02.png",
                 "east": "default.png",
                 "west": "default.png",
                 "top": "default.png",
@@ -2219,97 +2221,6 @@
             },
             "id": "313f466c-f822-4b56-8004-6b62c76be995",
             "hidden": false
-        },
-        {
-            "pos": [
-                -1786,
-                224,
-                -480
-            ],
-            "size": [
-                252,
-                344,
-                48
-            ],
-            "textures": {
-                "north": "sci_fi_mtlwall.jpg",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "id": "8da0f179-afb0-4dc0-b04a-c72204469b16",
-            "uv_angle": {
-                "north": 180
-            },
-            "is_door": true,
-            "door_direction": "east",
-            "door_distance": 200,
-            "door_lip": 8,
-            "door_speed": 64,
-            "name": "door01b",
-            "original_pos": [
-                -1786,
-                220,
-                -472
-            ],
-            "hidden": false,
-            "io_connections": [
-                {
-                    "output": "OnFullyOpen",
-                    "target": "door01b",
-                    "input": "Hide",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
-                }
-            ]
-        },
-        {
-            "pos": [
-                -2046,
-                224,
-                -480
-            ],
-            "size": [
-                260,
-                344,
-                48
-            ],
-            "textures": {
-                "north": "sci_fi_mtlwall.jpg",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71",
-            "is_door": true,
-            "door_direction": "west",
-            "door_distance": 128,
-            "door_lip": 8,
-            "door_speed": 64,
-            "name": "door01a",
-            "original_pos": [
-                -2046,
-                220,
-                -472
-            ],
-            "hidden": false,
-            "io_connections": [
-                {
-                    "output": "OnFullyOpen",
-                    "target": "door01a",
-                    "input": "Hide",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
-                }
-            ]
         },
         {
             "pos": [
@@ -3162,6 +3073,82 @@
                 "west": 90
             },
             "name": "curtain"
+        },
+        {
+            "pos": [
+                -1304.0,
+                16,
+                888.0
+            ],
+            "size": [
+                48.0,
+                128,
+                216.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "id": "5aa4a6a4-f70b-4e04-9777-2eb69b84ef21",
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "trigger_filters": [
+                "player"
+            ],
+            "trigger_poll_interval": 0.5,
+            "trigger_action": "teleport",
+            "target_node": "end"
+        },
+        {
+            "pos": [
+                -576.0,
+                304.0,
+                736.0
+            ],
+            "size": [
+                52.0,
+                192.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "StripLight.jpg",
+                "east": "nodraw.jpg",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "6616e531-6c60-4103-b874-9e5d829398cf",
+            "uv_angle": {
+                "south": 90.0
+            }
+        },
+        {
+            "pos": [
+                -1920.0,
+                8.0,
+                -480.0
+            ],
+            "size": [
+                512.0,
+                144.0,
+                32.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "84b9942e-0152-46bb-8257-3ca572c345db",
+            "hidden": false
         }
     ],
     "things": [
@@ -3472,38 +3459,12 @@
             "io_connections": [
                 {
                     "output": "OnPlayerSpawn",
-                    "target": "LogicCamera_1",
+                    "target": "showcase",
                     "input": "Start",
                     "parameter": "",
                     "delay": 0.0,
-                    "fire_once": true
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "Door_controller",
-                    "input": "Trigger",
-                    "parameter": "",
-                    "delay": 8.5,
                     "fire_once": false,
-                    "target_id": "8dae2cb1-3be8-455f-b87c-e0fa9bfd1bcc"
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "door01a",
-                    "input": "Show",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "door01b",
-                    "input": "Show",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
+                    "target_id": "d844f28e-ab97-4e88-ae45-c7e9a35d7f8a"
                 }
             ]
         },
@@ -3789,7 +3750,7 @@
                 "monster_type": "flying",
                 "monster_id": 0,
                 "health": -125,
-                "damage": 10,
+                "damage": 12,
                 "triggered": false,
                 "wake_on_sight": true,
                 "awake": false,
@@ -3803,180 +3764,22 @@
                 "non_hostile": false,
                 "io_enabled": true,
                 "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1840,
-                80,
-                928
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_camtarget",
-                "id": "32d72298-f515-405f-8eec-12ae2b6fc228",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_19",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "can_hear": false,
+                "dead": false,
+                "team": ""
             },
             "io_connections": [
                 {
-                    "output": "OnCameraArrived",
-                    "target": "intromessage1",
-                    "input": "RunCommand",
+                    "output": "OnDeath",
+                    "target": "Portal_1",
+                    "input": "Enable",
                     "parameter": "",
-                    "delay": 0.0,
+                    "delay": 1.0,
                     "fire_once": false,
-                    "target_id": "1afce153-1528-45ae-8e24-cd584967fb5b"
+                    "target_id": "2255ec35-6b25-41ef-ba13-cda9f5e355b7"
                 }
             ]
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1792,
-                192,
-                -528
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_camtarget1",
-                "id": "334ecae8-4e3c-41f7-9687-41e28ba38092",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_camtarget02",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1728,
-                208,
-                -608
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_camtarget02",
-                "id": "9dc9d15a-21d1-404b-8b04-6482df23f26e",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_18",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -64,
-                224,
-                480
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_camtarget03",
-                "id": "623d41ae-fdad-48d9-8051-baa83220370e",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_camtarget04",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -96,
-                224,
-                464
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_camtarget04",
-                "id": "0a3df836-1cea-45a0-b9e4-fb589d7e0988",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_9",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -128,
-                192,
-                416
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_9",
-                "id": "5a25aa73-57d5-4494-ae2d-cc1f365eea53",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_10",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -128,
-                208,
-                320
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_10",
-                "id": "00278881-07c9-4f53-8751-b0150a4edf8f",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
         },
         {
             "type": "logic_camera",
@@ -3996,293 +3799,8 @@
                 "io_enabled": true,
                 "hidden": false,
                 "disabled": false,
-                "lookat_return_time": 5
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -2624,
-                608,
-                1328
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_campathA",
-                "id": "9f32f2e4-0318-4016-9502-054fe23bd439",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_camtarget",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1856,
-                40,
-                576
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_17",
-                "id": "93f50516-2582-4268-b3eb-bb727a8eabaa",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_camtarget1",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": [
-                {
-                    "output": "OnCameraArrived",
-                    "target": "IntroRelay",
-                    "input": "Trigger",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "97fb8d92-818b-4b8d-81cb-aeacbc166a6b"
-                }
-            ]
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1616,
-                208,
-                -640
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_18",
-                "id": "f3025762-83ef-4a04-bcc6-731afa2fe0d1",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_21",
-                "wait_time": 0,
-                "speed": 2,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1808,
-                40,
-                864
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_19",
-                "id": "b639fd53-6357-48b4-8fed-c212132d6fdc",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_20",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                -1824,
-                40,
-                768
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_20",
-                "id": "2889310f-8a08-4679-b207-5f1b902b5831",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_17",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                16,
-                176,
-                -640
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_21",
-                "id": "1aa02504-a321-4e53-85f8-8390336ab402",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_22",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                96,
-                176,
-                -608
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_22",
-                "id": "0c0de82a-e27c-47ea-b1b9-76466b7abff5",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_23",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                144,
-                176,
-                -544
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_23",
-                "id": "2555b354-c0f9-48cc-972b-407672c9212b",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_24",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                160,
-                192,
-                -432
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_24",
-                "id": "9fb40044-5b33-413f-a6b7-85e778a3aae1",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_27",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                64,
-                224,
-                496
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_25",
-                "id": "aa395b79-02a3-454a-a0ee-71ae351c68ce",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_camtarget03",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                192,
-                224,
-                432
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_26",
-                "id": "fef32e6b-f275-4a92-adfc-55a03e9f0151",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_25",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "path_node",
-            "pos": [
-                224,
-                224,
-                240
-            ],
-            "properties": {
-                "type": "path_node",
-                "name": "PathNode_27",
-                "id": "9fc27dd2-ee50-4ad9-85db-f390c2ebe899",
-                "radius": 256,
-                "show_radius": false,
-                "affects_type": "both",
-                "next_node": "PathNode_26",
-                "wait_time": 0,
-                "speed": 1,
-                "io_enabled": true,
-                "hidden": false,
-                "disabled": false
+                "lookat_return_time": 5,
+                "cutscene_file": ""
             },
             "io_connections": []
         },
@@ -4690,65 +4208,11 @@
             "io_connections": []
         },
         {
-            "type": "logic_command",
-            "pos": [
-                -1944,
-                0,
-                896
-            ],
-            "properties": {
-                "type": "logic_command",
-                "io_enabled": true,
-                "name": "intromessage1",
-                "id": "1afce153-1528-45ae-8e24-cd584967fb5b",
-                "command": "message \"ViciousSquid presents\"",
-                "disabled": false,
-                "hidden": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "logic_command",
-            "pos": [
-                -1856.0,
-                0,
-                464.0
-            ],
-            "properties": {
-                "type": "logic_command",
-                "io_enabled": true,
-                "name": "intromessage2",
-                "id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28",
-                "command": "message3 \"Fio\"",
-                "disabled": false,
-                "hidden": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "logic_command",
-            "pos": [
-                -1760.0,
-                0,
-                384.0
-            ],
-            "properties": {
-                "type": "logic_command",
-                "io_enabled": true,
-                "name": "intromessage3",
-                "id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828",
-                "command": "message2 \"real-time world machine\"",
-                "disabled": false,
-                "hidden": false
-            },
-            "io_connections": []
-        },
-        {
             "type": "effect",
             "pos": [
-                -1728,
-                0,
-                -32
+                -1728.0,
+                0.0,
+                -32.0
             ],
             "properties": {
                 "type": "effect",
@@ -4764,14 +4228,14 @@
                 "custom_loop": true,
                 "width": 63.71,
                 "height": 139.08,
-                "intensity": 1,
+                "intensity": 1.01,
                 "colour": [
                     255,
                     110,
                     25
                 ],
                 "lifetime": 0.5,
-                "light_enabled": true,
+                "light_enabled": false,
                 "light_radius": 128,
                 "light_intensity": 2.5,
                 "light_colour": [
@@ -4784,42 +4248,6 @@
                 "disabled": false
             },
             "io_connections": []
-        },
-        {
-            "type": "logic_relay",
-            "pos": [
-                -1504.0,
-                216.0,
-                -416.0
-            ],
-            "properties": {
-                "type": "logic_relay",
-                "io_enabled": true,
-                "name": "Door_controller",
-                "id": "8dae2cb1-3be8-455f-b87c-e0fa9bfd1bcc",
-                "disabled": false,
-                "fire_once": false
-            },
-            "io_connections": [
-                {
-                    "output": "OnTrigger",
-                    "target": "door01a",
-                    "input": "Open",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
-                },
-                {
-                    "output": "OnTrigger",
-                    "target": "door01b",
-                    "input": "Open",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
-                }
-            ]
         },
         {
             "type": "prop",
@@ -5156,40 +4584,344 @@
             "io_connections": []
         },
         {
-            "type": "logic_relay",
+            "type": "logic_camera",
             "pos": [
-                -1584.0,
-                40.0,
-                464.0
+                -2089.09326171875,
+                188.12774658203125,
+                -1054.9254150390625
             ],
             "properties": {
-                "type": "logic_relay",
+                "type": "logic_camera",
+                "id": "d844f28e-ab97-4e88-ae45-c7e9a35d7f8a",
+                "name": "showcase",
+                "cutscene_file": "cutscenes/showcase.json",
+                "cutscene_trigger_mode": "manual",
+                "cutscene_trigger_radius": 180.0,
+                "cutscene_once": true,
+                "cutscene_restore_actors": true,
+                "cutscene_stop_on_escape": true,
+                "cutscene_io_events": [],
                 "io_enabled": true,
-                "name": "IntroRelay",
-                "id": "97fb8d92-818b-4b8d-81cb-aeacbc166a6b",
-                "disabled": false,
-                "fire_once": false
+                "path_target": "",
+                "speed": 200.0,
+                "fov_override": 0.0,
+                "look_ahead": true,
+                "lookat_return_time": 5.0
             },
-            "io_connections": [
-                {
-                    "output": "OnTrigger",
-                    "target": "intromessage2",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 3.0,
-                    "fire_once": false,
-                    "target_id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28"
-                },
-                {
-                    "output": "OnTrigger",
-                    "target": "intromessage3",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 5.0,
-                    "fire_once": false,
-                    "target_id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828"
-                }
-            ]
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                48.0,
+                144.0,
+                544.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_2",
+                "id": "35cdd967-50bd-4a76-bffe-2a4d6633e621",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/cig.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "weapon",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "cig",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                -736.0,
+                228.0,
+                600.0
+            ],
+            "properties": {
+                "type": "portal",
+                "io_enabled": true,
+                "name": "Portal_2",
+                "id": "611cd456-cad7-409c-af06-40167255c604",
+                "portal_target": "Portal_1",
+                "width": 198.4000000000001,
+                "height": 256.0,
+                "rotation": [
+                    90.0,
+                    0.0,
+                    0.0
+                ],
+                "angle": 90.0,
+                "active": false,
+                "portal_direction": "both",
+                "color": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_rim": false,
+                "glasses": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                -1304.0,
+                88.0,
+                896.0
+            ],
+            "properties": {
+                "type": "portal",
+                "io_enabled": true,
+                "name": "Portal_1",
+                "id": "2255ec35-6b25-41ef-ba13-cda9f5e355b7",
+                "portal_target": "Portal_2",
+                "width": 200.0,
+                "height": 256.0,
+                "rotation": [
+                    270.0,
+                    0.0,
+                    0.0
+                ],
+                "angle": 270.0,
+                "active": false,
+                "portal_direction": "both",
+                "color": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_rim": false,
+                "glasses": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -720.0,
+                224.0,
+                592.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "io_enabled": true,
+                "name": "end",
+                "id": "cdc6af8e-3503-4d9a-a2aa-c2db72927d75",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1944.0,
+                -8.0,
+                176.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_3",
+                "id": "278c73f3-1adb-4c4c-981e-45d5e3127170",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/health.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1472.0,
+                136.0,
+                -952.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_4",
+                "id": "6d5362ee-8981-45cd-b380-6a4f359a6a9d",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/health.png",
+                "sprite_size": [
+                    32.0,
+                    33.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
         }
     ],
     "created": "2026-09-27T09:24:54"

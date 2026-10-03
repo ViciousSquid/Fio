@@ -1189,7 +1189,9 @@ class LogicCamera(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'logic_camera'
-        # Name of the first PathNode in the chain
+        # Optional authored cutscene JSON. When set, this takes precedence over PathNode playback.
+        self.properties.setdefault('cutscene_file', '')
+        # Name of the first PathNode in the chain (legacy camera mode)
         self.properties.setdefault('path_target', '')
         # World-units per second along the chain
         self.properties.setdefault('speed', 200.0)
