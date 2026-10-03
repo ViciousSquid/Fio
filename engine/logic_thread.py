@@ -33,6 +33,7 @@ from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
 from .cutscene_runtime import CutsceneRuntime
+from .projectile_table import ProjectileStore
 
 # Import Thing subclasses for type checking
 try:
@@ -476,8 +477,10 @@ class LogicThread(threading.Thread):
 
         self.level_complete_ui = None
 
-        # Monster projectiles (flying monster ranged attacks)
-        self._monster_projectiles: list = []
+        # Monster projectiles (flying monster ranged attacks). The public list
+        # surface is retained for compatibility, while numeric simulation state
+        # lives in ProjectileStore's persistent NumPy columns.
+        self._monster_projectiles: ProjectileStore = ProjectileStore()
         #: Their positions as the ``(N, 3)`` float32 array each frame publishes.
         self._projectile_positions = _NO_PROJECTILES
 
@@ -4000,6 +4003,20 @@ class LogicThread(threading.Thread):
     # =========================================================================
     # MONSTER PROJECTILES (flying monster ranged attacks)
     # =========================================================================
+    def _projectile_store(self):
+        """Return the dense projectile store, importing legacy lists once."""
+        store = self._monster_projectiles
+        if not isinstance(store, ProjectileStore):
+            store = ProjectileStore(store)
+            self._monster_projectiles = store
+        store.sync_if_dirty()
+        return store
+
+    def _add_monster_projectile(self, projectile):
+        """Thread-safe spawn path used by MonsterAI."""
+        with self._monster_lock:
+            self._projectile_store().append(projectile)
+
 
     #: Monster hit sphere for projectiles: centred 64 units above the
     #: monster's origin, radius 64.
@@ -4100,87 +4117,114 @@ class LogicThread(threading.Thread):
         return hits
 
     def _update_monster_projectiles(self, delta: float):
-        """Move every monster projectile and resolve what it hits, as arrays.
+        """Advance monster projectiles using persistent dense numeric columns.
 
-        Movement, range and lifetime, and the player, monster and wall tests
-        run over all projectiles at once; only a projectile that hits
-        something is handled in Python, in list order, so a hit that kills
-        the player or a monster is seen by every projectile after it -- as it
-        was when each projectile walked the world in turn. With 1000 monsters
-        fighting that walk was most of a 38 ms logic tick, inside the monster
-        lock the AI thread waits on.
+        The compatibility records still expose pos/vel/lifetime fields, but the
+        60 Hz simulation no longer rebuilds numeric arrays from those
+        dictionaries. Only sparse collision side effects cross back into Python.
         """
-        if not hasattr(self, '_monster_projectiles'):
-            return
-        projectiles = self._monster_projectiles
+        projectiles = self._projectile_store()
         if not projectiles:
-            self._monster_projectiles = []
             self._projectile_positions = _NO_PROJECTILES
             return
 
         count = len(projectiles)
-        pos = np.array([p['pos'] for p in projectiles], dtype=np.float64)
-        vel = np.array([p['vel'] for p in projectiles], dtype=np.float64)
+        pos = projectiles.pos[:count].copy()
+        vel = projectiles.vel[:count].copy()
         prev = pos.copy()
         pos += vel * delta
 
-        # Portal transit is per projectile, and only when there are portals.
+        # Portal transit is inherently object/portal logic. It is only entered
+        # on maps that actually have portals; the dense movement path remains
+        # the normal case.
         if Portal is not None and len(getattr(self, '_portal_things', ()) or ()):
             for i, proj in enumerate(projectiles):
-                proj['pos'][0], proj['pos'][1], proj['pos'][2] = pos[i].tolist()
+                p = proj.get('pos')
+                v = proj.get('vel')
+                if isinstance(p, list) and len(p) == 3:
+                    p[0], p[1], p[2] = map(float, pos[i])
+                else:
+                    proj['pos'] = pos[i].tolist()
+                if isinstance(v, list) and len(v) == 3:
+                    v[0], v[1], v[2] = map(float, vel[i])
+                else:
+                    proj['vel'] = vel[i].tolist()
                 self._transit_projectile_through_portals(proj, tuple(prev[i]))
                 pos[i] = proj['pos']
                 vel[i] = proj['vel']
 
-        speed = np.sqrt(vel[:, 0] ** 2 + vel[:, 1] ** 2 + vel[:, 2] ** 2)
-        travelled = np.array([p['distance_travelled'] for p in projectiles],
-                             dtype=np.float64) + speed * delta
-        lifetime = np.array([p['lifetime'] for p in projectiles],
-                            dtype=np.float64) - delta
-        live = (travelled < MONSTER_PROJECTILE_MAX_DIST) & (lifetime > 0.0)
+        speed = np.sqrt(
+            vel[:, 0] * vel[:, 0]
+            + vel[:, 1] * vel[:, 1]
+            + vel[:, 2] * vel[:, 2]
+        )
+        travelled = projectiles.distance[:count] + speed * delta
+        lifetime = projectiles.lifetime[:count] - delta
+        live = (
+            (travelled < MONSTER_PROJECTILE_MAX_DIST)
+            & (lifetime > 0.0)
+        )
         pos32 = pos.astype(np.float32)
 
-        # The player's hit sphere, in the float32 glm.distance used.
+        # The player's hit sphere, in the float32 glm.distance used previously.
         player_hit = np.zeros(count, dtype=bool)
         if self.player is not None:
             pp = self.player.pos
             player32 = np.array((pp[0], pp[1], pp[2]), dtype=np.float32)
             d = pos32 - player32
-            player_hit = (np.sqrt(d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1]
-                                  + d[:, 2] * d[:, 2])
-                          < np.float32(self.PROJECTILE_PLAYER_RADIUS)) & live
+            player_hit = (
+                np.sqrt(
+                    d[:, 0] * d[:, 0]
+                    + d[:, 1] * d[:, 1]
+                    + d[:, 2] * d[:, 2]
+                )
+                < np.float32(self.PROJECTILE_PLAYER_RADIUS)
+            ) & live
 
         grid = getattr(self, '_spatial_grid', None)
         all_collision_brushes = self._collision_brushes_cache
-        survivors = []
+        keep = live.copy()
+
         with self._monster_lock:
             live_rows = np.flatnonzero(live)
-            owners = [projectiles[i]['owner_id'] for i in live_rows]
+            owners = projectiles.owner_id[live_rows]
             monsters, mq, mrow = self._projectile_monster_candidates(
-                pos32[live_rows], owners)
+                pos32[live_rows], owners
+            )
             mq = live_rows[mq] if len(mq) else mq
             monster_hits = {}
             for q, r in zip(mq.tolist(), mrow.tolist()):
                 monster_hits.setdefault(q, []).append(r)
+
             if grid is not None:
                 wall_hits = self._projectile_wall_candidates(pos32[live_rows])
-                wall_hits = {int(live_rows[q]): rows for q, rows in wall_hits.items()}
+                wall_hits = {
+                    int(live_rows[q]): rows
+                    for q, rows in wall_hits.items()
+                }
                 wall_brushes = grid._cell_rows
             else:
                 wall_hits = None
 
             for i in live_rows.tolist():
                 proj = projectiles[i]
-                # ---- Collision with player ----
-                if (player_hit[i] and self.player and not self.god_mode
-                        and not self.player_dead):
+
+                if (
+                    player_hit[i]
+                    and self.player
+                    and not self.god_mode
+                    and not self.player_dead
+                ):
                     damage = proj['damage']
                     self._apply_player_damage(damage)
                     if self.monster_ai.monster_debug_active:
-                        debug_log("MonsterAI", f"Projectile hit player for {damage} dmg")
-                    continue  # Projectile consumed
+                        debug_log(
+                            "MonsterAI",
+                            f"Projectile hit player for {damage} dmg",
+                        )
+                    keep[i] = False
+                    continue
 
-                # ---- Collision with monsters (team-aware), first in order ----
                 hit_monster = None
                 for r in monster_hits.get(i, ()):
                     candidate = monsters[r]
@@ -4190,46 +4234,51 @@ class LogicThread(threading.Thread):
                         break
                 if hit_monster is not None:
                     damage = proj['damage']
-                    self.monster_ai._apply_monster_damage(hit_monster, damage, attacker=None)
+                    self.monster_ai._apply_monster_damage(
+                        hit_monster, damage, attacker=None
+                    )
                     if self.monster_ai.monster_debug_active:
                         name = hit_monster.properties.get('name', '?')
-                        debug_log("MonsterAI", f"Projectile hit {name} for {damage} dmg")
-                    continue  # Projectile consumed
+                        debug_log(
+                            "MonsterAI",
+                            f"Projectile hit {name} for {damage} dmg",
+                        )
+                    keep[i] = False
+                    continue
 
-                # ---- Collision with solid brushes (walls) ----
                 if wall_hits is not None:
-                    hit_wall = any(is_solid_world_brush(wall_brushes.brushes[r])
-                                   for r in wall_hits.get(i, ()))
+                    hit_wall = any(
+                        is_solid_world_brush(wall_brushes.brushes[r])
+                        for r in wall_hits.get(i, ())
+                    )
                 else:
-                    x, y, z = (float(v) for v in pos32[i])
+                    x, y, z = pos32[i]
                     hit_wall = False
                     for brush in all_collision_brushes:
                         if not is_solid_world_brush(brush):
                             continue
                         bp = brush['pos']
                         bs = brush['size']
-                        if (bp[0] - bs[0] * 0.5 <= x <= bp[0] + bs[0] * 0.5 and
-                                bp[1] - bs[1] * 0.5 <= y <= bp[1] + bs[1] * 0.5 and
-                                bp[2] - bs[2] * 0.5 <= z <= bp[2] + bs[2] * 0.5):
+                        if (
+                            bp[0] - bs[0] * 0.5 <= x <= bp[0] + bs[0] * 0.5
+                            and bp[1] - bs[1] * 0.5 <= y <= bp[1] + bs[1] * 0.5
+                            and bp[2] - bs[2] * 0.5 <= z <= bp[2] + bs[2] * 0.5
+                        ):
                             hit_wall = True
                             break
                 if hit_wall:
-                    continue  # Projectile consumed
+                    keep[i] = False
 
-                # Projectile survived this tick
-                p_pos = proj['pos']
-                p_pos[0], p_pos[1], p_pos[2] = pos[i].tolist()
-                p_vel = proj['vel']
-                p_vel[0], p_vel[1], p_vel[2] = vel[i].tolist()
-                proj['distance_travelled'] = float(travelled[i])
-                proj['lifetime'] = float(lifetime[i])
-                survivors.append(i)
+        survivors = np.flatnonzero(keep)
+        projectiles.replace_active(
+            survivors, pos, vel, lifetime, travelled
+        )
 
-        self._monster_projectiles = [projectiles[i] for i in survivors]
-        # Published as one dense array by _prepare_render_state, every frame:
-        # a frame that runs no tick must still carry the projectiles.
-        self._projectile_positions = (pos32[survivors] if survivors
-                                      else _NO_PROJECTILES)
+        # Published as an independent snapshot so the renderer can keep
+        # consuming its frame even while the next logic tick mutates the store.
+        self._projectile_positions = (
+            pos32[survivors].copy() if len(survivors) else _NO_PROJECTILES
+        )
 
 
     # =========================================================================
