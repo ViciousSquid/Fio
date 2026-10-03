@@ -459,6 +459,8 @@ class CutsceneWizard(QtWidgets.QDialog):
                 lp = list(left.get("pos", (0, 0, 0)))
                 rp = list(right.get("pos", lp))
                 if right.get("teleport", False):
+                    if elapsed < rt:
+                        return list(lp), float(left.get("yaw", 0.0))
                     return list(rp), float(right.get("yaw", 0.0))
                 pos = [lp[i] + (rp[i] - lp[i]) * t for i in range(3)]
                 yaw = float(left.get("yaw", 0.0)) + (
@@ -512,8 +514,12 @@ class CutsceneWizard(QtWidgets.QDialog):
                     if lt <= self._preview_time <= rt:
                         t = max(0.0, min(1.0, (self._preview_time - lt) / max(1e-6, rt - lt)))
                         if right.get("teleport", False):
-                            pitch = float(right.get("pitch", 0.0))
-                            fov = float(right.get("fov", 90.0))
+                            if self._preview_time < rt:
+                                pitch = float(left.get("pitch", 0.0))
+                                fov = float(left.get("fov", 90.0))
+                            else:
+                                pitch = float(right.get("pitch", 0.0))
+                                fov = float(right.get("fov", 90.0))
                         else:
                             t = t * t * (3.0 - 2.0 * t)
                             pitch = float(left.get("pitch", 0.0)) + (float(right.get("pitch", 0.0)) - float(left.get("pitch", 0.0))) * t
