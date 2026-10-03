@@ -194,6 +194,38 @@ class LogicWorld:
             dtype=bool,
         )
 
+    def notify_visibility_changed(self):
+        """Record a drawable-world invalidation without rebuilding collision."""
+        self.logic.visibility_changes += 1
+
+    def notify_authored_visibility_changed(self):
+        """Rebuild collision after an authored visibility change."""
+        logic = self.logic
+        self.notify_visibility_changed()
+        logic._refresh_collision_brushes_cache()
+        grid = getattr(logic, "_spatial_grid", None)
+        if grid is not None:
+            grid.populate(logic._collision_brushes_cache)
+
+    def watch_world_rows(self):
+        """Re-index the play session briefly after an authored world edit."""
+        logic = self.logic
+        row_watch_ticks = 30
+
+        epoch = getattr(logic.editor_state, "world_epoch", None)
+        if epoch != getattr(logic, "_rows_epoch", None):
+            logic._rows_epoch = epoch
+            logic._rows_watch = row_watch_ticks
+
+        if not getattr(logic, "_rows_watch", 0):
+            return
+
+        logic._rows_watch -= 1
+        brushes_changed = tuple(logic.brushes) != logic._indexed_brushes
+        things_changed = tuple(logic.things) != logic._indexed_things
+        if brushes_changed or things_changed:
+            self.build_entity_caches()
+
     def release_session_indexes(self):
         """Drop references held by play-session world indexes."""
         logic = self.logic
