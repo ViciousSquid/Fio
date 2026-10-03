@@ -35,6 +35,8 @@ from .effect_entity import Effect
 from .cutscene_runtime import CutsceneRuntime
 from .projectile_table import ProjectileStore
 
+_NO_LEGACY_CUTSCENE_STATE = object()
+
 # Import Thing subclasses for type checking
 try:
     from editor.things import (Speaker, Prop as PropThing, Light,
@@ -573,7 +575,7 @@ class LogicThread(threading.Thread):
 
     def _fire_cinematic_io_events(self):
         runtime = self._cutscene_runtime()
-        legacy_before = self.__dict__.get("cinematic_state", self._NO_LEGACY_CUTSCENE_STATE)
+        legacy_before = self.__dict__.get("cinematic_state", _NO_LEGACY_CUTSCENE_STATE)
         result = runtime._fire_cinematic_io_events()
         if "cinematic_state" in self.__dict__:
             legacy_after = self.__dict__["cinematic_state"]
@@ -590,7 +592,6 @@ class LogicThread(threading.Thread):
     def consume_cinematic_messages(self):
         return self.cutscene_runtime.consume_cinematic_messages()
 
-    _NO_LEGACY_CUTSCENE_STATE = object()
 
     # Preserve the private helper surface used by older tests/tools.
     _cutscene_number = staticmethod(CutsceneRuntime._cutscene_number)
