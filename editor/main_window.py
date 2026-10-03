@@ -2877,6 +2877,23 @@ class MainWindow(QMainWindow):
             self.show_toast("Stamp brush must have a non-zero X/Z size", is_error=True)
             return
 
+        # Avoid creating an undo entry for an identical stamp.  The terrain
+        # owns the authoritative stamp list; this check is deliberately before
+        # save_state() so a rejected duplicate does not dirty the map.
+        probe_angle = math.radians(float(
+            brush.get('uv_angle', {}).get('top', 0.0)
+            if isinstance(brush.get('uv_angle', {}), dict) else 0.0))
+        probe = {
+            'bounds': [float(lo_x), float(lo_z), float(hi_x), float(hi_z)],
+            'texture': texture_name,
+            'angle': probe_angle,
+            'feather': 0.0,
+            'opacity': 1.0,
+        }
+        if probe in getattr(terrain, 'texture_stamps', []):
+            self.show_toast("That terrain texture stamp already exists", is_error=True)
+            return
+
         self.state.terrain_data = terrain.to_dict()
         self.save_state()
 
