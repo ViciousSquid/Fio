@@ -63,11 +63,15 @@ class CutsceneWizard(QtWidgets.QDialog):
     def __init__(self, main_window, parent=None):
         super().__init__(parent or main_window)
         self.main_window = main_window
-        self.setWindowTitle("Fio Cutscene Wizard")
+        self.setWindowTitle("Fio Cutscenes")
         self.setMinimumSize(560, 760)
         self.resize(640, 900)
         self.setWindowModality(QtCore.Qt.NonModal)
         self.setWindowFlag(QtCore.Qt.Tool, True)
+        # Use the same application stylesheet as the rest of Fio.
+        app = QtWidgets.QApplication.instance()
+        if app is not None and app.styleSheet():
+            self.setStyleSheet(app.styleSheet())
 
         self.actor_meta = {}
         self.actor_objects = {}
@@ -278,14 +282,25 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.camera_keys_list.setMinimumHeight(120)
         cv.addWidget(self.camera_keys_list)
         camera_buttons = QtWidgets.QHBoxLayout()
+        camera_buttons.addWidget(QtWidgets.QLabel("Selected time"))
+        self.camera_edit_time = QtWidgets.QDoubleSpinBox()
+        self.camera_edit_time.setRange(0, 3600)
+        self.camera_edit_time.setDecimals(2)
+        self.camera_edit_time.setSuffix(" s")
+        self.camera_edit_time.setEnabled(False)
+        camera_buttons.addWidget(self.camera_edit_time)
+        set_camera_time_button = QtWidgets.QPushButton("Set selected time")
+        set_camera_time_button.clicked.connect(self._set_selected_camera_keyframe_time)
+        camera_buttons.addWidget(set_camera_time_button)
         delete_camera_button = QtWidgets.QPushButton("Remove selected camera keyframe")
         delete_camera_button.clicked.connect(self._remove_selected_camera_keyframe)
         camera_buttons.addWidget(delete_camera_button)
         camera_buttons.addStretch(1)
         cv.addLayout(camera_buttons)
+        self.camera_keys_list.currentRowChanged.connect(self._camera_keyframe_selected)
         camera_layout.addWidget(camera_box)
         camera_layout.addStretch(1)
-        tabs.addTab(camera_page, "Camera")
+        tabs.addTab(camera_page, "Camera Keyframes")
 
         # -----------------------------------------------------------------
         # Events / dialogue. Advanced functionality remains available, but
@@ -1199,6 +1214,26 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.camera_keys.sort(key=lambda x: x["time"])
         self._refresh_camera_list()
         self.camera_time.setValue(float(frame["time"]) + 1.0)
+
+    def _camera_keyframe_selected(self, row):
+        valid = 0 <= row < len(self.camera_keys)
+        self.camera_edit_time.setEnabled(valid)
+        if valid:
+            self.camera_edit_time.blockSignals(True)
+            self.camera_edit_time.setValue(float(self.camera_keys[row].get("time", 0.0)))
+            self.camera_edit_time.blockSignals(False)
+
+    def _set_selected_camera_keyframe_time(self):
+        row = self.camera_keys_list.currentRow()
+        if not (0 <= row < len(self.camera_keys)):
+            return
+        selected = self.camera_keys[row]
+        selected["time"] = float(self.camera_edit_time.value())
+        self.camera_keys.sort(key=lambda x: float(x.get("time", 0.0)))
+        new_row = self.camera_keys.index(selected)
+        self._refresh_camera_list()
+        self.camera_keys_list.setCurrentRow(new_row)
+        self._refresh_summary()
 
     def _remove_selected_camera_keyframe(self):
         row = self.camera_keys_list.currentRow()
