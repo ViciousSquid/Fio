@@ -3807,17 +3807,14 @@ class LogicThread(threading.Thread):
             if isinstance(rows, list)
         }
         events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
-        # Cutscene I/O events directly address an entity input.  Older files
-        # authored before this UI change used source/output terminology; accept
-        # those too so existing cutscenes continue to load.
-        for event in events:
-            if event.get("type") == "io":
-                if not event.get("target_id") and event.get("source_id"):
-                    event["target_id"] = event.get("source_id")
-                if not event.get("target_name") and event.get("source_name"):
-                    event["target_name"] = event.get("source_name")
-                if not event.get("input") and event.get("output"):
-                    event["input"] = event.get("output")
+        # Preserve the two cutscene I/O schemas:
+        #
+        #   New editor authoring: target_id/target_name + input
+        #   Legacy cutscenes:     source_id/source_name + output
+        #
+        # They are not interchangeable.  The former executes an input directly
+        # on the target; the latter fires an output from the source and therefore
+        # traverses the map's authored I/O connections.
         events.sort(key=lambda event: self._cutscene_number(event.get("time", 0.0)))
         duration = 0.0
         for row in camera_rows:
@@ -3833,6 +3830,12 @@ class LogicThread(threading.Thread):
                     self._cutscene_number(event.get("time", 0.0))
                     + max(0.0, self._cutscene_number(event.get("duration", 0.0))),
                 )
+
+        # A single keyframe at t=0 is still a real cutscene state.  Keep it
+        # alive for one logical tick so LookAt/message/I/O authoring can observe
+        # that state before the runtime finishes an otherwise zero-duration shot.
+        if camera_rows and duration <= 0.0:
+            duration = 1e-6
 
         settings = data.get("settings") or {}
         self.cinematic_state = {
@@ -4075,7 +4078,7 @@ class LogicThread(threading.Thread):
                 return messages
 
     def _fire_cinematic_io_events(self):
-        """Fire timed I/O events authored on the active LogicCamera."""
+        """Fire timed cutscene I/O events, accepting both authored schemas."""
         cs = self.cinematic_state
         if not cs or not cs.get('active') or not self.io_manager:
             return bool(cs and cs.get('active'))
@@ -4087,27 +4090,63 @@ class LogicThread(threading.Thread):
             event = events[index]
             index += 1
             cs['next_io_event'] = index
+
+            # New editor format: address an entity input directly.
             target_id = str(event.get('target_id', '') or '')
             target_name = str(event.get('target_name', '') or '')
             input_name = str(event.get('input', '') or '').strip()
-            if not target_name and target_id:
-                target = self._find_entity_by_id(target_id)
-                target_name = str(getattr(target, 'properties', {}).get('name', '') or target_id)
-            if target_name and input_name:
-                self.io_manager._execute_input(
-                    target_name,
-                    input_name,
-                    event.get('parameter'),
-                    "Cutscene",
-                    target_id=target_id,
-                )
+            if target_name or target_id or input_name:
+                if not target_name and target_id:
+                    target = self._find_entity_by_id(target_id)
+                    target_name = str(
+                        getattr(target, 'properties', {}).get('name', '') or target_id
+                    )
+                if target_name and input_name:
+                    execute_input = getattr(self.io_manager, '_execute_input', None)
+                    if execute_input is None:
+                        debug_log(
+                            "IO",
+                            f"Cutscene I/O target '{target_name}' cannot execute input "
+                            f"'{input_name}': IO manager has no input executor.",
+                        )
+                    else:
+                        execute_input(
+                            target_name,
+                            input_name,
+                            event.get('parameter'),
+                            "Cutscene",
+                            target_id=target_id,
+                        )
+                else:
+                    debug_log(
+                        "IO",
+                        f"Cutscene I/O target '{target_name or target_id}' has no input to fire.",
+                    )
             else:
-                debug_log(
-                    "IO",
-                    f"Cutscene I/O target '{target_name or target_id}' has no input to fire.",
-                )
+                # Legacy format: fire a source output so the map's normal
+                # connection graph resolves the downstream input.
+                source_id = str(event.get('source_id', '') or '')
+                source_name = str(event.get('source_name', '') or '')
+                output_name = str(event.get('output', '') or '').strip()
+                source = None
+                if source_id:
+                    source = self._find_entity_by_id(source_id)
+                if source is None and source_name:
+                    source = self._find_entity_by_name(source_name)
+                if source is not None and output_name:
+                    self.io_manager.fire_output(
+                        source,
+                        output_name,
+                        event.get('parameter'),
+                    )
+                else:
+                    debug_log(
+                        "IO",
+                        f"Cutscene legacy I/O source '{source_name or source_id}' "
+                        f"has no output to fire.",
+                    )
 
-            # An output may stop, replace or otherwise mutate the cinematic.
+            # An input/output may stop, replace or otherwise mutate the cinematic.
             if self.cinematic_state is not cs:
                 return False
         return True
