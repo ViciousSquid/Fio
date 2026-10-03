@@ -550,22 +550,11 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _cutscene_runtime(self):
-        """Return the runtime, including for lightweight __new__ test doubles.
-
-        Older tests/tools sometimes provide a plain cinematic_state field
-        without constructing a full LogicThread. Seed and synchronise the
-        extracted runtime from that legacy field so the delegation surface
-        remains usable without restoring state ownership to LogicThread.
-        """
+        """Return the cutscene runtime, creating it for lightweight test doubles."""
         runtime = getattr(self, "cutscene_runtime", None)
-        legacy_state = self.__dict__.get("cinematic_state", None)
         if runtime is None:
             runtime = CutsceneRuntime(self)
-            if "cinematic_state" in self.__dict__:
-                runtime.state = legacy_state
             self.cutscene_runtime = runtime
-        elif "cinematic_state" in self.__dict__ and runtime.state is not legacy_state:
-            runtime.state = legacy_state
         return runtime
 
     @property
@@ -578,32 +567,22 @@ class LogicThread(threading.Thread):
         self._cutscene_runtime().state = value
 
     def _load_cutscene_file(self, filename):
-        return self.cutscene_runtime._load_cutscene_file(filename)
+        return self._cutscene_runtime()._load_cutscene_file(filename)
 
     def _start_json_cutscene(self, entity, filename, data):
-        return self.cutscene_runtime._start_json_cutscene(entity, filename, data)
+        return self._cutscene_runtime()._start_json_cutscene(entity, filename, data)
 
     def _finish_json_cutscene(self, cs, fire_finished=True):
-        return self.cutscene_runtime._finish_json_cutscene(cs, fire_finished)
+        return self._cutscene_runtime()._finish_json_cutscene(cs, fire_finished)
 
     def _fire_cinematic_io_events(self):
-        runtime = self._cutscene_runtime()
-        legacy_before = self.__dict__.get("cinematic_state", _NO_LEGACY_CUTSCENE_STATE)
-        result = runtime._fire_cinematic_io_events()
-        if "cinematic_state" in self.__dict__:
-            legacy_after = self.__dict__["cinematic_state"]
-            if legacy_after is not legacy_before:
-                runtime.state = legacy_after
-                result = bool(result and runtime.state is not None)
-            else:
-                self.__dict__["cinematic_state"] = runtime.state
-        return result
+        return self._cutscene_runtime()._fire_cinematic_io_events()
 
     def _update_cinematic_camera(self, delta):
-        return self.cutscene_runtime._update_cinematic_camera(delta)
+        return self._cutscene_runtime()._update_cinematic_camera(delta)
 
     def consume_cinematic_messages(self):
-        return self.cutscene_runtime.consume_cinematic_messages()
+        return self._cutscene_runtime().consume_cinematic_messages()
 
 
     # Preserve the private helper surface used by older tests/tools.
