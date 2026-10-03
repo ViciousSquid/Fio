@@ -45,6 +45,7 @@ class LogicCollision:
         through to the default AABB handling — a water/trigger volume never
         blocks the player, angled or not.
         """
+        logic = self.logic
         if brush.get('hidden') or brush.get('is_fog'):
             return False
         if is_water_brush(brush):
@@ -70,6 +71,7 @@ class LogicCollision:
 
         Runs at play start; results are private keys stripped on save.
         """
+        logic = self.logic
         count = 0
         for brush in logic.brushes:
             if not brush_has_geometry(brush):
@@ -105,6 +107,7 @@ class LogicCollision:
 
 
     def clear_angled_brush_collision(self):
+        logic = self.logic
         """Remove play-time mesh-collision data from all angled brushes."""
         for brush in logic.brushes:
             if brush_has_geometry(brush):
@@ -118,7 +121,8 @@ class LogicCollision:
         non-zero collision_size always overrides the shape choice with a
         custom AABB.
         """
-        model_collision_enabled = bool(getattr(self, 'model_collision_enabled', True))
+        logic = self.logic
+        model_collision_enabled = bool(getattr(logic, 'model_collision_enabled', True))
         brushes = []
 
         for thing in logic.things:
@@ -299,6 +303,7 @@ class LogicCollision:
         used GLB which called glGenVertexArrays/glGenBuffers and would silently
         fail when the GL context was not active on this thread.
         """
+        logic = self.logic
         if not model_path:
             return None
 
@@ -377,6 +382,7 @@ class LogicCollision:
 
 
     def compute_mesh_bounds(self, mesh_tris):
+        logic = self.logic
         """Compute AABB from mesh triangles for broad-phase culling."""
         if not mesh_tris:
             return None
@@ -389,6 +395,7 @@ class LogicCollision:
 
 
     def compute_model_bounds(self, model_path):
+        logic = self.logic
         """Compute axis-aligned bounds from a model file. Returns (min, max) or None."""
         if not model_path:
             return None
@@ -448,6 +455,7 @@ class LogicCollision:
     def toggle_model_collision(self, enabled: bool = None) -> bool:
         """Toggle model collision on/off. If enabled is None, flip current state.
         Returns the new state. Works in both play mode and editor mode."""
+        logic = self.logic
         if enabled is None:
             logic.model_collision_enabled = not logic.model_collision_enabled
         else:
@@ -461,15 +469,15 @@ class LogicCollision:
                 b for b in logic._model_collision_brushes
                 if b.get('_physics_body')
             ]
-            if logic.play_mode and hasattr(self, '_spatial_grid') and logic._spatial_grid:
+            if logic.play_mode and hasattr(logic, '_spatial_grid') and logic._spatial_grid:
                 logic._spatial_grid.populate(logic.brushes + logic._model_collision_brushes)
-                if getattr(self, '_physics_world', None) is not None:
+                if getattr(logic, '_physics_world', None) is not None:
                     logic._physics_world.rebuild(logic._physics_body_brushes)
         else:
             logic._model_collision_brushes = []
-            if logic.play_mode and hasattr(self, '_spatial_grid') and logic._spatial_grid:
+            if logic.play_mode and hasattr(logic, '_spatial_grid') and logic._spatial_grid:
                 logic._spatial_grid.populate(logic.brushes)
-                if getattr(self, '_physics_world', None) is not None:
+                if getattr(logic, '_physics_world', None) is not None:
                     logic._physics_world.rebuild(logic._physics_body_brushes)
         logic._refresh_collision_brushes_cache()
 
@@ -485,6 +493,7 @@ class LogicCollision:
         here (model-collision toggle, play-mode enter/exit), so cache the
         concatenation and reuse it from the hot paths instead.
         """
+        logic = self.logic
         logic._collision_brushes_cache = logic.brushes + logic._model_collision_brushes
 
     # -- visibility invalidation ------------------------------------------
