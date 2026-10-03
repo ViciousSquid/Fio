@@ -535,11 +535,22 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _cutscene_runtime(self):
-        """Return the runtime, including for lightweight __new__ test doubles."""
+        """Return the runtime, including for lightweight __new__ test doubles.
+
+        Older tests/tools sometimes provide a plain cinematic_state field
+        without constructing a full LogicThread. Seed and synchronise the
+        extracted runtime from that legacy field so the delegation surface
+        remains usable without restoring state ownership to LogicThread.
+        """
         runtime = getattr(self, "cutscene_runtime", None)
+        legacy_state = self.__dict__.get("cinematic_state", None)
         if runtime is None:
             runtime = CutsceneRuntime(self)
+            if "cinematic_state" in self.__dict__:
+                runtime.state = legacy_state
             self.cutscene_runtime = runtime
+        elif "cinematic_state" in self.__dict__ and runtime.state is not legacy_state:
+            runtime.state = legacy_state
         return runtime
 
     @property
@@ -561,7 +572,11 @@ class LogicThread(threading.Thread):
         return self.cutscene_runtime._finish_json_cutscene(cs, fire_finished)
 
     def _fire_cinematic_io_events(self):
-        return self.cutscene_runtime._fire_cinematic_io_events()
+        runtime = self._cutscene_runtime()
+        result = runtime._fire_cinematic_io_events()
+        if "cinematic_state" in self.__dict__:
+            self.__dict__["cinematic_state"] = runtime.state
+        return result
 
     def _update_cinematic_camera(self, delta):
         return self.cutscene_runtime._update_cinematic_camera(delta)
