@@ -330,6 +330,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.event_list = QtWidgets.QListWidget()
         self.event_list.setMinimumHeight(100)
         events_layout.addWidget(self.event_list)
+        self.event_list.itemDoubleClicked.connect(self._edit_selected_event)
         remove_event = QtWidgets.QPushButton("Remove selected event")
         remove_event.clicked.connect(self._remove_event)
         events_layout.addWidget(remove_event)
@@ -1375,6 +1376,164 @@ class CutsceneWizard(QtWidgets.QDialog):
             self._refresh_event_list()
             self._refresh_summary()
 
+
+    def _edit_selected_event(self, _item=None):
+        row = self.event_list.currentRow()
+        ordered = sorted(enumerate(self.events), key=lambda item: item[1].get("time", 0))
+        if not (0 <= row < len(ordered)):
+            return
+        index, event = ordered[row]
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Edit event")
+        dialog.setMinimumWidth(520)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        form = QtWidgets.QFormLayout()
+        layout.addLayout(form)
+
+        time = QtWidgets.QDoubleSpinBox()
+        time.setRange(0, 3600)
+        time.setDecimals(2)
+        time.setSuffix(" s")
+        time.setValue(float(event.get("time", 0.0)))
+        form.addRow("At time", time)
+
+        kind = str(event.get("type", ""))
+        widgets = {}
+
+        if kind == "message":
+            line = QtWidgets.QComboBox()
+            line.addItems(["message", "message2", "message3"])
+            line.setCurrentText(str(event.get("line", "message")))
+            text = QtWidgets.QLineEdit(str(event.get("text", "")))
+            form.addRow("Line", line)
+            form.addRow("Text", text)
+            widgets.update(line=line, text=text)
+
+        elif kind == "io":
+            target = QtWidgets.QLineEdit(str(event.get("target_name", event.get("source_name", ""))))
+            input_name = QtWidgets.QLineEdit(str(event.get("input", event.get("output", ""))))
+            parameter = QtWidgets.QLineEdit(str(event.get("parameter", "")))
+            form.addRow("Target entity", target)
+            form.addRow("Input", input_name)
+            form.addRow("Parameter", parameter)
+            widgets.update(target=target, input_name=input_name, parameter=parameter)
+
+        elif kind == "dialogue":
+            speaker = QtWidgets.QLineEdit(str(event.get("speaker_id", "")))
+            duration = QtWidgets.QDoubleSpinBox()
+            duration.setRange(0.05, 300)
+            duration.setDecimals(2)
+            duration.setSuffix(" s")
+            duration.setValue(float(event.get("duration", 5.0)))
+            text = QtWidgets.QPlainTextEdit(str(event.get("text", "")))
+            form.addRow("Speaker", speaker)
+            form.addRow("Duration", duration)
+            form.addRow("Text", text)
+            widgets.update(speaker=speaker, duration=duration, text=text)
+
+        elif kind == "fight":
+            duration = QtWidgets.QDoubleSpinBox()
+            duration.setRange(0.05, 300)
+            duration.setDecimals(2)
+            duration.setSuffix(" s")
+            duration.setValue(float(event.get("duration", 5.0)))
+            style = QtWidgets.QComboBox()
+            for label, value in (("Normal", "normal"), ("Melee", "melee"), ("Archery", "bow"), ("Spell", "magic")):
+                style.addItem(label, value)
+            style.setCurrentIndex(max(0, style.findData(event.get("style", "normal"))))
+            attackers = QtWidgets.QLineEdit(", ".join(map(str, event.get("attackers", []))))
+            defenders = QtWidgets.QLineEdit(", ".join(map(str, event.get("defenders", []))))
+            form.addRow("Duration", duration)
+            form.addRow("Style", style)
+            form.addRow("Attackers", attackers)
+            form.addRow("Defenders", defenders)
+            widgets.update(duration=duration, style=style, attackers=attackers, defenders=defenders)
+
+        elif kind == "blood":
+            position = list(event.get("position", [0, 0, 0]))
+            spins = []
+            for label, value in zip(("Position X", "Position Y", "Position Z"), position[:3]):
+                spin = QtWidgets.QDoubleSpinBox()
+                spin.setRange(-100000, 100000)
+                spin.setDecimals(2)
+                spin.setValue(float(value))
+                form.addRow(label, spin)
+                spins.append(spin)
+            variant = QtWidgets.QLineEdit(str(event.get("variant", "random")))
+            width = QtWidgets.QDoubleSpinBox()
+            height = QtWidgets.QDoubleSpinBox()
+            for spin, value in ((width, event.get("width", 64)), (height, event.get("height", 64))):
+                spin.setRange(0.01, 100000)
+                spin.setDecimals(2)
+                spin.setValue(float(value))
+            form.addRow("Variant", variant)
+            form.addRow("Width", width)
+            form.addRow("Height", height)
+            widgets.update(spins=spins, variant=variant, width=width, height=height)
+
+        else:
+            raw = QtWidgets.QPlainTextEdit(json.dumps(
+                {key: value for key, value in event.items() if key != "type"},
+                indent=2,
+                ensure_ascii=False,
+            ))
+            form.addRow("Data", raw)
+            widgets["raw"] = raw
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        event["time"] = float(time.value())
+        if kind == "message":
+            event["line"] = widgets["line"].currentText()
+            event["text"] = widgets["text"].text()
+        elif kind == "io":
+            event["target_name"] = widgets["target"].text().strip()
+            event["input"] = widgets["input_name"].text().strip()
+            event.pop("source_name", None)
+            event.pop("output", None)
+            if widgets["parameter"].text():
+                event["parameter"] = widgets["parameter"].text()
+            else:
+                event.pop("parameter", None)
+        elif kind == "dialogue":
+            event["speaker_id"] = widgets["speaker"].text().strip()
+            event["duration"] = float(widgets["duration"].value())
+            event["text"] = widgets["text"].toPlainText()
+        elif kind == "fight":
+            event["duration"] = float(widgets["duration"].value())
+            event["style"] = widgets["style"].currentData()
+            event["attackers"] = [x.strip() for x in widgets["attackers"].text().split(",") if x.strip()]
+            event["defenders"] = [x.strip() for x in widgets["defenders"].text().split(",") if x.strip()]
+        elif kind == "blood":
+            event["position"] = [float(spin.value()) for spin in widgets["spins"]]
+            event["variant"] = widgets["variant"].text().strip()
+            event["width"] = float(widgets["width"].value())
+            event["height"] = float(widgets["height"].value())
+        else:
+            try:
+                raw_data = json.loads(widgets["raw"].toPlainText())
+                if isinstance(raw_data, dict):
+                    event.clear()
+                    event["type"] = kind
+                    event.update(raw_data)
+                    event["time"] = float(time.value())
+            except (TypeError, ValueError):
+                QtWidgets.QMessageBox.warning(self, "Invalid event", "The event data is not valid JSON.")
+                return
+
+        self.events.sort(key=lambda x: x.get("time", 0))
+        self._refresh_event_list()
+        self._refresh_summary()
+
     def _refresh_event_list(self):
         self.event_list.clear()
         for event in sorted(self.events, key=lambda x: x.get("time", 0)):
@@ -1387,7 +1546,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             elif kind == "message":
                 label += f" — {event.get('line', 'message')}: {str(event.get('text', ''))[:45]}"
             elif kind == "io":
-                label += f" — {event.get('source_name', event.get('source_id', ''))}.{event.get('output', '')}"
+                label += f" — {event.get('target_name', event.get('target_id', ''))}.{event.get('input', event.get('output', ''))}"
             self.event_list.addItem(label)
 
     # ------------------------------------------------------------------
