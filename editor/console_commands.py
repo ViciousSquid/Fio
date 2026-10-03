@@ -859,15 +859,6 @@ class ConsoleCommandHandler:
             debug_log("Error", f"HUD font/style {style} could not be loaded.")
             return
 
-        config = self._hud_config()
-        if config is not None and not self._command_from_map:
-            config.set("Display", "hudstyle", str(style))
-            config.set("Display", "show_hud", str(style != 0))
-            if style == 4 and font_name:
-                config.set("Display", "hudfont", font_name)
-            elif config.has_option("Display", "hudfont"):
-                config.remove_option("Display", "hudfont")
-            self._save_hud_config()
 
         label = {
             0: "hidden",
