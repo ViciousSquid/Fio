@@ -1872,6 +1872,9 @@ class LogicThread(threading.Thread):
         return self.camera.effective_overhead_height()
 
     def overhead_ground_footprint(self):
+        # Keep the extracted camera in sync even when callers assign
+        # LogicThread.player directly (older tests/game hosts do this).
+        self.camera.player = self.player
         return self.camera.overhead_ground_footprint()
 
     def start_camera_transition(self, target_mode=None, duration=1.0):
