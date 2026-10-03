@@ -1935,8 +1935,10 @@ class TerrainEditorPanel(QWidget):
             'stamp' if getattr(self, 'paint_tool_mode', 'sculpt') == 'stamp'
             else self._sculpt_mode
         )
-        view_3d.terrain_sculpt_radius = float(
-            self.sculpt_radius_slider.value()
+        # The UI exposes brush size as the visible diameter. The terrain
+        # backend APIs consume radius, so convert once at the boundary.
+        view_3d.terrain_sculpt_radius = max(
+            4.0, float(self.sculpt_radius_slider.value()) * 0.5
         )
         view_3d.terrain_sculpt_strength = float(
             self.sculpt_strength_slider.value()
