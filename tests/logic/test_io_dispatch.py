@@ -599,6 +599,233 @@ def test_handlers_are_keyed_case_insensitively(net):
 
 
 # ---------------------------------------------------------------------------
+# LogicCamera JSON cutscene runtime
+# ---------------------------------------------------------------------------
+
+class _CutsceneEntityRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def fire_output(self, entity, output_name, value=None):
+        self.calls.append((entity, output_name, value))
+
+
+def _json_cutscene_logic(camera, actors, recorder=None):
+    from types import SimpleNamespace
+    from engine.logic_thread import LogicThread
+
+    recorder = recorder or _CutsceneEntityRecorder()
+    state = SimpleNamespace(things=[camera] + list(actors), brushes=[])
+    logic = LogicThread.__new__(LogicThread)
+    logic.editor_state = state
+    logic.cinematic_state = None
+    logic.io_manager = recorder
+    logic.monster_ai = SimpleNamespace(forget_monsters=lambda: None)
+    logic._find_entity_by_id = lambda entity_id: next(
+        (thing for thing in logic.things
+         if thing.properties.get("id") == entity_id),
+        None,
+    )
+    logic._find_entity_by_name = lambda name: next(
+        (thing for thing in logic.things
+         if thing.properties.get("name") == name),
+        None,
+    )
+    logic._build_entity_caches = lambda: None
+    return logic
+
+
+def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    actor = Monster(
+        [5.0, 0.0, 0.0],
+        {"id": "actor-1", "name": "Actor", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera", "cutscene_file": "cutscenes/test.json"},
+    )
+    logic = _json_cutscene_logic(camera, [actor])
+
+    data = {
+        "camera": [
+            {"time": 0.0, "pos": [0, 10, 0], "yaw": 0.0, "pitch": 0.0, "fov": 90},
+            {"time": 1.0, "pos": [10, 10, 0], "yaw": 1.0, "pitch": 0.5, "fov": 70},
+        ],
+        "actors": [{"id": "actor-1", "name": "Actor"}],
+        "actor_tracks": {
+            "actor-1": [
+                {"time": 0.0, "pos": [5, 0, 0], "yaw": 0.0},
+                {"time": 1.0, "pos": [15, 0, 0], "yaw": 1.0},
+            ],
+        },
+        "events": [],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    LogicThread._update_cinematic_camera(logic, 0.5)
+
+    assert logic.cinematic_state is not None
+    assert logic.cinematic_state["cam_pos"] == pytest.approx([5.0, 10.0, 0.0])
+    assert logic.cinematic_state["cam_angle"] == pytest.approx(0.5)
+    assert logic.cinematic_state["cam_pitch"] == pytest.approx(0.25)
+    assert logic.cinematic_state["fov"] == pytest.approx(80.0)
+    assert list(actor.pos) == pytest.approx([10.0, 0.0, 0.0])
+
+
+def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    actor = Monster(
+        [5.0, 0.0, 0.0],
+        {"id": "actor-1", "name": "Actor", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    recorder = _CutsceneEntityRecorder()
+    logic = _json_cutscene_logic(camera, [actor], recorder)
+
+    data = {
+        "camera": [{"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90}],
+        "actors": [{"id": "actor-1", "name": "Actor"}],
+        "actor_tracks": {
+            "actor-1": [
+                {"time": 0.0, "pos": [5, 0, 0], "yaw": 0},
+                {"time": 0.5, "pos": [20, 0, 0], "yaw": 1.0},
+            ],
+        },
+        "events": [],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    LogicThread._update_cinematic_camera(logic, 0.5)
+
+    assert logic.cinematic_state is None
+    assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
+    assert actor.properties.get("disabled") is False
+    assert [name for _, name, _ in recorder.calls] == ["OnFinished"]
+
+
+def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    actor = Monster(
+        [0.0, 0.0, 0.0],
+        {"id": "actor-1", "name": "Actor", "type": "monster"},
+    )
+    source = Monster(
+        [0.0, 0.0, 0.0],
+        {"id": "source-1", "name": "Source", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    recorder = _CutsceneEntityRecorder()
+    logic = _json_cutscene_logic(camera, [actor, source], recorder)
+
+    data = {
+        "camera": [{"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90}],
+        "actors": [{"id": "actor-1", "name": "Actor"}],
+        "actor_tracks": {},
+        "events": [{
+            "time": 0.25,
+            "type": "io",
+            "source_id": "source-1",
+            "source_name": "Source",
+            "output": "OnTrigger",
+            "parameter": "cutscene",
+        }],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    LogicThread._update_cinematic_camera(logic, 0.1)
+    assert [name for _, name, _ in recorder.calls] == ["OnTrigger", "OnFinished"]
+
+
+def test_logic_camera_json_cutscene_look_at_tracks_actor_position():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    actor = Monster(
+        [0.0, 0.0, 100.0],
+        {"id": "actor-1", "name": "Actor", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    logic = _json_cutscene_logic(camera, [actor])
+
+    data = {
+        "camera": [{
+            "time": 0.0,
+            "pos": [0, 0, 0],
+            "yaw": 2.0,
+            "pitch": 1.0,
+            "fov": 90,
+            "look_at": {"actor": "actor-1"},
+        }],
+        "actors": [{"id": "actor-1", "name": "Actor"}],
+        "actor_tracks": {},
+        "events": [],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    LogicThread._update_cinematic_camera(logic, 0.0)
+
+    assert logic.cinematic_state["cam_angle"] == pytest.approx(0.0)
+    assert logic.cinematic_state["cam_pitch"] == pytest.approx(0.0)
+
+
+def test_logic_camera_json_cutscene_stop_restores_actor():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    actor = Monster(
+        [5.0, 0.0, 0.0],
+        {"id": "actor-1", "name": "Actor", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    recorder = _CutsceneEntityRecorder()
+    logic = _json_cutscene_logic(camera, [actor], recorder)
+    data = {
+        "camera": [{"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90}],
+        "actors": [{"id": "actor-1", "name": "Actor"}],
+        "actor_tracks": {"actor-1": [{"time": 0.0, "pos": [20, 0, 0], "yaw": 0}]},
+        "events": [],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    LogicThread._update_cinematic_camera(logic, 0.0)
+    assert list(actor.pos) == pytest.approx([20.0, 0.0, 0.0])
+
+    logic.io_manager = recorder
+    from editor.io_handlers import register_all_input_handlers
+    manager = IOManager()
+    register_all_input_handlers(manager)
+    handler = manager._input_handlers[("logic_camera", "stop")]
+    handler(camera, "", logic)
+
+    assert logic.cinematic_state is None
+    assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
+
+
+# ---------------------------------------------------------------------------
 # LogicCamera path arrival and LookAt
 # ---------------------------------------------------------------------------
 
