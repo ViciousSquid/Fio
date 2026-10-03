@@ -1703,6 +1703,8 @@ highp vec4 sampleTerrainStamp(int slot, vec2 uv) {
     float s = float(slot);
     vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
     vec2 localUv = fract(uv);
+    vec2 halfTexel = vec2(0.5 / float(uStampTextureSize));
+    localUv = clamp(localUv, halfTexel, vec2(1.0) - halfTexel);
     return texture(terrainStampAtlas, cellOrigin + localUv * cell);
 }
 
@@ -1771,20 +1773,20 @@ void main() {
     }
 
     // ---- Terrain texture stamps --------------------------------------
-    // Stamps are world-space X/Z rectangles. Resizing the editor AABB changes
-    // the rectangle, so the same texture is naturally elongated for roads,
-    // paths, clearings, etc. The surface remains the terrain heightfield.
+    // Stamps are painted with the terrain sculpt brush. New editor stamps use
+    // square authored bounds and therefore render as circular brushes; the
+    // feather parameter softens the edge. The terrain remains a heightfield.
     for (int i = 0; i < MAX_TERRAIN_STAMPS; ++i) {
         if (i >= uStampCount) break;
         vec4 b = uStampBounds[i];
-        if (FragPos.x < b.x || FragPos.x > b.z ||
-            FragPos.z < b.y || FragPos.z > b.w) {
-            continue;
-        }
+        vec2 center = (b.xy + b.zw) * 0.5;
+        vec2 halfSize = max((b.zw - b.xy) * 0.5, vec2(1e-4));
+        vec2 delta = FragPos.xz - center;
+        vec2 normDelta = delta / halfSize;
+        float radial = length(normDelta);
+        if (radial > 1.0) continue;
 
-        vec2 size = max(b.zw - b.xy, vec2(1e-4));
-        vec2 uv = (FragPos.xz - b.xy) / size;
-
+        vec2 uv = normDelta * 0.5 + vec2(0.5);
         float angle = uStampParams[i].y;
         if (abs(angle) > 1e-5) {
             vec2 q = uv - vec2(0.5);
@@ -1794,18 +1796,18 @@ void main() {
         }
 
         float feather = max(uStampParams[i].z, 0.0);
-        float edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
         float edgeMask = feather > 0.0
-            ? smoothstep(0.0, feather / max(max(size.x, size.y), 1e-3), edge)
+            ? 1.0 - smoothstep(
+                max(0.0, 1.0 - feather / max(min(halfSize.x, halfSize.y), 1e-3)),
+                1.0,
+                radial)
             : 1.0;
 
         int slot = int(uStampParams[i].x + 0.5);
         if (slot < 0 || slot >= MAX_TERRAIN_STAMP_TEXTURES) continue;
         vec4 stamp = sampleTerrainStamp(slot, uv);
-        vec3 stampColor = stamp.rgb;
-        float stampAlpha = stamp.a;
-        float amount = clamp(uStampParams[i].w * edgeMask * stampAlpha, 0.0, 1.0);
-        texColor = mix(texColor, stampColor * 1.1, amount);
+        float amount = clamp(uStampParams[i].w * edgeMask * stamp.a, 0.0, 1.0);
+        texColor = mix(texColor, stamp.rgb * 1.1, amount);
     }
 
     // ---- Surface details ---------------------------------------------

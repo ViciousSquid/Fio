@@ -25,7 +25,7 @@ from editor.things import Light, PlayerStart, Prop, update_all_counters_from_ent
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
-from engine.constants import TILE_SIZE, brush_aabb_bounds
+from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
 from engine.change_journal import moved, touch
@@ -2838,89 +2838,6 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
         self._refresh_logic_graph()
-
-    def stamp_texture_to_terrain(self):
-        """Stamp the Asset Browser's selected texture onto terrain using the selected AABB brush."""
-        brush = self.state.selected_object
-        terrain = getattr(self, 'terrain', None)
-        if not isinstance(brush, dict):
-            QMessageBox.warning(self, "Invalid Selection",
-                                "Select a brush to use as the terrain stamp.")
-            return
-        if terrain is None:
-            self.show_toast("No terrain is present", is_error=True)
-            return
-        if not brush_geometry.is_plain_aabb_brush(brush):
-            self.show_toast(
-                "Terrain texture stamps require a plain axis-aligned box brush",
-                is_error=True,
-            )
-            return
-
-        texture_path = self.asset_browser.get_selected_filepath()
-        if not texture_path:
-            self.show_toast("Select a texture first", is_error=True)
-            return
-
-        # Store project-relative asset paths so terrain stamps survive moving
-        # the map with its project. External textures remain absolute.
-        abs_texture = os.path.abspath(texture_path)
-        rel_texture = os.path.relpath(abs_texture, self.root_dir).replace(os.sep, '/')
-        texture_name = (
-            rel_texture
-            if rel_texture != '..' and not rel_texture.startswith('../')
-            else abs_texture.replace(os.sep, '/')
-        )
-
-        lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = brush_aabb_bounds(brush)
-        if hi_x - lo_x <= 1e-6 or hi_z - lo_z <= 1e-6:
-            self.show_toast("Stamp brush must have a non-zero X/Z size", is_error=True)
-            return
-
-        # Avoid creating an undo entry for an identical stamp.  The terrain
-        # owns the authoritative stamp list; this check is deliberately before
-        # save_state() so a rejected duplicate does not dirty the map.
-        probe_angle = math.radians(float(
-            brush.get('uv_angle', {}).get('top', 0.0)
-            if isinstance(brush.get('uv_angle', {}), dict) else 0.0))
-        probe = {
-            'bounds': [float(lo_x), float(lo_z), float(hi_x), float(hi_z)],
-            'texture': texture_name,
-            'angle': probe_angle,
-            'feather': 0.0,
-            'opacity': 1.0,
-        }
-        if probe in getattr(terrain, 'texture_stamps', []):
-            self.show_toast("That terrain texture stamp already exists", is_error=True)
-            return
-
-        self.state.terrain_data = terrain.to_dict()
-        self.save_state()
-
-        # A selected brush can carry a top-face UV rotation from the Surface
-        # Inspector. Reuse that angle so the stamp orientation follows the
-        # mapper's existing brush workflow.
-        uv_angles = brush.get('uv_angle', {})
-        angle_deg = 0.0
-        if isinstance(uv_angles, dict):
-            try:
-                angle_deg = float(uv_angles.get('top', 0.0))
-            except (TypeError, ValueError):
-                angle_deg = 0.0
-
-        added = terrain.add_texture_stamp(
-            (lo_x, lo_z, hi_x, hi_z),
-            texture_name,
-            angle=math.radians(angle_deg),
-        )
-        if not added:
-            self.state.discard_last_checkpoint()
-            self.show_toast("That terrain texture stamp already exists", is_error=True)
-            return
-
-        self.state.terrain_data = terrain.to_dict()
-        self.update_views()
-        self.show_toast(f"Stamped {os.path.basename(texture_path)} onto terrain")
 
     def perform_subtraction(self, push_undo=True, target_brush=None):
         """CSG-subtract the selected brush, optionally from one target brush only.

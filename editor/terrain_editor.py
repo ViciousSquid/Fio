@@ -168,6 +168,7 @@ class TerrainEditorPanel(QWidget):
         )
         
         self.setup_ui()
+        self.paint_tool_mode = 'sculpt'
         self.load_from_terrain()
     
     def setup_ui(self):
@@ -891,10 +892,33 @@ class TerrainEditorPanel(QWidget):
         self.sculpt_paint_btn.toggled.connect(self.toggle_3d_sculpt_painting)
         brush_layout.addWidget(self.sculpt_paint_btn)
 
-        # Four large paint-tool mode buttons.
-        mode_label = QLabel("Brush")
+        # Paint operation: sculpt the heightfield or stamp the selected texture.
+        action_label = QLabel("Paint Action")
+        action_label.setStyleSheet("font-weight: bold; color: #ddd;")
+        brush_layout.addWidget(action_label)
+
+        action_grid = QGridLayout()
+        action_grid.setSpacing(6)
+        self.paint_tool_buttons = {}
+        for col, (label, mode) in enumerate((("Sculpt", "sculpt"), ("Stamp", "stamp"))):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setMinimumHeight(38)
+            btn.setProperty("paintTool", mode)
+            btn.clicked.connect(lambda _checked, m=mode: self.set_paint_tool_mode(m))
+            action_grid.addWidget(btn, 0, col)
+            self.paint_tool_buttons[mode] = btn
+        brush_layout.addLayout(action_grid)
+
+        # Sculpt-specific controls.
+        self.sculpt_controls_widget = QWidget()
+        sculpt_controls_layout = QVBoxLayout(self.sculpt_controls_widget)
+        sculpt_controls_layout.setContentsMargins(0, 0, 0, 0)
+        sculpt_controls_layout.setSpacing(8)
+
+        mode_label = QLabel("Sculpt Mode")
         mode_label.setStyleSheet("font-weight: bold; color: #ddd;")
-        brush_layout.addWidget(mode_label)
+        sculpt_controls_layout.addWidget(mode_label)
 
         mode_grid = QGridLayout()
         mode_grid.setSpacing(6)
@@ -914,7 +938,7 @@ class TerrainEditorPanel(QWidget):
                 self.sculpt_mode_buttons[mode] = btn
                 mode_grid.addWidget(btn, row, col)
 
-        brush_layout.addLayout(mode_grid)
+        sculpt_controls_layout.addLayout(mode_grid)
 
         self.sculpt_mode_combo = QComboBox()
         self.sculpt_mode_combo.addItem("Raise", "raise")
@@ -925,37 +949,6 @@ class TerrainEditorPanel(QWidget):
         self.sculpt_mode_combo.currentIndexChanged.connect(
             self.on_sculpt_brush_setting_changed)
 
-        # Brush size: visual slider + exact value.
-        size_row = QHBoxLayout()
-        size_title = QLabel("Brush Size")
-        size_title.setStyleSheet("font-weight: bold; color: #ddd;")
-        size_row.addWidget(size_title)
-        size_row.addStretch()
-
-        self.sculpt_radius_value = QLabel("50 units")
-        self.sculpt_radius_value.setMinimumWidth(70)
-        self.sculpt_radius_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.sculpt_radius_value.setStyleSheet("color: #F08000; font-weight: bold;")
-        size_row.addWidget(self.sculpt_radius_value)
-        brush_layout.addLayout(size_row)
-
-        self.sculpt_radius_slider = QSlider(Qt.Horizontal)
-        self.sculpt_radius_slider.setRange(4, 500)
-        self.sculpt_radius_slider.setSingleStep(4)
-        self.sculpt_radius_slider.setPageStep(25)
-        self.sculpt_radius_slider.setValue(50)
-        self.sculpt_radius_slider.valueChanged.connect(self.on_sculpt_radius_slider_changed)
-        brush_layout.addWidget(self.sculpt_radius_slider)
-
-        # Keep an exact numeric value available to the existing viewport API,
-        # but make the slider the primary control.
-        self.sculpt_radius_spin = QDoubleSpinBox()
-        self.sculpt_radius_spin.setRange(4, 500)
-        self.sculpt_radius_spin.setSingleStep(1)
-        self.sculpt_radius_spin.setValue(50)
-        self.sculpt_radius_spin.setVisible(False)
-        self.sculpt_radius_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
-
         strength_row = QHBoxLayout()
         strength_label = QLabel("Strength")
         strength_label.setStyleSheet("font-weight: bold; color: #ddd;")
@@ -965,13 +958,13 @@ class TerrainEditorPanel(QWidget):
         self.sculpt_strength_value = QLabel("20")
         self.sculpt_strength_value.setStyleSheet("color: #F08000; font-weight: bold;")
         strength_row.addWidget(self.sculpt_strength_value)
-        brush_layout.addLayout(strength_row)
+        sculpt_controls_layout.addLayout(strength_row)
 
         self.sculpt_strength_slider = QSlider(Qt.Horizontal)
         self.sculpt_strength_slider.setRange(1, 200)
         self.sculpt_strength_slider.setValue(20)
         self.sculpt_strength_slider.valueChanged.connect(self.on_sculpt_strength_slider_changed)
-        brush_layout.addWidget(self.sculpt_strength_slider)
+        sculpt_controls_layout.addWidget(self.sculpt_strength_slider)
 
         self.sculpt_strength_spin = QDoubleSpinBox()
         self.sculpt_strength_spin.setRange(0.1, 200)
@@ -980,12 +973,57 @@ class TerrainEditorPanel(QWidget):
         self.sculpt_strength_spin.setVisible(False)
         self.sculpt_strength_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
 
-        brush_group.setLayout(brush_layout)
-        sculpt_layout.addWidget(brush_group)
+        brush_layout.addWidget(self.sculpt_controls_widget)
+
+        # Stamp-specific controls. Brush Size above is shared by both tools.
+        self.stamp_controls_widget = QWidget()
+        stamp_controls_layout = QVBoxLayout(self.stamp_controls_widget)
+        stamp_controls_layout.setContentsMargins(0, 0, 0, 0)
+        stamp_controls_layout.setSpacing(8)
+
+        stamp_hint = QLabel(
+            "Left-click the terrain to stamp the texture currently selected "
+            "in the Asset Browser. The stamp is circular and feathered."
+        )
+        stamp_hint.setWordWrap(True)
+        stamp_hint.setStyleSheet("color: #aaa; font-style: italic;")
+        stamp_controls_layout.addWidget(stamp_hint)
+
+        self.stamp_texture_label = QLabel("Texture: none selected")
+        self.stamp_texture_label.setWordWrap(True)
+        self.stamp_texture_label.setStyleSheet("color: #F08000; font-weight: bold;")
+        stamp_controls_layout.addWidget(self.stamp_texture_label)
+
+        feather_row = QHBoxLayout()
+        feather_title = QLabel("Feather")
+        feather_title.setStyleSheet("font-weight: bold; color: #ddd;")
+        feather_row.addWidget(feather_title)
+        feather_row.addStretch()
+        self.stamp_feather_value = QLabel("25%")
+        self.stamp_feather_value.setMinimumWidth(45)
+        self.stamp_feather_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.stamp_feather_value.setStyleSheet("color: #F08000; font-weight: bold;")
+        feather_row.addWidget(self.stamp_feather_value)
+        stamp_controls_layout.addLayout(feather_row)
+
+        self.stamp_feather_slider = QSlider(Qt.Horizontal)
+        self.stamp_feather_slider.setRange(0, 100)
+        self.stamp_feather_slider.setValue(25)
+        self.stamp_feather_slider.setToolTip("Softness of the stamp edge")
+        self.stamp_feather_slider.valueChanged.connect(self.on_stamp_feather_changed)
+        stamp_controls_layout.addWidget(self.stamp_feather_slider)
+
+        clear_stamps_btn = QPushButton("🗑️  Clear All Texture Stamps")
+        clear_stamps_btn.clicked.connect(self.clear_texture_stamps)
+        stamp_controls_layout.addWidget(clear_stamps_btn)
+
+        self.stamp_controls_widget.setVisible(False)
+        brush_layout.addWidget(self.stamp_controls_widget)
 
         # Coordinate controls remain available for precise scripted/editor
         # placement, but are deliberately secondary to painting.
         coord_group = QGroupBox("Precise Placement")
+        self.sculpt_precise_group = coord_group
         coord_layout = QFormLayout(coord_group)
         coord_layout.setSpacing(8)
         coord_layout.setContentsMargins(12, 20, 12, 12)
@@ -1030,7 +1068,7 @@ class TerrainEditorPanel(QWidget):
         self._update_sculpt_info()
 
         sculpt_layout.addStretch()
-        tabs.addTab(sculpt_tab, "Sculpt")
+        tabs.addTab(sculpt_tab, "Sculpt/Stamp")
 
         # The tab widget must itself be inserted into the content layout.
         # Without this, all of the tab pages exist but QTabWidget is never
@@ -1433,9 +1471,10 @@ class TerrainEditorPanel(QWidget):
         idx = 0 if self.terrain.heightmap_blend == 'additive' else 1
         self.hm_blend_combo.setCurrentIndex(idx)
 
-        # Sculpt info
+        # Sculpt / stamp tool state
         self._update_sculpt_info()
         self.set_sculpt_mode(self.sculpt_mode_combo.currentData() or "raise")
+        self.set_paint_tool_mode("sculpt")
 
         self._load_appearance_ui()
 
@@ -1847,6 +1886,27 @@ class TerrainEditorPanel(QWidget):
     # SCULPT
     # =========================================================================
 
+    def set_paint_tool_mode(self, mode):
+        """Choose whether the 3D brush sculpts height or stamps texture."""
+        mode = "stamp" if mode == "stamp" else "sculpt"
+        self.paint_tool_mode = mode
+        for name, button in self.paint_tool_buttons.items():
+            button.setChecked(name == mode)
+        self.sculpt_controls_widget.setVisible(mode == "sculpt")
+        self.stamp_controls_widget.setVisible(mode == "stamp")
+        self.sculpt_precise_group.setVisible(mode == "sculpt")
+        self._update_stamp_texture_label()
+        self._sync_sculpt_to_viewport()
+
+    def _update_stamp_texture_label(self):
+        browser = getattr(self.editor, 'asset_browser', None) if self.editor else None
+        path = browser.get_selected_filepath() if browser is not None else None
+        if path:
+            import os
+            self.stamp_texture_label.setText(f"Texture: {os.path.basename(path)}")
+        else:
+            self.stamp_texture_label.setText("Texture: none selected")
+
     def set_sculpt_mode(self, mode):
         """Select the active painting tool."""
         index = self.sculpt_mode_combo.findData(mode)
@@ -1928,9 +1988,33 @@ class TerrainEditorPanel(QWidget):
         view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
         if view_3d is None:
             return
-        view_3d.terrain_sculpt_mode = self.sculpt_mode_combo.currentData()
+        view_3d.terrain_sculpt_mode = (
+            'stamp' if getattr(self, 'paint_tool_mode', 'sculpt') == 'stamp'
+            else self.sculpt_mode_combo.currentData()
+        )
         view_3d.terrain_sculpt_radius = self.sculpt_radius_spin.value()
         view_3d.terrain_sculpt_strength = self.sculpt_strength_spin.value()
+        view_3d.terrain_sculpt_feather = (
+            self.stamp_feather_slider.value() / 100.0
+        )
+
+    def on_stamp_feather_changed(self, value):
+        self.stamp_feather_value.setText(f"{value}%")
+        self._sync_sculpt_to_viewport()
+
+    def clear_texture_stamps(self):
+        """Remove every painted terrain texture stamp."""
+        if not getattr(self.terrain, 'texture_stamps', None):
+            return
+        if self.editor and hasattr(self.editor, 'save_state'):
+            self.editor.state.terrain_data = self.terrain.to_dict()
+            self.editor.save_state()
+        self.terrain.clear_texture_stamps()
+        if self.editor and hasattr(self.editor, 'state'):
+            self.editor.state.terrain_data = self.terrain.to_dict()
+        self.terrain_changed.emit()
+        if self.editor and hasattr(self.editor, 'show_toast'):
+            self.editor.show_toast("Terrain texture stamps cleared")
 
     def on_sculpt_brush_setting_changed(self, _=None):
         """Called when any sculpt brush setting changes — sync to viewport."""

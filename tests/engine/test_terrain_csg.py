@@ -77,22 +77,20 @@ def test_terrain_csg_requires_plain_aabb_brush():
 
 
 
-def test_terrain_texture_stamp_normalizes_and_serializes():
+def test_terrain_texture_stamp_uses_sculpt_brush_footprint():
     terrain = Terrain(seed=7)
 
-    assert terrain.add_texture_stamp(
-        [64.0, 32.0, -64.0, -32.0],
+    assert terrain.stamp_texture_at(
+        100.0, -40.0, 16.0,
         "assets/textures/road.png",
-        angle=0.5,
-        feather=4.0,
-        opacity=0.75,
+        feather=0.25,
     )
     assert terrain.texture_stamps == [{
-        "bounds": [-64.0, -32.0, 64.0, 32.0],
+        "bounds": [84.0, -56.0, 116.0, -24.0],
         "texture": "assets/textures/road.png",
-        "angle": 0.5,
+        "angle": 0.0,
         "feather": 4.0,
-        "opacity": 0.75,
+        "opacity": 1.0,
     }]
 
     data = terrain.to_dict()

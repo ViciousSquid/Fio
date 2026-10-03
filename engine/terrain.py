@@ -2299,7 +2299,7 @@ class Terrain:
 
     def add_texture_stamp(self, bounds, texture, angle=0.0,
                           feather=0.0, opacity=1.0) -> bool:
-        """Add a rectangular texture stamp to the terrain."""
+        """Add a feathered terrain texture stamp for the supplied footprint."""
         try:
             values = [float(v) for v in bounds]
         except (TypeError, ValueError):
@@ -2327,6 +2327,28 @@ class Terrain:
         self.texture_stamps.append(record)
         self._stamp_atlas_dirty = True
         return True
+
+    def stamp_texture_at(self, world_x, world_z, radius, texture,
+                         feather=0.25, opacity=1.0, angle=0.0) -> bool:
+        """Paint one circular terrain texture stamp with the sculpt brush."""
+        try:
+            world_x = float(world_x)
+            world_z = float(world_z)
+            radius = float(radius)
+            feather = float(feather)
+        except (TypeError, ValueError):
+            return False
+        if radius <= 1e-6:
+            return False
+        feather = float(np.clip(feather, 0.0, 1.0))
+        return self.add_texture_stamp(
+            [world_x - radius, world_z - radius,
+             world_x + radius, world_z + radius],
+            texture,
+            angle=angle,
+            feather=radius * feather,
+            opacity=opacity,
+        )
 
     def clear_texture_stamps(self):
         """Remove all terrain texture stamps."""

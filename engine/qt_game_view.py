@@ -304,6 +304,7 @@ class QtGameView(QOpenGLWidget):
         self.terrain_sculpt_mode = 'raise'
         self.terrain_sculpt_radius = 50.0
         self.terrain_sculpt_strength = 20.0
+        self.terrain_sculpt_feather = 0.25
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
@@ -2895,6 +2896,50 @@ class QtGameView(QOpenGLWidget):
         mode = self.terrain_sculpt_mode
         radius = self.terrain_sculpt_radius
         strength = self.terrain_sculpt_strength
+
+        if mode == 'stamp':
+            browser = getattr(self.editor, 'asset_browser', None)
+            texture_path = browser.get_selected_filepath() if browser is not None else None
+            if not texture_path:
+                if hasattr(self.editor, 'show_toast'):
+                    self.editor.show_toast("Select a texture in the Asset Browser first", is_error=True)
+                return
+
+            abs_texture = os.path.abspath(texture_path)
+            rel_texture = os.path.relpath(
+                abs_texture, self.editor.root_dir).replace(os.sep, '/')
+            texture_name = (
+                rel_texture
+                if rel_texture != '..' and not rel_texture.startswith('../')
+                else abs_texture.replace(os.sep, '/')
+            )
+
+            # One stamp is one undo step. The compact terrain snapshot already
+            # carries the persistent stamp list.
+            if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
+                self.editor.state.terrain_data = terrain.to_dict()
+                if hasattr(self.editor, 'save_state'):
+                    self.editor.save_state()
+
+            added = terrain.stamp_texture_at(
+                wx, wz, radius, texture_name,
+                feather=self.terrain_sculpt_feather,
+            )
+            if not added:
+                if hasattr(self.editor, 'state') and hasattr(
+                        self.editor.state, 'discard_last_checkpoint'):
+                    self.editor.state.discard_last_checkpoint()
+                if hasattr(self.editor, 'show_toast'):
+                    self.editor.show_toast("Texture stamp was not added", is_error=True)
+                return
+
+            if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
+                self.editor.state.terrain_data = terrain.to_dict()
+            if hasattr(self.editor, 'show_toast'):
+                self.editor.show_toast(f"Stamped {os.path.basename(texture_path)}")
+            self.update()
+            return
+
         if mode == 'raise':
             terrain.apply_sculpt_at(wx, wz, radius, strength)
         elif mode == 'lower':
@@ -3271,8 +3316,11 @@ class QtGameView(QOpenGLWidget):
                 return
 
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
-            self.terrain_sculpt_painting = True
-            self._apply_sculpt_at_mouse(event.x(), event.y())
+            if self.terrain_sculpt_mode == 'stamp':
+                self._apply_sculpt_at_mouse(event.x(), event.y())
+            else:
+                self.terrain_sculpt_painting = True
+                self._apply_sculpt_at_mouse(event.x(), event.y())
             return
         if not self.play_mode and self.floating_windows.handle_mouse_press(event):
             if any(getattr(w, "dragging", False) for w in self.floating_windows.windows):
@@ -3430,7 +3478,8 @@ class QtGameView(QOpenGLWidget):
             QCursor.setPos(center)
             self.last_mouse_pos = self.mapFromGlobal(center)
             return
-        if self.terrain_sculpt_painting and self.terrain_sculpt_active:
+        if (self.terrain_sculpt_painting and self.terrain_sculpt_active
+                and self.terrain_sculpt_mode != 'stamp'):
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
         if self.is_dragging_gizmo:
