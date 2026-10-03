@@ -836,14 +836,12 @@ class MainWindow(QMainWindow):
 
 
     def show_camera_position_toast(self):
-        """Show a persistent, live camera-position toast in the bottom centre."""
+        """Show a persistent, live camera-position toast in the notification area."""
         view_3d = getattr(self, 'view_3d', None)
         camera = getattr(view_3d, 'camera', None) if view_3d is not None else None
         if camera is None or not hasattr(camera, 'pos'):
             return
 
-        # The ordinary toast system is deliberately bypassed here: this is a
-        # live diagnostic overlay, so it must never fade while active.
         self._pos_toast_active = True
         if not hasattr(self, '_pos_toast_timer'):
             self._pos_toast_timer = QTimer(self)
@@ -871,28 +869,17 @@ class MainWindow(QMainWindow):
             '<span style="color:#ff8c00;">Z</span> '
             f'<span style="color:white;">{float(p.z):.3f}</span>'
         )
-        toast = getattr(self, 'toast', None)
-        if toast is None:
-            return
-        toast.setStyleSheet("""
-            QLabel {
-                background-color: rgba(20, 20, 20, 220);
-                color: white;
-                padding: 4px 8px;
-                border-radius: 3px;
-                font-weight: normal;
-                font-size: 9px;
-            }
+        label = self.ui.notification_label
+        label.setStyleSheet("""
+            background-color: #2b2b2b;
+            color: white;
+            font-weight: normal;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 9px;
         """)
-        toast.setTextFormat(Qt.RichText)
-        toast.setText(text)
-        toast.adjustSize()
-        toast.show()
-        toast.update_position()
-        toast.raise_()
-        toast.anim.stop()
-        toast.opacity_effect.setOpacity(1.0)
-        toast.timer.stop()
+        label.setTextFormat(Qt.RichText)
+        label.setText(text)
 
     def _stop_camera_position_toast(self):
         self._pos_toast_active = False
@@ -921,12 +908,13 @@ class MainWindow(QMainWindow):
             border-radius: 3px;
         """)
         
+        self.ui.notification_label.setTextFormat(Qt.PlainText)
         self.ui.notification_label.setText(message.upper())
         
         # Auto-clear timer
         final_duration = duration if duration is not None else (4000 if is_error else 2500)
         if final_duration > 0:
-            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText(""))
+            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText("") if not getattr(self, '_pos_toast_active', False) else None)
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
         """Displays teal-styled tooltips in the same area."""
