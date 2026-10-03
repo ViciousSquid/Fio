@@ -651,8 +651,10 @@ def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
 
     data = {
         "camera": [
+            # Camera yaw/pitch in cutscene JSON are authored in degrees,
+            # matching editor.Camera; runtime converts them to radians once.
             {"time": 0.0, "pos": [0, 10, 0], "yaw": 0.0, "pitch": 0.0, "fov": 90},
-            {"time": 1.0, "pos": [10, 10, 0], "yaw": 1.0, "pitch": 0.5, "fov": 70},
+            {"time": 1.0, "pos": [10, 10, 0], "yaw": 90.0, "pitch": 30.0, "fov": 70},
         ],
         "actors": [{"id": "actor-1", "name": "Actor"}],
         "actor_tracks": {
@@ -670,8 +672,8 @@ def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
 
     assert logic.cinematic_state is not None
     assert logic.cinematic_state["cam_pos"] == pytest.approx([5.0, 10.0, 0.0])
-    assert logic.cinematic_state["cam_angle"] == pytest.approx(0.5)
-    assert logic.cinematic_state["cam_pitch"] == pytest.approx(0.25)
+    assert logic.cinematic_state["cam_angle"] == pytest.approx(math.pi / 4.0)
+    assert logic.cinematic_state["cam_pitch"] == pytest.approx(math.pi / 12.0)
     assert logic.cinematic_state["fov"] == pytest.approx(80.0)
     assert list(actor.pos) == pytest.approx([10.0, 0.0, 0.0])
 
