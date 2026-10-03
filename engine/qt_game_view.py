@@ -519,15 +519,8 @@ class QtGameView(QOpenGLWidget):
         self._hud_status_font = QFont(self._current_hud_font_family(), 56)
 
     def _reload_hud_settings(self):
-        """Reload persistent HUD settings and clear map-only runtime overrides."""
+        """Reload persistent HUD settings and reset runtime-only HUD style."""
         config = getattr(self.editor, "config", None)
-        try:
-            style = int(config.get("Display", "hudstyle", fallback="1"))
-        except (AttributeError, TypeError, ValueError):
-            style = 1
-        if style not in (0, 1, 2, 3, 4):
-            style = 1
-
         try:
             opacity = float(config.get("Display", "hudopacity", fallback="100"))
         except (AttributeError, TypeError, ValueError):
@@ -541,19 +534,14 @@ class QtGameView(QOpenGLWidget):
         except (AttributeError, TypeError, ValueError):
             fade = True
 
-        self._hud_style = style
+        # HUD style/font are deliberately runtime-only.  A Play start or
+        # settings reload returns to the normal Rushford style rather than
+        # resurrecting a previous console command from settings.ini.
+        self._hud_style = 1
         self._hud_opacity = opacity
         self._hud_fade_enabled = fade
         self._hud_font_override = None
         self._hud_runtime_visible = None
-
-        if style == 4:
-            try:
-                selector = config.get("Display", "hudfont", fallback="")
-            except (AttributeError, TypeError, ValueError):
-                selector = ""
-            if selector:
-                self._hud_font_override = self._resolve_hud_font_family(selector)
 
         self._refresh_hud_status_font()
         logic_thread = getattr(self, "logic_thread", None)
@@ -561,7 +549,7 @@ class QtGameView(QOpenGLWidget):
             logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
 
     def set_hud_style(self, style, font_name=None):
-        """Apply a HUD style immediately; user commands persist separately."""
+        """Apply a HUD style immediately for the current runtime session."""
         try:
             style = int(style)
         except (TypeError, ValueError):
