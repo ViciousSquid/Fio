@@ -531,11 +531,11 @@ def test_a_distant_flying_monster_spawns_a_projectile(monster_factory, ai_world)
         "hitscan; projectiles=%d damage=%s"
         % (_distance(monster.pos, logic.player.pos),
            len(logic._monster_projectiles), logic.damage_applied))
-    projectile = logic._monster_projectiles[0]
-    assert projectile["damage"] == 9
-    assert projectile["owner_id"] == id(monster)
+    projectile = logic._monster_projectiles
+    assert projectile.damage[0] == 9
+    assert projectile.owner_id[0] == id(monster)
     # It must be aimed at the player, i.e. travelling in -X.
-    assert projectile["vel"][0] < 0, (
+    assert projectile.vel[0, 0] < 0, (
         "projectile velocity %s does not point back toward the player at the "
         "origin" % (projectile["vel"],))
 
