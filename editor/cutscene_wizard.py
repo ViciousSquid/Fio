@@ -430,6 +430,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_actor_lists()
         self._update_waypoint_controls()
         self._refresh_summary()
+        self._load_first_cutscene()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1456,14 +1457,24 @@ class CutsceneWizard(QtWidgets.QDialog):
                 return obj
         return None
 
-    def _load_cutscene(self):
-        start_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load Cutscene", str(start_dir),
-            "Cutscene JSON (*.json);;All files (*)",
-        )
-        if not filename:
-            return
+    def _load_first_cutscene(self):
+        cutscene_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
+        try:
+            candidates = sorted(path for path in cutscene_dir.glob("*.json") if path.is_file())
+        except OSError:
+            candidates = []
+        if candidates:
+            self._load_cutscene(str(candidates[0]))
+
+    def _load_cutscene(self, filename=None):
+        if filename is None:
+            start_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
+            filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Load Cutscene", str(start_dir),
+                "Cutscene JSON (*.json);;All files (*)",
+            )
+            if not filename:
+                return
         try:
             data = json.loads(Path(filename).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
