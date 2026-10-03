@@ -1867,12 +1867,22 @@ class QtGameView(QOpenGLWidget):
                        camera_pos=camera_pos, play_mode=self.play_mode)
 
         restore_default_pixel_store()
-        # QPainter draws the HUD with GL and assumes default state; a pass
-        # that leaves face culling on makes it cull the overlay's filled
-        # rectangles (the SysMon panel vanished that way).
+        # The native renderer may leave viewport/scissor/depth state from a
+        # pass (split-screen, shadows, or an effect). QPainter's GL backend
+        # starts from the widget's 2D framebuffer, not that native state.
+        # Normalize the native state while native painting is still active;
+        # endNativePainting() then hands the context back to Qt cleanly.
+        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glDisable(gl.GL_BLEND)
         gl.glDisable(gl.GL_CULL_FACE)
-        # Hand the context back to Qt before QPainter starts its overlay pass.
+        gl.glViewport(0, 0, max(1, int(self.width())), max(1, int(self.height())))
         painter.endNativePainting()
+        # Do not let native rendering leak QPainter state into the first 2D
+        # overlay draw. Individual HUD elements still use save()/restore().
+        painter.setOpacity(1.0)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         if self.play_mode:
             self._draw_underwater_overlay(painter, render_state)
         if self.editor.config.getboolean('Display', 'show_fps', fallback=False):
