@@ -1439,6 +1439,10 @@ class LogicThread(threading.Thread):
         """Compatibility wrapper for bullet-mark ageing."""
         return self._combat_runtime()._update_bullet_marks()
 
+    def _projectile_store(self):
+        """Return the authoritative dense monster ProjectileStore."""
+        return self._monster_projectiles
+
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
         """Compatibility wrapper for dense monster projectile creation."""
         return self._combat_runtime()._add_monster_projectile(
