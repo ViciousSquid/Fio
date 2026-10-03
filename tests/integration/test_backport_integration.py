@@ -387,61 +387,58 @@ def test_property_editor_has_no_hard_debug_console_dependency():
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Logic-thread exception isolation
 # ---------------------------------------------------------------------------
 
-def test_tick_exception_is_logged_not_swallowed():
+def test_tick_exception_enters_a_controlled_fault_state():
     src = _read("engine/logic_thread.py")
     i = src.index("while accumulator >= self.TICK_DURATION:")
-    block = src[i:i + 900]
+    block = src[i:i + 1300]
     assert "try:" in block and "self._tick(self.TICK_DURATION)" in block
     assert "except Exception:" in block
     assert "traceback.format_exc()" in block, "traceback must be reported"
+    assert "self._apply_play_mode(False)" in block
+    assert "accumulator = 0.0" in block
+    assert "break" in block
     assert "debug_log(" in block, "the failure must reach the console"
-    # It must never be a bare pass.
-    assert re.search(r"except Exception:\s*\n\s*pass", block) is None
 
-
-def test_tick_loop_still_advances_the_accumulator_after_a_failure():
-    """A failing tick must not spin the accumulator forever."""
-    src = _read("engine/logic_thread.py")
-    i = src.index("while accumulator >= self.TICK_DURATION:")
-    block = src[i:i + 900]
-    tick_pos = block.index("self._tick(self.TICK_DURATION)")
-    acc_pos = block.index("accumulator -= self.TICK_DURATION")
-    except_pos = block.index("except Exception:")
-    # The decrement must sit outside (after) the except handler.
-    assert acc_pos > except_pos > tick_pos
-
-
-def test_exception_isolation_simulation():
-    """The guard shape must keep looping and record every failure."""
+def test_exception_isolation_simulation_enters_controlled_fault_state():
     logged = []
+    stopped = []
 
     def debug_log(cat, msg):
         logged.append((cat, msg))
+
+    def _apply_play_mode(enabled):
+        stopped.append(enabled)
 
     ticks = []
 
     def _tick(d):
         ticks.append(d)
-        if len(ticks) == 2:
-            raise RuntimeError("bad handler")
+        raise RuntimeError("bad handler")
 
     accumulator, TICK = 0.5, 0.1
+    faulted = False
     while accumulator >= TICK:
         try:
             _tick(TICK)
         except Exception:
             import traceback
-            debug_log("LogicThread", "Unhandled exception in _tick:\n"
+            faulted = True
+            debug_log("LogicThread", "Fatal simulation tick failure; ending play session:\n"
                       + traceback.format_exc())
+            _apply_play_mode(False)
+            accumulator = 0.0
+            break
         accumulator -= TICK
 
-    assert len(ticks) == 5, "the loop must survive the failure and finish"
+    assert faulted is True
+    assert len(ticks) == 1
+    assert stopped == [False]
     assert len(logged) == 1
-    assert "bad handler" in logged[0][1], "the traceback must name the cause"
-
+    assert "bad handler" in logged[0][1]
 
 # ---------------------------------------------------------------------------
 # Persistence: a moved brush must save clean
