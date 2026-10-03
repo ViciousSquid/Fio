@@ -15,6 +15,7 @@ a fake that is kinder than the real thing.
 import glm
 
 from engine.physics import SpatialGrid
+from engine.projectile_table import ProjectileStore
 
 
 class ManualClock:
@@ -87,12 +88,16 @@ class FakeLogicThread:
         self.notarget = False
         self.io_manager = io_manager
         self.game_state = FakeGameState()
-        self._monster_projectiles = []
+        self._monster_projectiles = ProjectileStore()
         self._noise_events = []
         self._name_cache = {}
         self._monster_things = None
         self.damage_applied = []
         self.rebuild_name_cache()
+
+    def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
+        return self._monster_projectiles.add(
+            pos, vel, owner_id, damage, lifetime)
 
     # -- entity lookup ----------------------------------------------------
     def rebuild_name_cache(self):
