@@ -63,7 +63,7 @@ def test_delete_all_removes_every_matching_pathnode(monkeypatch, type_name):
     assert window.ui_updates == 1
     assert prompt == [(
         "Delete all",
-        "2 PathNode entities will be deleted.\\n\\nAre you sure?",
+        "2 PathNode entities will be deleted.\n\nAre you sure?",
         QMessageBox.Yes | QMessageBox.No,
         QMessageBox.No,
     )]
