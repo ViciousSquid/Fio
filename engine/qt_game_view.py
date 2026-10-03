@@ -19,21 +19,9 @@ from editor.things import (
 from engine.player import Player
 
 from .renderer_F   import Renderer_F
+from .hud_fonts import HUD_FONT_FILES, HUD_FONT_FALLBACKS
 _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
-}
-
-_HUD_FONT_FILES = {
-    1: "Rushfordclean-rgz89.otf",
-    2: "O.K.Retro.otf",
-    3: "HornetDisplay-Regular.ttf",
-    4: "LCDAT&TPhoneTimeDate.ttf",
-}
-_HUD_FONT_FALLBACKS = {
-    1: "Rushford Clean",
-    2: "O.K. Retro",
-    3: "HornetDisplay",
-    4: "LCD AT&T Phone Time/Date",
 }
 
 
@@ -538,13 +526,15 @@ class QtGameView(QOpenGLWidget):
         except (AttributeError, TypeError, ValueError):
             fade = True
 
-        # HUD style/font are deliberately runtime-only.  A Play start or
-        # settings reload returns to the normal Rushford style rather than
-        # resurrecting a previous console command from settings.ini.
-        self._hud_style = 1
+        configured_font = str(config.get("Display", "hudfont", fallback="")).strip()
+        font_override = self._resolve_hud_font_family(configured_font) if configured_font else None
+
+        # The Settings choice is the user's persistent default.  A map may
+        # override it during play with the HUD console commands.
+        self._hud_style = 4 if font_override else 1
         self._hud_opacity = opacity
         self._hud_fade_enabled = fade
-        self._hud_font_override = None
+        self._hud_font_override = font_override
         self._hud_runtime_visible = None
 
         self._refresh_hud_status_font()
