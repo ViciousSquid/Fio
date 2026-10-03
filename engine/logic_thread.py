@@ -32,6 +32,7 @@ from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .cutscene_runtime import CutsceneRuntime
+from .logic_camera import LogicCamera
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -226,41 +227,12 @@ class LogicThread(threading.Thread):
         
         # Frustum culling settings
         self.culling_enabled = True
-        self.frustum_aspect = 16.0 / 9.0
-        #: Vertical field of view (degrees) the play view projects with. The
-        #: view hands it over each frame (set_frustum_fov), so culling and
-        #: overhead_ground_footprint see the frustum that is actually drawn.
-        self.frustum_fov = 90.0
-        # Shared with the viewport and the renderer (set_view_distance). Held
-        # as None until the viewport hands one over, so a LogicThread built in
-        # a test without one still culls against the historical far plane.
         self.view_distance = None
 
-        # Play-mode camera mode: "First Person" (default) or "Overhead" (a
-        # native top-down camera, GTA 1 / Alien Swarm style). Controlled by the
-        # editor's "Camera" dropdown. In overhead mode the view matrix AND the
-        # frustum-culling planes are both derived from the overhead camera, so
-        # culling stays correct; ``overhead_height`` is how far the camera floats
-        # above the player and ``overhead_orientation`` is "north" (fixed map) or
-        # "player" (rotate with facing).
-        self.camera_mode = "First Person"
-        self.overhead_height = 800.0
-        #: Ceiling on the overhead camera's height, or None. A Big World
-        #: session sets it to the map's activation radius, so the camera can
-        #: never float out of the world it streams; overhead_height itself is
-        #: left as authored. See effective_overhead_height().
-        self.overhead_height_limit = None
-        self.overhead_tilt = 0.0
-        self.overhead_orientation = "north"
-        # PERF: is_overhead() runs every render-state build (~60 Hz). Cache the
-        # normalised boolean and only recompute when camera_mode actually
-        # changes, so the hot path never re-does str().strip().lower().
-        self._camera_mode_raw = None
-        self._camera_mode_overhead = False
-        # Active camera transition (First Person <-> Overhead tween), or None.
-        # Set by start_camera_transition, advanced by _update_camera_transition,
-        # and consumed in _prepare_render_state to blend the view matrix.
-        self.camera_transition = None
+        # Camera state and camera math live in LogicCamera. LogicThread keeps
+        # only the small forwarding surface needed by the rest of the engine.
+        self.camera = LogicCamera(player=self.player)
+        self.editor_camera = self.camera.editor_camera
         # HUD visibility follows LogicCamera control. When a cinematic ends,
         # the entire HUD fades back in over four seconds.
         self._hud_cinematic_last_active = False
@@ -290,10 +262,6 @@ class LogicThread(threading.Thread):
         #: edited; see _prepare_render_state.
         self._last_edited = {}
 
-        # Editor camera
-        self.editor_camera = Camera()
-        self.editor_camera.pos = glm.vec3(0, 150, 400)
-        
         self._editor_mouselook_active = False
         
         # Player stats
@@ -1236,6 +1204,7 @@ class LogicThread(threading.Thread):
 
     def set_player(self, player: Optional[Player]):
         self.player = player
+        self.camera.player = player
 
     def set_hud_fade_enabled(self, enabled: bool):
         """Enable or disable the damage-driven health HUD fade."""
@@ -1813,223 +1782,103 @@ class LogicThread(threading.Thread):
     def set_terrain(self, terrain):
         self.terrain = terrain
     
+    @property
+    def frustum_aspect(self):
+        return self.camera.frustum_aspect
+
+    @frustum_aspect.setter
+    def frustum_aspect(self, value):
+        self.camera.frustum_aspect = value
+
+    @property
+    def frustum_fov(self):
+        return self.camera.frustum_fov
+
+    @frustum_fov.setter
+    def frustum_fov(self, value):
+        self.camera.frustum_fov = value
+
+    @property
+    def camera_mode(self):
+        return self.camera.camera_mode
+
+    @camera_mode.setter
+    def camera_mode(self, value):
+        self.camera.camera_mode = value
+
+    @property
+    def overhead_height(self):
+        return self.camera.overhead_height
+
+    @overhead_height.setter
+    def overhead_height(self, value):
+        self.camera.overhead_height = value
+
+    @property
+    def overhead_height_limit(self):
+        return self.camera.overhead_height_limit
+
+    @overhead_height_limit.setter
+    def overhead_height_limit(self, value):
+        self.camera.overhead_height_limit = value
+
+    @property
+    def overhead_tilt(self):
+        return self.camera.overhead_tilt
+
+    @overhead_tilt.setter
+    def overhead_tilt(self, value):
+        self.camera.overhead_tilt = value
+
+    @property
+    def overhead_orientation(self):
+        return self.camera.overhead_orientation
+
+    @overhead_orientation.setter
+    def overhead_orientation(self, value):
+        self.camera.overhead_orientation = value
+
+    @property
+    def camera_transition(self):
+        return self.camera.camera_transition
+
+    @camera_transition.setter
+    def camera_transition(self, value):
+        self.camera.camera_transition = value
+
     def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
-        self.editor_camera.pos = glm.vec3(pos)
-        self.editor_camera.yaw = yaw
-        self.editor_camera.pitch = pitch
-        self.editor_camera.fov = fov
-    
+        self.camera.set_editor_camera(pos, yaw, pitch, fov)
+
     def get_editor_camera(self) -> Camera:
-        return self.editor_camera
+        return self.camera.get_editor_camera()
 
     def set_frustum_aspect(self, aspect: float):
-        self.frustum_aspect = aspect
+        self.camera.set_frustum_aspect(aspect)
 
     def set_frustum_fov(self, fov: float):
-        """The play view's vertical field of view, in degrees (see frustum_fov)."""
-        try:
-            fov = float(fov)
-        except (TypeError, ValueError):
-            return
-        if 1.0 <= fov <= 179.0:
-            self.frustum_fov = fov
+        self.camera.set_frustum_fov(fov)
 
     def set_view_distance(self, view_distance):
-        """Adopt the viewport's shared view-distance settings.
-
-        The frustum this thread culls against must use the same far plane the
-        renderer draws with. If it kept a larger one it would keep feeding the
-        renderer brushes the far plane then clips -- harmless but wasted work
-        every frame; a smaller one would cull something still on screen. The
-        object is shared, not copied, so a spinbox or console change is picked
-        up on the next tick.
-        """
+        """Adopt the viewport's shared view-distance settings."""
         self.view_distance = view_distance
 
     def set_camera_mode(self, mode: str):
-        """Select the play-mode camera: 'First Person' or 'Overhead'."""
-        self.camera_mode = str(mode)
+        self.camera.set_camera_mode(mode)
 
     def is_overhead(self) -> bool:
-        # PERF: cached — recompute only when camera_mode is reassigned (works
-        # whether set via set_camera_mode or by direct attribute assignment).
-        cm = self.camera_mode
-        if cm != self._camera_mode_raw:
-            self._camera_mode_raw = cm
-            self._camera_mode_overhead = str(cm).strip().lower() in (
-                "overhead", "top-down", "topdown")
-        return self._camera_mode_overhead
+        return self.camera.is_overhead()
 
     def effective_overhead_height(self) -> float:
-        """How high the overhead camera actually floats: ``overhead_height``,
-        held under ``overhead_height_limit`` when one is set."""
-        height = float(self.overhead_height)
-        limit = getattr(self, "overhead_height_limit", None)
-        if limit is not None and float(limit) > 0.0:
-            height = min(height, float(limit))
-        return height
-
-    def _overhead_camera(self, player_pos, angle):
-        """Compute ``(cam_pos, direction, up)`` for the overhead camera.
-
-        The camera floats ``effective_overhead_height()`` above the player looking down (raked
-        by ``overhead_tilt``); the up hint is the ground heading (fixed north or
-        the player's facing) so it is always perpendicular to a straight-down view
-        — never the degenerate world-up that would corrupt the view/frustum.
-        """
-        px, py, pz = float(player_pos.x), float(player_pos.y), float(player_pos.z)
-        if str(self.overhead_orientation).strip().lower() == "player":
-            head_x, head_z = math.sin(angle), math.cos(angle)
-        else:  # fixed north — world -Z at the top of the screen (GTA 1 style)
-            head_x, head_z = 0.0, -1.0
-
-        tilt = math.radians(max(0.0, min(89.0, float(self.overhead_tilt))))
-        sin_t, cos_t = math.sin(tilt), math.cos(tilt)
-        dir_x, dir_y, dir_z = head_x * sin_t, -cos_t, head_z * sin_t
-        dlen = math.sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z) or 1.0
-        direction = glm.vec3(dir_x / dlen, dir_y / dlen, dir_z / dlen)
-
-        dist = self.effective_overhead_height() / max(1e-3, cos_t)
-        cam_pos = glm.vec3(px - direction.x * dist,
-                           py - direction.y * dist,
-                           pz - direction.z * dist)
-        up = self._safe_up(direction, glm.vec3(head_x, 0.0, head_z))
-        return cam_pos, direction, up
+        return self.camera.effective_overhead_height()
 
     def overhead_ground_footprint(self):
-        """What ground the overhead camera shows: ``(hx, hz, reach)``.
-
-        ``hx``/``hz`` are the half extents of the axis-aligned box around the
-        player that holds the four points where the view's corner rays meet
-        the ground at the player's height; ``reach`` is the distance from the
-        player to the farthest of those points, which -- unlike the box --
-        does not change as a player-oriented camera turns. None when the
-        camera is not overhead (or looks at the horizon, so the view has no
-        ground edge). Used to fit world streaming and simulation to what is
-        actually on screen.
-        """
-        if not self.is_overhead() or self.player is None:
-            return None
-        pos = self.player.pos
-        cam, direction, up = self._overhead_camera(pos, getattr(self.player, "angle", 0.0))
-        d = glm.normalize(glm.vec3(direction))
-        right = glm.normalize(glm.cross(d, glm.vec3(up)))
-        true_up = glm.cross(right, d)
-        tan_v = math.tan(math.radians(float(getattr(self, "frustum_fov", 90.0))) / 2.0)
-        tan_h = tan_v * max(0.1, float(getattr(self, "frustum_aspect", 16.0 / 9.0)))
-        ground = float(pos.y)
-        hx = hz = reach = 0.0
-        for sx in (-1.0, 1.0):
-            for sy in (-1.0, 1.0):
-                ray = d + true_up * (sy * tan_v) + right * (sx * tan_h)
-                if ray.y >= -1e-3:
-                    return None
-                t = (ground - cam.y) / ray.y
-                dx = cam.x + ray.x * t - pos.x
-                dz = cam.z + ray.z * t - pos.z
-                hx = max(hx, abs(dx))
-                hz = max(hz, abs(dz))
-                reach = max(reach, math.hypot(dx, dz))
-        return hx, hz, reach
-
-    @staticmethod
-    def _safe_up(direction, up):
-        """A non-degenerate up vector for ``glm.lookAt`` (see _overhead_camera)."""
-        d = glm.vec3(direction)
-        if glm.length(d) < 1e-8:
-            return glm.vec3(0, 1, 0)
-        d = glm.normalize(d)
-        u = glm.vec3(up)
-        u = glm.normalize(u) if glm.length(u) > 1e-8 else glm.vec3(0, 1, 0)
-        if abs(glm.dot(d, u)) > 0.999:
-            u = glm.vec3(0, 0, 1) if abs(d.y) > 0.9 else glm.vec3(0, 1, 0)
-        return u
-
-    def _camera_for_mode(self, overhead, player_pos, player_angle,
-                         player_pitch, camera_height):
-        """Return ``(cam_pos, direction, up, fov)`` for one camera mode.
-
-        Both endpoints of a camera tween are computed from the *current* player
-        position/facing each frame, so the blend tracks the player as they move.
-        """
-        if overhead:
-            cam_pos, direction, up = self._overhead_camera(player_pos, player_angle)
-            return cam_pos, direction, up, self.frustum_fov
-        cam_pos = player_pos + glm.vec3(0, camera_height, 0)
-        direction = glm.vec3(
-            math.sin(player_angle) * math.cos(player_pitch),
-            math.sin(player_pitch),
-            math.cos(player_angle) * math.cos(player_pitch),
-        )
-        return cam_pos, direction, glm.vec3(0, 1, 0), self.frustum_fov
+        return self.camera.overhead_ground_footprint()
 
     def start_camera_transition(self, target_mode=None, duration=1.0):
-        """Begin a smooth tween between First Person and Overhead cameras.
-
-        ``target_mode`` may be ``None`` (toggle to the opposite of the current
-        mode) or a string ("overhead"/"top-down"/"topdown" → overhead, anything
-        else → first person). ``duration`` is the tween length in seconds; <= 0
-        switches instantly. ``camera_mode`` is updated to the target immediately
-        so gameplay (aiming, the overhead sprite) uses the new mode, while the
-        view matrix blends over ``duration``. Returns the new mode string.
-        """
-        current_overhead = self.is_overhead()
-        if target_mode is None:
-            to_overhead = not current_overhead
-        else:
-            to_overhead = str(target_mode).strip().lower() in (
-                "overhead", "top-down", "topdown", "top", "td")
-        new_mode = "Overhead" if to_overhead else "First Person"
-
-        try:
-            duration = float(duration)
-        except (TypeError, ValueError):
-            duration = 1.0
-
-        ct = self.camera_transition
-
-        # No-op when already in the requested mode and not mid-tween.
-        if to_overhead == current_overhead and not ct:
-            self.camera_mode = new_mode
-            return new_mode
-
-        if duration <= 0.0:
-            self.camera_transition = None
-            self.camera_mode = new_mode
-            return new_mode
-
-        # Reversing an in-flight tween back toward its origin: mirror the current
-        # progress so the camera continues smoothly from where it is rather than
-        # snapping to an endpoint.
-        if ct and to_overhead == ct['from_overhead']:
-            progressed = min(ct['elapsed'], ct['duration'])
-            remaining_frac = 1.0 - (progressed / ct['duration'] if ct['duration'] > 0 else 1.0)
-            self.camera_transition = {
-                'from_overhead': ct['to_overhead'],
-                'to_overhead':   to_overhead,
-                'elapsed':       remaining_frac * duration,
-                'duration':      duration,
-            }
-            self.camera_mode = new_mode
-            return new_mode
-
-        self.camera_transition = {
-            'from_overhead': current_overhead,
-            'to_overhead':   to_overhead,
-            'elapsed':       0.0,
-            'duration':      duration,
-        }
-        self.camera_mode = new_mode
-        return new_mode
+        return self.camera.start_camera_transition(target_mode, duration)
 
     def _update_camera_transition(self, delta):
-        """Advance the active camera tween; clear it when complete."""
-        ct = self.camera_transition
-        if not ct:
-            return
-        ct['elapsed'] += delta
-        if ct['elapsed'] >= ct['duration']:
-            self.camera_transition = None
+        self.camera.update_camera_transition(delta)
 
     # =========================================================================
     # MOVER/DOOR INITIALIZATION
@@ -4821,16 +4670,16 @@ class LogicThread(threading.Thread):
                     dur = ct['duration']
                     t = 1.0 if dur <= 0.0 else max(0.0, min(1.0, ct['elapsed'] / dur))
                     t = t * t * (3.0 - 2.0 * t)  # smoothstep
-                    a = self._camera_for_mode(ct['from_overhead'], player_pos,
+                    a = self.camera._camera_for_mode(ct['from_overhead'], player_pos,
                                               player_angle, player_pitch, camera_height)
-                    b = self._camera_for_mode(ct['to_overhead'], player_pos,
+                    b = self.camera._camera_for_mode(ct['to_overhead'], player_pos,
                                               player_angle, player_pitch, camera_height)
                     cam_pos = a[0] + (b[0] - a[0]) * t
                     direction = a[1] + (b[1] - a[1]) * t
                     if glm.length(direction) < 1e-8:
                         direction = b[1]
                     direction = glm.normalize(direction)
-                    up_vec = self._safe_up(direction, a[2] + (b[2] - a[2]) * t)
+                    up_vec = self.camera._safe_up(direction, a[2] + (b[2] - a[2]) * t)
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
                     fov = a[3] + (b[3] - a[3]) * t
                 elif self.is_overhead():
@@ -4838,7 +4687,7 @@ class LogicThread(threading.Thread):
                     # from this view_matrix, so overhead culling is correct; the
                     # up hint is horizontal, avoiding the straight-down lookAt
                     # degeneracy that would corrupt the view and every plane.
-                    cam_pos, direction, up_vec = self._overhead_camera(player_pos, player_angle)
+                    cam_pos, direction, up_vec = self.camera._overhead_camera(player_pos, player_angle)
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
                     fov = self.frustum_fov
                 else:
