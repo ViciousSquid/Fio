@@ -3753,7 +3753,22 @@ class LogicThread(threading.Thread):
         if spawned:
             self._build_entity_caches()
 
-        camera_rows = [row for row in data.get("camera") or [] if isinstance(row, dict)]
+        # The editor Camera stores yaw/pitch in degrees, while the play-mode
+        # camera math below uses radians.  Keep the authored JSON human-readable
+        # in degrees and convert the camera track once at runtime.  Converting
+        # here (rather than every tick) also keeps interpolation in one unit.
+        camera_rows = []
+        for source_row in data.get("camera") or []:
+            if not isinstance(source_row, dict):
+                continue
+            row = dict(source_row)
+            row["yaw"] = math.radians(
+                self._cutscene_number(row.get("yaw", 0.0))
+            )
+            row["pitch"] = math.radians(
+                self._cutscene_number(row.get("pitch", 0.0))
+            )
+            camera_rows.append(row)
         camera_rows.sort(key=lambda row: self._cutscene_number(row.get("time", 0.0)))
         actor_tracks = {
             str(aid): sorted(
