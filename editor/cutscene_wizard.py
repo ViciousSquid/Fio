@@ -652,7 +652,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_io_outputs()
 
     def _refresh_io_outputs(self):
-        from .io_system import get_output_names
+        from .io_system import get_input_names
         current = self.io_output.currentText()
         self.io_output.blockSignals(True)
         self.io_output.clear()
@@ -661,7 +661,7 @@ class CutsceneWizard(QtWidgets.QDialog):
                        if str(getattr(t, "properties", {}).get("id", "")) == source_id), None)
         if source is not None:
             entity_type = str(source.properties.get("type", ""))
-            for output in sorted(get_output_names(entity_type)):
+            for output in sorted(get_input_names(entity_type)):
                 self.io_output.addItem(output)
         self.io_output.setCurrentText(current)
         self.io_output.blockSignals(False)
@@ -669,7 +669,7 @@ class CutsceneWizard(QtWidgets.QDialog):
     def _build_io_tab(self, tabs):
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
-        box = QtWidgets.QGroupBox("Trigger an I/O output during the cutscene")
+        box = QtWidgets.QGroupBox("Send an I/O input during the cutscene")
         form = QtWidgets.QFormLayout(box)
         self.io_time = QtWidgets.QDoubleSpinBox()
         self.io_time.setRange(0, 3600)
@@ -678,27 +678,27 @@ class CutsceneWizard(QtWidgets.QDialog):
         form.addRow("At time", self.io_time)
         self.io_source = QtWidgets.QComboBox()
         self.io_source.setMinimumWidth(260)
-        form.addRow("Source entity", self.io_source)
+        form.addRow("Target entity", self.io_source)
         self.io_source.currentIndexChanged.connect(lambda _i: self._refresh_io_outputs())
         self.io_output = QtWidgets.QComboBox()
         self.io_output.setEditable(True)
         self.io_output.setMinimumWidth(260)
-        form.addRow("Output", self.io_output)
+        form.addRow("Input", self.io_output)
         self.io_parameter = QtWidgets.QLineEdit()
         self.io_parameter.setPlaceholderText("Optional parameter")
         form.addRow("Parameter", self.io_parameter)
-        add = QtWidgets.QPushButton("Add I/O event")
+        add = QtWidgets.QPushButton("Add I/O input")
         add.clicked.connect(self._add_io_event)
         form.addRow("", add)
         layout.addWidget(box)
         help_text = QtWidgets.QLabel(
-            "This fires the real Fio output at the authored cutscene time. "
-            "The normal I/O graph then handles the connected inputs."
+            "This sends a real Fio input directly to the selected target entity at the authored cutscene time. "
+            "For example, Target entity = Door and Input = Open."
         )
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
         layout.addStretch(1)
-        tabs.addTab(page, "I/O Output")
+        tabs.addTab(page, "I/O Input")
         self._refresh_io_sources()
 
     def _add_io_event(self):
@@ -706,17 +706,17 @@ class CutsceneWizard(QtWidgets.QDialog):
         source_name = self.io_source.currentText().strip()
         output = self.io_output.currentText().strip()
         if not source_id or not source_name:
-            QtWidgets.QMessageBox.warning(self, "I/O Output", "Choose a source entity first.")
+            QtWidgets.QMessageBox.warning(self, "I/O Input", "Choose a target entity first.")
             return
         if not output:
-            QtWidgets.QMessageBox.warning(self, "I/O Output", "Choose or enter an output name.")
+            QtWidgets.QMessageBox.warning(self, "I/O Input", "Choose or enter an input name.")
             return
         event = {
             "time": float(self.io_time.value()),
             "type": "io",
-            "source_id": source_id,
-            "source_name": source_name,
-            "output": output,
+            "target_id": source_id,
+            "target_name": source_name,
+            "input": output,
         }
         parameter = self.io_parameter.text()
         if parameter:
