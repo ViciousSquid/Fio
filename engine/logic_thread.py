@@ -20,6 +20,7 @@ import glm
 import math
 import os
 import random
+import queue
 
 from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
 from .player import Player
@@ -438,6 +439,10 @@ class LogicThread(threading.Thread):
 
         # Cinematic camera state (used by io_handlers LogicCamera)
         self.cinematic_state = None
+        # Timed cutscene messages are produced by the logic thread and consumed
+        # by QtGameView on the GUI thread, where the existing message widgets
+        # are safe to update.
+        self._cinematic_message_queue = queue.SimpleQueue()
 
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
@@ -3838,6 +3843,8 @@ class LogicThread(threading.Thread):
             "duration": duration,
             "io_events": [event for event in events if event.get("type") == "io"],
             "next_io_event": 0,
+            "message_events": [event for event in events if event.get("type") == "message"],
+            "next_message_event": 0,
             "fight_events": [
                 event for event in events
                 if event.get("type") == "fight"
@@ -4029,10 +4036,32 @@ class LogicThread(threading.Thread):
                     except (AttributeError, TypeError, ValueError):
                         pass
 
+        message_events = cs.get("message_events", [])
+        message_index = int(cs.get("next_message_event", 0))
+        while message_index < len(message_events) and float(message_events[message_index].get("time", 0.0)) <= elapsed + 1e-9:
+            event = message_events[message_index]
+            message_index += 1
+            cs["next_message_event"] = message_index
+            text = str(event.get("text", "") or "").strip()[:50]
+            if text:
+                line = str(event.get("line", "message") or "message").strip().lower()
+                if line not in ("message", "message2", "message3"):
+                    line = "message"
+                self._cinematic_message_queue.put((line, text))
+
         if not self._fire_cinematic_io_events():
             return
         if elapsed >= float(cs.get("duration", 0.0)):
             self._finish_json_cutscene(cs)
+
+    def consume_cinematic_messages(self):
+        """Return queued cutscene HUD messages for the GUI thread."""
+        messages = []
+        while True:
+            try:
+                messages.append(self._cinematic_message_queue.get_nowait())
+            except queue.Empty:
+                return messages
 
     def _fire_cinematic_io_events(self):
         """Fire timed I/O events authored on the active LogicCamera."""
