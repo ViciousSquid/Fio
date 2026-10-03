@@ -965,14 +965,13 @@ class CutsceneWizard(QtWidgets.QDialog):
         return list(self.actor_meta.keys())
 
     def _refresh_actor_lists(self):
+        """Refresh actor widgets that are part of the current simple wizard UI.
+
+        The old advanced Fight/Dialogue controls are intentionally no longer
+        created in the Events tab.  Keep this refresh path aligned with the
+        widgets that actually exist instead of touching removed controls.
+        """
         wanted = self._current_actor_id()
-        widgets = [self.actor_list, self.attackers, self.defenders]
-        old_attackers = {
-            str(x.data(QtCore.Qt.UserRole)) for x in self.attackers.selectedItems()
-        } if hasattr(self, "attackers") else set()
-        old_defenders = {
-            str(x.data(QtCore.Qt.UserRole)) for x in self.defenders.selectedItems()
-        } if hasattr(self, "defenders") else set()
 
         self.actor_list.blockSignals(True)
         self.actor_list.clear()
@@ -980,33 +979,27 @@ class CutsceneWizard(QtWidgets.QDialog):
             item = QtWidgets.QListWidgetItem(meta["name"])
             if meta.get("spawn"):
                 item.setText(f"★ {meta['name']}")
-                item.setToolTip("Temporary actor — embedded in the cutscene and deleted from the map after authoring")
+                item.setToolTip(
+                    "Temporary actor — embedded in the cutscene and deleted "
+                    "from the map after authoring"
+                )
             item.setData(QtCore.Qt.UserRole, aid)
             self.actor_list.addItem(item)
         self.actor_list.blockSignals(False)
 
-        for widget in (self.attackers, self.defenders):
-            widget.clear()
-            for aid, meta in self.actor_meta.items():
-                item = QtWidgets.QListWidgetItem(meta["name"])
-                item.setData(QtCore.Qt.UserRole, aid)
-                widget.addItem(item)
-
-        self._restore_multi_selection(self.attackers, old_attackers)
-        self._restore_multi_selection(self.defenders, old_defenders)
         if wanted:
             self._select_actor_id(wanted)
 
-        for combo in (self.look_at, self.waypoint_target, self.dialogue_speaker):
+        # Only these actor-selection combos are present in the simplified
+        # wizard.  Do not reference removed dialogue/fight widgets here.
+        for combo in (self.look_at, self.waypoint_target):
             current = combo.currentData()
             combo.blockSignals(True)
             combo.clear()
             if combo is self.look_at:
                 combo.addItem("Keep camera rotation", "")
-            elif combo is self.waypoint_target:
-                combo.addItem("No target — use actor's current position", "")
             else:
-                combo.addItem("Narrator", "")
+                combo.addItem("No target — use actor's current position", "")
             for aid, meta in self.actor_meta.items():
                 combo.addItem(meta["name"], aid)
             idx = combo.findData(current)
