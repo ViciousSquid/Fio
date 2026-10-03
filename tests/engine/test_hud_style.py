@@ -33,5 +33,5 @@ def test_hud_style_3_uses_a_white_spaced_ammo_counter():
     source = inspect.getsource(QtGameView._draw_hud)
 
     assert 'if style == 3:' in source
-    assert 'ammo_x += metrics.horizontalAdvance(" ")' in source
+    assert 'ammo_x += 2 * metrics.horizontalAdvance(" ")' in source
     assert 'Qt.white if style == 3 else self._hud_ammo_green' in source
