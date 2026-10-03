@@ -1495,29 +1495,16 @@ class MonsterAI:
             dir_len = 1.0
         direction = direction / dir_len
 
-        # Get custom projectile sprite or default
-        sprite = thing.properties.get('projectile_sprite', MONSTER_PROJECTILE_SPRITE)
-        size = thing.properties.get('projectile_size', MONSTER_PROJECTILE_SPRITE_SIZE)
-        if not isinstance(size, (list, tuple)) or len(size) != 2:
-            size = MONSTER_PROJECTILE_SPRITE_SIZE
-
-        projectile = {
-            'pos': [start_pos.x, start_pos.y, start_pos.z],
-            'vel': [direction.x * MONSTER_PROJECTILE_SPEED,
-                    direction.y * MONSTER_PROJECTILE_SPEED,
-                    direction.z * MONSTER_PROJECTILE_SPEED],
-            'owner_id': owner_id,
-            'sprite': sprite,
-            'lifetime': MONSTER_PROJECTILE_MAX_DIST / MONSTER_PROJECTILE_SPEED,
-            'damage': damage,
-            'size': tuple(size),
-            'distance_travelled': 0.0,
-        }
-
-        # Add through LogicThread's dense projectile store. The compatibility
-        # record remains available, but numeric simulation state is packed once
-        # at spawn rather than rebuilt from dictionaries every tick.
-        self.lt._add_monster_projectile(projectile)
+        lifetime = MONSTER_PROJECTILE_MAX_DIST / MONSTER_PROJECTILE_SPEED
+        self.lt._add_monster_projectile(
+            (start_pos.x, start_pos.y, start_pos.z),
+            (direction.x * MONSTER_PROJECTILE_SPEED,
+             direction.y * MONSTER_PROJECTILE_SPEED,
+             direction.z * MONSTER_PROJECTILE_SPEED),
+            owner_id,
+            damage,
+            lifetime,
+        )
 
         if self.monster_debug_active:
             name = thing.properties.get('name', '?')
