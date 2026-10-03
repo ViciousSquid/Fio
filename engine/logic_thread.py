@@ -3604,17 +3604,18 @@ class LogicThread(threading.Thread):
     def _load_cutscene_file(self, filename):
         path = self._cutscene_file_path(filename)
         if path is None:
-            debug_log("IO", f"LogicCamera: cutscene file '{filename}' not found or outside cutscenes/")
+            debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
             return None
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
         except (OSError, ValueError, TypeError) as exc:
-            debug_log("IO", f"LogicCamera: could not load cutscene '{filename}': {exc}")
+            debug_log("Cutscene", f"FAILED: '{filename}' could not be loaded: {exc}")
             return None
         if not isinstance(data, dict) or not isinstance(data.get("camera"), list):
-            debug_log("IO", f"LogicCamera: cutscene '{filename}' is invalid (camera keyframes missing)")
+            debug_log("Cutscene", f"FAILED: '{filename}' is invalid (camera keyframes missing)")
             return None
+        debug_log("Cutscene", f"LOADED: '{filename}'")
         return data
 
     @staticmethod
