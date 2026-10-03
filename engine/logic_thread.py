@@ -4276,20 +4276,14 @@ class LogicThread(threading.Thread):
                     continue
 
             owner_id = int(projectiles.owner_id[i])
-            owner = None
-            for thing in things:
-                if id(thing) == owner_id:
-                    owner = thing
-                    break
+            owner = self._monster_by_id.get(owner_id)
             owner_team = (
                 owner.properties.get('team', '')
                 if owner is not None else None
             )
 
             hit_monster = None
-            for candidate in things:
-                if not isinstance(candidate, monster_type):
-                    continue
+            for candidate in self._monster_things:
                 if id(candidate) == owner_id:
                     continue
                 cp = candidate.properties
@@ -4386,7 +4380,9 @@ class LogicThread(threading.Thread):
             (travelled < MONSTER_PROJECTILE_MAX_DIST)
             & (lifetime > 0.0)
         )
-        pos32 = pos.astype(np.float32)
+        # ProjectileStore positions are authoritative float32 storage, so do not
+        # copy the array merely to restate its dtype on every dense tick.
+        pos32 = pos
 
         # The player's hit sphere, in the float32 glm.distance used previously.
         player_hit = np.zeros(count, dtype=bool)
