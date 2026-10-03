@@ -749,6 +749,9 @@ def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
 
     assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
     LogicThread._update_cinematic_camera(logic, 0.1)
+    assert [name for _, name, _ in recorder.calls] == ["OnTrigger"]
+
+    LogicThread._update_cinematic_camera(logic, 0.15)
     assert [name for _, name, _ in recorder.calls] == ["OnTrigger", "OnFinished"]
 
 
