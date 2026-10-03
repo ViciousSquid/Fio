@@ -560,35 +560,12 @@ class LogicThread(threading.Thread):
     # anything about a particular streaming layer.
 
     def notify_visibility_changed(self):
-        """The set of drawable objects changed.
-
-        Cheap by contract — a counter bump and the per-frame cull buffers —
-        because a streaming layer calls it every time the player crosses a cell
-        boundary.  It really is just the counter: parking writes `hidden` and
-        leaves the brush in the list, so the render projection's row set has not
-        changed, and `hidden` is read live every frame anyway
-        (`engine.render_table.RenderTable.begin_frame`).  Nothing to rebuild.
-        """
-        self.visibility_changes += 1
+        return self._world_runtime().notify_visibility_changed()
 
     def notify_authored_visibility_changed(self):
-        """An object's *authored* hidden/disabled state changed.
+        return self._world_runtime().notify_authored_visibility_changed()
 
-        The expensive one, and the one streaming must never need: parking
-        stashes an object's authored ``hidden`` rather than overwriting it
-        (``engine.spatial.authored_hidden``), precisely so the collision grid
-        can outlive a cell going in and out.  An *authored* change is different
-        — an editor edit, an I/O Show/Hide, a save being restored over the live
-        world — and the grid is built from exactly that, once, so it has to be
-        rebuilt or the world collides like the map it used to be.
-        """
-        self.notify_visibility_changed()
-        self._refresh_collision_brushes_cache()
-        grid = getattr(self, '_spatial_grid', None)
-        if grid is not None:
-            grid.populate(self._collision_brushes_cache)
-
-    # =========================================================================
+        # =========================================================================
     # PLAYER & MODE MANAGEMENT
     # =========================================================================
 
@@ -1021,7 +998,6 @@ class LogicThread(threading.Thread):
         return self.editor_runtime.tick(delta)
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
-    _ROW_WATCH_TICKS = 30
     _indexed_things = ()
     _indexed_brushes = ()
     _moving_rows = None
@@ -1029,27 +1005,7 @@ class LogicThread(threading.Thread):
     _rows_watch = 0
 
     def _watch_world_rows(self):
-        """Re-index the session when the editor adds or removes objects.
-
-        The session indexes the world when Play starts (_build_entity_caches)
-        and the collision set with it. An object cloned, pasted, placed or
-        deleted in the editor during play otherwise had no AI, no I/O name,
-        or -- deleted -- kept being simulated and collided with. Every editor
-        edit moves ``world_epoch``, so the row sets are compared only for a
-        short while after one (tools checkpoint before they mutate): an
-        integer compare per tick otherwise.
-        """
-        epoch = getattr(self.editor_state, 'world_epoch', None)
-        if epoch != self._rows_epoch:
-            self._rows_epoch = epoch
-            self._rows_watch = self._ROW_WATCH_TICKS
-        if not self._rows_watch:
-            return
-        self._rows_watch -= 1
-        brushes_changed = tuple(self.brushes) != self._indexed_brushes
-        if brushes_changed or tuple(self.things) != self._indexed_things:
-            # Re-keys movers/doors and the collision set if brushes changed.
-            self._build_entity_caches()
+        return self._world_runtime().watch_world_rows()
 
     def _reindex_moving_brushes(self):
         return self._mover_runtime()._reindex_moving_brushes()
