@@ -428,6 +428,45 @@ def test_the_io_manager_advances_with_the_tick(logic):
         thread.set_play_mode(False)
 
 
+def test_a_fatal_tick_marshals_play_teardown_to_gui(logic):
+    """Fatal tick handling must never tear down the play session on the worker."""
+    thread = logic(brushes=room())
+    thread.play_mode = True
+    calls = []
+    threads = []
+
+    def _explode(delta):
+        raise RuntimeError("deliberate fatal tick failure")
+
+    def _gui_teardown(message):
+        calls.append(message)
+        threads.append(threading.get_ident())
+
+    def _forbidden_teardown(enabled):
+        raise AssertionError("play teardown ran on the logic worker")
+
+    thread._tick = _explode
+    thread.set_gui_fault_teardown(_gui_teardown)
+    thread._apply_play_mode = _forbidden_teardown
+    runner_ident = []
+
+    def run_one_frame():
+        runner_ident.append(threading.get_ident())
+        thread._step_frame(thread.TICK_DURATION)
+
+    runner = threading.Thread(target=run_one_frame, daemon=True)
+    runner.start()
+    runner.join(timeout=DEADLINE)
+
+    assert not runner.is_alive(), "fatal tick frame did not finish"
+    assert thread.play_mode is False, "fatal tick did not fail closed to editor state"
+    assert len(calls) == 1, "fatal tick dispatched GUI teardown more than once"
+    assert threads[0] == runner_ident[0], (
+        "the teardown callback was not emitted from the logic worker; the GUI "
+        "signal layer must perform the cross-thread marshal"
+    )
+
+
 def test_a_tick_that_raises_does_not_kill_the_thread(logic):
     """The loop logs and carries on; a broken entity must not freeze the game."""
     thread = logic(brushes=room())
