@@ -834,8 +834,73 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
+    def show_camera_position_toast(self):
+        """Show a persistent, live camera-position toast in the bottom centre."""
+        view_3d = getattr(self, 'view_3d', None)
+        camera = getattr(view_3d, 'camera', None) if view_3d is not None else None
+        if camera is None or not hasattr(camera, 'pos'):
+            return
+
+        # The ordinary toast system is deliberately bypassed here: this is a
+        # live diagnostic overlay, so it must never fade while active.
+        self._pos_toast_active = True
+        if not hasattr(self, '_pos_toast_timer'):
+            self._pos_toast_timer = QTimer(self)
+            self._pos_toast_timer.setInterval(100)
+            self._pos_toast_timer.timeout.connect(self._update_camera_position_toast)
+        self._update_camera_position_toast()
+        if not self._pos_toast_timer.isActive():
+            self._pos_toast_timer.start()
+
+    def _update_camera_position_toast(self):
+        if not getattr(self, '_pos_toast_active', False):
+            return
+        view_3d = getattr(self, 'view_3d', None)
+        camera = getattr(view_3d, 'camera', None) if view_3d is not None else None
+        if camera is None or not hasattr(camera, 'pos'):
+            return
+        p = camera.pos
+        text = (
+            '<span style="color:#ff8c00;">X</span> '
+            f'<span style="color:white;">{float(p.x):.3f}</span>'
+            ' &nbsp; '
+            '<span style="color:#ff8c00;">Y</span> '
+            f'<span style="color:white;">{float(p.y):.3f}</span>'
+            ' &nbsp; '
+            '<span style="color:#ff8c00;">Z</span> '
+            f'<span style="color:white;">{float(p.z):.3f}</span>'
+        )
+        toast = getattr(self, 'toast', None)
+        if toast is None:
+            return
+        toast.setStyleSheet("""
+            QLabel {
+                background-color: rgba(20, 20, 20, 220);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-weight: normal;
+                font-size: 9px;
+            }
+        """)
+        toast.setTextFormat(Qt.RichText)
+        toast.setText(text)
+        toast.adjustSize()
+        toast.update_position()
+        toast.show()
+        toast.raise_()
+        toast.anim.stop()
+        toast.opacity_effect.setOpacity(1.0)
+        toast.timer.stop()
+
+    def _stop_camera_position_toast(self):
+        self._pos_toast_active = False
+        timer = getattr(self, '_pos_toast_timer', None)
+        if timer is not None:
+            timer.stop()
+
     def show_toast(self, message, is_error=False, duration=None):
-        """Displays a notification"""
+        self._stop_camera_position_toast()\n        """Displays a notification"""
         if self.config.getboolean('Display', 'disable_toasts', fallback=False):
             return
         
