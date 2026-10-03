@@ -1977,28 +1977,8 @@ class QtGameView(QOpenGLWidget):
         # Live terrain sculpting hint: draw this inside the 3D viewport rather
         # than using the editor toast system. This is intentionally styled as
         # the compact dark tool-mode banner used by the other viewport tools.
-        if self.terrain_sculpt_active and not self.play_mode:
-            text = "Sculpt mode - ESC to quit"
-            font = self._face_mode_font_top
-            painter.save()
-            painter.setFont(font)
-            metrics = QFontMetrics(font)
-            padding_x = 20
-            padding_y = 9
-            box_w = metrics.horizontalAdvance(text) + padding_x * 2
-            box_h = metrics.height() + padding_y * 2
-            box_x = (self.width() - box_w) // 2
-            box_y = self.height() - box_h - 30
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
-            painter.drawRoundedRect(box_x, box_y, box_w, box_h, 5, 5)
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(
-                box_x + padding_x,
-                box_y + padding_y + metrics.ascent(),
-                text.upper(),
-            )
-            painter.restore()
+        # Draw the live brush circle last so it sits over the 3D terrain.
+        self._draw_terrain_brush_cursor(painter)
         if self.face_mode_active:
             painter.setFont(self._face_mode_font_top)
             ht = self._face_mode_font_top.pointSize() + 6
@@ -2830,21 +2810,13 @@ class QtGameView(QOpenGLWidget):
     def set_terrain_sculpt_active(self, active: bool):
         active = bool(active)
         self.terrain_sculpt_active = active
+        self.terrain_sculpt_painting = False
         if active:
             self.setCursor(Qt.CrossCursor)
         else:
-            self.terrain_sculpt_painting = False
+            self._terrain_brush_mouse_pos = QPoint(-1, -1)
             self.setCursor(Qt.ArrowCursor)
-            # ESC can leave sculpt mode without going through the Terrain
-            # Editor panel's toggle handler, so keep its button state honest.
-            panel = getattr(self.editor, 'terrain_editor_window', None)
-            if panel is not None:
-                btn = getattr(panel, 'sculpt_paint_btn', None)
-                if btn is not None:
-                    btn.blockSignals(True)
-                    btn.setChecked(False)
-                    btn.blockSignals(False)
-                    btn.setText("🎨  Start Painting")
+        self.update()
 
     def raycast_terrain(self, mx: int, my: int):
         terrain = getattr(self.editor, 'terrain', None)
@@ -2886,6 +2858,63 @@ class QtGameView(QOpenGLWidget):
             elif t > 200:
                 step = 8.0
         return None
+
+    def _world_to_screen(self, point):
+        """Project a world-space point into this viewport's pixel coordinates."""
+        clip = self.projection_matrix * self.view_matrix * glm.vec4(
+            float(point[0]), float(point[1]), float(point[2]), 1.0
+        )
+        if abs(float(clip.w)) < 1e-6:
+            return None
+        ndc_x = float(clip.x) / float(clip.w)
+        ndc_y = float(clip.y) / float(clip.w)
+        return QPoint(
+            int((ndc_x + 1.0) * 0.5 * self.width()),
+            int((1.0 - ndc_y) * 0.5 * self.height()),
+        )
+
+    def _draw_terrain_brush_cursor(self, painter):
+        """Draw a screen-space circle representing the world-space brush."""
+        if not self.terrain_sculpt_active or self.play_mode:
+            return
+        pos = self._terrain_brush_mouse_pos
+        if pos.x() < 0 or pos.y() < 0:
+            return
+
+        hit = self.raycast_terrain(pos.x(), pos.y())
+        if hit is None:
+            return
+
+        wx, wy, wz = hit
+        radius = max(1.0, float(self.terrain_sculpt_radius))
+        center = self._world_to_screen((wx, wy + 0.02, wz))
+        px = self._world_to_screen((wx + radius, wy + 0.02, wz))
+        pz = self._world_to_screen((wx, wy + 0.02, wz + radius))
+        if center is None or px is None or pz is None:
+            return
+
+        dx = math.hypot(px.x() - center.x(), px.y() - center.y())
+        dz = math.hypot(pz.x() - center.x(), pz.y() - center.y())
+        screen_radius = max(3.0, (dx + dz) * 0.5)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0, 210), 4))
+        painter.drawEllipse(
+            int(round(pos.x() - screen_radius)),
+            int(round(pos.y() - screen_radius)),
+            int(round(screen_radius * 2.0)),
+            int(round(screen_radius * 2.0)),
+        )
+        painter.setPen(QPen(QColor(240, 128, 0, 235), 2))
+        painter.drawEllipse(
+            int(round(pos.x() - screen_radius)),
+            int(round(pos.y() - screen_radius)),
+            int(round(screen_radius * 2.0)),
+            int(round(screen_radius * 2.0)),
+        )
+        painter.restore()
 
     def _apply_sculpt_at_mouse(self, mx: int, my: int):
         hit = self.raycast_terrain(mx, my)
@@ -3316,11 +3345,8 @@ class QtGameView(QOpenGLWidget):
                 return
 
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
-            if self.terrain_sculpt_mode == 'stamp':
-                self._apply_sculpt_at_mouse(event.x(), event.y())
-            else:
-                self.terrain_sculpt_painting = True
-                self._apply_sculpt_at_mouse(event.x(), event.y())
+            self._terrain_brush_mouse_pos = event.pos()
+            self._apply_sculpt_at_mouse(event.x(), event.y())
             return
         if not self.play_mode and self.floating_windows.handle_mouse_press(event):
             if any(getattr(w, "dragging", False) for w in self.floating_windows.windows):
@@ -3452,6 +3478,10 @@ class QtGameView(QOpenGLWidget):
                 if self._begin_face_mode_drag(event.pos()):
                     return
                 self._face_mode_press = None
+        if self.terrain_sculpt_active and not self.play_mode:
+            self._terrain_brush_mouse_pos = event.pos()
+            self.update()
+            return
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
             if self.use_threading and self.logic_thread:
@@ -3503,9 +3533,6 @@ class QtGameView(QOpenGLWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if self.terrain_sculpt_painting and event.button() == Qt.LeftButton:
-            self.terrain_sculpt_painting = False
-            return
         controller = self._components()
         if (event.button() == Qt.LeftButton and controller is not None and
                 controller.drag is not None):
@@ -3533,6 +3560,12 @@ class QtGameView(QOpenGLWidget):
             self.mouselook_active = False
             self.setCursor(Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):
+        if self.terrain_sculpt_active and not self.play_mode:
+            self._terrain_brush_mouse_pos = QPoint(-1, -1)
+            self.update()
+        super().leaveEvent(event)
 
     def wheelEvent(self, event):
         if not self.play_mode:
