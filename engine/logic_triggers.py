@@ -14,7 +14,11 @@ import glm
 import numpy as np
 
 from .brush_geometry import brush_aabb_bounds
-from .debug_console import debug_log
+try:
+    from editor.debug_console import debug_log
+except ImportError:
+    def debug_log(category, message):
+        print(f"[{category}] {message}")
 
 
 def _trigger_is_once(brush) -> bool:
