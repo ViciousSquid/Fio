@@ -2809,12 +2809,41 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush for CSG Subtract")
             return
 
+        # Terrain is a heightfield, so terrain CSG is deliberately limited to
+        # plain AABB brushes. A brush carrying custom convex geometry is still a
+        # valid CSG cutter for ordinary brushes, but never becomes a terrain cut.
+        if getattr(self, 'terrain', None) is not None and isinstance(self.state.terrain_data, dict):
+            # Keep the undo checkpoint's compact terrain-CSG snapshot in sync with
+            # the live terrain before the operation mutates it.
+            self.state.terrain_data = self.terrain.to_dict()
+
         if push_undo:
             self.save_state()
 
         self.state.selected_object['operation'] = 'subtract'
         subtract_brush = self.state.selected_object
-        
+
+        terrain_cut = False
+        if getattr(self, 'terrain', None) is not None and not brush_geometry.brush_has_geometry(subtract_brush):
+            sub_pos = subtract_brush['pos']
+            sub_size = subtract_brush['size']
+            terrain_cut = self.terrain.subtract_aabb(
+                [sub_pos[0] - sub_size[0] / 2,
+                 sub_pos[1] - sub_size[1] / 2,
+                 sub_pos[2] - sub_size[2] / 2],
+                [sub_pos[0] + sub_size[0] / 2,
+                 sub_pos[1] + sub_size[1] / 2,
+                 sub_pos[2] + sub_size[2] / 2],
+            )
+        elif getattr(self, 'terrain', None) is not None and brush_geometry.brush_has_geometry(subtract_brush):
+            self.show_toast(
+                "Terrain CSG requires a plain axis-aligned box brush",
+                is_error=True,
+            )
+
+        if terrain_cut:
+            self.state.terrain_data = self.terrain.to_dict()
+
         sub_pos = subtract_brush['pos']
         sub_size = subtract_brush['size']
         sub_min = [sub_pos[0] - sub_size[0]/2, sub_pos[1] - sub_size[1]/2, sub_pos[2] - sub_size[2]/2]
@@ -2955,6 +2984,11 @@ class MainWindow(QMainWindow):
         
         new_brushes.append(subtract_brush)
         self.state.brushes = new_brushes
+        if terrain_cut:
+            # Terrain and brush CSG are one user operation; keep the serialized
+            # terrain modifier in EditorState as the authoritative undo/save data.
+            self.state.terrain_data = self.terrain.to_dict()
+            self.show_toast("Subtracted AABB from terrain")
         self.update_all_ui()
 
 
