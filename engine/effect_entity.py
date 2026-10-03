@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import random
 
-from engine.change_journal import TrackedAttribute
-
 try:
     from editor.things import Thing as _ThingBase
     EDITOR_TIER = True
@@ -78,11 +76,12 @@ class Effect(_ThingBase):
     EDITOR_PRIMARY_PROPERTIES = ()
     EDITOR_ADVANCED_PROPERTIES = ()
 
-    #: Playback runtime the render projection derives the animation from.
-    #: Owned here, not by a render table, so both render buffers agree.
-    _effect_spawn_time = TrackedAttribute(0.0)
-    _effect_animation_phase = TrackedAttribute(0.0)
-    _effect_active = TrackedAttribute(False)
+    # Legacy non-journaled mirrors kept for standalone/editor callers that
+    # inspect Effect runtime state directly. The live simulation owns runtime
+    # state in EffectStore; LogicThread render projection reads the store.
+    _effect_spawn_time = 0.0
+    _effect_animation_phase = 0.0
+    _effect_active = False
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
