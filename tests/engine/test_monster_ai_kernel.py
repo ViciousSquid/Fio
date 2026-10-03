@@ -46,16 +46,18 @@ def test_nearest_enemy_switches_to_monolithic_for_small_and_tiny_team_blocks(
         positions, team, alive, 512.0
     )
     assert calls == ["monolithic"]
+    expected = real_blocks(
+        positions.astype(np.float32),
+        team.astype(np.int32),
+        alive,
+        np.float32(512.0) * np.float32(512.0),
+    )
+    np.testing.assert_array_equal(got_many_teams, expected)
 
     calls.clear()
     positions, team, alive = _field(256, 32)
-    got_larger_blocks = MonsterAI._nearest_enemy_rows(
-        positions, team, alive, 512.0
-    )
+    MonsterAI._nearest_enemy_rows(positions, team, alive, 512.0)
     assert calls == ["blocks"]
-
-    # The crossover changes only the kernel shape, not the nearest-enemy answer.
-    np.testing.assert_array_equal(got_many_teams, got_larger_blocks)
 
 
 def test_nearest_enemy_uses_monolithic_for_many_single_monster_teams():
