@@ -216,6 +216,7 @@ class DebugConsole(QWidget):
         'MonsterAI': '#FF7043', # Deep orange — monster combat / sight / attack
         'Pathfinding': '#26A69A', # Teal — monster patrol / navigation
         'Plugins': '#42A5F5',   # Blue — plugin debug / init (default; loads/errors recoloured per-message)
+        'Cutscene': '#66BB6A',  # Cutscene loads/errors are recoloured per-message
     }
 
     # Per-message colours for the 'Plugins' category. All plugin messages share
@@ -867,6 +868,12 @@ class DebugConsole(QWidget):
         # loads read green, errors red, and debug/init stay blue.
         if filter_category == 'Plugins':
             color = self._plugin_message_color(message)
+        elif filter_category == 'Cutscene':
+            color = (
+                self.CUTSCENE_ERROR_COLOR
+                if message.upper().startswith('[CUTSCENE] FAILED:')
+                else self.CUTSCENE_LOAD_COLOR
+            )
 
         # --- HIGHLIGHTING LOGIC ---
 
