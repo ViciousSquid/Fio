@@ -220,7 +220,7 @@ def test_renderer_light_capacities_untouched():
     """
     src = _read("engine/renderer_core.py")
     assert "MAX_LIGHTS = shaders.MAX_LIGHTS" in src
-    assert "MAX_SHADOW_LIGHTS = 8" in src
+    assert "MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS" in src
 
     from engine import shaders as shader_module
     for name in ("lit.frag", "textured.frag"):
