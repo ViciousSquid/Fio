@@ -1,9 +1,8 @@
-"""Persistent dense storage for live monster projectiles.
+"""Persistent structure-of-arrays storage for live monster projectiles.
 
-The gameplay-facing projectile records remain ordinary dicts for compatibility with
-existing I/O/debug/test code. Numeric simulation state lives in reusable NumPy
-arrays so the 60 Hz update does not rebuild position/velocity/lifetime/distance
-arrays from Python dictionaries every tick.
+Projectile simulation state is numeric and contiguous. There are no per-projectile
+Python dictionaries: the logic thread owns position, velocity, lifetime, distance,
+owner and damage as NumPy columns.
 """
 
 from __future__ import annotations
@@ -11,148 +10,90 @@ from __future__ import annotations
 import numpy as np
 
 
-class ProjectileStore(list):
-    """List-compatible projectile records backed by reusable numeric columns."""
+class ProjectileStore:
+    """Dense SoA store for monster projectiles."""
 
     __slots__ = (
-        "pos",
-        "vel",
-        "lifetime",
-        "distance",
-        "owner_id",
-        "_capacity",
-        "_records_dirty",
+        "pos", "vel", "lifetime", "distance", "owner_id", "damage",
+        "_capacity", "_count",
     )
 
-    def __init__(self, records=(), capacity=0):
-        super().__init__(records)
-        initial = len(self)
-        self._capacity = max(16, int(capacity), initial)
+    def __init__(self, capacity=16):
+        self._capacity = max(1, int(capacity))
+        self._count = 0
         self.pos = np.empty((self._capacity, 3), dtype=np.float64)
         self.vel = np.empty((self._capacity, 3), dtype=np.float64)
         self.lifetime = np.empty(self._capacity, dtype=np.float64)
         self.distance = np.empty(self._capacity, dtype=np.float64)
         self.owner_id = np.empty(self._capacity, dtype=np.int64)
-        self._records_dirty = False
-        if initial:
-            self.sync_from_records()
+        self.damage = np.empty(self._capacity, dtype=np.float64)
+
+    def __len__(self):
+        return self._count
+
+    @property
+    def count(self):
+        return self._count
 
     def _ensure_capacity(self, required):
         if required <= self._capacity:
             return
-        new_capacity = max(16, self._capacity * 2, required)
+        new_capacity = max(required, self._capacity * 2)
         self.pos = np.resize(self.pos, (new_capacity, 3))
         self.vel = np.resize(self.vel, (new_capacity, 3))
         self.lifetime = np.resize(self.lifetime, new_capacity)
         self.distance = np.resize(self.distance, new_capacity)
         self.owner_id = np.resize(self.owner_id, new_capacity)
+        self.damage = np.resize(self.damage, new_capacity)
         self._capacity = new_capacity
 
-    @staticmethod
-    def _vec3(record, key):
-        value = record.get(key, (0.0, 0.0, 0.0))
-        return float(value[0]), float(value[1]), float(value[2])
+    def add(self, pos, vel, owner_id, damage, lifetime):
+        i = self._count
+        self._ensure_capacity(i + 1)
+        self.pos[i] = pos
+        self.vel[i] = vel
+        self.owner_id[i] = int(owner_id)
+        self.damage[i] = float(damage)
+        self.lifetime[i] = float(lifetime)
+        self.distance[i] = 0.0
+        self._count = i + 1
+        return i
 
-    def append(self, record):
-        index = len(self)
-        self._ensure_capacity(index + 1)
-        super().append(record)
-        self._write_record(index, record)
-
-    def extend(self, records):
-        records = list(records)
-        if not records:
+    def add_batch(self, positions, velocities, owners, damages, lifetimes):
+        positions = np.asarray(positions, dtype=np.float64)
+        velocities = np.asarray(velocities, dtype=np.float64)
+        owners = np.asarray(owners, dtype=np.int64)
+        damages = np.asarray(damages, dtype=np.float64)
+        lifetimes = np.asarray(lifetimes, dtype=np.float64)
+        n = len(positions)
+        if positions.shape != (n, 3) or velocities.shape != (n, 3):
+            raise ValueError("projectile positions and velocities must be (N, 3)")
+        if any(len(values) != n for values in (owners, damages, lifetimes)):
+            raise ValueError("projectile batch columns must have equal length")
+        if not n:
             return
-        start = len(self)
-        self._ensure_capacity(start + len(records))
-        super().extend(records)
-        for offset, record in enumerate(records):
-            self._write_record(start + offset, record)
-
-    def insert(self, index, record):
-        super().insert(index, record)
-        self._records_dirty = True
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        self._records_dirty = True
-
-    def __delitem__(self, key):
-        super().__delitem__(key)
-        self._records_dirty = True
+        start = self._count
+        stop = start + n
+        self._ensure_capacity(stop)
+        self.pos[start:stop] = positions
+        self.vel[start:stop] = velocities
+        self.owner_id[start:stop] = owners
+        self.damage[start:stop] = damages
+        self.lifetime[start:stop] = lifetimes
+        self.distance[start:stop] = 0.0
+        self._count = stop
 
     def clear(self):
-        super().clear()
-        self._records_dirty = False
+        self._count = 0
 
-    def pop(self, *args):
-        value = super().pop(*args)
-        self._records_dirty = True
-        return value
-
-    def _write_record(self, index, record):
-        self.pos[index] = self._vec3(record, "pos")
-        self.vel[index] = self._vec3(record, "vel")
-        self.lifetime[index] = float(record.get("lifetime", 0.0))
-        self.distance[index] = float(record.get("distance_travelled", 0.0))
-        self.owner_id[index] = int(record.get("owner_id", 0))
-
-    def sync_from_records(self):
-        """Rebuild numeric columns once after external record-level edits."""
-        self._ensure_capacity(len(self))
-        for index, record in enumerate(self):
-            self._write_record(index, record)
-        self._records_dirty = False
-
-    def sync_if_dirty(self):
-        if self._records_dirty:
-            self.sync_from_records()
-
-    def replace_active(self, survivors, pos, vel, lifetime, distance):
-        """Compact live records and numeric columns without reallocating normally."""
-        indices = np.asarray(survivors, dtype=np.intp)
-        count = int(indices.size)
-
-        if count:
-            kept = [self[int(i)] for i in indices.tolist()]
-            new_pos = np.take(pos, indices, axis=0)
-            new_vel = np.take(vel, indices, axis=0)
-            new_lifetime = np.take(lifetime, indices)
-            new_distance = np.take(distance, indices)
-        else:
-            kept = []
-            new_pos = np.empty((0, 3), dtype=np.float64)
-            new_vel = np.empty((0, 3), dtype=np.float64)
-            new_lifetime = np.empty(0, dtype=np.float64)
-            new_distance = np.empty(0, dtype=np.float64)
-
-        # Update the compatibility records only after all dense gathers are
-        # complete. The simulation itself has stayed entirely in the columns.
-        for index, record in enumerate(kept):
-            p = record.get("pos")
-            v = record.get("vel")
-            if isinstance(p, list) and len(p) == 3:
-                p[0], p[1], p[2] = map(float, new_pos[index])
-            else:
-                record["pos"] = new_pos[index].tolist()
-            if isinstance(v, list) and len(v) == 3:
-                v[0], v[1], v[2] = map(float, new_vel[index])
-            else:
-                record["vel"] = new_vel[index].tolist()
-            record["distance_travelled"] = float(new_distance[index])
-            record["lifetime"] = float(new_lifetime[index])
-
-        super().__setitem__(slice(None), kept)
-        if count:
-            self.pos[:count] = new_pos
-            self.vel[:count] = new_vel
-            self.lifetime[:count] = new_lifetime
-            self.distance[:count] = new_distance
-            self.owner_id[:count] = [
-                int(record.get("owner_id", 0)) for record in kept
-            ]
-        self._records_dirty = False
-
-    @property
-    def count(self):
-        return len(self)
+    def compact(self, keep, pos, vel, lifetime, distance):
+        keep = np.asarray(keep, dtype=np.intp)
+        n = int(keep.size)
+        if n:
+            self.pos[:n] = np.take(pos, keep, axis=0)
+            self.vel[:n] = np.take(vel, keep, axis=0)
+            self.lifetime[:n] = np.take(lifetime, keep)
+            self.distance[:n] = np.take(distance, keep)
+            self.owner_id[:n] = np.take(self.owner_id[:self._count], keep)
+            self.damage[:n] = np.take(self.damage[:self._count], keep)
+        self._count = n
