@@ -299,6 +299,24 @@ def test_prop_respawn_alpha_is_a_dense_render_column():
     assert table.render_alpha[0] == 0.25
 
 
+def test_moved_position_uses_journal_payload_without_reading_the_thing(monkeypatch):
+    light = make_thing(Light, 'moved', (1.0, 2.0, 3.0))
+    table = _synced([light])
+
+    light.pos = [101.0, 202.0, 303.0]
+    monkeypatch.setattr(
+        et, '_pos_of',
+        lambda _thing: (_ for _ in ()).throw(
+            AssertionError('MOVED path re-read the Thing position')
+        ),
+    )
+
+    table.begin_frame([light], epoch=1)
+
+    assert np.allclose(table.pos[0], [101.0, 202.0, 303.0])
+    assert table.rows_read == 1
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
