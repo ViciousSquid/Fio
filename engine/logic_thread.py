@@ -38,6 +38,7 @@ from .logic_world import LogicWorld
 from .logic_render import LogicRender
 from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
+from .logic_editor import LogicEditor
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -209,6 +210,7 @@ class LogicThread(threading.Thread):
         self.render_runtime = LogicRender(self)
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
+        self.editor_runtime = LogicEditor(self)
         
         # Player stats
         self.player_health = 100
@@ -1026,34 +1028,7 @@ class LogicThread(threading.Thread):
             self.notify_authored_visibility_changed()
 
     def _tick_editor_mode(self, delta: float):
-        dx, dy = self.game_state.consume_mouse_delta()
-        if dx != 0 or dy != 0:
-            self._editor_mouselook_active = True
-            self.editor_camera.yaw += dx * self.EDITOR_MOUSE_SENSITIVITY
-            self.editor_camera.pitch -= dy * self.EDITOR_MOUSE_SENSITIVITY
-            self.editor_camera.pitch = max(-89.0, min(89.0, self.editor_camera.pitch))
-        
-        keys = self.game_state.get_keys()
-        yaw_rad = math.radians(self.editor_camera.yaw)
-        forward = glm.vec3(math.cos(yaw_rad), 0, math.sin(yaw_rad))
-        forward = glm.normalize(forward)
-        right = glm.normalize(glm.cross(forward, glm.vec3(0, 1, 0)))
-        up = glm.vec3(0, 1, 0)
-        
-        move_dir = glm.vec3(0, 0, 0)
-        if Key_W in keys: move_dir += forward
-        if Key_S in keys: move_dir -= forward
-        if Key_A in keys: move_dir -= right
-        if Key_D in keys: move_dir += right
-        if Key_Space in keys: move_dir += up
-        if Key_C in keys: move_dir -= up
-        
-        if glm.length(move_dir) > 0.001:
-            move_dir = glm.normalize(move_dir)
-            speed = self.EDITOR_CAMERA_SPEED
-            if Key_Shift in keys:
-                speed *= self.EDITOR_CAMERA_FAST_MULT
-            self.editor_camera.pos += move_dir * speed * delta
+        return self.editor_runtime.tick(delta)
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
     _ROW_WATCH_TICKS = 30
