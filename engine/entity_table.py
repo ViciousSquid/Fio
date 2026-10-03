@@ -904,10 +904,17 @@ class EntityTable:
             self.pos[moved_slots_array] = np.asarray(
                 moved_values, dtype=np.float64)
             if effect_store is not None:
-                for slot in moved_slots_array.tolist():
-                    if self.class_bits[slot] & ENT_EFFECT:
-                        effect_store.set_position(
-                            things[slot], self.pos[slot])
+                effect_mask = (
+                    self.class_bits[moved_slots_array] & ENT_EFFECT
+                ) != 0
+                effect_slots = moved_slots_array[effect_mask]
+                if len(effect_slots):
+                    store_indices = self.effect_store_index[effect_slots]
+                    valid = store_indices >= 0
+                    if valid.any():
+                        effect_store.pos[store_indices[valid]] = self.pos[
+                            effect_slots[valid]
+                        ]
         fallback = [slot for slot in moved if slot not in set(moved_slots)]
         if fallback:
             self._read_positions(things, fallback)
