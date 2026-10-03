@@ -4224,8 +4224,6 @@ class LogicThread(threading.Thread):
             player_pos = None
             player_radius_sq = 0.0
 
-        things = self.things
-        monster_type = MonsterThing
         radius_sq = float(self.PROJECTILE_MONSTER_RADIUS) ** 2
         lift = float(self.PROJECTILE_MONSTER_LIFT)
 
