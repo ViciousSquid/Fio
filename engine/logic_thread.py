@@ -2833,6 +2833,9 @@ class LogicThread(threading.Thread):
             brush, trigger_id, poll_interval
         )
 
+    def _apply_player_damage(self, damage):
+        return self._trigger_runtime()._apply_player_damage(damage)
+
     # =========================================================================
     # INTERACTIONS
     # =========================================================================
