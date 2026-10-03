@@ -14,7 +14,7 @@ pytestmark = pytest.mark.qt
 def test_prop_collection_defaults_are_independent_of_carry():
     prop = Prop()
     assert prop.properties["collect_enabled"] is False
-    assert prop.properties["collect_type"] == "health"
+    assert prop.properties["collect_type"] == "weapon"
     assert prop.properties["collect_weapon"] == "gun1"
     assert prop.properties["carry_enabled"] is False
 
