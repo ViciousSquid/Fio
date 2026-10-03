@@ -33,6 +33,7 @@ class ConsoleCommandHandler:
     def __init__(self, main_window):
         self.main_window = main_window
         self.editor_state = main_window.state
+        self._command_from_map = False
 
         self.commands = {
             'bind': self.cmd_bind,
@@ -86,6 +87,9 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
+            'hudstyle': self.cmd_hudstyle,
+            'hudopacity': self.cmd_hudopacity,
+            'hudfade': self.cmd_hudfade,
             'message': self.cmd_message,
             'message2': self.cmd_message2,
             'message3': self.cmd_message3,
@@ -213,7 +217,11 @@ class ConsoleCommandHandler:
 
         handler = self.commands.get(cmd)
         if handler:
-            handler(args)
+            self._command_from_map = from_map
+            try:
+                handler(args)
+            finally:
+                self._command_from_map = False
         elif self._dispatch_plugin_command(cmd, args):
             return
         else:
@@ -806,6 +814,117 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
 
+    # ===================================================================
+    # HUD COMMANDS
+    # ===================================================================
+
+    def _hud_config(self):
+        config = getattr(self.main_window, "config", None)
+        if config is None:
+            return None
+        if not config.has_section("Display"):
+            config.add_section("Display")
+        return config
+
+    def _save_hud_config(self):
+        if self._command_from_map:
+            return
+        save_config = getattr(self.main_window, "save_config", None)
+        if callable(save_config):
+            save_config()
+
+    def cmd_hudstyle(self, args):
+        """hudstyle 0|1|2|3|4 [font] — select or hide the HUD."""
+        parts = (args or "").strip().split(maxsplit=1)
+        view = getattr(self.main_window, "view_3d", None)
+        if not parts:
+            style = getattr(view, "_hud_style", 1) if view is not None else 1
+            debug_log("Info", f"HUD style: {style}")
+            return
+
+        try:
+            style = int(parts[0])
+        except ValueError:
+            debug_log("Error", "Usage: hudstyle 0|1|2|3|4 [font]")
+            return
+        if style not in (0, 1, 2, 3, 4) or (len(parts) > 1 and style != 4):
+            debug_log("Error", "Usage: hudstyle 0|1|2|3|4 [font]")
+            return
+
+        font_name = parts[1].strip().strip('"').strip("'") if len(parts) > 1 else None
+        if view is None or not hasattr(view, "set_hud_style"):
+            debug_log("Error", "HUD controls are unavailable.")
+            return
+        if not view.set_hud_style(style, font_name):
+            debug_log("Error", f"HUD font/style {style} could not be loaded.")
+            return
+
+        config = self._hud_config()
+        if config is not None and not self._command_from_map:
+            config.set("Display", "hudstyle", str(style))
+            config.set("Display", "show_hud", str(style != 0))
+            if style == 4 and font_name:
+                config.set("Display", "hudfont", font_name)
+            elif config.has_option("Display", "hudfont"):
+                config.remove_option("Display", "hudfont")
+            self._save_hud_config()
+
+        label = {
+            0: "hidden",
+            1: "Rushford",
+            2: "O.K. Retro",
+            3: "HornetDisplay",
+            4: "LCD/custom",
+        }[style]
+        debug_log("Info", f"HUD style set to {style} ({label})")
+
+    def cmd_hudopacity(self, args):
+        """hudopacity 0..100 — set the HUD opacity."""
+        text = (args or "").strip()
+        view = getattr(self.main_window, "view_3d", None)
+        if not text:
+            value = getattr(view, "_hud_opacity", 100.0) if view is not None else 100.0
+            debug_log("Info", f"HUD opacity: {value:g}%")
+            return
+
+        try:
+            opacity = float(text)
+        except ValueError:
+            debug_log("Error", "Usage: hudopacity 0..100")
+            return
+        if view is None or not hasattr(view, "set_hud_opacity") or not view.set_hud_opacity(opacity):
+            debug_log("Error", "HUD opacity must be a number between 0 and 100.")
+            return
+
+        config = self._hud_config()
+        if config is not None and not self._command_from_map:
+            config.set("Display", "hudopacity", f"{opacity:g}")
+            self._save_hud_config()
+        debug_log("Info", f"HUD opacity set to {opacity:g}%")
+
+    def cmd_hudfade(self, args):
+        """hudfade 0|1 — enable/disable damage-driven health HUD fading."""
+        text = (args or "").strip()
+        view = getattr(self.main_window, "view_3d", None)
+        if not text:
+            enabled = bool(getattr(view, "_hud_fade_enabled", True)) if view is not None else True
+            debug_log("Info", f"HUD damage fade: {1 if enabled else 0}")
+            return
+        if text not in ("0", "1"):
+            debug_log("Error", "Usage: hudfade 0|1")
+            return
+        if view is None or not hasattr(view, "set_hud_fade_enabled"):
+            debug_log("Error", "HUD controls are unavailable.")
+            return
+
+        enabled = text == "1"
+        view.set_hud_fade_enabled(enabled)
+        config = self._hud_config()
+        if config is not None and not self._command_from_map:
+            config.set("Display", "hudfade", str(enabled))
+            self._save_hud_config()
+        debug_log("Info", f"HUD damage fade {'enabled' if enabled else 'disabled'}")
+
     def _cmd_view_message(self, args, line):
         """Draw a transient message in one of the play-view message lines."""
         text = (args or "").strip()
@@ -856,6 +975,9 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
+<b style="color:orange;">hudstyle</b> 0|1|2|3|4 [font] — Hide/select the HUD font (1 Rushford, 2 O.K. Retro, 3 HornetDisplay, 4 LCD/custom)<br>
+<b style="color:orange;">hudopacity</b> 0..100 — Set HUD opacity<br>
+<b style="color:orange;">hudfade</b> 0|1 — Enable/disable damage-driven HUD fading<br>
 <b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
 <b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
 <b style="color:orange;">message3</b> &quot;text&quot; — Show a timed Rushford-font message on the third play-view line<br>
