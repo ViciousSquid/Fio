@@ -37,6 +37,39 @@ def test_effect_store_is_dense_and_does_not_store_authoring_objects():
     assert store.index_of(second) == 1
 
 
+def test_effect_store_preserves_runtime_state_when_a_new_effect_is_inserted_mid_list():
+    first = Effect(properties={"effect_type": "FIRE"})
+    second = Effect(properties={"effect_type": "ORB"})
+    third = Effect(properties={"effect_type": "CUSTOM"})
+    inserted = Effect(properties={"effect_type": "EXPLOSION"})
+
+    store = EffectStore(capacity=8)
+    store.begin_session([first, second, third])
+
+    store.phase[:3] = (0.11, 0.22, 0.33)
+    store.spawn_time[:3] = (11.0, 22.0, 33.0)
+    store.active[:3] = (True, False, True)
+
+    store.rebuild([first, inserted, second, third])
+
+    assert store.index_of(first) == 0
+    assert store.index_of(inserted) == 1
+    assert store.index_of(second) == 2
+    assert store.index_of(third) == 3
+
+    assert float(store.phase[0]) == pytest.approx(0.11)
+    assert float(store.spawn_time[0]) == pytest.approx(11.0)
+    assert bool(store.active[0])
+
+    assert float(store.phase[2]) == pytest.approx(0.22)
+    assert float(store.spawn_time[2]) == pytest.approx(22.0)
+    assert not bool(store.active[2])
+
+    assert float(store.phase[3]) == pytest.approx(0.33)
+    assert float(store.spawn_time[3]) == pytest.approx(33.0)
+    assert bool(store.active[3])
+
+
 def test_effect_store_preserves_runtime_state_when_authoring_rows_reorder():
     first = Effect(properties={"effect_type": "FIRE"})
     second = Effect(properties={"effect_type": "ORB"})
