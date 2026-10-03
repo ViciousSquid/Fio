@@ -4,6 +4,8 @@ pytest.importorskip("PyQt5", reason="Effect is an editor Thing")
 pytestmark = pytest.mark.qt
 
 from editor.things import Effect
+from editor.io_handlers import register_all_input_handlers
+from engine.io_system import IOManager
 from engine.effect_table import (
     FAMILY_CUSTOM,
     FAMILY_EXPLOSION,
@@ -81,6 +83,32 @@ def test_entity_table_reads_effect_runtime_from_effect_store():
     assert float(table.effect_lifetime[0]) == pytest.approx(0.75)
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
+
+
+def test_effect_inputs_update_the_logic_owned_store():
+    effect = Effect(properties={"effect_type": "FIRE", "silent": True})
+    store = EffectStore()
+    store.begin_session([effect])
+
+    io = IOManager()
+    register_all_input_handlers(io)
+    logic = __import__("types").SimpleNamespace(
+        effect_store=store,
+        game_state=None,
+        io_manager=__import__("types").SimpleNamespace(
+            get_game_state=lambda: None,
+            fire_output=lambda *args, **kwargs: None,
+        ),
+    )
+
+    io._input_handlers[("effect", "settype")](effect, "ORB", logic)
+    assert store.family_id[store.index_of(effect)] == FAMILY_ORB
+
+    io._input_handlers[("effect", "explode")](effect, "", logic)
+    index = store.index_of(effect)
+    assert store.family_id[index] == FAMILY_EXPLOSION
+    assert bool(store.active[index])
+    assert float(store.spawn_time[index]) > 0.0
 
 
 def test_effect_store_set_type_resets_dense_runtime_state():
