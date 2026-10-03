@@ -1514,10 +1514,10 @@ class MonsterAI:
             'distance_travelled': 0.0,
         }
 
-        # Add to logic thread's projectile list for update
-        if not hasattr(self.lt, '_monster_projectiles'):
-            self.lt._monster_projectiles = []
-        self.lt._monster_projectiles.append(projectile)
+        # Add through LogicThread's dense projectile store. The compatibility
+        # record remains available, but numeric simulation state is packed once
+        # at spawn rather than rebuilt from dictionaries every tick.
+        self.lt._add_monster_projectile(projectile)
 
         if self.monster_debug_active:
             name = thing.properties.get('name', '?')
