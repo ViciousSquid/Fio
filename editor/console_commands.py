@@ -84,7 +84,7 @@ class ConsoleCommandHandler:
             'phys_reset': self.cmd_phys_reset,
             'phys': self.cmd_phys_info,
             'setpos': self.cmd_setpos,
-            'teleport': self.cmd_setpos,
+            'pos': self.cmd_pos,\n            'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
             'hudstyle': self.cmd_hudstyle,
@@ -2301,6 +2301,11 @@ entity to drive them from the I/O system.</i><br>
             f"damping_scale={world.damping_scale:g}, "
             f"sleep={'ON' if world.sleep_enabled else 'OFF'})"
         )
+
+    def cmd_pos(self, args):
+        """pos — Show the live world coordinates of the active camera."""
+        self.main_window.show_camera_position_toast()
+        debug_log("Info", "Camera position overlay enabled")
 
     def cmd_setpos(self, args):
         if not self._require_play_mode("setpos"):
