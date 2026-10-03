@@ -695,6 +695,12 @@ class Ui_MainWindow(object):
 
         make_btn("assets/subtract.png", "Subtract",
                  on_click=MainWindow.perform_subtraction, bottom_color=group_2_color)
+        make_btn(
+            "assets/b_applytex.png",
+            "Stamp selected texture onto terrain\n"
+            "Select a plain AABB brush, elongate it in X/Z for roads or paths",
+            on_click=MainWindow.stamp_texture_to_terrain,
+            bottom_color=group_2_color)
 
         MainWindow.scissor_btn = make_btn(
             "assets/scissor.png",
