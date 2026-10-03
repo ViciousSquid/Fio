@@ -2815,6 +2815,7 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.CrossCursor)
         else:
             self._terrain_brush_mouse_pos = QPoint(-1, -1)
+            self._terrain_brush_hit = None
             self.setCursor(Qt.ArrowCursor)
         self.update()
 
@@ -2881,7 +2882,7 @@ class QtGameView(QOpenGLWidget):
         if pos.x() < 0 or pos.y() < 0:
             return
 
-        hit = self.raycast_terrain(pos.x(), pos.y())
+        hit = self._terrain_brush_hit
         if hit is None:
             return
 
@@ -3346,6 +3347,7 @@ class QtGameView(QOpenGLWidget):
 
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
             self._terrain_brush_mouse_pos = event.pos()
+            self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
         if not self.play_mode and self.floating_windows.handle_mouse_press(event):
@@ -3480,6 +3482,7 @@ class QtGameView(QOpenGLWidget):
                 self._face_mode_press = None
         if self.terrain_sculpt_active and not self.play_mode:
             self._terrain_brush_mouse_pos = event.pos()
+            self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
             self.update()
             return
         if self.mouselook_active:
@@ -3564,6 +3567,7 @@ class QtGameView(QOpenGLWidget):
     def leaveEvent(self, event):
         if self.terrain_sculpt_active and not self.play_mode:
             self._terrain_brush_mouse_pos = QPoint(-1, -1)
+            self._terrain_brush_hit = None
             self.update()
         super().leaveEvent(event)
 
