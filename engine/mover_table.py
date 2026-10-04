@@ -437,7 +437,7 @@ class LinearMovers(_Group):
         rows = np.arange(start, len(self.index))
         active = rows[~self.move_once[start:] & self.start_on[start:]]
         on_path = np.zeros(len(self.index), dtype=bool)
-        for i in logic.mover_path_states:
+        for i in logic.mover_runtime.mover_path_states:
             row = self.row_of_index.get(i)
             if row is not None:
                 on_path[row] = True
@@ -790,8 +790,8 @@ class MoverTable:
     def _link(self, logic):
         """Rows for the live lists, and the rows the two groups share."""
         movers, doors = self.movers, self.doors
-        movers.ensure(logic.movers)
-        doors.ensure(logic.doors)
+        movers.ensure(logic.mover_runtime.movers)
+        doors.ensure(logic.mover_runtime.doors)
         key = (movers.version, doors.version)
         if getattr(self, '_linked', None) == key:
             return
