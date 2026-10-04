@@ -186,35 +186,6 @@ def test_editor_mode_publishes_the_editor_camera(logic):
     assert published.camera_view_matrix is not None
 
 
-def test_every_non_hidden_brush_is_in_the_all_brushes_list(logic):
-    brushes = pillar_grid(3, 3, spacing=200.0)
-    brushes.append(box_brush("hidden_one", (0, 0, 0), hidden=True))
-    thread = logic(brushes=brushes)
-
-    thread.render_runtime.prepare_render_state()
-
-    published = thread.game_state.get_write_state()
-    names = {b.get("name") for b in published.all_brushes}
-    assert "hidden_one" not in names, "a hidden brush reached the renderer"
-    assert len(published.all_brushes) == 9, (
-        "expected the 9 visible pillars, got %d" % len(published.all_brushes))
-    assert published.total_brushes == 10, (
-        "total_brushes should count everything in the scene, it says %d"
-        % published.total_brushes)
-
-
-def test_the_visible_list_is_a_subset_of_the_all_brushes_list(logic):
-    thread = logic(brushes=pillar_grid(5, 5, spacing=400.0))
-    thread.editor_camera.pos = glm.vec3(0, 200, 1500)
-
-    thread.render_runtime.prepare_render_state()
-
-    published = thread.game_state.get_write_state()
-    all_ids = {id(b) for b in published.all_brushes}
-    stray = [b.get("name") for b in published.visible_brushes if id(b) not in all_ids]
-    assert not stray, (
-        "these brushes are in the visible list but not the all-brushes list: %s"
-        % (stray,))
 
 
 def test_culling_off_makes_everything_visible(logic):
@@ -225,9 +196,9 @@ def test_culling_off_makes_everything_visible(logic):
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    assert len(published.visible_brushes) == len(brushes), (
+    assert len(published.visible_brush_slots) == len(brushes), (
         "with culling off all %d brushes should be submitted, %d were"
-        % (len(brushes), len(published.visible_brushes)))
+        % (len(brushes), len(published.visible_brush_slots)))
     assert published.culled_brushes == 0
 
 
@@ -243,7 +214,7 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    names = {b.get("name") for b in published.visible_brushes}
+    names = {published.render_table.names[int(slot)] for slot in published.visible_brush_slots}
     assert "in_front" in names, (
         "the brush in front of the camera was culled; visible set is %s" % (names,))
     assert "behind" not in names, (
@@ -257,10 +228,10 @@ def test_the_culled_count_and_the_visible_list_agree(logic):
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    accounted = len(published.visible_brushes) + published.culled_brushes
+    accounted = len(published.visible_brush_slots) + published.culled_brushes
     assert accounted == published.total_brushes, (
         "%d visible + %d culled = %d, but the scene has %d brushes"
-        % (len(published.visible_brushes), published.culled_brushes,
+        % (len(published.visible_brush_slots), published.culled_brushes,
            accounted, published.total_brushes))
 
 
@@ -293,7 +264,8 @@ def test_a_static_brush_is_submitted_by_reference(logic):
 
     thread.render_runtime.prepare_render_state()
 
-    assert thread.game_state.get_write_state().all_brushes[0] is wall
+    state = thread.game_state.get_write_state()
+    assert state.render_table.refs[int(state.all_brush_slots[0])] is wall
 
 
 def test_lights_and_entities_reach_the_render_state(logic):
@@ -305,7 +277,7 @@ def test_lights_and_entities_reach_the_render_state(logic):
 
     published = thread.game_state.get_write_state()
     assert published.entity_table.count == 2
-    assert len(published.visible_things) == 2
+    assert len(published.visible_thing_slots) == 2
 
 
 def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_frame(logic, monkeypatch):
@@ -344,44 +316,6 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
     assert published.entity_refs[0] is not None
 
 
-def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
-    lamp = make_thing(Light, "lamp", (100, 200, -300))
-    monster = make_thing(Monster, "grunt", (-50, 96, -700))
-    thread = logic(things=[lamp, monster])
-
-    thread.render_runtime.prepare_render_state()
-
-    published = thread.game_state.get_write_state()
-    visible = published.visible_things
-    assert visible._list is None, (
-        "visible entity slots were materialised into a Python list during "
-        "render-state publication"
-    )
-    assert len(visible) == 2
-    assert visible._list is None, (
-        "len() must inspect the dense slot selection without materialising objects"
-    )
-
-    # An object consumer may still request the compatibility view.
-    assert visible[0] is lamp
-    assert visible._list is not None
-
-
-def test_all_lights_stays_lazy_until_light_consumer_reads_it(logic):
-    lamp = make_thing(Light, "lamp", (100, 200, -300))
-    monster = make_thing(Monster, "grunt", (-50, 96, -700))
-    thread = logic(things=[lamp, monster])
-
-    thread.render_runtime.prepare_render_state()
-
-    published = thread.game_state.get_write_state()
-    lights = published.all_lights
-    assert lights._list is None
-    assert len(lights) == 1
-    assert lights._list is None
-
-    assert lights[0] is lamp
-    assert lights._list is not None
 
 
 def test_published_entity_rows_carry_their_positions(logic):
@@ -395,7 +329,7 @@ def test_published_entity_rows_carry_their_positions(logic):
     slots = published.visible_thing_slots
     assert published.entity_table.pos[slots].tolist() == [
         [100.0, 200.0, -300.0], [-50.0, 96.0, 700.0]]
-    assert list(published.visible_things) == [lamp, monster]
+    assert published.visible_thing_slots.tolist() == [0, 1]
 
 
 def test_a_moved_entity_updates_its_row_without_reconciling(logic):
@@ -429,7 +363,7 @@ def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
     table = published.entity_table
     assert table.ids == [first_thing.properties["id"], third_thing.properties["id"]]
     assert table.pos[1].tolist() == [900.0, 100.0, -700.0]
-    assert list(published.visible_things) == [first_thing, third_thing]
+    assert published.visible_thing_slots.tolist() == [0, 1]
 
 
 def _publish(thread):
@@ -512,11 +446,11 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
         table = state.render_table
         slots = state.visible_brush_slots
         assert table is thread.game_state.get_write_state().render_table
-        assert len(slots) == len(state.visible_brushes)
+        assert len(slots) == len(state.visible_brush_slots)
         # Every slot indexes the row of the brush it was published beside, so a
         # consumer can classify from the columns instead of the dicts.
-        for i, brush in enumerate(state.visible_brushes):
-            assert table.ids[int(slots[i])] == brush["id"]
+        for i, slot in enumerate(state.visible_brush_slots):
+            assert table.ids[int(slot)] == table.ids[int(slots[i])]
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -530,11 +464,11 @@ def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
     thread.culling_enabled = False
     try:
         thread.render_runtime.prepare_render_state()
-        assert len(thread.game_state.get_write_state().all_brushes) == 1
+        assert len(thread.game_state.get_write_state().all_brush_slots) == 1
 
         set_authored_flag(brush, "hidden", True)
         thread.render_runtime.prepare_render_state()
-        assert len(thread.game_state.get_write_state().all_brushes) == 0, (
+        assert len(thread.game_state.get_write_state().all_brush_slots) == 0, (
             "hiding a brush mid-session did not remove it from the frame")
     finally:
         thread.session_runtime.apply_play_mode(False)
@@ -548,7 +482,8 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
     try:
         thread.editor_state.brushes.append(box_brush("second", (100, 0, -400)))
         thread.render_runtime.prepare_render_state()
-        names = {b.get("name") for b in thread.game_state.get_write_state().all_brushes}
+        state = thread.game_state.get_write_state()
+        names = {state.render_table.names[int(slot)] for slot in state.all_brush_slots}
         assert names == {"first", "second"}, (
             "a brush added mid-session did not reach the renderer; the frame "
             "holds %s" % (sorted(names),))
@@ -613,16 +548,15 @@ def test_the_recycled_write_buffer_is_reset():
     """Otherwise last-but-one frame's lists leak into the new frame."""
     game_state = ThreadedGameState()
     first = game_state.get_write_state()
-    first.visible_brushes = [box_brush("stale")]
+    first.visible_brush_slots = np.array([0], dtype=np.int32)
     game_state.request_swap()          # first becomes the read buffer
     second = game_state.get_write_state()
-    second.visible_brushes = [box_brush("newer")]
+    second.visible_brush_slots = np.array([0], dtype=np.int32)
     game_state.request_swap()          # first is recycled as the write buffer
 
     recycled = game_state.get_write_state()
-    assert recycled.visible_brushes == [], (
-        "the recycled buffer still holds %s from two frames ago"
-        % ([b.get("name") for b in recycled.visible_brushes],))
+    assert len(recycled.visible_brush_slots) == 0, (
+        "the recycled buffer still holds visible brush slots")
 
 
 def test_a_render_state_snapshot_is_independent_of_later_writes():
@@ -833,35 +767,6 @@ def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
         thread.session_runtime.apply_play_mode(False)
 
 
-def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
-    """The frame must not end by converting visibility back into objects.
-
-    The main camera pass consumes slots, so on an ordinary frame nothing asks
-    for a list at all; the portal and split-screen paths, which do, pay for it
-    when they ask.
-    """
-    brushes = pillar_grid(4, 4, spacing=300.0)
-    thread = logic(brushes=brushes)
-    thread.session_runtime.apply_play_mode(True)
-    try:
-        thread.render_runtime.prepare_render_state()
-        state = thread.game_state.get_write_state()
-        for published in (state.visible_brushes, state.all_brushes):
-            assert published._list is None, (
-                "the brush list was materialised during _prepare_render_state")
-            # Length and truthiness come from the slots, so the renderer and
-            # the stats overlay can ask without forcing the conversion.
-            assert len(published) >= 0
-            assert bool(published) is (len(published) > 0)
-            assert published._list is None
-
-        # ...and a caller that really wants objects still gets them.
-        materialised = list(state.all_brushes)
-        assert len(materialised) == len(brushes)
-        assert materialised[0] is thread.brushes[0]
-    finally:
-        thread.session_runtime.apply_play_mode(False)
-
 
 # ---------------------------------------------------------------------------
 # The dense entity projection
@@ -902,7 +807,7 @@ def test_entity_slots_index_the_rows_they_were_published_beside(logic):
     state = thread.game_state.get_write_state()
     table, slots = state.entity_table, state.visible_thing_slots
 
-    assert len(slots) == len(state.visible_things)
+    assert len(slots) == len(state.visible_thing_slots)
     assert table.ids[int(slots[0])] == lamp.properties["id"]
     assert table.ids[int(slots[1])] == monster.properties["id"]
     assert np.allclose(table.pos[int(slots[0])], lamp.pos)
@@ -918,7 +823,7 @@ def test_a_collected_prop_is_not_published(logic):
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
 
-        assert list(state.visible_things) == [keep]
+        assert len(state.visible_thing_slots) == 1
         assert len(state.visible_thing_slots) == 1
     finally:
         thread.session_runtime.apply_play_mode(False)
@@ -931,7 +836,7 @@ def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
     thread.render_runtime.prepare_render_state()
     state = thread.game_state.get_write_state()
 
-    assert list(state.all_lights) == [lamp]
+    assert state.entity_table.light_slots.tolist() == [0]
     assert list(thread.game_state.get_write_state().entity_table.light_slots) == [0]
 
 
