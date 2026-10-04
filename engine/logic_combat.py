@@ -111,7 +111,7 @@ class LogicCombat:
         ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
         closest_brush_hit = None
         closest_brush_dist = float('inf')
-        collision_brushes = logic._collision_brushes_cache
+        collision_brushes = logic.collision_runtime._collision_brushes_cache
         for brush in collision_brushes:
             if (brush.get('is_trigger') or brush.get('hidden') or
                 is_water_brush(brush) or brush.get('is_fog')):
@@ -389,7 +389,7 @@ class LogicCombat:
 
         count = len(projectiles)
         has_portals = bool(logic.portal_runtime.portal_things)
-        collision_brushes = logic._collision_brushes_cache
+        collision_brushes = logic.collision_runtime._collision_brushes_cache
         survivors = []
 
         player = logic.player
@@ -581,7 +581,7 @@ class LogicCombat:
             ) & live
 
         grid = logic.session_runtime.spatial_grid
-        all_collision_brushes = logic._collision_brushes_cache
+        all_collision_brushes = logic.collision_runtime._collision_brushes_cache
         keep = live.copy()
 
         live_rows = np.flatnonzero(live)
