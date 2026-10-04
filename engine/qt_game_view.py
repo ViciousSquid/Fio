@@ -3289,7 +3289,6 @@ class QtGameView(QOpenGLWidget):
         # A left click here also drops copies being carried by the cursor, so
         # a clone started in a 2D view can be committed from the 3D view too.
         if (not self.play_mode and event.button() == Qt.LeftButton and
-                self.editor.clone_placement_active() is not None and
                 self.editor.clone_placement_active()):
             self.editor.finish_clone_placement()
             return
