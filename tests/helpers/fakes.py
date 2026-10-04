@@ -79,7 +79,7 @@ class FakeLogicThread:
     """The parent object :class:`engine.monster_ai.MonsterAI` talks to.
 
     MonsterAI reads a well-defined set of attributes off its logic thread (see
-    ``grep 'self\\.lt\\.' engine/monster_ai.py``); every one of them is here,
+    its current ``self.lt`` references); every one of them is here,
     with the same meaning.  ``intersect_ray_aabb`` is the engine's own slab
     test, copied rather than approximated, because line-of-sight results would
     otherwise depend on which implementation the test happened to get.
@@ -105,7 +105,6 @@ class FakeLogicThread:
         self._monster_things = []
         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
-        self.hurt_trigger_timers = {}
         self.HURT_INTERVAL = 0.5
         self.damage_applied = []
 
