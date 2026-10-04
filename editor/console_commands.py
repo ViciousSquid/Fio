@@ -1044,24 +1044,13 @@ entity to drive them from the I/O system.</i><br>
     # HELPER: Get renderer safely
     # ===================================================================
     def _get_renderer(self):
-        """Safely retrieve the active renderer from the 3D view."""
-        try:
-            if hasattr(self.main_window, 'view_3d') and hasattr(self.main_window.view_3d, 'renderer'):
-                return self.main_window.view_3d.renderer
-        except Exception:
-            pass
-        debug_log("Error", "Renderer not accessible (not in 3D view).")
-        return None
+        """Return the active renderer owned by the 3D view."""
+        return self.main_window.view_3d.renderer
 
     def _get_io_manager(self):
-        """Safely retrieve the I/O manager from the logic thread."""
-        try:
-            if self.main_window.view_3d.logic_thread:
-                return self.main_window.view_3d.logic_thread.io_manager
-        except Exception:
-            pass
-        debug_log("Error", "I/O manager not accessible.")
-        return None
+        """Return the I/O manager owned by the active logic thread."""
+        logic_thread = self.main_window.view_3d.logic_thread
+        return logic_thread.io_manager if logic_thread is not None else None
 
     # ===================================================================
     # RENDER COMMANDS
@@ -1078,24 +1067,24 @@ entity to drive them from the I/O system.</i><br>
         def add_line(name, value):
             lines.append(f"<b>{name}:</b> {value}")
 
-        add_line("Wireframe", "ON" if getattr(renderer, 'wireframe', False) else "OFF")
-        add_line("Shadows", "ON" if getattr(renderer, 'shadows_enabled', False) else "OFF")
+        add_line("Wireframe", "ON" if renderer.wireframe else "OFF")
+        add_line("Shadows", "ON" if renderer.shadows_enabled else "OFF")
         add_line("Water quality cap",
-                 "per brush" if getattr(renderer, 'water_quality', 'expensive') == 'expensive'
+                 "per brush" if renderer.water_quality == 'expensive'
                  else "cheap (all water)")
-        add_line("Volumetric Fog", "ON" if getattr(renderer, 'fog_enabled', True) else "OFF")
-        add_line("Water Shader", "ON" if getattr(renderer, 'water_enabled', True) else "OFF")
-        add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
-        add_line("Real-time Lighting", "ON" if getattr(renderer, 'lighting_enabled', True) else "OFF")
-        add_line("Deferred Rendering", "ON" if getattr(renderer, 'use_deferred', False) else "OFF")
-        add_line("Low-power Mode", "ON" if getattr(renderer, "lowpower_mode", False) else "OFF")
+        add_line("Volumetric Fog", "ON" if renderer.fog_enabled else "OFF")
+        add_line("Water Shader", "ON" if renderer.water_enabled else "OFF")
+        add_line("Glass Shader", "ON" if renderer.glass_enabled else "OFF")
+        add_line("Real-time Lighting", "ON" if renderer.lighting_enabled else "OFF")
+        add_line("Deferred Rendering", "ON" if renderer.use_deferred else "OFF")
+        add_line("Low-power Mode", "ON" if renderer.lowpower_mode else "OFF")
 
         # Clear color
-        cc = getattr(renderer, 'clear_color', [0.02, 0.02, 0.05])
+        cc = renderer.clear_color
         add_line("Clear Color", f"[{cc[0]:.2f}, {cc[1]:.2f}, {cc[2]:.2f}]")
 
         # View distance and the far-plane fog that hides its clip.
-        vd = getattr(getattr(self.main_window, 'view_3d', None), 'view_distance', None)
+        vd = self.main_window.view_3d.view_distance
         if vd is not None:
             lines.append("<b>--- View Distance &amp; Fog ---</b>")
             for name, value in vd.describe():
@@ -1111,28 +1100,27 @@ entity to drive them from the I/O system.</i><br>
         renderer = self._get_renderer()
         if not renderer:
             return
-        renderer.wireframe = not getattr(renderer, 'wireframe', False)
+        renderer.wireframe = not renderer.wireframe
         state = "ON" if renderer.wireframe else "OFF"
         debug_log("Info", f"Wireframe: {state}")
-        if hasattr(self.main_window.view_3d, 'update'):
-            self.main_window.view_3d.update()
+        self.main_window.view_3d.update()
 
     def cmd_render_shadows(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.shadows_enabled = not getattr(renderer, 'shadows_enabled', False)
+        renderer.shadows_enabled = not renderer.shadows_enabled
         debug_log("Info", f"Shadows: {'ON' if renderer.shadows_enabled else 'OFF'}")
 
     def cmd_render_fog(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.fog_enabled = not getattr(renderer, 'fog_enabled', True)
+        renderer.fog_enabled = not renderer.fog_enabled
         debug_log("Info", f"Volumetric Fog: {'ON' if renderer.fog_enabled else 'OFF'}")
 
     def cmd_render_water(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.water_enabled = not getattr(renderer, 'water_enabled', True)
+        renderer.water_enabled = not renderer.water_enabled
         debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
 
     def cmd_water_quality(self, args):
@@ -1144,7 +1132,7 @@ entity to drive them from the I/O system.</i><br>
         """
         renderer = self._get_renderer()
         if not renderer: return
-        current = getattr(renderer, 'water_quality', 'expensive')
+        current = renderer.water_quality
         if args:
             wanted = str(args[0]).strip().lower()
             if wanted not in renderer.WATER_QUALITIES:
@@ -1159,19 +1147,19 @@ entity to drive them from the I/O system.</i><br>
     def cmd_render_glass(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.glass_enabled = not getattr(renderer, 'glass_enabled', True)
+        renderer.glass_enabled = not renderer.glass_enabled
         debug_log("Info", f"Glass shader: {'ON' if renderer.glass_enabled else 'OFF'}")
 
     def cmd_render_lighting(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.lighting_enabled = not getattr(renderer, 'lighting_enabled', True)
+        renderer.lighting_enabled = not renderer.lighting_enabled
         debug_log("Info", f"Real-time lighting: {'ON' if renderer.lighting_enabled else 'OFF'}")
 
     def cmd_render_deferred(self, args):
         renderer = self._get_renderer()
         if not renderer: return
-        renderer.use_deferred = not getattr(renderer, 'use_deferred', False)
+        renderer.use_deferred = not renderer.use_deferred
         debug_log("Info", f"Deferred rendering: {'ON' if renderer.use_deferred else 'OFF'}")
 
     def cmd_render_vsync(self, args):
