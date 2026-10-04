@@ -313,7 +313,7 @@ def _capture_moving_brushes(logic) -> dict:
     wherever it had got to.
     """
     out = {}
-    for brush in getattr(logic, "brushes", []) or []:
+    for brush in logic.editor_state.brushes:
         if not (brush.get("is_mover") or brush.get("is_door")):
             continue
         bid = brush.get("id")
@@ -669,7 +669,7 @@ def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
 
     # -- things: restore pos + mutable properties by id --------------------
     live_things = {}
-    for t in getattr(logic, "things", []) or []:
+    for t in logic.editor_state.things:
         tid = _thing_id(t)
         if tid:
             live_things[tid] = t
