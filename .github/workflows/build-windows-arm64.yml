@@ -2,6 +2,11 @@ name: Native Windows ARM64 Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 2.6_CANARY
+    paths:
+      - .github/workflows/build-windows-arm64.yml
 
 jobs:
   build-windows-arm64:
