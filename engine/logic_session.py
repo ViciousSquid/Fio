@@ -39,6 +39,11 @@ class LogicSession:
         self.logic = logic
 
     def apply_play_mode(self, enabled: bool):
+        """Enter or leave Play Mode under the session's tick lock."""
+        with self.logic._tick_lock:
+            return self._apply_play_mode_unlocked(enabled)
+
+    def _apply_play_mode_unlocked(self, enabled: bool):
         logic = self.logic
         logic.play_mode = enabled
 
