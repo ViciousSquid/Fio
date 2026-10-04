@@ -649,7 +649,8 @@ class EntityTable:
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
-        #: slot -> the entity, as an object array (``PublishedEntities``).
+        #: slot -> the live entity. Retained for cache-boundary resolution;
+        #: frame rendering consumes the dense numeric columns.
         self.refs = np.empty(0, dtype=object)
         #: Every row, as a slot vector; rebuilt only when the rows change.
         self.all_slots = np.empty(0, dtype=np.int32)
