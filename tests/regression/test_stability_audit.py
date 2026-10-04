@@ -409,7 +409,7 @@ def test_a_hidden_light_does_not_light_the_running_world():
     assert sorted(slots.tolist()) == [0, 1, 2]
 
 
-def test_console_hide_and_show_go_through_the_authored_writer():
+def test_console_hide_and_show_go_through_the_authored_writer(qt_app):
     from editor.console_commands import ConsoleCommandHandler
 
     editor = MainWindow(ROOT)
