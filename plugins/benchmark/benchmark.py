@@ -620,15 +620,9 @@ class BenchmarkRunner:
 
         logic = getattr(view, "logic_thread", None)
         if logic is not None:
-            try:
-                logic.notify_visibility_changed()
-            except Exception:
-                pass
-            try:
-                logic._model_collision_brushes = []
-                logic._refresh_collision_brushes_cache()
-            except Exception:
-                pass
+            logic.world_runtime.notify_visibility_changed()
+            logic.collision_runtime._model_collision_brushes = []
+            logic.collision_runtime.refresh_collision_brushes_cache()
 
         # Clear the currently displayed render snapshot.  The LogicThread's
         # write buffer is left alone and will publish a fresh snapshot from the
