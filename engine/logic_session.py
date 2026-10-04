@@ -84,15 +84,6 @@ class LogicSession:
             logic._gui_fault_teardown_requested = False
             logic._tick_fault_message = ""
 
-            if hasattr(logic.editor_state, "config"):
-                logic.player_runtime.p2_turn_sensitivity = float(
-                    logic.editor_state.config.get(
-                        "Controls",
-                        "p2_turn_sensitivity",
-                        fallback=10.0,
-                    )
-                )
-
             logic.mover_runtime._init_movers()
             logic.mover_runtime._init_doors()
             logic.parenting_runtime._init_parented_lights()
