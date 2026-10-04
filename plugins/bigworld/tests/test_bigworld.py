@@ -67,19 +67,23 @@ def make_brush(x, y, z, sx=64.0, sy=64.0, sz=64.0, **extra):
     return b
 
 
-def make_thing(tid_or_x, y_or_z, z=None, ttype="monster", **props):
-    """Create a real Fio Thing; Big World owns its position/properties, not a fake object."""
-    if z is None:
-        x, z = tid_or_x, y_or_z
-        tid = props.pop("uuid", f"t{x}_{z}")
-        y = 0.0
+def make_thing(first, second, third=None, props=None, ttype="monster", **extra):
+    """Create a real Fio Thing while accepting the historical test-helper signatures."""
+    if isinstance(second, str) and isinstance(third, (list, tuple)):
+        tid = str(first)
+        type_name = second
+        x, y, z = third
+        properties = dict(props or {})
     else:
-        tid = props.pop("uuid", str(tid_or_x))
-        x, y = float(tid_or_x), float(y_or_z)
-    properties = {"id": tid, "type": ttype}
-    properties.update(props)
+        x, z = float(first), float(second)
+        y = float(extra.pop("y", 0.0))
+        tid = str(extra.pop("uuid", extra.pop("id", f"t{x}_{z}")))
+        type_name = ttype
+        properties = {}
+    properties["id"] = tid
+    properties["type"] = type_name
+    properties.update(extra)
     return Thing(pos=[float(x), float(y), float(z)], properties=properties)
-
 
 def make_logic(brushes, things, player_pos=(0, 0, 0), terrain=None):
     """Build the real LogicThread used by play mode, without starting its thread."""
