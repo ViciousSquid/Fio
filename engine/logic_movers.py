@@ -55,7 +55,7 @@ class LogicMovers:
 
     @mover_states.setter
     def mover_states(self, states):
-        self._movers().movers.replace_states(self.self.movers, states)
+        self._movers().movers.replace_states(self.movers, states)
 
     @property
     def door_states(self):
@@ -64,7 +64,7 @@ class LogicMovers:
 
     @door_states.setter
     def door_states(self, states):
-        self._movers().doors.replace_states(self.self.doors, states)
+        self._movers().doors.replace_states(self.doors, states)
 
     def _init_movers(self):
         logic = self.logic
