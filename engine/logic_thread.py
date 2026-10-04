@@ -338,7 +338,6 @@ class LogicThread(threading.Thread):
         # only the small forwarding surface needed by the rest of the engine.
         self.camera = LogicCamera(self)
         self.player_runtime = LogicPlayer(self)
-        self.editor_camera = self.camera.editor_camera
         # HUD visibility follows LogicCamera control. When a cinematic ends,
         # the entire HUD fades back in over four seconds.
         self._hud_cinematic_last_active = False
