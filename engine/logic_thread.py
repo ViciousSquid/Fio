@@ -215,7 +215,6 @@ class LogicThread(threading.Thread):
         ),
         "world": (
             "editor_state",
-            "_props",
             "monster_ai",
             "_monster_lock",
         ),
@@ -402,9 +401,6 @@ class LogicThread(threading.Thread):
         self.collision_runtime = LogicCollision(self)
 
         # Entity lookup caches — built on play-mode enter
-        # The Prop registry (engine.prop_runtime.PropSession).  Created on
-        # play-mode enter and None in the editor, where nothing simulates.
-        self._props = None
         # Dense LevelChanger activation columns. Spatial data is rebuilt with
         # the entity caches; the per-tick interaction path only consumes these
         # float32 columns and scalar-dispatches the selected row.
