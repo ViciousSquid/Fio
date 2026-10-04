@@ -30,12 +30,23 @@ def _io_for(effect, events=None):
     io = IOManager()
     register_all_input_handlers(io)
     io.set_entity_finder(lambda name: effect)
+    effect_store = EffectStore()
+    effect_store.begin_session([effect])
     if events is None:
-        logic = SimpleNamespace(io_manager=io, game_state=None)
+        logic = SimpleNamespace(
+            io_manager=io,
+            game_state=None,
+            effect_store=effect_store,
+        )
     else:
-        logic = SimpleNamespace(io_manager=SimpleNamespace(
-            fire_output=lambda entity, name, value=None: events.append((name, value)),
-            get_game_state=lambda: None), game_state=None)
+        logic = SimpleNamespace(
+            io_manager=SimpleNamespace(
+                fire_output=lambda entity, name, value=None: events.append((name, value)),
+                get_game_state=lambda: None,
+            ),
+            game_state=None,
+            effect_store=effect_store,
+        )
     io.set_logic_thread(logic)
 
     def send(input_name, param=""):
@@ -97,9 +108,12 @@ def test_explosion_trigger_queues_centered_sound():
 
     queued = []
     game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
+    effect_store = EffectStore()
+    effect_store.begin_session([effect])
     logic = SimpleNamespace(
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
+        effect_store=effect_store,
     )
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
@@ -128,9 +142,12 @@ def test_silent_explosion_does_not_queue_sound():
 
     queued = []
     game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
+    effect_store = EffectStore()
+    effect_store.begin_session([effect])
     logic = SimpleNamespace(
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
+        effect_store=effect_store,
     )
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
