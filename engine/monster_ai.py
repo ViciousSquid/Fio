@@ -1213,12 +1213,11 @@ the scalar fallback for callers that do not have the dense table.
                 return None
 
             table = self.table
-            same_rows = (
-                table.count == len(monsters)
-                and all(a is b for a, b in zip(table.monsters, monsters))
-            )
-            if refresh_table or not same_rows:
-                table.gather(monsters)
+            # Direct helper calls can observe mutable monster state changes
+            # (dead/hidden/team/position) without a new dense tick. Gather the
+            # live columns for those calls; the hot tick path supplies a table
+            # explicitly and therefore avoids this compatibility gather.
+            table.gather(monsters)
         count = table.count
         if not count:
             return None
