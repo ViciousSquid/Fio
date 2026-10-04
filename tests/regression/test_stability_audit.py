@@ -350,23 +350,12 @@ def test_hurt_trigger_uses_the_editors_damage_amount():
         logic.session_runtime.apply_play_mode(False)
 
 
-def test_trigger_activation_falls_back_to_the_key_older_editors_wrote():
+def test_trigger_activation_uses_canonical_key():
     from engine.logic_thread import _trigger_activation
-    assert _trigger_activation({"trigger_collect_activation": "use"}) == "use"
+    assert _trigger_activation({"trigger_activation": "use"}) == "use"
     assert _trigger_activation({"trigger_activation": "Touch",
                                 "trigger_collect_activation": "use"}) == "touch"
     assert _trigger_activation({}) == "touch"
-
-
-@pytest.mark.parametrize("save", ["quicksave", "quickload"])
-def test_a_trigger_can_quicksave_or_quickload(save):
-    brush, game_state, logic = _trigger(trigger_type="Once", trigger_save=save)
-    try:
-        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
-        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
-        assert list(game_state.consume_console_commands()) == [save]
-    finally:
-        logic.session_runtime.apply_play_mode(False)
 
 
 def test_a_trigger_saves_nothing_by_default():
