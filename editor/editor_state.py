@@ -527,6 +527,21 @@ class EditorState:
                 if not isinstance(item, dict):
                     raise ValueError(f"{kind}[{index}] is not an object")
 
+                # Replace the live scene only after authored objects have
+                # passed the structural checks performed here and by
+                # load_from_data(). Keep vector shape validation on this
+                # preflight boundary so malformed data cannot clear the
+                # current level first.
+                fields = ('pos', 'size') if kind == 'brushes' else ('pos',)
+                for field in fields:
+                    value = item.get(field)
+                    if value is None:
+                        continue
+                    if not isinstance(value, (list, tuple)) or len(value) != 3:
+                        raise ValueError(
+                            f"{kind}[{index}]['{field}'] must be a 3-element vector"
+                        )
+
     def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
         """Populates the scene from a dictionary.
 
