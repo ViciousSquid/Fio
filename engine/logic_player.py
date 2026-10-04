@@ -7,6 +7,7 @@ orchestrator.
 """
 
 import math
+import threading
 import glm
 
 # Qt key values used by the engine's input state.
