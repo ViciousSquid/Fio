@@ -3893,8 +3893,8 @@ class View2D(QWidget):
 
         try:
             probe = cls(pos=list(pos_3d))
-            properties = getattr(probe, "properties", None)
-            ttype = properties.get("type") if isinstance(properties, dict) else None
+            properties = probe.properties
+            ttype = properties.get("type")
             if _singleton_blocked(self.main_window, self.editor.state, ttype):
                 return
 
@@ -4416,9 +4416,7 @@ def singleton_instance(things, ttype):
         return None
     norm = manager._normalise_type(ttype)
     for thing in things or []:
-        props = getattr(thing, "properties", None)
-        if not isinstance(props, dict):
-            continue
+        props = thing.properties
         if manager._normalise_type(props.get("type", "")) == norm:
             return thing
     return None
@@ -4426,7 +4424,7 @@ def singleton_instance(things, ttype):
 
 def _singleton_blocked(main_window, editor_state, ttype) -> bool:
     """Select an existing singleton instead of creating a duplicate."""
-    existing = singleton_instance(getattr(editor_state, "things", []), ttype)
+    existing = singleton_instance(editor_state.things, ttype)
     if existing is None:
         return False
     main_window.set_selected_object(existing)
