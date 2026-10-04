@@ -28,6 +28,8 @@ nothing and behave exactly as before (§19/§20).
 
 from __future__ import annotations
 
+import weakref
+
 from plugins.api import FioPlugin, TickContext, prop
 
 # NOTE: nothing below the plugin's own declaration is imported here.
@@ -58,6 +60,7 @@ class BigWorldPlugin(FioPlugin):
     # The manager auto-enables the plugin when such a map loads (auto_enable_for_map),
     # so streaming maps just work while ordinary maps never pay for it.
     enabled = False
+    _sessions = weakref.WeakKeyDictionary()
 
     #: Normalised ``type`` of the entity whose presence opts a map in. Kept here
     #: as a bare string rather than read off ``.entities`` so asking "does this
@@ -111,7 +114,6 @@ class BigWorldPlugin(FioPlugin):
 
     # -- play lifecycle -----------------------------------------------------
     def on_play_start(self, logic):
-        logic._bigworld = None
         # Only a running session publishes a camera-fitted view (see the runtime).
         logic.sim_view_rect = None
         things = logic.editor_state.things
@@ -168,7 +170,7 @@ class BigWorldPlugin(FioPlugin):
             )
             session.start()
         session._show_debug = cfg["show_cell_debug"]
-        logic._bigworld = session
+        self._sessions[logic] = session
         # Expose the live session as a service (renderer/other plugins/tools).
         try:
             host = getattr(self, "_host", None)
@@ -178,10 +180,10 @@ class BigWorldPlugin(FioPlugin):
             pass
 
     def on_play_stop(self, logic):
-        session = getattr(logic, "_bigworld", None)
+        session = self._sessions.get(logic)
         if session is not None:
             session.stop()
-            logic._bigworld = None
+            self._sessions.pop(logic, None)
         try:
             host = getattr(self, "_host", None)
             if host is not None:
@@ -190,7 +192,7 @@ class BigWorldPlugin(FioPlugin):
             pass
 
     def on_tick(self, logic, ctx: TickContext):
-        session = getattr(logic, "_bigworld", None)
+        session = self._sessions.get(logic)
         if session is not None:
             session.tick()
 
@@ -205,7 +207,7 @@ class BigWorldPlugin(FioPlugin):
             return
         host = getattr(self, "_host", None)
         logic = host.logic if host is not None else None
-        session = getattr(logic, "_bigworld", None)
+        session = self._sessions.get(logic)
         if session is None or not getattr(session, "_show_debug", True):
             return
         painter = ev.get("painter")
