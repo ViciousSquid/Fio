@@ -6,8 +6,6 @@ explosion cost a frame. The failure is now remembered and the device retried
 only after a pause, so one connected later is still found.
 """
 
-from types import SimpleNamespace
-
 import pytest
 
 pytest.importorskip("PyQt5", reason="the view is a Qt widget")
@@ -30,19 +28,26 @@ class _FailingMixer:
         raise pygame.error("no audio device")
 
 
-def test_a_failed_mixer_is_not_reprobed_on_every_sound(monkeypatch):
+def test_a_failed_mixer_is_not_reprobed_on_every_sound(main_window, qt_app, monkeypatch):
     mixer = _FailingMixer()
     monkeypatch.setattr(qt_game_view.pygame, "mixer", mixer)
     clock = [100.0]
     monkeypatch.setattr(qt_game_view.time, "perf_counter", lambda: clock[0])
-    view = SimpleNamespace(
-        MIXER_RETRY_SECONDS=qt_game_view.QtGameView.MIXER_RETRY_SECONDS)
-    ensure = qt_game_view.QtGameView._ensure_pygame_mixer
+    view = qt_game_view.QtGameView(main_window)
+    try:
+        ensure = view._ensure_pygame_mixer
 
-    for _ in range(20):
-        assert ensure(view) is False
-    assert mixer.attempts == 1
+        # Construction performs the first real mixer probe. Repeated sound
+        # requests must not probe again until the retry window expires.
+        assert mixer.attempts == 1
 
-    clock[0] += view.MIXER_RETRY_SECONDS
-    ensure(view)
-    assert mixer.attempts == 2, "a device connected later would never be found"
+        for _ in range(20):
+            assert ensure() is False
+        assert mixer.attempts == 1
+
+        clock[0] += view.MIXER_RETRY_SECONDS
+        assert ensure() is False
+        assert mixer.attempts == 2, "a device connected later would never be found"
+    finally:
+        view.deleteLater()
+        qt_app.processEvents()
