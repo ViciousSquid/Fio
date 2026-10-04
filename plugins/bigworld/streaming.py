@@ -359,11 +359,11 @@ class DiskStreamingSession:
         persistent = list(getattr(self.source, "persistent_things", []) or [])
         # The live scene now holds *only* globals; cells fill it as they stream.
         try:
-            self.logic.things[:] = list(persistent)
-            self.logic.brushes[:] = []
+            self.logic.editor_state.things[:] = list(persistent)
+            self.logic.editor_state.brushes[:] = []
         except Exception:
-            self.logic.things = list(persistent)
-            self.logic.brushes = []
+            self.logic.editor_state.things = list(persistent)
+            self.logic.editor_state.brushes = []
         # Fade the camera out where cells stop loading (see bound_view_horizon).
         if self._release_view_horizon is None:
             self._release_view_horizon = bound_view_horizon(
@@ -392,7 +392,7 @@ class DiskStreamingSession:
         be committed into the registry. Persistent globals are left resident.
         """
         for uuid, obj in list(self._live_by_id.items()):
-            target = self.logic.brushes if isinstance(obj, dict) else self.logic.things
+            target = self.logic.editor_state.brushes if isinstance(obj, dict) else self.logic.editor_state.things
             try:
                 target.remove(obj)
             except (ValueError, Exception):
@@ -484,7 +484,7 @@ class DiskStreamingSession:
             else:
                 self._live_by_id[uuid] = obj
                 self._load_ref[uuid] = 1
-                target = self.logic.brushes if kind == _BRUSH else self.logic.things
+                target = self.logic.editor_state.brushes if kind == _BRUSH else self.logic.editor_state.things
                 try:
                     target.append(obj)
                 except Exception:
@@ -511,7 +511,7 @@ class DiskStreamingSession:
                 obj = self._live_by_id.pop(uuid, None)
                 self._load_ref.pop(uuid, None)
                 if obj is not None:
-                    target = self.logic.brushes if kind == _BRUSH else self.logic.things
+                    target = self.logic.editor_state.brushes if kind == _BRUSH else self.logic.editor_state.things
                     try:
                         target.remove(obj)
                     except (ValueError, Exception):
