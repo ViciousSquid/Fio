@@ -146,6 +146,8 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
             render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
         logic = Logic()
+        manager = get_manager()
+        manager.bind_host(logic)
         plugin.on_play_start(logic)
         session = plugin._sessions.get(logic)
         report(session is not None,
