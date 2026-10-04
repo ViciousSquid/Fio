@@ -354,6 +354,10 @@ def _contract_host():
             setattr(host, attribute, None)
 
     host.camera = SimpleNamespace(player=host.player)
+    # The mover state properties delegate through mover_runtime. Use the real
+    # subsystem here so hasattr(host, "mover_states") exercises that contract
+    # rather than a generic stub with no state properties.
+    host.mover_runtime = LogicMovers(host)
     for runtime_name in LogicThread._RUNTIME_HOSTS:
         if runtime_name == "camera":
             continue
