@@ -402,10 +402,6 @@ class MainWindow(QMainWindow):
             self.unsaved_changes = True
             self.update_title()
     
-    def mark_dirty(self):
-        """Alias for mark_as_modified — called by property_editor and other subsystems."""
-        self.mark_as_modified()
-
     def check_unsaved_changes(self):
         """
         Checks for unsaved changes. Returns True if it's safe to proceed 
