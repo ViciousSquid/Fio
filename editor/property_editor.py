@@ -1124,7 +1124,7 @@ class PropertyEditor(QWidget):
     def _on_io_connections_changed(self):
         if hasattr(self.editor.state, 'save_state'):
             self.editor.state.save_state()
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
         if not self._populating:
             self.editor.update_all_ui()
 
@@ -3621,7 +3621,7 @@ class PropertyEditor(QWidget):
                 Monster.clear_sprite_cache()
             except Exception:
                 pass
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
             try:
                 self.editor.view_3d.update()
             except Exception:
@@ -3945,7 +3945,7 @@ class PropertyEditor(QWidget):
                 for k in ('monster_type', 'variant', 'random'):
                     spawn_props.pop(k, None)
             thing.properties['spawn_properties'] = spawn_props
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
         spawn_combo.currentTextChanged.connect(lambda _: update_visibility())
         update_visibility()
@@ -4347,12 +4347,12 @@ class PropertyEditor(QWidget):
                 rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
                 thing.properties['projectile_sprite'] = rel
                 proj_path.setText(rel)
-                self.editor.mark_dirty()
+                self.editor.mark_as_modified()
 
         def clear_proj():
             thing.properties.pop('projectile_sprite', None)
             proj_path.setText('')
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
         proj_btn = QPushButton("...")
         proj_btn.setFixedWidth(30)
@@ -4416,14 +4416,14 @@ class PropertyEditor(QWidget):
             if not checked:
                 thing.properties['patrol_target'] = ''
                 patrol_combo.setCurrentIndex(0)
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
         def _on_patrol_target(text):
             clean = (text or '').replace("  (missing)", "")
             if "  (wants " in clean:
                 clean = clean.split("  (wants ")[0]
             thing.properties['patrol_target'] = '' if clean == '(none)' else clean
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
         patrol_cb.toggled.connect(_on_patrol)
         patrol_combo.currentTextChanged.connect(_on_patrol_target)
@@ -4437,7 +4437,7 @@ class PropertyEditor(QWidget):
 
         def _on_mode(text):
             thing.properties['patrol_mode'] = text
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
         mode_combo.currentTextChanged.connect(_on_mode)
 
@@ -4889,7 +4889,7 @@ class PropertyEditor(QWidget):
         self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
 
     def _set_prop_key_sprite(self, collect_key_name):
         self.update_object_prop(
@@ -4923,7 +4923,7 @@ class PropertyEditor(QWidget):
             self._refresh_prop_collection_appearance(self.current_object)
             if hasattr(self.editor, 'view_3d'):
                 self.editor.view_3d.update()
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
 
     def on_collect_sprite_clear(self):
         if self.current_object is None or not isinstance(self.current_object, Prop):
@@ -4956,7 +4956,7 @@ class PropertyEditor(QWidget):
         self._refresh_prop_collection_appearance(thing)
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
 
     def on_collect_weapon_changed(self, weapon):
         if self.current_object is None or not isinstance(self.current_object, Prop):
@@ -4970,7 +4970,7 @@ class PropertyEditor(QWidget):
             Prop.clear_sprite_cache()
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
 
     def _set_prop_weapon_sprite(self, weapon):
         sprite = Prop.GUN_SPRITES.get(
@@ -5020,7 +5020,7 @@ class PropertyEditor(QWidget):
             Prop.clear_sprite_cache()
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
 
     def _on_collision_size_changed(self, value, thing):
         """Handle collision size vector update."""
@@ -5029,7 +5029,7 @@ class PropertyEditor(QWidget):
             thing.properties.pop('collision_size', None)
         else:
             thing.properties['collision_size'] = list(value)
-        self.editor.mark_dirty()
+        self.editor.mark_as_modified()
 
     def add_model_path_widget(self, layout, thing):
         widget = QWidget()
@@ -5225,4 +5225,4 @@ class PropertyEditor(QWidget):
             if key == 'name' and hasattr(self.editor, 'scene_hierarchy'):
                 self.editor.scene_hierarchy.refresh_list()
             # Mark the scene dirty so Ctrl+S knows there are unsaved changes.
-            self.editor.mark_dirty()
+            self.editor.mark_as_modified()
