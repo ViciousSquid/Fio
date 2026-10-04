@@ -72,7 +72,7 @@ class FakePlayer:
 class FakeLogic:
     def __init__(self, brushes, things, player_pos=(0, 0, 0), terrain=None):
         self.editor_state = SimpleNamespace(brushes=brushes, things=things)
-        self.player = FakePlayer(player_pos)
+        self.player_runtime = SimpleNamespace(player=FakePlayer(player_pos))
         self.terrain = terrain
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
@@ -342,7 +342,7 @@ def test_streaming_moves_active_set():
 
     start_cols = active_xs()
     # Teleport-walk far east.
-    logic.player.pos = [20 * 512 + 256, 0, 256]
+    logic.player_runtime.player.pos = [20 * 512 + 256, 0, 256]
     session.tick()
     end_cols = active_xs()
     _check(max(start_cols) < min(end_cols), "active columns shifted fully east with the player")
@@ -371,7 +371,7 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     # authored activation radius. The mover simultaneously walks into a cell
     # that remains active after the shrink.
     logic.render_runtime.view_distance.visual_horizon = 1024.0
-    logic.player.pos = [512.0, 0.0, 0.0]
+    logic.player_runtime.player.pos = [512.0, 0.0, 0.0]
     mover.pos = [1000.0, 0.0, 0.0]
     session.tick()
 
@@ -399,7 +399,7 @@ def test_uuid_stability():
     session.start()
     # Stream around a bit.
     for x in (400, 2000, 6000, 0):
-        logic.player.pos = [x, 0, 0]
+        logic.player_runtime.player.pos = [x, 0, 0]
         session.tick()
     session.stop()
     after = persistence.collect_uuids(brushes, things)
