@@ -498,7 +498,7 @@ class DebugTablesWindow(QMainWindow):
             path += ".zip"
 
         stats = getattr(
-            getattr(self.main_window.view_3d, "renderer", None),
+            self.main_window.view_3d.renderer,
             "render_stats", None
         )
         pipeline = {
@@ -748,7 +748,7 @@ class DebugTablesWindow(QMainWindow):
         lock. A map without terrain, or with terrain switched off, has no
         table: ``self.terrain`` is None.
         """
-        terrain = getattr(self.main_window, "terrain", None)
+        terrain = self.main_window.terrain
         table = getattr(terrain, "table", None)
         if terrain is None or table is None or not getattr(terrain, "enabled", False):
             self.terrain = None
@@ -812,7 +812,7 @@ class DebugTablesWindow(QMainWindow):
 
     def _timings(self):
         """Measured stage timings: the logic prepare, the paint, each pass."""
-        view = getattr(self.main_window, "view_3d", None)
+        view = self.main_window.view_3d
         stats = getattr(getattr(view, "renderer", None), "render_stats", None)
         game_state = self._game_state()
         now = time.perf_counter()
@@ -851,13 +851,13 @@ class DebugTablesWindow(QMainWindow):
         render_cap = len(self.render.center)
         entity_cap = len(self.entities.pos)
         stats = getattr(
-            getattr(self.main_window.view_3d, "renderer", None),
+            self.main_window.view_3d.renderer,
             "render_stats", None
         )
         draw_calls = int(getattr(stats, "draw_calls", 0)) if stats else 0
         entity_candidates = int(getattr(stats, "entity_candidates", 0)) if stats else 0
         culled_entities = int(getattr(stats, "culled_entities", 0)) if stats else 0
-        layers = getattr(getattr(self.main_window.view_3d, "renderer", None),
+        layers = getattr(self.main_window.view_3d.renderer,
                          "_sprite_layers", None)
         if layers is not None and layers.texture:
             layer_bytes = int(layers.size * layers.size * 4 * layers.capacity * 4 / 3)
@@ -1070,7 +1070,7 @@ class DebugTablesWindow(QMainWindow):
         if not self.follow.isChecked():
             return
         selected = next(
-            iter(getattr(getattr(self.main_window, "state", None),
+            iter(getattr(self.main_window.state,
                          "selected_objects", []) or []),
             None,
         )
