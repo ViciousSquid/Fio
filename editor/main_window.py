@@ -4231,7 +4231,7 @@ class MainWindow(QMainWindow):
             # The player keeps their weapons through a level change: taken
             # before the session ends (ending it drops them), handed back once
             # play has restarted on the new level (starting it clears them).
-            loadout = (logic.carried_loadout()
+            loadout = (logic.session_runtime.carried_loadout()
                        if was_playing and logic is not None else None)
             if was_playing:
                 # The world captured at Play belongs to the map being left.
@@ -4303,7 +4303,7 @@ class MainWindow(QMainWindow):
                 self.enter_play_mode()
                 if (loadout is not None
                         and getattr(self.view_3d, 'play_mode', False)):
-                    logic.restore_loadout(loadout)
+                    logic.session_runtime.restore_loadout(loadout)
 
             name = os.path.basename(file_path) if file_path else "generated level"
             print(f"[MainWindow] Successfully loaded {name}")
