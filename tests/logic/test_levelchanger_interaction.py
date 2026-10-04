@@ -31,6 +31,8 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
 
     logic = LogicThread.__new__(LogicThread)
     logic.editor_state = SimpleNamespace(things=list(things), brushes=[])
+    from engine.logic_player import LogicPlayer
+    logic.player_runtime = LogicPlayer(logic)
     logic.player_runtime.player = SimpleNamespace(
         pos=list(player_pos),
         angle=float(angle),
