@@ -128,7 +128,7 @@ def test_a_hearing_monster_wakes_to_a_noise_out_of_sight(monster_factory, ai_wor
     ai.update(TICK)
     assert monster.properties["awake"] is False
 
-    logic.emit_noise((far - 100, 96, 0), source="gunfire", loudness=1.0)
+    logic.combat_runtime._emit_noise_event((far - 100, 96, 0), source="gunfire", loudness=1.0)
     ai.update(TICK)
     assert monster.properties["awake"] is True, (
         "'%s' can hear and a gunshot went off 100 units away" % monster.name)
@@ -138,7 +138,7 @@ def test_a_deaf_monster_ignores_noise(monster_factory, ai_world, flat_ground):
     far = MONSTER_SIGHT_RANGE + 500
     monster = monster_factory("deaf", (far, 96, 0), awake=False, can_hear=False)
     ai, logic = ai_world(brushes=flat_ground, things=[monster])
-    logic.emit_noise((far, 96, 0), source="gunfire", loudness=1.0)
+    logic.combat_runtime._emit_noise_event((far, 96, 0), source="gunfire", loudness=1.0)
     ai.update(TICK)
     assert monster.properties["awake"] is False
 
@@ -151,14 +151,14 @@ def test_a_quiet_noise_carries_less_far_than_a_loud_one(monster_factory, ai_worl
                             can_hear=True, sight=1000.0)
     ai, logic = ai_world(brushes=flat_ground, things=[quiet],
                          player_pos=(5000.0, 0.0, 0.0))
-    logic.emit_noise((0, 96, 0), source="splash", loudness=0.25)   # reach 250
+    logic.combat_runtime._emit_noise_event((0, 96, 0), source="splash", loudness=0.25)   # reach 250
     ai.update(TICK)
     assert quiet.properties["awake"] is False, (
         "a loudness-0.25 noise reaches 250 units; the monster is %.0f away"
         % distance)
 
     logic.combat_runtime._gunfire_events.clear()
-    logic.emit_noise((0, 96, 0), source="gunfire", loudness=1.0)   # reach 1000
+    logic.combat_runtime._emit_noise_event((0, 96, 0), source="gunfire", loudness=1.0)   # reach 1000
     ai.update(TICK)
     assert quiet.properties["awake"] is True
 
