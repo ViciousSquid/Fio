@@ -2321,8 +2321,6 @@ layout (location = 10) in float iInstanceAlpha;
         if not os.path.exists(full_path):
             return self._model_load_failed(filename)
 
-        print(f"Loading model: {full_path}")
-
         # Determine format by extension
         ext = os.path.splitext(full_path)[1].lower()
 
