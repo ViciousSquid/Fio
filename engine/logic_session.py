@@ -80,12 +80,12 @@ class LogicSession:
             # grid is populated below so the grid indexes them by true bounds.
             logic.collision_runtime.prepare_angled_brush_collision()
 
-            logic._model_collision_brushes = (
+            logic.collision_runtime._model_collision_brushes = (
                 logic.collision_runtime.build_model_collision_brushes()
             )
-            logic._physics_body_brushes = [
+            logic.collision_runtime._physics_body_brushes = [
                 b
-                for b in logic._model_collision_brushes
+                for b in logic.collision_runtime._model_collision_brushes
                 if b.get("_physics_body")
             ]
             logic.collision_runtime.refresh_collision_brushes_cache()
