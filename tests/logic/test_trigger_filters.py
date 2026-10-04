@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import glm
 import pytest
 
+from engine.logic_interaction import LogicInteraction
+from engine.logic_movers import LogicMovers
+from engine.logic_thread import LogicThread, _trigger_activation
 from engine.logic_triggers import LogicTriggers
-from engine.logic_thread import _trigger_activation
 from engine.prop_runtime import PropSession
 
 
@@ -37,6 +39,12 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
         brush['trigger_poll_interval'] = poll_interval
     logic._trigger_brushes = [(1, brush)]
     logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
+    logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
+    logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
+    logic.TICK_DURATION = LogicThread.TICK_DURATION
+    logic.doors = []
+    logic.mover_runtime = LogicMovers(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
     logic.fired_once_triggers = set()
     logic.hurt_trigger_timers = {}
     logic.io_manager = None
@@ -173,13 +181,13 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(
             },
         )
     ]
-    logic.door_states = {0: {"state": "closed"}}
+    logic.mover_runtime.door_states = {0: {"state": "closed"}}
     logic.collected_keys = {key_name} if collected else set()
     logic._levelchanger_things = []
     logic.current_hud_message = ""
     logic.current_hud_key_name = None
 
-    logic._handle_interactions(False)
+    logic.interaction_runtime.handle(False)
 
     assert logic.current_hud_message == expected_message
     assert logic.current_hud_key_name == key_name
