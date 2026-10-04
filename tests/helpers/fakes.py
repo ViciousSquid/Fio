@@ -12,8 +12,12 @@ own implementation rather than a simplified one, so a test cannot pass against
 a fake that is kinder than the real thing.
 """
 
+import threading
+import time
+
 import glm
 
+from engine.logic_combat import LogicCombat
 from engine.physics import SpatialGrid
 from engine.projectile_table import ProjectileStore
 
@@ -89,7 +93,10 @@ class FakeLogicThread:
         self.io_manager = io_manager
         self.game_state = FakeGameState()
         self._monster_projectiles = ProjectileStore()
-        self._noise_events = []
+        self._monster_lock = threading.RLock()
+        self._gunfire_events = []
+        self.combat_runtime = LogicCombat(self)
+        self._noise_events = self._gunfire_events
         self._name_cache = {}
         self._monster_things = None
         self.damage_applied = []
@@ -139,9 +146,9 @@ class FakeLogicThread:
 
     # -- noise ------------------------------------------------------------
     def emit_noise(self, pos, source="test", loudness=1.0, when=0.0):
-        self._noise_events.append({
+        self._gunfire_events.append({
             "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
-            "time": float(when),
+            "time": time.perf_counter(),
             "source": source,
             "loudness": float(loudness),
         })

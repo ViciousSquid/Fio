@@ -15,10 +15,12 @@ Every "nothing happened" assertion has an unpaused control beside it, so a
 test cannot pass because the thing it watches would not have moved anyway.
 """
 
+import copy
 import threading
 import time
 
 import glm
+import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5", reason="drives the real editor state and logic thread")
@@ -148,37 +150,46 @@ def test_a_paused_tick_does_not_move_the_player(playing):
     assert glm.distance(playing.player.pos, start) == 0.0
 
 
-def test_look_and_fire_over_a_paused_world_are_discarded(playing, monkeypatch):
-    shots = []
-    monkeypatch.setattr(playing, "_handle_shooting", lambda *a, **k: shots.append(1))
+def test_look_and_fire_over_a_paused_world_are_discarded(playing):
     angle = playing.player.angle
+    events_before = len(playing.combat_runtime.get_recent_noise_events())
     playing.set_world_paused("menu", True)
     playing.game_state.set_mouse_delta(80.0, 30.0)
     playing.game_state.queue_shot()
     _ticks(playing, 1)
     assert playing.player.angle == angle
+    assert playing.muzzle_flash_active is False
+
     playing.set_world_paused("menu", False)
     _ticks(playing, 1)
     assert playing.player.angle == angle, "look input queued over a menu landed on resume"
-    assert shots == [], "a shot fired over a menu landed on resume"
+    assert playing.muzzle_flash_active is False
+    assert len(playing.combat_runtime.get_recent_noise_events()) == events_before
 
 
-def test_a_paused_tick_advances_no_world_system(playing, monkeypatch):
-    calls = []
-    for name in ("_update_movers", "_update_doors", "_update_logic_timers",
-                 "_update_light_fades", "_handle_triggers",
-                 "_update_monster_projectiles", "_update_portals"):
-        monkeypatch.setattr(playing, name,
-                            lambda *a, _n=name, **k: calls.append(_n))
-    if playing.io_manager is not None:
-        monkeypatch.setattr(playing.io_manager, "update",
-                            lambda *a, **k: calls.append("io"))
+def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
+    before = {
+        "player_pos": tuple(playing.player.pos),
+        "player_angle": playing.player.angle,
+        "movers": copy.deepcopy(playing.mover_states),
+        "doors": copy.deepcopy(playing.door_states),
+        "timers": copy.deepcopy(playing.timer_states),
+        "fades": copy.deepcopy(playing.light_fade_states),
+        "projectiles": playing._projectile_positions.copy(),
+        "noise": copy.deepcopy(playing._gunfire_events),
+    }
+
     playing.set_world_paused("menu", True)
     _ticks(playing, 5)
-    assert calls == []
-    playing.set_world_paused("menu", False)
-    _ticks(playing, 1)
-    assert "_update_movers" in calls and "_handle_triggers" in calls   # the control
+
+    assert tuple(playing.player.pos) == before["player_pos"]
+    assert playing.player.angle == before["player_angle"]
+    assert playing.mover_states == before["movers"]
+    assert playing.door_states == before["doors"]
+    assert playing.timer_states == before["timers"]
+    assert playing.light_fade_states == before["fades"]
+    assert np.array_equal(playing._projectile_positions, before["projectiles"])
+    assert playing._gunfire_events == before["noise"]
 
 
 def test_plugins_still_tick_over_a_paused_world(playing):

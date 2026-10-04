@@ -348,7 +348,7 @@ class LogicCombat:
         """
         logic = self.logic
         with logic._monster_lock:
-            projectiles = self._projectile_store()
+            projectiles = logic._monster_projectiles
             count = len(projectiles)
             if count:
                 logic._projectile_positions = projectiles.pos[:count].astype(
@@ -364,7 +364,7 @@ class LogicCombat:
         logic = self.logic
 
         with logic._monster_lock:
-            projectiles = self._projectile_store()
+            projectiles = logic._monster_projectiles
             if not projectiles:
                 logic._projectile_positions = NO_PROJECTILES
                 return
