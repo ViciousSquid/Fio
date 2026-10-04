@@ -12,54 +12,46 @@ the view-distance horizon stand exactly as before.
 """
 
 import math
-from types import SimpleNamespace
 
 from engine.spatial import TIER_ACTIVE, TIER_NEAR, tier_of
 from engine.view_distance import ViewDistance
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld.tiers import TierClassifier
 
-from .test_bigworld_tiers import FakePlayer, grid_world
+from .test_bigworld_tiers import make_thing, grid_world
 
 
-class _CameraFixture:
-    def __init__(self, logic):
-        self.logic = logic
-        self.overhead_height = 800.0
-        self.overhead_height_limit = None
+pytest.importorskip("PyQt5", reason="Big World overhead tests use real LogicThread/LogicCamera")
 
-    def overhead_ground_footprint(self):
-        return self.logic.footprint
-
-    def effective_overhead_height(self):
-        height = float(self.overhead_height)
-        if self.overhead_height_limit is not None:
-            height = min(height, float(self.overhead_height_limit))
-        return height
+from editor.editor_state import EditorState
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
 
 
-class OverheadLogic:
-    """A streaming host whose overhead camera shows +/- (hx, hz) of ground."""
-
-    def __init__(self, things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
-        self.editor_state = type('State', (), {'things': things, 'brushes': []})()
-        self.player_runtime = SimpleNamespace(player=FakePlayer(*at))
-        self.render_runtime = type('RenderRuntimeFixture', (), {'view_distance': ViewDistance()})()
-        self.world_runtime = SimpleNamespace(terrain=None)
-        self.footprint = footprint
-        self.camera = _CameraFixture(self)
-
+def _logic(things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
+    """Real play-mode owner; only the footprint measurement is controlled for fit tests."""
+    state = EditorState()
+    state.things = list(things)
+    state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
+    logic.camera.overhead_height = 800.0
+    logic.camera.overhead_height_limit = None
+    logic.camera.camera_mode = "Overhead"
+    logic._test_footprint = footprint
+    logic.camera.overhead_ground_footprint = lambda: logic._test_footprint
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 
 def fitted_session(things, **kw):
-    logic = OverheadLogic(things, **kw)
+    footprint = kw.pop("footprint", (1400.0, 800.0))
+    at = kw.pop("at", (0.0, 0.0))
+    logic = _logic(things, footprint=footprint, at=at)
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, sim_near_radius=1024.0)
     session.start()
-    return logic, session
-
-
-def test_residency_is_sized_from_the_screen_not_the_authored_radius():
+    return logic, sessiondef test_residency_is_sized_from_the_screen_not_the_authored_radius():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
     corner = (900.0 ** 2 + 500.0 ** 2) ** 0.5
     act = session.manager.activation_radius
@@ -112,9 +104,7 @@ def test_a_first_person_camera_keeps_the_authored_radii():
 
 
 def test_a_host_without_a_footprint_keeps_the_authored_radii():
-    from .test_bigworld_tiers import FakeLogic
-    logic = FakeLogic(things=grid_world(), player=FakePlayer(),
-                      render_view_distance=ViewDistance())
+    logic = _logic(grid_world(), footprint=None)
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, sim_near_radius=1024.0)
     session.start()
@@ -141,26 +131,8 @@ def test_the_classifier_rectangle_is_per_cell():
 
 
 def test_filled_terrain_keeps_streaming_at_the_fitted_radius():
-    class Terrain:
-        chunk_size = 2048.0
-        min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z = -2, 2, -2, 2
-        streaming = False
-        stream_radius = 1536.0
-        stream_evict_padding = 512.0
-        offset_x = offset_z = 0.0
-
-        def set_streaming(self, on, radius=None):
-            self.streaming = on
-            if radius:
-                self.stream_radius = radius
-
-        def set_world_extent(self, *a, **k):
-            pass
-
-        def set_bounds(self, *a, **k):
-            pass
-
-    logic = OverheadLogic(grid_world(), footprint=(900.0, 500.0))
+    from engine.terrain import Terrain
+    logic = _logic(grid_world(), footprint=(900.0, 500.0))
     logic.world_runtime.terrain = Terrain()
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, terrain_fill=True)
