@@ -17,8 +17,11 @@ from .camera import Camera
 class LogicCamera:
     """State and calculations for the editor/play camera."""
 
-    def __init__(self, player=None):
-        self.player = player
+    def __init__(self, host):
+        # Resolve the player from LogicThread at use time. LogicThread can replace
+        # its player during play-mode/session transitions, so this runtime must not
+        # retain a stale object reference.
+        self._host = host
 
         # Frustum parameters are shared with the render projection. They live
         # here so camera math and the values handed to GL cannot drift apart.
@@ -134,12 +137,13 @@ class LogicCamera:
         player pose, so streaming/culling consumers see exactly the ground the
         view can reach rather than an independent approximation.
         """
-        if not self.is_overhead() or self.player is None:
+        player = self._host.player
+        if not self.is_overhead() or player is None:
             return None
 
-        pos = self.player.pos
+        pos = player.pos
         cam, direction, up = self._overhead_camera(
-            pos, getattr(self.player, "angle", 0.0)
+            pos, getattr(player, "angle", 0.0)
         )
         d = glm.normalize(glm.vec3(direction))
         right = glm.normalize(glm.cross(d, glm.vec3(up)))
