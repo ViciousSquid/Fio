@@ -53,7 +53,6 @@ def apply():
     if _applied:
         return
     _applied = True
-    _patch_editor_state()
     _patch_view_2d()
     _patch_editor_menu()
     _patch_property_editor()
@@ -68,69 +67,6 @@ def apply():
 # ``self.plugins`` calls in ``__init__`` and ``_tick_play_mode``; lifecycle dispatch
 # is performed by ``LogicSession.apply_play_mode``.
 # No monkey-patch is needed here; the engine calls the plugin manager directly.
-
-
-# ---------------------------------------------------------------------------
-# editor.editor_state.EditorState  — auto-enable plugins on level load
-# ---------------------------------------------------------------------------
-
-def _patch_editor_state():
-    """Keep a disabled-by-default plugin in step with the loaded scene.
-
-    A plugin that ships inert (e.g. Tidy) should be on exactly when the current
-    map uses it. Two ``EditorState`` methods are the funnels for that:
-
-    * ``load_from_data`` — every editor load path passes through it, so it
-      auto-enables the plugins the level's entities require.
-    * ``clear_scene`` — runs on File ▸ New and just before each load, so it
-      reverts any level-driven auto-enable. New → stays off; load of a map that
-      uses the plugin → ``clear_scene`` turns it off, then ``load_from_data``
-      turns it back on.
-
-    Wrapping both here keeps the behaviour in the plugin system — no core edit,
-    no per-call hook in ``main_window``.
-    """
-    try:
-        from editor.editor_state import EditorState
-    except Exception as exc:
-        _log(f"editor-state patch skipped ({exc})")
-        return
-
-    if getattr(EditorState, "_fio_plugins_patched", False):
-        return
-
-    from plugins.manager import get_manager
-
-    _orig_load_from_data = EditorState.load_from_data
-    _orig_clear_scene = EditorState.clear_scene
-
-    def load_from_data(self, level_data, *args, **kwargs):
-        result = _orig_load_from_data(self, level_data, *args, **kwargs)
-        try:
-            enabled = get_manager().auto_enable_for_map(level_data)
-            if enabled:
-                names = ", ".join(p.name for p in enabled)
-                _log(f"Enabled plugin(s) for this level: {names}")
-        except Exception as exc:
-            _log(f"auto-enable on load failed: {exc}")
-        return result
-
-    def clear_scene(self, *args, **kwargs):
-        # Resetting to an empty scene reverts any level-driven auto-enable, so a
-        # plugin that was on only for its map switches back off (File ▸ New).
-        # A following load_from_data re-enables it if the new level uses it.
-        try:
-            disabled = get_manager().disable_auto_enabled()
-            if disabled:
-                names = ", ".join(p.name for p in disabled)
-                _log(f"Disabled plugin(s) with the cleared scene: {names}")
-        except Exception as exc:
-            _log(f"auto-disable on clear failed: {exc}")
-        return _orig_clear_scene(self, *args, **kwargs)
-
-    EditorState.load_from_data = load_from_data
-    EditorState.clear_scene = clear_scene
-    EditorState._fio_plugins_patched = True
 
 
 # ---------------------------------------------------------------------------

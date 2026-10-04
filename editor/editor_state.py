@@ -364,6 +364,8 @@ class EditorState:
 
     def clear_scene(self):
         """Resets the scene to an empty state."""
+        from plugins.manager import get_manager
+        get_manager().disable_auto_enabled()
         self.brushes.clear()
         self.things.clear()
         self._invalidate_entity_caches()
@@ -605,6 +607,9 @@ class EditorState:
             # Always treat a freshly loaded scene as dirty so the bake runs
             # at least once before the first Play in this session.
             self.bake_state.mark_dirty()
+
+        from plugins.manager import get_manager
+        get_manager().auto_enable_for_map(level_data)
 
         if save_undo:
             self.save_state()
