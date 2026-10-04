@@ -9,9 +9,9 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from engine.render_cull import (  # noqa: E402
-    CAMERA_RENDER_CULL_DISTANCE, CAMERA_RENDER_CULL_DISTANCE_SQ,
     camera_xz, cull_by_distance, pos_of, sort_by_distance, within_xz_sq,
 )
+from engine.view_distance import DEFAULT_VIEW_DISTANCE  # noqa: E402
 
 
 class _Thing:
@@ -29,7 +29,7 @@ class _FakeVec:
 
 
 def test_squared_radius_matches_distance():
-    assert CAMERA_RENDER_CULL_DISTANCE_SQ == CAMERA_RENDER_CULL_DISTANCE ** 2
+    assert DEFAULT_VIEW_DISTANCE ** 2 == DEFAULT_VIEW_DISTANCE * DEFAULT_VIEW_DISTANCE
 
 
 def test_pos_of_handles_dicts_things_and_missing():
@@ -52,7 +52,7 @@ def test_cull_ignores_the_y_axis():
 
 
 def test_boundary_is_inclusive():
-    r = CAMERA_RENDER_CULL_DISTANCE
+    r = DEFAULT_VIEW_DISTANCE
     exactly_on = {"pos": [r, 0.0, 0.0]}
     just_outside = {"pos": [r + 1.0, 0.0, 0.0]}
     kept = cull_by_distance([exactly_on, just_outside], 0.0, 0.0)
