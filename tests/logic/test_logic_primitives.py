@@ -339,9 +339,9 @@ def test_a_timer_fires_when_its_interval_elapses(world):
     world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
 
-    LogicTiming(world).update_logic_timers(0.5)
+    world.timing_runtime.update_logic_timers(0.5)
     assert world.hits == 0
-    LogicTiming(world).update_logic_timers( 0.6)
+    world.timing_runtime.update_logic_timers( 0.6)
     assert world.hits == 1
 
 
@@ -354,7 +354,7 @@ def test_a_timer_repeats(world):
     world.send(timer, "Start")
 
     for _ in range(3):
-        LogicTiming(world).update_logic_timers( 1.0)
+        world.timing_runtime.update_logic_timers( 1.0)
     assert world.hits == 3
 
 
@@ -367,7 +367,7 @@ def test_a_one_shot_timer_stops_itself(world):
     world.send(timer, "Enable")
 
     for _ in range(4):
-        LogicTiming(world).update_logic_timers( 1.0)
+        world.timing_runtime.update_logic_timers( 1.0)
     assert world.hits == 1
     assert timer.properties["timer_enabled"] is False
 
@@ -379,7 +379,7 @@ def test_a_one_shot_timer_announces_that_it_finished(world):
     world.connect(timer, "OnFinished", world.sink, "Fire")
     world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
-    LogicTiming(world).update_logic_timers( 1.0)
+    world.timing_runtime.update_logic_timers( 1.0)
     assert world.hits == 1
 
 
@@ -391,7 +391,7 @@ def test_a_stopped_timer_does_not_fire(world):
     world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
     world.send(timer, "Stop")
-    LogicTiming(world).update_logic_timers( 5.0)
+    world.timing_runtime.update_logic_timers( 5.0)
     assert world.hits == 0
 
 
@@ -410,9 +410,9 @@ def test_resettimer_puts_the_countdown_back(world):
     world.to_sink(timer, "OnTimer")
     world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
-    LogicTiming(world).update_logic_timers( 0.9)
+    world.timing_runtime.update_logic_timers( 0.9)
     world.send(timer, "ResetTimer")
-    LogicTiming(world).update_logic_timers( 0.9)
+    world.timing_runtime.update_logic_timers( 0.9)
     assert world.hits == 0
 
 
@@ -424,7 +424,7 @@ def test_settime_changes_the_interval(world):
     world.world_runtime.timer_things = [timer]
     world.send(timer, "SetTime", "0.5")
     world.send(timer, "Enable")
-    LogicTiming(world).update_logic_timers( 0.6)
+    world.timing_runtime.update_logic_timers( 0.6)
     assert world.hits == 1
 
 
@@ -442,6 +442,6 @@ def test_a_level_of_disabled_timers_does_no_work(world):
     timers = [world.add(LogicTimer(pos=[0, 0, 0], properties={"name": "t%d" % i}))
               for i in range(50)]
     world.world_runtime.timer_things = timers
-    LogicTiming(world).update_logic_timers( 1.0)
+    world.timing_runtime.update_logic_timers( 1.0)
     assert world.timing_runtime.timer_states == {}, (
         "a switched-off timer created countdown state it never needed")
