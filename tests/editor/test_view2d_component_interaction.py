@@ -140,6 +140,7 @@ class FakeEditorWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.config = configparser.ConfigParser()
+        self.terrain = None
         self.config.add_section('Controls')
         self.config.add_section('Display')
         self.state = EditorState()
