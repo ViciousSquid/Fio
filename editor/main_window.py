@@ -1273,9 +1273,7 @@ class MainWindow(QMainWindow):
         self.state.selected_objects = list(objects or [])
         primary = self.primary_selection()
         if self.config.getboolean('Display', 'sync_selection', fallback=True):
-            self.view_3d.selected_object = primary
         else:
-            self.view_3d.selected_object = None
         self.update_all_ui()
 
     def update_all_ui(self):
