@@ -343,9 +343,9 @@ def test_play_start_and_stop_keep_an_angled_brushs_geometry_epoch(logic):
     thread = logic(brushes=[solid, water])
     before = [bg.geometry_signature(b) for b in (solid, water)]
 
-    thread._prepare_angled_brush_collision()     # play start
+    thread.collision_runtime.prepare_angled_brush_collision()     # play start
     assert solid.get('_collision_mode') == 'mesh'
-    thread._clear_angled_brush_collision()       # play stop
+    thread.collision_runtime.clear_angled_brush_collision()       # play stop
 
     assert '_collision_mode' not in solid
     assert [bg.geometry_signature(b) for b in (solid, water)] == before

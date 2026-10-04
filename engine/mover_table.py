@@ -503,7 +503,7 @@ class LinearMovers(_Group):
         brush = self.brushes[row]
         i = self.index[row]
         if i in logic.mover_path_states:
-            logic._update_mover_path(i, brush, delta)
+            logic.mover_runtime._update_mover_path(i, brush, delta)
             self.resync(row)
             self._store(np.array([row]), self.pos[[row]])
             return True

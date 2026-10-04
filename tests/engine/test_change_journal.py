@@ -206,18 +206,18 @@ def test_big_world_parking_reaches_the_tables(change):
 
 
 def test_a_light_fading_at_runtime_is_re_resolved_each_step():
-    from engine.logic_thread import LogicThread
+    from engine.logic_timing import LogicTiming
 
     lamp = make_thing(Light, "lamp", intensity=2.0)
     table = EntityTable()
     table.begin_frame([lamp], 1)
-    logic = LogicThread.__new__(LogicThread)
+    logic = type("TimingHost", (), {})()
     logic.io_manager = None
     logic.light_fade_states = {id(lamp): {
         "entity": lamp, "from": 2.0, "to": 0.0,
         "elapsed": 0.0, "duration": 1.0, "end_off": True}}
 
-    logic._update_light_fades(0.5)
+    LogicTiming(logic).update_light_fades(0.5)
     table.begin_frame([lamp], 1)
     assert table.light_params[0, 0] == pytest.approx(1.0)
 

@@ -38,6 +38,7 @@ from editor.io_handlers import register_all_input_handlers   # noqa: E402
 from editor.io_system import IOManager, OutputConnection      # noqa: E402
 from editor.things import PathNode                             # noqa: E402
 from engine.logic_thread import DOOR_DIRECTION_MAP, LogicThread  # noqa: E402
+from engine.logic_movers import LogicMovers                    # noqa: E402
 from engine.savegame import _public_state                      # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -479,15 +480,16 @@ class _Side:
             logic.movers = []
             logic.doors = []
             logic.mover_path_states = {}
+            logic.mover_runtime = LogicMovers(logic)
         io.set_logic_thread(logic)
         self.io = io
         self.logic = logic
-        logic._init_movers()
-        logic._init_doors()
+        logic.mover_runtime._init_movers()
+        logic.mover_runtime._init_doors()
 
     def tick(self, delta):
-        self.logic._update_movers(delta)
-        self.logic._update_doors(delta)
+        self.logic.mover_runtime._update_movers(delta)
+        self.logic.mover_runtime._update_doors(delta)
         self.io.update(delta)
 
     def poke(self, index, input_name, param):

@@ -126,13 +126,14 @@ def test_the_model_path_field_shows_the_default(panel):
 def _collision_brushes_for(things):
     from editor.editor_state import EditorState
     from engine.logic_thread import LogicThread
+    from engine.logic_collision import LogicCollision
     from engine.threaded_game_state import ThreadedGameState
 
     state = EditorState()
     state.brushes = []
     state.things = list(things)
     thread = LogicThread(ThreadedGameState(), state)
-    return thread._build_model_collision_brushes()
+    return LogicCollision(thread).build_model_collision_brushes()
 
 
 def test_a_default_sprite_prop_has_no_collision():

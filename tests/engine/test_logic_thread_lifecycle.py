@@ -42,7 +42,7 @@ def logic():
     thread.stop()
 
 
-def _frame_from_inside(logic, monkeypatch, hook_name):
+def _frame_from_inside(logic, monkeypatch, hook_owner, hook_name):
     """Arrange for a frame to be attempted on another thread mid-transition.
 
     Returns ``(seen, finished)``: what each play-mode tick observed, and an
@@ -57,7 +57,7 @@ def _frame_from_inside(logic, monkeypatch, hook_name):
         logic, "_tick_play_mode",
         lambda delta: seen.append((logic._spatial_grid is not None,
                                    logic._props is not None)))
-    real_hook = getattr(logic, hook_name)
+    real_hook = getattr(hook_owner, hook_name)
 
     def hook_with_concurrent_frame(*args, **kwargs):
         helper = threading.Thread(
@@ -67,14 +67,14 @@ def _frame_from_inside(logic, monkeypatch, hook_name):
         helper.join(timeout=0.5)
         return real_hook(*args, **kwargs)
 
-    monkeypatch.setattr(logic, hook_name, hook_with_concurrent_frame)
+    monkeypatch.setattr(hook_owner, hook_name, hook_with_concurrent_frame)
     return seen, finished
 
 
 def test_no_tick_runs_against_a_half_built_session(logic, monkeypatch):
     # _init_doors runs early in entering play: the flag is already set, the
     # spatial grid and the Prop session do not exist yet.
-    seen, finished = _frame_from_inside(logic, monkeypatch, "_init_doors")
+    seen, finished = _frame_from_inside(logic, monkeypatch, logic.mover_runtime, "_init_doors")
 
     logic.set_play_mode(True)
 
@@ -99,14 +99,14 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
         events.append(("tick", logic._props is not None,
                        logic._spatial_grid is not None))
 
-    real_reset_doors = logic._reset_doors
+    real_reset_doors = logic.mover_runtime._reset_doors
 
     def reset_doors():
         events.append(("teardown",))
         return real_reset_doors()
 
     monkeypatch.setattr(logic, "_tick_play_mode", long_tick)
-    monkeypatch.setattr(logic, "_reset_doors", reset_doors)
+    monkeypatch.setattr(logic.mover_runtime, "_reset_doors", reset_doors)
 
     frame = threading.Thread(
         target=lambda: logic._step_frame(logic.TICK_DURATION), daemon=True)

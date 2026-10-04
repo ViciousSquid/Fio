@@ -565,7 +565,7 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
         assert logic.save_session(path)[0]
 
         door_idx = state.brushes.index(door)
-        logic._trigger_door_open(door_idx, door)
+        logic.mover_runtime._trigger_door_open(door_idx, door)
         lift["start_on"] = True
         from engine.change_journal import moved
         moved(lift)                                 # I/O Start
