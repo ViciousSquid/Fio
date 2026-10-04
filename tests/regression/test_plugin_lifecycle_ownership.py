@@ -258,7 +258,7 @@ def test_a_map_without_the_settings_entity_starts_no_session(streaming_session):
 @pytest.mark.qt
 @pytest.mark.integration
 def test_stopping_a_session_that_never_started_is_harmless(streaming_session):
-    """Editor startup calls ``set_play_mode(False)`` before any Play is pressed."""
+    """Editor startup can issue a session stop before any Play is pressed."""
     _state, thread, counter = streaming_session()
 
     thread.session_runtime.apply_play_mode(False)
