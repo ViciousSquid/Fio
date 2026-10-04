@@ -27,7 +27,8 @@ pytest.importorskip("PyQt5", reason="drives the real editor state and logic thre
 
 from editor.editor_state import EditorState               # noqa: E402
 from editor.things import PlayerStart                     # noqa: E402
-from engine.logic_thread import Key_W, LogicThread        # noqa: E402
+from engine.logic_player import KEY_W
+from engine.logic_thread import LogicThread        # noqa: E402
 from engine.monster_ai import MonsterAIThread             # noqa: E402
 from engine.player import Player                          # noqa: E402
 from engine.threaded_game_state import ThreadedGameState  # noqa: E402
@@ -137,7 +138,7 @@ def test_requests_from_many_threads_are_not_lost(logic):
 def test_an_unpaused_tick_moves_the_player(playing):
     """The control: holding W does move the player in this world."""
     start = glm.vec3(playing.player.pos)
-    playing.game_state.set_keys({Key_W})
+    playing.game_state.set_keys({KEY_W})
     _ticks(playing, 20)
     assert glm.distance(playing.player.pos, start) > 1.0
 
@@ -145,7 +146,7 @@ def test_an_unpaused_tick_moves_the_player(playing):
 def test_a_paused_tick_does_not_move_the_player(playing):
     start = glm.vec3(playing.player.pos)
     playing.set_world_paused("menu", True)
-    playing.game_state.set_keys({Key_W})
+    playing.game_state.set_keys({KEY_W})
     _ticks(playing, 20)
     assert glm.distance(playing.player.pos, start) == 0.0
 
