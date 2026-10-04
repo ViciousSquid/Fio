@@ -905,7 +905,16 @@ class QtGameView(QOpenGLWidget):
         missing sprite never breaks the frame. No-op outside overhead play mode,
         during a cinematic, or when disabled.
         """
-        if not (self.play_mode and self.overhead_sprite_enabled and self._is_overhead()):
+        _lt = getattr(self, "logic_thread", None)
+        _lt_overhead = False
+        _is_overhead = getattr(_lt, "is_overhead", None)
+        if callable(_is_overhead):
+            try:
+                _lt_overhead = bool(_is_overhead())
+            except Exception:
+                _lt_overhead = False
+        if not (self.play_mode and self.overhead_sprite_enabled
+                and (self._is_overhead() or _lt_overhead)):
             return
         if render_state is None:
             return
@@ -2077,7 +2086,18 @@ class QtGameView(QOpenGLWidget):
         # In overhead (top-down) mode there is no first-person view, so the gun
         # HUD sprite makes no sense; the held weapon is shown as a small pickup
         # icon bottom-right instead (see below), alongside any held keys.
-        overhead = self._is_overhead()
+        # LogicThread's extracted camera subsystem is the authoritative camera
+        # mode. Keep the view-local cache as the fast path, but also honour the
+        # runtime camera when a host changes it through LogicThread directly.
+        _lt = getattr(self, "logic_thread", None)
+        _lt_overhead = False
+        _is_overhead = getattr(_lt, "is_overhead", None)
+        if callable(_is_overhead):
+            try:
+                _lt_overhead = bool(_is_overhead())
+            except Exception:
+                _lt_overhead = False
+        overhead = self._is_overhead() or _lt_overhead
         health = getattr(self, '_cached_health', 0)
         max_health = getattr(self, '_cached_max_health', 100)
         if health is None or max_health is None:
