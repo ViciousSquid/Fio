@@ -22,6 +22,7 @@ from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
 from engine.physics import SpatialGrid
+from engine.prop_runtime import PropSession
 
 
 class ManualClock:
@@ -107,6 +108,7 @@ class FakeLogicThread:
         self._monster_by_id = {}
         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
+        self.prop_runtime = PropSession(self)
         self.HURT_INTERVAL = 0.5
         self.damage_applied = []
 
