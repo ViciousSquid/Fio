@@ -14,6 +14,7 @@ from engine.effect_entity import (
 )
 from engine.entity_table import ENT_EFFECT, EntityTable
 from engine.effect_table import EffectStore
+from engine.threaded_game_state import ThreadedGameState
 from editor.io_system import IOManager, get_input_names, get_output_names
 from editor.io_handlers import register_all_input_handlers
 from types import SimpleNamespace
@@ -32,19 +33,20 @@ def _io_for(effect, events=None):
     io.set_entity_finder(lambda name: effect)
     effect_store = EffectStore()
     effect_store.begin_session([effect])
+    game_state = ThreadedGameState()
     if events is None:
         logic = SimpleNamespace(
             io_manager=io,
-            game_state=None,
+            game_state=game_state,
             effect_store=effect_store,
         )
     else:
         logic = SimpleNamespace(
             io_manager=SimpleNamespace(
                 fire_output=lambda entity, name, value=None: events.append((name, value)),
-                get_game_state=lambda: None,
+                get_game_state=lambda: game_state,
             ),
-            game_state=None,
+            game_state=game_state,
             effect_store=effect_store,
         )
     io.set_logic_thread(logic)
@@ -52,6 +54,7 @@ def _io_for(effect, events=None):
     def send(input_name, param=""):
         io._execute_input(effect.properties.get("name", ""), input_name,
                           param, "test")
+    send.effect_store = effect_store
     return send
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
@@ -187,9 +190,12 @@ def test_both_buffers_agree_after_an_explode():
     for table in tables:
         table.begin_frame([effect], epoch=1, effect_runtime=True)
 
-    _io_for(effect)("Explode")
+    send = _io_for(effect)
+    send("Explode")
     for table in tables:
-        table.begin_frame([effect], epoch=1, effect_runtime=True)
+        table.begin_frame(
+            [effect], epoch=1, effect_runtime=True, effect_store=send.effect_store
+        )
 
     for table in tables:
         assert table.effect_type[0] == 1
@@ -501,7 +507,9 @@ def test_effect_texture_and_custom_inputs_update_dense_projection():
 
     def deliver(input_name, param):
         send(input_name, param)
-        table.begin_frame([effect], epoch=1, effect_runtime=True)
+        table.begin_frame(
+            [effect], epoch=1, effect_runtime=True, effect_store=send.effect_store
+        )
 
     deliver("SetFireTexture", "3")
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[2]
@@ -567,7 +575,9 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
 
     def explode():
         send("Explode")
-        table.begin_frame([effect], epoch=1, effect_runtime=True)
+        table.begin_frame(
+            [effect], epoch=1, effect_runtime=True, effect_store=send.effect_store
+        )
 
     explode()
 
@@ -612,7 +622,9 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
 
     def explode():
         send("Explode")
-        table.begin_frame([explosion], epoch=1, effect_runtime=True)
+        table.begin_frame(
+            [explosion], epoch=1, effect_runtime=True, effect_store=send.effect_store
+        )
 
     explode()
     assert bool(table.effect_active[0])
