@@ -156,10 +156,10 @@ class LogicSession:
             logic.combat_runtime.bullet_marks = []
             logic.combat_runtime.muzzle_flash_active = False
 
-            # Reset P2 stats.
-            logic.player2_health = 100
-            logic.player2_max_health = 100
-            logic.player2_dead = False
+            # Reset P2 stats through the player runtime owner.
+            logic.player_runtime.player2_health = 100
+            logic.player_runtime.player2_max_health = 100
+            logic.player_runtime.player2_dead = False
 
             self.reset_all_monsters(clear_dead=True)
 
