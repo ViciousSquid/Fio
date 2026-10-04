@@ -537,7 +537,7 @@ class LogicCombat:
 
         # Portal transit needs the previous segment endpoint. The common
         # no-portal path stays entirely in the persistent arrays.
-        if getattr(logic, '_portal_things', ()):
+        if logic.portal_runtime.portal_things:
             prev = pos.copy()
         pos += vel * delta
         if prev is not None:
