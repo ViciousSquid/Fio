@@ -39,7 +39,6 @@ from .logic_render import LogicRender
 from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
-from .effect_table import EffectStore
 from .prop_runtime import PropSession
 
 
@@ -339,9 +338,6 @@ class LogicThread(threading.Thread):
 
         # Level-complete UI state is owned by interaction_runtime
 
-        #: Dense execution state for Effect primitives. Authoring Effects remain
-        #: in editor_state.things; this store owns their runtime phase and origin.
-        self.effect_store: EffectStore = EffectStore()
 
         # Performance Monitoring
         self.actual_tps = 0.0
