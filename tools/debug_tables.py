@@ -731,7 +731,7 @@ class DebugTablesWindow(QMainWindow):
         if logic is None or ai is None:
             return
         table = ai.table
-        lock = logic._monster_lock
+        lock = logic.session_runtime.monster_lock
         if not lock.acquire(blocking=False):
             return
         try:
