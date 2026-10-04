@@ -1759,7 +1759,7 @@ class View2D(QWidget):
                 continue
                 
             # Check if brush is in selected_objects list (for multi-select support)
-            is_selected = brush in getattr(self.editor.state, 'selected_objects', []) or brush is self.editor.state.selected_object
+            is_selected = brush in self.editor.state.selected_objects or brush is self.editor.state.selected_object
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
@@ -2392,7 +2392,7 @@ class View2D(QWidget):
             # 4. Overlays (selection highlight + color tag)
             if draw_rect:
                 self.draw_thing_color_tag(painter, thing, draw_rect)
-                is_selected = thing in getattr(self.editor.state, 'selected_objects', []) or thing == self.editor.state.selected_object
+                is_selected = thing in self.editor.state.selected_objects or thing == self.editor.state.selected_object
                 if is_selected:
                     painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                     painter.setBrush(Qt.NoBrush)
@@ -3292,7 +3292,7 @@ class View2D(QWidget):
             # Handle shift-click for multi-selection
             if event.modifiers() & Qt.ShiftModifier and clicked_object:
                 # Get current selected_objects list
-                selected_objects = getattr(self.editor.state, 'selected_objects', [])
+                selected_objects = self.editor.state.selected_objects
                 if not selected_objects:
                     selected_objects = []
                     if self.editor.state.selected_object:
@@ -3312,7 +3312,7 @@ class View2D(QWidget):
                 # If the clicked object is already part of a multi-selection,
                 # keep the whole group so it can be dragged together.  Otherwise
                 # fall back to normal single selection.
-                current_selection = getattr(self.editor.state, 'selected_objects', []) or []
+                current_selection = self.editor.state.selected_objects
                 if clicked_object and clicked_object in current_selection and len(current_selection) > 1:
                     # Preserve the group; a click-without-drag toggles handle mode.
                     self._maybe_toggle_manip = True
@@ -3338,7 +3338,7 @@ class View2D(QWidget):
                     # Drag every selected object together (a group drag), moving
                     # only the unlocked members.  When the click landed on an
                     # object outside the current selection, just drag that one.
-                    group = getattr(self.editor.state, 'selected_objects', []) or []
+                    group = self.editor.state.selected_objects
                     if clicked_object not in group:
                         group = [clicked_object]
                     self.drag_group = [
