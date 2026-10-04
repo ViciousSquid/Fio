@@ -35,6 +35,27 @@ class LogicSession:
 
     def __init__(self, logic):
         self.logic = logic
+        self._world_pause_owners = frozenset()
+        self._world_pause_lock = threading.Lock()
+
+    def set_world_paused(self, owner, paused: bool = True) -> None:
+        """Hold or release a world pause owned by *owner*."""
+        with self._world_pause_lock:
+            owners = set(self._world_pause_owners)
+            if paused:
+                owners.add(owner)
+            else:
+                owners.discard(owner)
+            self._world_pause_owners = frozenset(owners)
+
+    @property
+    def world_paused(self) -> bool:
+        with self._world_pause_lock:
+            return bool(self._world_pause_owners)
+
+    def world_pause_owners(self) -> frozenset:
+        with self._world_pause_lock:
+            return self._world_pause_owners
 
     def apply_play_mode(self, enabled: bool):
         """Enter or leave Play Mode under the session's tick lock."""
@@ -47,8 +68,8 @@ class LogicSession:
 
         # A pause belongs to the session that took it: a new session, or the
         # editor after one, never starts frozen by a request nobody released.
-        with logic._world_pause_lock:
-            logic._world_pause_owners = frozenset()
+        with self._world_pause_lock:
+            self._world_pause_owners = frozenset()
 
         # Likewise a camera ceiling: a session that sets one (Big World) sets
         # it again from its play-start hook, which runs after this.

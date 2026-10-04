@@ -411,9 +411,9 @@ commands). Part of API 1.5.0: a plugin that uses them declares
 `api_version = "1.5.0"`.
 
 ```python
-logic.set_world_paused(owner, paused=True)   # hold/release a pause for *owner*
-logic.world_paused                           # True while any owner holds one
-logic.world_pause_owners()                   # frozenset of the owners holding one
+logic.session_runtime.set_world_paused(owner, paused=True)  # hold/release a pause for *owner*
+logic.session_runtime.world_paused                          # True while any owner holds one
+logic.session_runtime.world_pause_owners()                  # frozenset of the owners holding one
 main_window.begin_actor_pick(on_pick=None)   # arm click-to-pick of an actor
 main_window.view_3d.actor_pick_active        # True while a pick is armed
 ```

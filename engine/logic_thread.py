@@ -183,8 +183,6 @@ class LogicThread(threading.Thread):
         "session": (
             "editor_state",
             "play_mode",
-            "_world_pause_lock",
-            "_world_pause_owners",
             "io_manager",
             "player",
             "player2",
@@ -711,7 +709,7 @@ class LogicThread(threading.Thread):
             return
         self.world_runtime.watch_world_rows()
 
-        if self._world_pause_owners:
+        if self.session_runtime.world_paused:
             self._tick_paused_world(delta)
             return
         

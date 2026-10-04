@@ -171,10 +171,14 @@ def test_no_tables_pick_nothing():
 
 class _Logic:
     def __init__(self):
-        self.owners = set()
+        self.session_runtime = types.SimpleNamespace()
+        self.session_runtime.owners = set()
 
-    def set_world_paused(self, owner, paused=True):
-        (self.owners.add if paused else self.owners.discard)(owner)
+        def set_world_paused(owner, paused=True):
+            (self.session_runtime.owners.add if paused
+             else self.session_runtime.owners.discard)(owner)
+
+        self.session_runtime.set_world_paused = set_world_paused
 
 
 class _GameState:

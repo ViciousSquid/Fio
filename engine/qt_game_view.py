@@ -3650,7 +3650,7 @@ class QtGameView(QOpenGLWidget):
     def begin_actor_pick(self, on_pick=None) -> bool:
         """Arm a one-shot click-to-pick of an actor in Play Mode.
 
-        The world pauses (``LogicThread.set_world_paused``) so the actor holds
+        The world pauses (``LogicThread.session_runtime.set_world_paused``) so the actor holds
         still, and the cursor is freed. The next left-click on an actor ends
         the pick and calls ``on_pick(entity)``; by default that opens the
         Entity Inspector on it. A click on nothing keeps the pick armed; Esc
@@ -3662,7 +3662,7 @@ class QtGameView(QOpenGLWidget):
         self.actor_pick_hover = None
         logic = self.logic_thread
         if logic is not None:
-            logic.set_world_paused(self.ACTOR_PICK_PAUSE, True)
+            logic.session_runtime.set_world_paused(self.ACTOR_PICK_PAUSE, True)
         if not self.console_overlay_active:
             self._show_pick_cursor()
         self.update()
@@ -3679,7 +3679,7 @@ class QtGameView(QOpenGLWidget):
         self.actor_pick_hover = None
         logic = self.logic_thread
         if logic is not None:
-            logic.set_world_paused(self.ACTOR_PICK_PAUSE, False)
+            logic.session_runtime.set_world_paused(self.ACTOR_PICK_PAUSE, False)
         if self.play_mode and not self.console_overlay_active:
             self._capture_play_cursor()
         self.update()

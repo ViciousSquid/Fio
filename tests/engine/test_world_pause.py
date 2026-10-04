@@ -1,6 +1,6 @@
 """World pause: owners hold it, the play tick and the monster AI honour it.
 
-``LogicThread.set_world_paused(owner, paused)`` freezes the play-mode world
+``LogicSession.set_world_paused(owner, paused)`` freezes the play-mode world
 while any owner holds a request -- a game's modal screen, the actor picker, a
 pause menu -- and keeps plugins ticking so a game's menus still work. These
 tests pin the three halves of that contract:
@@ -81,54 +81,54 @@ def _ticks(logic, n=10):
 # ---------------------------------------------------------------------------
 
 def test_the_world_is_paused_while_any_owner_holds_a_request(logic):
-    assert logic.world_paused is False
-    logic.set_world_paused("menu", True)
-    logic.set_world_paused("picker", True)
-    assert logic.world_paused is True
-    assert logic.world_pause_owners() == {"menu", "picker"}
-    logic.set_world_paused("menu", False)
-    assert logic.world_paused is True, "releasing one owner unpaused the other"
-    logic.set_world_paused("picker", False)
-    assert logic.world_paused is False
+    assert logic.session_runtime.world_paused is False
+    logic.session_runtime.set_world_paused("menu", True)
+    logic.session_runtime.set_world_paused("picker", True)
+    assert logic.session_runtime.world_paused is True
+    assert logic.session_runtime.world_pause_owners() == {"menu", "picker"}
+    logic.session_runtime.set_world_paused("menu", False)
+    assert logic.session_runtime.world_paused is True, "releasing one owner unpaused the other"
+    logic.session_runtime.set_world_paused("picker", False)
+    assert logic.session_runtime.world_paused is False
 
 
 def test_releasing_twice_or_releasing_a_stranger_is_harmless(logic):
-    logic.set_world_paused("menu", True)
-    logic.set_world_paused("stranger", False)
-    logic.set_world_paused("menu", False)
-    logic.set_world_paused("menu", False)
-    assert logic.world_pause_owners() == frozenset()
+    logic.session_runtime.set_world_paused("menu", True)
+    logic.session_runtime.set_world_paused("stranger", False)
+    logic.session_runtime.set_world_paused("menu", False)
+    logic.session_runtime.set_world_paused("menu", False)
+    assert logic.session_runtime.world_pause_owners() == frozenset()
 
 
 def test_holding_twice_is_still_one_request(logic):
-    logic.set_world_paused("menu", True)
-    logic.set_world_paused("menu", True)
-    logic.set_world_paused("menu", False)
-    assert logic.world_paused is False
+    logic.session_runtime.set_world_paused("menu", True)
+    logic.session_runtime.set_world_paused("menu", True)
+    logic.session_runtime.set_world_paused("menu", False)
+    assert logic.session_runtime.world_paused is False
 
 
 @pytest.mark.parametrize("entering", [True, False])
 def test_a_play_mode_change_drops_every_request(logic, entering):
     if not entering:
         logic.session_runtime.apply_play_mode(True)
-    logic.set_world_paused("leftover", True)
+    logic.session_runtime.set_world_paused("leftover", True)
     logic.session_runtime.apply_play_mode(entering)
-    assert logic.world_paused is False
+    assert logic.session_runtime.world_paused is False
 
 
 def test_requests_from_many_threads_are_not_lost(logic):
     def hold(i):
         for _ in range(200):
-            logic.set_world_paused(("t", i), True)
-            logic.set_world_paused(("t", i), False)
-        logic.set_world_paused(("t", i), True)
+            logic.session_runtime.set_world_paused(("t", i), True)
+            logic.session_runtime.set_world_paused(("t", i), False)
+        logic.session_runtime.set_world_paused(("t", i), True)
 
     threads = [threading.Thread(target=hold, args=(i,)) for i in range(8)]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=5.0)
-    assert logic.world_pause_owners() == {("t", i) for i in range(8)}
+    assert logic.session_runtime.world_pause_owners() == {("t", i) for i in range(8)}
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ def test_an_unpaused_tick_moves_the_player(playing):
 
 def test_a_paused_tick_does_not_move_the_player(playing):
     start = glm.vec3(playing.player.pos)
-    playing.set_world_paused("menu", True)
+    playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_keys({KEY_W})
     _ticks(playing, 20)
     assert glm.distance(playing.player.pos, start) == 0.0
@@ -154,14 +154,14 @@ def test_a_paused_tick_does_not_move_the_player(playing):
 def test_look_and_fire_over_a_paused_world_are_discarded(playing):
     angle = playing.player.angle
     events_before = len(playing.combat_runtime.get_recent_noise_events())
-    playing.set_world_paused("menu", True)
+    playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_mouse_delta(80.0, 30.0)
     playing.game_state.queue_shot()
     _ticks(playing, 1)
     assert playing.player.angle == angle
     assert playing.muzzle_flash_active is False
 
-    playing.set_world_paused("menu", False)
+    playing.session_runtime.set_world_paused("menu", False)
     _ticks(playing, 1)
     assert playing.player.angle == angle, "look input queued over a menu landed on resume"
     assert playing.muzzle_flash_active is False
@@ -176,11 +176,11 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
         "doors": copy.deepcopy(playing.mover_runtime.door_states),
         "timers": copy.deepcopy(playing.timing_runtime.timer_states),
         "fades": copy.deepcopy(playing.timing_runtime.light_fade_states),
-        "projectiles": playing._projectile_positions.copy(),
+        "projectiles": playing.combat_runtime.projectile_positions.copy(),
         "noise": copy.deepcopy(playing.combat_runtime._gunfire_events),
     }
 
-    playing.set_world_paused("menu", True)
+    playing.session_runtime.set_world_paused("menu", True)
     _ticks(playing, 5)
 
     assert tuple(playing.player.pos) == before["player_pos"]
@@ -189,14 +189,14 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
     assert playing.mover_runtime.door_states == before["doors"]
     assert playing.timing_runtime.timer_states == before["timers"]
     assert playing.timing_runtime.light_fade_states == before["fades"]
-    assert np.array_equal(playing._projectile_positions, before["projectiles"])
+    assert np.array_equal(playing.combat_runtime.projectile_positions, before["projectiles"])
     assert playing.combat_runtime._gunfire_events == before["noise"]
 
 
 def test_plugins_still_tick_over_a_paused_world(playing):
     plugins = _RecordingPlugins()
     playing.plugins = plugins
-    playing.set_world_paused("menu", True)
+    playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_use_key_pressed()
     _ticks(playing, 2)
     assert len(plugins.ticks) == 2
@@ -213,9 +213,11 @@ def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playi
     playing.plugins = plugins
     if state == "cutscene_runtime.state":
         playing.cutscene_runtime.state = {"active": True}
+    elif state == "player_dead":
+        playing.player_dead = True
     else:
-        setattr(playing, state, True)
-    playing.set_world_paused("menu", True)
+        playing.interaction_runtime.level_complete_ui = {"active": True}
+    playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_use_key_pressed()
     _ticks(playing, 2)
     assert plugins.ticks == []
@@ -225,8 +227,8 @@ def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playi
 def test_a_paused_tick_reports_a_hud_prompt_as_consuming_the_use_key(playing):
     plugins = _RecordingPlugins()
     playing.plugins = plugins
-    playing.current_hud_message = "Press E to open"
-    playing.set_world_paused("menu", True)
+    playing.interaction_runtime.current_hud_message = "Press E to open"
+    playing.session_runtime.set_world_paused("menu", True)
     _ticks(playing, 1)
     assert plugins.ticks[0]["interaction_consumed"] is True
 
@@ -244,7 +246,9 @@ class _CountingAI:
 
 
 class _Host:
-    world_paused = False
+    class _Session:
+        world_paused = False
+    session_runtime = _Session()
 
 
 def _wait_for(predicate, timeout=2.0):
@@ -262,12 +266,12 @@ def test_the_monster_ai_thread_idles_while_the_world_is_paused():
     thread.start()
     try:
         assert _wait_for(lambda: ai.updates > 3), "the control: the AI runs"
-        host.world_paused = True
+        host.session_runtime.world_paused = True
         time.sleep(0.05)                     # let an in-flight frame finish
         frozen = ai.updates
         time.sleep(0.3)
         assert ai.updates == frozen
-        host.world_paused = False
+        host.session_runtime.world_paused = False
         assert _wait_for(lambda: ai.updates > frozen), "the AI did not resume"
     finally:
         thread.stop()
@@ -277,13 +281,13 @@ def test_the_monster_ai_thread_idles_while_the_world_is_paused():
 def test_the_monster_ai_does_not_fast_forward_after_a_pause():
     """0.5 s paused at 100 Hz would be ~50 catch-up updates in one burst."""
     host, ai = _Host(), _CountingAI()
-    host.world_paused = True
+    host.session_runtime.world_paused = True
     thread = MonsterAIThread(host, ai, threading.Lock(), tick_rate=100)
     thread.start()
     try:
         time.sleep(0.5)
         assert ai.updates == 0
-        host.world_paused = False
+        host.session_runtime.world_paused = False
         time.sleep(0.03)
         assert ai.updates < 15
     finally:

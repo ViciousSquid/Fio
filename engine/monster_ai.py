@@ -2116,7 +2116,7 @@ class MonsterAIThread(threading.Thread):
             # The world is paused (LogicThread.set_world_paused): monsters hold
             # still, and the paused time is dropped rather than caught up on
             # resume, which would fast-forward every monster at once.
-            if getattr(self.lt, 'world_paused', False):
+            if self.lt.session_runtime.world_paused:
                 accumulator = 0.0
 
             while accumulator >= self.tick_duration and self.running:
