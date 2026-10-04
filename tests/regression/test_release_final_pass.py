@@ -130,14 +130,14 @@ def test_setprop_hidden_false_leaves_the_object_visible():
     lamp = Light(pos=[0.0, 100.0, 0.0], properties={"name": "lamp"})
     state, logic = _playing([lamp])
     try:
-        _console(state, logic).cmd_set_property("lamp hidden false")
+        _console(state, logic)[0].cmd_set_property("lamp hidden false")
         assert lamp.properties["hidden"] is False
         logic.render_runtime.prepare_render_state()
         table = logic.game_state.get_write_state().entity_table
         assert not table.hidden[table.slot_of_id[lamp.properties["id"]]], (
             "setprop ... hidden false published the lamp as hidden")
 
-        _console(state, logic).cmd_set_property("lamp hidden TRUE")
+        _console(state, logic)[0].cmd_set_property("lamp hidden TRUE")
         assert lamp.properties["hidden"] is True
     finally:
         logic.stop()
@@ -150,7 +150,7 @@ def test_setprop_hidden_on_a_brush_in_play_updates_its_collision():
     wall = box_brush("wall", (200, 64, 0), (32, 128, 256))
     state, logic = _playing(brushes=[ground, wall])
     try:
-        console = _console(state, logic)
+        console = _console(state, logic)[0]
         console.cmd_set_property("wall hidden true")
         logic._tick(logic.TICK_DURATION)
         assert wall["hidden"] is True
@@ -171,7 +171,7 @@ def test_setprop_keeps_text_properties_as_text():
                                                      "label": "on"})
     state, logic = _playing([lamp])
     try:
-        _console(state, logic).cmd_set_property("lamp label false")
+        _console(state, logic)[0].cmd_set_property("lamp label false")
         assert lamp.properties["label"] == "false"
     finally:
         logic.stop()
