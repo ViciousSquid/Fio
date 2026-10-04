@@ -1101,8 +1101,8 @@ class PathNode(Thing):
       - wait_time (float, seconds): how long a monster pauses at this node
         before moving to next_node. 0 = no wait (pass through immediately).
       - speed (float, multiplier): speed factor applied while an entity is
-        heading toward this node.  1.0 = normal speed, 0.5 = half speed,
-        2.0 = double, etc.  (Renamed from legacy 'patrol_speed'.)
+        heading toward this node. 1.0 = normal speed, 0.5 = half speed,
+        2.0 = double, etc.
 
     PathNodes are invisible at runtime — they are editor-only aids that the
     monster AI consults during _update_monsters in the logic thread.
@@ -1122,12 +1122,6 @@ class PathNode(Thing):
         self.properties.setdefault('next_node', '')
         self.properties.setdefault('wait_time', 0.0)
         self.properties.setdefault('speed', 1.0)
-
-        # Migrate legacy key transparently on load
-        if 'patrol_speed' in self.properties and 'speed' not in self.properties:
-            self.properties['speed'] = self.properties.pop('patrol_speed')
-        elif 'patrol_speed' in self.properties:
-            self.properties.pop('patrol_speed', None)
 
     def get_radius(self) -> float:
         """Radius in world units — read by the 2D preview and the monster AI."""
@@ -1153,10 +1147,7 @@ class PathNode(Thing):
     def get_speed(self) -> float:
         """Speed multiplier for entities approaching this node."""
         try:
-            # Accept legacy 'patrol_speed' key transparently
-            raw = self.properties.get('speed',
-                    self.properties.get('patrol_speed', 1.0))
-            return max(0.01, float(raw))
+            return max(0.01, float(self.properties.get('speed', 1.0)))
         except (TypeError, ValueError):
             return 1.0
 
