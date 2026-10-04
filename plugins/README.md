@@ -1,6 +1,6 @@
 # Fio Plugin System
 
-Plugins add new concepts to Fio: new placeable entity types, their I/O, and
+> **Security / trust boundary:** plugins are executable Python code loaded into the Fio process. **Everything present as a plugin under this directory is trusted code with the same process privileges as Fio**; installing or copying a plugin here is equivalent to installing/running Python code. This is an intentional extension model, not a sandbox. Keep the `plugins/` directory under the same trust boundary as the executable. A `.fiopak` cannot supply plugin code; packages only declare dependencies on plugins already installed in the host.\n\nPlugins add new concepts to Fio: new placeable entity types, their I/O, and
 runtime behaviour. Drop a Python package into this `plugins/` directory and it
 is discovered automatically at startup, registered with the plugin manager, and
 consumed by explicit extension points in the editor and engine. The editor's
