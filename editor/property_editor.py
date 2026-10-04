@@ -805,8 +805,8 @@ class PropertyEditor(QWidget):
                 saved_scroll_pos = self._page.verticalScrollBar().value()
 
         if obj is None and self.current_object is not None:
-            if hasattr(self.editor, 'properties_tab_widget'):
-                prev = getattr(self.editor, '_previous_tab_index', None)
+            if self.editor.properties_tab_widget:
+                prev = self.editor._previous_tab_index
                 if prev is not None and self.editor.properties_tab_widget.currentIndex() == 0:
                     self.editor.properties_tab_widget.setCurrentIndex(prev)
 
@@ -4720,7 +4720,7 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'door_tab_index'):
                 self.tab_widget.setTabVisible(self.door_tab_index, False)
         self.current_object['is_mover'] = is_mover
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+        if self.editor.state.mark_world_changed:
             self.editor.state.mark_world_changed([self.current_object])
         if is_mover:
             self.current_object.setdefault('speed', 64.0)
@@ -4747,7 +4747,7 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'mover_tab_index'):
                 self.tab_widget.setTabVisible(self.mover_tab_index, False)
         self.current_object['is_door'] = is_door
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+        if self.editor.state.mark_world_changed:
             self.editor.state.mark_world_changed([self.current_object])
         if is_door:
             self.current_object.setdefault('door_direction', 'up')
@@ -4906,7 +4906,7 @@ class PropertyEditor(QWidget):
                 Prop.clear_sprite_cache()
             self._refresh_prop_collection_ui(self.current_object)
             self._refresh_prop_collection_appearance(self.current_object)
-            if hasattr(self.editor, 'view_3d'):
+            if self.editor.view_3d:
                 self.editor.view_3d.update()
             self.editor.mark_as_modified()
 
@@ -4939,7 +4939,7 @@ class PropertyEditor(QWidget):
             Prop.clear_sprite_cache()
         self._refresh_prop_collection_ui(thing)
         self._refresh_prop_collection_appearance(thing)
-        if hasattr(self.editor, 'view_3d'):
+        if self.editor.view_3d:
             self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
@@ -4953,7 +4953,7 @@ class PropertyEditor(QWidget):
         self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(Prop, 'clear_sprite_cache'):
             Prop.clear_sprite_cache()
-        if hasattr(self.editor, 'view_3d'):
+        if self.editor.view_3d:
             self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
@@ -5003,7 +5003,7 @@ class PropertyEditor(QWidget):
         self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(Prop, 'clear_sprite_cache'):
             Prop.clear_sprite_cache()
-        if hasattr(self.editor, 'view_3d'):
+        if self.editor.view_3d:
             self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
@@ -5154,7 +5154,7 @@ class PropertyEditor(QWidget):
         # Property edits are live scene mutations, not merely UI state.  The
         # dense render/entity projections cache their cold columns behind the
         # editor's world epoch, so journal this exact object immediately.
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+        if self.editor.state.mark_world_changed:
             self.editor.state.mark_world_changed([self.current_object])
 
         if key == 'name' and _io_system is not None:
@@ -5187,13 +5187,13 @@ class PropertyEditor(QWidget):
             if key in ('terrain_fill', 'terrain_infinite', 'enabled',
                        'terrain_stream_radius', 'collect_activation_radius') \
                     and getattr(self.current_object, 'TYPE', None) == 'bigworldsettings' \
-                    and hasattr(self.editor, 'sync_bigworld_terrain'):
+                    and self.editor.sync_bigworld_terrain:
                 self.editor.sync_bigworld_terrain(allow_create=True)
                 # When fill (or infinite) is switched on, surface the Terrain
                 # Editor so the generated ground can be sculpted / re-biomed.
                 if key in ('terrain_fill', 'terrain_infinite') and bool(value) \
-                        and getattr(self.editor, 'terrain', None) is not None \
-                        and hasattr(self.editor, '_show_terrain_editor_panel'):
+                        and self.editor.terrain is not None \
+                        and self.editor._show_terrain_editor_panel:
                     self.editor._show_terrain_editor_panel()
 
             # Only repaint viewports — do NOT call update_all_ui() here.
