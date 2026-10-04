@@ -260,7 +260,7 @@ def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick():
     from tests.logic.test_io_dispatch import Network
 
     net = Network()
-    net.manager.set_logic_thread(SimpleNamespace(play_mode=True))
+    net.manager.set_logic_thread(SimpleNamespace(session_runtime=SimpleNamespace(play_mode=True)))
     net.add("monster")
     net.add("now")
     net.add("later")
@@ -290,7 +290,7 @@ def test_outputs_fired_in_the_editor_still_run_immediately():
     from tests.logic.test_io_dispatch import Network
 
     net = Network()
-    net.manager.set_logic_thread(SimpleNamespace(play_mode=False))
+    net.manager.set_logic_thread(SimpleNamespace(session_runtime=SimpleNamespace(play_mode=False)))
     net.add("a")
     net.add("b")
     net.handler()
