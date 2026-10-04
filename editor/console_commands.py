@@ -2536,7 +2536,7 @@ entity to drive them from the I/O system.</i><br>
         path = self._resolve_save_path(args)
         save_mode = self._save_mode()
         base_level = self._base_level() if save_mode != 'full' else None
-        ok, msg = lt.save_session(path, map_name=self._current_map_name(),
+        ok, msg = lt.session_runtime.save_session(path, map_name=self._current_map_name(),
                                   save_mode=save_mode, base_level=base_level)
         debug_log("Info" if ok else "Error", msg)
         if ok:
@@ -2564,7 +2564,7 @@ entity to drive them from the I/O system.</i><br>
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
-            ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+            ok, msg = lt.session_runtime.load_session(path, map_name=self._current_map_name(),
                                        base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
@@ -2616,7 +2616,7 @@ entity to drive them from the I/O system.</i><br>
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
-        ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+        ok, msg = lt.session_runtime.load_session(path, map_name=self._current_map_name(),
                                   base_level=self._base_level())
         if not ok and 'different base map' in (msg or ''):
             # Genuinely ambiguous: a delta whose base map we couldn't reconcile.

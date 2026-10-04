@@ -784,51 +784,10 @@ class LogicThread(threading.Thread):
         thread) change together, never with a tick running in between.
         """
         with self._tick_lock:
-            self._apply_play_mode(enabled)
+            self.session_runtime.apply_play_mode(enabled)
 
-    def _apply_play_mode(self, enabled: bool):
-        return self.session_runtime.apply_play_mode(enabled)
-
-    # SAVE / LOAD  (native play-session serialization)
-    # =========================================================================
-
-    def save_session(
-        self, path: str, *, map_name: str = "",
-        save_mode: str = "full", base_level: dict = None
-    ):
-        return self.session_runtime.save_session(
-            path,
-            map_name=map_name,
-            save_mode=save_mode,
-            base_level=base_level,
-        )
-
-    def load_session(
-        self, path: str, *, map_name: str = "", base_level: dict = None
-    ):
-        return self.session_runtime.load_session(
-            path,
-            map_name=map_name,
-            base_level=base_level,
-        )
-
-    def _release_session_caches(self):
-        return self.session_runtime.release_session_caches()
-
-    def _start_monster_ai(self):
-        return self.session_runtime.start_monster_ai()
-
-    def _stop_monster_ai(self):
-        return self.session_runtime.stop_monster_ai()
-
-    def _reset_all_monsters(self, clear_dead=True):
-        return self.session_runtime.reset_all_monsters(clear_dead=clear_dead)
-
-    def _start_speakers_on_spawn(self):
-        return self.session_runtime.start_speakers_on_spawn()
-
-    def _fire_player_spawn_outputs(self):
-        return self.session_runtime.fire_player_spawn_outputs()
+    # Session lifecycle is owned by LogicSession. LogicThread keeps only the
+    # public play-mode entry point because it owns the tick-lock boundary.
 
     def set_terrain(self, terrain):
         self.terrain = terrain
@@ -1050,7 +1009,7 @@ class LogicThread(threading.Thread):
                         # Standalone/headless hosts have no Qt lifecycle to marshal
                         # through, so they still need the native engine teardown.
                         try:
-                            self._apply_play_mode(False)
+                            self.session_runtime.apply_play_mode(False)
                         except Exception:
                             debug_log(
                                 "LogicThread",
@@ -1094,7 +1053,7 @@ class LogicThread(threading.Thread):
 
     def stop(self):
         self.running = False
-        self._stop_monster_ai()
+        self.session_runtime.stop_monster_ai()
 
     def _update_tps_counter(self):
         self._tick_count += 1
