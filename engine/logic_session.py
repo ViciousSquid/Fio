@@ -117,9 +117,9 @@ class LogicSession:
             logic.effect_store.begin_session(logic.editor_state.things)
 
             # Reset player stats.
-            logic.player_health = 100
-            logic.player_max_health = 100
-            logic.player_dead = False
+            logic.player_runtime.player_health = 100
+            logic.player_runtime.player_max_health = 100
+            logic.player_runtime.player_dead = False
             logic.player_runtime.god_mode = False
             logic.player_runtime.buddha_mode = False
             logic.player_runtime.notarget = False
@@ -201,7 +201,7 @@ class LogicSession:
             # fast 1.5-second fade-in followed by the 4-second fade-out.
             hud_now = time.perf_counter()
             logic.render_runtime._hud_health_alpha = 0.0
-            logic.render_runtime._hud_health_last_value = logic.player_health
+            logic.render_runtime._hud_health_last_value = logic.player_runtime.player_health
             logic.render_runtime._hud_health_fade_started = hud_now
             logic.render_runtime._hud_health_fade_from = 0.0
             logic.render_runtime._hud_health_fade_phase = "in"
@@ -256,7 +256,7 @@ class LogicSession:
             logic.timing_runtime.light_fade_states.clear()
             logic.combat_runtime.active_weapon = None
             logic.combat_runtime.bullet_marks = []
-            logic.player_dead = False
+            logic.player_runtime.player_dead = False
             logic.combat_runtime.muzzle_flash_active = False
 
             logic.prop_runtime.stop()
@@ -425,7 +425,7 @@ class LogicSession:
         if logic.io_manager is not None:
             logic.io_manager.reset()
 
-        for player in (logic.player, logic.player2):
+        for player in (logic.player, logic.player_runtime.player2):
             if player is not None:
                 player.ground_object = None
 
