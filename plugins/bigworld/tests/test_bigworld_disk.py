@@ -155,7 +155,7 @@ def live_brush_ids(logic):
 
 
 def find_thing(logic, tid):
-    for t in logic.things:
+    for t in logic.editor_state.things:
         if t.properties["id"] == tid:
             return t
     return None
