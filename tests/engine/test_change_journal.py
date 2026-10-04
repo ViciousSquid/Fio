@@ -163,16 +163,15 @@ def test_an_io_tint_reaches_the_brush_table():
     assert before.tolist() != [1.0, 0.0, 0.0]
 
 
-def test_the_console_tint_reaches_the_brush_table():
-    from types import SimpleNamespace
+def test_the_console_tint_reaches_the_brush_table(main_window):
     from editor.console_commands import ConsoleCommandHandler
 
     wall = box_brush("wall")
     tables = _two_buffers([wall], RenderTable)
-    console = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
-    console.editor_state = SimpleNamespace(find_entity_by_name=lambda name: wall)
+    handler = ConsoleCommandHandler(main_window)
+    main_window.state.brushes[:] = [wall]
 
-    console.cmd_tint("wall 0 255 0")
+    handler.cmd_tint("wall 0 255 0")
     for table in tables:
         table.begin_frame([wall], 1)
 
@@ -182,13 +181,11 @@ def test_the_console_tint_reaches_the_brush_table():
 
 @pytest.mark.parametrize("change", ["park", "unpark"])
 def test_big_world_parking_reaches_the_tables(change):
-    from plugins.bigworld.runtime import BigWorldSession
+    from plugins.bigworld.runtime import BigWorldSession, StreamingHost
 
     wall = box_brush("wall")
     lamp = make_thing(Light, "lamp")
-    runtime = BigWorldSession.__new__(BigWorldSession)
-    runtime._parked_brushes = {}
-    runtime._parked_lights = {}
+    runtime = BigWorldSession(StreamingHost())
     if change == "unpark":
         runtime._set_brush_active(wall, False)
         runtime._set_light_active(lamp, False)
