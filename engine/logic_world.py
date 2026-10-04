@@ -103,7 +103,7 @@ class LogicWorld:
         self.indexed_brushes = tuple(logic.editor_state.brushes)
 
         if (
-            logic.play_mode
+            logic.session_runtime.play_mode
             and logic.mover_runtime._moving_rows is not None
             and self.indexed_brushes != logic.mover_runtime._moving_rows
         ):
@@ -117,7 +117,7 @@ class LogicWorld:
         logic = self.logic
         if not name:
             return None
-        if not logic.play_mode:
+        if not logic.session_runtime.play_mode:
             return self.scan_entity("name", name)
         return self.name_cache.get(name)
 
@@ -126,7 +126,7 @@ class LogicWorld:
         logic = self.logic
         if not entity_id:
             return None
-        if not logic.play_mode:
+        if not logic.session_runtime.play_mode:
             return self.scan_entity("id", entity_id)
         return self.id_cache.get(entity_id)
 
