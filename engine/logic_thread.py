@@ -1481,13 +1481,13 @@ class LogicThread(threading.Thread):
 
     def intersect_ray_aabb(self, origin, direction, box_min, box_max):
         """Compatibility wrapper for the ray/AABB intersection helper."""
-        return self._combat_runtime().intersect_ray_aabb(
+        return LogicThread._combat_runtime(self).intersect_ray_aabb(
             origin, direction, box_min, box_max
         )
 
     def _update_bullet_marks(self):
         """Compatibility wrapper for bullet-mark ageing."""
-        return self._combat_runtime()._update_bullet_marks()
+        return LogicThread._combat_runtime(self)._update_bullet_marks()
 
     def _projectile_store(self):
         """Return the authoritative dense monster ProjectileStore."""
@@ -1495,53 +1495,53 @@ class LogicThread(threading.Thread):
 
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
         """Compatibility wrapper for dense monster projectile creation."""
-        return self._combat_runtime()._add_monster_projectile(
+        return LogicThread._combat_runtime(self)._add_monster_projectile(
             pos, vel, owner_id, damage, lifetime
         )
 
     def _projectile_monster_candidates(self, pos32, owners):
         """Compatibility wrapper for dense projectile/monster broad-phase."""
-        return self._combat_runtime()._projectile_monster_candidates(
+        return LogicThread._combat_runtime(self)._projectile_monster_candidates(
             pos32, owners
         )
 
     def _projectile_wall_candidates(self, pos32):
         """Compatibility wrapper for dense projectile/wall broad-phase."""
-        return self._combat_runtime()._projectile_wall_candidates(pos32)
+        return LogicThread._combat_runtime(self)._projectile_wall_candidates(pos32)
 
     def _publish_projectile_render_snapshot(self):
         """Compatibility wrapper for projectile render publication."""
-        return self._combat_runtime()._publish_projectile_render_snapshot()
+        return LogicThread._combat_runtime(self)._publish_projectile_render_snapshot()
 
     def _update_monster_projectiles(self, delta: float):
         """Compatibility wrapper for projectile simulation dispatch."""
-        return self._combat_runtime()._update_monster_projectiles(delta)
+        return LogicThread._combat_runtime(self)._update_monster_projectiles(delta)
 
     def _update_monster_projectiles_scalar(self, projectiles, delta: float):
         """Compatibility wrapper for the scalar projectile path."""
-        return self._combat_runtime()._update_monster_projectiles_scalar(
+        return LogicThread._combat_runtime(self)._update_monster_projectiles_scalar(
             projectiles, delta
         )
 
     def _update_monster_projectiles_dense(self, projectiles, delta: float):
         """Compatibility wrapper for the dense projectile path."""
-        return self._combat_runtime()._update_monster_projectiles_dense(
+        return LogicThread._combat_runtime(self)._update_monster_projectiles_dense(
             projectiles, delta
         )
 
     def _emit_noise_event(self, pos, source: str, loudness: float = 1.0):
         """Compatibility wrapper for player noise emission."""
-        return self._combat_runtime()._emit_noise_event(
+        return LogicThread._combat_runtime(self)._emit_noise_event(
             pos, source, loudness
         )
 
     def get_recent_noise_events(self, max_age: float = 3.0) -> list:
         """Compatibility wrapper for monster-hearing noise queries."""
-        return self._combat_runtime().get_recent_noise_events(max_age)
+        return LogicThread._combat_runtime(self).get_recent_noise_events(max_age)
 
     def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
         """Compatibility wrapper for the legacy gunfire event query."""
-        return self._combat_runtime().get_recent_gunfire_events(max_age)
+        return LogicThread._combat_runtime(self).get_recent_gunfire_events(max_age)
 
     # =========================================================================
     # FRUSTUM CULLING
