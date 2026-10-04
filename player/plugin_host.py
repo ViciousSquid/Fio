@@ -3,9 +3,7 @@ Player-side plugin host.
 
 Lets the standalone ``.fiopak`` player load and *run* the plugins a package
 depends on — so a game built with, say, the Tidy plugin actually plays outside
-the editor. It is the player-side counterpart to the editor's
-``plugins.integration``: where the editor patches its logic thread to dispatch
-the plugin lifecycle, this drives the same dispatch from the player's frame loop.
+the editor. It is the player-side counterpart to the editor's native plugin lifecycle hooks; the player drives the same dispatch from its frame loop.
 
 Responsibilities:
 
