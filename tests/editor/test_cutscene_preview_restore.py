@@ -72,6 +72,7 @@ def _fake_wizard():
             "pitch": 8.0,
             "fov": 9.0,
         },
+        actor_meta={"actor": {}},
         actor_objects={"actor": actor},
         main_window=types.SimpleNamespace(
             view_3d=types.SimpleNamespace(
