@@ -13,7 +13,6 @@ import time
 import glm
 import numpy as np
 
-from .threaded_game_state import PublishedBrushes, PublishedEntities
 from .change_journal import JOURNAL, STATE
 from .entity_table import ENT_PROP
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
@@ -525,16 +524,12 @@ class LogicRender:
         else:
             visible_slots = all_slots
 
-        all_brushes = PublishedBrushes(refs, all_slots)
-        visible_brushes = PublishedBrushes(refs, visible_slots)
         culled_count = total_count - len(visible_slots)
 
         write_state.render_table = table
         write_state.render_refs = refs
         write_state.visible_brush_slots = visible_slots
         write_state.all_brush_slots = all_slots
-        write_state.visible_brushes = visible_brushes
-        write_state.all_brushes = all_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
 
@@ -583,11 +578,6 @@ class LogicRender:
                 keep_things[dropped] = False
                 visible_thing_slots = np.flatnonzero(keep_things)
 
-        all_lights = PublishedEntities(erefs, etable.light_slots)
-        visible_things = PublishedEntities(erefs, visible_thing_slots)
-
-        write_state.visible_things = visible_things
-        write_state.all_lights = all_lights
         write_state.has_portals = bool(len(etable.portal_slots))
         write_state.entity_table = etable
         write_state.entity_refs = erefs
