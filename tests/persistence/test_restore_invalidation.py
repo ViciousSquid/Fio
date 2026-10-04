@@ -205,7 +205,7 @@ def test_a_delta_restore_invalidates_too(session):
 
     # Back to the base map's state, as loading it fresh would leave it.
     wall["hidden"] = False
-    thread.session_runtime.spatial_grid.populate(thread.brushes)
+    thread.session_runtime.spatial_grid.populate(thread.editor_state.brushes)
     assert _in_grid(thread, wall)
 
     report = savegame.restore_auto(thread, snapshot, current_map_name=MAP)
