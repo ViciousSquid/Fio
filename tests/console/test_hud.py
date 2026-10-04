@@ -154,10 +154,10 @@ def test_message_commands_reach_play_view_overlay(command, attribute, expected):
 
 
 def test_hudstyle_is_not_shipped_in_settings_ini():
-    from tests.helpers.paths import REPO_ROOT
+    from tests.helpers.paths import repo_path
 
     settings = configparser.ConfigParser()
-    settings.read(REPO_ROOT / "settings.ini")
+    settings.read(repo_path("settings.ini"))
 
     assert not settings.has_option("Display", "hudstyle")
 
