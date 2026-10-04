@@ -599,7 +599,7 @@ class LogicThread(threading.Thread):
             )
 
     def _tick_play_mode(self, delta):
-        if not self.player_runtime.player:
+        if not self.player:
             return
         self.world_runtime.watch_world_rows()
 
