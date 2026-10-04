@@ -2,7 +2,7 @@
 
 Owns frustum math, HUD render-state fading, and the double-buffered
 RenderTable/EntityTable projection. LogicThread remains the simulation
-orchestrator and keeps render-state ownership for the existing private API.
+orchestrator; the published render state is owned by ThreadedGameState.
 """
 
 from __future__ import annotations

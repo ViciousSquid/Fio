@@ -241,8 +241,8 @@ class LogicThread(threading.Thread):
         self.terrain = None
         self._first_tick = False
         
-        # Camera state and camera math live in LogicCamera. LogicThread keeps
-        # only the small forwarding surface needed by the rest of the engine.
+        # Camera state and camera math live in LogicCamera; LogicThread keeps
+        # the camera runtime as an owned subsystem and schedules its updates.
         self.camera = LogicCamera(self)
         self.player_runtime = LogicPlayer(self)
         # HUD visibility follows LogicCamera control. When a cinematic ends,
