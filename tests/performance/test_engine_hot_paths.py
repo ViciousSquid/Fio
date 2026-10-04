@@ -221,7 +221,7 @@ def test_the_collision_brush_list_is_concatenated_once_not_per_tick(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     try:
-        thread.player_runtime.player = Player(0.0, 0.0)
+        thread.player = Player(0.0, 0.0)
         before = thread.collision_runtime._collision_brushes_cache
         for _ in range(20):
             thread._tick(1.0 / 60.0)
@@ -335,7 +335,7 @@ def test_the_ai_routes_its_queries_through_the_grid_not_the_brush_list(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         from engine.player import Player
-        thread.player_runtime.player = Player(0.0, 0.0)
+        thread.player = Player(0.0, 0.0)
         grid = thread.session_runtime.spatial_grid
         calls = {"wall": 0, "ground": 0}
         real_wall, real_ground = grid.overlaps_wall, grid.raycast_down
@@ -420,8 +420,8 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
                       properties={'name': 'P%d' % i}) for i in range(3)]
     filler = [make_thing(Light, "L%d" % i) for i in range(50)]
     thread = logic(brushes=room(), things=filler + portals)
-    thread.player_runtime.player = Player(0.0, 0.0, 0.0)
-    thread.camera.player = thread.player_runtime.player
+    thread.player = Player(0.0, 0.0, 0.0)
+    thread.camera.player = thread.player
     thread.session_runtime.apply_play_mode(True)
     try:
         assert thread.portal_runtime.portal_things == portals
@@ -479,7 +479,7 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
     player = Player(0.0, -10.0, 0.0)
     player.pos = glm.vec3(0.0, 20.0, -4.0)
     player.velocity = glm.vec3(0.0, 0.0, -120.0)
-    thread.player_runtime.player = player
+    thread.player = player
     thread.camera.player = player
     thread.session_runtime.apply_play_mode(True)
     try:
@@ -493,12 +493,12 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
 
         thread.portal_runtime._execute_player_transit(portal_a, portal_b)
 
-        actual = tuple(thread.player_runtime.player.pos)
+        actual = tuple(thread.player.pos)
         displacement = ((actual[0] - expected[0]) * portal_b.get_normal()[0]
                         + (actual[1] - expected[1]) * portal_b.get_normal()[1]
                         + (actual[2] - expected[2]) * portal_b.get_normal()[2])
         assert np.isclose(displacement, 0.05, atol=1e-6)
-        assert np.allclose(tuple(thread.player_runtime.player.velocity), expected_velocity)
+        assert np.allclose(tuple(thread.player.velocity), expected_velocity)
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -508,7 +508,7 @@ def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
 
     thread = logic(brushes=room(),
                    things=[make_thing(Light, "L%d" % i) for i in range(20)])
-    thread.player_runtime.player = Player(0.0, 0.0, 0.0)
+    thread.player = Player(0.0, 0.0, 0.0)
     thread.session_runtime.apply_play_mode(True)
     try:
         assert thread.portal_runtime.portal_things == []

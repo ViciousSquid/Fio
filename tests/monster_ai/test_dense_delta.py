@@ -49,7 +49,7 @@ def test_a_sit_out_row_skips_only_that_monster():
     before = [tuple(m.pos) for m in monsters]
     sit = np.zeros(len(monsters), dtype=bool)
     sit[0] = True
-    ai._update_dense(monsters, TICK, logic.player_runtime.player.pos, sit)
+    ai._update_dense(monsters, TICK, logic.player.pos, sit)
     assert tuple(monsters[0].pos) == before[0]
     assert any(tuple(m.pos) != b for m, b in zip(monsters[1:], before[1:]))
 
@@ -89,7 +89,7 @@ def test_a_fitted_view_runs_the_same_in_both_passes(seed):
 
 def test_off_screen_monsters_step_once_per_interval_and_on_screen_ones_every_tick():
     ai, logic = _world(2, dense=True)
-    player = logic.player_runtime.player.pos
+    player = logic.player.pos
     _fit(logic, rect=(1.0e6, 1.0e6))             # everything on screen
     on = list(logic.world_runtime.monster_things)
     _fit(logic, rect=(0.0, 0.0))                 # everything off screen
@@ -100,7 +100,7 @@ def test_off_screen_monsters_step_once_per_interval_and_on_screen_ones_every_tic
         moved.append(any(tuple(m.pos) != b for m, b in zip(on, before)))
     # Five ticks sat out, the sixth carries all 0.2 s.
     assert moved[:5] == [False] * 5 and moved[5] is True
-    assert player is logic.player_runtime.player.pos
+    assert player is logic.player.pos
 
 
 def test_a_fitted_pass_keeps_nothing_past_stop():

@@ -182,7 +182,7 @@ def _setpos_console(logic):
     window = SimpleNamespace(
         state=logic.editor_state,
         view_3d=SimpleNamespace(logic_thread=logic, play_mode=True,
-                                player=logic.player_runtime.player),
+                                player=logic.player),
         update_all_ui=lambda: None, show_toast=lambda *a, **k: None)
     return ConsoleCommandHandler(window)
 
@@ -194,10 +194,10 @@ def test_setpos_moves_the_player():
 
     state, logic = _playing()
     try:
-        logic.player_runtime.player.velocity = glm.vec3(0.0, -300.0, 0.0)
+        logic.player.velocity = glm.vec3(0.0, -300.0, 0.0)
         _setpos_console(logic).handle_command("setpos 100 200 -300")
-        assert tuple(logic.player_runtime.player.pos) == (100.0, 200.0, -300.0)
-        assert tuple(logic.player_runtime.player.velocity) == (0.0, 0.0, 0.0)
+        assert tuple(logic.player.pos) == (100.0, 200.0, -300.0)
+        assert tuple(logic.player.velocity) == (0.0, 0.0, 0.0)
     finally:
         logic.stop()
 
@@ -206,9 +206,9 @@ def test_setpos_moves_the_player():
 def test_setpos_refuses_non_finite_coordinates(coords):
     state, logic = _playing()
     try:
-        before = tuple(logic.player_runtime.player.pos)
+        before = tuple(logic.player.pos)
         _setpos_console(logic).handle_command(f"teleport {coords}")
-        assert tuple(logic.player_runtime.player.pos) == before
+        assert tuple(logic.player.pos) == before
     finally:
         logic.stop()
 
@@ -498,10 +498,10 @@ def _portal_session():
         state.load_from_data(json.load(f), save_undo=False)
     logic = LogicThread(ThreadedGameState(), state)
     start = next(t for t in state.things if isinstance(t, PlayerStart))
-    logic.player_runtime.player = Player(start.pos[0], start.pos[2])
+    logic.player = Player(start.pos[0], start.pos[2])
     logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()
-    logic.player_runtime.player.physics_enabled = False
+    logic.player.physics_enabled = False
     portal = next(t for t in state.things
                   if isinstance(t, Portal) and t.properties["name"] == "Portal_1")
     n, o = portal.get_normal(), portal.pos
@@ -512,12 +512,12 @@ def _portal_session():
 
 def _put(logic, where):
     import glm
-    logic.player_runtime.player.pos = glm.vec3(*where)
-    logic.player_runtime.player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    logic.player.pos = glm.vec3(*where)
+    logic.player.velocity = glm.vec3(0.0, 0.0, 0.0)
 
 
 def _at(logic, where):
-    return all(abs(a - b) < 1.0 for a, b in zip(logic.player_runtime.player.pos, where))
+    return all(abs(a - b) < 1.0 for a, b in zip(logic.player.pos, where))
 
 
 def test_walking_through_a_portal_still_transits():
@@ -580,6 +580,6 @@ def test_a_teleport_across_a_portal_does_not_transit(route, tmp_path):
 
         assert _at(logic, back), (
             "a %s just behind Portal_1 sent the player through it, to %s"
-            % (route, [round(c) for c in logic.player_runtime.player.pos]))
+            % (route, [round(c) for c in logic.player.pos]))
     finally:
         logic.stop()
