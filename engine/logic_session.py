@@ -161,10 +161,10 @@ class LogicSession:
 
             logic._spatial_grid = SpatialGrid(cell_size=512.0)
             logic._spatial_grid.populate(
-                logic.editor_state.brushes + logic._model_collision_brushes
+                logic.editor_state.brushes + logic.collision_runtime._model_collision_brushes
             )
             logic._physics_world = PhysicsWorld(logic._spatial_grid)
-            logic._physics_world.rebuild(logic._physics_body_brushes)
+            logic._physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
             logic.monster_ai.set_spatial_grid(logic._spatial_grid)
 
             # PropSession is the registry for the Prop runtime domain.
