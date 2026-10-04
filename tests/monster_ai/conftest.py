@@ -62,9 +62,9 @@ def ai_world():
             monster_type=Monster,
             path_node_type=PathNode,
         )
-        logic.world_runtime.build_entity_caches()
         ai = MonsterAI(logic)
         logic.monster_ai = ai
+        logic.world_runtime.build_entity_caches()
         ai.set_spatial_grid(logic.build_spatial_grid())
         return ai, logic
     return _build
