@@ -145,7 +145,7 @@ class LogicPortals:
             if target_slot < 0:
                 continue
 
-            portal_b = self._portal_target_things[portal_index]
+            portal_b = self.portal_target_things[portal_index]
             if portal_b is None or not portal_b.is_active():
                 continue
             if id(portal_a) in self._portal_cooldowns:
