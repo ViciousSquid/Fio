@@ -147,11 +147,11 @@ def new_session(logic, source):
 
 
 def live_ids(logic):
-    return {t.properties["id"] for t in logic.things}
+    return {t.properties["id"] for t in logic.editor_state.things}
 
 
 def live_brush_ids(logic):
-    return {b["id"] for b in logic.brushes}
+    return {b["id"] for b in logic.editor_state.brushes}
 
 
 def find_thing(logic, tid):
