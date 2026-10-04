@@ -415,7 +415,7 @@ class ConsoleCommandHandler:
         logic = self.main_window.view_3d.logic_thread
         ai = logic.monster_ai
         states = ai.monster_states
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             if monsters is None:
                 states.clear()
             else:
