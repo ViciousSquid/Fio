@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import glm
 
 from engine.logic_combat import LogicCombat
+from engine.logic_session import LogicSession
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
 from engine.logic_portals import LogicPortals
@@ -101,6 +102,7 @@ class FakeLogicThread:
         self.plugins = SimpleNamespace(services={})
         self._monster_lock = threading.RLock()
         self.combat_runtime = LogicCombat(self)
+        self.session_runtime = LogicSession(self)
         self._player_damage_lock = threading.Lock()
         self.god_mode = False
         self.buddha_mode = False
