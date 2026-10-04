@@ -38,17 +38,6 @@ from editor.io_system import (ABSTRACT_IO, OutputConnection, IO_REGISTRY, IOMana
                               get_output_names)
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import ENTITY_TYPES, PathNode, Thing           # noqa: E402
-from engine.cutscene_runtime import CutsceneRuntime              # noqa: E402
-from engine.logic_movers import LogicMovers                       # noqa: E402
-from engine.logic_triggers import LogicTriggers                   # noqa: E402
-from engine.logic_timing import LogicTiming                        # noqa: E402
-from engine.logic_portals import LogicPortals                     # noqa: E402
-from engine.logic_world import LogicWorld                         # noqa: E402
-from engine.logic_session import LogicSession                     # noqa: E402
-from engine.logic_player import LogicPlayer                         # noqa: E402
-from engine.logic_combat import LogicCombat                       # noqa: E402
-from engine.logic_collision import LogicCollision                 # noqa: E402
-from engine.prop_runtime import PropSession                       # noqa: E402
 from engine.threaded_game_state import ThreadedGameState           # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
 
@@ -62,46 +51,18 @@ SOURCE_DIRS = ("editor", "engine", "plugins", "player")
 
 
 # ---------------------------------------------------------------------------
-# The host an input handler is written against
+# The real host an input handler is written against
 # ---------------------------------------------------------------------------
 
-class HostStub:
-    """The current runtime ownership surface reached by input handlers.
+@pytest.fixture
+def logic_thread():
+    """A complete production LogicThread with all runtime owners constructed."""
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
 
-    This is deliberately a narrow test host, but every subsystem it exposes is
-    a real 2.6 runtime object or an authoritative editor/game-state container.
-    It does not recreate the pre-2.6 world fields that were removed from
-    LogicThread.
-    """
-
-    def __init__(self, io_manager):
-        self.io_manager = io_manager
-        self.game_state = ThreadedGameState()
-        self.editor_state = type("EditorStateStub", (), {})()
-        self.editor_state.brushes = []
-        self.editor_state.things = []
-        self.player_runtime = LogicPlayer(self)
-
-        self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
-
-        self.session_runtime = LogicSession(self)
-        self.mover_runtime = LogicMovers(self)
-        self.timing_runtime = LogicTiming(self)
-        self.world_runtime = LogicWorld(self, path_node_type=PathNode)
-        self.cutscene_runtime = CutsceneRuntime(self)
-        self.portal_runtime = LogicPortals(self)
-        self.collision_runtime = LogicCollision(self)
-        self.combat_runtime = LogicCombat(self)
-        self.prop_runtime = PropSession(self)
-        self.trigger_runtime = LogicTriggers(self)
-        self.trigger_runtime._reset_trigger_state()
-
-    LOCAL_ONLY = frozenset({
-        '_nonplayer_trigger_contacts', '_trigger_contacts',
-        '_trigger_poll_elapsed', '_trigger_poll_elapsed_by_bid',
-        '_trigger_use_generation', '_trigger_use_prompt', '_trigger_use_seen',
-        '_use_trigger_entries', 'player_in_triggers',
-    })
+    thread = LogicThread(ThreadedGameState(), EditorState())
+    yield thread
+    thread.running = False
 
 BRUSH_TYPES = {"trigger": "is_trigger", "door": "is_door", "mover": "is_mover",
                "water": "is_water", "fog": "is_fog", "brush": None}
@@ -302,7 +263,7 @@ def test_the_abstract_allowlist_is_justified():
 # Demonstrable: every input, invoked for real
 # ===========================================================================
 
-def _probe_all_inputs(manager):
+def _probe_all_inputs(manager, host):
     """Call every declared input on a real instance. Returns what went wrong."""
     entities = {}
     manager.set_entity_finder(
@@ -311,7 +272,6 @@ def _probe_all_inputs(manager):
                             else e.properties.get("name")) == n), None))
     manager.set_entity_finder_by_id(lambda i: entities.get(i))
 
-    host = HostStub(manager)
     manager.set_logic_thread(host)
 
     raised, unreached, unbuildable = [], [], []
@@ -402,26 +362,15 @@ def test_every_registered_type_has_an_instance_the_probe_can_build():
         "no instance could be built for: %s" % (missing,))
 
 
-def test_the_host_stub_only_promises_what_the_logic_thread_has():
-    """Keeps the probe honest.
+def test_the_probe_uses_the_real_logic_thread(logic_thread):
+    """The conformance probe must run against Fio's actual runtime owner."""
+    from engine.logic_thread import LogicThread
 
-    The stub stands in for ``LogicThread``. If it grew an attribute the real
-    host does not have, every handler reaching for that attribute would pass
-    here and fail in the game — the probe would be testing a fiction.
-    """
-    source = (ROOT / "engine" / "logic_thread.py").read_text(
-        encoding="utf-8", errors="replace")
-    stub = HostStub(IOManager())
-    promised = {name for name in vars(stub)
-                if name not in HostStub.LOCAL_ONLY}
-    promised |= {name for name in vars(HostStub)
-                 if not name.startswith("__") and callable(getattr(HostStub, name))
-                 and name not in {"LOCAL_ONLY"}}
-
-    missing = [name for name in sorted(promised)
-               if not re.search(r"(self\.%s\s*[:=]|def\s+%s\b)" % (name, name), source)]
-    assert missing == [], (
-        "the stub promises what LogicThread does not have: %s" % (missing,))
+    assert type(logic_thread) is LogicThread
+    assert logic_thread.io_manager is not None
+    assert logic_thread.session_runtime.logic is logic_thread
+    assert logic_thread.world_runtime.logic is logic_thread
+    assert logic_thread.combat_runtime.logic is logic_thread
 
 
 # ===========================================================================
