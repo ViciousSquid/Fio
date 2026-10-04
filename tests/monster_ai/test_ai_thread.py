@@ -17,8 +17,10 @@ import time
 
 import pytest
 
+from editor.editor_state import EditorState
+from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI, MonsterAIThread
-from tests.helpers.fakes import FakeLogicThread, FakePlayer
+from engine.threaded_game_state import ThreadedGameState
 
 pytestmark = [pytest.mark.qt, pytest.mark.slow]
 
@@ -56,12 +58,14 @@ class CountingAI:
 
 @pytest.fixture
 def ai_thread():
-    """Starts threads and guarantees they are stopped and joined afterwards."""
+    """Starts real MonsterAI threads against a real LogicThread owner."""
     started = []
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    lock = logic.session_runtime.monster_lock
 
-    def _start(ai=None, tick_rate=120, lock=None):
-        thread = MonsterAIThread(FakeLogicThread(), ai or CountingAI(),
-                                 lock or threading.RLock(), tick_rate=tick_rate)
+    def _start(ai=None, tick_rate=120):
+        thread = MonsterAIThread(logic, ai or CountingAI(), lock,
+                                 tick_rate=tick_rate)
         started.append(thread)
         thread.start()
         return thread
@@ -71,7 +75,7 @@ def ai_thread():
     for thread in started:
         thread.stop()
         thread.join(timeout=DEADLINE)
-
+    logic.stop()
 
 # ---------------------------------------------------------------------------
 # Start / stop
@@ -132,7 +136,7 @@ def test_stopping_twice_is_harmless(ai_thread):
 
 
 def test_stopping_a_thread_that_never_started_is_harmless():
-    thread = MonsterAIThread(FakeLogicThread(), CountingAI(), threading.RLock())
+    thread = MonsterAIThread(LogicThread(ThreadedGameState(), EditorState()), CountingAI(), threading.RLock())
     thread.stop()
     assert thread.running is False
     assert thread.is_alive() is False
