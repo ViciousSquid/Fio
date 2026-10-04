@@ -182,7 +182,6 @@ class LogicThread(threading.Thread):
         "session": (
             "editor_state",
             "io_manager",
-            "player",
             "player_runtime",
         ),
         "interaction": (
