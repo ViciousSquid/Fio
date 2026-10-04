@@ -2252,8 +2252,7 @@ class QtGameView(QOpenGLWidget):
     def _draw_hud_splitscreen(self, painter, render_state):
         if self._hud_style == 0:
             return
-        if render_state is not None and render_state.cinematic_camera_active
-        ):
+        if render_state is not None and render_state.cinematic_camera_active:
             return
         w, h = self.width(), self.height()
         half = w // 2
