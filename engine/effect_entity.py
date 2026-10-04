@@ -164,45 +164,6 @@ class Effect(_ThingBase):
     def is_explosion(self) -> bool:
         return self.effect_type == EFFECT_EXPLOSION
 
-    def set_effect_type(self, value: object) -> bool:
-        """Set the authored Effect TYPE and reset its transient behaviour.
-        
-        Returns True only when the type actually changes. The accepted names
-        come from EFFECT_TYPES, so adding a new type extends SetType without
-        changing the input handler.
-        """
-        effect_type = str(value or "").strip().upper()
-        if effect_type not in EFFECT_TYPES:
-            return False
-        if effect_type == self.effect_type:
-            return False
-
-        self.properties["effect_type"] = effect_type
-        self.properties["preview"] = False
-        if effect_type == EFFECT_ORB:
-            self.properties["width"] = 32.0
-            self.properties["height"] = 32.0
-            self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
-        self._effect_spawn_time = 0.0
-        self._effect_animation_phase = random.random()
-        self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
-        return True
-
-    def reset_runtime(self) -> None:
-        """Reset transient runtime state without changing authored data."""
-        self._effect_spawn_time = 0.0
-        self._effect_animation_phase = random.random()
-        self._effect_active = self.effect_type in EFFECT_ANIMATED_TYPES
-
-    def trigger_explosion(self, now: float) -> bool:
-        """Permanently switch to EXPLOSION and start/restart its playback."""
-        self.properties["effect_type"] = EFFECT_EXPLOSION
-        self.properties["preview"] = False
-        self._effect_spawn_time = float(now)
-        self._effect_animation_phase = 0.0
-        self._effect_active = True
-        return True
-
 
 if EDITOR_TIER:
     # Normally editor.things registers Effect itself.  When this module was the
