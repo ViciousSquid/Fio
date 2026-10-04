@@ -28,12 +28,17 @@ draws dynamic models.
 from __future__ import annotations
 
 import math
+import threading
 from types import SimpleNamespace
 from typing import List, Optional
 
 
 from engine.prop_runtime import PropSession
 from engine.prop_entity import Prop as CoreProp, legacy_model_properties
+from engine.logic_interaction import LogicInteraction
+from engine.logic_player import LogicPlayer
+from engine.logic_session import LogicSession
+from engine.logic_combat import LogicCombat
 
 
 class _CamPlayer:
@@ -68,14 +73,30 @@ class _NullIO:
 class _BridgeLogic:
     """The ``logic`` object the plugin lifecycle/tick hooks receive."""
 
-    def __init__(self, things):
+    def __init__(self, things, plugin_manager=None):
         self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
         self.player = _CamPlayer()
+        self.player2 = None
+        self.play_mode = True
         self.io_manager = _NullIO()
-        self.current_hud_message = ""
-        self._props = None
+        self._tick_lock = threading.RLock()
+        self._plugin_manager = plugin_manager
+        self.player_runtime = LogicPlayer(self)
+        self.session_runtime = LogicSession(self)
+        self.interaction_runtime = LogicInteraction(self)
+        self.combat_runtime = LogicCombat(self)
+        self.prop_runtime = PropSession(self)
         self._prop_drop_interceptor = None
+
+    def _plugin_emit(self, event: str, **data):
+        manager = self._plugin_manager
+        if manager is None:
+            return
+        try:
+            manager.emit(event, logic=self, **data)
+        except Exception:
+            pass
 
 
 class PlayerPluginHost:
@@ -199,13 +220,12 @@ class PlayerPluginHost:
             self.active = False
             return
 
-        self.bridge = _BridgeLogic(things)
+        self.bridge = _BridgeLogic(things, self.manager)
         self._playing = True
         # The engine's Prop registry, exactly as the editor logic thread builds
         # it: one session, filled from the authoritative thing list.  The player
         # does not decide for itself which Things are Props.
-        self.bridge._props = PropSession(self.bridge)
-        self.bridge._props.start()
+        self.bridge.prop_runtime.start()
 
         try:
             binder = getattr(self.manager, "bind_host", None)
@@ -228,9 +248,10 @@ class PlayerPluginHost:
             return
 
         self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
-        self.bridge.current_hud_message = ""
+        self.bridge.interaction_runtime.current_hud_message = ""
+        self.bridge.interaction_runtime.current_hud_key_name = None
 
-        props = self.bridge._props
+        props = self.bridge.prop_runtime
         if props is not None:
             props.tick(dt, bool(use_pressed))
             props.sync_physics_positions()
@@ -239,13 +260,13 @@ class PlayerPluginHost:
             self.manager.tick(
                 self.bridge,
                 use_pressed=bool(use_pressed),
-                interaction_consumed=bool(self.bridge.current_hud_message),
+                interaction_consumed=bool(self.bridge.interaction_runtime.current_hud_message),
                 delta=dt,
             )
         except Exception:
             return
 
-        self.hud_message = self.bridge.current_hud_message
+        self.hud_message = self.bridge.interaction_runtime.current_hud_message
 
     def camera_override(self, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float):
         """Let a plugin replace the render camera (pos, yaw°, pitch°).
@@ -295,8 +316,8 @@ class PlayerPluginHost:
             return
         self._playing = False
 
-        props = getattr(bridge, "_props", None)
-        bridge._props = None
+        props = bridge.prop_runtime
+        bridge.prop_runtime = None
         if props is not None:
             try:
                 props.stop()

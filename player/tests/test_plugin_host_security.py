@@ -82,8 +82,8 @@ def test_stopping_twice_dispatches_play_stop_once():
     host = PlayerPluginHost()
     host.manager = _Manager()
     host.active = True
-    bridge = _BridgeLogic([])
-    bridge._props = _BrokenProps()
+    bridge = _BridgeLogic([], host.manager)
+    bridge.prop_runtime = _BrokenProps()
     host.bridge = bridge
     host._playing = True
 
@@ -91,4 +91,4 @@ def test_stopping_twice_dispatches_play_stop_once():
     host.stop()
 
     assert host.manager.stops == [bridge]
-    assert bridge._props is None
+    assert bridge.prop_runtime is None

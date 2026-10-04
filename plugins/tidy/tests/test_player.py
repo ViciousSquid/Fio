@@ -141,13 +141,13 @@ def test_player_host_runs_core_prop_and_tidy():
     _check(mgr.is_enabled(tidy) is True, "core-Prop Tidy metadata auto-enabled Tidy")
     _check(host.active is True, "host active")
     _check(len(host.things) == 3, "host built core Prop + Tidy entities")
-    _check(host.bridge._props is not None, "shared core PropSession attached")
+    _check(host.bridge.prop_runtime is not None, "shared core PropSession attached")
 
     cam = [0.0, 40.0, 0.0]
     host.tick(0.016, cam, 90.0, 0.0, use_pressed=True)
-    session = host.bridge._tidy
+    session = tidy._sessions.get(host.bridge)
     _check(session is not None, "Tidy session started")
-    _check(host.bridge._props.held is not None, "core PropSession picked the object")
+    _check(host.bridge.prop_runtime.held is not None, "core PropSession picked the object")
 
     host.tick(0.016, cam, -90.0, 0.0, use_pressed=True)
     _check(host.bridge._props.held is None, "core PropSession released the object")
