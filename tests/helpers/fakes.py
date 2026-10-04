@@ -19,6 +19,7 @@ import glm
 
 from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
+from engine.logic_world import LogicWorld
 from engine.physics import SpatialGrid
 from engine.projectile_table import ProjectileStore
 
@@ -89,6 +90,7 @@ class FakeLogicThread:
         self.things = list(things)
         self.player = player
         self.player_dead = False
+        self.play_mode = False
         self.player_health = 100
         self.notarget = False
         self.io_manager = io_manager
@@ -104,6 +106,8 @@ class FakeLogicThread:
         self._noise_events = self._gunfire_events
         self._name_cache = {}
         self._monster_things = None
+        self._id_cache = {}
+        self.world_runtime = LogicWorld(self)
         self.hurt_trigger_timers = {}
         self.HURT_INTERVAL = 0.5
         self.damage_applied = []
