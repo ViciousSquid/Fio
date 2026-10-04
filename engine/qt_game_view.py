@@ -2622,10 +2622,6 @@ class QtGameView(QOpenGLWidget):
         # Reached e.g. when ESC is pressed after the player dies; without this
         # the Play button would stay red after returning to the editor.
         self.editor._exit_play_mode()
-            return
-        pos = self._last_player_start_pos
-        angle = self._last_player_start_angle
-        self.toggle_play_mode(pos, angle)
 
     def set_cull_distance(self, distance):
         """Set the camera's maximum render distance, in world units.
