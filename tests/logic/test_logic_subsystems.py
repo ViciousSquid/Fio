@@ -200,7 +200,6 @@ def test_logic_player_constructs_and_reports_water_transition():
         pos=glm.vec3(1, 2, 3),
     )
     host = SimpleNamespace(
-        player_runtime=SimpleNamespace(player=player),
         game_state=_GameState(),
         WATERWALK_INTERVAL=0.45,
         _gunfire_events=[],
@@ -208,6 +207,7 @@ def test_logic_player_constructs_and_reports_water_transition():
     )
     host.combat_runtime = LogicCombat(host)
     runtime = LogicPlayer(host)
+    runtime.player = player
 
     runtime.update_water_sounds(0.1)
 
@@ -368,6 +368,7 @@ def _contract_host():
         if attribute not in {"brushes", "things"}:
             setattr(host, attribute, None)
 
+    host.player_runtime = SimpleNamespace(player=SimpleNamespace())
     host.camera = SimpleNamespace(
         player_runtime=SimpleNamespace(player=host.player_runtime.player)
     )
