@@ -420,7 +420,7 @@ class SurfaceInspector(QDialog):
         if self.scope_face.isChecked():
             return [(brush, face_key)]
         brushes = [brush]
-        selected = getattr(self.editor, '_selected_brushes', None)
+        selected = self.editor._selected_brushes
         if selected is not None:
             chosen = [b for b in selected() if isinstance(b, dict)]
             if brush in chosen:
@@ -489,7 +489,7 @@ class SurfaceInspector(QDialog):
 
     def _on_face_mode_clicked(self):
         """Hand the toggle straight to the editor's Face Mode."""
-        toggle = getattr(self.editor, 'toggle_face_mode', None)
+        toggle = self.editor.toggle_face_mode
         if toggle is not None:
             toggle(self.face_btn.isChecked())
 
@@ -510,7 +510,7 @@ class SurfaceInspector(QDialog):
         closed the ways it always was: T, Shift+S, or its close button.
         """
         if event.key() == Qt.Key_Escape:
-            handler = getattr(self.editor, 'handle_escape', None)
+            handler = self.editor.handle_escape
             if handler is not None:
                 handler()
             event.accept()
@@ -529,7 +529,7 @@ class SurfaceInspector(QDialog):
             self.face_btn.blockSignals(True)
             self.face_btn.setChecked(False)
             self.face_btn.blockSignals(False)
-            toggle = getattr(self.editor, 'toggle_face_mode', None)
+            toggle = self.editor.toggle_face_mode
             if toggle is not None:
                 toggle(False)
         super().hideEvent(event)
@@ -552,7 +552,7 @@ class SurfaceInspector(QDialog):
         if cached is not None:
             return cached
         size = ft.DEFAULT_TEXTURE_SIZE
-        root = getattr(self.editor, 'root_dir', '')
+        root = self.editor.root_dir
         path = os.path.join(root, 'assets', 'textures', name)
         reader = QImageReader(path)
         read = reader.size()
@@ -615,7 +615,7 @@ class SurfaceInspector(QDialog):
         """Put the Asset Browser's current texture on the target faces."""
         if not self.target:
             return
-        browser = getattr(self.editor, 'asset_browser', None)
+        browser = self.editor.asset_browser
         path = browser.get_selected_filepath() if browser is not None else None
         if not path:
             self.editor.show_toast("Select a texture first", is_error=True)
