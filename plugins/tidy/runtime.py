@@ -119,7 +119,7 @@ class TidySession:
         self._tidied_ids.clear()
 
     def _receptacle_in_view(self, category):
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None:
             return None
 
