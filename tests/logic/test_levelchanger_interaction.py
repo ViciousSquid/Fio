@@ -4,9 +4,6 @@ from types import SimpleNamespace
 
 import numpy as np
 
-import engine.logic_thread as logic_thread
-from engine.logic_thread import LogicThread
-
 
 def _levelchanger(name="LevelChanger_1", pos=(0.0, 0.0, 0.0), radius=128.0, **props):
     values = {
@@ -29,7 +26,7 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
     from engine.logic_movers import LogicMovers
     from engine.logic_world import LogicWorld
 
-    logic = LogicThread.__new__(LogicThread)
+    logic = SimpleNamespace()
     logic.editor_state = SimpleNamespace(things=list(things), brushes=[])
     from engine.logic_player import LogicPlayer
     logic.player_runtime = LogicPlayer(logic)
@@ -38,7 +35,6 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
         angle=float(angle),
     )
     logic.io_manager = None
-    logic.level_complete_ui = None
     logic.mover_runtime = LogicMovers(logic)
     logic.world_runtime = LogicWorld(logic, levelchanger_type=type(things[0]))
     logic.world_runtime.levelchanger_things = list(things)
