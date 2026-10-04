@@ -22,13 +22,13 @@ from .test_bigworld_tiers import FakePlayer, grid_world
 
 
 class _CameraFixture:
-    def __init__(self, footprint):
+    def __init__(self, logic):
+        self.logic = logic
         self.overhead_height = 800.0
         self.overhead_height_limit = None
-        self._footprint = footprint
 
     def overhead_ground_footprint(self):
-        return self._footprint
+        return self.logic.footprint
 
     def effective_overhead_height(self):
         height = float(self.overhead_height)
@@ -46,7 +46,7 @@ class OverheadLogic:
         self.player = FakePlayer(*at)
         self.view_distance = ViewDistance()
         self.footprint = footprint
-        self.camera = _CameraFixture(self.footprint)
+        self.camera = _CameraFixture(self)
 
 
 
