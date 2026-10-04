@@ -703,12 +703,6 @@ class LogicCombat:
             if (current_time - e['time']) < max_age
         ]
 
-    # Backwards-compatible alias: the noise list started as gunfire-only.
-
-    def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
-        logic = self.logic
-        return self.get_recent_noise_events(max_age)
-
     # =========================================================================
     # FRUSTUM CULLING
     # =========================================================================
