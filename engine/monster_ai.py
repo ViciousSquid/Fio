@@ -1963,7 +1963,7 @@ the scalar fallback for callers that do not have the dense table.
         if not name or PathNode is None:
             return None
         # Use the O(1) name cache on the parent LogicThread
-        entity = self.lt._name_cache.get(name)
+        entity = self.lt.world_runtime.find_entity_by_name(name)
         if entity is not None and isinstance(entity, PathNode):
             return entity
         return None
