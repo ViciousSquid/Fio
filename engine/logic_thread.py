@@ -43,18 +43,6 @@ from .logic_editor import LogicEditor
 from .effect_table import EffectStore
 
 
-# Qt key constants kept as part of LogicThread's historical input surface.
-# Play input is now implemented by LogicPlayer, but tests/tools and older
-# integrations still import these raw key codes from engine.logic_thread.
-Key_W = 0x57
-Key_S = 0x53
-Key_A = 0x41
-Key_D = 0x44
-Key_Space = 0x20
-Key_C = 0x43
-Key_Shift = 0x01000020
-Key_Control = 0x01000021
-
 
 # Import Thing subclasses for type checking
 try:
