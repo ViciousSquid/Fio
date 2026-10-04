@@ -956,17 +956,26 @@ def test_logic_camera_has_explicit_cutscene_file_setting():
 
 
 def test_logic_camera_start_uses_cutscene_file_runtime():
-    from types import SimpleNamespace
+    from editor.editor_state import EditorState
     from editor.io_handlers import register_all_input_handlers
     from editor.things import LogicCamera
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
     camera = LogicCamera(
         [0.0, 0.0, 0.0],
         {"name": "Camera", "cutscene_file": "cutscenes/test.json"},
     )
-    manager = IOManager()
-    register_all_input_handlers(manager)
+    state = EditorState(); state.things = [camera]; state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
     recorder = _CutsceneEntityRecorder()
+    real_fire_output = logic.io_manager.fire_output
+
+    def record_and_dispatch(entity, output_name, value=None):
+        recorder.calls.append((entity, output_name, value))
+        return real_fire_output(entity, output_name, value)
+
+    logic.io_manager.fire_output = record_and_dispatch
     started = []
 
     def _load(filename):
@@ -977,24 +986,15 @@ def test_logic_camera_start_uses_cutscene_file_runtime():
         started.append((entity, filename, data))
         return True
 
-    logic = SimpleNamespace(
-        io_manager=recorder,
-        cutscene_runtime=SimpleNamespace(
-            state=None,
-            _load_cutscene_file=_load,
-            _start_json_cutscene=_start,
-            _fire_cinematic_io_events=lambda: True,
-        ),
-        world_runtime=SimpleNamespace(
-            find_path_node_by_name=lambda name: None,
-        ),
-    )
-    manager._input_handlers[("logic_camera", "start")](camera, "", logic)
+    logic.cutscene_runtime._load_cutscene_file = _load
+    logic.cutscene_runtime._start_json_cutscene = _start
+    register_all_input_handlers(logic.io_manager)
+    handler = logic.io_manager._input_handlers[("logic_camera", "start")]
+    handler(camera, "", logic)
 
     assert len(started) == 1
     assert started[0][1] == "cutscenes/test.json"
     assert [name for _, name, _ in recorder.calls] == ["OnStart"]
-
 
 # ---------------------------------------------------------------------------
 # LogicCamera path arrival and LookAt
@@ -1082,56 +1082,46 @@ def test_logic_camera_look_ahead_turn_is_smoothed():
 
 
 def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
-    from types import SimpleNamespace
+    from editor.editor_state import EditorState
     from editor.io_handlers import register_all_input_handlers
     from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
     camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera'})
     target = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
-    manager = IOManager()
-    register_all_input_handlers(manager)
-    logic = SimpleNamespace(
-        cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
-        world_runtime=SimpleNamespace(
-            find_entity_by_name=lambda name: target if name == 'Focus' else None,
-            find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
-        ),
-        _find_entity_by_name=lambda name: target if name == 'Focus' else None,
-        _find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
-    )
-    handler = manager._input_handlers[('logic_camera', 'lookat')]
+    state = EditorState(); state.things = [camera, target]; state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.world_runtime.build_entity_caches()
+    logic.cutscene_runtime.state = {'active': True, 'entity': camera}
+    register_all_input_handlers(logic.io_manager)
+    handler = logic.io_manager._input_handlers[('logic_camera', 'lookat')]
 
     handler(camera, target.properties['id'], logic)
 
     assert logic.cutscene_runtime.state['lookat_target'] is target
     assert logic.cutscene_runtime.state['lookat_return_remaining'] == pytest.approx(5.0)
 
-
 def test_logic_camera_lookat_zero_return_time_holds_focus():
-    from types import SimpleNamespace
+    from editor.editor_state import EditorState
     from editor.io_handlers import register_all_input_handlers
     from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
     camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'lookat_return_time': 0.0})
     target = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
-    manager = IOManager()
-    register_all_input_handlers(manager)
-    logic = SimpleNamespace(
-        cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
-        world_runtime=SimpleNamespace(
-            find_entity_by_name=lambda name: target if name == 'Focus' else None,
-            find_entity_by_id=lambda entity_id: None,
-        ),
-        _find_entity_by_name=lambda name: target if name == 'Focus' else None,
-        _find_entity_by_id=lambda entity_id: None,
-    )
-    handler = manager._input_handlers[('logic_camera', 'lookat')]
+    state = EditorState(); state.things = [camera, target]; state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.world_runtime.build_entity_caches()
+    logic.cutscene_runtime.state = {'active': True, 'entity': camera}
+    register_all_input_handlers(logic.io_manager)
+    handler = logic.io_manager._input_handlers[('logic_camera', 'lookat')]
 
     handler(camera, 'Focus', logic)
 
     assert logic.cutscene_runtime.state['lookat_target'] is target
     assert logic.cutscene_runtime.state['lookat_return_remaining'] is None
-
 
 def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
     from editor.things import LogicCamera, PathNode
