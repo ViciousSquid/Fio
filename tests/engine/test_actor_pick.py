@@ -171,14 +171,7 @@ def test_no_tables_pick_nothing():
 
 class _Logic:
     def __init__(self):
-        self.session_runtime = types.SimpleNamespace()
-        self.session_runtime.owners = set()
-
-        def set_world_paused(owner, paused=True):
-            (self.session_runtime.owners.add if paused
-             else self.session_runtime.owners.discard)(owner)
-
-        self.session_runtime.set_world_paused = set_world_paused
+        self.session_runtime = LogicSession(self)
 
 
 class _GameState:
@@ -277,7 +270,7 @@ def test_arming_a_pick_pauses_the_world_and_frees_the_cursor(view):
     v = view()
     assert v.begin_actor_pick() is True
     assert v.actor_pick_active
-    assert v.logic_thread.owners == {QtGameView.ACTOR_PICK_PAUSE}
+    assert v.logic_thread.session_runtime.world_pause_owners() == {QtGameView.ACTOR_PICK_PAUSE}
     assert QApplication.overrideCursor().shape() == Qt.CrossCursor
 
 
@@ -285,7 +278,7 @@ def test_there_is_no_pick_outside_play_mode(view):
     v = view()
     v.play_mode = False
     assert v.begin_actor_pick() is False
-    assert not v.actor_pick_active and not v.logic_thread.owners
+    assert not v.actor_pick_active and not v.logic_thread.session_runtime.world_pause_owners()
 
 
 def test_clicking_an_actor_opens_the_inspector_and_resumes(view):
@@ -295,7 +288,7 @@ def test_clicking_an_actor_opens_the_inspector_and_resumes(view):
     _press(v, Qt.LeftButton)
     assert v.editor.inspected == [npc]
     assert not v.actor_pick_active
-    assert not v.logic_thread.owners, "the world stayed paused after the pick"
+    assert not v.logic_thread.session_runtime.world_pause_owners(), "the world stayed paused after the pick"
     assert QApplication.overrideCursor().shape() == Qt.BlankCursor
     assert v.game_state.borrowed == 0, "the render state was not released"
 
@@ -314,7 +307,7 @@ def test_a_click_on_nothing_keeps_the_pick_armed(view):
     v.begin_actor_pick()
     _press(v, Qt.LeftButton, 5, 5)
     assert v.actor_pick_active
-    assert v.logic_thread.owners == {QtGameView.ACTOR_PICK_PAUSE}
+    assert v.logic_thread.session_runtime.world_pause_owners() == {QtGameView.ACTOR_PICK_PAUSE}
     assert v.editor.inspected == []
 
 
@@ -327,7 +320,7 @@ def test_a_pick_can_be_cancelled(view, cancel):
     else:
         _press(v, Qt.RightButton)
     assert not v.actor_pick_active
-    assert not v.logic_thread.owners
+    assert not v.logic_thread.session_runtime.world_pause_owners()
     assert v.editor.inspected == []
 
 
