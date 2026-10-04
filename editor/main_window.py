@@ -4134,7 +4134,7 @@ class MainWindow(QMainWindow):
         self.state.terrain_data = terrain_data
 
         # Re-initialize terrain if present in the new map
-        if getattr(self.state, 'terrain_data', None):
+        if self.state.terrain_data:
             if self.terrain is None:
                 from engine.terrain import Terrain
                 self.terrain = Terrain()
@@ -4197,8 +4197,8 @@ class MainWindow(QMainWindow):
             # belongs to no file: a failure part-way must never leave the
             # previous map's path on a half-built scene for Ctrl+S to write.
             open_level = (self.file_path, self.unsaved_changes,
-                          getattr(self.state, 'brushes', None),
-                          getattr(self.state, 'things', None))
+                          self.state.brushes,
+                          self.state.things)
             self.file_path = None
             self._apply_level_data(level_data)
 
@@ -4272,8 +4272,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             if (not loaded and open_level is not None
                     and open_level[2] is not None and open_level[3] is not None
-                    and getattr(self.state, 'brushes', None) is open_level[2]
-                    and getattr(self.state, 'things', None) is open_level[3]):
+                    and self.state.brushes is open_level[2]
+                    and self.state.things is open_level[3]):
                 # The map failed to parse: the open level was never replaced,
                 # so it keeps its file.
                 self.file_path, self.unsaved_changes = open_level[:2]
