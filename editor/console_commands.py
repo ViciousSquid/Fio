@@ -242,9 +242,9 @@ class ConsoleCommandHandler:
             mgr = self._plugin_manager()
             if mgr is None or not mgr.has_console_command(cmd):
                 return False
-            view_3d = getattr(self.main_window, 'view_3d', None)
-            lt = getattr(view_3d, 'logic_thread', None) if view_3d else None
-            play = bool(getattr(view_3d, 'play_mode', False))
+            view_3d = self.main_window.view_3d
+            play = bool(view_3d.play_mode)
+            lt = view_3d.logic_thread if play else None
             handled, reply = mgr.dispatch_console_command(
                 cmd, args, lt, main_window=self.main_window, play_mode=play
             )
@@ -410,15 +410,12 @@ class ConsoleCommandHandler:
         The state lives on the MonsterAI, not the LogicThread, and the AI
         thread iterates it, so it is changed under the monster lock.
         """
-        lt = self._logic_thread()
-        ai = getattr(lt, 'monster_ai', None)
-        states = getattr(ai, 'monster_states', None)
-        if states is None:
+        if not self._in_play_mode():
             return
-        lock = getattr(lt, '_monster_lock', None)
-        if lock is None:
-            lock = contextlib.nullcontext()
-        with lock:
+        logic = self.main_window.view_3d.logic_thread
+        ai = logic.monster_ai
+        states = ai.monster_states
+        with logic._monster_lock:
             if monsters is None:
                 states.clear()
             else:
@@ -471,9 +468,8 @@ class ConsoleCommandHandler:
         """
         set_authored_flag(entity, 'hidden', hidden)
         if isinstance(entity, dict):
-            logic = self._logic_thread()
-            if logic is not None:
-                logic.collision_runtime.mark_dirty()
+            if self._in_play_mode():
+                self.main_window.view_3d.logic_thread.collision_runtime.mark_dirty()
 
     def cmd_hide(self, args):
         """hide <name> — Set hidden flag on a brush or entity."""
@@ -1963,9 +1959,8 @@ entity to drive them from the I/O system.</i><br>
 
         # The scene mutation and all derived runtime-cache updates must be
         # one atomic operation while Play Mode is running.
-        logic = self._logic_thread() if self._in_play_mode() else None
-        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
-        context = lock if lock is not None else contextlib.nullcontext()
+        logic = self.main_window.view_3d.logic_thread if self._in_play_mode() else None
+        context = logic._tick_lock if logic is not None else contextlib.nullcontext()
         with context:
             for entity in entities:
                 if isinstance(entity, dict):
@@ -2083,10 +2078,7 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("cam"):
             return
 
-        lt = getattr(self.main_window.view_3d, 'logic_thread', None)
-        if lt is None or not hasattr(lt, 'camera'):
-            debug_log("Error", "Camera control unavailable (no active play session).")
-            return
+        lt = self.main_window.view_3d.logic_thread
 
         target_mode = None
         duration = 1.0
@@ -2327,10 +2319,8 @@ entity to drive them from the I/O system.</i><br>
             with self._io_dispatch_lock():
                 player.pos = glm.vec3(x, y, z)
                 player.velocity = glm.vec3(0, 0, 0)
-                portal_runtime = getattr(self._logic_thread(),
-                                               'portal_runtime', None)
-                if portal_runtime is not None:
-                    portal_runtime.note_player_teleported()
+                portal_runtime = self.main_window.view_3d.logic_thread.portal_runtime
+                portal_runtime.note_player_teleported()
             debug_log("Info", f"Player teleported to [{x:.1f}, {y:.1f}, {z:.1f}]")
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
         except Exception:
@@ -2432,10 +2422,6 @@ entity to drive them from the I/O system.</i><br>
             name += self.SAVE_EXT
         return os.path.join(self._saves_dir(), name)
 
-    def _logic_thread(self):
-        view_3d = getattr(self.main_window, 'view_3d', None)
-        return getattr(view_3d, 'logic_thread', None) if view_3d else None
-
     def _io_dispatch_lock(self):
         """The running logic thread's tick lock, for I/O sent from the console.
 
@@ -2443,9 +2429,9 @@ entity to drive them from the I/O system.</i><br>
         runs its handler against the world the logic tick is advancing, so it
         has to land between ticks, as play start/stop and save/load do.
         """
-        logic = self._logic_thread()
-        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
-        return lock if lock is not None else contextlib.nullcontext()
+        if not self._in_play_mode():
+            return contextlib.nullcontext()
+        return self.main_window.view_3d.logic_thread._tick_lock
 
     def _rebuild_logic_entity_caches(self):
         """Tell a running logic thread that the thing list changed.
@@ -2456,25 +2442,16 @@ entity to drive them from the I/O system.</i><br>
         this, a portal created from the console is invisible to the portal
         system until play mode is toggled.
         """
-        logic = self._logic_thread()
-        world_runtime = (
-            getattr(logic, 'world_runtime', None)
-            if logic is not None else None
-        )
-        if world_runtime is not None:
-            # Console commands run on the UI thread. The rebuild replaces
-            # caches a tick walks (the Prop registry above all), so it must
-            # land between ticks, never inside one.
-            lock = getattr(logic, '_tick_lock', None)
-            if lock is None:
-                world_runtime.build_entity_caches()
-            else:
-                with lock:
-                    world_runtime.build_entity_caches()
+        if not self._in_play_mode():
+            return
+        logic = self.main_window.view_3d.logic_thread
+        # Console commands run on the UI thread. The rebuild replaces caches a
+        # tick walks (the Prop registry above all), so it must land between ticks.
+        with logic._tick_lock:
+            logic.world_runtime.build_entity_caches()
 
     def _in_play_mode(self):
-        view_3d = getattr(self.main_window, 'view_3d', None)
-        return bool(getattr(view_3d, 'play_mode', False)) if view_3d else False
+        return bool(self.main_window.view_3d.play_mode)
 
     def _current_map_name(self):
         """Basename of the currently loaded map file, or '' if untitled."""
@@ -2528,7 +2505,7 @@ entity to drive them from the I/O system.</i><br>
         if not self._in_play_mode():
             debug_log("Error", "save: enter Play Mode first (nothing to save in the editor).")
             return
-        lt = self._logic_thread()
+        lt = self.main_window.view_3d.logic_thread
         if lt is None:
             debug_log("Error", "save: no active play session.")
             return
