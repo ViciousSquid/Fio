@@ -2918,8 +2918,7 @@ class QtGameView(QOpenGLWidget):
             terrain.smooth_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
         elif mode == 'flatten':
             terrain.flatten_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
-            self.editor.state.terrain_data = terrain.to_dict()
+        self.editor.state.terrain_data = terrain.to_dict()
         self.update()
 
     def get_ray_from_mouse(self, mx, my):
@@ -3474,8 +3473,7 @@ class QtGameView(QOpenGLWidget):
             brush, face = self._face_mode_press['face']
             self._face_mode_press = None
             self.editor.apply_texture_to_specific_face(brush, face)
-            if hasattr(self.editor, 'show_surface_inspector'):
-                self.editor.show_surface_inspector(brush, face)
+            self.editor.show_surface_inspector(brush, face)
             return
         if not self.play_mode and self.floating_windows.handle_mouse_release(event):
             self.setCursor(Qt.ArrowCursor)
@@ -3837,11 +3835,7 @@ class QtGameView(QOpenGLWidget):
             return
         if check_key('key_show_connections', 'F1'):
             current_state = self.editor.show_logic_links
-            if hasattr(self.editor, 'set_connection_links_enabled'):
-                self.editor.set_connection_links_enabled(not current_state)
-            else:
-                self.editor.show_logic_links = not current_state
-                self.editor.update_views()
+            self.editor.set_connection_links_enabled(not current_state)
             return
         if check_key('key_toggle_wireframe', 'F2'):
             if self.current_render_mode == RENDER_MODE_WIREFRAME:
@@ -3849,24 +3843,18 @@ class QtGameView(QOpenGLWidget):
             else:
                 self.current_render_mode = RENDER_MODE_WIREFRAME
             mode_name = self.render_mode_names.get(self.current_render_mode, "Unknown")
-            if hasattr(self.editor, 'show_toast'):
-                self.editor.show_toast(f"Render Mode: {mode_name}")
+            self.editor.show_toast(f"Render Mode: {mode_name}")
             self.update()
             return
         if check_key('key_sysmon', 'F3'):
-            if hasattr(self.editor, 'toggle_system_monitor'):
-                self.editor.toggle_system_monitor()
-            else:
-                self.sysmon.toggle()
-                self.update()
+            self.editor.toggle_system_monitor()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
             self.monster_debug_active = not self.monster_debug_active
             if self.logic_thread:
                 self.logic_thread.monster_debug_active = self.monster_debug_active
-            if hasattr(self.editor, 'show_toast'):
-                status = "ON" if self.monster_debug_active else "OFF"
-                self.editor.show_toast(f"Monster Debug: {status}")
+            status = "ON" if self.monster_debug_active else "OFF"
+            self.editor.show_toast(f"Monster Debug: {status}")
             self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F6:
@@ -3894,18 +3882,14 @@ class QtGameView(QOpenGLWidget):
                 return
         if not self.play_mode:
             if event.key() == Qt.Key_BracketLeft:
-                if hasattr(self.editor, 'set_grid_size'):
-                    new_size = max(2, self.grid_size // 2)
-                    self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'):
-                        self.editor.show_toast(f"Grid Size: {new_size}")
+                new_size = max(2, self.grid_size // 2)
+                self.editor.set_grid_size(new_size)
+                self.editor.show_toast(f"Grid Size: {new_size}")
                 return
             elif event.key() == Qt.Key_BracketRight:
-                if hasattr(self.editor, 'set_grid_size'):
-                    new_size = min(128, self.grid_size * 2)
-                    self.editor.set_grid_size(new_size)
-                    if hasattr(self.editor, 'show_toast'):
-                        self.editor.show_toast(f"Grid Size: {new_size}")
+                new_size = min(128, self.grid_size * 2)
+                self.editor.set_grid_size(new_size)
+                self.editor.show_toast(f"Grid Size: {new_size}")
                 return
         if self.play_mode:
             if self.show_render_menu:
