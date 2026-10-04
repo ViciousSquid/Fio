@@ -294,7 +294,7 @@ class TidyPlugin(FioPlugin):
         self._sessions.pop(logic, None)
 
     def on_tick(self, logic, ctx: TickContext):
-        session = getattr(logic, "_tidy", None)
+        session = self._sessions.get(logic)
         if session is None:
             return
         session.tick(ctx)
