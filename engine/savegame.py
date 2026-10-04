@@ -1070,15 +1070,13 @@ def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
     # Disk-streaming session: the world isn't fully resident, so it can't be
     # overlaid wholesale — hand off to the session, which streams cells in and
     # re-applies each cell's delta as it loads.
-    session = (
-        logic.plugins.services.get("bigworld")
+    restore_handler = (
+        logic.plugins.services.get("savegame.restore")
         if logic.plugins is not None
         else None
     )
-    from plugins.bigworld.streaming import DiskStreamingSession
-
-    if isinstance(session, DiskStreamingSession):
-        return session.restore_saved(data, current_map_name=current_map_name)
+    if restore_handler is not None:
+        return restore_handler(data, current_map_name=current_map_name)
 
     try:
         current_level = logic.editor_state.get_level_data()

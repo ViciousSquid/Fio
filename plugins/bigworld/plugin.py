@@ -134,6 +134,7 @@ class BigWorldPlugin(FioPlugin):
         if not cfg["enabled"]:
             return
         session = None
+        restore_handler = None
         if cfg.get("disk_streaming"):
             # Experimental disk-streaming path: genuinely free unloaded cells,
             # re-streaming them from a pristine in-memory partition of the map.
@@ -147,6 +148,7 @@ class BigWorldPlugin(FioPlugin):
                     evict_radius=cfg["deactivation_radius"],
                 )
                 session.start()
+                restore_handler = session.restore_saved
             except Exception:
                 # Undo whatever a half-started session already claimed (the
                 # camera-horizon limit, above all) before falling back.
@@ -174,6 +176,7 @@ class BigWorldPlugin(FioPlugin):
             host = getattr(self, "_host", None)
             if host is not None:
                 host.provide("bigworld", session)
+                host.provide("savegame.restore", restore_handler)
         except Exception:
             pass
 
@@ -186,6 +189,7 @@ class BigWorldPlugin(FioPlugin):
             host = getattr(self, "_host", None)
             if host is not None:
                 host.provide("bigworld", None)
+                host.provide("savegame.restore", None)
         except Exception:
             pass
 
