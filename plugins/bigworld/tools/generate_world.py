@@ -190,7 +190,7 @@ def benchmark_size(n_brushes: int, walk_cells: int = 32,
     t_frame_still = (time.perf_counter() - t0) / reps
 
     # One boundary crossing (the expensive per-move event).
-    logic.player.pos = [mid + 512, 0, mid]
+    logic.player_runtime.player.pos = [mid + 512, 0, mid]
     t0 = time.perf_counter()
     changed = session.tick()
     t_one_cross = time.perf_counter() - t0
@@ -199,7 +199,7 @@ def benchmark_size(n_brushes: int, walk_cells: int = 32,
     crosses = 0
     t0 = time.perf_counter()
     for k in range(1, walk_cells + 1):
-        logic.player.pos = [mid + 512 * k, 0, mid]
+        logic.player_runtime.player.pos = [mid + 512 * k, 0, mid]
         if session.tick():
             crosses += 1
     t_walk = time.perf_counter() - t0
