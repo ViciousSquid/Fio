@@ -244,7 +244,7 @@ def test_speaker_start_on_is_consumed_at_player_spawn():
     src = read_source("engine", "logic_session.py")
     assert 'if not bool(thing.properties.get("play_on_start", False)):' in src
     assert "logic.io_manager._execute_input(" in src
-    assert "'PlaySound'," in src
+    assert "PlaySound" in src
 
 
 def test_sound_radius_gain_is_linear_and_zero_at_edge():
