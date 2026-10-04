@@ -129,6 +129,43 @@ def _owner_double_classes(path):
 
 EDITOR_TEST_ROOT = ROOT / "tests" / "editor"
 
+MACHINERY_TEST_ROOTS = (
+    "tests/editor",
+    "tests/engine",
+    "tests/io",
+    "tests/physics",
+    "tests/persistence",
+    "tests/renderer",
+    "tests/visual",
+)
+
+#: These names have appeared as substitutes for production owners in behavioural
+#: tests. They belong in narrow leaf/unit tests only, never in the machinery tiers.
+MACHINERY_OWNER_DOUBLES = {
+    "FakeHost", "FakeEditorWindow", "_MainWindow", "InspectorHost",
+    "HostStub", "SaveStub", "PlayStub", "FakePhysics", "FakeGL",
+    "FakeRenderer", "_FakeRenderer", "FakeLogicThread",
+}
+
+
+def test_machinery_tests_do_not_replace_production_owners():
+    """Behavioural machinery tests must call the real subsystem owners."""
+    offenders = []
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef) and node.name in MACHINERY_OWNER_DOUBLES:
+                    offenders.append("%s:%d (%s)" % (_rel(path), node.lineno, node.name))
+    assert not offenders, (
+        "machinery tests contain production-owner doubles; use the real Fio owner "
+        "fixture/object instead:\n  " + "\n  ".join(offenders)
+    )
+
+
 
 def test_editor_tests_do_not_reintroduce_fake_owner_windows():
     """Editor tests must cross the real MainWindow ownership boundary.
