@@ -153,7 +153,8 @@ class LogicTriggers:
         # Tolerates being called before the trigger list exists: state reset
         # runs during construction, ahead of the first cache build.
         self.logic._use_trigger_entries = [
-            (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
+            (bid, brush)
+            for bid, brush in getattr(self.logic, '_trigger_brushes', ())
             if _trigger_activation(brush) == 'use'
         ]
 
