@@ -167,6 +167,42 @@ def test_the_batched_cull_of_an_empty_scene_is_an_empty_result(logic):
     planes = _frustum_looking_down_negative_z(thread)
     assert list(thread.render_runtime.aabb_in_frustum_batch(planes, [], [])) == []
 
+def test_hud_fade_state_belongs_to_the_render_runtime(logic):
+    thread = logic()
+
+    assert not hasattr(thread, "hud_fade_enabled")
+    assert not hasattr(thread, "_hud_health_alpha")
+    assert not hasattr(thread, "_hud_cinematic_last_active")
+    assert thread.render_runtime.hud_fade_enabled is True
+
+    thread.render_runtime.set_hud_fade_enabled(False)
+    assert thread.render_runtime.hud_fade_enabled is False
+    assert thread.render_runtime.update_hud_health_alpha(10.0) == pytest.approx(1.0)
+
+    thread.render_runtime.set_hud_fade_enabled(True)
+    assert thread.render_runtime.hud_fade_enabled is True
+    assert thread.render_runtime.update_hud_health_alpha(10.0) == pytest.approx(0.5)
+
+
+def test_session_reset_reinitialises_render_owned_hud_fade_state(logic):
+    thread = logic()
+    thread.session_runtime.apply_play_mode(True)
+    try:
+        runtime = thread.render_runtime
+        assert runtime._hud_health_alpha == pytest.approx(0.0)
+        assert runtime._hud_health_fade_phase == "in"
+        assert runtime._hud_cinematic_last_active is False
+        assert runtime._hud_cinematic_fade_started is None
+    finally:
+        thread.session_runtime.apply_play_mode(False)
+
+    runtime = thread.render_runtime
+    assert runtime._hud_health_alpha == pytest.approx(0.5)
+    assert runtime._hud_health_last_value is None
+    assert runtime._hud_health_fade_phase == "idle"
+    assert runtime._hud_cinematic_last_active is False
+    assert runtime._hud_cinematic_fade_started is None
+
 
 # ---------------------------------------------------------------------------
 # The published render state
