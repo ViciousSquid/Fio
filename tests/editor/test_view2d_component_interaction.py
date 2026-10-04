@@ -1,9 +1,8 @@
 """Interaction tests for component editing in a 2D view.
 
-These drive the real ``View2D`` mouse handlers and the real ``MainWindow``
-selection logic against a lightweight host that stands in for the widgets a
-full editor window would own.  The 3D viewport is the only part replaced by a
-stub: it needs a GL context, which a test runner has no business creating.
+These drive the real ``View2D`` mouse handlers against the real MainWindow
+and its actual selection/component machinery.  The tests use the editor's
+existing viewport objects rather than a replacement host.
 
 What is under test here is the interaction contract rather than the geometry:
 which gesture starts which drag, and that one continuous drag produces exactly
