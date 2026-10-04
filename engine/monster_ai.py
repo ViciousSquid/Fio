@@ -216,7 +216,7 @@ class MonsterAI:
     def _view_rect(self):
         """Return the overhead simulation rectangle ``(hx, hz)`` or ``None``.
 
-Big World publishes ``sim_view_rect`` only for the fitted overhead camera.
+The Big World session exposes ``tiers.near_rect`` only for the fitted overhead camera.
 First-person sessions return ``None``, preserving the normal all-monster
 tick path.
 """
