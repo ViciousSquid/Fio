@@ -183,7 +183,7 @@ class LogicSession:
             logic._hud_health_fade_phase = "in"
 
             # Reset portal runtime state.
-            logic._portal_runtime().reset_session()
+            logic.portal_runtime.reset_session()
 
             logic.level_complete_ui = None
 
@@ -265,7 +265,7 @@ class LogicSession:
             logic._hud_health_fade_phase = "idle"
 
             # Reset portal runtime state.
-            logic._portal_runtime().reset_session()
+            logic.portal_runtime.reset_session()
 
             logic.level_complete_ui = None
             logic._monster_projectiles.clear()

@@ -740,9 +740,8 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     _apply_player(getattr(logic, "player", None), data.get("player"))
     _apply_player(getattr(logic, "player2", None), data.get("player2"))
     # The player was put back, not walked back: no portal crossing.
-    teleported = getattr(logic, "note_player_teleported", None)
-    if teleported is not None and data.get("player"):
-        teleported()
+    if data.get("player"):
+        logic.portal_runtime.note_player_teleported()
 
     # Player stats / cheat flags
     for attr in (

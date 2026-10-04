@@ -413,7 +413,7 @@ class LogicCombat:
             pos[2] += vel[2] * delta
 
             if prev is not None:
-                logic._transit_projectile_through_portals(projectiles, i, prev)
+                logic.portal_runtime.transit_projectile_through_portals(projectiles, i, prev)
 
             vx = float(projectiles.vel[i, 0])
             vy = float(projectiles.vel[i, 1])
@@ -539,7 +539,7 @@ class LogicCombat:
         pos += vel * delta
         if prev is not None:
             for i in range(count):
-                logic._transit_projectile_through_portals(
+                logic.portal_runtime.transit_projectile_through_portals(
                     projectiles, i, tuple(prev[i]))
 
         speed = np.sqrt(

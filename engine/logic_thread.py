@@ -1306,7 +1306,7 @@ class LogicThread(threading.Thread):
 
         # Portal transit detection — must run AFTER player physics so the
         # post-physics position is the one tested against portal planes.
-        self._update_portals(delta)
+        self.portal_runtime.update(delta)
         
         # Player shooting
         if self.game_state.consume_shot():
@@ -1348,26 +1348,11 @@ class LogicThread(threading.Thread):
 
     def note_player_teleported(self):
         """Invalidate the previous portal segment after a non-portal teleport."""
-        return self._portal_runtime().note_player_teleported()
+        return self.portal_runtime.note_player_teleported()
 
     def _update_portals(self, delta: float):
         """Advance portal fade/transit runtime for one simulation tick."""
-        return self._portal_runtime().update(delta)
-
-    @staticmethod
-    def _segment_crosses_aperture(portal, prev, cur):
-        """Compatibility wrapper for the portal crossing predicate."""
-        return LogicPortals._segment_crosses_aperture(portal, prev, cur)
-
-    def _execute_portal_transit(self, portal_a, portal_b):
-        """Compatibility wrapper for player portal transit."""
-        return self._portal_runtime()._execute_player_transit(portal_a, portal_b)
-
-    def _transit_projectile_through_portals(self, projectiles, index, prev_pos):
-        """Compatibility wrapper for dense projectile portal transit."""
-        return self._portal_runtime().transit_projectile_through_portals(
-            projectiles, index, prev_pos
-        )
+        return self.portal_runtime.update(delta)
 
     # =========================================================================
     # LOGIC TIMER UPDATE
