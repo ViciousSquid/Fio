@@ -434,12 +434,12 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
         thread.editor_state.things.append(unnamed)
         thread.world_runtime.build_entity_caches()
         assert unnamed in thread.portal_runtime.portal_things
-        assert '' not in [p.properties.get('name', '') for p in thread._portal_things]
+        assert '' not in [p.properties.get('name', '') for p in thread.portal_runtime.portal_things]
 
-        for p in thread._portal_things:
+        for p in thread.portal_runtime.portal_things:
             p._fade_alpha, p._fade_target = 0.0, 1.0
         thread.portal_runtime.update(1.0 / 60.0)
-        assert all(p._fade_alpha > 0.0 for p in thread._portal_things)
+        assert all(p._fade_alpha > 0.0 for p in thread.portal_runtime.portal_things)
 
         # Instrument the authoritative collection itself.  This verifies
         # the production portal cache is used without recreating the removed
@@ -511,10 +511,10 @@ def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
     thread.player = Player(0.0, 0.0, 0.0)
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert thread._portal_things == []
-        thread._portal_prev_player_pos = None
+        assert thread.portal_runtime.portal_things == []
+        thread.portal_runtime._portal_prev_player_pos = None
         thread.portal_runtime.update(1.0 / 60.0)
-        assert thread._portal_prev_player_pos is None, (
+        assert thread.portal_runtime._portal_prev_player_pos is None, (
             "the portal system did per-frame work on a map with no portals")
     finally:
         thread.session_runtime.apply_play_mode(False)
