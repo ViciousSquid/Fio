@@ -123,6 +123,7 @@ def test_the_opt_in_test_itself_costs_no_import():
 def test_a_map_with_a_bigworld_entity_activates_streaming():
     out = run_isolated("""
         import sys
+        from types import SimpleNamespace
         from plugins.manager import load_plugins, get_manager
         load_plugins()
         manager = get_manager()
