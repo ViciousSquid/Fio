@@ -176,8 +176,9 @@ def test_editor_mode_publishes_the_editor_camera_and_dense_projection(logic):
     wall = box_brush("wall")
     lamp = make_thing(Light, "lamp", (0, 100, 0))
     thread = logic(brushes=[wall], things=[lamp])
-    thread.editor_camera.pos = glm.vec3(10, 20, 30)
-    thread.editor_camera.yaw = 45.0
+    editor_camera = thread.camera.get_editor_camera()
+    editor_camera.pos = glm.vec3(10, 20, 30)
+    editor_camera.yaw = 45.0
 
     thread.render_runtime.prepare_render_state()
 
