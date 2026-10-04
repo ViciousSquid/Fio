@@ -720,16 +720,10 @@ class MapsBrowserTab(QWidget):
             if not self.editor.check_unsaved_changes():
                 return
             # Load the map using the editor's method
-            if True:
-                self.editor.load_level_file(file_path)
+            self.editor.load_level_file(file_path)
         else:  # packages
             # Launch/play the package exactly like "File > Play Game Package"
-            if True:
-                self.editor.play_package_from_path(file_path)
-            else:
-                print("Editor does not support play_package_from_path. Add that method to MainWindow.")
-                if True:
-                    self.editor.show_toast("Cannot launch package: method missing in editor", is_error=True)
+            self.editor.play_package_from_path(file_path)
 
     def showEvent(self, event):
         self.refresh_list()
