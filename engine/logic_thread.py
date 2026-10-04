@@ -1276,10 +1276,10 @@ class LogicThread(threading.Thread):
             self.io_manager.update(delta)
         
         # Update logic timers
-        self._update_logic_timers(delta)
+        self.timing_runtime.update_logic_timers(delta)
 
         # Update light FadeIn/FadeOut transitions
-        self._update_light_fades(delta)
+        self.timing_runtime.update_light_fades(delta)
 
         # ---- Camera transition (First Person <-> Overhead tween) ----
         # Advances even while a cinematic runs so a queued toggle resolves; it
@@ -1420,25 +1420,6 @@ class LogicThread(threading.Thread):
     # LOGIC TIMER UPDATE
     # =========================================================================
     
-    def _timing_runtime(self):
-        """Return the timing runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "timing_runtime", None)
-        if runtime is None:
-            runtime = LogicTiming(self)
-            try:
-                self.timing_runtime = runtime
-            except Exception:
-                pass
-        return runtime
-
-    def _update_logic_timers(self, delta: float):
-        """Compatibility wrapper for logic_timer advancement."""
-        return LogicThread._timing_runtime(self).update_logic_timers(delta)
-
-    def _update_light_fades(self, delta: float):
-        """Compatibility wrapper for light FadeIn/FadeOut advancement."""
-        return LogicThread._timing_runtime(self).update_light_fades(delta)
-
     # =========================================================================
     # TRIGGER HANDLING
     # =========================================================================

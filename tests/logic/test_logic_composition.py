@@ -301,9 +301,9 @@ def test_a_trigger_starts_a_timer_that_drives_a_spawner(level):
     assert level.spawned == [], "the timer ran before anything started it"
 
     level.fire(trigger, "OnTrigger")
-    LogicThread._update_logic_timers(level, 1.0)
+    LogicTiming(level).update_logic_timers( 1.0)
     assert level.spawned == []
-    LogicThread._update_logic_timers(level, 1.5)
+    LogicTiming(level).update_logic_timers( 1.5)
     assert level.spawned == ["spawner"]
 
 
