@@ -21,7 +21,6 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QApplication, QCheckBox, QGroupBox, QPushButton, QVBoxLayout, QWidget,
 )
 
-from editor.editor_state import EditorState  # noqa: E402
 from editor.property_editor import PropertyEditor  # noqa: E402
 from editor.tooltips import STASH, set_tooltips_enabled  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
@@ -208,25 +207,19 @@ def test_saving_does_not_disturb_the_autosave_settings(qt_app):
 # The Property Editor honouring it
 # ────────────────────────────
 
-class FakeHost(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.state = EditorState()
-        self.state.selected_objects = []
-        self.config = configparser.ConfigParser()
-        self.grid_size = 16
+def make_brush(name='wall'):
+    return {
+        'pos': [0, 0, 0],
+        'size': [128, 64, 32],
+        'name': name,
+        'id': 'id-%s' % name,
+        'textures': {tag: 'default.png' for tag in bg.FACE_TAGS},
+    }
 
-    def save_state(self):
-        pass
 
-    def update_views(self):
-        pass
-
-    def update_all_ui(self):
-        pass
-
-    def show_toast(self, message, is_error=False, duration=None):
-        pass
+@pytest.fixture
+def panel(main_window):
+    return main_window, main_window.property_editor
 
 
 def make_brush(name='wall'):
@@ -252,7 +245,8 @@ def _tooltips(widget):
 def test_the_panel_has_tooltips_to_begin_with(panel):
     """Guards every test below: they would pass vacuously on a bare panel."""
     host, editor = panel
-    editor.set_object(make_brush())
+    host.state.brushes = [make_brush()]
+    editor.set_object(host.state.brushes[0])
 
     assert _tooltips(editor)
 
@@ -290,7 +284,7 @@ def test_a_page_built_later_comes_up_without_tooltips(panel):
 def test_a_page_restored_from_the_cache_stays_stripped(panel):
     host, editor = panel
     one, two = make_brush('one'), make_brush('two')
-    host.state.brushes = [one, two]
+    host.state.brushes[:] = [one, two]
     editor.set_tooltips_enabled(False)
 
     editor.set_object(one)
@@ -348,79 +342,56 @@ def test_leaving_them_on_costs_no_walk(panel, monkeypatch):
 # The editor routing the setting to both areas
 # ────────────────────────────
 
-class FakeEditorWindow(QWidget):
-    """The slice of MainWindow ``apply_tooltip_settings`` touches.
-
-    The real method is bound onto it: the full editor needs a GL context and
-    cannot be built here, but this is the code that actually ships.
-    """
-
-    from editor.main_window import MainWindow
-    apply_tooltip_settings = MainWindow.apply_tooltip_settings
-    del MainWindow
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-
-def _toolbar(qt_app):
-    from PyQt5.QtWidgets import QToolBar
-    bar = QToolBar()
-    button = QPushButton()
-    button.setToolTip("Select tool")
-    bar.addWidget(button)
-    return bar, button
-
-
-def test_it_applies_both_settings(qt_app):
+def _editor_with_tooltip_settings(main_window, property_enabled=True, toolbar_enabled=True):
     config = configparser.ConfigParser()
     config.add_section('Editor')
-    config.set('Editor', 'property_editor_tooltips', 'False')
-    config.set('Editor', 'toolbar_tooltips', 'False')
+    config.set('Editor', 'property_editor_tooltips', str(property_enabled))
+    config.set('Editor', 'toolbar_tooltips', str(toolbar_enabled))
+    main_window.config = config
+    main_window.state.brushes = [make_brush()]
+    main_window.property_editor.set_object(main_window.state.brushes[0])
+    button = next(
+        b for b in main_window.tool_toolbar.findChildren(QPushButton)
+        if b.toolTip()
+    )
+    return button
 
-    host = FakeEditorWindow(config)
-    host.property_editor = PropertyEditor(FakeHost())
-    host.property_editor.set_object(make_brush())
-    host.tool_toolbar, button = _toolbar(qt_app)
 
-    host.apply_tooltip_settings()
-
-    assert _tooltips(host.property_editor) == []
+def test_it_applies_both_settings(main_window):
+    button = _editor_with_tooltip_settings(main_window, False, False)
+    main_window.apply_tooltip_settings()
+    assert _tooltips(main_window.property_editor) == []
     assert button.toolTip() == ''
 
 
-def test_the_two_switches_are_independent(qt_app):
+def test_the_two_switches_are_independent(main_window):
+    button = _editor_with_tooltip_settings(main_window, True, False)
+    before = button.toolTip()
+    main_window.apply_tooltip_settings()
+    assert _tooltips(main_window.property_editor)
+    assert button.toolTip() == '' and before
+
+
+def test_it_defaults_to_showing_both(main_window):
     config = configparser.ConfigParser()
-    config.add_section('Editor')
-    config.set('Editor', 'property_editor_tooltips', 'True')
-    config.set('Editor', 'toolbar_tooltips', 'False')
+    main_window.config = config
+    main_window.state.brushes = [make_brush()]
+    main_window.property_editor.set_object(main_window.state.brushes[0])
+    button = next(
+        b for b in main_window.tool_toolbar.findChildren(QPushButton)
+        if b.toolTip()
+    )
+    before = button.toolTip()
 
-    host = FakeEditorWindow(config)
-    host.property_editor = PropertyEditor(FakeHost())
-    host.property_editor.set_object(make_brush())
-    host.tool_toolbar, button = _toolbar(qt_app)
+    main_window.apply_tooltip_settings()
 
-    host.apply_tooltip_settings()
-
-    assert _tooltips(host.property_editor)
-    assert button.toolTip() == ''
-
-
-def test_it_defaults_to_showing_both(qt_app):
-    host = FakeEditorWindow(configparser.ConfigParser())
-    host.property_editor = PropertyEditor(FakeHost())
-    host.property_editor.set_object(make_brush())
-    host.tool_toolbar, button = _toolbar(qt_app)
-
-    host.apply_tooltip_settings()
-
-    assert _tooltips(host.property_editor)
-    assert button.toolTip() == 'Select tool'
+    assert _tooltips(main_window.property_editor)
+    assert button.toolTip() == before
 
 
-def test_it_copes_before_either_area_exists(qt_app):
+def test_it_copes_before_either_area_exists(main_window):
     """It runs during startup, so neither attribute is guaranteed yet."""
-    host = FakeEditorWindow(configparser.ConfigParser())
+    main_window.property_editor = None
+    main_window.tool_toolbar = None
+    main_window.apply_tooltip_settings()
 
-    host.apply_tooltip_settings()
