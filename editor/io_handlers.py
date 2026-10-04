@@ -1896,10 +1896,10 @@ def _get_brush_index(brush: dict, logic) -> int:
     40k brushes). The table's answer is used only if the list confirms it.
     """
     brushes = logic.brushes
-    table_of = getattr(logic, '_movers', None)
-    if table_of is not None:
+    mover_runtime = getattr(logic, 'mover_runtime', None)
+    if mover_runtime is not None:
         try:
-            table = table_of()
+            table = mover_runtime._movers()
             for group in (table.movers, table.doors):
                 row = group.row_of_obj.get(id(brush))
                 if row is not None:
