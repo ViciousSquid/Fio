@@ -1980,8 +1980,7 @@ class MainWindow(QMainWindow):
         """
         if self.cancel_clone_placement():
             return True
-        if (hasattr(self, 'view_3d') and
-                getattr(self.view_3d, 'terrain_sculpt_active', False)):
+        if self.view_3d.terrain_sculpt_active:
             self.view_3d.set_terrain_sculpt_active(False)
             return True
         if self.components.cancel_drag():
@@ -2421,11 +2420,7 @@ class MainWindow(QMainWindow):
 
     def set_camera_mode(self, text):
         """Switch the play-mode camera between First Person and Overhead."""
-        if hasattr(self.view_3d, "set_camera_mode"):
-            self.view_3d.set_camera_mode(text)
-        else:
-            self.view_3d.camera_mode = text
-            self.view_3d.update()
+        self.view_3d.set_camera_mode(text)
 
     def set_cull_distance(self, distance):
         """Set Cull Dist and mirror the actual clamped value in the spinner."""
@@ -4674,7 +4669,7 @@ class MainWindow(QMainWindow):
         self.is_kiosk_mode = False
 
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
-        if not keep_play_mode and hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
+        if not keep_play_mode and self.view_3d.play_mode:
             self._exit_play_mode()
         else:
             # --- Restore previous tab ---
