@@ -354,7 +354,8 @@ def _session_world(state):
 
 def _play(state, ticks=240):
     """A real headless session: walk, turn, shoot and use, with the AI."""
-    from engine.logic_thread import Key_D, Key_W, LogicThread
+    from engine.logic_player import KEY_D, KEY_W
+from engine.logic_thread import LogicThread
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
     from editor.things import PlayerStart
@@ -370,7 +371,7 @@ def _play(state, ticks=240):
     logic.god_mode = True                      # play start resets it
     seen = {}
     for tick in range(ticks):
-        game_state.set_keys([{Key_W}, {Key_W, Key_D}, set(), {Key_D}][(tick // 40) % 4])
+        game_state.set_keys([{KEY_W}, {KEY_W, KEY_D}, set(), {KEY_D}][(tick // 40) % 4])
         game_state.set_mouse_delta(15.0, 0.0)
         if tick % 15 == 0:
             game_state.queue_shot()
