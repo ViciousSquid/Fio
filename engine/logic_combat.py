@@ -364,7 +364,7 @@ class LogicCombat:
         logic = self.logic
 
         with logic._monster_lock:
-            projectiles = logic._projectile_store()
+            projectiles = self._projectile_store()
             if not projectiles:
                 logic._projectile_positions = NO_PROJECTILES
                 return

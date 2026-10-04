@@ -151,7 +151,7 @@ def test_batch_matches_the_walk_over_random_crowds():
         pos = (rng.uniform(-150, 150), rng.uniform(0, 100), rng.uniform(-150, 150))
         expected = _reference_hit(things, pos, id(owner))
         host = _Host(things, [(pos, owner)])
-        host._update_monster_projectiles(0.0)
+        host.combat_runtime._update_monster_projectiles(0.0)
         assert host.hits == ([expected] if expected else []), trial
 
 
@@ -168,5 +168,5 @@ def test_a_monster_killed_by_one_projectile_is_not_hit_by_the_next():
         monster.properties['dead'] = True
 
     host.monster_ai._apply_monster_damage = kill
-    host._update_monster_projectiles(0.0)
+    host.combat_runtime._update_monster_projectiles(0.0)
     assert host.hits == ["first", "second"]
