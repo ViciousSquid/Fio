@@ -27,8 +27,13 @@ from engine.spatial import CELL_SIZE, cell_of_point, cells_of_points  # noqa: E4
 
 def make_session(props=(), physics=None):
     logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=list(props)),
-        player=None,
+        editor_state=SimpleNamespace(things=list(props), brushes=[]),
+        player=SimpleNamespace(
+            pos=[0.0, 0.0, 0.0],
+            angle=0.0,
+            pitch=0.0,
+            camera_height=40.0,
+        ),
         interaction_runtime=SimpleNamespace(current_hud_message=""),
         io_manager=None,
         session_runtime=SimpleNamespace(physics_world=physics, spatial_grid=None),
@@ -117,8 +122,8 @@ def test_the_query_examines_local_props_not_every_prop():
 def test_adopting_and_releasing_file_and_unfile():
     prop = prop_at(0, 0, 60)
     logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]),
-        player=None,
+        editor_state=SimpleNamespace(things=[prop], brushes=[]),
+        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0, camera_height=40.0),
         interaction_runtime=SimpleNamespace(current_hud_message=""),
         io_manager=None,
         session_runtime=SimpleNamespace(physics_world=None, spatial_grid=None),
