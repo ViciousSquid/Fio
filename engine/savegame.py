@@ -391,7 +391,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "active_weapon": logic.combat_runtime.active_weapon,
         "gun2_obtained": bool(logic.combat_runtime.gun2_obtained),
         "player_ammo": max(0, int(logic.combat_runtime.player_ammo)),
-        "current_hud_message": getattr(logic, "current_hud_message", ""),
+        "current_hud_message": logic.interaction_runtime.current_hud_message,
         "player_health": getattr(logic, "player_health", 100),
         "player_max_health": getattr(logic, "player_max_health", 100),
         "player_dead": bool(getattr(logic, "player_dead", False)),
@@ -752,6 +752,10 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     ):
         if attr in runtime:
             setattr(logic, attr, runtime[attr])
+
+    interaction = logic.interaction_runtime
+    if "current_hud_message" in runtime:
+        interaction.current_hud_message = runtime["current_hud_message"]
 
     combat = logic.combat_runtime
     if "active_weapon" in runtime:

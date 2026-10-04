@@ -2453,13 +2453,13 @@ class QtGameView(QOpenGLWidget):
         self._cached_level_complete_ui = None
         self._level_complete_btn_rect = None
         if self.logic_thread:
-            self.logic_thread.level_complete_ui = None
+            self.logic_thread.interaction_runtime.level_complete_ui = None
 
     def _cancel_level_complete(self):
         self._cached_level_complete_ui = None
         self._level_complete_btn_rect = None
         if self.logic_thread:
-            self.logic_thread.level_complete_ui = None
+            self.logic_thread.interaction_runtime.level_complete_ui = None
     def load_texture(self, texture_name, subfolder):
         return self.renderer.load_texture(texture_name, subfolder) if self.renderer else 0
 
