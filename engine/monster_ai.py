@@ -1132,13 +1132,8 @@ all accumulated time when it runs, so simulation time is not lost.
 
     def _find_monster_by_id(self, monster_id: int):
         """Return a living Monster thing by Python id, or None."""
-        monster_by_id = getattr(self.lt, '_monster_by_id', None)
-        if monster_by_id is not None:
-            return monster_by_id.get(monster_id)
-        for t in self.lt.things:
-            if isinstance(t, MonsterThing) and id(t) == monster_id:
-                return t
-        return None
+        monster_by_id = self.lt._monster_by_id
+        return monster_by_id.get(monster_id)
 
     #: Below this many monsters the batch costs more to assemble than the walk
     #: it replaces, because only a fraction of monsters query in a given tick
@@ -1204,7 +1199,7 @@ the scalar fallback for callers that do not have the dense table.
         if table is None:
             monsters = getattr(self, '_tick_monsters', None)
             if monsters is None:
-                monsters = getattr(self.lt, '_monster_things', None)
+                monsters = self.lt._monster_things
             if not monsters:
                 return None
 
@@ -1242,7 +1237,7 @@ the scalar fallback for callers that do not have the dense table.
         """Return the small compatibility signature used by direct queries."""
         monsters = self._tick_monsters
         if monsters is None:
-            monsters = getattr(self.lt, "_monster_things", None)
+            monsters = self.lt._monster_things
         return tuple(
             (
                 id(monster),
@@ -1409,7 +1404,7 @@ the scalar fallback for callers that do not have the dense table.
         # are hidden and never a candidate), else the logic thread's list.
         monster_things = getattr(self, '_tick_monsters', None)
         if monster_things is None:
-            monster_things = getattr(self.lt, '_monster_things', None) or self.lt.things
+            monster_things = self.lt._monster_things
 
         for t in monster_things:
             if t is shooter:
@@ -1963,7 +1958,7 @@ the scalar fallback for callers that do not have the dense table.
         best_name = ''
         best_dist = MONSTER_DETOUR_RANGE + 1.0
 
-        for t in self.lt.things:
+        for t in self.lt.editor_state.things:
             if not isinstance(t, PathNode):
                 continue
             node_name = t.properties.get('name', '')
@@ -2032,7 +2027,7 @@ the scalar fallback for callers that do not have the dense table.
 
         # Fallback
         best_y = None
-        for brush in self.lt.brushes:
+        for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
             pos = brush['pos']
