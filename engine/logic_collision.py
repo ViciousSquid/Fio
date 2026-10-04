@@ -492,10 +492,10 @@ class LogicCollision:
                     logic.session_runtime.physics_world.rebuild(self._physics_body_brushes)
         else:
             self._model_collision_brushes = []
-            if logic.play_mode and hasattr(logic, '_spatial_grid') and logic._spatial_grid:
-                logic._spatial_grid.populate(logic.editor_state.brushes)
-                if getattr(logic, '_physics_world', None) is not None:
-                    logic._physics_world.rebuild(self._physics_body_brushes)
+            if logic.play_mode and logic.session_runtime.spatial_grid is not None:
+                logic.session_runtime.spatial_grid.populate(logic.editor_state.brushes)
+                if logic.session_runtime.physics_world is not None:
+                    logic.session_runtime.physics_world.rebuild(self._physics_body_brushes)
         self.refresh_collision_brushes_cache()
 
         return self.model_collision_enabled
