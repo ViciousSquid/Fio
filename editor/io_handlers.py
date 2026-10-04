@@ -126,27 +126,9 @@ def register_all_input_handlers(io_manager: IOManager):
         return float(nominal)
 
     def _start_light_fade(entity, logic, target, duration, end_off):
-        if not hasattr(logic, 'light_fade_states'):
-            logic.light_fade_states = {}
-        try:
-            duration = max(0.0, _finite(duration))
-        except (ValueError, TypeError):
-            duration = 1.0
-        start = float(entity.properties.get('intensity', 0.0))
-        if duration <= 0.0:
-            # Instant: apply immediately, no per-frame state needed.
-            entity.properties['intensity'] = target
-            entity.properties['state'] = 'off' if end_off else 'on'
-            logic.light_fade_states.pop(id(entity), None)
-            return
-        logic.light_fade_states[id(entity)] = {
-            'entity':   entity,
-            'from':     start,
-            'to':       target,
-            'elapsed':  0.0,
-            'duration': duration,
-            'end_off':  end_off,
-        }
+        logic.timing_runtime.start_light_fade(
+            entity, target, duration, end_off
+        )
 
     def light_fade_in(entity, param, logic):
         """Fade the light up to its nominal intensity over `param` seconds."""
@@ -924,15 +906,8 @@ def register_all_input_handlers(io_manager: IOManager):
         return entity.properties.get('id') or entity.properties.get('name', '')
 
     def _timer_arm(entity, logic):
-        """Start (or restart) the countdown from the full interval."""
-        try:
-            interval = max(0.01, float(entity.properties.get('interval', 1.0)))
-        except (TypeError, ValueError):
-            interval = 1.0
-        logic.timer_states[_timer_key(entity)] = {
-            'remaining': interval,
-            'interval': interval,
-        }
+        """Start (or restart) the countdown through the timing runtime."""
+        logic.timing_runtime.arm_timer(entity)
 
     def timer_enable(entity, param, logic):
         entity.properties['timer_enabled'] = True
