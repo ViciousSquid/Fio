@@ -47,7 +47,7 @@ from engine import shaders
 
 _BASE_RENDERER_PREFIX = "\x1b[38;2;240;128;0m[BaseRenderer]\x1b[0m"
 from engine.shaders import DEFAULT_SHADERS
-from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
+from engine.terrain import Terrain
 from engine.view_distance import ViewDistance
 from engine.portal_transform import (
     map_point as _portal_map_point,
@@ -771,9 +771,9 @@ class BaseRenderer:
 
             # terrain
             try:
-                terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
+                terrain_vs = compileShader(DEFAULT_SHADERS['terrain.vert'], gl.GL_VERTEX_SHADER)
                 terrain_fs = compileShader(
-                    shaders.light_ubo_source(TERRAIN_FRAGMENT_SHADER),
+                    shaders.light_ubo_source(DEFAULT_SHADERS['terrain.frag']),
                     gl.GL_FRAGMENT_SHADER,
                 )
                 terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
