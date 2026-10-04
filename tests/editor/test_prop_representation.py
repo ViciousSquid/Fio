@@ -27,7 +27,8 @@ def panel(qt_app):
     # to be something with update(); the rest it probes with hasattr.
     editor = types.SimpleNamespace(
         state=types.SimpleNamespace(things=[], brushes=[]),
-        view_3d=QWidget())
+        view_3d=QWidget(),
+        mark_dirty=lambda: None)
     widget = PropertyEditor(editor)
     yield widget
     widget.deleteLater()
