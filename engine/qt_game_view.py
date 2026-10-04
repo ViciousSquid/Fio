@@ -1583,10 +1583,10 @@ class QtGameView(QOpenGLWidget):
                 self._muzzle_flash_counter = self._muzzle_flash_duration_frames
             self._cached_muzzle_flash = self._muzzle_flash_counter > 0
             self._cached_player_dead = render_state.player_dead
-            self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
+            self._cached_monster_debug = render_state.monster_debug_active
             self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
-            self._cached_projectiles = np.array(getattr(render_state, 'projectiles', ()), dtype=np.float32).reshape(-1, 3)
-            self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
+            self._cached_projectiles = np.array(render_state.projectiles, dtype=np.float32).reshape(-1, 3)
+            self._cached_monster_rays = list(render_state.monster_debug_rays)
             self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
             self._cached_underwater = getattr(render_state, 'player_underwater', False)
             self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
@@ -1654,7 +1654,7 @@ class QtGameView(QOpenGLWidget):
                 _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
                 _glass_sprites.append(glasses_sprite_key(
                     self.player1_glasses))
-            if (getattr(render_state, 'splitscreen_active', False)
+            if (render_state.splitscreen_active
                     and not render_state.player2_dead):
                 _p2 = render_state.player2_pos
                 _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
@@ -1678,7 +1678,7 @@ class QtGameView(QOpenGLWidget):
             self.play_mode
             and self.splitscreen_mode
             and render_state is not None
-            and getattr(render_state, 'splitscreen_active', False)
+            and render_state.splitscreen_active
         )
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
         # pays a single dict lookup and builds no payload — see the render.*
@@ -1717,10 +1717,10 @@ class QtGameView(QOpenGLWidget):
 
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, self.view_matrix)
-            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
+            if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, _split_proj, self.view_matrix)
-            if render_state and getattr(render_state, 'monster_debug_active', False):
-                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+            if render_state and render_state.monster_debug_active:
+                self._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 _split_proj, self.view_matrix)
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, self.view_matrix)
@@ -1755,10 +1755,10 @@ class QtGameView(QOpenGLWidget):
 
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, _p2_view)
-            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
+            if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, _split_proj, _p2_view)
-            if render_state and getattr(render_state, 'monster_debug_active', False):
-                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+            if render_state and render_state.monster_debug_active:
+                self._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 _split_proj, _p2_view)
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, _p2_view)
@@ -1805,10 +1805,10 @@ class QtGameView(QOpenGLWidget):
                         )
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
-            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
+            if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, self.projection_matrix, self.view_matrix)
-            if render_state and getattr(render_state, 'monster_debug_active', False):
-                self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
+            if render_state and render_state.monster_debug_active:
+                self._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 self.projection_matrix, self.view_matrix)
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(self.projection_matrix, self.view_matrix)
@@ -1888,7 +1888,7 @@ class QtGameView(QOpenGLWidget):
             _ss_hud = (
                 self.splitscreen_mode
                 and render_state is not None
-                and getattr(render_state, 'splitscreen_active', False)
+                and render_state.splitscreen_active
             )
             if _ss_hud:
                 self._draw_hud_splitscreen(painter, render_state)
@@ -1958,7 +1958,7 @@ class QtGameView(QOpenGLWidget):
         splitscreen = (
             self.splitscreen_mode
             and render_state is not None
-            and getattr(render_state, 'splitscreen_active', False)
+            and render_state.splitscreen_active
         )
         w, h = self.width(), self.height()
         if splitscreen:
@@ -2143,7 +2143,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
         msg = getattr(self, '_cached_hud_message', '')
-        prompt_key = getattr(render_state, 'hud_prompt_key', None) if render_state is not None else None
+        prompt_key = render_state.hud_prompt_key if render_state is not None else None
         if msg:
             if self._cached_hud_message != msg:
                 self._cached_hud_message = msg
