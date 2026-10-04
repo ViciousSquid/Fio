@@ -33,6 +33,21 @@ def _synced(things, epoch=1):
     return table
 
 
+@pytest.fixture
+def renderer():
+    pytest.importorskip("OpenGL", reason="renderer entity-slot tests require OpenGL")
+    from tests.helpers import gl as glh
+
+    glh.reset_texture_cache()
+    with glh.GLTestContext(64, 64):
+        value = glh.make_renderer()
+        try:
+            yield value
+        finally:
+            value.cleanup()
+            glh.reset_texture_cache()
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -234,15 +249,11 @@ def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
     assert np.isclose(table.portal_width_height[0, 0], 128.0)
     assert np.isclose(table.portal_width_height[0, 1], 256.0)
 
-def test_renderer_consumes_active_lights_as_entity_slots():
+def test_renderer_consumes_active_lights_as_entity_slots(renderer):
     pytest.importorskip("OpenGL")
-    from engine.renderer_F import Renderer_F
-
     on = make_thing(Light, 'on', state='on')
     off = make_thing(Light, 'off', state='off')
     table = _synced([on, off])
-    renderer = Renderer_F.__new__(Renderer_F)
-
     packet = renderer._get_active_lights(
         {'entity_table': table, 'all_lights': []},
     )
@@ -603,7 +614,7 @@ def test_portal_glasses_property_is_per_portal():
 
 
 
-def test_portal_candidate_keeps_a_disabled_portal_during_fade_out():
+def test_portal_candidate_keeps_a_disabled_portal_during_fade_out(renderer):
     """Disabling gameplay must not remove the portal before its visual fade finishes."""
     a = make_thing(Portal, 'A', portal_target='B')
     b = make_thing(Portal, 'B', portal_target='A')
@@ -612,8 +623,6 @@ def test_portal_candidate_keeps_a_disabled_portal_during_fade_out():
 
     table = _synced([a, b])
     pytest.importorskip("OpenGL")
-    from engine.renderer_core import BaseRenderer
-    renderer = BaseRenderer.__new__(BaseRenderer)
     slots = np.arange(2, dtype=np.int32)
 
     candidates = renderer._portal_candidate_slots(table, slots, None)
