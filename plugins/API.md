@@ -588,7 +588,7 @@ isn't present on this host, rather than raising:
 | `host.globals` | the [`GlobalStore`](#globalstore--cross-level-storage) |
 | `host.game_state` | the game-state object |
 | `host.monster_ai` | the monster AI subsystem |
-| `host.terrain` | the terrain object |
+| `host.logic.world_runtime.terrain` | the live world terrain object |
 | `host.editor` | the editor main window if running in the editor, else `None` |
 
 For anything without a named accessor — including subsystems added later:

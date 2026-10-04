@@ -193,10 +193,6 @@ class PluginHost:
         return getattr(self._target, "monster_ai", None)
 
     @property
-    def terrain(self):
-        return getattr(self._target, "terrain", None)
-
-    @property
     def editor(self):
         """The editor main window if running inside the editor, else ``None``."""
         try:
