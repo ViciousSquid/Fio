@@ -282,9 +282,7 @@ class IOConnectionDialog(QDialog):
         ent = self.editor_state.find_entity_by_name(text)
         if ent is not None:
             return ent
-        if hasattr(self.editor_state, 'find_entity_by_id'):
-            return self.editor_state.find_entity_by_id(text)
-        return None
+        return self.editor_state.find_entity_by_id(text)
 
     def _update_input_options(self, target_name):
         # If the user has hand-edited the name away from the picked entity,
@@ -443,9 +441,8 @@ class IOConnectionDialog(QDialog):
                 return typed, _ensure_entity_id(ent)
 
             # 3. The typed text is itself a UUID
-            if hasattr(self.editor_state, 'find_entity_by_id'):
-                ent = self.editor_state.find_entity_by_id(typed)
-                if ent is not None:
+            ent = self.editor_state.find_entity_by_id(typed)
+            if ent is not None:
                     real_name = _entity_name(ent)
                     # Keep the entity's real name for display when it has one;
                     # otherwise fall back to the UUID so the row isn't blank.
@@ -799,12 +796,12 @@ class IOEditorWidget(QWidget):
             return None
         state = self.editor.state
         target_id = getattr(conn, 'target_id', '')
-        if target_id and hasattr(state, 'find_entity_by_id'):
+        if target_id:
             ent = state.find_entity_by_id(target_id)
             if ent is not None:
                 return ent
         target_name = getattr(conn, 'target_name', '')
-        if target_name and hasattr(state, 'find_entity_by_name'):
+        if target_name:
             return state.find_entity_by_name(target_name)
         return None
 
