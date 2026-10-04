@@ -129,7 +129,9 @@ def test_logic_interaction_constructs_and_opens_a_nearby_door():
         "door_locked": False,
     }
     host = SimpleNamespace(
-        player=SimpleNamespace(pos=glm.vec3(0, 0, 0)),
+        player_runtime=SimpleNamespace(
+            player=SimpleNamespace(pos=glm.vec3(0, 0, 0))
+        ),
         editor_state=SimpleNamespace(brushes=[], things=[]),
         io_manager=None,
         _plugin_emit=lambda *args, **kwargs: opened.append((args, kwargs)),
@@ -190,14 +192,15 @@ def test_logic_parenting_constructs_and_updates_parented_light():
 
 def test_logic_player_constructs_and_reports_water_transition():
     noise = []
+    player = SimpleNamespace(
+        in_water=True,
+        swimming=False,
+        on_ground=True,
+        velocity=glm.vec3(30, 0, 0),
+        pos=glm.vec3(1, 2, 3),
+    )
     host = SimpleNamespace(
-        player=SimpleNamespace(
-            in_water=True,
-            swimming=False,
-            on_ground=True,
-            velocity=glm.vec3(30, 0, 0),
-            pos=glm.vec3(1, 2, 3),
-        ),
+        player_runtime=SimpleNamespace(player=player),
         player2=None,
         game_state=_GameState(),
         WATERWALK_INTERVAL=0.45,
@@ -252,9 +255,7 @@ def test_logic_session_constructs_and_releases_session_cache_state():
     host = SimpleNamespace(
         editor_state=SimpleNamespace(brushes=[], things=[]),
         io_manager=SimpleNamespace(reset=lambda: reset.append(True)),
-        player=player,
-        player2=None,
-        player_runtime=SimpleNamespace(player2=None),
+        player_runtime=SimpleNamespace(player=player, player2=None),
     )
     host._monster_lock = threading.RLock()
     host.monster_ai = SimpleNamespace(monster_states={})
@@ -368,7 +369,9 @@ def _contract_host():
         if attribute not in {"brushes", "things"}:
             setattr(host, attribute, None)
 
-    host.camera = SimpleNamespace(player_runtime=SimpleNamespace(player=host.player))
+    host.camera = SimpleNamespace(
+        player_runtime=SimpleNamespace(player=host.player_runtime.player)
+    )
     # The mover state properties delegate through mover_runtime. Use the real
     # subsystem here so hasattr(host, "mover_states") exercises that contract
     # rather than a generic stub with no state properties.
@@ -385,7 +388,7 @@ def test_logic_thread_runtime_contract_validation_catches_missing_host_state():
 
     host._validate_runtime_contracts()
 
-    del host.player
+    del host.player_runtime
 
-    with pytest.raises(AssertionError, match="player"):
+    with pytest.raises(AssertionError, match="player_runtime"):
         host._validate_runtime_contracts()
