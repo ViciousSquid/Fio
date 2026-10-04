@@ -137,41 +137,41 @@ def test_requests_from_many_threads_are_not_lost(logic):
 
 def test_an_unpaused_tick_moves_the_player(playing):
     """The control: holding W does move the player in this world."""
-    start = glm.vec3(playing.player.pos)
+    start = glm.vec3(playing.player_runtime.player.pos)
     playing.game_state.set_keys({KEY_W})
     _ticks(playing, 20)
-    assert glm.distance(playing.player.pos, start) > 1.0
+    assert glm.distance(playing.player_runtime.player.pos, start) > 1.0
 
 
 def test_a_paused_tick_does_not_move_the_player(playing):
-    start = glm.vec3(playing.player.pos)
+    start = glm.vec3(playing.player_runtime.player.pos)
     playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_keys({KEY_W})
     _ticks(playing, 20)
-    assert glm.distance(playing.player.pos, start) == 0.0
+    assert glm.distance(playing.player_runtime.player.pos, start) == 0.0
 
 
 def test_look_and_fire_over_a_paused_world_are_discarded(playing):
-    angle = playing.player.angle
+    angle = playing.player_runtime.player.angle
     events_before = len(playing.combat_runtime.get_recent_noise_events())
     playing.session_runtime.set_world_paused("menu", True)
     playing.game_state.set_mouse_delta(80.0, 30.0)
     playing.game_state.queue_shot()
     _ticks(playing, 1)
-    assert playing.player.angle == angle
+    assert playing.player_runtime.player.angle == angle
     assert playing.combat_runtime.muzzle_flash_active is False
 
     playing.session_runtime.set_world_paused("menu", False)
     _ticks(playing, 1)
-    assert playing.player.angle == angle, "look input queued over a menu landed on resume"
+    assert playing.player_runtime.player.angle == angle, "look input queued over a menu landed on resume"
     assert playing.combat_runtime.muzzle_flash_active is False
     assert len(playing.combat_runtime.get_recent_noise_events()) == events_before
 
 
 def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
     before = {
-        "player_pos": tuple(playing.player.pos),
-        "player_angle": playing.player.angle,
+        "player_pos": tuple(playing.player_runtime.player.pos),
+        "player_angle": playing.player_runtime.player.angle,
         "movers": copy.deepcopy(playing.mover_runtime.mover_states),
         "doors": copy.deepcopy(playing.mover_runtime.door_states),
         "timers": copy.deepcopy(playing.timing_runtime.timer_states),
@@ -183,8 +183,8 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
     playing.session_runtime.set_world_paused("menu", True)
     _ticks(playing, 5)
 
-    assert tuple(playing.player.pos) == before["player_pos"]
-    assert playing.player.angle == before["player_angle"]
+    assert tuple(playing.player_runtime.player.pos) == before["player_pos"]
+    assert playing.player_runtime.player.angle == before["player_angle"]
     assert playing.mover_runtime.mover_states == before["movers"]
     assert playing.mover_runtime.door_states == before["doors"]
     assert playing.timing_runtime.timer_states == before["timers"]
@@ -214,7 +214,7 @@ def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playi
     if state == "cutscene_runtime.state":
         playing.cutscene_runtime.state = {"active": True}
     elif state == "player_dead":
-        playing.player_runtime.player_dead = True
+        playing.player_runtime.player_runtime.player_dead = True
     else:
         playing.interaction_runtime.level_complete_ui = {"active": True}
     playing.session_runtime.set_world_paused("menu", True)
