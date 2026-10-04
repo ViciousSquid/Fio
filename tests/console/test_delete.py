@@ -1,4 +1,4 @@
-from types import SimpleNamespace
+"""Console deletion commands through the real MainWindow/editor machinery."""
 
 import pytest
 
@@ -9,59 +9,65 @@ from PyQt5.QtWidgets import QMessageBox
 from editor.console_commands import ConsoleCommandHandler
 from editor.things import Monster, PathNode
 
-
 pytestmark = pytest.mark.qt
 
 
-class _State:
-    def __init__(self, things):
-        self.brushes = []
-        self.things = list(things)
-        self.saved = 0
-
-    def find_entity_by_name(self, name):
-        for thing in self.things:
-            if thing.properties.get("name") == name:
-                return thing
-        return None
-
-    def save_state(self):
-        self.saved += 1
-
-
-class _MainWindow:
-    def __init__(self, things):
-        self.state = _State(things)
-        self.view_3d = SimpleNamespace(play_mode=False, logic_thread=None)
-        self.ui_updates = 0
-
-    def update_all_ui(self):
-        self.ui_updates += 1
-
-
 def _pathnode(name):
-    return PathNode(pos=[0.0, 0.0, 0.0], properties={"name": name})
+    return PathNode(
+        pos=[0.0, 0.0, 0.0],
+        properties={"name": name},
+    )
+
+
+def _install_spies(monkeypatch, main_window):
+    state_saves = []
+    ui_updates = []
+    real_save = main_window.state.save_state
+    real_update = main_window.update_all_ui
+
+    def save_state():
+        state_saves.append(True)
+        return real_save()
+
+    def update_all_ui():
+        ui_updates.append(True)
+        return real_update()
+
+    monkeypatch.setattr(main_window.state, "save_state", save_state)
+    monkeypatch.setattr(main_window, "update_all_ui", update_all_ui)
+    return state_saves, ui_updates
 
 
 @pytest.mark.parametrize("type_name", ["pathnode", "path_node", "PathNode"])
-def test_delete_all_removes_every_matching_pathnode(monkeypatch, type_name):
+def test_delete_all_removes_every_matching_pathnode(
+    main_window, monkeypatch, type_name
+):
     nodes = [_pathnode("node_a"), _pathnode("node_b")]
-    monster = Monster(pos=[0.0, 0.0, 0.0], properties={"name": "grunt"})
-    window = _MainWindow(nodes + [monster])
+    monster = Monster(
+        pos=[0.0, 0.0, 0.0],
+        properties={"name": "grunt"},
+    )
+    main_window.state.things[:] = nodes + [monster]
+    main_window.state.brushes[:] = []
+
+    saves, ui_updates = _install_spies(monkeypatch, main_window)
     prompt = []
 
     def confirm(parent, title, text, buttons, default):
-        prompt.append((title, text, buttons, default))
+        prompt.append((parent, title, text, buttons, default))
         return QMessageBox.Yes
 
     monkeypatch.setattr(QMessageBox, "question", staticmethod(confirm))
 
-    ConsoleCommandHandler(window).handle_command(f"delete all {type_name}")
+    ConsoleCommandHandler(main_window).handle_command(
+        f"delete all {type_name}"
+    )
 
-    assert window.state.things == [monster]
-    assert window.state.saved == 1
-    assert window.ui_updates == 1
+    assert main_window.state.things == [monster]
+    assert len(saves) == 1
+    assert len(ui_updates) == 1
     assert prompt == [(
+        main_window,
         "Delete all",
         "2 PathNode entities will be deleted.\n\nAre you sure?",
         QMessageBox.Yes | QMessageBox.No,
@@ -69,34 +75,43 @@ def test_delete_all_removes_every_matching_pathnode(monkeypatch, type_name):
     )]
 
 
-def test_delete_all_can_be_cancelled(monkeypatch):
+def test_delete_all_can_be_cancelled(main_window, monkeypatch):
     nodes = [_pathnode("node_a"), _pathnode("node_b")]
-    window = _MainWindow(nodes)
+    main_window.state.things[:] = nodes
+    main_window.state.brushes[:] = []
 
+    saves, ui_updates = _install_spies(monkeypatch, main_window)
     monkeypatch.setattr(
         QMessageBox,
         "question",
         staticmethod(lambda *args: QMessageBox.No),
     )
 
-    ConsoleCommandHandler(window).handle_command("delete all pathnode")
+    ConsoleCommandHandler(main_window).handle_command("delete all pathnode")
 
-    assert window.state.things == nodes
-    assert window.state.saved == 0
-    assert window.ui_updates == 0
+    assert main_window.state.things == nodes
+    assert saves == []
+    assert ui_updates == []
 
 
-def test_delete_still_removes_one_named_entity_without_bulk_prompt(monkeypatch):
+def test_delete_still_removes_one_named_entity_without_bulk_prompt(
+    main_window, monkeypatch
+):
     node = _pathnode("node_a")
-    window = _MainWindow([node])
+    main_window.state.things[:] = [node]
+    main_window.state.brushes[:] = []
+
+    saves, ui_updates = _install_spies(monkeypatch, main_window)
 
     def unexpected_prompt(*args):
         raise AssertionError("single-entity delete should not prompt")
 
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(unexpected_prompt))
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(unexpected_prompt)
+    )
 
-    ConsoleCommandHandler(window).handle_command("delete node_a")
+    ConsoleCommandHandler(main_window).handle_command("delete node_a")
 
-    assert window.state.things == []
-    assert window.state.saved == 1
-    assert window.ui_updates == 1
+    assert main_window.state.things == []
+    assert len(saves) == 1
+    assert len(ui_updates) == 1
