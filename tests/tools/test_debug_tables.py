@@ -497,3 +497,48 @@ def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
     original = shown.heights[slots[0]].copy()
     table.heights[slots[0], 0, 0] += 123.0
     assert shown.heights[slots[0]].tolist() == pytest.approx(original.tolist())
+
+
+def test_debug_tables_tracks_real_terrain_streaming_residency(window):
+    """Moving the real terrain camera must recycle dense TerrainTable rows."""
+    from engine.terrain import Terrain
+    import glm
+
+    instrument, _ = window
+    terrain = Terrain(seed=0xF10)
+    terrain.set_world_extent(-4096.0, -4096.0, 4096.0, 4096.0)
+    terrain.set_streaming(True, radius=512.0)
+
+    terrain._stream_chunks(glm.vec3(0.0, 0.0, 0.0))
+    first_coords = {
+        tuple(map(int, terrain.table.coord[int(slot)]))
+        for slot in terrain.table.live_slots()
+    }
+    assert first_coords
+
+    for slot in terrain.table.live_slots()[:2]:
+        slot = int(slot)
+        terrain.table.store(
+            slot, 48, 0, terrain._chunk_heights(slot, 48)
+        )
+
+    instrument.main_window.terrain = terrain
+    instrument.refresh()
+    assert instrument.terrain.live_count == len(first_coords)
+
+    terrain._stream_chunks(glm.vec3(2048.0, 0.0, 2048.0))
+    second_coords = {
+        tuple(map(int, terrain.table.coord[int(slot)]))
+        for slot in terrain.table.live_slots()
+    }
+    assert second_coords
+    assert second_coords != first_coords
+    assert first_coords.isdisjoint(second_coords)
+
+    instrument.refresh()
+    assert instrument.terrain.live_count == len(second_coords)
+    shown_coords = {
+        tuple(map(int, row))
+        for row in instrument.terrain.coord[terrain.table.live_slots()]
+    }
+    assert shown_coords == second_coords
