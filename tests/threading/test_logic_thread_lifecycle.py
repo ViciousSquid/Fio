@@ -1,8 +1,8 @@
 """``LogicThread``: start, stop, tick, and the state a play session owns.
 
-The logic thread is Fio's simulation loop and the owner of the shared
-editor/runtime state — it reads the editor's brush and thing lists live and
-writes a render snapshot for the Qt view.  What has to be true of it is
+The logic thread is Fio's simulation loop and orchestration boundary: ``EditorState``
+owns the authored world, extracted ``Logic*`` runtimes own their domains, and the
+thread schedules ticks and publishes render state.  What has to be true of it is
 therefore less about any one tick and more about lifetime: nothing may be left
 running after ``stop()``, and entering and leaving play mode must leave the
 editor's world exactly as the mapper authored it.
