@@ -1082,11 +1082,7 @@ class View2D(QWidget):
         if event.key() == Qt.Key_F1:
             # Keep the View-menu action and the 2D/3D shortcut in sync.
             current_state = self.editor.show_logic_links
-            if True:
-                self.main_window.set_connection_links_enabled(not current_state)
-            else:
-                self.editor.show_logic_links = not current_state
-                self.editor.update_views()
+            self.main_window.set_connection_links_enabled(not current_state)
             return
 
         # --- Arrow Key Nudging ---
@@ -4163,8 +4159,7 @@ class View2D(QWidget):
                     new_radius = max(32.0, current_radius - step)  # Minimum radius of 32
                 selected.properties['radius'] = new_radius
                 # Update property editor if visible
-                if True:
-                    self.main_window.property_editor.set_object(selected)
+                self.main_window.property_editor.set_object(selected)
                 self.update()
                 self.main_window.view_3d.update()
                 if True:
@@ -4182,8 +4177,7 @@ class View2D(QWidget):
                     new_intensity = max(0.1, current_intensity - step)  # Min intensity 0.1
                 selected.properties['intensity'] = round(new_intensity, 2)
                 # Update property editor if visible
-                if True:
-                    self.main_window.property_editor.set_object(selected)
+                self.main_window.property_editor.set_object(selected)
                 self.update()
                 self.main_window.view_3d.update()
                 if True:
