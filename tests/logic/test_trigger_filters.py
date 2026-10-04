@@ -15,22 +15,21 @@ from engine.prop_runtime import PropSession
 
 def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
            poll_interval=None):
-    logic = SimpleNamespace()
-    logic.player_runtime = SimpleNamespace(collected_keys=set(), player=SimpleNamespace(
-        pos=glm.vec3(*player_pos), angle=0.0, velocity=glm.vec3(0.0)
-    ))
-    logic.editor_state = SimpleNamespace(things=list(props) + list(monsters), brushes=[])
-    logic.session_runtime = LogicSession(logic)
-    logic.world_runtime = LogicWorld(logic)
-    logic.world_runtime.monster_things = list(monsters)
-    logic.world_runtime.monster_by_id = {id(t): t for t in monsters}
-    logic.prop_runtime = PropSession(logic)
-    logic.prop_runtime.rebuild(list(props))
-    logic.mover_runtime = LogicMovers(logic)
-    logic.mover_runtime.doors = []
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.io_manager = None
-    logic.plugins = None
+    from editor.editor_state import EditorState
+    from editor.things import Monster, Thing
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
+    from tests.helpers.worlds import make_thing
+
+    things = list(props) + list(monsters)
+    state = EditorState()
+    state.things = things
+    state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = glm.vec3(*player_pos)
+    logic.player_runtime.player.angle = 0.0
+    logic.world_runtime.build_entity_caches()
+
     brush = {
         'id': 1,
         'pos': [0, 0, 0],
@@ -44,23 +43,19 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
         brush['trigger_filters'] = filters
     if poll_interval is not None:
         brush['trigger_poll_interval'] = poll_interval
-    logic._events = []
-    def _plugin_emit(event, **payload):
-        if event == "trigger_enter":
-            logic._events.append(("enter", payload.get("activator_type")))
-        elif event == "trigger_exit":
-            logic._events.append(("exit", payload.get("activator_type")))
-    logic._plugin_emit = _plugin_emit
-    logic.trigger_runtime = LogicTriggers(logic)
+    logic.editor_state.brushes = [brush]
     logic.trigger_runtime.rebuild_trigger_index([brush])
     logic.trigger_runtime._reset_trigger_state()
+    logic._events = []
+    real_emit = logic._plugin_emit
 
+    def record_emit(event, **payload):
+        if event in ('trigger_enter', 'trigger_exit'):
+            logic._events.append((event.split('_', 1)[1], payload.get('activator_type')))
+        return real_emit(event, **payload)
+
+    logic._plugin_emit = record_emit
     return logic
-
-
-def _thing(kind, x=5, y=5, z=5):
-    return SimpleNamespace(pos=[x, y, z], properties={'type': kind, 'disabled': False})
-
 
 def test_default_filter_is_player_only_and_unchanged_contacts_are_silent():
     logic = _logic(props=[_thing('prop')], monsters=[_thing('monster')])
