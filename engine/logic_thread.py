@@ -375,6 +375,14 @@ class LogicThread(threading.Thread):
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
         self.editor_runtime = LogicEditor(self)
+        # LogicWorld owns entity lookup, indexing and LevelChanger projections.
+        self.world_runtime = LogicWorld(
+            self,
+            levelchanger_type=LevelChanger,
+            monster_type=MonsterThing,
+            timer_type=LogicTimer,
+            path_node_type=PathNode,
+        )
         
         # Player stats
         self.player_health = 100
@@ -397,8 +405,8 @@ class LogicThread(threading.Thread):
         if IO_AVAILABLE and IOManager:
             self.io_manager = IOManager()
             self.io_manager.set_logic_thread(self)
-            self.io_manager.set_entity_finder(self._find_entity_by_name)
-            self.io_manager.set_entity_finder_by_id(self._find_entity_by_id)
+            self.io_manager.set_entity_finder(self.world_runtime.find_entity_by_name)
+            self.io_manager.set_entity_finder_by_id(self.world_runtime.find_entity_by_id)
             self.io_manager.set_game_state(self.game_state)
             register_all_input_handlers(self.io_manager)
 
@@ -538,14 +546,6 @@ class LogicThread(threading.Thread):
         self.timing_runtime = LogicTiming(self)
         # LogicCollision owns world/model collision geometry and cache rebuilding.
         self.collision_runtime = LogicCollision(self)
-        # LogicWorld owns entity lookup/index caches and LevelChanger data.
-        self.world_runtime = LogicWorld(
-            self,
-            levelchanger_type=LevelChanger,
-            monster_type=MonsterThing,
-            timer_type=LogicTimer,
-            path_node_type=PathNode,
-        )
 
         # Entity lookup caches — built on play-mode enter
         self._name_cache = {}
@@ -721,63 +721,12 @@ class LogicThread(threading.Thread):
     # ENTITY LOOKUP (for I/O system)
     # =========================================================================
     
-    def _world_runtime(self):
-        """Return the world/entity indexing runtime."""
-        runtime = getattr(self, "world_runtime", None)
-        if runtime is None:
-            runtime = LogicWorld(
-                self,
-                levelchanger_type=LevelChanger,
-                monster_type=MonsterThing,
-                timer_type=LogicTimer,
-                path_node_type=PathNode,
-            )
-            try:
-                self.world_runtime = runtime
-            except Exception:
-                pass
-        return runtime
-
-    def _build_entity_caches(self):
-        """Compatibility wrapper for world/entity index rebuilding."""
-        return self._world_runtime().build_entity_caches()
-
-    def _portal_runtime(self):
-        """Return the portal runtime subsystem."""
-        return self.portal_runtime
-
-    def _rebuild_portal_links(self):
-        """Rebuild cached portal target/slot relations."""
-        return self._portal_runtime().rebuild_links()
-
-    def _find_entity_by_name(self, name: str):
-        """Compatibility wrapper for live/session name lookup."""
-        return self._world_runtime().find_entity_by_name(name)
-
-    def _find_entity_by_id(self, entity_id: str):
-        """Compatibility wrapper for live/session id lookup."""
-        return self._world_runtime().find_entity_by_id(entity_id)
-
-    def _scan_entity(self, key, value):
-        """Compatibility wrapper for editor-world entity scanning."""
-        return self._world_runtime().scan_entity(key, value)
-
-    def _find_path_node_by_name(self, name: str):
-        """Compatibility wrapper for PathNode lookup."""
-        return self._world_runtime().find_path_node_by_name(name)
-
     # -- visibility invalidation ------------------------------------------
     #
     # Two notifications, because "what is drawn" and "what is collided with"
     # go stale at different costs.  Both are the *host* side of the streaming
     # contract in ``plugins.bigworld.runtime.StreamingHost``; neither knows
     # anything about a particular streaming layer.
-
-    def notify_visibility_changed(self):
-        return self._world_runtime().notify_visibility_changed()
-
-    def notify_authored_visibility_changed(self):
-        return self._world_runtime().notify_authored_visibility_changed()
 
         # =========================================================================
     # PLAYER & MODE MANAGEMENT
@@ -1181,7 +1130,7 @@ class LogicThread(threading.Thread):
         self._collision_dirty = False
         # The monster AI thread queries the grid while populate() refills it.
         with self._monster_lock:
-            self.notify_authored_visibility_changed()
+            self.world_runtime.notify_authored_visibility_changed()
 
     def _tick_editor_mode(self, delta: float):
         return self.editor_runtime.tick(delta)

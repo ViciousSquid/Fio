@@ -151,7 +151,7 @@ class LogicSession:
                         conn.reset()
 
             # Build entity caches before constructing session-local physics.
-            logic._build_entity_caches()
+            logic.world_runtime.build_entity_caches()
 
             from .physics import PhysicsWorld, SpatialGrid
 

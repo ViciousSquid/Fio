@@ -653,14 +653,14 @@ class LogicTriggers:
         if action == 'teleport':
             target_node_name = brush.get('target_node', '')
             if target_node_name:
-                node = self.logic._find_path_node_by_name(target_node_name)
+                node = self.logic.world_runtime.find_path_node_by_name(target_node_name)
                 if node and (activator_entity or self.logic.player):
                     activator = activator_entity or self.logic.player
                     dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
                     if activator is self.logic.player:
                         self.logic.player.pos = dest
                         self.logic.player.velocity = glm.vec3(0, 0, 0)
-                        self.logic.note_player_teleported()
+                        self.logic.portal_runtime.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
                         physics_world = getattr(self, '_physics_world', None)
