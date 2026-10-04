@@ -471,7 +471,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
 
 
 
-def test_editor_action_journal_save_and_reload_is_one_real_world(session, main_window, tmp_path):
+def test_editor_action_journal_save_and_reload_is_one_real_world(main_window, tmp_path):
     """Editor action -> EditorState journal -> disk -> real editor reload.
 
     This deliberately uses the real MainWindow persistence path rather than
@@ -511,7 +511,7 @@ def test_editor_action_journal_save_and_reload_is_one_real_world(session, main_w
 
     # Destroy the in-memory mutation, then force the real loader to reconstruct
     # the authored world from the file that was actually written.
-    main_window.state.clear_scene(save_undo=False)
+    main_window.state.clear_scene()
     assert main_window.load_level_file(str(path)) is True
 
     reloaded = main_window.state.get_level_data()
