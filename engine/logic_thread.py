@@ -238,7 +238,6 @@ class LogicThread(threading.Thread):
         ),
         "editor": (
             "game_state",
-            "editor_camera",
             "_editor_mouselook_active",
         ),
         "triggers": (
