@@ -612,8 +612,6 @@ class _CutsceneEntityRecorder:
 
 def _json_cutscene_logic(camera, actors, recorder=None):
     from editor.editor_state import EditorState
-    from types import SimpleNamespace
-    from engine.cutscene_runtime import CutsceneRuntime
     from engine.logic_thread import LogicThread
     from engine.threaded_game_state import ThreadedGameState
 
@@ -622,16 +620,15 @@ def _json_cutscene_logic(camera, actors, recorder=None):
     state.things = [camera] + list(actors)
     state.brushes = []
     logic = LogicThread(ThreadedGameState(), state)
-    logic.io_manager = recorder
-    logic.cutscene_runtime = CutsceneRuntime(logic)
-    logic.monster_ai = SimpleNamespace(
-        monster_states={},
-        forget_monsters=lambda: None,
-    )
-    logic._gunfire_events = []
-    logic._plugin_emit = lambda *args, **kwargs: None
-    return logic
+    real_fire_output = logic.io_manager.fire_output
 
+    def record_and_dispatch(entity, output_name, value=None):
+        recorder.calls.append((entity, output_name, value))
+        return real_fire_output(entity, output_name, value)
+
+    logic.io_manager.fire_output = record_and_dispatch
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
     from editor.things import LogicCamera, Monster
