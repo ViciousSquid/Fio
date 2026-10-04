@@ -8,11 +8,10 @@ on an actor, hands it over -- by default to the Entity Inspector.
 The first half builds real ``EntityTable`` / ``RenderTable`` projections from
 real Monsters and brushes, so the column contract the picker reads is the one
 the renderer publishes. The second half drives the view's pick mode on a light
-host that borrows ``QtGameView``'s methods (a real view needs a GL context).
+pick mode on a real ``MainWindow`` / ``QtGameView`` pair without requiring a GL context.
 """
 
 import os
-import types
 
 import glm
 import numpy as np
@@ -22,12 +21,11 @@ pytest.importorskip("PyQt5", reason="the entity classes live in editor.things")
 
 from PyQt5.QtCore import QEvent, QPoint, Qt          # noqa: E402
 from PyQt5.QtGui import QKeyEvent, QMouseEvent       # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget    # noqa: E402
+from PyQt5.QtWidgets import QApplication             # noqa: E402
 
 from editor.things import Light, Monster             # noqa: E402
 from engine.actor_pick import NO_SLOT, nearest_wall, pick_actor  # noqa: E402
 from engine.entity_table import EntityTable          # noqa: E402
-from engine.logic_session import LogicSession          # noqa: E402
 from engine.qt_game_view import QtGameView           # noqa: E402
 from engine.render_table import RenderTable          # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing  # noqa: E402
