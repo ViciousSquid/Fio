@@ -127,7 +127,7 @@ def test_respawn_fades_in_over_two_seconds():
         'collect_respawns': True,
     })
     logic = SimpleNamespace(
-        things=[prop], io_manager=IO(),
+        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
         _spatial_grid=None, _physics_world=None,
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
@@ -198,7 +198,7 @@ def test_carried_billboard_keeps_its_facing_when_player_turns():
 def test_the_registry_is_derived_from_the_authoritative_thing_list():
     """PropSession is the Prop registry; the thing list is still the world."""
     prop, light = Prop(pos=[0, 0, 0]), SimpleNamespace(properties={'type': 'light'})
-    logic = SimpleNamespace(things=[prop, light])
+    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, light]))
     session = PropSession(logic)
     session.start()
 
@@ -210,7 +210,7 @@ def test_the_registry_is_derived_from_the_authoritative_thing_list():
 def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
     """A spawn elsewhere in the map must not reset a Prop already registered."""
     settled = Prop(pos=[0, 0, 0])
-    logic = SimpleNamespace(things=[settled])
+    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[settled]))
     session = PropSession(logic)
     session.start()
 
@@ -229,12 +229,12 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
 
 def test_a_rebuild_releases_a_prop_that_left_the_world():
     prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
-    logic = SimpleNamespace(things=[prop, other])
+    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, other]))
     session = PropSession(logic)
     session.start()
     session.held = other
 
-    logic.things.remove(other)
+    logic.editor_state.things.remove(other)
     session.rebuild()
 
     assert session.props == [prop]
@@ -246,7 +246,7 @@ def test_a_rebuild_releases_a_prop_that_left_the_world():
 
 def test_an_empty_registry_is_a_valid_state():
     """A map with no Props still has a session; it just has nothing in it."""
-    logic = SimpleNamespace(things=[SimpleNamespace(properties={'type': 'light'})])
+    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[SimpleNamespace(properties={'type': 'light'})]))
     session = PropSession(logic)
     session.start()
     assert session.props == []
@@ -282,7 +282,7 @@ def test_aabb_collision_shape_skips_mesh_collision():
 
     class Builder:
         model_collision_enabled = True
-        things = [
+        editor_state = SimpleNamespace(things=[
             SimpleNamespace(
                 pos=[10.0, 20.0, 30.0],
                 properties={
@@ -296,7 +296,7 @@ def test_aabb_collision_shape_skips_mesh_collision():
                     'physics_enabled': False,
                 },
             )
-        ]
+        ])
 
     brushes = LogicCollision(Builder()).build_model_collision_brushes()
     assert len(brushes) == 1
