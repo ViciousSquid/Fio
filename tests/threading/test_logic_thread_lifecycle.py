@@ -410,7 +410,7 @@ def test_an_editor_tick_moves_the_editor_camera_and_nothing_else(logic):
 
     thread._tick(TICK)
 
-    assert list(thread.editor_camera.pos) != before, (
+    assert list(thread.camera.get_editor_camera().pos) != before, (
         "holding W for a tick did not move the editor camera from %s" % (before,))
 
 
