@@ -183,11 +183,14 @@ def test_setprop_keeps_text_properties_as_text():
 
 def _setpos_console(logic):
     from editor.console_commands import ConsoleCommandHandler
-    window = SimpleNamespace(
-        state=logic.editor_state,
-        view_3d=SimpleNamespace(logic_thread=logic, play_mode=True,
-                                player=logic.player_runtime.player),
-        update_all_ui=lambda: None, show_toast=lambda *a, **k: None)
+    from editor.main_window import MainWindow
+    from tests.helpers.paths import REPO_ROOT
+
+    window = MainWindow(str(REPO_ROOT))
+    window.state = logic.editor_state
+    window.view_3d.logic_thread = logic
+    window.view_3d.play_mode = True
+    window.view_3d.player = logic.player_runtime.player
     return ConsoleCommandHandler(window)
 
 
