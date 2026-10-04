@@ -613,9 +613,9 @@ class CutsceneWizard(QtWidgets.QDialog):
             camera.yaw = yaw
             camera.pitch = pitch
             camera.fov = fov
-            logic = getattr(self.main_window.view_3d, "logic_thread", None)
-            if logic is not None and hasattr(logic, "set_editor_camera"):
-                logic.set_editor_camera(camera.pos, camera.yaw, camera.pitch, camera.fov)
+            self.main_window.view_3d.logic_thread.camera.set_editor_camera(
+                camera.pos, camera.yaw, camera.pitch, camera.fov
+            )
 
         self.preview_time_label.setText(f"{self._preview_time:.2f}s / {self._preview_duration:.2f}s")
         try:
@@ -678,9 +678,9 @@ class CutsceneWizard(QtWidgets.QDialog):
             camera.yaw = self._preview_camera_baseline["yaw"]
             camera.pitch = self._preview_camera_baseline["pitch"]
             camera.fov = self._preview_camera_baseline["fov"]
-            logic = getattr(self.main_window.view_3d, "logic_thread", None)
-            if logic is not None and hasattr(logic, "set_editor_camera"):
-                logic.set_editor_camera(camera.pos, camera.yaw, camera.pitch, camera.fov)
+            self.main_window.view_3d.logic_thread.camera.set_editor_camera(
+                camera.pos, camera.yaw, camera.pitch, camera.fov
+            )
         self._preview_camera_baseline = None
         self._preview_actor_baseline.clear()
         self._preview_time = 0.0
