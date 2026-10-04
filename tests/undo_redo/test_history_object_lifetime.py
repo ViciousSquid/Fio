@@ -7,7 +7,7 @@ an object that is no longer in the scene.  Reads from it still work, writes to i
 go nowhere, and it stays alive for as long as whatever is holding it does.
 
 That is what these tests are about.  The headline case is the selection itself:
-``selected_object`` was re-pointed by index, but ``selected_objects`` — the list
+``selected_objects`` is the list
 every editor operation actually acts on (component picking, the clip tool, the
 Surface Inspector's whole-brush scope, group transforms, delete) — was not.  The
 sequences below are the ones a mapper actually performs:
@@ -59,7 +59,6 @@ def in_scene(state, obj):
 
 def test_undo_re_points_the_whole_selection_not_just_the_primary(state):
     state.selected_objects = list(state.brushes)
-    state.selected_object = state.brushes[0]
     state.save_state()
 
     state.brushes[0]['size'] = [128, 64, 64]
@@ -69,12 +68,10 @@ def test_undo_re_points_the_whole_selection_not_just_the_primary(state):
     assert len(state.selected_objects) == 2
     for obj in state.selected_objects:
         assert in_scene(state, obj)
-    assert state.selected_object is state.brushes[0]
 
 
 def test_redo_re_points_the_selection_too(state):
     state.selected_objects = list(state.brushes)
-    state.selected_object = state.brushes[0]
     state.save_state()
     state.brushes[0]['size'] = [128, 64, 64]
     state.save_state()
@@ -89,7 +86,6 @@ def test_redo_re_points_the_selection_too(state):
 def test_a_selection_follows_its_object_when_the_brush_order_changes(state):
     """Stable ids, not list positions: an insert must not shift the selection."""
     state.selected_objects = [state.brushes[1]]
-    state.selected_object = state.brushes[1]
     state.save_state()
     selected_id = state.brushes[1]['id']
 
@@ -107,11 +103,9 @@ def test_a_selection_whose_object_is_undone_away_is_dropped(state):
     added = make_box('added', pos=(-256, 0, 0))
     state.brushes.append(added)
     state.selected_objects = [added]
-    state.selected_object = added
 
     assert state.undo()
     assert state.selected_objects == []
-    assert state.selected_object is None
 
 
 def test_every_brush_gets_a_stable_id_at_its_first_checkpoint(state):
@@ -132,7 +126,6 @@ def test_component_editing_still_reaches_the_scene_after_an_undo(state):
     controller.set_mode(ce.MODE_VERTEX)
 
     state.selected_objects = [state.brushes[0]]
-    state.selected_object = state.brushes[0]
     state.save_state()
 
     # First edit.
@@ -187,7 +180,6 @@ def test_clone_split_component_edit_undo_redo(state):
 
     original = state.brushes[0]
     state.selected_objects = [original]
-    state.selected_object = original
     state.save_state()
 
     # Clone.
@@ -198,7 +190,6 @@ def test_clone_split_component_edit_undo_redo(state):
     clone['pos'] = [0, 0, 128]
     state.brushes.append(clone)
     state.selected_objects = [clone]
-    state.selected_object = clone
     state.save_state()
 
     # Split (clip in place) — the clone becomes an angled brush.
@@ -230,7 +221,6 @@ def test_clone_split_component_edit_undo_redo(state):
 def test_undoing_a_clip_leaves_the_brush_a_plain_box_again(state):
     brush = state.brushes[0]
     state.selected_objects = [brush]
-    state.selected_object = brush
     state.save_state()
 
     assert state.clip_brush(brush, (1.0, 1.0, 0.0), 0.0)
@@ -300,7 +290,6 @@ def test_a_chain_of_operations_undoes_and_redoes_back_to_where_it_started(state)
 def test_redo_survives_a_geometry_operation(state):
     brush = state.brushes[0]
     state.selected_objects = [brush]
-    state.selected_object = brush
     state.save_state()
 
     assert state.clip_brush(brush, (1.0, 1.0, 0.0), 0.0)
