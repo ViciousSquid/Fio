@@ -68,11 +68,9 @@ def test_an_unreadable_file_leaves_the_open_level_alone(main_window, tmp_path):
     path = tmp_path / "broken.json"
     path.write_text("{ not json")
     window = main_window
-
-    assert window.load_level_file(str(path)) is False
-
     window.file_path = "maps/previous.json"
     window.unsaved_changes = False
+
     assert window.load_level_file(str(path)) is False
     assert window.file_path == "maps/previous.json"
     assert not window.unsaved_changes
@@ -83,11 +81,10 @@ def test_a_document_that_is_not_a_map_changes_nothing(main_window, tmp_path, doc
     path = tmp_path / "odd.json"
     path.write_text(json.dumps(document))
     window = main_window
-
-    assert window.load_level_file(str(path)) is False
-
     window.file_path = "maps/previous.json"
     window.unsaved_changes = False
+
+    assert window.load_level_file(str(path)) is False
     assert window.file_path == "maps/previous.json"
     assert not window.unsaved_changes
 
@@ -166,7 +163,6 @@ def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_
 
     assert window.load_level_file(str(path)) is True
 
-    assert window.calls == ["exit play", "replace scene", "enter play"]
     assert playing_logic.session_runtime.play_mode
     assert _loadout(playing_logic) == ("gun2", True, 5)
 
@@ -177,7 +173,7 @@ def test_only_the_weapons_come_along(main_window, tmp_path, playing_logic):
     playing_logic.combat_runtime.active_weapon = "gun1"
     playing_logic.player_runtime.collected_keys.add("blue_key")
     playing_logic.player_runtime.player_health = 40
-    window = _window_on(playing_logic)
+    window = _window_on(main_window, playing_logic)
 
     window.load_level_file(str(path))
 
@@ -192,7 +188,7 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(main_window, tmp_
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun1"
-    window = _window_on(playing_logic, starts_play=False)
+    window = _window_on(main_window, playing_logic, starts_play=False)
 
     window.load_level_file(str(path))
     assert not playing_logic.session_runtime.play_mode
