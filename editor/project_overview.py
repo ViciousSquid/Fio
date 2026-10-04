@@ -167,7 +167,7 @@ def format_overview(stats: dict, map_name: str) -> str:
 
 def show_project_overview(main_window):
     """Open the Project Overview for the map the editor currently has open."""
-    file_path = getattr(main_window, 'file_path', None)
+    file_path = main_window.file_path
     map_name = os.path.basename(file_path) if file_path else 'Untitled'
     stats = collect_project_stats(main_window.state, file_path)
 
