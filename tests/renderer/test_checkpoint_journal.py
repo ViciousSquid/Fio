@@ -33,7 +33,7 @@ def test_a_change_made_after_its_checkpoint_reaches_the_table():
     state.post_event = deferred.append        # the UI event loop, by hand
     wall = box_brush("wall")
     state.brushes = [wall]
-    state.set_selected_object(wall)
+    state.selected_objects = [wall]
     thread = LogicThread(ThreadedGameState(), state)
     thread.render_runtime.prepare_render_state()
 
