@@ -517,7 +517,7 @@ class QtGameView(QOpenGLWidget):
 
     def _reload_hud_settings(self):
         """Reload persistent HUD settings and reset runtime-only HUD style."""
-        config = getattr(self.editor, "config", None)
+        config = self.editor.config
         try:
             opacity = float(config.get("Display", "hudopacity", fallback="100"))
         except (AttributeError, TypeError, ValueError):
@@ -942,7 +942,7 @@ class QtGameView(QOpenGLWidget):
 
     def initializeGL(self):
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
-        config = getattr(self.editor, 'config', None)
+        config = self.editor.config
         self._renderer_mode = 'Forward'
         self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
@@ -2693,7 +2693,7 @@ class QtGameView(QOpenGLWidget):
                     except Exception as e:
                         print(f"[QtGameView] Renderer cleanup warning: {e}")
                 del old
-            config = getattr(self.editor, 'config', None)
+            config = self.editor.config
             self.renderer = cls(
                 self.load_texture, self.grid_size, self.world_size, config)
             self.renderer.set_sprite_textures(self.sprite_textures)
@@ -2704,7 +2704,7 @@ class QtGameView(QOpenGLWidget):
         except Exception as exc:
             print(f"[QtGameView] switch_renderer FAILED: {exc}")
             try:
-                config = getattr(self.editor, 'config', None)
+                config = self.editor.config
                 self.renderer = Renderer_F(
                     self.load_texture, self.grid_size, self.world_size, config)
                 self._renderer_mode = 'Forward'
