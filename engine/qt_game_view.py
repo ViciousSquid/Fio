@@ -1824,8 +1824,7 @@ class QtGameView(QOpenGLWidget):
                 self.renderer.draw_connection_lines(self.projection_matrix, self.view_matrix, conn_lines)
         if self.face_mode_active and self.hovered_face_info:
             brush, face_name = self.hovered_face_info
-            if hasattr(self.renderer, 'draw_face_highlight'):
-                self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
+            self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.
