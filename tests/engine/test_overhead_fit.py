@@ -83,7 +83,7 @@ def test_a_turning_camera_moves_the_box_but_not_the_reach():
     cam = _Camera(orientation="player", tilt=20.0)
     seen = []
     for degrees in range(0, 360, 15):
-        cam.player.angle = math.radians(degrees)
+        cam._host.player.angle = math.radians(degrees)
         seen.append(cam.overhead_ground_footprint())
     reaches = [r for _hx, _hz, r in seen]
     assert max(reaches) - min(reaches) < 1e-3 * reaches[0]
