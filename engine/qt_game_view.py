@@ -204,7 +204,6 @@ class QtGameView(QOpenGLWidget):
         self.gun_hud_pixmaps = {}
         self.gun_flash_pixmaps = {}
         self.weapon_collect_pixmaps = {}   # item_type -> world/collectible QPixmap
-        self.monster_debug_active = False
         self.show_spatial_grid = False
         self.renderer = None
 
@@ -2568,10 +2567,9 @@ class QtGameView(QOpenGLWidget):
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
-            self.monster_debug_active = False
             self.show_spatial_grid = False
             if self.logic_thread:
-                self.logic_thread.monster_debug_active = False
+                self.logic_thread.monster_ai.monster_debug_active = False
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             self.setCursor(Qt.ArrowCursor)
@@ -3830,10 +3828,12 @@ class QtGameView(QOpenGLWidget):
             self.editor.toggle_system_monitor()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
-            self.monster_debug_active = not self.monster_debug_active
             if self.logic_thread:
-                self.logic_thread.monster_debug_active = self.monster_debug_active
-            status = "ON" if self.monster_debug_active else "OFF"
+                monster_ai = self.logic_thread.monster_ai
+                monster_ai.monster_debug_active = not monster_ai.monster_debug_active
+                status = "ON" if monster_ai.monster_debug_active else "OFF"
+            else:
+                status = "OFF"
             self.editor.show_toast(f"Monster Debug: {status}")
             self.update()
             return
