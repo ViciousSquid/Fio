@@ -175,10 +175,6 @@ class PluginHost:
         """The live list of scene entities owned by editor_state."""
         return self._target.editor_state.things
     @property
-    def player(self):
-        return getattr(self._target, "player", None)
-
-    @property
     def io(self):
         """The play session's ``IOManager`` (fire outputs / register inputs)."""
         return getattr(self._target, "io_manager", None)
