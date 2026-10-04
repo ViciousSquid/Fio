@@ -6,7 +6,7 @@ sampled until its next refresh, a quarter of a second later, and so held a
 borrow permanently -- with it open, the renderer never saw another frame.
 """
 
-from types import SimpleNamespace
+import os
 
 import numpy as np
 import pytest
@@ -21,9 +21,9 @@ pytestmark = pytest.mark.qt
 
 @pytest.fixture
 def window(qt_app):
-    from PyQt5.QtWidgets import QMainWindow
     from tools.debug_tables import DebugTablesWindow
     from editor.editor_state import EditorState
+    from editor.main_window import MainWindow
     from engine.logic_thread import LogicThread
 
     game_state = ThreadedGameState()
@@ -34,15 +34,15 @@ def window(qt_app):
     write.prepare_ms = 1.5
     assert game_state.request_swap() is True
 
-    host = QMainWindow()
-    host.view_3d = SimpleNamespace(
-        logic_thread=logic,
-        renderer=None, paint_ms=4.0)
-    host.state = SimpleNamespace(selected_objects=[])
+    host = MainWindow(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    host.view_3d.logic_thread = logic
     instrument = DebugTablesWindow(host)
     instrument.timer.stop()
     yield instrument, game_state
     instrument.close()
+    host.close()
+    host.deleteLater()
+    qt_app.processEvents()
 
 
 def test_sampling_does_not_hold_the_published_frame(window):
@@ -181,8 +181,7 @@ def test_export_writes_every_table_of_a_real_frame(window, tmp_path):
 def test_follow_selection_names_the_render_row_key_and_run(window):
     instrument, game_state = window
     brush = game_state._read_state.render_table.brushes[0]
-    instrument.main_window.state = SimpleNamespace(
-        selected_objects=[brush])
+    instrument.main_window.state.selected_objects = [brush]
     instrument.refresh()
     status = instrument.status.text()
     assert "FOLLOW id=%s" % brush["id"] in status
