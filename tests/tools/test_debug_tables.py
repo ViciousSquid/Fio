@@ -287,3 +287,138 @@ def test_the_export_includes_the_terrain_table(window, tmp_path, monkeypatch):
         pipeline = json.loads(archive.read("pipeline.json"))
     assert "TerrainTable/heights.npy" in names
     assert pipeline["terrain_resident"] == 2
+
+
+
+@pytest.fixture
+def real_world_window(qt_app):
+    """Attach Debug Tables to a real authored world and real LogicThread."""
+    from editor.editor_state import EditorState
+    from editor.main_window import MainWindow
+    from editor.things import Light, Sprite
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
+    from tests.helpers.worlds import box_brush, make_thing
+
+    state = EditorState()
+    state.brushes = [
+        box_brush("ground", (0, -16, 0), (2048, 32, 2048)),
+        box_brush("wall_a", (-160, 96, 0), (64, 192, 256)),
+        box_brush("wall_b", (160, 128, 0), (64, 256, 256)),
+    ]
+    state.things = [
+        make_thing(
+            Light, "audit_light", (0, 256, 192),
+            color=[255, 255, 255], intensity=2.0, radius=1000.0,
+            state="on", casts_shadows=True,
+        ),
+        make_thing(
+            Sprite, "audit_sprite", (0, 64, 0),
+            sprite="Dev/monster.png",
+        ),
+    ]
+
+    game_state = ThreadedGameState()
+    logic = LogicThread(game_state, state)
+    logic._prepare_render_state()
+    assert game_state.request_swap() is True
+    # The published frame is the actual dense execution state consumed by
+    # Debug Tables. A second prepare/swap settles the peer buffer as well.
+    logic._prepare_render_state()
+    assert game_state.request_swap() is True
+
+    host = MainWindow(os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", ".."
+    )))
+    host.state = state
+    host.view_3d.logic_thread = logic
+
+    from tools.debug_tables import DebugTablesWindow
+    instrument = DebugTablesWindow(host)
+    instrument.timer.stop()
+    yield instrument, state, logic
+
+    instrument.close()
+    host.close()
+    host.deleteLater()
+    qt_app.processEvents()
+
+
+def test_debug_tables_is_an_oracle_for_a_real_authored_world(real_world_window):
+    """Debug Tables must expose the dense rows produced by the real world path."""
+    instrument, state, logic = real_world_window
+    instrument.refresh()
+
+    assert instrument.render is not None
+    assert instrument.entities is not None
+    assert instrument.render.count == len(state.brushes)
+    assert instrument.entities.count == len(state.things)
+
+    for brush in state.brushes:
+        slot = instrument.render.slot_of_id[brush["id"]]
+        assert instrument.render.center[slot].tolist() == pytest.approx(brush["pos"])
+        assert instrument.render.bounds[slot, 3:6].tolist() == pytest.approx(
+            [brush["size"][i] * 0.5 for i in range(3)]
+        )
+
+    for thing in state.things:
+        ident = thing.properties["id"]
+        slot = instrument.entities.slot_of_id[ident]
+        assert instrument.entities.pos[slot].tolist() == pytest.approx(
+            thing.pos.tolist()
+        )
+
+    light = state.things[0]
+    light_slot = instrument.entities.slot_of_id[light.properties["id"]]
+    assert instrument.entities.light_pos[light_slot].tolist() == pytest.approx(
+        light.pos.tolist()
+    )
+    assert bool(instrument.entities.light_casts_shadows[light_slot])
+    assert instrument.entities.light_intensity[light_slot] == pytest.approx(2.0)
+
+    sprite = state.things[1]
+    sprite_slot = instrument.entities.slot_of_id[sprite.properties["id"]]
+    assert int(instrument.entities.sprite_key_id[sprite_slot]) >= 0
+
+
+def test_debug_tables_tracks_a_real_light_move_in_the_dense_entity_row(
+    real_world_window,
+):
+    """A real authoring mutation must become a new EntityTable row value."""
+    instrument, state, logic = real_world_window
+
+    instrument.refresh()
+    ident = state.things[0].properties["id"]
+    before = instrument.entities.slot_of_id[ident]
+    old = instrument.entities.light_pos[before].copy()
+
+    state.things[0].pos = [320.0, 256.0, 192.0]
+    state.mark_world_changed([state.things[0]])
+    logic._prepare_render_state()
+    assert logic.game_state.request_swap() is True
+
+    instrument.refresh()
+    slot = instrument.entities.slot_of_id[ident]
+    assert slot == before
+    assert instrument.entities.light_pos[slot].tolist() == pytest.approx(
+        [320.0, 256.0, 192.0]
+    )
+    assert not np.array_equal(old, instrument.entities.light_pos[slot])
+
+
+def test_debug_tables_detects_the_real_brush_set_change(real_world_window):
+    """Adding authored geometry must appear as a new dense RenderTable row."""
+    instrument, state, logic = real_world_window
+    instrument.refresh()
+    before = instrument.render.count
+
+    added = box_brush("late_wall", (0, 128, -320), (128, 256, 64))
+    state.brushes.append(added)
+    state.mark_world_changed([added])
+    logic._prepare_render_state()
+    assert logic.game_state.request_swap() is True
+
+    instrument.refresh()
+    assert instrument.render.count == before + 1
+    slot = instrument.render.slot_of_id[added["id"]]
+    assert instrument.render.center[slot].tolist() == pytest.approx(added["pos"])
