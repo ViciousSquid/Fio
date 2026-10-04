@@ -355,7 +355,7 @@ def _session_world(state):
 def _play(state, ticks=240):
     """A real headless session: walk, turn, shoot and use, with the AI."""
     from engine.logic_player import KEY_D, KEY_W
-from engine.logic_thread import LogicThread
+    from engine.logic_thread import LogicThread
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
     from editor.things import PlayerStart
