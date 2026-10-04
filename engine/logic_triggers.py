@@ -366,7 +366,7 @@ class LogicTriggers:
                 entity_types.append(2)
                 entity_ids.append(id(entity))
 
-        for entity in self.logic._monster_things:
+        for entity in self.logic.world_runtime.monster_things:
             if not getattr(entity, 'properties', {}).get('disabled', False):
                 entities.append(entity)
                 entity_types.append(4)
@@ -441,7 +441,7 @@ class LogicTriggers:
                             activator = (self.logic.prop_runtime.by_id(entity_id)
                                          if True else None)
                         else:
-                            activator = self.logic._monster_by_id.get(entity_id)
+                            activator = self.logic.world_runtime.monster_by_id.get(entity_id)
 
                         if activator is not None:
                             # Use triggers are activation-driven rather than
@@ -466,7 +466,7 @@ class LogicTriggers:
                             activator = (self.logic.prop_runtime.by_id(entity_id)
                                          if True else None)
                         else:
-                            activator = self.logic._monster_by_id.get(entity_id)
+                            activator = self.logic.world_runtime.monster_by_id.get(entity_id)
 
                         if activator is not None:
                             if _trigger_activation(brush) != 'use':

@@ -93,8 +93,6 @@ class HostStub:
         self._timer_things = []
         self.world_runtime.monster_spawn_health = {}
         self._props = None
-        self._monster_things = []
-        self._monster_by_id = {}
         self._monster_lock = __import__("threading").RLock()
         self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
         self.collision_runtime = type("CollisionRuntimeStub", (), {"mark_dirty": lambda self: None})()

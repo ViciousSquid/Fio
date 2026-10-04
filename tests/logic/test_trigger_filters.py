@@ -21,8 +21,8 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     # Props come from the real Prop runtime owner used by LogicThread.
     logic.prop_runtime = PropSession(logic)
     logic.prop_runtime.rebuild(list(props))
-    logic._monster_things = list(monsters)
-    logic._monster_by_id = {id(t): t for t in logic._monster_things}
+    logic.world_runtime.monster_things = list(monsters)
+    logic.world_runtime.monster_by_id = {id(t): t for t in monsters}
     brush = {
         'id': 'trigger_1',
         'pos': [0, 0, 0],
