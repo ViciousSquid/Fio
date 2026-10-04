@@ -341,7 +341,7 @@ class ConsoleCommandHandler:
         # Fire I/O output if available
         try:
             # Since we don't have IOManager reference here, we can use the logic_thread's io_manager if in play mode
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
+            if self.main_window.view_3d.logic_thread:
                 io_manager = self.main_window.view_3d.logic_thread.io_manager
                 if io_manager:
                     io_manager.fire_output(entity, 'OnDeath')
@@ -1075,7 +1075,7 @@ entity to drive them from the I/O system.</i><br>
     def _get_io_manager(self):
         """Safely retrieve the I/O manager from the logic thread."""
         try:
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
+            if self.main_window.view_3d.logic_thread:
                 return self.main_window.view_3d.logic_thread.io_manager
         except Exception:
             pass
