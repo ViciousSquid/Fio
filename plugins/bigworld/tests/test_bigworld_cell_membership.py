@@ -17,38 +17,28 @@ Plain Python throughout, like the rest of the plugin's bookkeeping.
 
 import os
 import sys
-from types import SimpleNamespace
+pytest.importorskip("PyQt5", reason="Big World membership tests exercise the real LogicThread owner")
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
-
-from engine.spatial import (TIER_DORMANT, TIER_NEAR, cell_of_point,  # noqa: E402
-                            tier_of)
-from engine.view_distance import ViewDistance                         # noqa: E402
-from plugins.bigworld.manager import BigWorldManager                 # noqa: E402
-from plugins.bigworld.runtime import BigWorldSession                 # noqa: E402
-
-CELL = 512.0
+from editor.editor_state import EditorState
+from editor.things import Thing as FioThing
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
 
 
-class Thing:
-    def __init__(self, x, z, uuid, type_name="monster", **props):
-        self.pos = [float(x), 0.0, float(z)]
-        self.properties = {"type": type_name, "id": uuid}
-        self.properties.update(props)
+def make_thing(x, z, uuid, type_name="monster", **props):
+    properties = {"type": type_name, "id": uuid}
+    properties.update(props)
+    return FioThing(pos=[float(x), 0.0, float(z)], properties=properties)
 
 
-class Player:
-    def __init__(self, x=0.0, z=0.0):
-        self.pos = [float(x), 0.0, float(z)]
-
-
-class Logic:
-    def __init__(self, brushes=(), things=(), player=None):
-        self.editor_state = SimpleNamespace(
-            brushes=list(brushes), things=list(things)
-        )
-        self.player_runtime = SimpleNamespace(player=player or Player())
-        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
+def make_logic(brushes=(), things=(), at=(0.0, 0.0)):
+    state = EditorState()
+    state.brushes = list(brushes)
+    state.things = list(things)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 
 def brush(x, z, uuid, size=64.0):
@@ -58,12 +48,11 @@ def brush(x, z, uuid, size=64.0):
 
 def session(things=(), brushes=(), activation=1024.0, deactivation=1152.0,
             near=512.0, at=(0.0, 0.0)):
-    logic = Logic(brushes=brushes, things=things, player=Player(*at))
+    logic = make_logic(brushes=brushes, things=things, at=at)
     s = BigWorldSession(logic, activation_radius=activation,
                         deactivation_radius=deactivation, sim_near_radius=near)
     s.start()
     return s
-
 
 def cells_holding(manager, thing):
     return sorted(c for c, cell in manager.cells.items() if thing in cell.things)
@@ -78,9 +67,10 @@ def walk(s, x, z=0.0, entities=()):
 
 
 def test_streaming_reads_player_from_logic_player_runtime():
-    logic = Logic(player=Player(123.0, 456.0))
+    logic = make_logic(at=(123.0, 456.0))
     session = BigWorldSession(logic)
     assert session._player_pos() is logic.player_runtime.player.pos
+    session.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +83,7 @@ def test_an_entity_is_filed_under_exactly_one_cell():
     A brush is filed from every cell its footprint touches and reference
     counted; an entity must not be, or the counting has nothing to count.
     """
-    mon = Thing(100.0, 100.0, "mon")
+    mon = make_thing(100.0, 100.0, "mon")
     mgr = BigWorldManager()
     mgr.index_world([], [mon])
     assert cells_holding(mgr, mon) == [(0, 0)]
@@ -116,7 +106,7 @@ def test_a_brush_is_filed_from_every_cell_it_spans_and_stored_once():
 
 def test_re_indexing_a_world_leaves_nothing_of_the_previous_one():
     """``index_world`` is the rebuild, and a rebuild must not remember."""
-    a, b = Thing(100.0, 100.0, "a"), Thing(5000.0, 0.0, "b")
+    a, b = make_thing(100.0, 100.0, "a"), make_thing(5000.0, 0.0, "b")
     mgr = BigWorldManager()
     mgr.index_world([], [a, b])
     mgr.index_world([], [a])
@@ -138,7 +128,7 @@ def test_an_entity_that_walks_is_filed_where_it_now_stands():
     was parked — hidden and disabled — in the middle of a fight, standing right
     next to the player.
     """
-    chaser = Thing(0.0, 0.0, "chaser")
+    chaser = make_thing(0.0, 0.0, "chaser")
     s = session([chaser])
     try:
         assert cells_holding(s.manager, chaser) == [(0, 0)]
@@ -160,7 +150,7 @@ def test_an_entity_that_walks_is_filed_where_it_now_stands():
 
 def test_an_entity_that_stays_behind_still_parks():
     """The other half: re-filing must not make everything resident forever."""
-    chaser, homebody = Thing(0.0, 0.0, "chaser"), Thing(0.0, 0.0, "homebody")
+    chaser, homebody = make_thing(0.0, 0.0, "chaser"), make_thing(0.0, 0.0, "homebody")
     s = session([chaser, homebody])
     try:
         walk(s, 20000.0, entities=[chaser])
@@ -174,7 +164,7 @@ def test_an_entity_that_stays_behind_still_parks():
 
 def test_a_mover_is_never_filed_under_two_cells_at_once():
     """Re-filing is a move, not a copy — over a long, winding walk."""
-    chaser = Thing(0.0, 0.0, "chaser")
+    chaser = make_thing(0.0, 0.0, "chaser")
     s = session([chaser])
     try:
         for step in range(40):
@@ -200,7 +190,7 @@ def test_re_filing_keeps_the_reference_count_in_step():
     mid-move — a zero would fire a spurious park/unpark pair, and with it a
     spurious commit of the cell's persistent state.
     """
-    chaser = Thing(0.0, 0.0, "chaser")
+    chaser = make_thing(0.0, 0.0, "chaser")
     s = session([chaser])
     try:
         parks = []
@@ -226,7 +216,7 @@ def test_re_filing_keeps_the_reference_count_in_step():
 
 
 def test_an_entity_that_walks_out_of_range_parks_exactly_once():
-    chaser = Thing(0.0, 0.0, "chaser")
+    chaser = make_thing(0.0, 0.0, "chaser")
     s = session([chaser])
     try:
         walk(s, 3000.0)                       # the player moves; the entity does not
@@ -247,8 +237,8 @@ def test_a_parked_entity_is_not_re_filed():
     cost of moving scale with the world's population — the one thing the design
     forbids.
     """
-    far = Thing(20000.0, 0.0, "far")
-    near = Thing(0.0, 0.0, "near")
+    far = make_thing(20000.0, 0.0, "far")
+    near = make_thing(0.0, 0.0, "near")
     s = session([near, far])
     try:
         assert far.properties.get("hidden") is True
@@ -267,7 +257,7 @@ def test_an_entity_walking_into_empty_space_stays_live():
     Filing an entity into it has to bring it in, or walking into an empty part
     of the world would park the entity standing next to the player.
     """
-    chaser = Thing(0.0, 0.0, "chaser")
+    chaser = make_thing(0.0, 0.0, "chaser")
     s = session([chaser], brushes=[brush(0.0, 0.0, "floor")])
     try:
         empty = cell_of_point(30000.0, 0.0, CELL)
@@ -287,8 +277,8 @@ def test_an_entity_walking_into_empty_space_stays_live():
 
 def test_repeated_streaming_cycles_do_not_accumulate_membership():
     """Twenty round trips must leave the index the size one leaves it."""
-    chaser = Thing(0.0, 0.0, "chaser")
-    others = [Thing(i * 700.0, 0.0, "o%d" % i) for i in range(12)]
+    chaser = make_thing(0.0, 0.0, "chaser")
+    others = [make_thing(i * 700.0, 0.0, "o%d" % i) for i in range(12)]
     s = session([chaser] + others)
     try:
         walk(s, 0.0, entities=[chaser])
@@ -307,8 +297,8 @@ def test_repeated_streaming_cycles_do_not_accumulate_membership():
 
 def test_no_entity_is_lost_by_any_amount_of_streaming():
     """The invariant with teeth: every entity is somewhere, always."""
-    movers = [Thing(0.0, 0.0, "m%d" % i) for i in range(4)]
-    statics = [Thing(i * 900.0, i * 900.0, "s%d" % i) for i in range(10)]
+    movers = [make_thing(0.0, 0.0, "m%d" % i) for i in range(4)]
+    statics = [make_thing(i * 900.0, i * 900.0, "s%d" % i) for i in range(10)]
     s = session(movers + statics)
     try:
         for step in range(30):
@@ -329,8 +319,8 @@ def test_play_stop_hands_back_a_world_with_every_entity_where_it_stands():
     The entity's position is the game's to change; its flags, its uuid and the
     absence of any streaming marker are the session's to hand back.
     """
-    chaser = Thing(0.0, 0.0, "chaser", hidden=True)
-    homebody = Thing(0.0, 0.0, "homebody")
+    chaser = make_thing(0.0, 0.0, "chaser", hidden=True)
+    homebody = make_thing(0.0, 0.0, "homebody")
     s = session([chaser, homebody])
     walk(s, 9000.0, entities=[chaser])
     s.stop()
