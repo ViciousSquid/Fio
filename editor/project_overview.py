@@ -54,8 +54,8 @@ def collect_project_stats(state, file_path=None) -> dict:
     *file_path* is the map on disk, used only for the timestamps; a map that
     has never been saved simply has none.
     """
-    brushes = list(getattr(state, 'brushes', ()) or ())
-    things = list(getattr(state, 'things', ()) or ())
+    brushes = list(state.brushes)
+    things = list(state.things)
 
     connections = 0
     if IO_AVAILABLE:
