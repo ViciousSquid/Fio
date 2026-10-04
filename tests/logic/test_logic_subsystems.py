@@ -201,7 +201,6 @@ def test_logic_player_constructs_and_reports_water_transition():
     )
     host = SimpleNamespace(
         player_runtime=SimpleNamespace(player=player),
-        player2=None,
         game_state=_GameState(),
         WATERWALK_INTERVAL=0.45,
         _gunfire_events=[],
