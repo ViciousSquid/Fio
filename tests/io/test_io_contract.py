@@ -73,6 +73,7 @@ class HostStub:
         self.io_manager = io_manager
         self.brushes = []
         self.things = []
+        self.play_mode = False
         self.gate_inputs = {}
         self.timer_states = {}
         self.mover_path_states = {}
