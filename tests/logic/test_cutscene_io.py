@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from engine.cutscene_runtime import CutsceneRuntime
 from engine.logic_world import LogicWorld
 from editor.things import ENTITY_TYPES
+
+
+class RecordingIO:
     def __init__(self, owner):
         self.owner = owner
         self.calls = []
