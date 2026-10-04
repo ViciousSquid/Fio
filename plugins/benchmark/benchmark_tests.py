@@ -369,7 +369,7 @@ class BenchmarkTests:
             position = [float(position[0]), max(96.0, float(position[1])), float(position[2])]
 
         monster = Monster(pos=position, properties=props)
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             logic.editor_state.things.append(monster)
             logic.world_runtime.build_entity_caches()
         return monster
