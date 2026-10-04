@@ -208,9 +208,7 @@ class LogicThread(threading.Thread):
         ),
     }
 
-    def __init__(self, game_state: ThreadedGameState, 
-                 editor_state, 
-                 visibility_system: Optional[Any] = None):
+    def __init__(self, game_state: ThreadedGameState, editor_state):
         super().__init__(daemon=True)
         # Serialises the simulation with everything that rebuilds or reads the
         # world from another thread.  The run loop holds it for each frame's
@@ -221,14 +219,12 @@ class LogicThread(threading.Thread):
         self._tick_lock = threading.RLock()
         self.game_state = game_state
         self.editor_state = editor_state
-        self.visibility_system = visibility_system
         self.running = False
         
         # Camera state and camera math live in LogicCamera; LogicThread keeps
         # the camera runtime as an owned subsystem and schedules its updates.
         self.camera = LogicCamera(self)
         self.player_runtime = LogicPlayer(self)
-        self._editor_mouselook_active = False
         # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
         self.render_runtime = LogicRender(self)
         self.session_runtime = LogicSession(self)
