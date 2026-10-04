@@ -564,15 +564,29 @@ def test_escape_is_accepted_so_the_dialog_never_sees_it(inspector):
     assert event.isAccepted()
 
 
-def test_escape_survives_a_host_without_the_hook(inspector):
-    """An older host, or a panel built against a stand-in, must not crash."""
-    host, panel, brush = inspector
-    assert not hasattr(host, 'handle_escape')
+def test_escape_is_handled_by_the_editor_host(qt_app):
+    """Escape is routed through the real MainWindow cancellation machinery."""
+    from editor.main_window import MainWindow
+
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    host = MainWindow(root)
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.state.selected_objects = [brush]
+    panel = SurfaceInspector(host)
+    panel.set_target(brush, 'north')
     panel.show()
-
-    _escape(panel)
-
-    assert panel.isVisible()
+    try:
+        assert host.primary_selection() is brush
+        _escape(panel)
+        assert host.primary_selection() is None
+        assert panel.isVisible()
+    finally:
+        host.unsaved_changes = False
+        panel.deleteLater()
+        host.close()
+        host.deleteLater()
+        qt_app.processEvents()
 
 
 def test_other_keys_still_reach_the_dialog(inspector):
