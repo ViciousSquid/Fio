@@ -172,15 +172,8 @@ class PluginHost:
 
     @property
     def scene(self):
-        """The live list of scene entities (``things``).
-
-        Returns the *actual* list (so mutating it affects the scene), or ``[]``
-        only when the host exposes no ``things`` at all — never a throwaway copy
-        of a merely-empty scene.
-        """
-        things = getattr(self._target, "things", None)
-        return things if things is not None else []
-
+        """The live list of scene entities owned by editor_state."""
+        return self._target.editor_state.things
     @property
     def player(self):
         return getattr(self._target, "player", None)
