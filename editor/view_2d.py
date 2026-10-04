@@ -265,7 +265,7 @@ class View2D(QWidget):
                 e1[0]*e2[1] - e1[1]*e2[0]]
 
     def _selected_brush(self):
-        obj = self.editor.state.selected_object
+        obj = self.editor.primary_selection()
         return obj if isinstance(obj, dict) else None
 
     # ======================================================================
@@ -442,7 +442,7 @@ class View2D(QWidget):
             # branch that checkpoint cleared back).
             self.editor.state.discard_last_checkpoint()
         self.main_window.property_editor.set_object(
-            self.editor.state.selected_object)
+            self.editor.primary_selection())
         self.main_window.refresh_views()
         return changed
 
@@ -526,7 +526,7 @@ class View2D(QWidget):
     def _selected_list(self):
         """Current multi-selection as a plain list (never None)."""
         objs = list(self.editor.state.selected_objects)
-        sel = self.editor.state.selected_object
+        sel = self.editor.primary_selection()
         if sel is not None and sel not in objs:
             objs.append(sel)
         return objs
@@ -1091,7 +1091,7 @@ class View2D(QWidget):
 
         # --- Arrow Key Nudging ---
         # Only process arrow keys if we have a selected object and we're not in play mode
-        selected = self.editor.state.selected_object
+        selected = self.editor.primary_selection()
         if selected and not self.editor.view_3d.play_mode:
             arrow_key = None
             if event.key() == Qt.Key_Up:
@@ -1759,7 +1759,7 @@ class View2D(QWidget):
                 continue
                 
             # Check if brush is in selected_objects list (for multi-select support)
-            is_selected = brush in self.editor.state.selected_objects or brush is self.editor.state.selected_object
+            is_selected = brush in self.editor.state.selected_objects or brush is self.editor.primary_selection()
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
@@ -2392,7 +2392,7 @@ class View2D(QWidget):
             # 4. Overlays (selection highlight + color tag)
             if draw_rect:
                 self.draw_thing_color_tag(painter, thing, draw_rect)
-                is_selected = thing in self.editor.state.selected_objects or thing == self.editor.state.selected_object
+                is_selected = thing in self.editor.state.selected_objects or thing == self.editor.primary_selection()
                 if is_selected:
                     painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                     painter.setBrush(Qt.NoBrush)
@@ -3253,7 +3253,7 @@ class View2D(QWidget):
             if handle_ix != -1:
                 self.is_resizing_brush = True
                 self.resize_handle_ix = handle_ix
-                brush = self.editor.state.selected_object
+                brush = self.editor.primary_selection()
                 ax1, ax2 = self.get_axes()
                 ax_map = {'x': 0, 'y': 1, 'z': 2}
                 pos = brush['pos']
@@ -3295,8 +3295,8 @@ class View2D(QWidget):
                 selected_objects = self.editor.state.selected_objects
                 if not selected_objects:
                     selected_objects = []
-                    if self.editor.state.selected_object:
-                        selected_objects = [self.editor.state.selected_object]
+                    if self.editor.primary_selection():
+                        selected_objects = [self.editor.primary_selection()]
                 
                 # Toggle selection: add if not present, remove if present
                 if clicked_object in selected_objects:
@@ -3317,7 +3317,7 @@ class View2D(QWidget):
                     # Preserve the group; a click-without-drag toggles handle mode.
                     self._maybe_toggle_manip = True
                 else:
-                    self.editor.set_selected_object(clicked_object)
+                    self.editor.set_selected_objects([clicked_object])
                     self.manip_mode = 'resize'  # fresh selection starts in scale mode
                     # Focus Properties tab when selecting an object
                     if clicked_object and hasattr(self.main_window, 'properties_tab_widget'):
@@ -3478,7 +3478,7 @@ class View2D(QWidget):
             # The "grab" object stays under the cursor; every other member of
             # the drag group follows by the same (snapped) delta so the whole
             # box-selection moves as one and keeps its relative layout.
-            primary = self.drag_primary or self.editor.state.selected_object
+            primary = self.drag_primary or self.editor.primary_selection()
             group = self.drag_group or ([primary] if primary else [])
             if primary:
                 ax1, ax2 = self.get_axes()
@@ -3565,7 +3565,7 @@ class View2D(QWidget):
                 min_world = 3.0 / max(self.zoom_factor, 1e-6)
                 self.marquee_hits = []
                 if rect.width() < min_world and rect.height() < min_world:
-                    self.editor.set_selected_object(None)   # click empty = deselect
+                    self.editor.set_selected_objects([])   # click empty = deselect
                     self.update()
                     return
                 enclose = bool(event.modifiers() & Qt.AltModifier)
@@ -3577,7 +3577,7 @@ class View2D(QWidget):
                         self._focus_properties_tab()
                     self.main_window.show_toast(f"Selected {len(hits)} object(s)")
                 else:
-                    self.editor.set_selected_object(None)
+                    self.editor.set_selected_objects([])
                 self.update()
                 return
 
@@ -3623,9 +3623,9 @@ class View2D(QWidget):
                     self.main_window.show_toast(f"Connected to '{target_name}'")
                     
                     # Refresh property editor if needed
-                    if self.editor.state.selected_object == self.connection_source:
+                    if self.editor.primary_selection() == self.connection_source:
                         self.main_window.property_editor.set_object(self.connection_source)
-                    elif self.editor.state.selected_object == target_object:
+                    elif self.editor.primary_selection() == target_object:
                         self.main_window.property_editor.set_object(target_object)
                 
                 self.connection_source = None
@@ -3651,7 +3651,7 @@ class View2D(QWidget):
 
                     new_brush = {'pos': pos, 'size': size, 'textures': {f: 'default.png' for f in ['north','south','east','west','top','down']}}
                     self.editor.state.brushes.append(new_brush)
-                    self.editor.set_selected_object(new_brush)
+                    self.editor.set_selected_objects([new_brush])
             
             if action_taken:
                 self.main_window.save_state()
@@ -3874,7 +3874,7 @@ class View2D(QWidget):
         if new_thing:
             self.main_window.save_state()
             self.editor.state.things.append(new_thing)
-            self.editor.set_selected_object(new_thing)
+            self.editor.set_selected_objects([new_thing])
             # Focus the Properties tab when creating a new thing
             if hasattr(self.main_window, 'properties_tab_widget'):
                 self._focus_properties_tab()
@@ -3909,7 +3909,7 @@ class View2D(QWidget):
 
             self.main_window.save_state()
             self.editor.state.things.append(thing)
-            self.editor.set_selected_object(thing)
+            self.editor.set_selected_objects([thing])
             if hasattr(self.main_window, 'properties_tab_widget'):
                 self._focus_properties_tab()
             self.update()
@@ -4139,7 +4139,7 @@ class View2D(QWidget):
             if hasattr(self.main_window, 'show_toast'):
                 self.main_window.show_toast(f"Selected {len(inside)} object(s) inside box")
         else:
-            self.editor.set_selected_object(None)
+            self.editor.set_selected_objects([])
             if hasattr(self.main_window, 'show_toast'):
                 self.main_window.show_toast("No objects inside box", is_error=True)
 
@@ -4151,7 +4151,7 @@ class View2D(QWidget):
         delta = event.angleDelta().y()
         
         # Check if a Light thing is selected
-        selected = self.editor.state.selected_object
+        selected = self.editor.primary_selection()
         if isinstance(selected, Light):
             # SHIFT + wheel: adjust radius
             if modifiers & Qt.ShiftModifier:
@@ -4299,12 +4299,12 @@ class View2D(QWidget):
         # visits the same brushes in the same sequence — including ones buried
         # completely behind others.
         if cycle:
-            return ce.cycle_pick(candidates, self.editor.state.selected_object)
+            return ce.cycle_pick(candidates, self.editor.primary_selection())
 
         return candidates[0]
 
     def get_handle_at(self, screen_pos):
-        brush = self.editor.state.selected_object
+        brush = self.editor.primary_selection()
         if not isinstance(brush, dict) or brush.get('lock', False): 
             return -1
         
@@ -4335,7 +4335,7 @@ class View2D(QWidget):
         return -1
         
     def resize_brush(self, world_pos):
-        brush = self.editor.state.selected_object
+        brush = self.editor.primary_selection()
         if not brush: return
         snapped_pos = self.snap_to_grid(world_pos)
         ax1, ax2 = self.get_axes()
@@ -4427,7 +4427,7 @@ def _singleton_blocked(main_window, editor_state, ttype) -> bool:
     existing = singleton_instance(editor_state.things, ttype)
     if existing is None:
         return False
-    main_window.set_selected_object(existing)
+    main_window.set_selected_objects([existing])
     main_window.update_views()
     main_window.show_toast(
         "Only one of this entity is allowed per map - selected the existing one.",
