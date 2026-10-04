@@ -161,7 +161,7 @@ def _render(renderer, context, brushes, things, numeric, live_things=None,
         config["thing_hidden"] = ehidden
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(projection, view, eye, brushes, things, None, config,
+    renderer.render_scene(projection, view, eye, None, config,
                           brush_slots=brush_slots)
     gl.glFinish()
     return context.read_pixels().astype(np.int16)
@@ -429,7 +429,7 @@ def test_a_hidden_brush_is_absent_from_both(renderer, context):
                                all_brush_slots=kept)
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(projection, view, eye, brushes, things, None, config,
+    renderer.render_scene(projection, view, eye, None, config,
                           brush_slots=kept)
     gl.glFinish()
     hidden_img = context.read_pixels().astype(np.int16)
