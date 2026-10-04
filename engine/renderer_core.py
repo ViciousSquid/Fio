@@ -415,11 +415,8 @@ class BaseRenderer:
         # still overrides the guess either way.
         is_low_power, _ = shaders.detect_low_power_arm()
         if config is not None:
-            # `arm_mode` is the setting's old name; an existing settings.ini
-            # keeps whatever its owner chose.
-            legacy = config.getboolean('Renderer', 'arm_mode', fallback=is_low_power)
-            self.lowpower_mode = config.getboolean('Renderer', 'lowpower_mode',
-                                                   fallback=legacy)
+            self.lowpower_mode = config.getboolean(
+                'Renderer', 'lowpower_mode', fallback=is_low_power)
             self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_low_power)
             try:
                 shadow_size = config.getint('Renderer', 'shadow_map_size', fallback=self.SHADOW_MAP_SIZE)
