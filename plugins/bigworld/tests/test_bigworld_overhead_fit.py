@@ -42,7 +42,7 @@ class OverheadLogic:
 
     def __init__(self, things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
         self.brushes = []
-        self.things = things
+        self.editor_state = type('State', (), {'things': things, 'brushes': self.brushes})()
         self.player = FakePlayer(*at)
         self.view_distance = ViewDistance()
         self.footprint = footprint
@@ -76,7 +76,7 @@ def test_near_is_the_screen_rectangle_and_the_rest_resident_is_active():
     rx, rz = session.tiers.near_rect
     assert rx > rz
     near = [t for t in logic.editor_state.things if tier_of(t) == TIER_NEAR]
-    active = [t for t in logic.things if tier_of(t) == TIER_ACTIVE]
+    active = [t for t in logic.editor_state.things if tier_of(t) == TIER_ACTIVE]
     assert near and active
     cell = session.manager.cell_size
     # NEAR: in a cell meeting the rectangle. ACTIVE: outside it on some axis.
