@@ -158,9 +158,8 @@ class LogicThread(threading.Thread):
     # These are deliberately the shared attributes a runtime may assume exist
     # after LogicThread.__init__ has completed. Session-specific contents are
     # reset by LogicSession, but the host containers themselves are created here.
-    # parenting_runtime and player_runtime stay lazy for lightweight test
-    # doubles; mover_runtime exists because the mover state property initializes it.
-    # Their host contracts are still validated below.
+    # player_runtime stays lazy for lightweight test doubles; the other extracted
+    # runtimes are constructed during LogicThread initialization.
     _RUNTIME_HOSTS = (
         "camera",
         "mover_runtime",
@@ -170,6 +169,7 @@ class LogicThread(threading.Thread):
         "editor_runtime",
         "trigger_runtime",
         "portal_runtime",
+        "parenting_runtime",
         "combat_runtime",
         "timing_runtime",
         "collision_runtime",
@@ -528,6 +528,10 @@ class LogicThread(threading.Thread):
         self.trigger_runtime = LogicTriggers(self)
         # LogicPortals owns portal topology, transit and fade runtime.
         self.portal_runtime = LogicPortals(self, portal_type=Portal)
+        # LogicParenting owns mover-parented light and portal transforms.
+        self.parenting_runtime = LogicParenting(
+            self, light_type=Light, portal_type=Portal
+        )
         # LogicCombat owns weapons, projectiles, bullet marks and noise.
         self.combat_runtime = LogicCombat(self)
         # LogicTiming owns timer and light-fade advancement.
