@@ -407,9 +407,9 @@ def test_an_ordinary_map_starts_no_bigworld_session(session):
 
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert getattr(thread, "_bigworld", None) is None, (
+        assert thread._bigworld is None, (
             "an ordinary map started a Big World session: %r"
-            % getattr(thread, "_bigworld", None))
+            % thread._bigworld)
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -450,7 +450,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     finally:
         thread.session_runtime.apply_play_mode(False)
 
-    assert getattr(thread, "_bigworld", None) is None, \
+    assert thread._bigworld is None, \
         "the streaming session outlived play mode"
 
     # No object may still carry the session's activation marker.
