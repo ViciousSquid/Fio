@@ -210,7 +210,7 @@ class LogicWorld:
         logic.collision_runtime.refresh_collision_brushes_cache()
         grid = logic.session_runtime.spatial_grid
         if grid is not None:
-            grid.populate(logic._collision_brushes_cache)
+            grid.populate(logic.collision_runtime._collision_brushes_cache)
 
     def watch_world_rows(self):
         """Re-index the play session briefly after an authored world edit."""
