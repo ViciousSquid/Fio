@@ -46,11 +46,11 @@ class LogicPortals:
 
         name_to_slot = {
             t.properties.get("name"): slot
-            for slot, t in enumerate(logic.things)
+            for slot, t in enumerate(logic.editor_state.things)
             if t.properties.get("name")
         }
 
-        for slot, thing in enumerate(logic.things):
+        for slot, thing in enumerate(logic.editor_state.things):
             if not (Portal and isinstance(thing, Portal)):
                 continue
 
@@ -62,10 +62,10 @@ class LogicPortals:
             if (
                 target_slot >= 0
                 and Portal
-                and isinstance(logic.things[target_slot], Portal)
+                and isinstance(logic.editor_state.things[target_slot], Portal)
             ):
                 portal_target_slots.append(target_slot)
-                logic._portal_target_things.append(logic.things[target_slot])
+                logic._portal_target_things.append(logic.editor_state.things[target_slot])
             else:
                 portal_target_slots.append(-1)
                 logic._portal_target_things.append(None)
@@ -84,7 +84,7 @@ class LogicPortals:
         logic._portal_prev_player_pos = None
 
         if Portal is not None:
-            for thing in logic.things:
+            for thing in logic.editor_state.things:
                 if isinstance(thing, Portal):
                     active = thing.is_active()
                     thing._fade_alpha = 1.0 if active else 0.0
