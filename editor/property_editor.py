@@ -1122,8 +1122,7 @@ class PropertyEditor(QWidget):
         inputs.set_io_enabled(enabled)
 
     def _on_io_connections_changed(self):
-        if hasattr(self.editor.state, 'save_state'):
-            self.editor.state.save_state()
+        self.editor.state.save_state()
         self.editor.mark_as_modified()
         if not self._populating:
             self.editor.update_all_ui()
@@ -4673,8 +4672,7 @@ class PropertyEditor(QWidget):
         # Shader selection changes dense render classification/material state
         # (fog, water, glass, glow, trigger exclusion). Journal this exact
         # brush so the write-side RenderTable cold row is refreshed immediately.
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
-            self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object])
 
         # Defer refresh to avoid interrupting shader combo's own update cycle
         QTimer.singleShot(0, self._deferred_shader_refresh)
