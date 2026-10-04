@@ -554,7 +554,7 @@ Show a contextual HUD line this tick, respecting priority. Returns `False`
 (does nothing) if the core already claimed the line (`interaction_consumed`)
 and *priority* isn't above it, or if another plugin already set a
 higher-priority prompt this tick. This replaces the manual "don't clobber the
-HUD" dance and poking `logic.current_hud_message` directly.
+HUD" dance and poking the engine-owned HUD storage directly.
 
 ```python
 def toast(self, text: str, seconds: float = 2.0) -> None
