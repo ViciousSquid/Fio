@@ -1092,7 +1092,7 @@ class View2D(QWidget):
         # --- Arrow Key Nudging ---
         # Only process arrow keys if we have a selected object and we're not in play mode
         selected = self.editor.state.selected_object
-        if selected and not getattr(self.editor.view_3d, 'play_mode', False):
+        if selected and not self.editor.view_3d.play_mode:
             arrow_key = None
             if event.key() == Qt.Key_Up:
                 arrow_key = 'up'
