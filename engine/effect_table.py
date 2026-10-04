@@ -182,11 +182,10 @@ class EffectStore:
                 self.spawn_time[i] = old_spawn[old]
                 self.active[i] = old_active[old]
             else:
+                self.family_id[i] = authored_family
                 self.phase[i] = random.random()
                 self.spawn_time[i] = 0.0
                 self.active[i] = self.family_id[i] != FAMILY_EXPLOSION
-            if reset_runtime or old is None or old >= old_count:
-                self.family_id[i] = authored_family
             self._count = i + 1
 
     def begin_session(self, things):
