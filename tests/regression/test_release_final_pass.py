@@ -360,7 +360,8 @@ def test_validate_connections_names_the_connection_it_reports(main_window, monke
     monkeypatch.setattr(mw.QMessageBox, "warning",
                         staticmethod(lambda _p, _t, text: shown.append(text)))
 
-    mw.MainWindow.validate_io_connections(SimpleNamespace(state=state))
+    main_window.state = state
+    main_window.validate_io_connections()
 
     lines = [l.strip() for l in shown[0].splitlines()[2:] if l.strip()]
     assert lines[0].startswith("Start.OnPlayerSpawn targets 'ghost'"), lines
