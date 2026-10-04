@@ -1688,8 +1688,7 @@ class QtGameView(QOpenGLWidget):
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
-        _pmgr = getattr(self.logic_thread, 'plugins', None) \
-            if self.logic_thread is not None else None
+        _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
