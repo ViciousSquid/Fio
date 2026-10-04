@@ -204,9 +204,11 @@ def _capture_pending_events(logic) -> list:
     ``logic.timing_runtime.timer_states``) and this is only the queue.
     """
     manager = logic.io_manager
+    if manager is None:
+        return []
     now = float(manager.current_time)
     events = []
-    for event in getattr(manager, "pending_events", []) or []:
+    for event in manager.pending_events:
         try:
             events.append({
                 "remaining": max(0.0, float(event.fire_time) - now),
