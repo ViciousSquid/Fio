@@ -29,6 +29,7 @@ def panel(qt_app):
     yield widget
     widget.deleteLater()
     editor.unsaved_changes = False
+    editor.unsaved_changes = False
     editor.close()
     editor.deleteLater()
     qt_app.processEvents()
