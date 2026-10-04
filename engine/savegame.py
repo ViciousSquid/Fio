@@ -384,10 +384,10 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "god_mode": bool(getattr(logic, "god_mode", False)),
         "buddha_mode": bool(getattr(logic, "buddha_mode", False)),
         "notarget": bool(getattr(logic, "notarget", False)),
-        "camera_mode": getattr(logic, "camera_mode", "First Person"),
-        "overhead_height": float(getattr(logic, "overhead_height", 800.0)),
-        "overhead_tilt": float(getattr(logic, "overhead_tilt", 0.0)),
-        "overhead_orientation": getattr(logic, "overhead_orientation", "north"),
+        "camera_mode": getattr(logic.camera, "camera_mode", "First Person"),
+        "overhead_height": float(getattr(logic.camera, "overhead_height", 800.0)),
+        "overhead_tilt": float(getattr(logic.camera, "overhead_tilt", 0.0)),
+        "overhead_orientation": getattr(logic.camera, "overhead_orientation", "north"),
         "active_weapon": getattr(logic, "active_weapon", None),
         "gun2_obtained": bool(getattr(logic, "gun2_obtained", False)),
         "player_ammo": max(0, int(getattr(logic, "player_ammo", 0))),
@@ -399,8 +399,8 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "player2_max_health": getattr(logic, "player2_max_health", 100),
         "player2_dead": bool(getattr(logic, "player2_dead", False)),
         "collected_keys": sorted(str(k) for k in getattr(logic, "collected_keys", set())),
-        "door_states": {str(i): _public_state(s) for i, s in getattr(logic, "door_states", {}).items()},
-        "mover_states": {str(i): _public_state(s) for i, s in getattr(logic, "mover_states", {}).items()},
+        "door_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.door_states.items()},
+        "mover_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.mover_states.items()},
         "monster_states": monster_states,
         "timer_states": {str(k): dict(s)
                          for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
@@ -746,13 +746,19 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Player stats / cheat flags
     for attr in (
         "god_mode", "buddha_mode", "notarget",
-        "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
         "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
         if attr in runtime:
             setattr(logic, attr, runtime[attr])
+
+    # Camera state belongs to LogicCamera.
+    if "camera_mode" in runtime:
+        logic.camera.set_camera_mode(runtime["camera_mode"])
+    for attr in ("overhead_height", "overhead_tilt", "overhead_orientation"):
+        if attr in runtime:
+            setattr(logic.camera, attr, runtime[attr])
 
     # Collected keys — rebuild the set from the saved list.
     try:
@@ -778,11 +784,11 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # _direction_np NumPy cache) that an older save may still carry, so the
     # engine rebuilds them with the right type on the next tick.
     try:
-        logic.door_states = {int(i): _public_state(s) for i, s in runtime.get("door_states", {}).items()}
+        logic.mover_runtime.door_states = {int(i): _public_state(s) for i, s in runtime.get("door_states", {}).items()}
     except Exception:
         pass
     try:
-        logic.mover_states = {int(i): _public_state(s) for i, s in runtime.get("mover_states", {}).items()}
+        logic.mover_runtime.mover_states = {int(i): _public_state(s) for i, s in runtime.get("mover_states", {}).items()}
     except Exception:
         pass
 

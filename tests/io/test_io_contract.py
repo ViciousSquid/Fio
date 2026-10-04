@@ -37,7 +37,11 @@ from editor.io_system import (ABSTRACT_IO, OutputConnection, IO_REGISTRY, IOMana
                               audit_io_coverage, get_input_names,
                               get_output_names)
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
-from editor.things import ENTITY_TYPES, Thing                    # noqa: E402
+from editor.things import ENTITY_TYPES, PathNode, Thing           # noqa: E402
+from engine.cutscene_runtime import CutsceneRuntime              # noqa: E402
+from engine.logic_movers import LogicMovers                       # noqa: E402
+from engine.logic_portals import LogicPortals                     # noqa: E402
+from engine.logic_world import LogicWorld                         # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -70,12 +74,16 @@ class HostStub:
         self.things = []
         self.gate_inputs = {}
         self.timer_states = {}
-        self.door_states = {}
-        self.mover_states = {}
         self.mover_path_states = {}
         self.light_fade_states = {}
-        self.cinematic_state = {}
         self.active_speakers = set()
+        self.movers = []
+        self.doors = []
+        self._name_cache = {}
+        self.mover_runtime = LogicMovers(self)
+        self.world_runtime = LogicWorld(self, path_node_type=PathNode)
+        self.cutscene_runtime = CutsceneRuntime(self)
+        self.portal_runtime = LogicPortals(self)
         self.collected_keys = set()
         self.player = None
         self.terrain = None
@@ -87,9 +95,6 @@ class HostStub:
     #: resolves; the real host holds a separate object there, so the name is a
     #: promise about ``LogicThread`` but the target is not.
     LOCAL_ONLY = frozenset()
-
-    def _find_path_node_by_name(self, name):
-        return None
 
 
 BRUSH_TYPES = {"trigger": "is_trigger", "door": "is_door", "mover": "is_mover",
