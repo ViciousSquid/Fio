@@ -402,7 +402,7 @@ class IOManager:
             return
         tick_thread = self._tick_thread
         if (tick_thread is not None and tick_thread != threading.get_ident()
-                and getattr(self._logic_thread, 'play_mode', False)):
+                and self._logic_thread.session_runtime.play_mode):
             self._foreign_outputs.append(
                 (source_entity, output_name, value, activator_entity))
             return
