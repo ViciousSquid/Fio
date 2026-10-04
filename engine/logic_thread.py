@@ -500,7 +500,7 @@ class LogicThread(threading.Thread):
                     # Qt/editor teardown must not run on this worker thread.
                     # Stop gameplay immediately, then let the GUI thread run
                     # the normal QtGameView play-mode teardown path.
-                                        callback = getattr(self, "_gui_fault_teardown", None)
+                    callback = getattr(self, "_gui_fault_teardown", None)
                     if callback is not None and not self._gui_fault_teardown_requested:
                         self._gui_fault_teardown_requested = True
                         try:

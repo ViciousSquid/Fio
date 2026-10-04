@@ -259,7 +259,7 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing
     window = _window_on(playing_logic, starts_play=False)
 
     window.load_level_file(str(path))
-    assert not playing_logic.play_mode
+    assert not playing_logic.session_runtime.play_mode
     playing_logic.session_runtime.apply_play_mode(True)
 
     assert _loadout(playing_logic) == (None, False, 0)
