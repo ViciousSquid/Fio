@@ -482,7 +482,7 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
         expected_velocity = map_direction(
             portal_a.get_basis(), portal_b.get_basis(), tuple(player.velocity))
 
-        thread._execute_portal_transit(portal_a, portal_b)
+        thread.portal_runtime._execute_player_transit(portal_a, portal_b)
 
         actual = tuple(thread.player.pos)
         displacement = ((actual[0] - expected[0]) * portal_b.get_normal()[0]
