@@ -218,8 +218,8 @@ class _CeilingCamera(_Camera):
 def test_the_camera_floats_no_higher_than_its_ceiling():
     cam = _CeilingCamera(height=5000.0, limit=2048.0)
     assert cam.effective_overhead_height() == 2048.0
-    pos, _d, _u = cam._overhead_camera(cam._host.player.pos, 0.0)
-    assert pos.y - cam._host.player.pos.y == pytest.approx(2048.0)
+    pos, _d, _u = cam._overhead_camera(cam._host.player_runtime.player.pos, 0.0)
+    assert pos.y - cam._host.player_runtime.player.pos.y == pytest.approx(2048.0)
     # The footprint is the one the held camera shows, not the asked-for one.
     assert cam.overhead_ground_footprint()[1] == pytest.approx(2048.0, rel=1e-4)
     # The authored height is left alone, and a lower one is not raised.
