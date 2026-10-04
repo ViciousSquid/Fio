@@ -17,7 +17,7 @@ from engine.logic_combat import ProjectileStore
 from tests.helpers.worlds import make_thing
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
-from editor.things import Monster, LogicRelay  # noqa: E402
+from editor.things import Monster, LogicRelay, Thing  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -66,7 +66,7 @@ def test_published_projectile_snapshot_does_not_alias_simulation_store():
     snapshot = logic.combat_runtime._publish_projectile_render_snapshot()
     assert snapshot.shape == (1, 3)
     assert snapshot.dtype == np.float32
-    assert not np.shares_memory(snapshot, host.combat_runtime._monster_projectiles.pos)
+    assert not np.shares_memory(snapshot, logic.combat_runtime._monster_projectiles.pos)
 
     expected = snapshot.copy()
     logic.combat_runtime._monster_projectiles.pos[0] = (100.0, 200.0, 300.0)
@@ -90,12 +90,20 @@ def test_small_projectile_set_uses_scalar_path_but_matches_dense():
     target = make_thing(Monster, "target", (10, 0, 0), team="blue")
     things = [owner, target]
     projectile = ((0, 64, 0), owner)
+    scalar_things = [Thing.from_dict(thing.to_dict()) for thing in things]
+    dense_things = [Thing.from_dict(thing.to_dict()) for thing in things]
+    scalar_owner = scalar_things[0]
+    dense_owner = dense_things[0]
 
-    dense = _logic(things, [projectile])
-    scalar = _logic(things, [projectile])
-    scalar.combat_runtime.PROJECTILE_DENSE_THRESHOLD = 0
+    dense = _logic(dense_things, [(projectile[0], dense_owner)])
+    scalar = _logic(scalar_things, [(projectile[0], scalar_owner)])
+    dense.combat_runtime.PROJECTILE_DENSE_THRESHOLD = 0
+    scalar.combat_runtime.PROJECTILE_DENSE_THRESHOLD = 100
 
-    dense_before = {m.properties["name"]: m.properties.get("health", 100) for m in things}
+    dense_before = {m.properties["name"]: m.properties.get("health", 100)
+                    for m in dense.world_runtime.monster_things}
+    scalar_before = {m.properties["name"]: m.properties.get("health", 100)
+                     for m in scalar.world_runtime.monster_things}
     dense.combat_runtime._update_monster_projectiles(0.0)
     scalar.combat_runtime._update_monster_projectiles(0.0)
 
@@ -103,6 +111,7 @@ def test_small_projectile_set_uses_scalar_path_but_matches_dense():
     scalar_after = {m.properties["name"]: m.properties.get("health", 100) for m in scalar.world_runtime.monster_things}
     assert dense_after == scalar_after
     assert dense_after["target"] == dense_before["target"] - 5
+    assert scalar_after["target"] == scalar_before["target"] - 5
     assert len(dense.combat_runtime._monster_projectiles) == len(scalar.combat_runtime._monster_projectiles) == 0
 
 
