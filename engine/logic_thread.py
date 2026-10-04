@@ -178,7 +178,7 @@ class LogicThread(threading.Thread):
             "game_state",
             "editor_state",
             "player",
-            "player_health",
+            "player_runtime",
         ),
         "session": (
             "editor_state",
@@ -186,6 +186,7 @@ class LogicThread(threading.Thread):
             "io_manager",
             "player",
             "player2",
+            "player_runtime",
         ),
         "interaction": (
             "player",
@@ -234,9 +235,6 @@ class LogicThread(threading.Thread):
         self.running = False
         self.player: Optional[Player] = None
         self.player2: Optional[Player] = None
-        self.player2_health = 100
-        self.player2_max_health = 100
-        self.player2_dead = False
         self.play_mode = False
         self.terrain = None
         
@@ -262,9 +260,6 @@ class LogicThread(threading.Thread):
         self.prop_runtime = PropSession(self)
         
         # Player stats
-        self.player_health = 100
-        self.player_max_health = 100
-        self.player_dead = False
 
         # I/O System
         self.io_manager = None
@@ -601,7 +596,7 @@ class LogicThread(threading.Thread):
         self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         self.game_state.consume_shot()
-        if self.cutscene_runtime.state or self.player_dead or self.interaction_runtime.level_complete_ui:
+        if self.cutscene_runtime.state or self.player_runtime.player_dead or self.interaction_runtime.level_complete_ui:
             return
         if self.plugins is not None and self.plugins.wants_tick():
             self.plugins.tick(
@@ -651,7 +646,7 @@ class LogicThread(threading.Thread):
             return
 
         # ---- Player dead: freeze all gameplay input ----
-        if self.player_dead:
+        if self.player_runtime.player_dead:
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()

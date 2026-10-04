@@ -381,13 +381,11 @@ class PropSession:
             value_num = 25
 
         if collect_type == "health":
-            try:
-                self.logic.player_health = min(
-                    self.logic.player_max_health,
-                    self.logic.player_health + value_num,
-                )
-            except (AttributeError, TypeError):
-                pass
+            player_runtime = self.logic.player_runtime
+            player_runtime.player_health = min(
+                player_runtime.player_max_health,
+                player_runtime.player_health + value_num,
+            )
         elif collect_type == "key":
             key_name = p.get("collect_key_name", "")
             if key_name:

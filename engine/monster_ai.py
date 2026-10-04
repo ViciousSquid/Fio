@@ -154,7 +154,7 @@ class MonsterAI:
         if not self.lt.player or not MonsterThing:
             return
 
-        if self.lt.player_dead:
+        if self.lt.player_runtime.player_dead:
             return
 
         player_pos = self.lt.player.pos
@@ -196,8 +196,8 @@ class MonsterAI:
                     self._update_monster(thing, float(row_delta[i]), player_pos)
 
         # ---- Player death check (after all monsters processed) ----
-        if self.lt.player_health <= 0 and not self.lt.player_dead:
-            self.lt.player_dead = True
+        if self.lt.player_runtime.player_health <= 0 and not self.lt.player_runtime.player_dead:
+            self.lt.player_runtime.player_dead = True
             if self.lt.io_manager:
                 try:
                     from editor.things import PlayerStart

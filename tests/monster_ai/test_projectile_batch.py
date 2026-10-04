@@ -53,7 +53,7 @@ class _Host:
             buddha_mode=False,
             notarget=False,
         )
-        self.player_dead = False
+        self.player_runtime.player_dead = False
         self.hits = []
         host = self
         self.monster_ai = types.SimpleNamespace(

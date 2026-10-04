@@ -32,6 +32,12 @@ class LogicPlayer:
         self.god_mode = False
         self.buddha_mode = False
         self.notarget = False
+        self.player_health = 100
+        self.player_max_health = 100
+        self.player_dead = False
+        self.player2_health = 100
+        self.player2_max_health = 100
+        self.player2_dead = False
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""
@@ -73,7 +79,7 @@ class LogicPlayer:
     def update_player2(self, delta):
         """Apply split-screen Player 2 input, look and physics for one tick."""
         logic = self.logic
-        if not logic.player2 or logic.player2_dead:
+        if not logic.player2 or self.player2_dead:
             return
 
         p2 = logic.game_state.get_p2_input()

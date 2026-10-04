@@ -1595,7 +1595,7 @@ class QtGameView(QOpenGLWidget):
             if getattr(render_state, 'muzzle_flash_active', False):
                 self._muzzle_flash_counter = self._muzzle_flash_duration_frames
             self._cached_muzzle_flash = self._muzzle_flash_counter > 0
-            self._cached_player_dead = getattr(render_state, 'player_dead', False)
+            self._cached_player_dead = render_state.player_dead
             self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
             self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
             self._cached_projectiles = np.array(getattr(render_state, 'projectiles', ()), dtype=np.float32).reshape(-1, 3)
@@ -1662,13 +1662,13 @@ class QtGameView(QOpenGLWidget):
         _glass_positions = []
         _glass_sprites = []
         if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
-            if not getattr(render_state, 'player_dead', False):
+            if not render_state.player_dead:
                 _p = render_state.player_pos
                 _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
                 _glass_sprites.append(glasses_sprite_key(
                     getattr(self, 'player1_glasses', DEFAULT_GLASSES)))
             if (getattr(render_state, 'splitscreen_active', False)
-                    and not getattr(render_state, 'player2_dead', False)):
+                    and not render_state.player2_dead):
                 _p2 = render_state.player2_pos
                 _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
                 _glass_sprites.append(DEFAULT_SPRITE_KEY)
@@ -1907,7 +1907,7 @@ class QtGameView(QOpenGLWidget):
                 self._draw_hud_splitscreen(painter, render_state)
             else:
                 self._draw_hud(painter, render_state)
-        if self.play_mode and render_state and getattr(render_state, 'player_dead', False):
+        if self.play_mode and render_state and render_state.player_dead:
             self._draw_death_screen(painter)
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
@@ -2291,9 +2291,9 @@ class QtGameView(QOpenGLWidget):
         painter.setFont(self._hud_font)
         painter.drawText(8, 22, "P1")
         painter.restore()
-        p2_health = getattr(render_state, 'player2_health', 100)
-        p2_max_health = getattr(render_state, 'player2_max_health', 100)
-        p2_dead = getattr(render_state, 'player2_dead', False)
+        p2_health = render_state.player2_health
+        p2_max_health = render_state.player2_max_health
+        p2_dead = render_state.player2_dead
         health_hud_alpha = 1.0 if self._hud_style == 3 else max(
             0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
         )

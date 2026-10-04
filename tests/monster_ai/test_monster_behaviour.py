@@ -625,9 +625,9 @@ def test_the_player_dying_is_reported_once(monster_factory, ai_world, flat_groun
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) * 3):
         ai.update(TICK)
 
-    assert logic.player_dead is True, (
+    assert logic.player_runtime.player_dead is True, (
         "player health is %d after taking %s damage but player_dead is False"
-        % (logic.player_health, logic.damage_applied))
+        % (logic.player_runtime.player_health, logic.damage_applied))
     assert len(logic.damage_applied) == 1, (
         "the AI kept attacking a dead player: %s" % (logic.damage_applied,))
 

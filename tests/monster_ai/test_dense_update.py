@@ -84,7 +84,7 @@ def _world(seed, dense, teams=False, count=None):
                                  monster_type="human", awake=False, team="red"))
     logic = FakeLogicThread(brushes=brushes, things=things,
                             player=FakePlayer((0.0, 0.0, 0.0)))
-    logic.player_health = 10 ** 9
+    logic.player_runtime.player_health = 10 ** 9
     logic.world_runtime.monster_things = [t for t in logic.editor_state.things if isinstance(t, Monster)]
     ai = MonsterAI(logic)
     ai.DENSE_UPDATE = dense

@@ -18,13 +18,21 @@ class Logic:
     def __init__(self, things):
         self.editor_state = SimpleNamespace(things=list(things), brushes=[])
         self.io_manager = None
-        self.player_runtime = type("PlayerRuntime", (), {"collected_keys": set()})()
+        self.player_runtime = type("PlayerRuntime", (), {
+            "collected_keys": set(),
+            "player_health": 100,
+            "player_max_health": 100,
+            "player_dead": False,
+            "player2_health": 100,
+            "player2_max_health": 100,
+            "player2_dead": False,
+        })()
         self.interaction_runtime = SimpleNamespace(
             current_hud_message="",
             current_hud_key_name=None,
         )
-        self.player_health = 100
-        self.player_max_health = 100
+        self.player_runtime.player_health = 100
+        self.player_runtime.player_max_health = 100
         self.session_runtime = SimpleNamespace(physics_world=None, spatial_grid=None)
         self._plugin_emit = lambda *args, **kwargs: None
 

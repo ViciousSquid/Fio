@@ -240,14 +240,14 @@ def test_only_the_weapons_come_along(tmp_path, playing_logic):
     path.write_text(json.dumps(LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun1"
     playing_logic.player_runtime.collected_keys.add("blue_key")
-    playing_logic.player_health = 40
+    playing_logic.player_runtime.player_health = 40
     window = _window_on(playing_logic)
 
     window.load_level_file(str(path))
 
     assert playing_logic.combat_runtime.active_weapon == "gun1"
     assert playing_logic.player_runtime.collected_keys == set()
-    assert playing_logic.player_health == 100
+    assert playing_logic.player_runtime.player_health == 100
 
 
 def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing_logic):

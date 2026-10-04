@@ -92,12 +92,6 @@ class FakeLogic:
         self.camera.overhead_orientation = "north"
         self.active_weapon = None
         self.current_hud_message = ""
-        self.player_health = 100
-        self.player_max_health = 100
-        self.player_dead = False
-        self.player2_health = 100
-        self.player2_max_health = 100
-        self.player2_dead = False
         self.collected_keys = set()
         self.movers = []
         self.doors = []

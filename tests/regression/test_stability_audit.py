@@ -345,7 +345,7 @@ def test_hurt_trigger_uses_the_editors_damage_amount():
     brush["trigger_action"] = "hurt"
     try:
         logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
-        assert logic.player_health == 100 - 37
+        assert logic.player_runtime.player_health == 100 - 37
     finally:
         logic.session_runtime.apply_play_mode(False)
 

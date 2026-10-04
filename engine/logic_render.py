@@ -145,7 +145,7 @@ class LogicRender:
             self._hud_health_fade_started = None
             self._hud_health_fade_from = self._hud_health_alpha
             self._hud_health_fade_phase = "idle"
-            self._hud_health_last_value = logic.player_health
+            self._hud_health_last_value = logic.player_runtime.player_health
 
     def update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
@@ -156,7 +156,7 @@ class LogicRender:
             self._hud_health_fade_started = None
             self._hud_health_fade_from = 1.0
             self._hud_health_fade_phase = "idle"
-            self._hud_health_last_value = logic.player_health
+            self._hud_health_last_value = logic.player_runtime.player_health
             return self._hud_health_alpha
 
         def _sample(at):
@@ -215,7 +215,7 @@ class LogicRender:
             self._hud_health_alpha = 1.0 - (0.5 * t)
             return self._hud_health_alpha
 
-        health = logic.player_health
+        health = logic.player_runtime.player_health
         health_changed = (
             self._hud_health_last_value is not None
             and health != self._hud_health_last_value
@@ -390,9 +390,9 @@ class LogicRender:
         write_state.cinematic_camera_active = cinematic_active
         write_state.hud_alpha = hud_alpha
         write_state.hud_health_alpha = health_hud_alpha
-        write_state.player_health = logic.player_health
-        write_state.player_max_health = logic.player_max_health
-        write_state.player_dead = logic.player_dead
+        write_state.player_health = logic.player_runtime.player_health
+        write_state.player_max_health = logic.player_runtime.player_max_health
+        write_state.player_dead = logic.player_runtime.player_dead
         write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
         if logic.play_mode and logic.player and not logic.cutscene_runtime.state:
             write_state.player_underwater = bool(logic.player.eye_underwater)
@@ -610,9 +610,9 @@ class LogicRender:
                 p2_cam + p2_dir,
                 glm.vec3(0, 1, 0),
             )
-            write_state.player2_health = logic.player2_health
-            write_state.player2_max_health = logic.player2_max_health
-            write_state.player2_dead = logic.player2_dead
+            write_state.player2_health = logic.player_runtime.player2_health
+            write_state.player2_max_health = logic.player_runtime.player2_max_health
+            write_state.player2_dead = logic.player_runtime.player2_dead
             write_state.player2_underwater = bool(logic.player2.eye_underwater)
             write_state.splitscreen_active = True
         else:

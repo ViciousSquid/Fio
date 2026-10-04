@@ -96,14 +96,20 @@ def _logic_for(prop):
         (),
         {
             "editor_state": type("EditorState", (), {"things": [prop], "brushes": []})(),
-            "player_health": 100,
-            "player_max_health": 100,
+            "player_runtime": type("PlayerRuntime", (), {
+                "collected_keys": set(),
+                "player_health": 100,
+                "player_max_health": 100,
+                "player_dead": False,
+                "player2_health": 100,
+                "player2_max_health": 100,
+                "player2_dead": False,
+            })(),
             "combat_runtime": type("CombatRuntime", (), {
                 "player_ammo": 0,
                 "active_weapon": "gun1",
                 "gun2_obtained": False,
             })(),
-            "player_runtime": type("PlayerRuntime", (), {"collected_keys": set()})(),
             "interaction_runtime": type("InteractionRuntime", (), {
                 "current_hud_message": "",
                 "current_hud_key_name": None,

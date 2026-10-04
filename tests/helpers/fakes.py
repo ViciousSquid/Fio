@@ -93,13 +93,17 @@ class FakeLogicThread:
         self.editor_state.brushes = list(brushes)
         self.editor_state.things = list(things)
         self.player = player
-        self.player_dead = False
         self.play_mode = False
-        self.player_health = 100
         self.player_runtime = SimpleNamespace(
             god_mode=False,
             buddha_mode=False,
             notarget=False,
+            player_health=100,
+            player_max_health=100,
+            player_dead=False,
+            player2_health=100,
+            player2_max_health=100,
+            player2_dead=False,
         )
         self.io_manager = io_manager
         self.game_state = FakeGameState()
@@ -119,7 +123,7 @@ class FakeLogicThread:
         if event == "player_damage":
             self.damage_applied.append(payload["damage"])
         elif event == "player_death":
-            self.player_dead = True
+            self.player_runtime.player_dead = True
 
     # -- convenience ------------------------------------------------------
     def build_spatial_grid(self):

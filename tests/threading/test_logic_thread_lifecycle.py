@@ -48,6 +48,25 @@ class _FaultBridge(QObject):
         self.thread_ids.append(threading.get_ident())
 
 
+def test_player_health_state_belongs_to_logic_player(logic):
+    thread = logic()
+
+    assert not hasattr(thread, "player_health")
+    assert not hasattr(thread, "player_max_health")
+    assert not hasattr(thread, "player_dead")
+    assert not hasattr(thread, "player2_health")
+    assert not hasattr(thread, "player2_max_health")
+    assert not hasattr(thread, "player2_dead")
+
+    runtime = thread.player_runtime
+    assert runtime.player_health == 100
+    assert runtime.player_max_health == 100
+    assert runtime.player_dead is False
+    assert runtime.player2_health == 100
+    assert runtime.player2_max_health == 100
+    assert runtime.player2_dead is False
+
+
 @pytest.fixture
 def logic():
     """A LogicThread over a small world, guaranteed to be stopped afterwards."""
@@ -195,17 +214,17 @@ def test_stop_ends_the_monster_ai_thread_as_well(logic):
 def test_play_mode_resets_player_state_every_time(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
-    thread.player_health = 3
-    thread.player_dead = True
+    thread.player_runtime.player_health = 3
+    thread.player_runtime.player_dead = True
     thread.player_runtime.god_mode = True
     thread.session_runtime.apply_play_mode(False)
 
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert thread.player_health == 100, (
+        assert thread.player_runtime.player_health == 100, (
             "player health carried over from the previous session (%d)"
-            % thread.player_health)
-        assert thread.player_dead is False
+            % thread.player_runtime.player_health)
+        assert thread.player_runtime.player_dead is False
         assert thread.player_runtime.god_mode is False, "a cheat leaked into the next session"
     finally:
         thread.session_runtime.apply_play_mode(False)
@@ -323,7 +342,7 @@ def test_disabling_health_hud_fade_keeps_full_alpha_after_damage(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.set_hud_fade_enabled(False)
-        thread.player_health = 25
+        thread.player_runtime.player_health = 25
 
         # Disabled fade mode clears the timing marker deliberately;
         # sampling a timestamp is irrelevant because the disabled branch is
@@ -347,7 +366,7 @@ def test_health_change_uses_fast_fade_in_then_slow_fade_out(logic):
         assert thread.render_runtime._hud_health_alpha == pytest.approx(0.5)
 
         change = start + 10.0
-        thread.player_health = 75
+        thread.player_runtime.player_health = 75
 
         alpha = thread.render_runtime.update_hud_health_alpha(change)
         assert alpha == pytest.approx(0.5)
@@ -380,13 +399,13 @@ def test_further_health_changes_restart_the_fast_fade_from_current_opacity(logic
         assert thread.render_runtime._hud_health_alpha == pytest.approx(0.5)
 
         first_change = start + 8.0
-        thread.player_health = 90
+        thread.player_runtime.player_health = 90
         thread.render_runtime.update_hud_health_alpha(first_change)
         thread.render_runtime.update_hud_health_alpha(first_change + 1.5)
         assert thread.render_runtime._hud_health_alpha == pytest.approx(1.0)
 
         second_change = first_change + 3.0
-        thread.player_health = 80
+        thread.player_runtime.player_health = 80
         alpha = thread.render_runtime.update_hud_health_alpha(second_change)
         assert alpha == pytest.approx(0.8125)
         assert thread.render_runtime._hud_health_fade_phase == "in"

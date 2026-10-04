@@ -392,12 +392,12 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "gun2_obtained": bool(logic.combat_runtime.gun2_obtained),
         "player_ammo": max(0, int(logic.combat_runtime.player_ammo)),
         "current_hud_message": logic.interaction_runtime.current_hud_message,
-        "player_health": logic.player_health,
-        "player_max_health": logic.player_max_health,
-        "player_dead": bool(logic.player_dead),
-        "player2_health": logic.player2_health,
-        "player2_max_health": logic.player2_max_health,
-        "player2_dead": bool(logic.player2_dead),
+        "player_health": logic.player_runtime.player_health,
+        "player_max_health": logic.player_runtime.player_max_health,
+        "player_dead": bool(logic.player_runtime.player_dead),
+        "player2_health": logic.player_runtime.player2_health,
+        "player2_max_health": logic.player_runtime.player2_max_health,
+        "player2_dead": bool(logic.player_runtime.player2_dead),
         "collected_keys": sorted(str(k) for k in logic.player_runtime.collected_keys),
         "door_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.door_states.items()},
         "mover_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.mover_states.items()},
@@ -749,14 +749,15 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         if attr in runtime:
             setattr(player_runtime, attr, bool(runtime[attr]))
 
-    # Player runtime overlay that remains on the session host.
+    # Player runtime state belongs to LogicPlayer; preserve the save schema
+    # while restoring directly into that owner.
+    player_runtime = logic.player_runtime
     for attr in (
-        "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
         if attr in runtime:
-            setattr(logic, attr, runtime[attr])
+            setattr(player_runtime, attr, runtime[attr])
 
     interaction = logic.interaction_runtime
     if "current_hud_message" in runtime:
