@@ -2154,6 +2154,12 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2, cy, msg)
 
             if prompt_key:
+                # cy is the text baseline, not its lower edge. Position
+                # the key from the actual ink bounds so every HUD font keeps
+                # the icon directly underneath the prompt rather than relying
+                # on a font-independent magic Y offset.
+                text_bottom = QFontMetrics(self._hud_msg_font).tightBoundingRect(msg).bottom()
+                prompt_y = cy + text_bottom + 8
                 prompt_size = self._cached_prompt_key_size
                 if self._cached_prompt_key != prompt_key:
                     self._cached_prompt_key = prompt_key
@@ -2174,7 +2180,7 @@ class QtGameView(QOpenGLWidget):
                     scaled = self._cached_prompt_key_pixmap
                     painter.drawPixmap(
                         cx - scaled.width() // 2,
-                        cy + 10,
+                        prompt_y,
                         scaled,
                     )
                 else:
@@ -2182,7 +2188,7 @@ class QtGameView(QOpenGLWidget):
                         painter,
                         prompt_key,
                         cx - prompt_size // 2,
-                        cy + 10,
+                        prompt_y,
                         prompt_size,
                     )
         hint = self._play_mode_hint
