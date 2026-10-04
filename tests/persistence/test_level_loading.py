@@ -61,7 +61,7 @@ class _Window:
     def update_title(self):
         pass
 
-    def set_selected_object(self, obj):
+    def set_selected_objects(self, objects):
         pass
 
     def update_all_ui(self):
