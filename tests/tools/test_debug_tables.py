@@ -436,3 +436,68 @@ def test_debug_tables_detects_the_real_brush_set_change(real_world_window):
     assert instrument.render.count == before + 1
     slot = instrument.render.slot_of_id[added["id"]]
     assert instrument.render.center[slot].tolist() == pytest.approx(added["pos"])
+
+
+def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
+    """A real Terrain must populate Debug Tables from its dense TerrainTable."""
+    from engine.terrain import Terrain
+    import glm
+
+    host = window[0].main_window
+    host.open_terrain_editor()
+    terrain = host.terrain
+    assert isinstance(terrain, Terrain)
+
+    # Use the production terrain bounds/streaming path to create resident
+    # chunks, then the production height sampler + TerrainTable.store path to
+    # build their dense rows. No fake TerrainTable rows are inserted.
+    terrain.set_world_extent(-256.0, -256.0, 512.0, 512.0)
+    terrain.set_streaming(True, radius=768.0)
+    terrain._stream_chunks(glm.vec3(0.0, 0.0, 0.0))
+
+    slots = terrain.table.live_slots()
+    assert len(slots) >= 2
+
+    for slot in slots[:2]:
+        terrain.table.store(
+            int(slot),
+            48,
+            0,
+            terrain._chunk_heights(int(slot), 48),
+        )
+
+    instrument = window[0]
+    instrument.refresh()
+
+    assert instrument.terrain is not None
+    shown = instrument.terrain
+    assert shown.count == terrain.table.count
+    assert shown.live_count == terrain.table.count
+    assert shown.built_count == 2
+
+    fields = {
+        instrument.terrain_raw.selector.itemText(i)
+        for i in range(instrument.terrain_raw.selector.count())
+    }
+    assert {"coord", "live", "built", "lod", "heights"} <= fields
+
+    table = terrain.table
+    for slot in slots[:2]:
+        slot = int(slot)
+        assert shown.coord[slot].tolist() == table.coord[slot].tolist()
+        assert shown.world[slot].tolist() == pytest.approx(table.world[slot].tolist())
+        assert shown.heights[slot].tolist() == pytest.approx(
+            table.heights[slot].tolist()
+        )
+
+    text = instrument.dashboard.toPlainText()
+    assert "TERRAIN (TerrainTable)" in text
+    assert "resident %d" % table.count in text
+    assert "built 2" in text
+    assert "TerrainTable" in instrument.memory_text.toPlainText()
+
+    # Debug Tables is a snapshot/oracle: changing the live dense table after
+    # refresh must not mutate the sampled copy.
+    original = shown.heights[slots[0]].copy()
+    table.heights[slots[0], 0, 0] += 123.0
+    assert shown.heights[slots[0]].tolist() == pytest.approx(original.tolist())
