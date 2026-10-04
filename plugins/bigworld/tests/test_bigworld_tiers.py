@@ -51,12 +51,12 @@ class FakeCamera:
 class FakeLogic:
     """Stand-in for the streaming host using the real editor-state ownership."""
 
-    def __init__(self, brushes=None, things=None, player=None, view_distance=None):
+    def __init__(self, brushes=None, things=None, player=None, render_view_distance=None):
         self.editor_state = SimpleNamespace()
         self.editor_state.brushes = list(brushes or [])
         self.editor_state.things = list(things or [])
         self.player = player
-        self.view_distance = view_distance
+        self.render_runtime = SimpleNamespace(view_distance=render_view_distance or ViewDistance())
         self.camera = FakeCamera()
 
 class FakePlayer:
@@ -85,7 +85,7 @@ def started_session(things, brushes=None, activation=2048.0,
                     deactivation=2304.0, near=1024.0, at=(0.0, 0.0),
                     view_distance=None):
     logic = FakeLogic(brushes=brushes or [], things=things,
-                      player=FakePlayer(*at), view_distance=view_distance)
+                      player=FakePlayer(*at), render_view_distance=view_distance)
     session = BigWorldSession(logic, activation_radius=activation,
                               deactivation_radius=deactivation,
                               sim_near_radius=near)
@@ -207,9 +207,9 @@ def test_bigworld_residency_never_ends_inside_the_visual_horizon():
     view_distance = ViewDistance(4096.0)
     session = started_session(
         things, activation=1024.0, deactivation=1280.0,
-        at=(0.0, 0.0), view_distance=view_distance
+        at=(0.0, 0.0), render_view_distance=view_distance
     )
-    horizon = session.logic.view_distance.visual_horizon
+    horizon = session.logic.render_runtime.view_distance.visual_horizon
     expected_a, expected_d = effective_streaming_radii(1024.0, 1280.0, horizon)
     assert session.manager.activation_radius == pytest.approx(expected_a)
     assert session.manager.deactivation_radius == pytest.approx(expected_d)
@@ -227,7 +227,7 @@ def test_the_session_fades_the_camera_out_at_its_activation_radius():
     view_distance = ViewDistance(4096.0)
     session = started_session(
         [FakeThing(0.0, 0.0)], activation=2048.0, deactivation=2304.0,
-        view_distance=view_distance,
+        render_view_distance=view_distance,
     )
     assert view_distance.limit == 2048.0
     assert view_distance.resolve()[1] == pytest.approx(2048.0)
@@ -242,24 +242,24 @@ def test_the_session_fades_the_camera_out_at_its_activation_radius():
 def test_a_shorter_view_distance_is_left_alone():
     view_distance = ViewDistance(1000.0)
     started_session([FakeThing(0.0, 0.0)], activation=2048.0,
-                    view_distance=view_distance)
+                    render_view_distance=view_distance)
     assert view_distance.far_plane == 1000.0
 
 
 def test_changing_view_distance_cannot_widen_bigworld_past_its_radius():
     subject = FakeThing(3000.0, 0.0, uuid="far")
     logic = FakeLogic(things=[subject], player=FakePlayer(0.0, 0.0))
-    logic.view_distance = ViewDistance(4096.0)
+    logic.render_runtime.view_distance = ViewDistance(4096.0)
     session = BigWorldSession(
         logic, activation_radius=1024.0, deactivation_radius=1280.0
     )
     session.start()
     assert not session.manager.is_thing_active(subject)
 
-    logic.view_distance.distance = 20000.0
+    logic.render_runtime.view_distance.distance = 20000.0
     session.tick()
 
-    assert logic.view_distance.visual_horizon <= 1024.0
+    assert logic.render_runtime.view_distance.visual_horizon <= 1024.0
     assert session.manager.activation_radius == pytest.approx(1024.0)
     assert not session.manager.is_thing_active(subject), (
         "raising the view distance streamed in a cell past the authored radius"

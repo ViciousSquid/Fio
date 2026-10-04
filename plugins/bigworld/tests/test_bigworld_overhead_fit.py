@@ -43,7 +43,7 @@ class OverheadLogic:
     def __init__(self, things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
         self.editor_state = type('State', (), {'things': things, 'brushes': []})()
         self.player = FakePlayer(*at)
-        self.view_distance = ViewDistance()
+        self.render_runtime = type('RenderRuntimeFixture', (), {'view_distance': ViewDistance()})()
         self.footprint = footprint
         self.camera = _CameraFixture(self)
 
@@ -67,7 +67,7 @@ def test_residency_is_sized_from_the_screen_not_the_authored_radius():
     assert session.manager.deactivation_radius > act
     assert session.tiers.near_rect == session.tiers.near_rect
     # The camera's far plane follows residency.
-    assert logic.view_distance.limit is not None
+    assert logic.render_runtime.view_distance.limit is not None
 
 
 def test_near_is_the_screen_rectangle_and_the_rest_resident_is_active():
@@ -112,7 +112,7 @@ def test_a_first_person_camera_keeps_the_authored_radii():
 def test_a_host_without_a_footprint_keeps_the_authored_radii():
     from .test_bigworld_tiers import FakeLogic
     logic = FakeLogic(things=grid_world(), player=FakePlayer(),
-                      view_distance=ViewDistance())
+                      render_view_distance=ViewDistance())
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, sim_near_radius=1024.0)
     session.start()
@@ -193,7 +193,7 @@ def test_a_screen_past_the_authored_radius_keeps_the_authored_residency():
     assert session.manager.activation_radius == 2048.0
     assert session.manager.deactivation_radius == 2304.0
     # The camera sees down to the residency edge at the player's ground.
-    assert logic.view_distance.limit == 64.0 * math.ceil(math.hypot(2048.0, 800.0) / 64.0)
+    assert logic.render_runtime.view_distance.limit == 64.0 * math.ceil(math.hypot(2048.0, 800.0) / 64.0)
     # The screen's box is still published, for whoever throttles off screen.
     assert session.tiers.near_rect is not None
 
@@ -201,7 +201,7 @@ def test_a_screen_past_the_authored_radius_keeps_the_authored_residency():
 def test_turning_the_camera_retiers_but_leaves_residency_alone():
     logic, session = fitted_session(grid_world(cells_each_way=8),
                                     footprint=(900.0, 500.0, 1030.0))
-    residency = (session.manager.activation_radius, logic.view_distance.limit)
+    residency = (session.manager.activation_radius, logic.render_runtime.view_distance.limit)
     forced = []
     original = session.manager.update
 
@@ -211,7 +211,7 @@ def test_turning_the_camera_retiers_but_leaves_residency_alone():
     session.manager.update = update
     logic.footprint = (700.0, 800.0, 1030.0)        # same reach, turned box
     session.tick()
-    assert (session.manager.activation_radius, logic.view_distance.limit) == residency
+    assert (session.manager.activation_radius, logic.render_runtime.view_distance.limit) == residency
     assert True not in forced                       # no forced residency pass
     assert session.tiers.near_rect == session.tiers.near_rect
     assert session.tiers.near_rect[1] > session.tiers.near_rect[0]
@@ -243,4 +243,4 @@ def test_a_camera_at_the_ceiling_still_sees_the_player():
     logic.footprint = (4100.0, 2048.0, 4600.0)      # re-fit at the new height
     session.tick()
     assert session.manager.activation_radius == 2048.0
-    assert logic.view_distance.limit > 2048.0 * 1.4
+    assert logic.render_runtime.view_distance.limit > 2048.0 * 1.4

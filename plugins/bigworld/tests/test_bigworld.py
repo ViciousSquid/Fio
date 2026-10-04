@@ -74,7 +74,7 @@ class FakeLogic:
         self.editor_state = SimpleNamespace(brushes=brushes, things=things)
         self.player = FakePlayer(player_pos)
         self.terrain = terrain
-        self.view_distance = ViewDistance()
+        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
 
 class FakeTerrain:
@@ -355,7 +355,7 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     print("[10b] moved entities are refiled before a simultaneous residency shrink")
     mover = FakeThing(3000.0, 0.0, 0.0, ttype="monster")
     logic = FakeLogic([], [mover], player_pos=(0.0, 0.0, 0.0))
-    logic.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
+    logic.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
     session = BigWorldSession(
         logic,
         activation_radius=1024.0,
@@ -370,7 +370,7 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     # The player crosses a cell while the visible horizon shrinks back to the
     # authored activation radius. The mover simultaneously walks into a cell
     # that remains active after the shrink.
-    logic.view_distance.visual_horizon = 1024.0
+    logic.render_runtime.view_distance.visual_horizon = 1024.0
     logic.player.pos = [512.0, 0.0, 0.0]
     mover.pos = [1000.0, 0.0, 0.0]
     session.tick()
