@@ -826,7 +826,7 @@ def test_a_collected_prop_is_not_published(logic):
     thread = logic(things=[keep, taken])
     thread.session_runtime.apply_play_mode(True)
     try:
-        thread._props.collected_ids.add(id(taken))
+        thread.prop_runtime.collected_ids.add(id(taken))
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
 

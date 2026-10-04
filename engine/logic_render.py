@@ -555,11 +555,7 @@ class LogicRender:
         logic.editor_state.clear_render_dirty(render_dirty_snapshot)
 
         visible_thing_slots = etable.all_slots
-        collected = (
-            logic.prop_runtime.collected_ids
-            if logic._props is not None
-            else set()
-        )
+        collected = logic.prop_runtime.collected_ids
         if logic.play_mode and collected:
             prop_slots = np.flatnonzero(
                 (etable.class_bits[:thing_count] & ENT_PROP) != 0

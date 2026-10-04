@@ -94,7 +94,7 @@ def test_colored_key_collects_the_key_and_fires_on_collected_to_a_door(key_name)
     )
 
     session = PropSession(logic)
-    logic._props = session
+    logic.prop_runtime = session
     session.start()
     assert session.collect_prop(prop) is True
 

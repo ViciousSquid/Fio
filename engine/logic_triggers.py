@@ -360,7 +360,7 @@ class LogicTriggers:
         entity_types = [1]  # player
         entity_ids = [id(self.logic.player)]
 
-        for entity in (self.logic._props.props if self.logic._props is not None else ()):
+        for entity in (self.logic.prop_runtime.props if True else ()):
             if not getattr(entity, 'properties', {}).get('disabled', False):
                 entities.append(entity)
                 entity_types.append(2)
@@ -438,8 +438,8 @@ class LogicTriggers:
                         if activator_type == 'player':
                             activator = self.logic.player
                         elif activator_type == 'props':
-                            activator = (self.logic._props.by_id(entity_id)
-                                         if self.logic._props is not None else None)
+                            activator = (self.logic.prop_runtime.by_id(entity_id)
+                                         if True else None)
                         else:
                             activator = self.logic._monster_by_id.get(entity_id)
 
@@ -463,8 +463,8 @@ class LogicTriggers:
                         if activator_type == 'player':
                             activator = self.logic.player
                         elif activator_type == 'props':
-                            activator = (self.logic._props.by_id(entity_id)
-                                         if self.logic._props is not None else None)
+                            activator = (self.logic.prop_runtime.by_id(entity_id)
+                                         if True else None)
                         else:
                             activator = self.logic._monster_by_id.get(entity_id)
 

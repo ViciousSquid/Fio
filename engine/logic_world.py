@@ -64,8 +64,7 @@ class LogicWorld:
 
         logic.trigger_runtime.rebuild_trigger_index(logic.editor_state.brushes)
 
-        if logic.prop_runtime is not None:
-            logic._props.rebuild(logic.editor_state.things)
+        logic.prop_runtime.rebuild(logic.editor_state.things)
 
         LevelChanger = self.levelchanger_type
         self.levelchanger_things = [

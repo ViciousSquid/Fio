@@ -56,7 +56,7 @@ def _frame_from_inside(logic, monkeypatch, hook_owner, hook_name):
     monkeypatch.setattr(
         logic, "_tick_play_mode",
         lambda delta: seen.append((logic._spatial_grid is not None,
-                                   logic._props is not None)))
+                                   logic.prop_runtime is not None)))
     real_hook = getattr(hook_owner, hook_name)
 
     def hook_with_concurrent_frame(*args, **kwargs):
@@ -96,7 +96,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
     def long_tick(delta):
         entered.set()
         release.wait(DEADLINE)
-        events.append(("tick", logic._props is not None,
+        events.append(("tick", logic.prop_runtime is not None,
                        logic._spatial_grid is not None))
 
     real_reset_doors = logic.mover_runtime._reset_doors

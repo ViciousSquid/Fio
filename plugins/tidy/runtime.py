@@ -180,7 +180,7 @@ class TidySession:
 
         # The core Prop runtime is currently carrying this object and will
         # otherwise perform the normal drop immediately after this callback.
-        prop_session = getattr(self.logic, "_props", None)
+        prop_session = self.logic.prop_runtime
         if prop_session is not None and getattr(prop_session, "held", None) is obj:
             prop_session.held = None
 
@@ -222,7 +222,7 @@ class TidySession:
         if obj not in self.objects:
             return
 
-        prop_session = getattr(self.logic, "_props", None)
+        prop_session = self.logic.prop_runtime
         if prop_session is not None and getattr(prop_session, "held", None) is obj:
             prop_session.held = None
         obj.properties.pop("_drop_requested", None)
@@ -248,7 +248,7 @@ class TidySession:
         home = obj.properties.get("_prop_home_pos")
         if home is not None:
             obj.pos = list(home)
-            prop_session = getattr(self.logic, "_props", None)
+            prop_session = self.logic.prop_runtime
             if prop_session is not None:
                 prop_session.moved(obj)
 
@@ -272,20 +272,20 @@ class TidySession:
 
     def tick(self, ctx=None):
         del ctx
-        prop_session = getattr(self.logic, "_props", None)
+        prop_session = self.logic.prop_runtime
         held = getattr(prop_session, "held", None) if prop_session is not None else None
 
         if held is not None and held in self.objects:
             receptacle = self._receptacle_in_view(self._category(held))
             if receptacle is not None:
                 name = receptacle.properties.get("name", "shelf")
-                self.logic.current_hud_message = f"[E] Put away ({name})"
+                self.logic.interaction_runtime.current_hud_message = f"[E] Put away ({name})"
                 return
 
-        if not getattr(self.logic, "current_hud_message", ""):
+        if not self.logic.interaction_runtime.current_hud_message:
             line = self.hud_line()
             if line:
-                self.logic.current_hud_message = line
+                self.logic.interaction_runtime.current_hud_message = line
 
     def _check_goals(self):
         for goal in self.goals:

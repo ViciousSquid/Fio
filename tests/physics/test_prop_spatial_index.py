@@ -282,7 +282,7 @@ def test_a_savegame_restore_refiles_the_props_it_teleports():
     prop = prop_at(0, 0, 60, id="prop-1")
     session = make_session([prop])
     logic = session.logic
-    logic._props = session
+    logic.prop_runtime = session
 
     destination = [CELL_SIZE * 6, 0.0, CELL_SIZE * 6 + 60.0]
     _overlay_entities(logic, {"things": [
@@ -303,7 +303,7 @@ def test_a_streaming_delta_refiles_the_props_it_places():
     prop = prop_at(0, 0, 60, id="prop-1")
     session = make_session([prop])
     logic = session.logic
-    logic._props = session
+    logic.prop_runtime = session
 
     host = DiskStreamingSession.__new__(DiskStreamingSession)
     host.logic = logic
@@ -326,7 +326,7 @@ def test_tidy_reset_refiles_the_prop_it_moves():
     prop = prop_at(0, 0, 60, tidy_category="books")
     session = make_session([prop])
     logic = session.logic
-    logic._props = session
+    logic.prop_runtime = session
 
     tidy = TidySession.__new__(TidySession)
     tidy.logic = logic

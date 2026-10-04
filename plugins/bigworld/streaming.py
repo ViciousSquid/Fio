@@ -546,9 +546,7 @@ class DiskStreamingSession:
         # call per object. Unknown Things are ignored on the far side, so this
         # does not have to know which of them are Props.
         if moved:
-            session = getattr(self.logic, "_props", None)
-            if session is not None:
-                session.refile(moved)
+            self.logic.prop_runtime.refile(moved)
 
     @staticmethod
     def _apply_thing_rec(thing, rec: dict) -> bool:

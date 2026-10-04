@@ -675,7 +675,7 @@ def register_all_input_handlers(io_manager: IOManager):
             session.collect_prop(entity)
 
     def prop_respawn(entity, param, logic):
-        session = getattr(logic, '_props', None)
+        session = logic.prop_runtime
         if session is not None:
             session.respawn_prop(entity)
 
