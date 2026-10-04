@@ -939,6 +939,17 @@ void main()
     vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
     vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
 
+    // Broad world-space variation breaks up normal-map repetition on large water brushes.
+    highp vec2 broadNoise = vec2(
+        vnoise(FragPos.xz * 0.006 + vec2(time * 0.004, -time * 0.003)),
+        vnoise(FragPos.xz * 0.008 + vec2(-time * 0.003, time * 0.005))
+    ) - 0.5;
+    broadNoise += (vec2(
+        vnoise(FragPos.xz * 0.0037 + vec2(-time * 0.002, time * 0.001)),
+        vnoise(FragPos.xz * 0.0051 + vec2(time * 0.001, time * 0.002))
+    ) - 0.5) * 0.55;
+    ripple += broadNoise * 0.55;
+
     float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
     float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
 
