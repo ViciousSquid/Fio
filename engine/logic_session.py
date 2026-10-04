@@ -41,6 +41,8 @@ class LogicSession:
         self.physics_world = None
         self.spatial_grid = None
         self._world_pause_lock = threading.Lock()
+        self.monster_lock = threading.RLock()
+        self.monster_ai_thread = None
         self.effect_store = EffectStore()
 
     def set_world_paused(self, owner, paused: bool = True) -> None:
@@ -425,18 +427,18 @@ class LogicSession:
     def start_monster_ai(self):
         logic = self.logic
         self.stop_monster_ai()
-        logic.monster_ai_thread = MonsterAIThread(
+        self.monster_ai_thread = MonsterAIThread(
             logic,
             logic.monster_ai,
-            logic._monster_lock,
+            self.monster_lock,
             tick_rate=30,
         )
-        logic.monster_ai_thread.start()
+        self.monster_ai_thread.start()
 
     def stop_monster_ai(self):
         logic = self.logic
-        thread = logic.monster_ai_thread
-        logic.monster_ai_thread = None
+        thread = self.monster_ai_thread
+        self.monster_ai_thread = None
         if thread is not None:
             thread.stop()
             if (
@@ -448,7 +450,7 @@ class LogicSession:
     def reset_all_monsters(self, clear_dead=True):
         """Reset all monster AI state and capture authored spawn health."""
         logic = self.logic
-        with logic._monster_lock:
+        with self.monster_lock:
             logic.monster_ai.forget_monsters()
 
         if not MonsterThing:
