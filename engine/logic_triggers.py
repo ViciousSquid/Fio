@@ -61,11 +61,18 @@ class LogicTriggers:
 
     def __init__(self, logic):
         self.logic = logic
+        self.fired_once_triggers = set()
+        self.hurt_trigger_timers = {}
+        self._trigger_contacts = {}
+        self.player_in_triggers = set()
+        self._nonplayer_trigger_contacts = {}
+        self._trigger_poll_elapsed = 0.0
+        self._trigger_poll_elapsed_by_bid = {}
+        self._trigger_use_generation = 0
+        self._trigger_use_seen = {}
+        self._trigger_use_prompt = ""
+        self._use_trigger_entries = []
 
-    # Trigger state is deliberately kept on LogicThread for compatibility with
-    # existing tools/tests that inspect these fields directly. This runtime owns
-    # the algorithms; LogicThread is merely the state host until those public
-    # surfaces can be retired.
     @staticmethod
     def _trigger_filters(brush):
         """Return configured trigger detection categories.
@@ -97,31 +104,27 @@ class LogicTriggers:
         """
         logic = self.logic
 
-        def fresh(name, factory):
-            current = getattr(logic, name, None)
-            if current is None:
-                setattr(logic, name, factory())
-            else:
-                current.clear()
+        def fresh(name):
+            getattr(self, name).clear()
 
         # Active occupants keyed by trigger id, then (entity type, entity id).
         # Each trigger is sampled at its own configured interval; unchanged
         # contacts are retained between that trigger's polls.
-        fresh('_trigger_contacts', dict)
+        fresh('_trigger_contacts')
         # Mirrors for code that inspects player-only or non-player state.
-        fresh('player_in_triggers', set)
-        fresh('_nonplayer_trigger_contacts', dict)
+        fresh('player_in_triggers')
+        fresh('_nonplayer_trigger_contacts')
         # Scheduler: wakes every TRIGGER_POLL_TICK and polls only triggers
         # whose own interval has elapsed; never scans at the 60 Hz tick rate.
-        self.logic._trigger_poll_elapsed = 0.0
-        fresh('_trigger_poll_elapsed_by_bid', dict)
+        self._trigger_poll_elapsed = 0.0
+        fresh('_trigger_poll_elapsed_by_bid')
         # Each use-key press gets a generation number consumed independently
         # per trigger, so a fast trigger cannot steal a slower one's press.
-        self.logic._trigger_use_generation = 0
-        fresh('_trigger_use_seen', dict)
+        self._trigger_use_generation = 0
+        fresh('_trigger_use_seen')
         # Evaluated per tick by _sample_use_prompt; kept as an attribute only
         # so the render state and tests can read the frame's current prompt.
-        self.logic._trigger_use_prompt = ""
+        self._trigger_use_prompt = ""
         self._refresh_use_triggers()
 
     @staticmethod
@@ -163,7 +166,7 @@ class LogicTriggers:
         """
         # Tolerates being called before the trigger list exists: state reset
         # runs during construction, ahead of the first cache build.
-        self.logic._use_trigger_entries = [
+        self._use_trigger_entries = [
             (bid, brush)
             for bid, brush in getattr(self.logic, '_trigger_brushes', ())
             if _trigger_activation(brush) == 'use'
@@ -171,7 +174,7 @@ class LogicTriggers:
 
     def _use_prompt_candidates(self):
         """(bid, brush, centre, radius) for every use trigger a prompt may name."""
-        for bid, brush in self.logic._use_trigger_entries:
+        for bid, brush in self._use_trigger_entries:
             if brush.get('disabled', False):
                 continue
             if 'player' not in self._trigger_filters(brush):
@@ -179,7 +182,7 @@ class LogicTriggers:
             # A spent 'once' trigger does nothing, so it must not keep
             # advertising itself -- 2.4.2 suppressed the prompt for exactly
             # this case and the rewrite dropped the check.
-            if _trigger_is_once(brush) and bid in self.logic.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
             centre = brush.get('pos', (0.0, 0.0, 0.0))
             yield (bid, brush,
@@ -197,7 +200,7 @@ class LogicTriggers:
         later. The arithmetic is one batched pass over that subset.
         """
         player = self.logic.player
-        if player is None or not self.logic._use_trigger_entries:
+        if player is None or not self._use_trigger_entries:
             return ""
 
         candidates = list(self._use_prompt_candidates())
@@ -255,7 +258,7 @@ class LogicTriggers:
             return
 
         if use_key_pressed:
-            self.logic._trigger_use_generation += 1
+            self._trigger_use_generation += 1
 
         if trigger_ids is None:
             trigger_ids = {
@@ -311,17 +314,17 @@ class LogicTriggers:
 
         # Preserve contacts for triggers that were not due. Replace only the
         # state belonging to triggers sampled on this pass.
-        new_contacts = dict(self.logic._trigger_contacts)
+        new_contacts = dict(self._trigger_contacts)
         for bid in polled_ids:
             new_contacts.pop(bid, None)
 
         if not trigger_entries:
-            self.logic._trigger_contacts = new_contacts
-            self.logic.player_in_triggers = {
+            self._trigger_contacts = new_contacts
+            self.player_in_triggers = {
                 bid for bid, contacts in new_contacts.items()
                 if any(entity_type == 'player' for entity_type, _ in contacts)
             }
-            self.logic._nonplayer_trigger_contacts = {
+            self._nonplayer_trigger_contacts = {
                 bid: {
                     contact for contact in contacts
                     if contact[0] != 'player'
@@ -398,7 +401,7 @@ class LogicTriggers:
                 (category, entity_ids[int(entity_index)])
             )
 
-        old_contacts = self.logic._trigger_contacts
+        old_contacts = self._trigger_contacts
 
         # ------------------------------------------------------------------
         # Only changed contacts generate trigger enter/exit I/O.
@@ -457,16 +460,16 @@ class LogicTriggers:
 
                     # A player leaving a hurt trigger clears its cadence.
                     if any(entity_type == 'player' for entity_type, _ in exited):
-                        self.logic.hurt_trigger_timers.pop(bid, None)
+                        self.hurt_trigger_timers.pop(bid, None)
 
-        self.logic._trigger_contacts = new_contacts
+        self._trigger_contacts = new_contacts
 
         # Maintain the legacy mirrors from the same sampled contact state.
-        self.logic.player_in_triggers = {
+        self.player_in_triggers = {
             bid for bid, contacts in new_contacts.items()
             if any(entity_type == 'player' for entity_type, _ in contacts)
         }
-        self.logic._nonplayer_trigger_contacts = {
+        self._nonplayer_trigger_contacts = {
             bid: {
                 contact for contact in contacts
                 if contact[0] != 'player'
@@ -485,10 +488,10 @@ class LogicTriggers:
             if activation != 'use':
                 continue
 
-            generation = self.logic._trigger_use_generation
-            last_seen = self.logic._trigger_use_seen.get(bid, generation)
+            generation = self._trigger_use_generation
+            last_seen = self._trigger_use_seen.get(bid, generation)
             use_edge = last_seen < generation
-            self.logic._trigger_use_seen[bid] = generation
+            self._trigger_use_seen[bid] = generation
 
             if not inside[0, trigger_index]:
                 continue
@@ -516,7 +519,7 @@ class LogicTriggers:
                 if float(np.dot(p_forward, to_trigger)) <= 0.5:
                     continue
 
-            if _trigger_is_once(brush) and bid in self.logic.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
 
             self._on_trigger_enter(
@@ -531,7 +534,7 @@ class LogicTriggers:
         # this pass, never on the 60 Hz logic path.
         # ------------------------------------------------------------------
         for bid in polled_ids:
-            if bid not in self.logic.player_in_triggers:
+            if bid not in self.player_in_triggers:
                 continue
             brush = self.logic._trigger_brush_by_bid.get(bid)
             if (
@@ -553,7 +556,7 @@ class LogicTriggers:
     def _handle_triggers(self, use_key_pressed: bool, delta=None):
         """Schedule trigger polls without scanning occupancy at 60 Hz."""
         if use_key_pressed:
-            self.logic._trigger_use_generation += 1
+            self._trigger_use_generation += 1
 
         # The use prompt is evaluated here, every tick, against the live player
         # position and angle -- not republished from the last poll. Sampling it
@@ -567,30 +570,30 @@ class LogicTriggers:
         # stages had just set, which is what silently removed "NEED: <key>",
         # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
         # "[E] Complete Level" and "[E] Drop" from the HUD.
-        self.logic._trigger_use_prompt = self._sample_use_prompt()
-        if self.logic._trigger_use_prompt:
-            self.logic.current_hud_message = self.logic._trigger_use_prompt
+        self._trigger_use_prompt = self._sample_use_prompt()
+        if self._trigger_use_prompt:
+            self.logic.current_hud_message = self._trigger_use_prompt
 
         step = float(delta) if delta is not None else float(self.logic.TICK_DURATION)
-        self.logic._trigger_poll_elapsed += max(0.0, step)
+        self._trigger_poll_elapsed += max(0.0, step)
 
         scheduler_tick = self.logic.TRIGGER_POLL_TICK
         # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
         # push every poll one logic tick late (same epsilon as per-trigger).
-        while self.logic._trigger_poll_elapsed + self.logic.TRIGGER_POLL_EPSILON >= scheduler_tick:
-            self.logic._trigger_poll_elapsed = max(0.0, self.logic._trigger_poll_elapsed - scheduler_tick)
+        while self._trigger_poll_elapsed + self.logic.TRIGGER_POLL_EPSILON >= scheduler_tick:
+            self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
             for bid, brush in self.logic._trigger_brushes:
                 elapsed = (
-                    self.logic._trigger_poll_elapsed_by_bid.get(bid, 0.0)
+                    self._trigger_poll_elapsed_by_bid.get(bid, 0.0)
                     + scheduler_tick
                 )
                 interval = self._trigger_poll_interval(brush)
                 if elapsed + self.logic.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
-                self.logic._trigger_poll_elapsed_by_bid[bid] = elapsed
+                self._trigger_poll_elapsed_by_bid[bid] = elapsed
 
             if due_ids:
                 self._poll_triggers(trigger_ids=due_ids)
@@ -645,7 +648,7 @@ class LogicTriggers:
         # Authored as 'Once'/'Multiple' by the editor and the shipped maps; the
         # raw compare against 'once' made every Once trigger fire on each entry.
         once = _trigger_is_once(brush)
-        if once and trigger_id in self.logic.fired_once_triggers:
+        if once and trigger_id in self.fired_once_triggers:
             return
 
         action = brush.get('trigger_action', 'target')
@@ -683,7 +686,7 @@ class LogicTriggers:
             if activator_type == 'player':
                 damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
-                self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
+                self.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
         elif action == 'target':
             if self.logic.io_manager:
@@ -708,7 +711,7 @@ class LogicTriggers:
             activator_type=activator_type,
         )
         if once:
-            self.logic.fired_once_triggers.add(trigger_id)
+            self.fired_once_triggers.add(trigger_id)
 
     def _on_trigger_exit(
         self,
@@ -729,11 +732,11 @@ class LogicTriggers:
         )
 
     def _process_hurt_trigger(self, brush: dict, trigger_id: int, poll_interval=1.0):
-        if trigger_id in self.logic.hurt_trigger_timers:
-            self.logic.hurt_trigger_timers[trigger_id] -= float(poll_interval)
-            if self.logic.hurt_trigger_timers[trigger_id] <= 0:
+        if trigger_id in self.hurt_trigger_timers:
+            self.hurt_trigger_timers[trigger_id] -= float(poll_interval)
+            if self.hurt_trigger_timers[trigger_id] <= 0:
                 damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
-                self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
+                self.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
 
