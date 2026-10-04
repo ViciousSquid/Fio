@@ -167,7 +167,7 @@ class LogicThread(threading.Thread):
         ),
         "movers": (
             "editor_state",
-            "player",
+            "player_runtime",
             "io_manager",
             "world_runtime",
         ),

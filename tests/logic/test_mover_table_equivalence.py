@@ -669,7 +669,7 @@ class _Side:
             logic.editor_state = SimpleNamespace(brushes=self.brushes,
                                                  things=self.things)
             logic.io_manager = io
-            logic.player = player
+            logic.player_runtime = SimpleNamespace(player=player)
             logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
             logic.mover_runtime = LogicMovers(logic)
         io.set_logic_thread(logic)
@@ -703,7 +703,7 @@ class _Side:
                                                "start_on", "original_pos", "speed",
                                                "path_target")}
                         for b in self.brushes],
-            "player": tuple(logic.player.pos),
+            "player": tuple(logic.player_runtime.player.pos),
         }
         if not states:
             return moving
