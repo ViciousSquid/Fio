@@ -53,7 +53,7 @@ class LogicInteraction:
                     is_locked = found_door_brush.get("door_locked", False)
                     needs_key = found_door_brush.get("door_needs_key", False)
                     if not is_locked and not needs_key:
-                        logic._trigger_door_open(
+                        logic.mover_runtime._trigger_door_open(
                             found_door_idx,
                             found_door_brush,
                         )
@@ -76,7 +76,7 @@ class LogicInteraction:
                             logic.current_hud_message = "[E] Use"
                             logic.current_hud_key_name = key_name or None
                             if use_key_pressed:
-                                logic._trigger_door_open(
+                                logic.mover_runtime._trigger_door_open(
                                     found_door_idx,
                                     found_door_brush,
                                 )
@@ -87,7 +87,7 @@ class LogicInteraction:
                     else:
                         logic.current_hud_message = "[E] Open"
                         if use_key_pressed:
-                            logic._trigger_door_open(
+                            logic.mover_runtime._trigger_door_open(
                                 found_door_idx,
                                 found_door_brush,
                             )

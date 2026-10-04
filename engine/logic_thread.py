@@ -1009,20 +1009,6 @@ class LogicThread(threading.Thread):
     def door_states(self, states):
         self._mover_runtime().door_states = states
 
-    def _init_movers(self):
-        return self._mover_runtime()._init_movers()
-
-    def _reset_movers(self):
-        return self._mover_runtime()._reset_movers()
-
-    def _init_doors(self):
-        return self._mover_runtime()._init_doors()
-
-    def _reset_doors(self):
-        return self._mover_runtime()._reset_doors()
-
-    def _trigger_door_open(self, door_idx: int, brush: dict):
-        return self._mover_runtime()._trigger_door_open(door_idx, brush)
 
     # COLLISION RUNTIME
     # =========================================================================
@@ -1323,8 +1309,8 @@ class LogicThread(threading.Thread):
             return
         
         # Update movers & doors first (for platform carrying)
-        self._update_movers(delta)
-        self._update_doors(delta)
+        self.mover_runtime._update_movers(delta)
+        self.mover_runtime._update_doors(delta)
         self._update_parented_lights()
         self._update_parented_portals()
         
@@ -1584,17 +1570,6 @@ class LogicThread(threading.Thread):
         return LogicThread._interaction_runtime(self).handle(use_key_pressed)
 
     # =========================================================================
-    # MOVER/DOOR UPDATES
-    # =========================================================================
-
-    def _update_movers(self, delta: float):
-        return self._mover_runtime()._update_movers(delta)
-
-    def _update_mover_path(self, idx: int, brush: dict, delta: float):
-        return self._mover_runtime()._update_mover_path(idx, brush, delta)
-
-    def _update_doors(self, delta: float):
-        return self._mover_runtime()._update_doors(delta)
 
     # =========================================================================
     # PARENTED ENTITY RUNTIME

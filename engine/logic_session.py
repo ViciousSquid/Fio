@@ -66,8 +66,8 @@ class LogicSession:
                     )
                 )
 
-            logic._init_movers()
-            logic._init_doors()
+            logic.mover_runtime._init_movers()
+            logic.mover_runtime._init_doors()
             logic._init_parented_lights()
             logic._init_parented_portals()
 
@@ -222,8 +222,8 @@ class LogicSession:
             logic.collected_keys.clear()
             logic.active_speakers.clear()
             logic.hurt_trigger_timers.clear()
-            logic._reset_movers()
-            logic._reset_doors()
+            logic.mover_runtime._reset_movers()
+            logic.mover_runtime._reset_doors()
             logic._reset_parented_lights()
             logic._reset_parented_portals()
             logic._clear_angled_brush_collision()

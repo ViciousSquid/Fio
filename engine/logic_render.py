@@ -494,7 +494,7 @@ class LogicRender:
             ),
         )
         if logic.play_mode:
-            logic._movers().publish(logic, table)
+            logic.mover_runtime._movers().publish(logic, table)
 
         refs = table.refs
         total_count = table.count
