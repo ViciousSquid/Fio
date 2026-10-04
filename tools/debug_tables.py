@@ -830,7 +830,7 @@ class DebugTablesWindow(QMainWindow):
             self._last_counters = (now, published, declined)
             self._last_rates = rates
         logic = view.logic_thread if view is not None else None
-        ai = logic.monster_ai_thread if logic is not None else None
+        ai = logic.session_runtime.monster_ai_thread if logic is not None else None
         return {
             "tick": float(getattr(logic, "tick_ms", 0.0)),
             "ai": float(getattr(ai, "update_ms", 0.0)) if ai is not None else 0.0,
