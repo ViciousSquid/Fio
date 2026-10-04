@@ -81,22 +81,22 @@ def test_a_saved_game_names_its_map_by_basename_in_maps_only(main_window, projec
 def test_map_logic_cannot_bind_keys_but_the_user_can(main_window, tmp_path):
     """A map cannot persist key bindings through the real play console."""
     from engine.qt_game_view import QtGameView
-    from engine.threaded_game_state import ThreadedGameState
-    from types import SimpleNamespace
 
     bound = []
     window = main_window
     window.set_key_binding = lambda key, command: bound.append((key, command))
     handler = ConsoleCommandHandler(window)
 
-    game_state = ThreadedGameState()
-    game_state.queue_console_command("bind K delete everything")
-    view = SimpleNamespace(game_state=game_state,
-                           editor=SimpleNamespace(console_handler=handler))
-    QtGameView._process_console_command_queue(view)
-    assert bound == []
+    view = QtGameView(window)
+    try:
+        view.game_state.queue_console_command("bind K delete everything")
+        view._process_console_command_queue()
+        assert bound == []
 
-    handler.handle_command("bind K god")
-    assert bound == [("K", "god")]
+        handler.handle_command("bind K god")
+        assert bound == [("K", "god")]
+    finally:
+        view.deleteLater()
+        qt_app.processEvents()
 
 
