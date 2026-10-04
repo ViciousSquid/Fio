@@ -388,7 +388,7 @@ class EditorState:
         data['created'] = self.created_at
 
         # Include terrain data if present
-        if hasattr(self, 'terrain_data') and self.terrain_data:
+        if self.terrain_data:
             data['terrain_data'] = self.terrain_data
 
         # Persist the scene hash so we can skip a rebake on reload
@@ -416,7 +416,7 @@ class EditorState:
         are right whether the window is open, has been closed, or was never
         opened at all.
         """
-        return getattr(self, '_logic_graph_positions', {})
+        return self._logic_graph_positions
 
     def _serialize_brushes(self):
         """Serialize brushes with I/O connections."""
