@@ -108,11 +108,6 @@ _WATER_LOUDNESS = 0.7
 class LogicThread(threading.Thread):
     _COLLISION_KEYS = _COLLISION_KEYS
 
-    # Historical projectile constants remain on LogicThread while the
-    # implementation lives in LogicCombat.
-    PROJECTILE_MONSTER_LIFT = LogicCombat.PROJECTILE_MONSTER_LIFT
-    PROJECTILE_MONSTER_RADIUS = LogicCombat.PROJECTILE_MONSTER_RADIUS
-    PROJECTILE_PLAYER_RADIUS = LogicCombat.PROJECTILE_PLAYER_RADIUS
     """
     Unified logic thread for both editor and play mode.
     Runs continuously at a fixed timestep (60 Hz).
