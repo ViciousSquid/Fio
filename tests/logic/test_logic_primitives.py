@@ -12,15 +12,17 @@ timer state filed under a memory address.
 """
 
 import pytest
-from types import SimpleNamespace
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
 
 from editor import io_system as io                       # noqa: E402
+from editor.editor_state import EditorState               # noqa: E402
 from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import LogicGate, LogicRelay, LogicTimer  # noqa: E402
 from tests.helpers.worlds import box_brush                # noqa: E402
+from engine.logic_thread import LogicThread                 # noqa: E402
+from engine.threaded_game_state import ThreadedGameState   # noqa: E402
 from engine.logic_timing import LogicTiming                    # noqa: E402
 from engine.logic_world import LogicWorld                          # noqa: E402
 
@@ -28,30 +30,31 @@ pytestmark = pytest.mark.qt
 
 
 class World:
-    """Brushes, things, an I/O manager and a log of what reached the sink."""
+    """Real LogicThread world with the production I/O dispatcher and runtimes."""
 
     def __init__(self):
-        self.manager = IOManager()
-        self.manager.set_logic_thread(self)
+        self.logic = LogicThread(ThreadedGameState(), EditorState())
+        self.manager = self.logic.io_manager
         self.io_manager = self.manager
-        self.editor_state = SimpleNamespace(brushes=[], things=[])
-        self.timing_runtime = LogicTiming(self)
-        self.door_states = {}
-        self.mover_states = {}
-        self.world_runtime = LogicWorld(self, timer_type=LogicTimer)
+        self.editor_state = self.logic.editor_state
+        self.timing_runtime = self.logic.timing_runtime
+        self.world_runtime = self.logic.world_runtime
+        self.door_states = self.logic.mover_runtime.door_states
+        self.mover_states = self.logic.mover_runtime.mover_states
         self.log = []
 
         self.manager.set_entity_finder(self._by_name)
         self.manager.set_entity_finder_by_id(self._by_id)
-        register_all_input_handlers(self.manager)
 
         def _sink(entity, parameter, logic):
             self.log.append((entity.get("name"), parameter))
-        self.manager.register_input_handler("brush", "fire", _sink)
 
+        self.manager.register_input_handler("brush", "fire", _sink)
         self.sink = self.add_brush("sink")
 
-    # -- world ------------------------------------------------------------
+    def close(self):
+        self.logic.stop()
+
     def add_brush(self, name, **props):
         brush = box_brush(name, **props)
         self.editor_state.brushes.append(brush)
@@ -59,35 +62,44 @@ class World:
 
     def add(self, thing):
         self.editor_state.things.append(thing)
+        self.logic.world_runtime.build_entity_caches()
         return thing
 
     def _by_name(self, name):
-        for b in self.editor_state.brushes:
-            if b.get("name") == name:
-                return b
-        for t in self.editor_state.things:
-            if t.properties.get("name") == name:
-                return t
+        for brush in self.editor_state.brushes:
+            if brush.get("name") == name:
+                return brush
+        for thing in self.editor_state.things:
+            if thing.properties.get("name") == name:
+                return thing
         return None
 
     def _by_id(self, entity_id):
-        for b in self.editor_state.brushes:
-            if b.get("id") == entity_id:
-                return b
-        for t in self.editor_state.things:
-            if t.properties.get("id") == entity_id:
-                return t
+        for brush in self.editor_state.brushes:
+            if brush.get("id") == entity_id:
+                return brush
+        for thing in self.editor_state.things:
+            if thing.properties.get("id") == entity_id:
+                return thing
         return None
 
-    # -- wiring -----------------------------------------------------------
     def connect(self, source, output, target, input_name, parameter="", **kw):
-        target_id = (target.get("id") if isinstance(target, dict)
-                     else target.properties.get("id"))
-        target_name = (target.get("name") if isinstance(target, dict)
-                       else target.properties.get("name"))
-        conn = OutputConnection(output_name=output, target_name=target_name,
-                                input_name=input_name, parameter=parameter,
-                                target_id=target_id, **kw)
+        target_id = (
+            target.get("id") if isinstance(target, dict)
+            else target.properties.get("id")
+        )
+        target_name = (
+            target.get("name") if isinstance(target, dict)
+            else target.properties.get("name")
+        )
+        conn = OutputConnection(
+            output_name=output,
+            target_name=target_name,
+            input_name=input_name,
+            parameter=parameter,
+            target_id=target_id,
+            **kw,
+        )
         io.add_connection(source, conn)
         return conn
 
@@ -95,12 +107,17 @@ class World:
         return self.connect(source, output, self.sink, "Fire")
 
     def send(self, entity, input_name, parameter=""):
-        name = (entity.get("name") if isinstance(entity, dict)
-                else entity.properties.get("name"))
-        entity_id = (entity.get("id") if isinstance(entity, dict)
-                     else entity.properties.get("id"))
-        self.manager._execute_input(name, input_name, parameter, "test",
-                                    target_id=entity_id)
+        name = (
+            entity.get("name") if isinstance(entity, dict)
+            else entity.properties.get("name")
+        )
+        entity_id = (
+            entity.get("id") if isinstance(entity, dict)
+            else entity.properties.get("id")
+        )
+        self.manager._execute_input(
+            name, input_name, parameter, "test", target_id=entity_id
+        )
 
     @property
     def hits(self):
@@ -108,6 +125,12 @@ class World:
 
 
 @pytest.fixture
+def world():
+    value = World()
+    yield value
+    value.close()
+
+
 def world():
     return World()
 
