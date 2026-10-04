@@ -2698,14 +2698,14 @@ class QtGameView(QOpenGLWidget):
             self.doneCurrent()
         self.update()
 
-    def get_selected_object_pos(self):
+    def get_primary_selection_pos(self):
         if not self.editor.primary_selection():
             return None
         if isinstance(self.editor.primary_selection(), dict):
             return glm.vec3(self.editor.primary_selection().get('pos', [0, 0, 0]))
         return glm.vec3(self.editor.primary_selection().pos)
 
-    def set_selected_object_pos(self, new_pos_vec):
+    def set_primary_selection_pos(self, new_pos_vec):
         """Move the whole selection so the grabbed object lands on ``new_pos_vec``.
 
         The gizmo drags one object, but everything selected travels with it by
@@ -3339,7 +3339,7 @@ class QtGameView(QOpenGLWidget):
                 self.update()
             return
         if event.button() == Qt.LeftButton and self.editor.primary_selection() and not self.play_mode:
-            obj_pos = self.get_selected_object_pos()
+            obj_pos = self.get_primary_selection_pos()
             if obj_pos:
                 ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
                 best_dist = float('inf')
@@ -3428,7 +3428,7 @@ class QtGameView(QOpenGLWidget):
             pt, _ = self.intersect_ray_with_axis(ray_o, ray_d, self.gizmo_object_start_pos, axis_vec)
             if pt:
                 diff = pt - self.drag_start_on_axis
-                self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
+                self.set_primary_selection_pos(self.gizmo_object_start_pos + diff)
             return
         # Component hover: highlight what a press would grab.  Selection-scoped
         # and repainted only when the highlight actually changes.
