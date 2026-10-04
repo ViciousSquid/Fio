@@ -114,7 +114,7 @@ class LogicSession:
 
             # Reset speaker/interaction state.
             logic.active_speakers.clear()
-            logic.hurt_trigger_timers.clear()
+            logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.current_hud_message = ""
             logic.current_hud_key_name = None
 
@@ -222,7 +222,7 @@ class LogicSession:
 
             self.stop_monster_ai()
             logic.trigger_runtime._reset_trigger_state()
-            logic.fired_once_triggers.clear()
+            logic.trigger_runtime.fired_once_triggers.clear()
             logic.collected_keys.clear()
             logic.active_speakers.clear()
             logic.hurt_trigger_timers.clear()
