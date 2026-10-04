@@ -172,8 +172,10 @@ def test_the_batched_cull_of_an_empty_scene_is_an_empty_result(logic):
 # The published render state
 # ---------------------------------------------------------------------------
 
-def test_editor_mode_publishes_the_editor_camera(logic):
-    thread = logic(brushes=[box_brush("wall")])
+def test_editor_mode_publishes_the_editor_camera_and_dense_projection(logic):
+    wall = box_brush("wall")
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    thread = logic(brushes=[wall], things=[lamp])
     thread.editor_camera.pos = glm.vec3(10, 20, 30)
     thread.editor_camera.yaw = 45.0
 
@@ -184,6 +186,28 @@ def test_editor_mode_publishes_the_editor_camera(logic):
     assert list(published.editor_camera_pos) == pytest.approx([10, 20, 30])
     assert published.editor_camera_yaw == 45.0
     assert published.camera_view_matrix is not None
+
+    # Editor rendering consumes the same canonical dense projections as play
+    # rendering; QtGameView must not reconstruct reduced editor-side tables.
+    assert published.render_table.count == 1
+    assert published.render_refs[0] is wall
+    assert published.visible_brush_slots.tolist() == [0]
+    assert published.entity_table.count == 1
+    assert published.entity_refs[0] is lamp
+    assert published.visible_thing_slots.tolist() == [0]
+
+
+def test_qt_game_view_has_no_editor_side_render_projection():
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "engine" / "qt_game_view.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert "_editor_render_table" not in source
+    assert "_editor_entity_table" not in source
+    assert "self._editor_entity_refs" not in source
+    assert "entity_table.begin_frame(" not in source
+    assert ".render_table.sync(" not in source
 
 
 
