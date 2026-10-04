@@ -77,6 +77,12 @@ def walk(s, x, z=0.0, entities=()):
     s.tick()
 
 
+def test_streaming_reads_player_from_logic_player_runtime():
+    logic = Logic(player=Player(123.0, 456.0))
+    session = BigWorldSession(logic)
+    assert session._player_pos() is logic.player_runtime.player.pos
+
+
 # ---------------------------------------------------------------------------
 # Creation
 # ---------------------------------------------------------------------------

@@ -714,7 +714,7 @@ class DiskStreamingSession:
 
     # ------------------------------------------------------------------
     def _player_pos(self):
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None:
             return None
         return player.pos
