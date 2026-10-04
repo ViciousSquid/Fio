@@ -1,33 +1,32 @@
 """Fixtures shared by the MonsterAI suite.
 
-MonsterAI reaches into ``editor.things`` for the ``Monster`` and ``PathNode``
-classes, which are PyQt-backed, so the whole area is marked ``qt`` — it runs
-head-less against the offscreen platform plugin, but PyQt5 has to be installed.
-Nothing here needs a display, a GL context or a running thread.
+MonsterAI reaches into editor.things for the Monster and PathNode classes,
+which are PyQt-backed, so the whole area is marked qt. The behavioural
+fixtures use the production LogicThread, player, spatial grid and IOManager.
 """
 
+import glm
 import pytest
 
 pytest.importorskip("PyQt5", reason="editor.things (Monster/PathNode) needs PyQt5")
 
-import glm
-
 from editor.editor_state import EditorState
-from editor.things import Monster, PathNode
 from editor.io_system import IOManager
+from editor.things import Monster, PathNode
 from engine.io_handlers import register_all_input_handlers
-from engine.monster_ai import MonsterAI
 from engine.logic_thread import LogicThread
-from engine.threaded_game_state import ThreadedGameState
+from engine.monster_ai import MonsterAI
 from engine.physics import SpatialGrid
 from engine.player import Player
-from tests.helpers.worlds import make_thing, room
+from engine.threaded_game_state import ThreadedGameState
+from tests.helpers.worlds import make_thing
+
 pytestmark = pytest.mark.qt
 
 
 @pytest.fixture
 def monster_factory():
-    """Builds a ``Monster`` with a fixed name, id and known properties."""
+    """Build a Monster with a fixed name and known gameplay properties."""
     counter = {"n": 0}
 
     def _make(name=None, pos=(0, 0, 0), **props):
@@ -45,7 +44,12 @@ def monster_factory():
 
 @pytest.fixture
 def path_node_factory():
-    def _make(name, po@pytest.fixture
+    def _make(name, pos=(0, 0, 0), **props):
+        return make_thing(PathNode, name, pos, **props)
+    return _make
+
+
+@pytest.fixture
 def ai_world(request):
     """Build MonsterAI against a complete production LogicThread."""
     created = []
@@ -71,6 +75,7 @@ def ai_world(request):
     def cleanup():
         for logic in created:
             logic.stop()
+
     request.addfinalizer(cleanup)
     return _build
 
@@ -90,12 +95,9 @@ def io_manager():
     manager.fire_output = record_and_dispatch
     return manager
 
-ding stand-in for the I/O manager the AI fires outputs into."""
-    return RecordingIOManager()
-
 
 @pytest.fixture
 def flat_ground():
     """A large floor brush so ground monsters have something to stand on."""
     from tests.helpers.worlds import box_brush
-    return [box_brush("ground", (0, -16, 0), (8192, 32, 8192))]
+    return [box_brush("ground", (0, -16, 0), (8192, 32, 8192))
