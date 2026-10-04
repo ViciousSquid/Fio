@@ -24,6 +24,7 @@ from engine.logic_collision import LogicCollision
 from engine.logic_movers import LogicMovers
 from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
+from engine.logic_timing import LogicTiming
 from engine.logic_world import LogicWorld                       # noqa: E402
 from plugins.bigworld import persistence          # noqa: E402
 from plugins.bigworld.runtime import BigWorldSession  # noqa: E402
@@ -110,6 +111,7 @@ class FakeLogic:
         self.movers = []
         self.doors = []
         self.mover_runtime = LogicMovers(self)
+        self.timing_runtime = LogicTiming(self)
         self.monster_ai = FakeMonsterAI()
         self._monster_lock = threading.RLock()
         self._moving_rows = None
