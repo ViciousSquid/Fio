@@ -304,10 +304,15 @@ def test_logic_triggers_constructs_and_uses_authored_sphere_radius():
 def test_logic_world_constructs_and_packs_levelchanger_rows():
     first = _Thing((1, 2, 3), name="first", radius=32)
     second = _Thing((4, 5, 6), name="second", radius=64, disabled=True)
-    host = SimpleNamespace(_levelchanger_things=[first, second])
+    host = SimpleNamespace(
+        editor_state=SimpleNamespace(brushes=[], things=[first, second]),
+        _levelchanger_things=[first, second],
+    )
     runtime = LogicWorld(host)
 
     runtime.refresh_levelchanger_table()
+    runtime.build_entity_caches()
+    assert runtime.name_cache["first"] is first
 
     assert host._levelchanger_centres.dtype == np.float32
     assert np.array_equal(

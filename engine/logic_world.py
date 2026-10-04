@@ -48,18 +48,18 @@ class LogicWorld:
         for brush in logic.editor_state.brushes:
             name = brush.get("name")
             if name:
-                logic._name_cache[name] = brush
+                self.name_cache[name] = brush
             entity_id = brush.get("id")
             if entity_id:
-                logic._id_cache[entity_id] = brush
+                self.id_cache[entity_id] = brush
 
         for thing in logic.editor_state.things:
             name = thing.properties.get("name")
             if name:
-                logic._name_cache[name] = thing
+                self.name_cache[name] = thing
             entity_id = thing.properties.get("id")
             if entity_id:
-                logic._id_cache[entity_id] = thing
+                self.id_cache[entity_id] = thing
 
         logic._trigger_brushes = [
             (brush.get("id") or index, brush)
@@ -107,7 +107,7 @@ class LogicWorld:
         if (
             logic.play_mode
             and logic.mover_runtime._moving_rows is not None
-            and logic._indexed_brushes != logic._moving_rows
+            and self.indexed_brushes != logic._moving_rows
         ):
             logic.mover_runtime._reindex_moving_brushes()
             logic.collision_runtime.mark_dirty()
@@ -121,7 +121,7 @@ class LogicWorld:
             return None
         if not logic.play_mode:
             return self.scan_entity("name", name)
-        return logic._name_cache.get(name)
+        return self.name_cache.get(name)
 
     def find_entity_by_id(self, entity_id: str):
         """Resolve an entity by stable id against the live world/cache."""
@@ -130,7 +130,7 @@ class LogicWorld:
             return None
         if not logic.play_mode:
             return self.scan_entity("id", entity_id)
-        return logic._id_cache.get(entity_id)
+        return self.id_cache.get(entity_id)
 
     def scan_entity(self, key, value):
         """Search the live editor world outside a play session."""
@@ -150,7 +150,7 @@ class LogicWorld:
         if not name or PathNode is None:
             return None
 
-        entity = logic._name_cache.get(name)
+        entity = self.name_cache.get(name)
         if entity is not None and isinstance(entity, PathNode):
             return entity
 
@@ -238,10 +238,10 @@ class LogicWorld:
         """Drop references held by play-session world indexes."""
         logic = self.logic
 
-        logic._name_cache = {}
-        logic._id_cache = {}
-        logic._indexed_things = ()
-        logic._indexed_brushes = ()
+        self.name_cache = {}
+        self.id_cache = {}
+        self.indexed_things = ()
+        self.indexed_brushes = ()
         logic.mover_runtime._moving_rows = None
 
         self.monster_by_id = {}
