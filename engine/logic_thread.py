@@ -32,7 +32,7 @@ from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
 from .logic_parenting import LogicParenting
 from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYER_EXIT_EPSILON
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
-from .logic_combat import LogicCombat, NO_PROJECTILES as _NO_PROJECTILES
+from .logic_combat import LogicCombat
 from .logic_timing import LogicTiming
 from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
 from .logic_world import LogicWorld
@@ -41,7 +41,6 @@ from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
 from .effect_table import EffectStore
-from .projectile_table import ProjectileStore
 
 
 

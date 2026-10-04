@@ -237,7 +237,7 @@ class LogicSession:
             logic.timing_runtime.timer_states.clear()
             logic.timing_runtime.light_fade_states.clear()
             logic.active_weapon = None
-            logic.bullet_marks = []
+            logic.combat_runtime.bullet_marks = []
             logic.player_dead = False
             logic.muzzle_flash_active = False
 
@@ -272,8 +272,8 @@ class LogicSession:
             logic.portal_runtime.reset_session()
 
             logic.level_complete_ui = None
-            logic._monster_projectiles.clear()
-            logic._projectile_positions = _NO_PROJECTILES
+            logic.combat_runtime._monster_projectiles.clear()
+            logic.combat_runtime.projectile_positions = _NO_PROJECTILES
             logic._gunfire_events.clear()
 
             self.reset_all_monsters(clear_dead=False)
