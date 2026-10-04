@@ -7,6 +7,7 @@ borrow permanently -- with it open, the renderer never saw another frame.
 """
 
 import os
+import random
 import numpy as np
 import pytest
 
@@ -292,38 +293,48 @@ def test_the_export_includes_the_terrain_table(window, tmp_path, monkeypatch):
 
 @pytest.fixture
 def real_world_window(qt_app):
-    """Attach Debug Tables to a real authored world and real LogicThread."""
+    """Attach Debug Tables to a real generated map and real LogicThread."""
     from editor.editor_state import EditorState
     from editor.main_window import MainWindow
+    from editor.procedural_generator import create_map_data
     from editor.things import Light, Sprite
     from engine.logic_thread import LogicThread
     from engine.threaded_game_state import ThreadedGameState
-    from tests.helpers.worlds import box_brush, make_thing
+    from tests.helpers.worlds import make_thing
+
+    random.seed(0xF10)
+    data = create_map_data({
+        "world_width": 1024,
+        "world_height": 1024,
+        "room_count": 8,
+        "min_room": 192,
+        "max_room": 256,
+        "wall_tex": "default.png",
+        "floor_tex": "default.png",
+        "random_wall_texture": False,
+        "random_floor_texture": False,
+        "enable_floors": False,
+        "spawn_monsters": False,
+        "spawn_health": False,
+    })
 
     state = EditorState()
-    state.brushes = [
-        box_brush("ground", (0, -16, 0), (2048, 32, 2048)),
-        box_brush("wall_a", (-160, 96, 0), (64, 192, 256)),
-        box_brush("wall_b", (160, 128, 0), (64, 256, 256)),
-    ]
-    state.things = [
-        make_thing(
-            Light, "audit_light", (0, 256, 192),
-            color=[255, 255, 255], intensity=2.0, radius=1000.0,
-            state="on", casts_shadows=True,
-        ),
-        make_thing(
-            Sprite, "audit_sprite", (0, 64, 0),
-            sprite="Dev/monster.png",
-        ),
-    ]
+    state.load_from_data(data, save_undo=False)
+
+    generated_lights = [thing for thing in state.things if isinstance(thing, Light)]
+    assert generated_lights, "procedural map must contain its generated room lights"
+    light = generated_lights[0]
+    light.properties["casts_shadows"] = True
+
+    sprite = make_thing(Sprite, "audit_sprite", light.pos,
+                        sprite="Dev/monster.png")
+    state.things.append(sprite)
+    state.mark_world_changed([light, sprite])
 
     game_state = ThreadedGameState()
     logic = LogicThread(game_state, state)
     logic._prepare_render_state()
     assert game_state.request_swap() is True
-    # The published frame is the actual dense execution state consumed by
-    # Debug Tables. A second prepare/swap settles the peer buffer as well.
     logic._prepare_render_state()
     assert game_state.request_swap() is True
 
@@ -368,15 +379,15 @@ def test_debug_tables_is_an_oracle_for_a_real_authored_world(real_world_window):
             thing.pos.tolist()
         )
 
-    light = state.things[0]
+    light = next(thing for thing in state.things if isinstance(thing, Light))
     light_slot = instrument.entities.slot_of_id[light.properties["id"]]
-    assert instrument.entities.light_pos[light_slot].tolist() == pytest.approx(
+    assert instrument.entities.pos[light_slot].tolist() == pytest.approx(
         light.pos.tolist()
     )
     assert bool(instrument.entities.light_casts_shadows[light_slot])
     assert instrument.entities.light_params[light_slot, 0] == pytest.approx(2.0)\n    assert instrument.entities.light_params[light_slot, 1] == pytest.approx(1000.0)
 
-    sprite = state.things[1]
+    sprite = next(thing for thing in state.things if thing.properties["id"] == "audit_sprite")
     sprite_slot = instrument.entities.slot_of_id[sprite.properties["id"]]
     assert int(instrument.entities.sprite_key_id[sprite_slot]) >= 0
 
@@ -388,22 +399,23 @@ def test_debug_tables_tracks_a_real_light_move_in_the_dense_entity_row(
     instrument, state, logic = real_world_window
 
     instrument.refresh()
-    ident = state.things[0].properties["id"]
+    light = next(thing for thing in state.things if isinstance(thing, Light))
+    ident = light.properties["id"]
     before = instrument.entities.slot_of_id[ident]
     old = instrument.entities.pos[before].copy()
 
-    state.things[0].pos = [320.0, 256.0, 192.0]
-    state.mark_world_changed([state.things[0]])
+    light.pos = [320.0, 256.0, 192.0]
+    state.mark_world_changed([light])
     logic._prepare_render_state()
     assert logic.game_state.request_swap() is True
 
     instrument.refresh()
     slot = instrument.entities.slot_of_id[ident]
     assert slot == before
-    assert instrument.entities.light_pos[slot].tolist() == pytest.approx(
+    assert instrument.entities.pos[slot].tolist() == pytest.approx(
         [320.0, 256.0, 192.0]
     )
-    assert not np.array_equal(old, instrument.entities.light_pos[slot])
+    assert not np.array_equal(old, instrument.entities.pos[slot])
 
 
 def test_debug_tables_detects_the_real_brush_set_change(real_world_window):
