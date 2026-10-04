@@ -27,6 +27,10 @@ class LogicWorld:
         self.monster_type = monster_type
         self.timer_type = timer_type
         self.path_node_type = path_node_type
+        self.levelchanger_things = []
+        self.levelchanger_centres = np.empty((0, 3), dtype=np.float32)
+        self.levelchanger_radii = np.empty(0, dtype=np.float32)
+        self.levelchanger_eligible = np.empty(0, dtype=bool)
 
     def build_entity_caches(self):
         """Build lookup and hot-path entity indexes for the current world."""
@@ -63,7 +67,7 @@ class LogicWorld:
             logic._props.rebuild(logic.editor_state.things)
 
         LevelChanger = self.levelchanger_type
-        logic._levelchanger_things = [
+        self.levelchanger_things = [
             thing
             for thing in logic.editor_state.things
             if LevelChanger and isinstance(thing, LevelChanger)
@@ -157,27 +161,27 @@ class LogicWorld:
     def refresh_levelchanger_table(self):
         """Pack LevelChanger activation geometry into dense numeric columns."""
         logic = self.logic
-        things = getattr(logic, "_levelchanger_things", ())
+        things = self.levelchanger_things
         count = len(things)
 
         if not count:
-            logic._levelchanger_centres = np.empty(
+            self.levelchanger_centres = np.empty(
                 (0, 3), dtype=np.float32
             )
-            logic._levelchanger_radii = np.empty(
+            self.levelchanger_radii = np.empty(
                 0, dtype=np.float32
             )
-            logic._levelchanger_eligible = np.empty(
+            self.levelchanger_eligible = np.empty(
                 0, dtype=bool
             )
             return
 
-        logic._levelchanger_centres = np.asarray(
+        self.levelchanger_centres = np.asarray(
             [thing.pos for thing in things],
             dtype=np.float32,
         ).reshape(count, 3)
 
-        logic._levelchanger_radii = np.asarray(
+        self.levelchanger_radii = np.asarray(
             [
                 float(thing.properties.get("radius", 128.0))
                 for thing in things
@@ -185,7 +189,7 @@ class LogicWorld:
             dtype=np.float32,
         )
 
-        logic._levelchanger_eligible = np.asarray(
+        self.levelchanger_eligible = np.asarray(
             [
                 not thing.properties.get("disabled", False)
                 and thing.properties.get("usable", True)
@@ -240,10 +244,10 @@ class LogicWorld:
         logic._monster_things = []
         logic._timer_things = []
 
-        logic._levelchanger_things = []
-        logic._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
-        logic._levelchanger_radii = np.empty(0, dtype=np.float32)
-        logic._levelchanger_eligible = np.empty(0, dtype=bool)
+        self.levelchanger_things = []
+        self.levelchanger_centres = np.empty((0, 3), dtype=np.float32)
+        self.levelchanger_radii = np.empty(0, dtype=np.float32)
+        self.levelchanger_eligible = np.empty(0, dtype=bool)
 
         logic._trigger_brushes = []
         logic._trigger_brush_by_bid = {}
