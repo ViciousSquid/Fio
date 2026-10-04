@@ -131,20 +131,22 @@ def test_clearing_the_grid_clears_line_of_sight():
 
 
 def test_the_monster_ai_does_not_read_the_render_table():
-    """The AI thread must not touch a table the logic thread is rewriting."""
-    from engine.monster_ai import MonsterAI
+    """The production MonsterAI operates from the real LogicThread-owned grid."""
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
-    class _Logic:
-        @property
-        def _render_table(self):
-            raise AssertionError("line of sight read the logic thread's render table")
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    logic.monster_ai._grid = _world(
+        [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))]
+    )
 
-    ai = object.__new__(MonsterAI)
-    ai.lt = _Logic()
-    ai._grid = _world([box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))])
-
-    assert ai._has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0)) is False
-    assert ai._has_line_of_sight(glm.vec3(-300, 0, 900), glm.vec3(300, 0, 900)) is True
+    try:
+        ai = logic.monster_ai
+        assert ai._has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0)) is False
+        assert ai._has_line_of_sight(glm.vec3(-300, 0, 900), glm.vec3(300, 0, 900)) is True
+    finally:
+        logic.stop()
 
 
 # ---------------------------------------------------------------------------
