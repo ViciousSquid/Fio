@@ -52,7 +52,7 @@ def session():
         state.things = list(things)
         thread = LogicThread(ThreadedGameState(), state)
         made.append(thread)
-        thread.player = Player(0.0, 0.0)
+        thread.player_runtime.player = Player(0.0, 0.0)
         thread.session_runtime.apply_play_mode(True)
         return state, thread
 
