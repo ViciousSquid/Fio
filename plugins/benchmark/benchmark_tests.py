@@ -231,7 +231,7 @@ class BenchmarkTests:
         camera = self.main_window.view_3d.camera
         import glm
         position = glm.vec3(float(x), float(y), float(z))
-        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
+        logic_thread = self.main_window.view_3d.logic_thread
         if logic_thread is not None:
             logic_thread.camera.set_editor_camera(position, yaw, pitch, camera.fov)
         else:
@@ -577,7 +577,7 @@ class BenchmarkTests:
                         "Fio failed to enter Play Mode for monster chaos witness"
                     )
 
-                logic = getattr(view, "logic_thread", None)
+                logic = view.logic_thread
                 if logic is None:
                     raise RuntimeError(
                         "Monster chaos witness has no live LogicThread"
@@ -648,7 +648,7 @@ class BenchmarkTests:
                     window.enter_play_mode()
                     QApplication.processEvents()
     
-                io_manager = getattr(view.logic_thread, "io_manager", None)
+                io_manager = view.logic_thread.io_manager
                 if io_manager is None:
                     raise RuntimeError("live Fio LogicThread has no IOManager")
                 relays = [
