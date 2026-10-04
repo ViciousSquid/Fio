@@ -28,6 +28,22 @@ class LogicRender:
         self.culling_enabled = True
         self._last_edited = {}
 
+        # Health HUD fade is render-owned state. LogicThread supplies the
+        # authoritative health value; this runtime owns the projection timing
+        # and display alpha.
+        self.hud_fade_enabled = True
+        self._hud_health_fade_in_duration = 1.5
+        self._hud_health_fade_out_duration = 4.0
+        self._hud_health_alpha = 0.5
+        self._hud_health_last_value = None
+        self._hud_health_fade_started = None
+        self._hud_health_fade_from = 0.5
+        self._hud_health_fade_phase = "idle"
+
+        # Cinematic HUD fade is also render-owned state.
+        self._hud_cinematic_last_active = False
+        self._hud_cinematic_fade_started = None
+
     def extract_frustum_planes(self, proj_view: glm.mat4):
         m = proj_view
         planes = []
@@ -122,97 +138,97 @@ class LogicRender:
         logic = self.logic
         with logic._tick_lock:
             enabled = bool(enabled)
-            if enabled == logic.hud_fade_enabled:
+            if enabled == self.hud_fade_enabled:
                 return
-            logic.hud_fade_enabled = enabled
-            logic._hud_health_alpha = 0.5 if enabled else 1.0
-            logic._hud_health_fade_started = None
-            logic._hud_health_fade_from = logic._hud_health_alpha
-            logic._hud_health_fade_phase = "idle"
-            logic._hud_health_last_value = logic.player_health
+            self.hud_fade_enabled = enabled
+            self._hud_health_alpha = 0.5 if enabled else 1.0
+            self._hud_health_fade_started = None
+            self._hud_health_fade_from = self._hud_health_alpha
+            self._hud_health_fade_phase = "idle"
+            self._hud_health_last_value = logic.player_health
 
     def update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
         logic = self.logic
 
-        if not logic.hud_fade_enabled:
-            logic._hud_health_alpha = 1.0
-            logic._hud_health_fade_started = None
-            logic._hud_health_fade_from = 1.0
-            logic._hud_health_fade_phase = "idle"
-            logic._hud_health_last_value = logic.player_health
-            return logic._hud_health_alpha
+        if not self.hud_fade_enabled:
+            self._hud_health_alpha = 1.0
+            self._hud_health_fade_started = None
+            self._hud_health_fade_from = 1.0
+            self._hud_health_fade_phase = "idle"
+            self._hud_health_last_value = logic.player_health
+            return self._hud_health_alpha
 
         def _sample(at):
-            phase = logic._hud_health_fade_phase
+            phase = self._hud_health_fade_phase
             if phase == "in":
-                started = logic._hud_health_fade_started
+                started = self._hud_health_fade_started
                 if started is None:
-                    logic._hud_health_alpha = 1.0
-                    logic._hud_health_fade_from = 1.0
-                    logic._hud_health_fade_started = at
-                    logic._hud_health_fade_phase = "out"
-                    return logic._hud_health_alpha
+                    self._hud_health_alpha = 1.0
+                    self._hud_health_fade_from = 1.0
+                    self._hud_health_fade_started = at
+                    self._hud_health_fade_phase = "out"
+                    return self._hud_health_alpha
 
                 elapsed = max(0.0, at - started)
-                if elapsed + 1e-12 < logic._hud_health_fade_in_duration:
-                    t = elapsed / logic._hud_health_fade_in_duration
-                    logic._hud_health_alpha = (
-                        logic._hud_health_fade_from
-                        + (1.0 - logic._hud_health_fade_from) * t
+                if elapsed + 1e-12 < self._hud_health_fade_in_duration:
+                    t = elapsed / self._hud_health_fade_in_duration
+                    self._hud_health_alpha = (
+                        self._hud_health_fade_from
+                        + (1.0 - self._hud_health_fade_from) * t
                     )
-                    return logic._hud_health_alpha
+                    return self._hud_health_alpha
 
-                logic._hud_health_alpha = 1.0
-                logic._hud_health_fade_from = 1.0
-                logic._hud_health_fade_phase = "out"
-                out_elapsed = elapsed - logic._hud_health_fade_in_duration
+                self._hud_health_alpha = 1.0
+                self._hud_health_fade_from = 1.0
+                self._hud_health_fade_phase = "out"
+                out_elapsed = elapsed - self._hud_health_fade_in_duration
             elif phase == "out":
-                started = logic._hud_health_fade_started
+                started = self._hud_health_fade_started
                 if started is None:
-                    logic._hud_health_alpha = 0.5
-                    logic._hud_health_fade_phase = "idle"
-                    return logic._hud_health_alpha
+                    self._hud_health_alpha = 0.5
+                    self._hud_health_fade_phase = "idle"
+                    return self._hud_health_alpha
                 out_elapsed = max(
                     0.0,
                     at
                     - started
-                    - logic._hud_health_fade_in_duration,
+                    - self._hud_health_fade_in_duration,
                 )
             else:
-                logic._hud_health_alpha = 0.5
-                return logic._hud_health_alpha
+                self._hud_health_alpha = 0.5
+                return self._hud_health_alpha
 
-            if out_elapsed + 1e-12 >= logic._hud_health_fade_out_duration:
-                logic._hud_health_alpha = 0.5
-                logic._hud_health_fade_started = None
-                logic._hud_health_fade_phase = "idle"
-                return logic._hud_health_alpha
+            if out_elapsed + 1e-12 >= self._hud_health_fade_out_duration:
+                self._hud_health_alpha = 0.5
+                self._hud_health_fade_started = None
+                self._hud_health_fade_phase = "idle"
+                return self._hud_health_alpha
 
             t = max(
                 0.0,
                 min(
                     1.0,
-                    out_elapsed / logic._hud_health_fade_out_duration,
+                    out_elapsed / self._hud_health_fade_out_duration,
                 ),
             )
-            logic._hud_health_alpha = 1.0 - (0.5 * t)
-            return logic._hud_health_alpha
+            self._hud_health_alpha = 1.0 - (0.5 * t)
+            return self._hud_health_alpha
 
         health = logic.player_health
         health_changed = (
-            logic._hud_health_last_value is not None
-            and health != logic._hud_health_last_value
+            self._hud_health_last_value is not None
+            and health != self._hud_health_last_value
         )
 
         if health_changed:
             _sample(now)
-            logic._hud_health_last_value = health
-            logic._hud_health_fade_started = now
-            logic._hud_health_fade_from = logic._hud_health_alpha
-            logic._hud_health_fade_phase = "in"
-        elif logic._hud_health_last_value is None:
-            logic._hud_health_last_value = health
+            self._hud_health_last_value = health
+            self._hud_health_fade_started = now
+            self._hud_health_fade_from = self._hud_health_alpha
+            self._hud_health_fade_phase = "in"
+        elif self._hud_health_last_value is None:
+            self._hud_health_last_value = health
 
         return _sample(now)
 
@@ -349,23 +365,23 @@ class LogicRender:
         cinematic_active = bool(logic.cutscene_runtime.state)
         now = time.perf_counter()
         if cinematic_active:
-            logic._hud_cinematic_last_active = True
-            logic._hud_cinematic_fade_started = None
+            self._hud_cinematic_last_active = True
+            self._hud_cinematic_fade_started = None
             hud_alpha = 0.0
-        elif logic._hud_cinematic_last_active:
-            logic._hud_cinematic_last_active = False
-            logic._hud_cinematic_fade_started = now
+        elif self._hud_cinematic_last_active:
+            self._hud_cinematic_last_active = False
+            self._hud_cinematic_fade_started = now
             hud_alpha = 0.0
-        elif logic._hud_cinematic_fade_started is not None:
+        elif self._hud_cinematic_fade_started is not None:
             hud_alpha = min(
                 1.0,
                 max(
                     0.0,
-                    (now - logic._hud_cinematic_fade_started) / 4.0,
+                    (now - self._hud_cinematic_fade_started) / 4.0,
                 ),
             )
             if hud_alpha >= 1.0:
-                logic._hud_cinematic_fade_started = None
+                self._hud_cinematic_fade_started = None
         else:
             hud_alpha = 1.0
 

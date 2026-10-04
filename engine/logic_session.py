@@ -195,17 +195,17 @@ class LogicSession:
             # Reset cinematic state.
             logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
-            logic._hud_cinematic_last_active = False
-            logic._hud_cinematic_fade_started = None
+            logic.render_runtime._hud_cinematic_last_active = False
+            logic.render_runtime._hud_cinematic_fade_started = None
 
             # Start the health HUD hidden; player spawn uses the normal
             # fast 1.5-second fade-in followed by the 4-second fade-out.
             hud_now = time.perf_counter()
-            logic._hud_health_alpha = 0.0
-            logic._hud_health_last_value = logic.player_health
-            logic._hud_health_fade_started = hud_now
-            logic._hud_health_fade_from = 0.0
-            logic._hud_health_fade_phase = "in"
+            logic.render_runtime._hud_health_alpha = 0.0
+            logic.render_runtime._hud_health_last_value = logic.player_health
+            logic.render_runtime._hud_health_fade_started = hud_now
+            logic.render_runtime._hud_health_fade_from = 0.0
+            logic.render_runtime._hud_health_fade_phase = "in"
 
             # Reset portal runtime state.
             logic.portal_runtime.reset_session()
@@ -276,13 +276,13 @@ class LogicSession:
             logic.mover_runtime.mover_path_states = {}
             logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
-            logic._hud_cinematic_last_active = False
-            logic._hud_cinematic_fade_started = None
-            logic._hud_health_alpha = 0.5
-            logic._hud_health_last_value = None
-            logic._hud_health_fade_started = None
-            logic._hud_health_fade_from = 0.5
-            logic._hud_health_fade_phase = "idle"
+            logic.render_runtime._hud_cinematic_last_active = False
+            logic.render_runtime._hud_cinematic_fade_started = None
+            logic.render_runtime._hud_health_alpha = 0.5
+            logic.render_runtime._hud_health_last_value = None
+            logic.render_runtime._hud_health_fade_started = None
+            logic.render_runtime._hud_health_fade_from = 0.5
+            logic.render_runtime._hud_health_fade_phase = "idle"
 
             # Reset portal runtime state.
             logic.portal_runtime.reset_session()

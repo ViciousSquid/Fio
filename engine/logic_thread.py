@@ -245,23 +245,6 @@ class LogicThread(threading.Thread):
         # the camera runtime as an owned subsystem and schedules its updates.
         self.camera = LogicCamera(self)
         self.player_runtime = LogicPlayer(self)
-        # HUD visibility follows LogicCamera control. When a cinematic ends,
-        # the entire HUD fades back in over four seconds.
-        self._hud_cinematic_last_active = False
-        self._hud_cinematic_fade_started = None
-
-        # Health HUD fade timing is deliberately asymmetric: a fast 1.5-second
-        # fade-in to full opacity followed immediately by a slower 4-second
-        # fade-out to the normal 50% idle state.
-        self._hud_health_fade_in_duration = 1.5
-        self._hud_health_fade_out_duration = 4.0
-        self._hud_health_alpha = 0.5
-        self._hud_health_last_value = None
-        self._hud_health_fade_started = None
-        self._hud_health_fade_from = 0.5
-        self._hud_health_fade_phase = "idle"
-        self.hud_fade_enabled = True
-
         self._editor_mouselook_active = False
         # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
         self.render_runtime = LogicRender(self)
