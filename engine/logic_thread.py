@@ -206,7 +206,6 @@ class LogicThread(threading.Thread):
         ),
         "portals": (),
         "combat": (
-            "player",
             "player_runtime",
             "io_manager",
             "camera",
