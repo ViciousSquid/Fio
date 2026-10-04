@@ -111,9 +111,10 @@ launch (nothing is discovered or loaded).
 
 The **engine** play lifecycle is wired **natively**:
 `engine.logic_thread.LogicThread` calls the plugin manager directly —
-`attach_runtime` in `__init__`, `dispatch_play_start`/`dispatch_play_stop` in
-`set_play_mode`, and the cached, early-out `tick()` in `_tick_play_mode`. Each
-call is guarded, so a build without the `plugins/` package runs unchanged.
+`attach_runtime` in `__init__`, `dispatch_play_start`/`dispatch_play_stop` from
+`LogicSession.apply_play_mode`, and the cached, early-out `tick()` in
+`_tick_play_mode`. Each call is guarded, so a build without the `plugins/`
+package runs unchanged.
 
 The **editor** integrations stay as small, guarded monkey-patches in
 [`integration.py`](integration.py) (cold paths only — menus, load hooks, export),
@@ -122,7 +123,7 @@ tiny bootstrap in `editor/__init__.py`.
 
 | File | Role |
 |------|------|
-| `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
+| `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`) and per-tick dispatch (`_tick_play_mode`). Play start/stop dispatch is owned by `LogicSession.apply_play_mode`. All guarded and optional. |
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
 | [`integration.py`](integration.py) | Installs the editor hooks: auto-enable/disable of disabled-by-default plugins onto `EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ &lt;plugin&gt;** submenu onto `View2D`'s right-click menu; and a top-level **Plugins** menu onto `Ui_MainWindow`. |
 | `editor/package_exporter.py` | Exports world/maps/assets only; plugin code is never added to the archive. |

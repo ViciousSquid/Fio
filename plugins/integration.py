@@ -3,7 +3,7 @@ Editor-side integration shim for the Fio plugin system.
 
 The **engine** play lifecycle is wired natively: ``engine.logic_thread.LogicThread``
 calls the plugin manager directly (attach at ``__init__``, play-start/stop in
-``set_play_mode``, per-tick dispatch in ``_tick_play_mode``). Nothing in this
+``LogicSession.apply_play_mode``, per-tick dispatch in ``_tick_play_mode``). Nothing in this
 module touches the engine any more.
 
 What remains here are the **editor** integrations, kept as small guarded
@@ -65,7 +65,8 @@ def apply():
 #
 # The play-lifecycle hooks (runtime attach, play-start/stop, per-tick dispatch)
 # are wired natively inside ``engine.logic_thread.LogicThread`` — see the guarded
-# ``self.plugins`` calls in ``__init__``, ``set_play_mode`` and ``_tick_play_mode``.
+# ``self.plugins`` calls in ``__init__`` and ``_tick_play_mode``; lifecycle dispatch
+# is performed by ``LogicSession.apply_play_mode``.
 # No monkey-patch is needed here; the engine calls the plugin manager directly.
 
 
