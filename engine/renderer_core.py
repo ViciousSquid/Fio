@@ -2879,16 +2879,17 @@ layout (location = 10) in float iInstanceAlpha;
         return 0
 
     def draw_player_glasses(self, projection, view, positions,
-                           width=40.0, height=18.0, lift=40.0, sprites=()):
+                           width=40.0, height=18.0, lift=0.0, sprites=()):
         """Draw the player as the fixed glasses billboard.
 
         Player bodies are deliberately not EntityTable rows, so this is the
         small non-entity billboard path used only for player representation
         (split-screen and portal virtual scenes). It reuses the existing sprite
         shader/VAO and performs at most two draws in a normal split-screen view.
-        *positions* are the published ``player_glasses_positions``; each
-        billboard is raised by *lift* here so every view (split-screen halves
-        and portal scenes) places the glasses at the same height. *sprites*
+        *positions* are the published ``player_glasses_positions`` and are
+        already at eye height. *lift* is an optional caller-supplied offset;
+        the default is zero so portal and split-screen views do not apply a
+        second eye-height offset. *sprites*
         holds the ``sprite_textures`` key each position wears (player 1's
         chosen style, see :mod:`engine.glasses`); missing or unloaded keys
         fall back to the default pair.
