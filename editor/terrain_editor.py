@@ -1927,7 +1927,7 @@ class TerrainEditorPanel(QWidget):
         self.terrain.clear_sculpt()
         self._update_sculpt_info()
         self.terrain_changed.emit()
-        if self.editor and hasattr(self.editor, 'show_toast'):
+        if self.editor:
             self.editor.show_toast("Sculpt data cleared")
 
     def _update_sculpt_info(self):
@@ -1983,7 +1983,7 @@ class TerrainEditorPanel(QWidget):
         view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
-        if self.editor and hasattr(self.editor, '_close_current_overlay'):
+        if self.editor:
             self.editor._close_current_overlay()
 
     def showEvent(self, event):
