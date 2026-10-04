@@ -697,7 +697,7 @@ class MainWindow(QMainWindow):
             self.state.terrain_data = None
 
         # Notify the 3D view's logic thread (if any) that terrain is gone
-        if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+        if self.view_3d is not None and self.view_3d.logic_thread:
             self.view_3d.logic_thread.world_runtime.terrain = None
 
         # Close the terrain editor panel if it is open in the Properties dock
@@ -2567,7 +2567,7 @@ class MainWindow(QMainWindow):
         terrain.from_dict(terrain_data)
         if getattr(self.view_3d, 'renderer', None):
             self.view_3d.renderer.setup_terrain_shader(terrain)
-        if getattr(self.view_3d, 'logic_thread', None):
+        if self.view_3d is not None and self.view_3d.logic_thread:
             self.view_3d.logic_thread.world_runtime.terrain = terrain
 
     def _rebind_face_targets(self):
@@ -4229,7 +4229,7 @@ class MainWindow(QMainWindow):
             # plugins' on_play_stop) restores state by index into the world it
             # was started on, so it must run against that world, not the new one.
             was_playing = bool(getattr(self.view_3d, 'play_mode', False))
-            logic = getattr(self.view_3d, 'logic_thread', None)
+            logic = self.view_3d.logic_thread
             # The player keeps their weapons through a level change: taken
             # before the session ends (ending it drops them), handed back once
             # play has restarted on the new level (starting it clears them).
@@ -4961,7 +4961,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"save_layout failed: {e}")
 
-            if hasattr(self, 'view_3d') and self.view_3d and self.view_3d.logic_thread:
+            if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.stop()
                 self.view_3d.logic_thread.join(timeout=1.0)
 
