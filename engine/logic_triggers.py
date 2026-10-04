@@ -59,6 +59,8 @@ def _trigger_save(brush):
 class LogicTriggers:
     """Trigger subsystem for a single LogicThread host."""
 
+    TRIGGER_POLL_TICK = 0.25
+    TRIGGER_POLL_EPSILON = 1.0e-9
     HURT_INTERVAL = 0.5
 
     def __init__(self, logic):
@@ -597,10 +599,10 @@ class LogicTriggers:
         step = float(delta) if delta is not None else float(self.logic.TICK_DURATION)
         self._trigger_poll_elapsed += max(0.0, step)
 
-        scheduler_tick = self.logic.TRIGGER_POLL_TICK
+        scheduler_tick = self.TRIGGER_POLL_TICK
         # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
         # push every poll one logic tick late (same epsilon as per-trigger).
-        while self._trigger_poll_elapsed + self.logic.TRIGGER_POLL_EPSILON >= scheduler_tick:
+        while self._trigger_poll_elapsed + self.TRIGGER_POLL_EPSILON >= scheduler_tick:
             self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()

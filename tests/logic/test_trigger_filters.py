@@ -8,7 +8,7 @@ import pytest
 from engine.logic_interaction import LogicInteraction
 from engine.logic_movers import LogicMovers
 from engine.logic_session import LogicSession
-from engine.logic_thread import LogicThread, _trigger_activation
+from engine.logic_triggers import LogicTriggers, _trigger_activation
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
 from engine.prop_runtime import PropSession
@@ -32,10 +32,7 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.interaction_runtime = LogicInteraction(logic)
     logic.io_manager = None
     logic.plugins = None
-    logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
-    logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
-    logic.TICK_DURATION = LogicThread.TICK_DURATION
-    brush = {
+        brush = {
         'id': 1,
         'pos': [0, 0, 0],
         'size': [20, 20, 20],
@@ -136,7 +133,7 @@ def test_reset_clears_occupancy_in_place():
 # HUD prompt ownership
 #
 # _handle_triggers runs after _handle_interactions and PropSession.tick in
-# LogicThread._tick_play_mode, so whatever it leaves in current_hud_message is
+# the play-mode tick, so whatever it leaves in current_hud_message is
 # what the frame publishes. It may add a use-trigger prompt; it must never
 # clear a prompt an earlier stage set, or doors, pickups, level changers and
 # carried props all go silent.
