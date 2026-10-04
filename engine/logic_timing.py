@@ -89,7 +89,7 @@ class LogicTiming:
                 continue
 
             key = self.timer_key(thing)
-            state = logic.timer_states.get(key)
+            state = self.timer_states.get(key)
             if state is None:
                 try:
                     interval = max(
@@ -102,7 +102,7 @@ class LogicTiming:
                     "remaining": interval,
                     "interval": interval,
                 }
-                logic.timer_states[key] = state
+                self.timer_states[key] = state
 
             state["remaining"] -= delta
             if state["remaining"] > 0:
@@ -113,7 +113,7 @@ class LogicTiming:
 
             if thing.properties.get("one_shot", False):
                 thing.properties["timer_enabled"] = False
-                logic.timer_states.pop(key, None)
+                self.timer_states.pop(key, None)
                 if logic.io_manager:
                     logic.io_manager.fire_output(thing, "OnFinished")
             else:
@@ -126,7 +126,7 @@ class LogicTiming:
             return
 
         finished = []
-        for key, state in logic.light_fade_states.items():
+        for key, state in self.light_fade_states.items():
             entity = state["entity"]
             state["elapsed"] += delta
             duration = state["duration"]
@@ -152,4 +152,4 @@ class LogicTiming:
                 finished.append(key)
 
         for key in finished:
-            logic.light_fade_states.pop(key, None)
+            self.light_fade_states.pop(key, None)
