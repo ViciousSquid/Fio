@@ -1070,8 +1070,12 @@ def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
     # Disk-streaming session: the world isn't fully resident, so it can't be
     # overlaid wholesale — hand off to the session, which streams cells in and
     # re-applies each cell's delta as it loads.
-    session = getattr(logic, "_bigworld", None)
-    if session is not None and getattr(session, "is_disk_streaming", False):
+    session = (
+        logic.plugins.services.get("bigworld")
+        if logic.plugins is not None
+        else None
+    )
+    if session is not None and session.is_disk_streaming:
         return session.restore_saved(data, current_map_name=current_map_name)
 
     try:
@@ -1093,12 +1097,13 @@ def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
     # Hand the registry to the live streaming session so a cell streamed in later
     # re-applies its saved changes (belt-and-braces for a disk-streamed future;
     # in the in-RAM model the overlay above already reached every resident cell).
-    session = getattr(logic, "_bigworld", None)
+    session = (
+        logic.plugins.services.get("bigworld")
+        if logic.plugins is not None
+        else None
+    )
     if session is not None:
-        try:
-            session.registry = cell_deltas
-        except Exception:
-            pass
+        session.registry = cell_deltas
 
     warning = ""
     if cls == BASE_RELATED:
