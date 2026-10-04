@@ -222,7 +222,7 @@ def test_qt_game_view_has_no_editor_side_render_projection():
 def test_culling_off_makes_everything_visible(logic):
     brushes = pillar_grid(4, 4, spacing=2000.0)
     thread = logic(brushes=brushes)
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
 
     thread.render_runtime.prepare_render_state()
 
@@ -237,7 +237,7 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
     brushes = [box_brush("in_front", (0, 0, -600), (64, 64, 64)),
                box_brush("behind", (0, 0, 6000), (64, 64, 64))]
     thread = logic(brushes=brushes)
-    thread.culling_enabled = True
+    thread.render_runtime.culling_enabled = True
     thread.camera.get_editor_camera().pos = glm.vec3(0, 0, 0)
     thread.camera.get_editor_camera().yaw = -90.0        # look down -Z
     thread.camera.get_editor_camera().pitch = 0.0
@@ -270,7 +270,7 @@ def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
     """The published compatibility view may reference the world; the dense table is the frame snapshot."""
     mover = box_brush("lift", (0, 0, -400), (128, 32, 128), is_mover=True)
     thread = logic(brushes=[mover])
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
 
     thread.render_runtime.prepare_render_state()
     state = thread.game_state.get_write_state()
@@ -291,7 +291,7 @@ def test_a_static_brush_is_submitted_by_reference(logic):
     """Copying every static brush per frame would be the whole cost of a level."""
     wall = box_brush("wall", (0, 0, -400))
     thread = logic(brushes=[wall])
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
 
     thread.render_runtime.prepare_render_state()
 
@@ -468,7 +468,7 @@ def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
     brush = box_brush("switchable", (0, 0, -400))
     thread = logic(brushes=[brush])
     thread.session_runtime.apply_play_mode(True)
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
     try:
         thread.render_runtime.prepare_render_state()
         assert len(thread.game_state.get_write_state().all_brush_slots) == 1
@@ -485,7 +485,7 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
     """A brush added during play invalidates the fixed-size cache by count."""
     thread = logic(brushes=[box_brush("first", (0, 0, -400))])
     thread.session_runtime.apply_play_mode(True)
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
     try:
         thread.editor_state.brushes.append(box_brush("second", (100, 0, -400)))
         thread.render_runtime.prepare_render_state()

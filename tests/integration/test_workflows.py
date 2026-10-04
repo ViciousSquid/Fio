@@ -258,7 +258,7 @@ def test_an_edit_made_while_play_mode_is_running_reaches_the_runtime(session):
     state, thread = session()
     thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
 
     state.brushes.append(box_brush("late_addition", (0, 64, -300)))
     thread.render_runtime.prepare_render_state()
@@ -352,7 +352,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
     rebuild render state."""
     state, thread = session(brushes=room(size=2048.0),
                             things=[make_thing(Light, "lamp", (0, 200, 0))])
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
 
     thread.render_runtime.prepare_render_state()
     first = thread.game_state.get_write_state()
@@ -375,7 +375,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
 def test_a_geometry_edit_reaches_the_renderers_derived_mesh(session):
     state, thread = session(brushes=[box_brush("wall", (0, 64, -300),
                                                (128, 128, 128))])
-    thread.culling_enabled = False
+    thread.render_runtime.culling_enabled = False
     brush = state.brushes[0]
 
     thread.render_runtime.prepare_render_state()
