@@ -707,8 +707,8 @@ def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 1.0)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
+    logic.cutscene_runtime._update_cinematic_camera(1.0)
 
     assert logic.cutscene_runtime.state is None
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
@@ -754,16 +754,16 @@ def test_logic_camera_json_cutscene_fight_temporarily_hands_monsters_to_ai():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
     assert attacker.properties["disabled"] is True
 
-    LogicThread._update_cinematic_camera(logic, 0.1)
+    logic.cutscene_runtime._update_cinematic_camera(0.1)
 
     assert attacker.properties["disabled"] is False
     assert attacker.properties["awake"] is True
     assert attacker.properties["_aggro_target"] == id(defender)
 
-    LogicThread._update_cinematic_camera(logic, 0.4)
+    logic.cutscene_runtime._update_cinematic_camera(0.4)
 
     assert attacker.properties["disabled"] is True
     assert attacker.properties["awake"] is False
@@ -811,13 +811,13 @@ def test_logic_camera_json_cutscene_spawns_and_removes_temporary_actor():
     }
 
     assert len(logic.things) == 1
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
     assert len(logic.things) == 2
     spawned = logic.cutscene_runtime.state["actors"]["spawned-1"]
     assert spawned in logic.things
     assert spawned.properties["_cutscene_runtime"] is True
 
-    LogicThread._update_cinematic_camera(logic, 1.0)
+    logic.cutscene_runtime._update_cinematic_camera(1.0)
 
     assert logic.cutscene_runtime.state is None
     assert spawned not in logic.things
@@ -861,11 +861,11 @@ def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 0.1)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
+    logic.cutscene_runtime._update_cinematic_camera(0.1)
     assert [name for _, name, _ in recorder.calls] == ["OnTrigger"]
 
-    LogicThread._update_cinematic_camera(logic, 0.9)
+    logic.cutscene_runtime._update_cinematic_camera(0.9)
     assert [name for _, name, _ in recorder.calls] == ["OnTrigger", "OnFinished"]
 
 
@@ -898,8 +898,8 @@ def test_logic_camera_json_cutscene_look_at_tracks_actor_position():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 0.0)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
+    logic.cutscene_runtime._update_cinematic_camera(0.0)
 
     assert logic.cutscene_runtime.state["cam_angle"] == pytest.approx(0.0)
     assert logic.cutscene_runtime.state["cam_pitch"] == pytest.approx(0.0)
@@ -930,8 +930,8 @@ def test_logic_camera_json_cutscene_stop_restores_actor():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 0.0)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
+    logic.cutscene_runtime._update_cinematic_camera(0.0)
     assert list(actor.pos) == pytest.approx([20.0, 0.0, 0.0])
 
     logic.io_manager = recorder
@@ -1048,7 +1048,7 @@ def test_logic_camera_arrival_fires_the_individual_path_node_output():
         '_look_initialized': True,
     }
 
-    LogicThread._update_cinematic_camera(logic, 0.4)
+    logic.cutscene_runtime._update_cinematic_camera(0.4)
 
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnCameraArrived'] == [(b, 'OnCameraArrived')]
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnReachNode'] == [(camera, 'OnReachNode')]
@@ -1073,7 +1073,7 @@ def test_logic_camera_look_ahead_turn_is_smoothed():
         '_look_initialized': True,
     }
 
-    LogicThread._update_cinematic_camera(logic, 0.2)
+    logic.cutscene_runtime._update_cinematic_camera(0.2)
 
     assert 0.0 < logic.cutscene_runtime.state['cam_angle'] < (math.pi / 2.0)
 
@@ -1147,7 +1147,7 @@ def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
         'lookat_return_remaining': 0.1,
     }
 
-    LogicThread._update_cinematic_camera(logic, 0.2)
+    logic.cutscene_runtime._update_cinematic_camera(0.2)
 
     assert logic.cutscene_runtime.state['lookat_target'] is None
     assert logic.cutscene_runtime.state['lookat_return_remaining'] is None
