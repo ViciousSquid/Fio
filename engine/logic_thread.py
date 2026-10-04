@@ -179,7 +179,6 @@ class LogicThread(threading.Thread):
             "prop_runtime",
             "session_runtime",
             "world_runtime",
-            "_player_damage_lock",
         ),
         "portals": (),
         "combat": (
@@ -194,7 +193,6 @@ class LogicThread(threading.Thread):
             "session_runtime",
             "trigger_runtime",
             "world_runtime",
-            "_monster_lock",
         ),
         "timing": (
             "io_manager",
@@ -300,10 +298,8 @@ class LogicThread(threading.Thread):
         # Visual FX
 
         # Monster AI (delegated to separate class + thread)
-        self._monster_lock = threading.RLock()
         self._player_damage_lock = threading.Lock()
         self.monster_ai = MonsterAI(self)
-        self.monster_ai_thread = None
 
 
         # CutsceneRuntime owns cinematic playback state. LogicThread remains
