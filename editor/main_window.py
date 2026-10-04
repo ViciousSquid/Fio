@@ -2192,10 +2192,12 @@ class MainWindow(QMainWindow):
         from editor.entity_inspector import EntityInspector
 
         def _logic():
-            # The logic thread lives for the whole editor session; providers
-            # are promised it only while Play Mode is running.
-            logic = getattr(getattr(self, 'view_3d', None), 'logic_thread', None)
-            return logic if logic.session_runtime.play_mode else None
+            # The view owns the editor-facing Play Mode state. Providers receive
+            # the live engine host only while the view is actually in Play Mode.
+            view = self.view_3d
+            if view is None or not view.play_mode:
+                return None
+            return view.logic_thread
 
         def _alive(e=entity):
             return any(t is e for t in getattr(self.state, 'things', ()))
