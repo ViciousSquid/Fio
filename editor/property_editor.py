@@ -1124,8 +1124,7 @@ class PropertyEditor(QWidget):
     def _on_io_connections_changed(self):
         if hasattr(self.editor.state, 'save_state'):
             self.editor.state.save_state()
-        if hasattr(self.editor, 'mark_dirty'):
-            self.editor.mark_dirty()
+        self.editor.mark_dirty()
         if not self._populating:
             self.editor.update_all_ui()
 
@@ -3622,8 +3621,7 @@ class PropertyEditor(QWidget):
                 Monster.clear_sprite_cache()
             except Exception:
                 pass
-            if hasattr(self.editor, 'mark_dirty'):
-                self.editor.mark_dirty()
+            self.editor.mark_dirty()
             try:
                 self.editor.view_3d.update()
             except Exception:
@@ -3750,7 +3748,7 @@ class PropertyEditor(QWidget):
             cutscene_files = sorted(
                 os.path.basename(path)
                 for path in glob.glob(
-                    os.path.join(getattr(self.editor, "root_dir", _project_root()), "cutscenes", "*.json")
+                    os.path.join(self.editor.root_dir, "cutscenes", "*.json")
                 )
             )
         except (AttributeError, TypeError, OSError):
