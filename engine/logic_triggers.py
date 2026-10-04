@@ -684,7 +684,7 @@ class LogicTriggers:
                         self.logic.portal_runtime.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
-                        physics_world = getattr(self, '_physics_world', None)
+                        physics_world = self.logic.session_runtime.physics_world
                         if physics_world is not None:
                             try:
                                 physics_world.sync_entity_position(activator, wake=True)
