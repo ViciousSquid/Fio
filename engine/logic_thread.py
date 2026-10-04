@@ -1431,10 +1431,6 @@ class LogicThread(threading.Thread):
     # INTERACTIONS
     # =========================================================================
 
-    def _refresh_levelchanger_table(self):
-        """Compatibility wrapper for dense LevelChanger geometry."""
-        return self._world_runtime().refresh_levelchanger_table()
-
     # PARENTED ENTITY RUNTIME
     # =========================================================================
 
