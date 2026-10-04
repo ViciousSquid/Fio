@@ -263,7 +263,11 @@ def test_an_edit_made_while_play_mode_is_running_reaches_the_runtime(session):
     state.brushes.append(box_brush("late_addition", (0, 64, -300)))
     thread.render_runtime.prepare_render_state()
 
-    names = {b.get("name") for b in thread.game_state.get_write_state().all_brushes}
+    write_state = thread.game_state.get_write_state()
+    names = {
+        write_state.render_refs[int(slot)]["name"]
+        for slot in write_state.all_brush_slots
+    }
     assert "late_addition" in names, (
         "a brush added during play did not reach the renderer; the frame holds "
         "%s" % (sorted(names),))
