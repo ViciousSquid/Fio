@@ -47,9 +47,6 @@ class Level:
         self.opened = []
         self.spawned = []
 
-        from engine.logic_thread import LogicThread
-        self._timer_key = LogicThread._timer_key
-
         self.manager.set_entity_finder(self._by_name)
         self.manager.set_entity_finder_by_id(self._by_id)
         register_all_input_handlers(self.manager)
@@ -287,7 +284,7 @@ def test_other_inputs_wired_into_a_gate_are_not_counted_as_signals(level):
 
 def test_a_trigger_starts_a_timer_that_drives_a_spawner(level):
     """Trigger -> Relay -> Timer -> Spawner, with no scripting runtime."""
-    from engine.logic_thread import LogicThread
+    from engine.logic_timing import LogicTiming
     trigger = level.brush("ambush", is_trigger=True)
     relay = level.thing(LogicRelay(pos=[0, 0, 0], properties={"name": "relay"}))
     timer = level.thing(LogicTimer(pos=[0, 0, 0],
@@ -300,7 +297,7 @@ def test_a_trigger_starts_a_timer_that_drives_a_spawner(level):
     level.wire(relay, "OnTrigger", timer, "Enable")
     level.wire(timer, "OnTimer", spawner, "Spawn")
 
-    LogicThread._update_logic_timers(level, 5.0)
+    LogicTiming(level).update_logic_timers( 5.0)
     assert level.spawned == [], "the timer ran before anything started it"
 
     level.fire(trigger, "OnTrigger")
