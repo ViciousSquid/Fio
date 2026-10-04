@@ -101,11 +101,6 @@ def make_world():
     return things, brushes
 
 
-def new_session(logic):
-    s = BigWorldSession(logic, activation_radius=600.0, deactivation_radius=700.0)
-    logic.plugins.services["bigworld"] = s
-    return s
-
 
 # ---------------------------------------------------------------------------
 # tests
