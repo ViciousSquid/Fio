@@ -108,6 +108,7 @@ class MonsterAI:
         self._enemy_nearest = None     # row -> nearest enemy row, or -1
         self._enemy_range = None       # the range the batch was built for
         self._enemy_ready = False      # has this tick's batch been attempted
+        self._enemy_signature = None   # direct-helper validity signature
         self._enemy_pos = np.empty((0, 3), dtype=np.float64)
         # Camera-fitted Big World only (see _view_rect): this tick's resident
         # monsters, the off-screen cadence, and the time each monster sitting
@@ -138,6 +139,7 @@ class MonsterAI:
         self._enemy_team_codes = {}
         self._enemy_nearest = None
         self._enemy_ready = False
+        self._enemy_signature = None
         self._tick_monsters = None
         self._offscreen_accum = 0.0
         self._owed = {}
@@ -161,6 +163,7 @@ class MonsterAI:
         # it means a map with no teams never pays for one.
         self._enemy_ready = False
         self._enemy_nearest = None
+        self._enemy_signature = None
 
         # PERF: iterate the precomputed monster list instead of isinstance-
         # scanning every brush/thing in the level every tick.
@@ -1180,17 +1183,20 @@ the scalar fallback for callers that do not have the dense table.
         team mask, and an argmin per block. There is no per-monster
         candidate walk.
 
-        A direct helper call outside the dense update gathers the table first;
-        the play-mode hot path has already gathered it in _update_dense.
+        Direct helper calls may occur outside the dense tick in compatibility
+        tests and tools. Those calls keep the batch while the queried monster
+        set is unchanged, and invalidate it if a position/team/dead/hidden
+        value changed.
         """
-        # A batch supplied with a MonsterTable is part of the dense tick and
-        # is valid until that tick finishes. Direct helper calls, however,
-        # may be made after authoring/runtime flags changed between calls;
-        # rebuild those rather than returning a stale per-tick answer.
-        if self._enemy_ready and table is not None:
-            return self._enemy_nearest if self._enemy_range == max_range else None
-        if self._enemy_ready and table is None:
+        if self._enemy_ready:
+            if self._enemy_range != max_range:
+                return None
+            if table is not None:
+                return self._enemy_nearest
+            if self._enemy_runtime_signature() == self._enemy_signature:
+                return self._enemy_nearest
             self._enemy_ready = False
+
         self._enemy_ready = True
         self._enemy_nearest = None
         self._enemy_range = max_range
@@ -1226,7 +1232,27 @@ the scalar fallback for callers that do not have the dense table.
         self._enemy_answered = alive & (team_id >= 0)
         self._enemy_nearest = self._nearest_enemy_rows(
             table.pos[:count], team_id, alive, max_range)
+        if table is not None:
+            self._enemy_signature = self._enemy_runtime_signature()
         return self._enemy_nearest
+
+    def _enemy_runtime_signature(self):
+        """Return the small compatibility signature used by direct queries."""
+        monsters = self._tick_monsters
+        if monsters is None:
+            monsters = getattr(self.lt, "_monster_things", None)
+        if monsters is None:
+            monsters = getattr(self.lt, "things", ())
+        return tuple(
+            (
+                id(monster),
+                bool(monster.properties.get("dead", False)),
+                bool(monster.properties.get("hidden", False)),
+                monster.properties.get("team", ""),
+                tuple(float(value) for value in monster.pos),
+            )
+            for monster in monsters
+        )
 
     @staticmethod
     def _nearest_enemy_rows(pos, team_id, alive, max_range):
