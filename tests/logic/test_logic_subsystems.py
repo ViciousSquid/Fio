@@ -132,13 +132,14 @@ def test_logic_interaction_constructs_and_opens_a_nearby_door():
         current_hud_key_name="stale",
         _levelchanger_things=[],
         level_complete_ui=None,
-        _trigger_door_open=lambda idx, brush: opened.append((idx, brush)),
+        _plugin_emit=lambda *args, **kwargs: opened.append((args, kwargs)),
     )
+    host.mover_runtime = LogicMovers(host)
     runtime = LogicInteraction(host)
 
     runtime.handle(True)
 
-    assert opened == [(0, door)]
+    assert host.door_states[0]["state"] == "opening"
     assert host.current_hud_message == "[E] Open"
 
 
