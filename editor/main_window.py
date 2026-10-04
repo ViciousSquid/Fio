@@ -1020,7 +1020,7 @@ class MainWindow(QMainWindow):
         immediate click still leaves the copy beside the original instead of
         exactly on top of it, and clipboard copy/paste is untouched.
         """
-        sources = list(self.state.selected_objects or [])
+        sources = list(self.state.selected_objects)
         if not sources:
             return
         sources, skipped = self._drop_singleton_copies(sources)
@@ -3773,7 +3773,7 @@ class MainWindow(QMainWindow):
 
     def _selected_brushes(self):
         """Every brush in the current selection (things filtered out)."""
-        objs = list(self.state.selected_objects or [])
+        objs = list(self.state.selected_objects)
         return [o for o in objs if isinstance(o, dict)]
 
     def component_drag_targets(self):
@@ -3967,7 +3967,7 @@ class MainWindow(QMainWindow):
 
     def selected_objects_list(self):
         """The authoritative current selection as a plain list."""
-        return list(self.state.selected_objects or [])
+        return list(self.state.selected_objects)
 
     def primary_selection(self):
         """Return the first object in the authoritative multi-selection."""
