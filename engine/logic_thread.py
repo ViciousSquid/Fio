@@ -43,6 +43,19 @@ from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
 
+# Qt key constants kept as part of LogicThread's historical input surface.
+# Play input is now implemented by LogicPlayer, but tests/tools and older
+# integrations still import these raw key codes from engine.logic_thread.
+Key_W = 0x57
+Key_S = 0x53
+Key_A = 0x41
+Key_D = 0x44
+Key_Space = 0x20
+Key_C = 0x43
+Key_Shift = 0x01000020
+Key_Control = 0x01000021
+
+
 # Import Thing subclasses for type checking
 try:
     from editor.things import (Speaker, Prop as PropThing, Light,
@@ -105,6 +118,12 @@ _WATER_LOUDNESS = 0.7
 
 class LogicThread(threading.Thread):
     _COLLISION_KEYS = _COLLISION_KEYS
+
+    # Historical projectile constants remain on LogicThread while the
+    # implementation lives in LogicCombat.
+    PROJECTILE_MONSTER_LIFT = LogicCombat.PROJECTILE_MONSTER_LIFT
+    PROJECTILE_MONSTER_RADIUS = LogicCombat.PROJECTILE_MONSTER_RADIUS
+    PROJECTILE_PLAYER_RADIUS = LogicCombat.PROJECTILE_PLAYER_RADIUS
     """
     Unified logic thread for both editor and play mode.
     Runs continuously at a fixed timestep (60 Hz).
