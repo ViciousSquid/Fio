@@ -177,6 +177,7 @@ def test_monster_table_follows_a_replaced_list_at_a_recycled_address():
 # Resources
 # ---------------------------------------------------------------------------
 
+@pytest.mark.gl
 def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
     """Every draw, cull and shadow pass asks for a Prop's model; a missing one
     was probed on disk and logged each time (1194 lines in a short soak)."""
