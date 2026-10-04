@@ -161,7 +161,7 @@ def test_machinery_tests_do_not_use_namespace_production_owners():
                 if not isinstance(node.value, ast.Call):
                     continue
                 func = node.value.func
-                if not (isinstance(func, ast.Name) and func.id == "SimpleNamespace"):
+                if _dotted_name(func) not in {"SimpleNamespace", "types.SimpleNamespace"}:
                     continue
                 for target in node.targets:
                     if isinstance(target, ast.Name) and target.id in owner_names:
