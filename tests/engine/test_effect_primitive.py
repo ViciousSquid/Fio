@@ -47,7 +47,8 @@ def _io_for(effect, events=None):
                                         input_name, param, "test")
 
     send.effect_store = logic.session_runtime.effect_store
-    return send, logic
+    send.logic = logic
+    return send
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
@@ -97,7 +98,8 @@ def test_explosion_trigger_queues_centered_sound():
         pos=(10.0, 20.0, 30.0),
         properties={"effect_type": EFFECT_FIRE, "silent": False},
     )
-    send, logic = _io_for(effect)
+    send = _io_for(effect)
+    logic = send.logic
     register_all_input_handlers(logic.io_manager)
     logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
@@ -115,7 +117,8 @@ def test_silent_explosion_does_not_queue_sound():
         pos=(1.0, 2.0, 3.0),
         properties={"effect_type": EFFECT_FIRE, "silent": True},
     )
-    _send, logic = _io_for(effect)
+    send = _io_for(effect)
+    logic = send.logic
     register_all_input_handlers(logic.io_manager)
     logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
