@@ -3,11 +3,11 @@
 Runs against the real SpatialGrid so the static-cell cache, the batched
 floor query and the push response are exercised exactly as in play mode.
 """
-from types import SimpleNamespace
-
 import glm
 
 from engine.physics import PhysicsWorld, SpatialGrid
+from engine.player import Player
+from engine.prop_entity import Prop
 
 # Oil_Drum_Grey bounds: local Y starts at zero, so the entity origin is the
 # point touching the floor and the collision box centre sits half a height up.
@@ -37,7 +37,7 @@ def _prop(pos=(0.0, 0.0, 0.0), **props):
         'drop_angular_velocity': [0.0, 0.0, 0.0],
     }
     properties.update(props)
-    return SimpleNamespace(pos=list(pos), properties=properties)
+    return Prop(pos=list(pos), properties=properties)
 
 
 def _drum_brush(prop):
@@ -53,11 +53,15 @@ def _drum_brush(prop):
 
 
 def _player(x=-30.0, vx=120.0):
-    return SimpleNamespace(
-        pos=glm.vec3(x, 50.0, 0.0),
-        velocity=glm.vec3(vx, 0.0, 0.0),
-        width=50.0, height=100.0, depth=50.0,
-    )
+    player = Player(x, 0.0)
+    player.pos = glm.vec3(x, 50.0, 0.0)
+    player.velocity = glm.vec3(vx, 0.0, 0.0)
+    # Preserve the exact authored collision dimensions of the old fixture,
+    # while the object itself is now the production Player.
+    player.width = 50.0
+    player.height = 100.0
+    player.depth = 50.0
+    return player
 
 
 def _run(world, frames, player=None):
