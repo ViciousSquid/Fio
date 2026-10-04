@@ -366,7 +366,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     monster_states: Dict[str, Any] = {}
     try:
         raw = getattr(logic.monster_ai, "monster_states", {}) or {}
-        by_obj_id = {id(t): t for t in logic._monster_things}
+        by_obj_id = {id(t): t for t in logic.world_runtime.monster_things}
         for obj_id, state in raw.items():
             mon = by_obj_id.get(obj_id)
             sid = _thing_id(mon) if mon is not None else ""
