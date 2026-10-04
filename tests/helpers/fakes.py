@@ -96,7 +96,11 @@ class FakeLogicThread:
         self.player_dead = False
         self.play_mode = False
         self.player_health = 100
-        self.notarget = False
+        self.player_runtime = SimpleNamespace(
+            god_mode=False,
+            buddha_mode=False,
+            notarget=False,
+        )
         self.io_manager = io_manager
         self.game_state = FakeGameState()
         self.plugins = SimpleNamespace(services={})
@@ -104,8 +108,6 @@ class FakeLogicThread:
         self.combat_runtime = LogicCombat(self)
         self.session_runtime = LogicSession(self)
         self._player_damage_lock = threading.Lock()
-        self.god_mode = False
-        self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
         self._id_cache = {}
         self.portal_runtime = LogicPortals(self)

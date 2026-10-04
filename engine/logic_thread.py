@@ -265,9 +265,6 @@ class LogicThread(threading.Thread):
         self.player_health = 100
         self.player_max_health = 100
         self.player_dead = False
-        self.god_mode = False
-        self.buddha_mode = False
-        self.notarget = False
 
         # I/O System
         self.io_manager = None

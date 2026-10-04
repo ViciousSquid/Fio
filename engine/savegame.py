@@ -381,9 +381,9 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         monster_states = {}
 
     runtime = {
-        "god_mode": bool(logic.god_mode),
-        "buddha_mode": bool(logic.buddha_mode),
-        "notarget": bool(logic.notarget),
+        "god_mode": bool(logic.player_runtime.god_mode),
+        "buddha_mode": bool(logic.player_runtime.buddha_mode),
+        "notarget": bool(logic.player_runtime.notarget),
         "camera_mode": logic.camera.camera_mode,
         "overhead_height": float(logic.camera.overhead_height),
         "overhead_tilt": float(logic.camera.overhead_tilt),
@@ -743,9 +743,14 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     if data.get("player"):
         logic.portal_runtime.note_player_teleported()
 
-    # Player stats / cheat flags
+    # Player cheat flags belong to LogicPlayer.
+    player_runtime = logic.player_runtime
+    for attr in ("god_mode", "buddha_mode", "notarget"):
+        if attr in runtime:
+            setattr(player_runtime, attr, bool(runtime[attr]))
+
+    # Player runtime overlay that remains on the session host.
     for attr in (
-        "god_mode", "buddha_mode", "notarget",
         "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",

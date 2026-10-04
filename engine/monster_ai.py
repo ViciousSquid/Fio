@@ -285,7 +285,7 @@ all accumulated time when it runs, so simulation time is not lost.
             return 'per-monster (DENSE_UPDATE off)'
         if self._grid is None:
             return 'per-monster (no spatial grid)'
-        if self.lt.notarget:
+        if self.lt.player_runtime.notarget:
             return 'per-monster (notarget)'
         if self.monster_debug_active:
             return 'per-monster (F7 debug view)'
@@ -879,7 +879,7 @@ all accumulated time when it runs, so simulation time is not lost.
 
         # ---- Notarget: skip all player-targeting when cheat is active ----
         #      Monsters still gravity-fall and patrol, just don't chase/attack.
-        if self.lt.notarget:
+        if self.lt.player_runtime.notarget:
             _set_render_flag(thing, 'is_shooting', False)
             if mid in self.monster_states:
                 self.monster_states[mid]['anim_timer'] = 0.0

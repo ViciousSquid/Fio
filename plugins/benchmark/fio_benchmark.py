@@ -987,7 +987,7 @@ def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
         raise RuntimeError("Fio Play Mode has no LogicThread")
 
     # God mode protects the benchmark player without disabling monster AI.
-    logic.god_mode = True
+    logic.player_runtime.god_mode = True
 
     monsters = [
         t for t in window.state.things

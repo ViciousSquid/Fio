@@ -29,6 +29,9 @@ class LogicPlayer:
         self._waterwalk_timer = 0.0
         self.collected_keys = set()
         self.p2_turn_sensitivity = 10.0
+        self.god_mode = False
+        self.buddha_mode = False
+        self.notarget = False
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""

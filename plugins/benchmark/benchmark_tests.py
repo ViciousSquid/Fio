@@ -585,8 +585,8 @@ class BenchmarkTests:
 
                 # God mode protects the benchmark player while the real MonsterAI
                 # remains fully active and is allowed to target opposing teams.
-                logic.god_mode = True
-                logic.notarget = False
+                logic.player_runtime.god_mode = True
+                logic.player_runtime.notarget = False
                 self._install_monster_chaos_ai_counter(logic)
 
                 import random

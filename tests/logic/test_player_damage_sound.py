@@ -11,8 +11,11 @@ from engine.logic_triggers import LogicTriggers
 def _logic(player_pos=(10.0, 20.0, 30.0), health=100):
     logic = SimpleNamespace()
     logic._player_damage_lock = __import__("threading").Lock()
-    logic.god_mode = False
-    logic.buddha_mode = False
+    logic.player_runtime = SimpleNamespace(
+        god_mode=False,
+        buddha_mode=False,
+        notarget=False,
+    )
     logic.player_health = health
     logic.player = SimpleNamespace(pos=glm.vec3(*player_pos))
     logic.game_state = SimpleNamespace(sounds=[])
@@ -60,7 +63,7 @@ def test_pain_sound_position_is_a_snapshot():
 def test_no_pain_sound_when_damage_is_ignored():
     logic = _logic()
 
-    logic.god_mode = True
+    logic.player_runtime.god_mode = True
     LogicTriggers(logic)._apply_player_damage(10)
 
     assert logic.player_health == 100

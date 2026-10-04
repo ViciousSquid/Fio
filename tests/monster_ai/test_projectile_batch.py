@@ -48,7 +48,11 @@ class _Host:
         self._collision_brushes_cache = []
         self._monster_lock = threading.RLock()
         self.player = None
-        self.god_mode = True
+        self.player_runtime = types.SimpleNamespace(
+            god_mode=True,
+            buddha_mode=False,
+            notarget=False,
+        )
         self.player_dead = False
         self.hits = []
         host = self

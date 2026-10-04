@@ -119,9 +119,9 @@ class LogicSession:
             logic.player_health = 100
             logic.player_max_health = 100
             logic.player_dead = False
-            logic.god_mode = False
-            logic.buddha_mode = False
-            logic.notarget = False
+            logic.player_runtime.god_mode = False
+            logic.player_runtime.buddha_mode = False
+            logic.player_runtime.notarget = False
 
             # Reset collection state.
             logic.trigger_runtime._reset_trigger_state()

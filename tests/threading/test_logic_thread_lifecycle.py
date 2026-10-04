@@ -197,7 +197,7 @@ def test_play_mode_resets_player_state_every_time(logic):
     thread.session_runtime.apply_play_mode(True)
     thread.player_health = 3
     thread.player_dead = True
-    thread.god_mode = True
+    thread.player_runtime.god_mode = True
     thread.session_runtime.apply_play_mode(False)
 
     thread.session_runtime.apply_play_mode(True)
@@ -206,7 +206,7 @@ def test_play_mode_resets_player_state_every_time(logic):
             "player health carried over from the previous session (%d)"
             % thread.player_health)
         assert thread.player_dead is False
-        assert thread.god_mode is False, "a cheat leaked into the next session"
+        assert thread.player_runtime.god_mode is False, "a cheat leaked into the next session"
     finally:
         thread.session_runtime.apply_play_mode(False)
 

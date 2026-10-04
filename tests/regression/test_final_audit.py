@@ -368,7 +368,7 @@ def _play(state, ticks=240):
     logic.player.pos.y = pos[1]
     logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()                   # this test drives the AI itself
-    logic.god_mode = True                      # play start resets it
+    logic.player_runtime.god_mode = True                      # play start resets it
     seen = {}
     for tick in range(ticks):
         game_state.set_keys([{KEY_W}, {KEY_W, KEY_D}, set(), {KEY_D}][(tick // 40) % 4])

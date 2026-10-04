@@ -2137,11 +2137,11 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("god"):
             return
         lt = self.main_window.view_3d.logic_thread
-        lt.god_mode = not lt.god_mode
-        state = "ON" if lt.god_mode else "OFF"
-        if lt.god_mode:
+        lt.player_runtime.god_mode = not lt.player_runtime.god_mode
+        state = "ON" if lt.player_runtime.god_mode else "OFF"
+        if lt.player_runtime.god_mode:
             # Turning on god also disables buddha to avoid confusion
-            lt.buddha_mode = False
+            lt.player_runtime.buddha_mode = False
         self.main_window.show_toast(f"God mode: {state}")
         debug_log("Info", f"God mode set to {state}")
 
@@ -2149,11 +2149,11 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("buddha"):
             return
         lt = self.main_window.view_3d.logic_thread
-        lt.buddha_mode = not lt.buddha_mode
-        state = "ON" if lt.buddha_mode else "OFF"
-        if lt.buddha_mode:
+        lt.player_runtime.buddha_mode = not lt.player_runtime.buddha_mode
+        state = "ON" if lt.player_runtime.buddha_mode else "OFF"
+        if lt.player_runtime.buddha_mode:
             # Turning on buddha also disables god to avoid confusion
-            lt.god_mode = False
+            lt.player_runtime.god_mode = False
         self.main_window.show_toast(f"Buddha mode: {state}")
         debug_log("Info", f"Buddha mode set to {state}")
 
@@ -2162,8 +2162,8 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("notarget"):
             return
         lt = self.main_window.view_3d.logic_thread
-        lt.notarget = not lt.notarget
-        state = "ON" if lt.notarget else "OFF"
+        lt.player_runtime.notarget = not lt.player_runtime.notarget
+        state = "ON" if lt.player_runtime.notarget else "OFF"
         self.main_window.show_toast(f"Notarget: {state}")
         debug_log("Info", f"Notarget set to {state}")
 
