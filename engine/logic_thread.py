@@ -177,9 +177,7 @@ class LogicThread(threading.Thread):
     )
 
     _RUNTIME_HOST_CONTRACTS = {
-        "camera": (
-            "player",
-        ),
+        "camera": (),
         "movers": (
             "editor_state",
             "movers",
@@ -625,11 +623,7 @@ class LogicThread(threading.Thread):
             assert runtime is not None, (
                 f"{runtime_name} was not constructed before runtime validation"
             )
-            if runtime_name == "camera":
-                assert getattr(runtime, "player", self.player) is self.player, (
-                    "camera.player must point at this LogicThread player"
-                )
-            else:
+            if runtime_name != "camera":
                 assert getattr(runtime, "logic", self) is self, (
                     f"{runtime_name}.logic must point at this LogicThread"
                 )
