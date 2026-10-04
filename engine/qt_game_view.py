@@ -278,7 +278,7 @@ class QtGameView(QOpenGLWidget):
             "show_triggers_as_solid": False,
             "show_caulk": True,
             "play_mode": False,
-            "selected_object": None,
+            "primary_selection": None,
             "time": 0.0,
             "show_sprites_in_play_mode": False,
             "show_glasses": True,
@@ -1645,7 +1645,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
         self._render_config["render_mode"] = self.current_render_mode
         self._render_config["play_mode"] = self.play_mode
-        self._render_config["selected_object"] = self.editor.primary_selection()
+        self._render_config["primary_selection"] = self.editor.primary_selection()
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
