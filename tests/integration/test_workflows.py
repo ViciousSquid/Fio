@@ -468,3 +468,124 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     assert normalize_streaming_state(state.get_level_data()) == \
         normalize_streaming_state(json.loads(authored)), (
         "a streaming session changed the authored map")
+
+
+
+def test_editor_action_journal_save_and_reload_is_one_real_world(session, main_window, tmp_path):
+    """Editor action -> EditorState journal -> disk -> real editor reload.
+
+    This deliberately uses the real MainWindow persistence path rather than
+    serialising EditorState directly.  The edited object must survive the
+    undo checkpoint, the actual atomic save, and the actual level loader.
+    """
+    brush = box_brush("journal-wall", (0, 64, 0), (128, 128, 32))
+    main_window.state.brushes = [brush]
+    main_window.state.selected_objects = [brush]
+
+    before = json.loads(json.dumps(main_window.state.get_level_data()))
+
+    moved = main_window.apply_rotation_to_selection(
+        90.0, (0.0, 1.0, 0.0), undoable=True)
+    assert moved == 1
+    assert len(main_window.state.undo_stack) >= 1
+
+    edited = json.loads(json.dumps(main_window.state.get_level_data()))
+    assert edited != before
+
+    # The journal must actually contain the pre-action world.
+    assert main_window.state.undo() is True
+    assert json.dumps(main_window.state.get_level_data(), sort_keys=True) ==         json.dumps(before, sort_keys=True)
+
+    # Redo restores the editor action before persistence.
+    assert main_window.state.redo() is True
+    assert json.dumps(main_window.state.get_level_data(), sort_keys=True) ==         json.dumps(edited, sort_keys=True)
+
+    path = tmp_path / "e2e-editor-action.json"
+    main_window.file_path = str(path)
+    main_window.unsaved_changes = True
+    main_window.save_level()
+
+    assert path.exists()
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["brushes"] == edited["brushes"]
+
+    # Destroy the in-memory mutation, then force the real loader to reconstruct
+    # the authored world from the file that was actually written.
+    main_window.state.clear_scene(save_undo=False)
+    assert main_window.load_level_file(str(path)) is True
+
+    reloaded = main_window.state.get_level_data()
+    assert reloaded["brushes"] == edited["brushes"]
+    assert not main_window.unsaved_changes
+
+
+def test_game_input_ai_and_io_reach_one_published_render_state(session):
+    """GameState -> LogicThread -> player/AI/IO -> published render state.
+
+    No fake runtime owner is involved.  Input is consumed by the real play
+    tick, the real I/O dispatcher changes a live brush, real MonsterAI updates
+    a live Monster, and LogicRender publishes all resulting state into the
+    double-buffered render snapshot.
+    """
+    from editor.things import Monster, PlayerStart
+    from engine.logic_player import KEY_W
+    from engine.player import Player
+
+    switchable = box_brush("runtime-door", (0, 64, -300),
+                           (64, 128, 64))
+    button = box_brush("runtime-button", (200, 64, 0),
+                       (32, 64, 32), is_trigger=True)
+    io.add_connection(button, OutputConnection(
+        output_name="OnTrigger", target_name="runtime-door",
+        input_name="Hide", target_id=switchable["id"]))
+
+    monster = make_thing(
+        Monster, "runtime-grunt", (300, 96, 0),
+        awake=True, damage=5)
+    state, thread = session(
+        brushes=room(size=2048.0) + [switchable, button],
+        things=[
+            make_thing(PlayerStart, "spawn", (0, 64, 0)),
+            monster,
+        ])
+
+    thread.session_runtime.apply_play_mode(True)
+    thread.player_runtime.player = Player(0.0, 0.0)
+    try:
+        start_player_z = float(thread.player_runtime.player.pos.z)
+        start_monster_x = float(monster.pos[0])
+
+        # IO is the real runtime dispatcher and mutates the live authored
+        # object before publication.
+        thread.io_manager.fire_output(button, "OnTrigger")
+        assert switchable["hidden"] is True
+
+        # Game input is consumed by LogicThread's real play tick.
+        thread.game_state.set_keys({KEY_W})
+        for _ in range(20):
+            thread._step_frame(TICK)
+
+        # AI is the real MonsterAI machinery operating on the same live world.
+        for _ in range(30):
+            thread.monster_ai.update(1.0 / 30.0)
+
+        assert float(thread.player_runtime.player.pos.z) < start_player_z
+        assert float(monster.pos[0]) < start_monster_x
+
+        # Publication is the real LogicRender -> ThreadedGameState boundary.
+        thread.render_runtime.prepare_render_state()
+        assert thread._publish_frame() is True
+        published = thread.game_state.get_render_state()
+        try:
+            assert published.player_pos[2] < start_player_z
+            assert published.entity_table.count >= 1
+            assert "runtime-door" not in {
+                published.render_refs[int(slot)]["name"]
+                for slot in published.all_brush_slots
+            }
+            monster_ids = set(published.entity_table.ids)
+            assert monster.properties["id"] in monster_ids
+        finally:
+            thread.game_state.release_render_state(published)
+    finally:
+        thread.session_runtime.apply_play_mode(False)
