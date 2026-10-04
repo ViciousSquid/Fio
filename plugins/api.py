@@ -657,7 +657,7 @@ class RuntimeAPI:
         self._manager = manager
         self._plugin = plugin
         self.logic = logic
-        self.io_manager = getattr(logic, "io_manager", None)
+        self.io_manager = logic.io_manager
 
     # -- I/O ----------------------------------------------------------------
     def register_input_handler(self, entity_type: str, input_name: str, handler: Callable):
@@ -713,11 +713,11 @@ class RuntimeAPI:
 
     def player_eye(self):
         """The player's eye position as an ``(x, y, z)`` tuple."""
-        return _player_eye(getattr(self.logic, "player", None))
+        return _player_eye(self.logic.player)
 
     def player_forward(self):
         """The player's full look direction (with pitch) as a unit-ish tuple."""
-        return _player_forward(getattr(self.logic, "player", None))
+        return _player_forward(self.logic.player)
 
     def raycast_from_crosshair(self, reach: float = 160.0, aim_dot: float = 0.86,
                                type_name: Optional[str] = None,
@@ -730,7 +730,7 @@ class RuntimeAPI:
         This is the query most interaction plugins need — it replaces the
         hand-rolled "what am I looking at" loop.
         """
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return None
         eye = _player_eye(player)
@@ -798,10 +798,10 @@ class RuntimeAPI:
         the stale index. Outside play there is no index to rebuild.
         """
         logic = self.logic
-        runtime = getattr(logic, "world_runtime", None)
-        if runtime is None or not getattr(logic, "play_mode", False):
+        runtime = logic.world_runtime
+        if runtime is None or not logic.play_mode:
             return
-        lock = getattr(logic, "_tick_lock", None)
+        lock = logic._tick_lock
         if lock is None:
             runtime.build_entity_caches()
         else:
@@ -903,7 +903,7 @@ class TickContext:
         if priority < self._prompt_priority:
             return False
         try:
-            self.logic.current_hud_message = str(text)
+            self.logic.interaction_runtime.current_hud_message = str(text)
         except Exception:
             return False
         self._prompt_priority = priority
@@ -936,8 +936,8 @@ class TickContext:
             st.toast_text = ""
             return
         try:
-            if not getattr(self.logic, "current_hud_message", ""):
-                self.logic.current_hud_message = st.toast_text
+            if not self.logic.interaction_runtime.current_hud_message:
+                self.logic.interaction_runtime.current_hud_message = st.toast_text
         except Exception:
             pass
 
