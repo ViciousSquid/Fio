@@ -1072,19 +1072,22 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def brush_hide(entity, param, logic):
         """Hide a brush (set hidden flag — renderer skips it)."""
-        entity['hidden'] = True
+        set_authored_flag(entity, 'hidden', True)
+        logic.collision_runtime.mark_dirty()
         name = entity.get('name', 'unnamed')
         debug_log('IO', f"Brush '{name}' hidden")
 
     def brush_show(entity, param, logic):
         """Show a brush (clear hidden flag)."""
-        entity['hidden'] = False
+        set_authored_flag(entity, 'hidden', False)
+        logic.collision_runtime.mark_dirty()
         name = entity.get('name', 'unnamed')
         debug_log('IO', f"Brush '{name}' shown")
 
     def brush_toggle_vis(entity, param, logic):
         """Toggle brush visibility."""
-        entity['hidden'] = not entity.get('hidden', False)
+        set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
+        logic.collision_runtime.mark_dirty()
         name = entity.get('name', 'unnamed')
         state = "hidden" if entity.get('hidden') else "visible"
         debug_log('IO', f"Brush '{name}' toggled → {state}")
@@ -1135,19 +1138,19 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def thing_hide(entity, param, logic):
         """Hide a thing entity."""
-        entity.properties['hidden'] = True
+        set_authored_flag(entity, 'hidden', True)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Entity '{name}' hidden")
 
     def thing_show(entity, param, logic):
         """Show a thing entity."""
-        entity.properties['hidden'] = False
+        set_authored_flag(entity, 'hidden', False)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Entity '{name}' shown")
 
     def thing_toggle_vis(entity, param, logic):
         """Toggle thing visibility."""
-        entity.properties['hidden'] = not entity.properties.get('hidden', False)
+        set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
         name = entity.properties.get('name', 'unnamed')
         state = "hidden" if entity.properties.get('hidden') else "visible"
         debug_log('IO', f"Entity '{name}' toggled → {state}")
