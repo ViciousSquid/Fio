@@ -19,7 +19,7 @@ approximately, and that is most of what is here:
   are committed, its event runs, and rows after it are recomputed if the event
   changed any of them.
 * **Some rows are always taken one at a time**, in list order: path-following
-  movers (``LogicThread._update_mover_path``, which walks named nodes), rows
+  movers (``LogicMovers._update_mover_path``, which walks named nodes), rows
   with no state yet (created lazily, as the loop did), and rows whose direction
   has not been resolved yet (resolved on first use, as the loop did).
 * **The state dicts stay the interface.** I/O handlers and saved games read and
