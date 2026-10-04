@@ -135,7 +135,7 @@ class LogicRender:
         """Advance the health HUD fade state machine and return its alpha."""
         logic = self.logic
 
-        if not getattr(logic, "hud_fade_enabled", True):
+        if not logic.hud_fade_enabled:
             logic._hud_health_alpha = 1.0
             logic._hud_health_fade_started = None
             logic._hud_health_fade_from = 1.0
