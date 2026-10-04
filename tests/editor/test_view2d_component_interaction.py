@@ -24,7 +24,7 @@ import configparser  # noqa: E402
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt5.QtGui import QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QTabWidget  # noqa: E402
 
 from editor import component_edit as ce  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
@@ -154,6 +154,8 @@ class FakeEditorWindow(QWidget):
         self.grid_visible = True
         self.unsaved_changes = False
         self.view_3d = _Stub3DView()
+        self.properties_tab_widget = QTabWidget(self)
+        self.properties_tab_widget.addTab(QWidget(), "Properties")
         self.property_editor = _StubPropertyEditor()
         self.toasts = []
 
