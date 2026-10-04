@@ -292,14 +292,6 @@ class LogicThread(threading.Thread):
         self.buddha_mode = False
         self.notarget = False
 
-        # World pause: each owner (a modal game screen, the entity picker, a
-        # pause menu) holds its own request, and the world stays frozen while
-        # any is held, so one owner releasing never unpauses another's. See
-        # set_world_paused(). Replaced whole, never mutated, so a reader on
-        # another thread always sees a consistent set.
-        self._world_pause_owners = frozenset()
-        self._world_pause_lock = threading.Lock()
-
         # I/O System
         self.io_manager = None
         if IO_AVAILABLE and IOManager:
@@ -642,42 +634,6 @@ class LogicThread(threading.Thread):
 
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
-
-    # =========================================================================
-    # WORLD PAUSE
-    # =========================================================================
-
-    def set_world_paused(self, owner, paused: bool = True) -> None:
-        """Hold (or release) a pause of the play-mode world for *owner*.
-
-        While any owner holds one, a play tick advances nothing in the world:
-        no player movement, look or shooting, no movers, doors, I/O timers,
-        triggers, props, physics, projectiles or portals, and the monster AI
-        thread idles. Plugins still tick, with the input they would normally
-        see, so a game's menus keep working over the frozen world. The frame is
-        still published, so the view keeps drawing it.
-
-        *owner* is any hashable key naming who paused (a modal screen, the
-        entity picker, a pause menu); each releases only its own request.
-        Callable from any thread. Leaving or entering Play Mode drops every
-        request.
-        """
-        with self._world_pause_lock:
-            owners = set(self._world_pause_owners)
-            if paused:
-                owners.add(owner)
-            else:
-                owners.discard(owner)
-            self._world_pause_owners = frozenset(owners)
-
-    @property
-    def world_paused(self) -> bool:
-        """True while any owner holds a world pause (see set_world_paused)."""
-        return bool(self._world_pause_owners)
-
-    def world_pause_owners(self) -> frozenset:
-        """The owners currently holding a world pause."""
-        return self._world_pause_owners
 
     def _tick_paused_world(self, delta):
         """One play tick with the world frozen: input drained, plugins run.
