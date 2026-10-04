@@ -184,7 +184,6 @@ def test_core_prop_carry_and_tidy_place(logic, monkeypatch):
     )
 
     tidy.stop()
-    core.stop()
 
 
 def test_receptacle_slots_and_filtering():
