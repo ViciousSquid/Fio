@@ -290,7 +290,7 @@ def test_leaving_play_releases_the_sessions_monsters():
         ai.monster_states = {id(m): {} for m in thread._monster_things}
         refs = [weakref.ref(m) for m in state.things]
 
-        thread._apply_play_mode(False)                     # Stop
+        thread.session_runtime.apply_play_mode(False)                     # Stop
         assert ai.table.count == 0 and ai.table.monsters == []
         assert ai.monster_states == {} and ai._enemy_monsters == ()
 
@@ -366,7 +366,7 @@ def _play(state, ticks=240):
     logic.player = Player(pos[0], pos[2])
     logic.player.pos.y = pos[1]
     logic.set_play_mode(True)
-    logic._stop_monster_ai()                   # this test drives the AI itself
+    logic.session_runtime.stop_monster_ai()                   # this test drives the AI itself
     logic.god_mode = True                      # play start resets it
     seen = {}
     for tick in range(ticks):
@@ -462,7 +462,7 @@ def _playing(things=(), brushes=()):
     logic = LogicThread(ThreadedGameState(), state)
     logic.player = Player(0.0, 0.0)
     logic.set_play_mode(True)
-    logic._stop_monster_ai()                   # deterministic: no AI thread
+    logic.session_runtime.stop_monster_ai()                   # deterministic: no AI thread
     return state, logic
 
 
@@ -562,7 +562,7 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
     try:
         saved_door, saved_lift = list(door["pos"]), list(lift["pos"])
         path = str(tmp_path / "s.fiosave")
-        assert logic.save_session(path)[0]
+        assert logic.session_runtime.save_session(path)[0]
 
         door_idx = state.brushes.index(door)
         logic.mover_runtime._trigger_door_open(door_idx, door)
@@ -576,7 +576,7 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
         logic._tick(logic.TICK_DURATION)
         assert door["pos"] != saved_door and lift["pos"] != saved_lift
 
-        assert logic.load_session(path)[0]
+        assert logic.session_runtime.load_session(path)[0]
         for _ in range(30):                         # and it stays there
             logic._tick(logic.TICK_DURATION)
         assert door["pos"] == pytest.approx(saved_door)
@@ -596,10 +596,10 @@ def _kill_after_save_then_load(tmp_path, save_mode):
     try:
         base = savegame.normalize_base_level(state.get_level_data())
         path = str(tmp_path / "s.fiosave")
-        assert logic.save_session(path, save_mode=save_mode, base_level=base)[0]
+        assert logic.session_runtime.save_session(path, save_mode=save_mode, base_level=base)[0]
 
         alive.properties.update(dead=True, health=0, _aggro_target=123)
-        ok, msg = logic.load_session(path, base_level=base)
+        ok, msg = logic.session_runtime.load_session(path, base_level=base)
         assert ok, msg
         return alive
     finally:

@@ -500,7 +500,7 @@ def _portal_session():
     start = next(t for t in state.things if isinstance(t, PlayerStart))
     logic.player = Player(start.pos[0], start.pos[2])
     logic.set_play_mode(True)
-    logic._stop_monster_ai()
+    logic.session_runtime.stop_monster_ai()
     logic.player.physics_enabled = False
     portal = next(t for t in state.things
                   if isinstance(t, Portal) and t.properties["name"] == "Portal_1")
@@ -555,7 +555,7 @@ def test_a_teleport_across_a_portal_does_not_transit(route, tmp_path):
             _put(logic, back)
             logic._portal_prev_player_pos = None
             logic._tick(logic.TICK_DURATION)
-            ok, msg = logic.save_session(str(tmp_path / "s.fiosave"),
+            ok, msg = logic.session_runtime.save_session(str(tmp_path / "s.fiosave"),
                                          map_name="Portal_Test.json")
             assert ok, msg
         _put(logic, front)
@@ -573,7 +573,7 @@ def test_a_teleport_across_a_portal_does_not_transit(route, tmp_path):
             handler = logic.io_manager._input_handlers[("trigger", "teleport")]
             handler({"name": "tele", "target_node": "behind"}, "behind", logic)
         else:
-            ok, msg = logic.load_session(str(tmp_path / "s.fiosave"),
+            ok, msg = logic.session_runtime.load_session(str(tmp_path / "s.fiosave"),
                                          map_name="Portal_Test.json")
             assert ok, msg
         logic._tick(logic.TICK_DURATION)
