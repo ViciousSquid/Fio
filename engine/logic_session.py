@@ -84,7 +84,7 @@ class LogicSession:
             logic._tick_fault_message = ""
 
             if hasattr(logic.editor_state, "config"):
-                logic.p2_turn_sensitivity = float(
+                logic.player_runtime.p2_turn_sensitivity = float(
                     logic.editor_state.config.get(
                         "Controls",
                         "p2_turn_sensitivity",

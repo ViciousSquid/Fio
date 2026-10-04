@@ -399,8 +399,6 @@ class LogicThread(threading.Thread):
         self._tick_count = 0
         self._last_tps_time = time.perf_counter()
 
-        # Player 2 turn sensitivity (degrees per second)
-        self.p2_turn_sensitivity = 10.0
         # A failed simulation tick enters a controlled fault state instead of
         # continuing from a partially mutated world. The current play session
         # is torn down cleanly and the editor remains usable.

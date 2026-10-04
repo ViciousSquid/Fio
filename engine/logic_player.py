@@ -28,6 +28,7 @@ class LogicPlayer:
         self._player_was_in_water = False
         self._waterwalk_timer = 0.0
         self.collected_keys = set()
+        self.p2_turn_sensitivity = 10.0
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""
@@ -76,7 +77,7 @@ class LogicPlayer:
         p2_dir = glm.vec3(float(p2['move_x']), 0.0, float(p2['move_z']))
 
         turn_input = float(p2['look_dx'])
-        logic.player2.angle -= turn_input * logic.p2_turn_sensitivity * delta
+        logic.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
         logic.player2.pitch -= float(p2['look_dy']) * 0.002
         logic.player2.pitch = max(-1.5, min(1.5, logic.player2.pitch))
 
