@@ -96,6 +96,7 @@ class FakeLogicThread:
         self.notarget = False
         self.io_manager = io_manager
         self.game_state = FakeGameState()
+        self.plugins = SimpleNamespace(services={})
         self._monster_lock = threading.RLock()
         self.combat_runtime = LogicCombat(self)
         self._player_damage_lock = threading.Lock()
