@@ -13,6 +13,7 @@ import math
 import os
 import sys
 import uuid as _uuidlib
+from types import SimpleNamespace
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _ROOT not in sys.path:
@@ -69,8 +70,7 @@ class FakePlayer:
 
 class FakeLogic:
     def __init__(self, brushes, things, player_pos=(0, 0, 0), terrain=None):
-        self.brushes = brushes
-        self.things = things
+        self.editor_state = SimpleNamespace(brushes=brushes, things=things)
         self.player = FakePlayer(player_pos)
         self.terrain = terrain
 
