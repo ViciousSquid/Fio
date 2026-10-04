@@ -38,6 +38,7 @@ from plugins.bigworld.cell import (CELL_SIZE, CellState, cell_of_point,
 from plugins.bigworld.manager import BigWorldManager
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld import persistence
+from engine.view_distance import ViewDistance  # noqa: E402
 
 
 def _check(cond, msg):
@@ -73,6 +74,7 @@ class FakeLogic:
         self.editor_state = SimpleNamespace(brushes=brushes, things=things)
         self.player = FakePlayer(player_pos)
         self.terrain = terrain
+        self.view_distance = ViewDistance()
 
 
 class FakeTerrain:

@@ -28,6 +28,11 @@ from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
 from engine.logic_timing import LogicTiming
 from engine.logic_world import LogicWorld                                    # noqa: E402
+from engine.logic_interaction import LogicInteraction               # noqa: E402
+from engine.logic_player import LogicPlayer                           # noqa: E402
+from engine.logic_session import LogicSession                         # noqa: E402
+from engine.logic_combat import LogicCombat                           # noqa: E402
+from engine.prop_runtime import PropSession                           # noqa: E402
 from engine.view_distance import ViewDistance                                # noqa: E402
 from plugins.bigworld.streaming import (DiskStreamingSession,   # noqa: E402
                                         MemoryCellSource)
@@ -70,6 +75,11 @@ class FakeLogic:
         self.editor_state = SimpleNamespace(things=[], brushes=[])
         self.player = FakePlayer(player_pos)
         self.view_distance = ViewDistance()
+        self._tick_lock = threading.RLock()
+        self.io_manager = None
+        self.player_runtime = LogicPlayer(self)
+        self.session_runtime = LogicSession(self)
+        self.interaction_runtime = LogicInteraction(self)
         self.player2 = None
         self.god_mode = False
         self.buddha_mode = False
@@ -97,6 +107,8 @@ class FakeLogic:
         self.movers = []
         self.doors = []
         self.mover_runtime = LogicMovers(self)
+        self.prop_runtime = PropSession(self)
+        self.combat_runtime = LogicCombat(self)
         self.timing_runtime = LogicTiming(self)
         self.monster_ai = FakeMonsterAI()
         self._monster_lock = threading.RLock()
