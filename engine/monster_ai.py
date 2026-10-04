@@ -1188,6 +1188,7 @@ the scalar fallback for callers that do not have the dense table.
         set is unchanged, and invalidate it if a position/team/dead/hidden
         value changed.
         """
+        refresh_table = False
         if self._enemy_ready:
             if self._enemy_range != max_range:
                 return None
@@ -1196,6 +1197,7 @@ the scalar fallback for callers that do not have the dense table.
             if self._enemy_runtime_signature() == self._enemy_signature:
                 return self._enemy_nearest
             self._enemy_ready = False
+            refresh_table = True
 
         self._enemy_ready = True
         self._enemy_nearest = None
@@ -1215,7 +1217,7 @@ the scalar fallback for callers that do not have the dense table.
                 table.count == len(monsters)
                 and all(a is b for a, b in zip(table.monsters, monsters))
             )
-            if not same_rows:
+            if refresh_table or not same_rows:
                 table.gather(monsters)
         count = table.count
         if not count:
