@@ -79,6 +79,7 @@ def test_loading_plugins_does_not_import_the_bigworld_runtime():
 def test_a_map_with_no_bigworld_entity_never_starts_a_session():
     out = run_isolated("""
         import sys
+        from types import SimpleNamespace
         from plugins.manager import load_plugins, get_manager
         load_plugins()
         plugin = next(p for p in get_manager().plugins if p.name == 'bigworld')
@@ -86,6 +87,7 @@ def test_a_map_with_no_bigworld_entity_never_starts_a_session():
         class Logic:
             things = []
             brushes = []
+            camera = SimpleNamespace(overhead_height_limit=None)
 
         logic = Logic()
         plugin.on_play_start(logic)
@@ -131,6 +133,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
 
         class Logic:
             things = [settings]
+            camera = SimpleNamespace(overhead_height_limit=None)
             brushes = [{'id': 'a', 'pos': [0, 0, 0], 'size': [64, 64, 64]},
                        {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]}]
             player = None
