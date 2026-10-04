@@ -245,7 +245,7 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    names = {published.render_table.names[int(slot)] for slot in published.visible_brush_slots}
+    names = {published.render_refs[int(slot)]["name"] for slot in published.visible_brush_slots}
     assert "in_front" in names, (
         "the brush in front of the camera was culled; visible set is %s" % (names,))
     assert "behind" not in names, (
@@ -254,7 +254,7 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
 
 def test_the_culled_count_and_the_visible_list_agree(logic):
     thread = logic(brushes=pillar_grid(6, 6, spacing=500.0))
-    thread.editor_camera.pos = glm.vec3(0, 200, 2000)
+    thread.camera.get_editor_camera().pos = glm.vec3(0, 200, 2000)
 
     thread.render_runtime.prepare_render_state()
 
@@ -490,7 +490,7 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
         thread.editor_state.brushes.append(box_brush("second", (100, 0, -400)))
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
-        names = {state.render_table.names[int(slot)] for slot in state.all_brush_slots}
+        names = {state.render_refs[int(slot)]["name"] for slot in state.all_brush_slots}
         assert names == {"first", "second"}, (
             "a brush added mid-session did not reach the renderer; the frame "
             "holds %s" % (sorted(names),))
