@@ -1,6 +1,6 @@
 """The dense render projection of Fio's world -- T3.
 
-Fio already pays to describe its world numerically: :meth:`LogicThread._build_cull_cache`
+Fio already pays to describe its world numerically: the render-table cull projection
 keeps AABB centres and half-extents in NumPy so the frustum test can run as two
 matmuls instead of a per-brush Python loop.  What it does not keep is anything
 about *what* a brush is -- its shader class, whether it is water, which texture
