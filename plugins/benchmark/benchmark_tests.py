@@ -232,7 +232,7 @@ class BenchmarkTests:
         import glm
         position = glm.vec3(float(x), float(y), float(z))
         logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
-        if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
+        if logic_thread is not None:
             logic_thread.camera.set_editor_camera(position, yaw, pitch, camera.fov)
         else:
             camera.pos = position
