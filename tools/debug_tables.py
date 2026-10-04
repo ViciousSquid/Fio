@@ -450,18 +450,11 @@ class DebugTablesWindow(QMainWindow):
 
     def _follow_export_text(self):
         """Return the current FOLLOW SELECTION chain, or an explicit empty state."""
-        selected = getattr(
-            getattr(self.main_window, "state", None),
-            "selected_object", None
+        selected = next(
+            iter(getattr(getattr(self.main_window, "state", None),
+                         "selected_objects", []) or []),
+            None,
         )
-        if selected is None:
-            selected = next(
-                iter(getattr(
-                    getattr(self.main_window, "state", None),
-                    "selected_objects", []
-                ) or []),
-                None
-            )
         if selected is None:
             return "FOLLOW SELECTION\n\nNO SELECTION"
         props = selected if isinstance(selected, dict) else getattr(
@@ -1077,18 +1070,11 @@ class DebugTablesWindow(QMainWindow):
     def _update_follow(self):
         if not self.follow.isChecked():
             return
-        selected = getattr(
-            getattr(self.main_window, "state", None),
-            "selected_object", None
+        selected = next(
+            iter(getattr(getattr(self.main_window, "state", None),
+                         "selected_objects", []) or []),
+            None,
         )
-        if selected is None:
-            selected = next(
-                iter(getattr(
-                    getattr(self.main_window, "state", None),
-                    "selected_objects", []
-                ) or []),
-                None
-            )
         if selected is None:
             return
         props = selected if isinstance(selected, dict) else getattr(
