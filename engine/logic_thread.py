@@ -644,8 +644,6 @@ class LogicThread(threading.Thread):
 
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
-    _rows_epoch = None
-    _rows_watch = 0
 
     # =========================================================================
     # WORLD PAUSE

@@ -39,6 +39,8 @@ class LogicWorld:
         self.indexed_things = ()
         self.indexed_brushes = ()
         self.timer_things = []
+        self._rows_epoch = None
+        self._rows_watch = 0
 
     def build_entity_caches(self):
         """Build lookup and hot-path entity indexes for the current world."""
@@ -216,14 +218,14 @@ class LogicWorld:
         row_watch_ticks = 30
 
         epoch = getattr(logic.editor_state, "world_epoch", None)
-        if epoch != getattr(logic, "_rows_epoch", None):
-            logic._rows_epoch = epoch
-            logic._rows_watch = row_watch_ticks
+        if epoch != self._rows_epoch:
+            self._rows_epoch = epoch
+            self._rows_watch = row_watch_ticks
 
-        if not getattr(logic, "_rows_watch", 0):
+        if not self._rows_watch:
             return
 
-        logic._rows_watch -= 1
+        self._rows_watch -= 1
         brushes_changed = tuple(logic.editor_state.brushes) != logic._indexed_brushes
         things_changed = tuple(logic.editor_state.things) != logic._indexed_things
         if brushes_changed or things_changed:
@@ -242,6 +244,8 @@ class LogicWorld:
         self.monster_by_id = {}
         self.monster_things = []
         self.timer_things = []
+        self._rows_epoch = None
+        self._rows_watch = 0
 
         self.levelchanger_things = []
         self.levelchanger_centres = np.empty((0, 3), dtype=np.float32)
