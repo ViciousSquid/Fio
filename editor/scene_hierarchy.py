@@ -230,7 +230,7 @@ class SceneHierarchy(QWidget):
                                                ("is_fog", 0))):
                 parts.append("brush")
         else:
-            props = getattr(obj, "properties", {}) or {}
+            props = obj.properties
             parts.append(props.get("name", "") or "")
             parts.append(props.get("type", "") or "")
             parts.append(type(obj).__name__)
