@@ -233,7 +233,7 @@ def _window_host(state):
         config=SimpleNamespace(getboolean=lambda *a, **k: False),
         toasts=[])
     host.show_toast = lambda msg, **k: host.toasts.append(msg)
-    for name in ("update_title", "update_all_ui", "set_selected_object",
+    for name in ("update_title", "update_all_ui", "set_selected_objects",
                  "add_recent_file", "center_2d_views_on", "_refresh_logic_graph"):
         setattr(host, name, lambda *a, **k: None)
     for name in ("_load_level", "_apply_level_data", "_clear_terrain"):
