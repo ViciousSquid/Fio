@@ -7,8 +7,6 @@ borrow permanently -- with it open, the renderer never saw another frame.
 """
 
 import os
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -214,18 +212,30 @@ def test_follow_selection_names_the_render_row_key_and_run(window):
 
 def _terrain_host(instrument):
     """Give the instrument's host a terrain with a few built chunks."""
-    from engine.terrain_table import TerrainTable
-    table = TerrainTable()
+    from engine.terrain import Terrain
+    terrain = Terrain()
     for cx in range(3):
-        slot = table.ensure(cx, 0, 256.0, 0.0, 0.0)
+        slot = terrain.table.ensure(
+            cx, 0, terrain.chunk_size, terrain.offset_x, terrain.offset_z
+        )
         if cx < 2:
-            table.store(slot, 48, 0, np.full((51, 51), 10.0 * cx, dtype=np.float32))
-    table.release([table.slot_of_coord[(2, 0)]])     # a freed slot, awaiting reuse
-    terrain = SimpleNamespace(
-        table=table, enabled=True, streaming=True, stream_radius=2048.0,
-        drawn_slots=np.array([0, 1]), culled_chunks=0, total_triangles=9216,
-        _height_pages=[7], _page_layers=512, use_textures=True,
-        grass_enabled=False, UPDATE_BUDGET_MS=4.0, MAX_UPDATES_PER_FRAME=2)
+            terrain.table.store(
+                slot, 48, 0,
+                np.full((51, 51), 10.0 * cx, dtype=np.float32),
+            )
+    terrain.table.release([terrain.table.slot_of_coord[(2, 0)]])
+    terrain.enabled = True
+    terrain.streaming = True
+    terrain.stream_radius = 2048.0
+    terrain.drawn_slots = np.array([0, 1], dtype=np.intp)
+    terrain.culled_chunks = 0
+    terrain.total_triangles = 9216
+    terrain._height_pages = [7]
+    terrain._page_layers = 512
+    terrain.use_textures = True
+    terrain.grass_enabled = False
+    terrain.UPDATE_BUDGET_MS = 4.0
+    terrain.MAX_UPDATES_PER_FRAME = 2
     instrument.main_window.terrain = terrain
     return terrain
 
