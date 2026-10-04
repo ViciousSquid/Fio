@@ -432,15 +432,12 @@ def test_the_inspector_hands_providers_logic_only_in_play_mode(api, inspector_ho
     seen = []
     api.register_entity_inspector(lambda e, logic: seen.append(logic) or {"title": "x"})
 
-    class View:
-        play_mode = play_mode
-        logic_thread = object()
-
-    inspector_host.view_3d = View()
+    view = types.SimpleNamespace(play_mode=play_mode, logic_thread=object())
+    inspector_host.view_3d = view
     a = Thing(pos=[0, 0, 0], properties={"type": "t"})
     inspector_host.state.things.append(a)
     inspector_host.show_entity_inspector(a)
-    assert seen[-1] is (View.logic_thread if play_mode else None)
+    assert seen[-1] is (view.logic_thread if play_mode else None)
 
 
 def test_no_entity_opens_nothing(inspector_host):

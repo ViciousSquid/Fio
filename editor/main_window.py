@@ -4228,8 +4228,8 @@ class MainWindow(QMainWindow):
             # the scene is replaced.  Its teardown (movers, doors, Props, the
             # plugins' on_play_stop) restores state by index into the world it
             # was started on, so it must run against that world, not the new one.
-            was_playing = bool(getattr(self.view_3d, 'play_mode', False))
-            logic = self.view_3d.logic_thread
+            was_playing = bool(self.view_3d.play_mode)
+            logic = self.view_3d.logic_thread if was_playing else None
             # The player keeps their weapons through a level change: taken
             # before the session ends (ending it drops them), handed back once
             # play has restarted on the new level (starting it clears them).

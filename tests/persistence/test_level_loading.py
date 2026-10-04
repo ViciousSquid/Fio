@@ -39,7 +39,7 @@ class _Window:
         self.state = types.SimpleNamespace(
             things=[], validate_level_data=EditorState.validate_level_data)
         self.view_3d = types.SimpleNamespace(
-            play_mode=False, camera=types.SimpleNamespace())
+            play_mode=False, logic_thread=None, camera=types.SimpleNamespace())
         self.fail_apply = fail_apply
         self.applied = []
         self.recent = []
