@@ -65,7 +65,7 @@ def _floor_grid():
     return grid
 
 
-def test_core_prop_carry_drop_rest_without_plugins():
+def test_core_prop_carry_drop_rest_without_plugins(real_logic):
     spin = 90.0  # degrees per second about X
     prop = Prop(pos=[0.0, 40.0, 30.0], properties={
         'carry_enabled': True,
@@ -84,16 +84,7 @@ def test_core_prop_carry_drop_rest_without_plugins():
         '_physics_entity': prop,
         '_collision_mode': 'aabb',
     }])
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]), io_manager=io,
-        session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=physics),
-        player_runtime=SimpleNamespace(player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-                               camera_height=40.0)),
-        interaction_runtime=SimpleNamespace(current_hud_message=''),
-        combat_runtime=SimpleNamespace(player_ammo=0, active_weapon=None, gun2_obtained=False),
-    )
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop], grid=grid, physics=physics)
 
     # Carry: the prop is directly ahead at eye height.
     session.tick(1 / 60, use_pressed=True)
