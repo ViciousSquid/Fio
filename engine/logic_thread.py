@@ -274,8 +274,6 @@ class LogicThread(threading.Thread):
         ),
         "timing": (
             "_timer_things",
-            "timer_states",
-            "light_fade_states",
             "io_manager",
         ),
         "collision": (
@@ -434,10 +432,8 @@ class LogicThread(threading.Thread):
         # Countdown state for logic_timer entities, keyed by the timer's UUID
         # (see LogicThread._timer_key) so it survives a save and can never be
         # confused with another entity's.
-        self.timer_states: Dict[str, Dict[str, float]] = {}
 
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
-        self.light_fade_states: Dict[int, Dict[str, Any]] = {}
         
         # Hurt trigger timers remain on LogicThread for compatibility;
         # LogicTriggers owns their processing.
