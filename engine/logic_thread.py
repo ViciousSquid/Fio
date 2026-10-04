@@ -1,36 +1,24 @@
-"""
-Game Logic Processing
+"""Logic-thread orchestration for Fio's extracted runtime domains.
 
-This thread runs game logic at a fixed timestep (60 Hz), handling:
-- Player movement and physics
-- Entity interactions and triggers
-- I/O event dispatching
-- Mover and door animations
-- Prop collection
-- Player death detection
-- Portal transit (Prey 2006-style world portals)
+The thread owns cross-domain ordering, the fixed-timestep loop, fault handling,
+and render publication. Authoritative authoring state remains in EditorState;
+play-session state belongs to the extracted Logic* runtimes constructed here.
 """
 
 import threading
 import time
-import json
-import numpy as np
-from typing import List, Dict, Any, Optional
-import glm
 import math
 import os
-import random
 
 from .threaded_game_state import ThreadedGameState
-from .camera import Camera
-from .change_journal import moved, touch
+from .change_journal import touch
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_player import LogicPlayer
-from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
+from .logic_movers import LogicMovers
 from .logic_parenting import LogicParenting
-from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYER_EXIT_EPSILON
-from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
+from .logic_portals import LogicPortals
+from .logic_triggers import LogicTriggers
 from .logic_combat import LogicCombat
 from .logic_timing import LogicTiming
 from .logic_collision import LogicCollision
@@ -278,23 +266,9 @@ class LogicThread(threading.Thread):
         self.trigger_runtime = LogicTriggers(self)
         self.trigger_runtime._reset_trigger_state()
 
-        # Countdown state for logic_timer entities, keyed by the timer's UUID
-        # (see LogicThread._timer_key) so it survives a save and can never be
-        # confused with another entity's.
+        # Extracted runtime domains below own their state; LogicThread only
+        # constructs them and establishes their dependency order.
 
-        # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
-        
-        
-        # Collection state
-        
-        
-        # Mover and door animation state are owned by mover_runtime.
-        # Model collision pseudo-brushes for things with model_path
-
-
-        # Interaction state is owned by interaction_runtime.
-
-        # Visual FX
 
         # Monster AI (delegated to separate class + thread)
         self.monster_ai = MonsterAI(self)
@@ -315,19 +289,6 @@ class LogicThread(threading.Thread):
         self.timing_runtime = LogicTiming(self)
         # LogicCollision owns world/model collision geometry and cache rebuilding.
         self.collision_runtime = LogicCollision(self)
-
-        # Entity lookup caches — built on play-mode enter
-        # Dense LevelChanger activation columns. Spatial data is rebuilt with
-        # the entity caches; the per-tick interaction path only consumes these
-        # float32 columns and scalar-dispatches the selected row.
-        # Authored health per monster UUID, captured on play-mode enter so the
-        # Respawn input has a value to restore (see LogicSession.reset_all_monsters).
-
-        # Portal slots use the same enumerate(editor_state.things) address space
-        # as EntityTable. Links are resolved once when topology changes.
-
-        # Level-complete UI state is owned by interaction_runtime
-
 
         # Performance Monitoring
         self.actual_tps = 0.0
@@ -389,24 +350,7 @@ class LogicThread(threading.Thread):
             pass
 
     # =========================================================================
-    # CUTSCENE RUNTIME
-    # =========================================================================
-    # CutsceneRuntime owns cinematic playback state and behaviour; LogicThread
-    # invokes it directly rather than mirroring its API.
-
-    # =========================================================================
-    # ENTITY LOOKUP (for I/O system)
-    # =========================================================================
-    
-    # -- visibility invalidation ------------------------------------------
-    #
-    # Two notifications, because "what is drawn" and "what is collided with"
-    # go stale at different costs.  Both are the *host* side of the streaming
-    # contract in ``plugins.bigworld.runtime.StreamingHost``; neither knows
-    # anything about a particular streaming layer.
-
-        # =========================================================================
-    # PLAYER & MODE MANAGEMENT
+    # THREAD LIFECYCLE
     # =========================================================================
 
     def start(self):
@@ -694,17 +638,4 @@ class LogicThread(threading.Thread):
         # ── Player 2 physics (split-screen) ──────────────────────────────────
         self.player_runtime.update_player2(delta)
 
-    # =========================================================================
-    # LOGIC TIMER UPDATE
-    # =========================================================================
-    
-    # =========================================================================
-    # TRIGGER HANDLING
-    # =========================================================================
-
-    # INTERACTIONS
-    # =========================================================================
-
-    # PARENTED ENTITY RUNTIME
-    # =========================================================================
 
