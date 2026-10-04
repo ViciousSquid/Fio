@@ -2025,12 +2025,12 @@ class QtGameView(QOpenGLWidget):
         # icon bottom-right instead (see below), alongside any held keys.
         # LogicCamera is the authoritative camera mode.
         overhead = self.logic_thread.camera.is_overhead()
-        health = getattr(self, '_cached_health', 0)
-        max_health = getattr(self, '_cached_max_health', 100)
+        health = self._cached_health
+        max_health = self._cached_max_health
         if health is None or max_health is None:
             return
         hud_margin = 20
-        active_weapon = getattr(self, '_cached_active_weapon', None)
+        active_weapon = self._cached_active_weapon
 
         # The entire HUD fades back in for four seconds after a LogicCamera
         # gives control back to the player. The health count has its own
@@ -2142,7 +2142,7 @@ class QtGameView(QOpenGLWidget):
             painter.setPen(QPen(QColor(0, 255, 0), 2))
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
-        msg = getattr(self, '_cached_hud_message', '')
+        msg = self._cached_hud_message
         prompt_key = render_state.hud_prompt_key if render_state is not None else None
         if msg:
             if self._cached_hud_message != msg:
@@ -2189,7 +2189,7 @@ class QtGameView(QOpenGLWidget):
                         cy + 10,
                         prompt_size,
                     )
-        hint = getattr(self, '_play_mode_hint', '')
+        hint = self._play_mode_hint
         if hint and not msg:
             if self._cached_hint_text != hint:
                 self._cached_hint_text = hint
@@ -2223,7 +2223,7 @@ class QtGameView(QOpenGLWidget):
                 # Reserve the weapon's slot so keys don't overlap it.
                 key_slot_offset = icon_size + 15
 
-        collected_keys = getattr(self, '_cached_collected_keys', set())
+        collected_keys = self._cached_collected_keys
         if collected_keys:
             key_x = viewport_width - hud_margin - 100 - key_slot_offset
             key_y = viewport_height - hud_margin - 100
