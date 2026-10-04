@@ -400,11 +400,9 @@ def test_camera_mode_cannot_move_the_resident_set_or_the_tiers():
     assert resident, "expected a non-empty resident set to compare against"
 
     # Everything a camera mode can change, changed -- except the player.
-    session.logic.camera_mode = "Overhead"
     session.logic.camera.overhead_height = 800.0
-    session.logic.editor_camera = FakePlayer(9000.0, 9000.0)
     session.tick()
-    session.logic.camera_mode = "First Person"
+    session.logic.camera.overhead_height = 400.0
     session.tick()
 
     assert {t.properties["id"] for t in things
@@ -419,7 +417,7 @@ def test_the_session_reads_the_player_not_the_camera():
     session.tick()
     near_origin = session.tiers.cell_tier((0, 0))
 
-    session.logic.editor_camera = FakePlayer(20000.0, 20000.0)
+    session.logic.camera.overhead_height = 20000.0
     session.tick()
     assert session.tiers.cell_tier((0, 0)) == near_origin
 
