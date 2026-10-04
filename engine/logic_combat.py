@@ -1,8 +1,7 @@
 """Combat and projectile runtime delegated from LogicThread.
 
 Owns player hitscan shooting, monster projectile simulation, bullet marks, and
-player-noise events. LogicThread remains the tick-order orchestrator and keeps
-the existing private/public method surface as compatibility wrappers.
+player-noise events. LogicThread remains the tick-order orchestrator.
 """
 
 from __future__ import annotations
