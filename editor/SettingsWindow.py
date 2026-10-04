@@ -580,10 +580,6 @@ class SettingsWindow(QDialog):
         # every machine, which put desktops on the low-power shaders.
         default_lowpower_mode = is_low_power
         default_shadows = not is_low_power
-        # `arm_mode` is the setting's old name; read it as the fallback so an
-        # existing settings.ini keeps the choice its owner made.
-        default_lowpower_mode = self.config.getboolean(
-            'Renderer', 'arm_mode', fallback=default_lowpower_mode)
         self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
