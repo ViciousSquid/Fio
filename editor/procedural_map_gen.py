@@ -47,14 +47,14 @@ def run_cli(args):
         'max_room': args.max_room,
         'wall_tex': args.wall_tex,
         'floor_tex': args.floor_tex,
+        'random_wall_texture': args.random_wall_texture,
+        'random_floor_texture': args.random_floor_texture,
         'spawn_monsters': args.spawn_monsters,
         'monster_count': args.monster_count,
         'world_width': world_width,
         'world_height': world_height,
         'spawn_health': args.spawn_health,
         'health_count': args.health_count,
-        'spawn_ammo': args.spawn_ammo,
-        'ammo_count': args.ammo_count,
         'enable_floors': args.floors,
         'floor_room_count': args.floor_count,
         'floor_height': args.floor_height,
@@ -93,6 +93,10 @@ def main():
                         help="Wall texture filename")
     parser.add_argument("--floor-tex", type=str, default="default.png",
                         help="Floor texture filename")
+    parser.add_argument("--random-wall-texture", action="store_true",
+                        help="Choose a random wall texture from the procedural sci-fi set")
+    parser.add_argument("--random-floor-texture", action="store_true",
+                        help="Choose a random floor texture from the procedural floor set")
     parser.add_argument("--spawn-monsters", action="store_true", default=True,
                         help="Spawn monsters (default: True)")
     parser.add_argument("--no-spawn-monsters", dest="spawn_monsters", action="store_false",
@@ -105,12 +109,6 @@ def main():
                         help="Disable health pickups")
     parser.add_argument("--health-count", type=int, default=6,
                         help="Number of health pickups to spawn")
-    parser.add_argument("--spawn-ammo", action="store_true", default=True,
-                        help="Spawn ammo pickups (default: True)")
-    parser.add_argument("--no-spawn-ammo", dest="spawn_ammo", action="store_false",
-                        help="Disable ammo pickups")
-    parser.add_argument("--ammo-count", type=int, default=4,
-                        help="Number of ammo pickups to spawn")
     parser.add_argument("--floors", action="store_true", default=True,
                         help="Generate upper floors reached by steps (default: True)")
     parser.add_argument("--no-floors", dest="floors", action="store_false",
