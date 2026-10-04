@@ -364,8 +364,8 @@ def _play(state, ticks=240):
     logic = LogicThread(game_state, state)
     start = next((t for t in state.things if isinstance(t, PlayerStart)), None)
     pos = start.pos if start is not None else [0.0, 64.0, 0.0]
-    logic.player = Player(pos[0], pos[2])
-    logic.player.pos.y = pos[1]
+    logic.player_runtime.player = Player(pos[0], pos[2])
+    logic.player_runtime.player.pos.y = pos[1]
     logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()                   # this test drives the AI itself
     logic.player_runtime.god_mode = True                      # play start resets it
@@ -461,7 +461,7 @@ def _playing(things=(), brushes=()):
     state.brushes = list(brushes) or [box_brush("ground", (0, -16, 0), (4096, 32, 4096))]
     state.things = list(things)
     logic = LogicThread(ThreadedGameState(), state)
-    logic.player = Player(0.0, 0.0)
+    logic.player_runtime.player = Player(0.0, 0.0)
     logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()                   # deterministic: no AI thread
     return state, logic

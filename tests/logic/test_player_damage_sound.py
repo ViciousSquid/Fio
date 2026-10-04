@@ -22,7 +22,7 @@ def _logic(player_pos=(10.0, 20.0, 30.0), health=100):
         player2_max_health=100,
         player2_dead=False,
     )
-    logic.player = SimpleNamespace(pos=glm.vec3(*player_pos))
+    logic.player_runtime.player = SimpleNamespace(pos=glm.vec3(*player_pos))
     logic.game_state = SimpleNamespace(sounds=[])
 
     def queue_sound(request):
@@ -60,7 +60,7 @@ def test_pain_sound_position_is_a_snapshot():
     logic = _logic(player_pos=(1.0, 2.0, 3.0))
 
     LogicTriggers(logic)._apply_player_damage(10)
-    logic.player.pos = glm.vec3(100.0, 200.0, 300.0)
+    logic.player_runtime.player.pos = glm.vec3(100.0, 200.0, 300.0)
 
     assert logic.game_state.sounds[0]["position"] == (1.0, 2.0, 3.0)
 

@@ -59,7 +59,7 @@ def test_frames_stay_consistent_while_everything_changes():
                        for i in range(12)])
     game_state = ThreadedGameState()
     logic = LogicThread(game_state, state)
-    logic.player = Player(0.0, 0.0)
+    logic.player_runtime.player = Player(0.0, 0.0)
     logic.session_runtime.apply_play_mode(True)
 
     errors = []

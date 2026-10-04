@@ -109,7 +109,7 @@ def _editor(brushes=(), things=()):
 
 def _play(brushes=(), things=()):
     state, game_state, logic = _editor(brushes, things)
-    logic.player = Player(0.0, 0.0, 0.0)
+    logic.player_runtime.player = Player(0.0, 0.0, 0.0)
     logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()
     return state, game_state, logic
@@ -312,7 +312,7 @@ def test_a_wall_revealed_by_io_show_is_solid():
         game_state.set_keys({KEY_W})
         for _ in range(240):
             logic._step_frame(logic.TICK_DURATION)
-        assert logic.player.pos.z < 284.0
+        assert logic.player_runtime.player.pos.z < 284.0
     finally:
         logic.session_runtime.apply_play_mode(False)
 

@@ -177,7 +177,7 @@ def streaming_session():
         plugin = thread.plugins.find_plugin("bigworld")
         counter = _Counter(plugin)
         made.append((thread, counter))
-        thread.player = Player(0.0, 0.0)
+        thread.player_runtime.player = Player(0.0, 0.0)
         return state, thread, counter
 
     yield _build

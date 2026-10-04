@@ -185,7 +185,7 @@ def playing_logic():
     from engine.threaded_game_state import ThreadedGameState
 
     logic = LogicThread(ThreadedGameState(), EditorState())
-    logic.player = Player(0.0, 0.0)
+    logic.player_runtime.player = Player(0.0, 0.0)
     logic.session_runtime.apply_play_mode(True)
     yield logic
     logic.session_runtime.apply_play_mode(False)

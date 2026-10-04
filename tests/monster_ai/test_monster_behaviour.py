@@ -113,7 +113,7 @@ def test_a_triggered_ambush_monster_ignores_sight(monster_factory, ai_world,
     ai.update(TICK)
     assert monster.properties["awake"] is False, (
         "a scripted ambush waits for its I/O trigger; it woke to sight from "
-        "%.0f units" % _distance(monster.pos, logic.player.pos))
+        "%.0f units" % _distance(monster.pos, logic.player_runtime.player.pos))
     assert _state(ai, monster) is None, \
         "a sleeping monster must not accumulate AI state"
 
@@ -533,7 +533,7 @@ def test_a_distant_flying_monster_spawns_a_projectile(monster_factory, ai_world)
     assert len(logic.combat_runtime._monster_projectiles) == 1, (
         "a flying monster %.0f units away should fire a projectile, not a "
         "hitscan; projectiles=%d damage=%s"
-        % (_distance(monster.pos, logic.player.pos),
+        % (_distance(monster.pos, logic.player_runtime.player.pos),
            len(logic.combat_runtime._monster_projectiles), logic.damage_applied))
     projectile = logic.combat_runtime._monster_projectiles
     assert projectile.damage[0] == 9
