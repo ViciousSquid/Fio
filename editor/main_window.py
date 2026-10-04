@@ -683,8 +683,7 @@ class MainWindow(QMainWindow):
             self.terrain = None
 
         # Clear terrain data from editor state
-        if hasattr(self.state, 'terrain_data'):
-            self.state.terrain_data = None
+        self.state.terrain_data = None
 
         # Notify the 3D view's logic thread (if any) that terrain is gone
         if self.view_3d is not None and self.view_3d.logic_thread:
@@ -954,7 +953,7 @@ class MainWindow(QMainWindow):
                 self.terrain = Terrain(seed=42)
                 
                 # Load from state if available
-                if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+                if self.state.terrain_data:
                     self.terrain.from_dict(self.state.terrain_data)
                 
                 # Setup shader in renderer
@@ -1007,8 +1006,7 @@ class MainWindow(QMainWindow):
     def on_terrain_changed(self):
         """Handle terrain changes."""
         if self.terrain:
-            if hasattr(self.state, 'terrain_data'):
-                self.state.terrain_data = self.terrain.to_dict()
+            self.state.terrain_data = self.terrain.to_dict()
         self.update_all_ui()
 
     def clone_selected_object(self):
@@ -1323,7 +1321,7 @@ class MainWindow(QMainWindow):
         min_x = min_z = float('inf')
         max_x = max_z = float('-inf')
         found = False
-        for b in getattr(self.state, 'brushes', None) or []:
+        for b in self.state.brushes:
             pos = b.get('pos'); size = b.get('size') or [0, 0, 0]
             if not pos:
                 continue
@@ -1331,7 +1329,7 @@ class MainWindow(QMainWindow):
             min_x = min(min_x, pos[0] - hx); max_x = max(max_x, pos[0] + hx)
             min_z = min(min_z, pos[2] - hz); max_z = max(max_z, pos[2] + hz)
             found = True
-        for t in getattr(self.state, 'things', None) or []:
+        for t in self.state.things:
             pos = getattr(t, 'pos', None)
             if not pos:
                 continue
@@ -1355,7 +1353,7 @@ class MainWindow(QMainWindow):
         try:
             from engine.terrain import Terrain
             self.terrain = Terrain(seed=42)
-            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
+            if self.state.terrain_data:
                 self.terrain.from_dict(self.state.terrain_data)
             if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
@@ -2489,7 +2487,7 @@ class MainWindow(QMainWindow):
     def _resync_terrain_after_history(self):
         """Reload live terrain when an undo/redo changed authored terrain data."""
         terrain = self.terrain
-        terrain_data = getattr(self.state, 'terrain_data', None)
+        terrain_data = self.state.terrain_data
         if terrain is None or not isinstance(terrain_data, dict):
             return
 
