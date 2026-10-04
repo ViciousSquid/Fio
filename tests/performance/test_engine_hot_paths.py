@@ -57,7 +57,7 @@ def test_the_cull_buffers_are_built_once_per_session_not_per_frame(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        table = thread._render_table
+        table = thread.game_state.get_write_state().render_table
         bounds = table.bounds
         generation = table.generation
         for _ in range(20):
@@ -82,7 +82,7 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        table = thread._render_table
+        table = thread.game_state.get_write_state().render_table
         static_row = table.center[0].copy()
 
         # Move both brushes. The static one behind the projection's back: its
@@ -118,7 +118,7 @@ def test_classification_is_not_re_resolved_per_frame(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        table = thread._render_table
+        table = thread.game_state.get_write_state().render_table
         before = int(table.class_bits[0])
 
         brush["shader"] = "Glass"          # no epoch bump: nobody was told
@@ -151,7 +151,7 @@ def test_entity_classification_is_not_re_resolved_per_frame(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        table = thread._entity_table
+        table = thread.game_state.get_write_state().entity_table
         before = int(table.class_bits[0])
 
         thing.properties["render_mode"] = "billboard"   # nobody was told
@@ -192,7 +192,7 @@ def test_no_entity_is_copied_or_re_read_on_an_unchanged_frame(logic, monkeypatch
 
     assert first == second == [lamp, grunt]
     assert resolved == [], "an unchanged entity was re-resolved"
-    assert list(thread._entity_table.monster_slots) == [1]
+    assert list(thread.game_state.get_write_state().entity_table.monster_slots) == [1]
 
 
 def test_the_frustum_test_is_one_batched_numpy_pass(logic):
