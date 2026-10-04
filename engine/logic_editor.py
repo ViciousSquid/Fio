@@ -23,6 +23,10 @@ Key_Shift = 0x01000020
 class LogicEditor:
     """Runtime input/navigation for the editor viewport."""
 
+    EDITOR_CAMERA_SPEED = 300.0
+    EDITOR_CAMERA_FAST_MULT = 2.5
+    EDITOR_MOUSE_SENSITIVITY = 0.15
+
     def __init__(self, logic):
         self.logic = logic
 
@@ -32,7 +36,7 @@ class LogicEditor:
 
         dx, dy = logic.game_state.consume_mouse_delta()
         if dx != 0 or dy != 0:
-            camera.yaw += dx * logic.EDITOR_MOUSE_SENSITIVITY
+            camera.yaw += dx * self.EDITOR_MOUSE_SENSITIVITY
             camera.pitch -= dy * logic.EDITOR_MOUSE_SENSITIVITY
             camera.pitch = max(
                 -89.0,
@@ -64,7 +68,7 @@ class LogicEditor:
 
         if glm.length(move_dir) > 0.001:
             move_dir = glm.normalize(move_dir)
-            speed = logic.EDITOR_CAMERA_SPEED
+            speed = self.EDITOR_CAMERA_SPEED
             if Key_Shift in keys:
-                speed *= logic.EDITOR_CAMERA_FAST_MULT
+                speed *= self.EDITOR_CAMERA_FAST_MULT
             camera.pos += move_dir * speed * delta

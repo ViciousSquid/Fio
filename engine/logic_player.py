@@ -23,6 +23,8 @@ _WATER_LOUDNESS = 0.7
 class LogicPlayer:
     """Runtime mechanics for the engine's player actors."""
 
+    WATERWALK_INTERVAL = 0.45
+
     def __init__(self, logic):
         self.logic = logic
         self.player = None
@@ -147,6 +149,6 @@ class LogicPlayer:
             if self._waterwalk_timer <= 0.0:
                 logic.game_state.queue_sound(
                     {'file': 'waterwalk.wav', 'volume': 0.8})
-                self._waterwalk_timer = logic.WATERWALK_INTERVAL
+                self._waterwalk_timer = self.WATERWALK_INTERVAL
         else:
             self._waterwalk_timer = 0.0

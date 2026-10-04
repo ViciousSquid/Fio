@@ -33,7 +33,7 @@ from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYE
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
 from .logic_combat import LogicCombat
 from .logic_timing import LogicTiming
-from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
+from .logic_collision import LogicCollision
 from .logic_world import LogicWorld
 from .logic_render import LogicRender
 from .logic_session import LogicSession
@@ -106,8 +106,6 @@ _WATER_LOUDNESS = 0.7
 
 
 class LogicThread(threading.Thread):
-    _COLLISION_KEYS = _COLLISION_KEYS
-
     """
     Unified logic thread for both editor and play mode.
     Runs continuously at a fixed timestep (60 Hz).
@@ -115,26 +113,6 @@ class LogicThread(threading.Thread):
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
-
-    # Trigger polling is scheduled at the fastest supported interval, while
-    # each trigger independently decides when its next sample is due.
-    TRIGGER_POLL_TICK = 0.25
-    #: Slack on both trigger-scheduler comparisons. The scheduler accumulates
-    #: arbitrary frame deltas and 1/60 is not exactly representable, so 60
-    #: ticks sum to 0.99999999999999989 rather than 1.0; comparing bare against
-    #: an exact decimal lost one scheduler step per second and let the poll
-    #: cadence drift behind the configured interval. A nanosecond is far below
-    #: any cadence a map can author and comfortably above the accumulated
-    #: representation error of a whole session.
-    TRIGGER_POLL_EPSILON = 1.0e-9
-
-    # Seconds between repeating wade footstep sounds while walking in water
-    WATERWALK_INTERVAL = 0.45
-
-    # Editor camera settings
-    EDITOR_CAMERA_SPEED = 300.0
-    EDITOR_CAMERA_FAST_MULT = 2.5
-    EDITOR_MOUSE_SENSITIVITY = 0.15
 
     # Construction-time host contracts for the extracted Logic runtimes.
     #
