@@ -114,13 +114,16 @@ class BigWorldPlugin(FioPlugin):
         logic._bigworld = None
         # Only a running session publishes a camera-fitted view (see the runtime).
         logic.sim_view_rect = None
-        logic.camera.overhead_height_limit = None
         things = getattr(logic, "things", None) or []
         if not self.map_uses_bigworld(things):
             # No opt-in: behave as ordinary Fio, and in particular leave the
             # streaming runtime unimported. Checking this *before* the import
             # below is the whole point — see the note at the top of the module.
             return
+
+        # Big World owns the camera ceiling only while a BigWorld session is
+        # actually active. Ordinary maps never need to expose a camera object.
+        logic.camera.overhead_height_limit = None
         from .persistence import config_from_settings, find_settings_thing
         from .runtime import BigWorldSession
 
