@@ -95,7 +95,7 @@ def _logic_for(prop):
         "CollectionLogic",
         (),
         {
-            "things": [prop],
+            "editor_state": type("EditorState", (), {"things": [prop], "brushes": []})(),
             "player_health": 100,
             "player_max_health": 100,
             "player_ammo": 0,
