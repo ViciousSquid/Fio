@@ -74,7 +74,7 @@ def test_a_disabled_plugins_actions_are_hidden(window):
     try:
         mgr.set_enabled(tidy, False)
         _build_plugins_menu(window)
-        items = plugin_action_items(window, tidy.name)
+        items = plugin_action_items(window, tidy)
         assert items, "Tidy registered no menu actions; this test is looking in the wrong place"
         for label, visible, _enabled in items:
             assert not visible, (
