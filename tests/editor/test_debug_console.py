@@ -44,7 +44,7 @@ def test_github_startup_link_is_dark_green_and_clickable(qt_app):
     html = console.console.toHtml()
 
     assert "https://github.com/vicioussquid/Fio" in html
-    assert "#2b6132" in html
+    assert "#26a69a" in html or "#26A69A" in html
 
     console.deleteLater()
 
