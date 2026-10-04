@@ -925,7 +925,7 @@ class DebugConsole(QWidget):
         def get_external_link_html(url):
             return (
                 f'<a href="{url}" '
-                f'style="color: #2b6132; text-decoration: underline;" '
+                f'style="color: #26A69A; text-decoration: underline;" '
                 f'title="Open Fio on GitHub">{url}</a>'
             )
 
