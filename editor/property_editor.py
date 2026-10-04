@@ -1224,7 +1224,7 @@ class PropertyEditor(QWidget):
             )
         )
         form.addRow("Activation:", collect_activation_combo)
-        self._widgets['trigger_collect_activation_combo'] = collect_activation_combo
+        self._widgets['trigger_activation_combo'] = collect_activation_combo
 
         poll_interval_values = {
             '1.0 s': 1.0,
@@ -1263,9 +1263,7 @@ class PropertyEditor(QWidget):
             )
         )
 
-        is_use_mode = brush.get(
-            'trigger_activation',
-            brush.get('trigger_activation', 'touch')) == 'use'
+        is_use_mode = brush.get('trigger_activation', 'touch') == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
 
