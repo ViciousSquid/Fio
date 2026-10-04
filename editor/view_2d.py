@@ -525,7 +525,7 @@ class View2D(QWidget):
 
     def _selected_list(self):
         """Current multi-selection as a plain list (never None)."""
-        objs = list(getattr(self.editor.state, 'selected_objects', []) or [])
+        objs = list(self.editor.state.selected_objects)
         sel = self.editor.state.selected_object
         if sel is not None and sel not in objs:
             objs.append(sel)
