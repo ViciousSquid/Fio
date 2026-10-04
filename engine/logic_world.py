@@ -35,7 +35,7 @@ class LogicWorld:
         logic._name_cache = {}
         logic._id_cache = {}
 
-        for brush in logic.brushes:
+        for brush in logic.editor_state.brushes:
             name = brush.get("name")
             if name:
                 logic._name_cache[name] = brush
@@ -43,7 +43,7 @@ class LogicWorld:
             if entity_id:
                 logic._id_cache[entity_id] = brush
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             name = thing.properties.get("name")
             if name:
                 logic._name_cache[name] = thing
@@ -53,19 +53,19 @@ class LogicWorld:
 
         logic._trigger_brushes = [
             (brush.get("id") or index, brush)
-            for index, brush in enumerate(logic.brushes)
+            for index, brush in enumerate(logic.editor_state.brushes)
             if brush.get("is_trigger")
         ]
         logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
         logic.trigger_runtime._refresh_use_triggers()
 
         if logic._props is not None:
-            logic._props.rebuild(logic.things)
+            logic._props.rebuild(logic.editor_state.things)
 
         LevelChanger = self.levelchanger_type
         logic._levelchanger_things = [
             thing
-            for thing in logic.things
+            for thing in logic.editor_state.things
             if LevelChanger and isinstance(thing, LevelChanger)
         ]
         self.refresh_levelchanger_table()
@@ -73,7 +73,7 @@ class LogicWorld:
         MonsterThing = self.monster_type
         logic._monster_things = [
             thing
-            for thing in logic.things
+            for thing in logic.editor_state.things
             if MonsterThing and isinstance(thing, MonsterThing)
         ]
         logic._monster_by_id = {
@@ -89,12 +89,12 @@ class LogicWorld:
         LogicTimer = self.timer_type
         logic._timer_things = [
             thing
-            for thing in logic.things
+            for thing in logic.editor_state.things
             if LogicTimer and isinstance(thing, LogicTimer)
         ]
 
-        logic._indexed_things = tuple(logic.things)
-        logic._indexed_brushes = tuple(logic.brushes)
+        logic._indexed_things = tuple(logic.editor_state.things)
+        logic._indexed_brushes = tuple(logic.editor_state.brushes)
 
         if (
             logic.play_mode
@@ -127,10 +127,10 @@ class LogicWorld:
     def scan_entity(self, key, value):
         """Search the live editor world outside a play session."""
         logic = self.logic
-        for thing in reversed(logic.things):
+        for thing in reversed(logic.editor_state.things):
             if thing.properties.get(key) == value:
                 return thing
-        for brush in reversed(logic.brushes):
+        for brush in reversed(logic.editor_state.brushes):
             if brush.get(key) == value:
                 return brush
         return None
@@ -146,7 +146,7 @@ class LogicWorld:
         if entity is not None and isinstance(entity, PathNode):
             return entity
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if (
                 isinstance(thing, PathNode)
                 and thing.properties.get("name", "") == name
@@ -221,8 +221,8 @@ class LogicWorld:
             return
 
         logic._rows_watch -= 1
-        brushes_changed = tuple(logic.brushes) != logic._indexed_brushes
-        things_changed = tuple(logic.things) != logic._indexed_things
+        brushes_changed = tuple(logic.editor_state.brushes) != logic._indexed_brushes
+        things_changed = tuple(logic.editor_state.things) != logic._indexed_things
         if brushes_changed or things_changed:
             self.build_entity_caches()
 
