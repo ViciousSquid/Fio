@@ -31,58 +31,9 @@ from engine.view_distance import (  # noqa: E402
 pytestmark = pytest.mark.qt
 
 
-class _Spinbox:
-    """Just enough QSpinBox for the handler: a clamped value."""
-
-    def __init__(self, value, low=int(MIN_VIEW_DISTANCE), high=int(MAX_VIEW_DISTANCE)):
-        self._value = value
-        self._low, self._high = low, high
-
-    def setValue(self, value):
-        self._value = max(self._low, min(self._high, int(value)))
-
-    def value(self):
-        return self._value
-
-
-class _View3D:
-    """A stand-in viewport that mirrors QtGameView's view-distance contract."""
-
-    def __init__(self):
-        self.view_distance = ViewDistance()
-        self.cull_distance = self.view_distance.distance
-        self.play_mode = False
-        self.renderer = None
-        self.logic_thread = None
-        self.updates = 0
-
-    def set_cull_distance(self, distance):
-        # Mirrors QtGameView.set_cull_distance, repaint included — the
-        # repaint is part of that contract, and the console relies on it.
-        self.view_distance.distance = float(distance)
-        self.cull_distance = self.view_distance.distance
-        self.update()
-
-    def update(self):
-        self.updates += 1
-
-
-class _MainWindow:
-    def __init__(self):
-        from editor.editor_state import EditorState
-
-        self.state = EditorState()
-        self.view_3d = _View3D()
-        self.cull_dist_spinbox = _Spinbox(int(self.view_3d.view_distance.distance))
-
-    def set_cull_distance(self, distance):
-        self.view_3d.set_cull_distance(distance)
-        self.cull_dist_spinbox.setValue(int(round(self.view_3d.view_distance.distance)))
-
-
 @pytest.fixture
-def handler():
-    return ConsoleCommandHandler(_MainWindow())
+def handler(main_window):
+    return ConsoleCommandHandler(main_window)
 
 
 @pytest.fixture
@@ -324,22 +275,26 @@ def test_bad_ambient_arguments_change_nothing(handler, vd):
     "r_fogcolor 10 20 30", "ambient 0.4",
 ])
 def test_every_setter_asks_the_view_to_repaint(handler, line):
-    before = handler.main_window.view_3d.updates
+    calls = []
+    view = handler.main_window.view_3d
+    original_update = view.update
+
+    def record_update(*args, **kwargs):
+        calls.append(True)
+        return original_update(*args, **kwargs)
+
+    view.update = record_update
     run(handler, line)
-    assert handler.main_window.view_3d.updates > before, (
-        f"'{line}' changed a setting without repainting the 3D view")
+    assert calls, f"{line!r} changed a setting without repainting the 3D view"
 
 
 # ---------------------------------------------------------------------------
 # The readout
 # ---------------------------------------------------------------------------
 
-def test_the_commands_survive_having_no_3d_view():
-    """Console input must not raise before the viewport exists."""
-    class _Bare:
-        state = None
-        view_3d = None
+def test_the_commands_survive_having_no_3d_view(main_window):
+    """Console input tolerates the editor before its viewport is available."""
+    handler = ConsoleCommandHandler(main_window)
+    main_window.view_3d = None
+    assert handler._get_view_distance() is None
 
-    bare = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
-    bare.main_window = _Bare()
-    assert bare._get_view_distance() is None
