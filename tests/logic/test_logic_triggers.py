@@ -13,8 +13,6 @@ def _runtime():
         player=SimpleNamespace(pos=np.array([0.0, 0.0, 0.0])),
         _trigger_brushes=[],
         _trigger_brush_by_bid={},
-        player_in_triggers=set(),
-        _trigger_contacts={},
         _trigger_use_prompt="",
         current_hud_message="",
         current_hud_key_name=None,
@@ -54,15 +52,15 @@ def test_logic_triggers_use_radius_supports_numpy_batches():
 
 def test_logic_triggers_reset_clears_contact_state_in_place():
     runtime = _runtime()
-    held = runtime.logic.player_in_triggers
+    held = runtime.player_in_triggers
     held.add(42)
-    runtime.logic._trigger_contacts[42] = {"player"}
+    runtime._trigger_contacts[42] = {"player"}
 
     runtime._reset_trigger_state()
 
-    assert held is runtime.logic.player_in_triggers
+    assert held is runtime.player_in_triggers
     assert held == set()
-    assert runtime.logic._trigger_contacts == {}
+    assert runtime._trigger_contacts == {}
 
 
 def test_logic_triggers_poll_interval_uses_authored_positive_value():
