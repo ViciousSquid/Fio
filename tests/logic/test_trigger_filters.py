@@ -56,6 +56,13 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
 
     logic._plugin_emit = record_emit
     return logic
+def _thing(kind, x=5, y=5, z=5, **props):
+    from editor.things import Monster, Thing
+    from tests.helpers.worlds import make_thing
+    cls = Monster if kind == 'monster' else Thing
+    props.setdefault('type', kind)
+    props.setdefault('disabled', False)
+    return make_thing(cls, '%s-%s-%s' % (kind, x, z), (x, y, z), **props)
 
 def test_default_filter_is_player_only_and_unchanged_contacts_are_silent():
     logic = _logic(props=[_thing('prop')], monsters=[_thing('monster')])
