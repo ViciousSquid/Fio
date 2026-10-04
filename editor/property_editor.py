@@ -1968,8 +1968,8 @@ class PropertyEditor(QWidget):
                 self.tab_widget._fio_pending_tabs = pending
 
                 def build_plugin_tab(index, widget=self.tab_widget, entity=thing):
-                    pending_tabs = getattr(widget, '_fio_pending_tabs', None)
-                    if not pending_tabs or index not in pending_tabs:
+                    pending_tabs = widget._fio_pending_tabs
+                    if index not in pending_tabs:
                         return
                     placeholder, factory = pending_tabs.pop(index)
                     try:
