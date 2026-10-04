@@ -232,7 +232,7 @@ def test_mover_slot_maps_are_cached_per_render_buffer():
         tables = [RenderTable(), RenderTable()]
         for table in tables:
             table.sync([mover], epoch=1)
-        movers = logic._movers()
+        movers = logic.mover_runtime._movers()
         movers.publish(logic, tables[0])
         first = movers._slot_cache[tables[0]]
         movers.publish(logic, tables[1])
@@ -262,7 +262,7 @@ def test_non_finite_io_parameters_are_ignored(value):
         assert monster.properties["health"] == 50
         for _ in range(3):
             logic._step_frame(logic.TICK_DURATION)
-        assert np.isfinite(logic._movers().movers.rot_angle).all()
+        assert np.isfinite(logic.mover_runtime._movers().movers.rot_angle).all()
     finally:
         logic.session_runtime.apply_play_mode(False)
 
