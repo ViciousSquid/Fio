@@ -541,7 +541,20 @@ class LogicThread(threading.Thread):
     
     def _world_runtime(self):
         """Return the world/entity indexing runtime."""
-        return self.world_runtime
+        runtime = getattr(self, "world_runtime", None)
+        if runtime is None:
+            runtime = LogicWorld(
+                self,
+                levelchanger_type=LevelChanger,
+                monster_type=MonsterThing,
+                timer_type=LogicTimer,
+                path_node_type=PathNode,
+            )
+            try:
+                self.world_runtime = runtime
+            except Exception:
+                pass
+        return runtime
 
     def _build_entity_caches(self):
         """Compatibility wrapper for world/entity index rebuilding."""
@@ -857,7 +870,7 @@ class LogicThread(threading.Thread):
         return runtime
 
     def _angled_brush_is_solid(self, brush):
-        return self._collision_runtime().angled_brush_is_solid(brush)
+        return LogicThread._collision_runtime(self).angled_brush_is_solid(brush)
 
     @classmethod
     def _clear_brush_collision(cls, brush):
@@ -1312,11 +1325,11 @@ class LogicThread(threading.Thread):
 
     def _update_logic_timers(self, delta: float):
         """Compatibility wrapper for logic_timer advancement."""
-        return self._timing_runtime().update_logic_timers(delta)
+        return LogicThread._timing_runtime(self).update_logic_timers(delta)
 
     def _update_light_fades(self, delta: float):
         """Compatibility wrapper for light FadeIn/FadeOut advancement."""
-        return self._timing_runtime().update_light_fades(delta)
+        return LogicThread._timing_runtime(self).update_light_fades(delta)
 
     # =========================================================================
     # TRIGGER HANDLING
@@ -1391,8 +1404,19 @@ class LogicThread(threading.Thread):
         """Compatibility wrapper for dense LevelChanger geometry."""
         return self._world_runtime().refresh_levelchanger_table()
 
+    def _interaction_runtime(self):
+        """Return the player/world interaction runtime."""
+        runtime = getattr(self, "interaction_runtime", None)
+        if runtime is None:
+            runtime = LogicInteraction(self)
+            try:
+                self.interaction_runtime = runtime
+            except Exception:
+                pass
+        return runtime
+
     def _handle_interactions(self, use_key_pressed: bool):
-        return self.interaction_runtime.handle(use_key_pressed)
+        return LogicThread._interaction_runtime(self).handle(use_key_pressed)
 
     # =========================================================================
     # MOVER/DOOR UPDATES
@@ -1442,11 +1466,18 @@ class LogicThread(threading.Thread):
 
     def _combat_runtime(self):
         """Return the combat runtime subsystem."""
-        return self.combat_runtime
+        runtime = getattr(self, "combat_runtime", None)
+        if runtime is None:
+            runtime = LogicCombat(self)
+            try:
+                self.combat_runtime = runtime
+            except Exception:
+                pass
+        return runtime
 
     def _handle_shooting(self):
         """Compatibility wrapper for player hitscan shooting."""
-        return self._combat_runtime()._handle_shooting()
+        return LogicThread._combat_runtime(self)._handle_shooting()
 
     def intersect_ray_aabb(self, origin, direction, box_min, box_max):
         """Compatibility wrapper for the ray/AABB intersection helper."""
