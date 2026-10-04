@@ -63,6 +63,7 @@ from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.entity_table import EntityTable
 from engine.renderer_core import restore_default_pixel_store
+from engine.render_table import RenderTable
 from engine.view_distance import ViewDistance
 from engine.glasses import (
     DEFAULT_GLASSES, DEFAULT_SPRITE_KEY, GLASSES_STYLES, GLASSES_SUBFOLDER,
@@ -112,6 +113,7 @@ class QtGameView(QOpenGLWidget):
         # threaded renderer. There is no Portal-object rendering fallback.
         self._editor_entity_table = EntityTable()
         self._editor_entity_refs = np.empty(0, dtype=object)
+        self._editor_render_table = RenderTable()
 
         self.brush_display_mode = "Solid Lit"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
@@ -1603,6 +1605,8 @@ class QtGameView(QOpenGLWidget):
         else:
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
+            brushes_to_render = self.editor.state.brushes
+            things_to_render = self.editor.state.things
         # In overhead play mode the camera is lifted far above the scene, so a
         # 0.1 near plane wastes almost all depth precision at ground level and
         # coplanar surfaces z-fight ("flicker"). Nothing sits within a fraction
@@ -1673,9 +1677,13 @@ class QtGameView(QOpenGLWidget):
                     self._editor_entity_refs[_i] = _thing
             self._render_config["entity_table"] = etable
             self._render_config["entity_refs"] = self._editor_entity_refs
-            self._render_config["visible_thing_slots"] = (
-                np.arange(etable.count, dtype=np.int32))
+            self._render_config["visible_thing_slots"] = np.arange(
+                etable.count, dtype=np.int32)
             self._render_config["thing_hidden"] = hidden
+            self._editor_render_table.sync(
+                brushes_to_render,
+                epoch=getattr(self.editor.state, 'world_epoch', None),
+            )
 
         # The dense render projection and the per-slot render references. With
         # these the main pass classifies, depth-orders and batches brushes from
@@ -1683,19 +1691,19 @@ class QtGameView(QOpenGLWidget):
         # to rediscover what it already knows.
         self._render_config["render_table"] = (
             getattr(render_state, "render_table", None)
-            if render_state is not None else None
+            if render_state is not None else self._editor_render_table
         )
         self._render_config["render_refs"] = (
             getattr(render_state, "render_refs", None)
-            if render_state is not None else None
+            if render_state is not None else self._editor_render_table.refs
         )
         self._render_config["all_brush_slots"] = (
             getattr(render_state, "all_brush_slots", None)
-            if render_state is not None else None
+            if render_state is not None else self._editor_render_table.all_slots
         )
         _main_brush_slots = (
             getattr(render_state, "visible_brush_slots", None)
-            if render_state is not None else None
+            if render_state is not None else self._editor_render_table.all_slots
         )
         # The entity half of the same projection: with it, the main pass splits
         # entities into the model and sprite passes from their class column
