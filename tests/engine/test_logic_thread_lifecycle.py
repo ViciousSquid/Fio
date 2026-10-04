@@ -52,7 +52,7 @@ def _frame_from_inside(logic, monkeypatch, hook_owner, hook_name):
     """
     seen = []
     finished = threading.Event()
-    monkeypatch.setattr(logic, "_prepare_render_state", lambda: None)
+    monkeypatch.setattr(logic.render_runtime, "prepare_render_state", lambda: None)
     monkeypatch.setattr(
         logic, "_tick_play_mode",
         lambda delta: seen.append((logic._spatial_grid is not None,
@@ -89,7 +89,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
     hazard is the one already running, which teardown used to pull the Prop
     session and the spatial grid out from under."""
     logic.set_play_mode(True)
-    monkeypatch.setattr(logic, "_prepare_render_state", lambda: None)
+    monkeypatch.setattr(logic.render_runtime, "prepare_render_state", lambda: None)
     events = []
     entered, release = threading.Event(), threading.Event()
 
