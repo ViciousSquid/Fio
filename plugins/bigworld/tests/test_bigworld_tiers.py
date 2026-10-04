@@ -78,7 +78,7 @@ def started_session(things, brushes=None, activation=2048.0,
 
 def test_absent_stamp_reads_near():
     """An unclassified world is a fully simulated world -- ordinary Fio."""
-    assert tier_of(FakeThing(0, 0)) == TIER_NEAR
+    assert tier_of(make_thing(0, 0)) == TIER_NEAR
     assert tier_of(brush(0, 0, "b")) == TIER_NEAR
     assert tier_of(object()) == TIER_NEAR
 
@@ -182,7 +182,7 @@ def test_bigworld_residency_never_ends_inside_the_visual_horizon():
     radius, so the horizon lands inside the authored radius and residency is
     exactly what the map asked for.
     """
-    things = [FakeThing(3000.0, 0.0, uuid="far")]
+    things = [make_thing(3000.0, 0.0, uuid="far")]
     view_distance = ViewDistance(4096.0)
     session = started_session(
         things, activation=1024.0, deactivation=1280.0,
@@ -205,7 +205,7 @@ def test_bigworld_residency_never_ends_inside_the_visual_horizon():
 def test_the_session_fades_the_camera_out_at_its_activation_radius():
     view_distance = ViewDistance(4096.0)
     session = started_session(
-        [FakeThing(0.0, 0.0)], activation=2048.0, deactivation=2304.0,
+        [make_thing(0.0, 0.0)], activation=2048.0, deactivation=2304.0,
         render_view_distance=view_distance,
     )
     assert view_distance.limit == 2048.0
@@ -220,19 +220,17 @@ def test_the_session_fades_the_camera_out_at_its_activation_radius():
 
 def test_a_shorter_view_distance_is_left_alone():
     view_distance = ViewDistance(1000.0)
-    started_session([FakeThing(0.0, 0.0)], activation=2048.0,
+    started_session([make_thing(0.0, 0.0)], activation=2048.0,
                     render_view_distance=view_distance)
     assert view_distance.far_plane == 1000.0
 
 
 def test_changing_view_distance_cannot_widen_bigworld_past_its_radius():
-    subject = FakeThing(3000.0, 0.0, uuid="far")
-    logic = FakeLogic(things=[subject], player=FakePlayer(0.0, 0.0))
-    logic.render_runtime.view_distance = ViewDistance(4096.0)
-    session = BigWorldSession(
-        logic, activation_radius=1024.0, deactivation_radius=1280.0
-    )
-    session.start()
+    subject = make_thing(3000.0, 0.0, uuid="far")
+    session = started_session([subject], activation=1024.0,
+                              deactivation=1280.0, near=1024.0,
+                              render_view_distance=ViewDistance(4096.0))
+    logic = session.logic
     assert not session.manager.is_thing_active(subject)
 
     logic.render_runtime.view_distance.distance = 20000.0
@@ -248,7 +246,7 @@ def test_changing_view_distance_cannot_widen_bigworld_past_its_radius():
 def test_persistent_globals_are_never_demoted_by_distance():
     """§10: a world manager has no cell and must not fall dormant."""
     things = grid_world(cells_each_way=6)
-    boss = FakeThing(0, 0, type_name="worldmanager", uuid="wm")
+    boss = make_thing(0, 0, type_name="worldmanager", uuid="wm")
     things.append(boss)
     session = started_session(things)
     session.logic.player_runtime.player.pos = [12000.0, 0.0, 12000.0]
@@ -283,7 +281,7 @@ def test_play_stop_removes_every_tier_stamp():
 def test_authored_hidden_is_not_dormant():
     """Mapper intent and parked state are different things (§9)."""
     c = TierClassifier()
-    hidden_trigger = FakeThing(0, 0, hidden=True)
+    hidden_trigger = make_thing(0, 0, hidden=True)
     from plugins.bigworld.tiers import is_parked
     assert not is_parked(hidden_trigger)
 
@@ -441,7 +439,7 @@ def test_every_tier_transition_a_walking_player_can_cause():
     beyond it, as this one does; see the test below, which pins the stock
     behaviour so the two cannot be confused for a bug in each other.
     """
-    subject = FakeThing(0.0, 0.0, uuid="subject")
+    subject = make_thing(0.0, 0.0, uuid="subject")
     session = started_session([subject], activation=2048.0,
                               deactivation=4096.0, near=1024.0, at=(0.0, 0.0))
     try:
@@ -490,7 +488,7 @@ def test_a_cell_can_never_come_back_from_dormant_straight_into_distant():
     is §13 holding: the streamer and the tier model cannot disagree about how
     far out the world is live, because they are the same measurement.
     """
-    subject = FakeThing(0.0, 0.0, uuid="subject")
+    subject = make_thing(0.0, 0.0, uuid="subject")
     session = started_session([subject], activation=2048.0,
                               deactivation=4096.0, near=1024.0, at=(0.0, 0.0))
     try:
@@ -528,7 +526,7 @@ def test_the_stock_radii_leave_the_distant_band_no_width():
         "'Full-simulation radius' help text together"
         % (DEFAULT_DEACTIVATION_RADIUS - active_outer))
 
-    subject = FakeThing(0.0, 0.0, uuid="subject")
+    subject = make_thing(0.0, 0.0, uuid="subject")
     session = started_session([subject], activation=DEFAULT_ACTIVATION_RADIUS,
                               deactivation=DEFAULT_DEACTIVATION_RADIUS,
                               near=1024.0, at=(0.0, 0.0))
@@ -553,7 +551,7 @@ def test_a_tier_transition_never_touches_identity_or_persistent_state():
     gameplay state must read exactly as they did -- otherwise "dormant" has
     quietly become "reset".
     """
-    subject = FakeThing(0.0, 0.0, uuid="subject", health=37, quest_flag="given")
+    subject = make_thing(0.0, 0.0, uuid="subject", health=37, quest_flag="given")
     session = started_session([subject], activation=2048.0,
                               deactivation=2304.0, near=1024.0, at=(0.0, 0.0))
     identity = id(subject)
@@ -580,7 +578,7 @@ def test_repeated_activation_and_deactivation_settles_in_the_same_place():
     or restored from the wrong side, drifts.  Drift over a long session is the
     kind of bug that only shows up in a save taken an hour in.
     """
-    subject = FakeThing(0.0, 0.0, uuid="subject", hidden=True, disabled=False)
+    subject = make_thing(0.0, 0.0, uuid="subject", hidden=True, disabled=False)
     session = started_session([subject], activation=2048.0,
                               deactivation=2304.0, near=1024.0, at=(0.0, 0.0))
     try:
@@ -637,7 +635,7 @@ def test_a_dormant_entity_that_is_restored_wakes_up_with_the_restored_state():
     """
     from engine.spatial import set_authored_flag
 
-    subject = FakeThing(0.0, 0.0, uuid="subject")
+    subject = make_thing(0.0, 0.0, uuid="subject")
     session = started_session([subject], activation=2048.0,
                               deactivation=2304.0, near=1024.0, at=(0.0, 0.0))
     try:
@@ -723,7 +721,7 @@ def test_the_classifier_only_ever_writes_the_one_property_key():
     could not have asked for and the session could not clean up -- and play-stop
     sweeps exactly one key.
     """
-    subject = FakeThing(0.0, 0.0, uuid="subject", health=5)
+    subject = make_thing(0.0, 0.0, uuid="subject", health=5)
     before = dict(subject.properties)
     session = started_session([subject], activation=2048.0,
                               deactivation=4096.0, near=1024.0, at=(0.0, 0.0))
