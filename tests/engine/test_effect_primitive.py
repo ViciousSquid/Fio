@@ -97,7 +97,6 @@ def test_explosion_trigger_queues_centered_sound():
     queued = []
     game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
     logic = SimpleNamespace(
-        _entity_table=table,
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
     )
@@ -129,7 +128,6 @@ def test_silent_explosion_does_not_queue_sound():
     queued = []
     game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
     logic = SimpleNamespace(
-        _entity_table=table,
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
     )
@@ -522,7 +520,6 @@ def test_effect_texture_inputs_ignore_invalid_variants():
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
     logic = SimpleNamespace(
-        _entity_table=table,
         things=[effect],
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
     )
