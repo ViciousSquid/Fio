@@ -580,7 +580,7 @@ class LogicCombat:
                 < np.float32(self.PROJECTILE_PLAYER_RADIUS)
             ) & live
 
-        grid = getattr(logic, '_spatial_grid', None)
+        grid = logic.session_runtime.spatial_grid
         all_collision_brushes = logic._collision_brushes_cache
         keep = live.copy()
 

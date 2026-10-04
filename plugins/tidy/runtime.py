@@ -252,7 +252,7 @@ class TidySession:
             if prop_session is not None:
                 prop_session.moved(obj)
 
-        physics = getattr(self.logic, "_physics_world", None)
+        physics = self.logic.session_runtime.physics_world
         if physics is not None:
             physics.set_kinematic(obj, False)
             physics.wake(obj, [0.0, 0.0, 0.0])

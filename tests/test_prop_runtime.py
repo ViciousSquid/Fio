@@ -159,7 +159,7 @@ def test_respawn_fade_state_resets_when_session_restarts():
     prop = Prop(pos=[0.0, 0.0, 0.0])
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        _spatial_grid=None, _physics_world=None,
+        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
