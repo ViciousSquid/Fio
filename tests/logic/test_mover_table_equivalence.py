@@ -4,9 +4,12 @@
 pass. The pass has to reproduce that loop exactly, down to the last bit:
 positions, spins, state, which I/O fires and in what order, and how far the
 player is carried. The loop itself is kept below, verbatim, as
-:class:`ReferenceLogic`, with the state dicts it always had. Both are driven
-through the same worlds, the same I/O wiring and the same scripted inputs, and
-compared after every tick.
+:class:`ReferenceLogic`, with the state dicts it always had. The real I/O
+dispatcher and output graph are shared with the live implementation; only the
+input handlers that mutate the retired reference state are registered
+separately so the production API is not kept alive just for this oracle. Both
+are driven through the same worlds and scripted inputs, and compared after
+every tick.
 
 The worlds are built to reach the awkward cases:
 
@@ -431,6 +434,192 @@ def _world(seed, count=70):
     return brushes, things
 
 
+
+# ---------------------------------------------------------------------------
+# Reference-side I/O
+# ---------------------------------------------------------------------------
+
+def register_reference_input_handlers(io_manager):
+    """Register the pre-table mover/door input semantics for ReferenceLogic.
+
+    The live handlers now correctly target LogicThread.mover_runtime. The
+    reference implementation deliberately does not expose that retired host
+    field, so this test keeps the old loop's input semantics here instead of
+    adding a production compatibility shim.
+    """
+    def brush_index(entity, logic):
+        for index, brush in enumerate(logic.brushes):
+            if brush is entity:
+                return index
+        return -1
+
+    def finite_value(param, default):
+        if not param:
+            return default
+        try:
+            value = float(param)
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
+    def door_open(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0:
+            return
+        if idx not in logic.door_states:
+            if "original_pos" not in entity:
+                entity["original_pos"] = list(entity["pos"])
+            logic.door_states[idx] = {
+                "progress": 0.0,
+                "state": "closed",
+                "open_timer": 0.0,
+            }
+        state = logic.door_states[idx]
+        if state["state"] in ("closed", "closing", "stopped"):
+            state["state"] = "opening"
+            logic.io_manager.fire_output(entity, "OnOpen")
+
+    def door_close(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0 or idx not in logic.door_states:
+            return
+        state = logic.door_states[idx]
+        if state["state"] in ("open", "opening", "stopped"):
+            state["state"] = "closing"
+            logic.io_manager.fire_output(entity, "OnClose")
+
+    def door_stop(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0 or idx not in logic.door_states:
+            return
+        state = logic.door_states[idx]
+        if state["state"] in ("opening", "closing"):
+            state["state"] = "stopped"
+
+    def door_reverse(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0 or idx not in logic.door_states:
+            return
+        state = logic.door_states[idx]
+        current = state["state"]
+        if current == "opening":
+            door_close(entity, param, logic)
+        elif current == "closing":
+            door_open(entity, param, logic)
+        elif current == "stopped":
+            if state.get("progress", 0.0) >= 0.5:
+                door_close(entity, param, logic)
+            else:
+                door_open(entity, param, logic)
+        else:
+            door_toggle(entity, param, logic)
+
+    def door_toggle(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0:
+            return
+        if idx in logic.door_states:
+            state = logic.door_states[idx]
+            if state["state"] == "closed":
+                door_open(entity, param, logic)
+            elif state["state"] == "open":
+                door_close(entity, param, logic)
+        else:
+            door_open(entity, param, logic)
+
+    def door_set_speed(entity, param, logic):
+        value = finite_value(param, 128.0)
+        if value is not None:
+            entity["speed"] = value
+
+    def mover_open(entity, param, logic):
+        entity["start_on"] = True
+        idx = brush_index(entity, logic)
+        if idx >= 0 and idx in logic.mover_states:
+            logic.mover_states[idx]["forward"] = True
+
+    def mover_close(entity, param, logic):
+        entity["start_on"] = True
+        idx = brush_index(entity, logic)
+        if idx >= 0 and idx in logic.mover_states:
+            logic.mover_states[idx]["forward"] = False
+
+    def mover_toggle(entity, param, logic):
+        entity["start_on"] = not entity.get("start_on", False)
+
+    def mover_set_position(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0:
+            return
+        value = finite_value(param, None)
+        if value is None:
+            return
+        if idx in logic.mover_states:
+            logic.mover_states[idx]["progress"] = max(0.0, min(1.0, value))
+
+    def mover_enable(entity, param, logic):
+        entity["start_on"] = True
+
+    def mover_disable(entity, param, logic):
+        entity["start_on"] = False
+
+    def mover_set_speed(entity, param, logic):
+        value = finite_value(param, 64.0)
+        if value is not None:
+            entity["speed"] = max(0.0, value)
+
+    def mover_stop(entity, param, logic):
+        entity["start_on"] = False
+
+    def mover_reverse(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx >= 0 and idx in logic.mover_states:
+            state = logic.mover_states[idx]
+            state["forward"] = not state.get("forward", True)
+
+    def mover_follow_path(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx < 0:
+            return
+        target = param or entity.get("path_target", "")
+        if not target:
+            return
+        entity["path_target"] = target
+        entity["start_on"] = True
+        if idx not in logic.mover_path_states:
+            logic.mover_path_states[idx] = {
+                "current_node": target,
+                "lerp_t": 0.0,
+                "origin": list(entity["pos"]),
+                "waiting": False,
+                "wait_remaining": 0.0,
+            }
+        logic.mover_states.pop(idx, None)
+
+    def mover_stop_path(entity, param, logic):
+        idx = brush_index(entity, logic)
+        if idx >= 0:
+            logic.mover_path_states.pop(idx, None)
+
+    io_manager.register_input_handler("door", "open", door_open)
+    io_manager.register_input_handler("door", "close", door_close)
+    io_manager.register_input_handler("door", "toggle", door_toggle)
+    io_manager.register_input_handler("door", "stop", door_stop)
+    io_manager.register_input_handler("door", "reverse", door_reverse)
+    io_manager.register_input_handler("door", "setspeed", door_set_speed)
+
+    io_manager.register_input_handler("mover", "open", mover_open)
+    io_manager.register_input_handler("mover", "close", mover_close)
+    io_manager.register_input_handler("mover", "toggle", mover_toggle)
+    io_manager.register_input_handler("mover", "setposition", mover_set_position)
+    io_manager.register_input_handler("mover", "enable", mover_enable)
+    io_manager.register_input_handler("mover", "disable", mover_disable)
+    io_manager.register_input_handler("mover", "stop", mover_stop)
+    io_manager.register_input_handler("mover", "reverse", mover_reverse)
+    io_manager.register_input_handler("mover", "setspeed", mover_set_speed)
+    io_manager.register_input_handler("mover", "followpath", mover_follow_path)
+    io_manager.register_input_handler("mover", "stoppath", mover_stop_path)
+
 # ---------------------------------------------------------------------------
 # Running both
 # ---------------------------------------------------------------------------
@@ -443,7 +632,10 @@ class _Side:
         self.things = copy.deepcopy(things)
         self.events = []
         io = IOManager()
-        register_all_input_handlers(io)
+        if reference:
+            register_reference_input_handlers(io)
+        else:
+            register_all_input_handlers(io)
         entities = self.brushes + self.things
 
         def by_name(name):
@@ -649,7 +841,7 @@ def test_saved_state_restored_mid_run_matches():
             doors = {i: _public_state(s) for i, s in door_states.items()}
             movers = {i: _public_state(s) for i, s in mover_states.items()}
             if side.reference:
-                logic.mover_runtime.door_states = copy.deepcopy(doors)
+                logic.door_states = copy.deepcopy(doors)
                 logic.mover_states = copy.deepcopy(movers)
             else:
                 logic.mover_runtime.door_states = copy.deepcopy(doors)
