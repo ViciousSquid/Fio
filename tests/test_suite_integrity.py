@@ -131,6 +131,7 @@ EDITOR_TEST_ROOT = ROOT / "tests" / "editor"
 
 MACHINERY_TEST_ROOTS = (
     "tests/editor",
+    "tests/console",
     "tests/engine",
     "tests/io",
     "tests/physics",
@@ -154,7 +155,7 @@ MACHINERY_OWNER_DOUBLES = {
 
 def test_machinery_tests_do_not_use_namespace_production_owners():
     """A fake namespace must not stand in for a production subsystem owner."""
-    owner_names = {"logic", "host", "renderer", "physics", "ai", "main_window"}
+    owner_names = {"logic", "host", "renderer", "physics", "ai", "main_window", "view"}
     offenders = []
     for root_name in MACHINERY_TEST_ROOTS:
         base = ROOT / root_name
