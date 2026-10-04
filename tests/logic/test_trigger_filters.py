@@ -7,8 +7,10 @@ import pytest
 
 from engine.logic_interaction import LogicInteraction
 from engine.logic_movers import LogicMovers
+from engine.logic_session import LogicSession
 from engine.logic_thread import LogicThread, _trigger_activation
 from engine.logic_triggers import LogicTriggers
+from engine.logic_world import LogicWorld
 from engine.prop_runtime import PropSession
 
 
@@ -19,33 +21,21 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.player = SimpleNamespace(
         pos=glm.vec3(*player_pos), angle=0.0, velocity=glm.vec3(0.0)
     )
-    # Props come from the real Prop runtime owner used by LogicThread.
-    logic.prop_runtime = PropSession(logic)
-    logic.prop_runtime.rebuild(list(props))
+    logic.editor_state = SimpleNamespace(things=list(props) + list(monsters), brushes=[])
+    logic.session_runtime = LogicSession(logic)
+    logic.world_runtime = LogicWorld(logic)
     logic.world_runtime.monster_things = list(monsters)
     logic.world_runtime.monster_by_id = {id(t): t for t in monsters}
-    brush = {
-        'id': 'trigger_1',
-        'pos': [0, 0, 0],
-        'size': [20, 20, 20],
-        'is_trigger': True,
-        'trigger_type': 'Multiple',
-        'trigger_activation': 'touch',
-        'trigger_action': 'target',
-    }
-    if filters is not None:
-        brush['trigger_filters'] = filters
-    if poll_interval is not None:
-        brush['trigger_poll_interval'] = poll_interval
-    logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
-    logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
-    logic.TICK_DURATION = LogicThread.TICK_DURATION
-    logic.mover_runtime.doors = []
+    logic.prop_runtime = PropSession(logic)
+    logic.prop_runtime.rebuild(list(props))
     logic.mover_runtime = LogicMovers(logic)
+    logic.mover_runtime.doors = []
     logic.interaction_runtime = LogicInteraction(logic)
     logic.io_manager = None
     logic.plugins = None
-    logic.interaction_runtime.current_hud_message = ''
+    logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
+    logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
+    logic.TICK_DURATION = LogicThread.TICK_DURATION
     logic._events = []
     def _plugin_emit(event, **payload):
         if event == "trigger_enter":
@@ -143,7 +133,7 @@ def test_reset_clears_occupancy_in_place():
 def test_empty_trigger_prompt_does_not_clear_an_interaction_prompt():
     """A door/pickup/prop prompt survives a tick with no use trigger in range."""
     logic = _logic()
-    logic._trigger_use_prompt = ""
+    logic.trigger_runtime._trigger_use_prompt = ""
     logic.interaction_runtime.current_hud_message = "Need"
 
     logic.trigger_runtime._handle_triggers(False, 1.0 / 60.0)
@@ -300,7 +290,7 @@ def test_a_disabled_use_trigger_shows_no_prompt():
 def test_interaction_prompt_survives_a_full_poll_window():
     """Not just the frames between polls: the prompt must survive the poll too."""
     logic = _logic()
-    logic._trigger_use_prompt = ""
+    logic.trigger_runtime._trigger_use_prompt = ""
     logic.interaction_runtime.current_hud_message = "[E] Drop"
 
     for _ in range(120):  # two full 1 Hz poll windows
