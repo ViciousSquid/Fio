@@ -335,8 +335,8 @@ class DiskStreamingSession:
     # ------------------------------------------------------------------
 
     def _sync_visual_horizon(self) -> bool:
-        view_distance = getattr(self.logic, "view_distance", None)
-        horizon = getattr(view_distance, "visual_horizon", None)
+        view_distance = self.logic.view_distance
+        horizon = view_distance.visual_horizon if view_distance is not None else None
         load_radius, evict_radius = effective_streaming_radii(
             self._authored_load_radius,
             self._authored_evict_radius,
@@ -715,7 +715,7 @@ class DiskStreamingSession:
 
     # ------------------------------------------------------------------
     def _player_pos(self):
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return None
         return getattr(player, "pos", None)
