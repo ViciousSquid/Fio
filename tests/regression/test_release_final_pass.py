@@ -458,8 +458,7 @@ def test_bind_with_no_arguments_opens_the_dialog(main_window, monkeypatch, accep
     called QKeySequenceEdit.setPlaceholderText, which Qt 5 does not have, so
     it raised every time and the dialog never appeared. Found by the hostile
     console fuzz."""
-    from PyQt5 import sip
-    from PyQt5.QtWidgets import QDialog, QMainWindow
+    from PyQt5.QtWidgets import QDialog
 
     from editor import debug_console
     from editor.console_commands import ConsoleCommandHandler
