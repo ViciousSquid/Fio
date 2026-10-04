@@ -197,7 +197,6 @@ class LogicThread(threading.Thread):
         ),
         "interaction": (
             "player",
-            "doors",
             "collected_keys",
             "current_hud_message",
             "current_hud_key_name",
