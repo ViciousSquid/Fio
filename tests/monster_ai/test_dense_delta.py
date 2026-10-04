@@ -11,7 +11,6 @@ agree with each other.
 """
 
 import numpy as np
-from types import SimpleNamespace
 import pytest
 
 from engine.monster_constants import MONSTER_SHOOT_INTERVAL
@@ -66,11 +65,19 @@ def test_a_zero_per_row_delta_is_still_a_tick_not_a_skip():
 
 
 def _fit(logic, rect=(300.0, 300.0)):
-    logic.plugins = SimpleNamespace(
-        services={"bigworld": SimpleNamespace(
-            tiers=SimpleNamespace(near_rect=rect)
-        )}
+    from plugins.bigworld.runtime import BigWorldSession
+
+    assert logic.plugins is not None
+    session = BigWorldSession(
+        logic,
+        activation_radius=2048.0,
+        deactivation_radius=2304.0,
+        sim_near_radius=1024.0,
     )
+    session.tiers.set_near_rect(rect)
+    # This is the production plugin service object consumed by MonsterAI;
+    # only the camera-derived rectangle is controlled by this test.
+    logic.plugins.services["bigworld"] = session
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
