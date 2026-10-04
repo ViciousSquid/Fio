@@ -46,7 +46,7 @@ _LIFECYCLE_HOOKS = ("on_play_start", "on_play_stop", "on_tick")
 #: plugin's implementation.
 _FRAMEWORK_MODULES = frozenset({
     "plugins", "plugins.api", "plugins.manager", "plugins.host",
-    "plugins.integration", "plugins.entitybase",
+    "plugins.entitybase",
 })
 
 
