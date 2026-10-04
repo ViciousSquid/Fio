@@ -233,9 +233,8 @@ def make_brush(name='wall'):
 
 
 @pytest.fixture
-def panel(qt_app):
-    host = FakeHost()
-    return host, PropertyEditor(host)
+def panel(main_window):
+    return main_window, main_window.property_editor
 
 
 def _tooltips(widget):
