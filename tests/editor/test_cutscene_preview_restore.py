@@ -207,3 +207,61 @@ def test_removing_actor_cleans_all_cutscene_references():
     assert dialogue["speaker_id"] == ""
     message = next(e for e in wizard.events if e["type"] == "message")
     assert message["text"] == "Still here"
+
+
+class LogicCamera:
+    def __init__(self, cutscene_file):
+        self.properties = {
+            "type": "logic_camera",
+            "cutscene_file": cutscene_file,
+        }
+
+
+def test_cutscene_open_discovers_the_current_maps_logic_camera(tmp_path):
+    """Opening the wizard must follow the loaded map, not alphabetic cutscene order."""
+    cutscene_dir = tmp_path / "cutscenes"
+    cutscene_dir.mkdir()
+    expected = cutscene_dir / "corridor.json"
+    expected.write_text("{}", encoding="utf-8")
+    distractor = cutscene_dir / "showcase.json"
+    distractor.write_text("{}", encoding="utf-8")
+
+    wizard = types.SimpleNamespace(
+        main_window=types.SimpleNamespace(
+            root_dir=str(tmp_path),
+            state=types.SimpleNamespace(
+                things=[
+                    LogicCamera("cutscenes/corridor.json"),
+                ],
+            ),
+        ),
+    )
+    loaded = []
+    wizard._load_cutscene = loaded.append
+
+    CutsceneWizard._load_current_map_cutscene(wizard)
+
+    assert loaded == [str(expected)]
+
+
+def test_cutscene_map_discovery_deduplicates_logic_camera_references(tmp_path):
+    cutscene_dir = tmp_path / "cutscenes"
+    cutscene_dir.mkdir()
+    expected = cutscene_dir / "corridor.json"
+    expected.write_text("{}", encoding="utf-8")
+
+    wizard = types.SimpleNamespace(
+        main_window=types.SimpleNamespace(
+            root_dir=str(tmp_path),
+            state=types.SimpleNamespace(
+                things=[
+                    LogicCamera("cutscenes/corridor.json"),
+                    LogicCamera("cutscenes/corridor.json"),
+                ],
+            ),
+        ),
+    )
+
+    paths = CutsceneWizard._current_map_cutscene_files(wizard)
+
+    assert paths == [expected]
