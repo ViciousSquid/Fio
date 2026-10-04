@@ -21,6 +21,7 @@ import glm
 from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
+from engine.logic_portals import LogicPortals
 from engine.physics import SpatialGrid
 from engine.prop_runtime import PropSession
 
@@ -105,6 +106,7 @@ class FakeLogicThread:
         self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
         self._id_cache = {}
+        self.portal_runtime = LogicPortals(self)
         self.world_runtime = LogicWorld(self)
         self.prop_runtime = PropSession(self)
         self.HURT_INTERVAL = 0.5
