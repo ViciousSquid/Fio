@@ -13,8 +13,6 @@ def _runtime():
         player=SimpleNamespace(pos=np.array([0.0, 0.0, 0.0])),
         _trigger_brushes=[],
         _trigger_brush_by_bid={},
-        fired_once_triggers=set(),
-        hurt_trigger_timers={},
         player_in_triggers=set(),
         _trigger_contacts={},
         _trigger_use_prompt="",
