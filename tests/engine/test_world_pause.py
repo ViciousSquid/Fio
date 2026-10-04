@@ -210,7 +210,10 @@ def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playi
     plugin step either way; pausing on top of one does not start plugins."""
     plugins = _RecordingPlugins()
     playing.plugins = plugins
-    setattr(playing, state, {"active": True} if state != "player_dead" else True)
+    if state == "cutscene_runtime.state":
+        playing.cutscene_runtime.state = {"active": True}
+    else:
+        setattr(playing, state, True)
     playing.set_world_paused("menu", True)
     playing.game_state.set_use_key_pressed()
     _ticks(playing, 2)
