@@ -337,7 +337,7 @@ def render_pair(context, t, eye, target, far, lights=True, seamless=False):
     def frame():
         context.bind()
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        renderer.render_scene(projection, view, eye_v, [], things, None, config,
+        renderer.render_scene(projection, view, eye_v, None, config,
                               brush_slots=config["all_brush_slots"])
         gl.glFinish()
         return context.read_pixels()
