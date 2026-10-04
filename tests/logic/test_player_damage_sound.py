@@ -10,7 +10,6 @@ from engine.logic_triggers import LogicTriggers
 
 def _logic(player_pos=(10.0, 20.0, 30.0), health=100):
     logic = SimpleNamespace()
-    logic._player_damage_lock = __import__("threading").Lock()
     logic.player_runtime = SimpleNamespace(
         god_mode=False,
         buddha_mode=False,
@@ -21,6 +20,7 @@ def _logic(player_pos=(10.0, 20.0, 30.0), health=100):
         player2_health=100,
         player2_max_health=100,
         player2_dead=False,
+        damage_lock=__import__("threading").Lock(),
     )
     logic.player_runtime.player = SimpleNamespace(pos=glm.vec3(*player_pos))
     logic.game_state = SimpleNamespace(sounds=[])
