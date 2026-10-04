@@ -255,7 +255,7 @@ class SceneHierarchy(QWidget):
             if is_match(self._searchable_text(brush, name)):
                 matches.append(brush)
         for thing in self.main_window.state.things:
-            name = thing.properties.get("name", "") if hasattr(thing, "properties") else ""
+            name = thing.properties.get("name", "")
             if is_match(self._searchable_text(thing, name)):
                 matches.append(thing)
         return matches
