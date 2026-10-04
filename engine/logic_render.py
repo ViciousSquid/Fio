@@ -379,12 +379,8 @@ class LogicRender:
         write_state.player_dead = logic.player_dead
         write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
         if logic.play_mode and logic.player and not logic.cutscene_runtime.state:
-            write_state.player_underwater = bool(
-                getattr(logic.player, "eye_underwater", False)
-            )
-            write_state.underwater_tint = list(
-                getattr(logic.player, "water_tint", [0.0, 0.4, 0.6])
-            )
+            write_state.player_underwater = bool(logic.player.eye_underwater)
+            write_state.underwater_tint = list(logic.player.water_tint)
         else:
             write_state.player_underwater = False
         write_state.collected_keys = set(logic.player_runtime.collected_keys)
@@ -601,9 +597,7 @@ class LogicRender:
             write_state.player2_health = logic.player2_health
             write_state.player2_max_health = logic.player2_max_health
             write_state.player2_dead = logic.player2_dead
-            write_state.player2_underwater = bool(
-                getattr(logic.player2, "eye_underwater", False)
-            )
+            write_state.player2_underwater = bool(logic.player2.eye_underwater)
             write_state.splitscreen_active = True
         else:
             write_state.splitscreen_active = False
