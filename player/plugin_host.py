@@ -76,8 +76,8 @@ class _BridgeLogic:
     def __init__(self, things, plugin_manager=None):
         self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
-        self.player_runtime.player = _CamPlayer()
-        self.player_runtime.player2 = None
+        self.player = _CamPlayer()
+        self.player2 = None
         self.play_mode = True
         self.io_manager = _NullIO()
         self._tick_lock = threading.RLock()

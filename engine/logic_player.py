@@ -107,7 +107,7 @@ class LogicPlayer:
     def update_water_sounds(self, delta):
         """Queue sounds and monster-noise events from player water state."""
         logic = self.logic
-        player = self.player
+        player = logic.player
         if not player:
             return
 

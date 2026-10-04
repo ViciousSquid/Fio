@@ -31,10 +31,10 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
 
     logic = LogicThread.__new__(LogicThread)
     logic.editor_state = SimpleNamespace(things=list(things), brushes=[])
-    logic.player_runtime.player = SimpleNamespace(
+    logic.player_runtime = SimpleNamespace(player=SimpleNamespace(
         pos=list(player_pos),
         angle=float(angle),
-    )
+    ))
     logic.io_manager = None
     logic.level_complete_ui = None
     logic.mover_runtime = LogicMovers(logic)
