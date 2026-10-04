@@ -1027,7 +1027,7 @@ class QtGameView(QOpenGLWidget):
             self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
-        self.logic_thread.set_play_mode(False)
+        self.logic_thread.session_runtime.apply_play_mode(False)
         self._sync_view_distance()
         self.logic_thread.start()
         self._thread_started = True
@@ -2613,7 +2613,7 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
-                self.logic_thread.set_play_mode(True)
+                self.logic_thread.session_runtime.apply_play_mode(True)
 
             if self.splitscreen_mode:
                 self.player2 = Player(
@@ -2646,7 +2646,7 @@ class QtGameView(QOpenGLWidget):
                 QApplication.restoreOverrideCursor()
             self.setCursor(Qt.ArrowCursor)
             if self.logic_thread:
-                self.logic_thread.set_play_mode(False)
+                self.logic_thread.session_runtime.apply_play_mode(False)
                 self.logic_thread.set_player(None)
             self.player = None
             self.player2 = None
