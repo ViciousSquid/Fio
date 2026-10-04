@@ -65,8 +65,7 @@ class FakeMonsterAI:
 class FakeLogic:
     def __init__(self, player_pos):
         self.play_mode = True
-        self.things = []
-        self.brushes = []
+        self.editor_state = SimpleNamespace(things=[], brushes=[])
         self.player = FakePlayer(player_pos)
         self.player2 = None
         self.god_mode = False
@@ -115,7 +114,7 @@ class FakeLogic:
         self.visibility_changes = 0
 
     def _build_entity_caches(self):
-        self._monster_things = [t for t in self.things
+        self._monster_things = [t for t in self.editor_state.things
                                 if t.properties.get("type") == "monster"]
 
 
