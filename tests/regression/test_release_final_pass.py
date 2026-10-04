@@ -499,7 +499,7 @@ def _portal_session():
     logic = LogicThread(ThreadedGameState(), state)
     start = next(t for t in state.things if isinstance(t, PlayerStart))
     logic.player = Player(start.pos[0], start.pos[2])
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()
     logic.player.physics_enabled = False
     portal = next(t for t in state.things

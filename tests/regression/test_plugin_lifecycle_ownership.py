@@ -183,7 +183,7 @@ def streaming_session():
     yield _build
 
     for thread, counter in made:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
         counter.release()
         thread.stop()
 
@@ -193,7 +193,7 @@ def streaming_session():
 def test_one_play_session_starts_the_plugin_exactly_once(streaming_session):
     _state, thread, counter = streaming_session()
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
 
     assert len(counter.starts) == 1, (
         "on_play_start ran %d times for one press of Play; a second lifecycle "
@@ -214,13 +214,13 @@ def test_repeated_play_cycles_pair_one_start_with_one_stop(streaming_session):
     sessions = []
 
     for cycle in range(3):
-        thread.set_play_mode(True)
+        thread.session_runtime.apply_play_mode(True)
         sessions.append(getattr(thread, "_bigworld", None))
         assert len(counter.starts) == cycle + 1, (
             "cycle %d: %d starts for %d play sessions"
             % (cycle, len(counter.starts), cycle + 1))
 
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
         assert len(counter.stops) == cycle + 1, (
             "cycle %d: %d stops for %d play sessions"
             % (cycle, len(counter.stops), cycle + 1))
@@ -248,7 +248,7 @@ def test_a_map_without_the_settings_entity_starts_no_session(streaming_session):
     """
     _state, thread, counter = streaming_session(bigworld=False)
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
 
     assert getattr(thread, "_bigworld", None) is None, (
         "a map with no BigWorldSettings entity started a streaming session")
@@ -261,8 +261,8 @@ def test_stopping_a_session_that_never_started_is_harmless(streaming_session):
     """Editor startup calls ``set_play_mode(False)`` before any Play is pressed."""
     _state, thread, counter = streaming_session()
 
-    thread.set_play_mode(False)
-    thread.set_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
 
     assert counter.starts == [], "a stop dispatched a start"
     assert getattr(thread, "_bigworld", None) is None
