@@ -12,7 +12,7 @@ pytest.importorskip("PyQt5", reason="the plugins menu is editor-tier")
 
 from PyQt5.QtWidgets import QMainWindow                 # noqa: E402
 
-from editor.ui import _build_plugins_menu                 # noqa: E402
+from editor.ui import (_build_plugins_menu, _toggle_plugin) # noqa: E402
 from plugins.manager import get_manager, load_plugins   # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -73,7 +73,7 @@ def test_an_enabled_plugins_actions_are_shown(window):
     was = mgr.is_enabled(tidy)
     try:
         mgr.set_enabled(tidy, True)
-        integration._build_plugins_menu(window)
+        _build_plugins_menu(window)
         items = plugin_action_items(window, tidy.name)
         assert any(label.startswith("Load Demo map") for label, _v, _e in items), (
             "Tidy's demo-map action is missing entirely: %r" % (items,))
@@ -90,11 +90,11 @@ def test_toggling_the_plugin_flips_its_actions_without_a_rebuild(window):
     was = mgr.is_enabled(tidy)
     try:
         mgr.set_enabled(tidy, True)
-        integration._build_plugins_menu(window)
+        _build_plugins_menu(window)
         before = plugin_action_items(window, tidy.name)
         assert all(v for _l, v, _e in before)
 
-        integration._toggle_plugin(window, tidy, False,
+        _toggle_plugin(window, tidy, False,
                                    _live_actions(window, tidy.name))
         after = plugin_action_items(window, tidy.name)
         assert not any(v for _l, v, _e in after), (
@@ -144,7 +144,7 @@ def test_a_persisted_disable_really_stops_the_plugin(window, monkeypatch):
 
         window.config = configparser.ConfigParser()
         window.config["Plugins"] = {"disabled": "tidy"}
-        integration._build_plugins_menu(window)
+        _build_plugins_menu(window)
 
         assert not mgr.is_enabled(tidy)
         mgr.tick(logic)
@@ -177,7 +177,7 @@ def test_the_toggle_shows_a_plugin_a_level_auto_enabled(window):
     was = mgr.is_enabled(bigworld)
     try:
         mgr.set_enabled(bigworld, False)
-        integration._build_plugins_menu(window)
+        _build_plugins_menu(window)
         menu, toggle = _enabled_toggle(window, bigworld.name)
         assert toggle is not None and not toggle.isChecked()
 
