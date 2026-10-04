@@ -92,7 +92,7 @@ def _render(renderer, context, things, eye=glh.CAMERA_EYE,
     config = glh.render_config(all_brushes=[], all_things=things)
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(projection, view, eye_v, [], things, None, config,
+    renderer.render_scene(projection, view, eye_v, None, config,
                           brush_slots=np.empty(0, dtype=np.int32))
     gl.glFinish()
     return context.read_pixels()
@@ -312,7 +312,7 @@ def test_building_the_array_leaves_the_pixel_store_as_qt_expects(renderer, conte
     projection, view, eye = glh.camera_matrices(aspect=1.0)
     context.bind()
     restore_default_pixel_store()
-    renderer.render_scene(projection, view, eye, [], things, None,
+    renderer.render_scene(projection, view, eye, None,
                           glh.render_config(all_brushes=[], all_things=things),
                           brush_slots=np.empty(0, dtype=np.int32))
     gl.glFinish()
