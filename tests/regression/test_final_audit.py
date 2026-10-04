@@ -214,8 +214,10 @@ class _State:
 def _console(things, states):
     from editor.console_commands import ConsoleCommandHandler
 
-    logic = SimpleNamespace(monster_ai=SimpleNamespace(monster_states=states),
-                            _monster_lock=threading.RLock())
+    logic = SimpleNamespace(
+        monster_ai=SimpleNamespace(monster_states=states),
+        session_runtime=SimpleNamespace(monster_lock=threading.RLock()),
+    )
     window = SimpleNamespace(
         state=_State(things),
         view_3d=SimpleNamespace(play_mode=True, logic_thread=logic),
