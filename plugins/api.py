@@ -799,7 +799,7 @@ class RuntimeAPI:
         """
         logic = self.logic
         runtime = logic.world_runtime
-        if runtime is None or not logic.play_mode:
+        if runtime is None or not logic.session_runtime.play_mode:
             return
         lock = logic._tick_lock
         if lock is None:

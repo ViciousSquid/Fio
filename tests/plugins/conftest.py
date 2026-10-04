@@ -100,7 +100,7 @@ class FakeLogic:
             "things": list(things),
             "brushes": list(brushes),
         })()
-        self.play_mode = False
+        self.session_runtime = type("SessionRuntime", (), {"play_mode": False})()
         self.player = None
         self.io_manager = None
         self.game_state = None

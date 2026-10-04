@@ -35,6 +35,7 @@ class LogicSession:
 
     def __init__(self, logic):
         self.logic = logic
+        self.play_mode = False
         self._world_pause_owners = frozenset()
         self.physics_world = None
         self.spatial_grid = None
@@ -66,7 +67,7 @@ class LogicSession:
 
     def _apply_play_mode_unlocked(self, enabled: bool):
         logic = self.logic
-        logic.play_mode = enabled
+        self.play_mode = enabled
 
         # A pause belongs to the session that took it: a new session, or the
         # editor after one, never starts frozen by a request nobody released.
@@ -340,7 +341,7 @@ class LogicSession:
         base_level: dict = None,
     ):
         logic = self.logic
-        if not logic.play_mode:
+        if not self.play_mode:
             return False, "Nothing to save — not in play mode."
 
         try:
@@ -385,7 +386,7 @@ class LogicSession:
         base_level: dict = None,
     ):
         logic = self.logic
-        if not logic.play_mode:
+        if not self.play_mode:
             return False, "Enter play mode before loading a session."
 
         try:

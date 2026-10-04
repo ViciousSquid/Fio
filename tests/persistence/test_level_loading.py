@@ -231,7 +231,7 @@ def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing
     assert window.load_level_file(str(path)) is True
 
     assert window.calls == ["exit play", "replace scene", "enter play"]
-    assert playing_logic.play_mode
+    assert playing_logic.session_runtime.play_mode
     assert _loadout(playing_logic) == ("gun2", True, 5)
 
 

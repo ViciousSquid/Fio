@@ -248,9 +248,9 @@ class LogicRender:
         logic = self.logic
         started = time.perf_counter()
         write_state = logic.game_state.get_write_state()
-        write_state.is_play_mode = logic.play_mode
+        write_state.is_play_mode = logic.session_runtime.play_mode
 
-        if logic.play_mode and logic.player:
+        if logic.session_runtime.play_mode and logic.player:
             cs = logic.cutscene_runtime.state
             if cs and "cam_pos" in cs:
                 cam_pos = glm.vec3(*cs["cam_pos"])
@@ -394,7 +394,7 @@ class LogicRender:
         write_state.player_max_health = logic.player_runtime.player_max_health
         write_state.player_dead = logic.player_runtime.player_dead
         write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
-        if logic.play_mode and logic.player and not logic.cutscene_runtime.state:
+        if logic.session_runtime.play_mode and logic.player and not logic.cutscene_runtime.state:
             write_state.player_underwater = bool(logic.player.eye_underwater)
             write_state.underwater_tint = list(logic.player.water_tint)
         else:
@@ -430,7 +430,7 @@ class LogicRender:
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(logic.camera.camera_transition)
 
-        if logic.play_mode and logic.combat_runtime._monster_projectiles:
+        if logic.session_runtime.play_mode and logic.combat_runtime._monster_projectiles:
             logic.combat_runtime._publish_projectile_render_snapshot()
         else:
             logic.combat_runtime.projectile_positions = _NO_PROJECTILES
@@ -486,7 +486,7 @@ class LogicRender:
 
         edited = (
             ()
-            if logic.play_mode
+            if logic.session_runtime.play_mode
             else logic.editor_state.edited_objects()
         )
         edited_ids = {id(obj): obj for obj in edited}
@@ -514,7 +514,7 @@ class LogicRender:
                 snapshot_epoch,
             ),
         )
-        if logic.play_mode:
+        if logic.session_runtime.play_mode:
             logic.mover_runtime._movers().publish(logic, table)
 
         refs = table.refs
@@ -550,7 +550,7 @@ class LogicRender:
             things,
             world_epoch,
             dirty_objects=render_dirty,
-            effect_runtime=logic.play_mode,
+            effect_runtime=logic.session_runtime.play_mode,
             effect_store=logic.effect_store,
             peer=peer_etable,
             peer_dirty=self.peer_render_dirty(
@@ -567,7 +567,7 @@ class LogicRender:
 
         visible_thing_slots = etable.all_slots
         collected = logic.prop_runtime.collected_ids
-        if logic.play_mode and collected:
+        if logic.session_runtime.play_mode and collected:
             prop_slots = np.flatnonzero(
                 (etable.class_bits[:thing_count] & ENT_PROP) != 0
             )
@@ -588,7 +588,7 @@ class LogicRender:
         write_state.thing_hidden = thing_hidden
         write_state.timestamp = time.perf_counter()
 
-        if logic.play_mode and logic.player2:
+        if logic.session_runtime.play_mode and logic.player2:
             p2_pos = glm.vec3(logic.player2.pos)
             p2_cam = p2_pos + glm.vec3(
                 0,

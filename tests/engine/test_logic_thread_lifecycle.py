@@ -1,11 +1,10 @@
 """The logic thread against the UI thread that starts and stops play.
 
-``QtGameView`` calls ``LogicThread.set_play_mode`` on the UI thread while the
-logic thread is looping.  The flag used to be flipped first and the session
-built after it — movers, doors, collision caches, the spatial grid, the Prop
-session, the monster thread — with nothing stopping a tick from running in
-between, so the first play-mode ticks could run against a half-built session
-(and the last ones against a half-torn-down one).
+``QtGameView`` enters and exits Play Mode through ``LogicSession`` while the
+logic thread is looping.  The session owns the mode bit and builds/tears down
+movers, doors, collision caches, the spatial grid, the Prop session, and the
+monster thread under the tick lock, so no tick observes a half-built session
+(or a half-torn-down one).
 
 These tests use real threads, bounded by explicit timeouts, and make the
 interleaving deterministic by starting a frame from inside the transition.
@@ -40,6 +39,18 @@ def logic():
     yield thread
     thread.session_runtime.apply_play_mode(False)
     thread.stop()
+
+
+def test_play_mode_state_belongs_to_logic_session(logic):
+    assert not hasattr(logic, "play_mode")
+    assert logic.session_runtime.play_mode is False
+
+    logic.session_runtime.apply_play_mode(True)
+    try:
+        assert logic.session_runtime.play_mode is True
+    finally:
+        logic.session_runtime.apply_play_mode(False)
+
 
 
 def _frame_from_inside(logic, monkeypatch, hook_owner, hook_name):

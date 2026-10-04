@@ -53,7 +53,7 @@ def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
     tick at all. Its buffer was reset by the previous swap; projectiles written
     only by the tick then vanished for that frame (visible flicker)."""
     thread = logic()
-    thread.play_mode = True
+    thread.session_runtime.play_mode = True
     _add_projectile(thread)
     thread.combat_runtime._update_monster_projectiles(thread.TICK_DURATION)
 
@@ -69,10 +69,10 @@ def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
 
 def test_leaving_play_publishes_no_projectiles(logic):
     thread = logic()
-    thread.play_mode = True
+    thread.session_runtime.play_mode = True
     _add_projectile(thread)
     thread.combat_runtime._update_monster_projectiles(thread.TICK_DURATION)
-    thread.play_mode = False
+    thread.session_runtime.play_mode = False
     thread._step_frame(0.0)
     thread._publish_frame()
     assert len(_published(thread, 'projectiles')) == 0

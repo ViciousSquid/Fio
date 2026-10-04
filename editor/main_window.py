@@ -2195,7 +2195,7 @@ class MainWindow(QMainWindow):
             # The logic thread lives for the whole editor session; providers
             # are promised it only while Play Mode is running.
             logic = getattr(getattr(self, 'view_3d', None), 'logic_thread', None)
-            return logic if getattr(logic, 'play_mode', False) else None
+            return logic if logic.session_runtime.play_mode else None
 
         def _alive(e=entity):
             return any(t is e for t in getattr(self.state, 'things', ()))

@@ -182,7 +182,6 @@ class LogicThread(threading.Thread):
         ),
         "session": (
             "editor_state",
-            "play_mode",
             "io_manager",
             "player",
             "player2",
@@ -235,7 +234,6 @@ class LogicThread(threading.Thread):
         self.running = False
         self.player: Optional[Player] = None
         self.player2: Optional[Player] = None
-        self.play_mode = False
         self.terrain = None
         
         # Camera state and camera math live in LogicCamera; LogicThread keeps
@@ -502,8 +500,7 @@ class LogicThread(threading.Thread):
                     # Qt/editor teardown must not run on this worker thread.
                     # Stop gameplay immediately, then let the GUI thread run
                     # the normal QtGameView play-mode teardown path.
-                    self.play_mode = False
-                    callback = getattr(self, "_gui_fault_teardown", None)
+                                        callback = getattr(self, "_gui_fault_teardown", None)
                     if callback is not None and not self._gui_fault_teardown_requested:
                         self._gui_fault_teardown_requested = True
                         try:
@@ -573,7 +570,7 @@ class LogicThread(threading.Thread):
             self._last_tps_time = t
 
     def _tick(self, delta: float):
-        if self.play_mode:
+        if self.session_runtime.play_mode:
             self._tick_play_mode(delta)
             self.collision_runtime.rebuild_if_dirty()
         else:
