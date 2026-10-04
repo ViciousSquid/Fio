@@ -96,7 +96,8 @@ def test_terrain_texture_paint_is_part_of_terrain_data():
 
     data = terrain.to_dict()
     assert data["texture_paint_resolution"] == terrain.TERRAIN_PAINT_RESOLUTION
-    assert data["texture_paint"][0]["coord"] == [0, 0]
+    coords = {tuple(entry["coord"]) for entry in data["texture_paint"]}
+    assert coords == {(-1, -1), (-1, 0), (0, -1), (0, 0)}
     assert "texture_stamps" not in data
 
     restored = _flat_terrain()
