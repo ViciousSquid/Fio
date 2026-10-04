@@ -224,7 +224,7 @@ def test_the_published_radii_do_not_depend_on_when_the_fit_arrived():
     s2.tick()
     assert (at_start.sim_near_radius, at_start.sim_active_radius) == \
         (later.sim_near_radius, later.sim_active_radius)
-    assert at_start.sim_view_rect == later.sim_view_rect
+    assert s1.tiers.near_rect == s2.tiers.near_rect
 
 
 def test_the_overhead_camera_is_held_under_the_activation_radius():
