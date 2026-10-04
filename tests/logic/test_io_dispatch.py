@@ -1009,18 +1009,24 @@ class _CameraOutputRecorder:
 
 
 def _camera_logic(camera, nodes, recorder=None):
+    from editor.editor_state import EditorState
     from engine.logic_thread import LogicThread
-    lookup = {node.properties['name']: node for node in nodes}
-    from types import SimpleNamespace
-    from engine.cutscene_runtime import CutsceneRuntime
-    logic = SimpleNamespace()
-    logic.io_manager = recorder or _CameraOutputRecorder()
-    logic.world_runtime = SimpleNamespace(
-        find_path_node_by_name=lambda name: lookup.get(name)
-    )
-    logic.cutscene_runtime = CutsceneRuntime(logic)
-    return logic
+    from engine.threaded_game_state import ThreadedGameState
 
+    recorder = recorder or _CameraOutputRecorder()
+    state = EditorState()
+    state.things = list(nodes) + [camera]
+    state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    real_fire_output = logic.io_manager.fire_output
+
+    def record_and_dispatch(entity, output_name, value=None):
+        recorder.calls.append((entity, output_name, value))
+        return real_fire_output(entity, output_name, value)
+
+    logic.io_manager.fire_output = record_and_dispatch
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 def test_path_node_declares_camera_arrival_output():
     assert 'OnCameraArrived' in io.get_output_names('path_node')
