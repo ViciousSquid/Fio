@@ -542,3 +542,42 @@ def test_debug_tables_tracks_real_terrain_streaming_residency(window):
         for row in instrument.terrain.coord[terrain.table.live_slots()]
     }
     assert shown_coords == second_coords
+
+
+def test_debug_tables_observes_real_terrain_csg_rebuild(window):
+    """A terrain CSG edit must dirty and rebuild the dense heightfield row."""
+    from engine.terrain import Terrain
+    import glm
+
+    instrument, _ = window
+    terrain = Terrain(seed=0xF10)
+    terrain.set_world_extent(0.0, 0.0, 512.0, 512.0)
+    terrain.set_streaming(True, radius=768.0)
+    terrain._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
+
+    slot = int(terrain.table.live_slots()[0])
+    terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
+    before = terrain.table.heights[slot].copy()
+    before_version = int(terrain.table.version[slot])
+
+    h = float(terrain._get_height_scalar(128.0, 128.0))
+    assert terrain.subtract_aabb(
+        (64.0, h - 100.0, 64.0),
+        (192.0, h + 100.0, 192.0),
+    )
+
+    terrain.table.mark_dirty_region(128.0, 128.0, 128.0)
+    assert bool(terrain.table.dirty[slot])
+
+    terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
+    assert int(terrain.table.version[slot]) == before_version + 1
+    assert not bool(terrain.table.dirty[slot])
+    assert not np.array_equal(before, terrain.table.heights[slot])
+
+    instrument.main_window.terrain = terrain
+    instrument.refresh()
+    shown = instrument.terrain
+    assert shown is not None
+    assert shown.heights[slot].tolist() == pytest.approx(
+        terrain.table.heights[slot].tolist()
+    )
