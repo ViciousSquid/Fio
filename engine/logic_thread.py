@@ -216,7 +216,6 @@ class LogicThread(threading.Thread):
             "_props",
             "monster_ai",
             "_monster_lock",
-            "_timer_things",
         ),
     }
 
