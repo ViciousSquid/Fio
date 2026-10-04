@@ -17,10 +17,10 @@ never stores: the player transform and stats, the cheat flags, the collected-key
 set, and the door / mover / monster animation state.
 
 It is deliberately engine-native: no plugin, no bump to the plugin API
-(:data:`plugins.api.API_VERSION` stays ``1.3.0``). :class:`~engine.logic_thread.LogicThread`
-exposes :meth:`~engine.logic_thread.LogicThread.save_session` /
-:meth:`~engine.logic_thread.LogicThread.load_session`, and the editor console
-grows ``save`` / ``load`` / ``quicksave`` / ``quickload`` commands over them.
+(:data:`plugins.api.API_VERSION` stays ``1.3.0``). :class:`~engine.logic_session.LogicSession`
+owns the live-session ``save_session`` / ``load_session`` operations, and the
+editor console grows ``save`` / ``load`` / ``quicksave`` / ``quickload`` commands
+over that runtime surface.
 
 Snapshot shape::
 
