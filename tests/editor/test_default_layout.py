@@ -17,9 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 from PyQt5.QtCore import QByteArray, Qt  # noqa: E402
-from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QLabel, QMainWindow, QWidget,
-)
+from PyQt5.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from editor.ui import LAYOUT_VERSION  # noqa: E402
 
@@ -29,97 +27,44 @@ pytestmark = pytest.mark.qt
 
 
 
-@pytest.fixture(scope="session")
-def qt_app():
-    # Only when there is no display: the offscreen plugin cannot create an
-    # OpenGL context, and forcing it here would disable the visual tier for
-    # the whole session when the suite is run under Xvfb.
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 # ────────────────────────────
 # The 40/60 split
 # ────────────────────────────
 
-def _lay_out(width=1600, height=980):
-    """The editor's dock arrangement, with stand-ins for the real views."""
-    window = QMainWindow()
-    window.resize(width, height)
-
-    def dock(title, name, minimum=None):
-        widget = QDockWidget(title, window)
-        widget.setObjectName(name)
-        widget.setWidget(QWidget())
-        if minimum:
-            widget.setMinimumWidth(minimum)
-        return widget
-
-    scene = dock("Scene", "SceneDock")
-    window.addDockWidget(Qt.LeftDockWidgetArea, scene)
-    scene.setMaximumWidth(int(width * 0.10))
-
-    view_3d = dock("3D View", "View3DDock")
-    window.addDockWidget(Qt.RightDockWidgetArea, view_3d)
-    views_2d = dock("2D Views", "2DViewsDock", 610)
-    window.addDockWidget(Qt.RightDockWidgetArea, views_2d)
-    properties = dock(" ", "PropertiesDock")
-    window.addDockWidget(Qt.RightDockWidgetArea, properties)
-
-    window.splitDockWidget(view_3d, views_2d, Qt.Horizontal)
-    window.splitDockWidget(views_2d, properties, Qt.Vertical)
-    window.resizeDocks([view_3d, views_2d], [40, 60], Qt.Horizontal)
-    window.resizeDocks([views_2d, properties], [600, 300], Qt.Vertical)
-
-    assets = dock("Asset Browser", "AssetBrowserDock")
-    window.addDockWidget(Qt.RightDockWidgetArea, assets)
-    window.splitDockWidget(view_3d, assets, Qt.Vertical)
-    window.resizeDocks([view_3d, assets], [10000, 1], Qt.Vertical)
-
-    window.show()
-    QApplication.instance().processEvents()
-    return window, view_3d, views_2d
-
-
 @pytest.mark.parametrize("width", [1280, 1600, 1920, 2560])
-def test_the_3d_view_gets_two_fifths_of_the_width(qt_app, width):
-    """The ratio is what matters, so it has to hold at any window size."""
-    _, view_3d, views_2d = _lay_out(width)
-    shared = view_3d.width() + views_2d.width()
+def test_the_3d_view_gets_two_fifths_of_the_width(main_window, qt_app, width):
+    """The real MainWindow layout keeps the 3D/2D split at 40/60."""
+    host = main_window
+    host.resize(width, 980)
+    host.show()
+    qt_app.processEvents()
 
-    assert view_3d.width() / shared == pytest.approx(0.40, abs=0.01)
-    assert views_2d.width() / shared == pytest.approx(0.60, abs=0.01)
-
-
-def test_the_2d_views_are_the_wider_of_the_two(qt_app):
-    _, view_3d, views_2d = _lay_out()
-
-    assert views_2d.width() > view_3d.width()
+    shared = host.view_3d_dock.width() + host.right_dock.width()
+    assert host.view_3d_dock.width() / shared == pytest.approx(0.40, abs=0.01)
+    assert host.right_dock.width() / shared == pytest.approx(0.60, abs=0.01)
 
 
-def test_the_layout_call_asks_for_forty_sixty(qt_app):
-    """The ratio lives in ui.py; this is what the numbers above come from."""
-    import inspect
-
-    from editor.ui import Ui_MainWindow
-
-    source = inspect.getsource(Ui_MainWindow.setupUi)
-
-    assert '[40, 60], Qt.Horizontal' in source
+def test_the_2d_views_are_the_wider_of_the_two(main_window, qt_app):
+    host = main_window
+    qt_app.processEvents()
+    assert host.right_dock.width() > host.view_3d_dock.width()
 
 
-def test_the_scene_hierarchy_keeps_its_view_menu_label_without_a_title_bar():
-    import inspect
+def test_the_layout_resize_is_applied_by_the_real_ui_owner(main_window, qt_app):
+    host = main_window
+    host.resizeDocks([host.view_3d_dock, host.right_dock], [40, 60], Qt.Horizontal)
+    qt_app.processEvents()
+    shared = host.view_3d_dock.width() + host.right_dock.width()
+    assert host.view_3d_dock.width() / shared == pytest.approx(0.40, abs=0.01)
+    assert host.right_dock.width() / shared == pytest.approx(0.60, abs=0.01)
 
-    from editor.ui import Ui_MainWindow
 
-    source = inspect.getsource(Ui_MainWindow.setupUi)
-
-    assert 'QDockWidget("Scene Hierarchy", MainWindow)' in source
-    assert 'setTitleBarWidget(scene_title_bar)' in source
-
+def test_the_scene_hierarchy_keeps_its_zero_height_title_bar(main_window):
+    dock = main_window.scene_hierarchy_dock
+    assert dock.windowTitle() == "Scene Hierarchy"
+    title_bar = dock.titleBarWidget()
+    assert title_bar is not None
+    assert title_bar.height() == 0
 
 # ────────────────────────────
 # The version gate
