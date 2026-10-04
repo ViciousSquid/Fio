@@ -61,6 +61,9 @@ class FakeHost(QWidget):
     def update_all_ui(self):
         pass
 
+    def mark_as_modified(self):
+        pass
+
 
 @pytest.fixture
 def api(monkeypatch):
