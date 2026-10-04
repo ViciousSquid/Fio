@@ -47,13 +47,13 @@ def logic():
     thread.player = Player(0.0, 0.0)
     thread.player.pos.y = 40.0
     yield thread
-    thread.set_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
     thread.stop()
 
 
 @pytest.fixture
 def playing(logic):
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     # The AI thread is not under test here; keep the tick single-threaded.
     logic.session_runtime.stop_monster_ai()
     return logic
@@ -109,9 +109,9 @@ def test_holding_twice_is_still_one_request(logic):
 @pytest.mark.parametrize("entering", [True, False])
 def test_a_play_mode_change_drops_every_request(logic, entering):
     if not entering:
-        logic.set_play_mode(True)
+        logic.session_runtime.apply_play_mode(True)
     logic.set_world_paused("leftover", True)
-    logic.set_play_mode(entering)
+    logic.session_runtime.apply_play_mode(entering)
     assert logic.world_paused is False
 
 

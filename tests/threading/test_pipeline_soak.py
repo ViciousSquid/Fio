@@ -60,7 +60,7 @@ def test_frames_stay_consistent_while_everything_changes():
     game_state = ThreadedGameState()
     logic = LogicThread(game_state, state)
     logic.player = Player(0.0, 0.0)
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
 
     errors = []
     stop = threading.Event()
@@ -120,7 +120,7 @@ def test_frames_stay_consistent_while_everything_changes():
         stop.set()
         for worker in workers:
             worker.join(5.0)
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
         logic.stop()
         logic.join(5.0)
 

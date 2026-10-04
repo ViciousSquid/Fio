@@ -109,7 +109,7 @@ def _editor(brushes=(), things=()):
 def _play(brushes=(), things=()):
     state, game_state, logic = _editor(brushes, things)
     logic.player = Player(0.0, 0.0, 0.0)
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     logic.session_runtime.stop_monster_ai()
     return state, game_state, logic
 
@@ -222,7 +222,7 @@ def test_projectiles_are_published_on_a_frame_that_runs_no_tick():
             game_state.release_render_state(frame)
         assert counts == [3, 3, 3, 3]
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_mover_slot_maps_are_cached_per_render_buffer():
@@ -240,7 +240,7 @@ def test_mover_slot_maps_are_cached_per_render_buffer():
         assert movers._slot_cache[tables[0]] is first
         assert len(movers._slot_cache) == 2
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ def test_non_finite_io_parameters_are_ignored(value):
             logic._step_frame(logic.TICK_DURATION)
         assert np.isfinite(logic._movers().movers.rot_angle).all()
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_portal_set_target_relinks_the_renderer_and_transit():
@@ -286,7 +286,7 @@ def test_portal_set_target_relinks_the_renderer_and_transit():
         finally:
             game_state.release_render_state(frame)
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_brush_kill_removes_it_from_the_running_world():
@@ -297,7 +297,7 @@ def test_brush_kill_removes_it_from_the_running_world():
         assert wall.get("hidden") is True and wall.get("disabled") is True
         assert "_kill" not in wall
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_a_wall_revealed_by_io_show_is_solid():
@@ -313,7 +313,7 @@ def test_a_wall_revealed_by_io_show_is_solid():
             logic._step_frame(logic.TICK_DURATION)
         assert logic.player.pos.z < 284.0
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +336,7 @@ def test_a_once_trigger_as_the_editor_authors_it_fires_once():
         logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert fired == ["OnStartTouch", "OnTrigger"]
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_hurt_trigger_uses_the_editors_damage_amount():
@@ -346,7 +346,7 @@ def test_hurt_trigger_uses_the_editors_damage_amount():
         logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert logic.player_health == 100 - 37
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_trigger_activation_falls_back_to_the_key_older_editors_wrote():
@@ -365,7 +365,7 @@ def test_a_trigger_can_quicksave_or_quickload(save):
         logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert list(game_state.consume_console_commands()) == [save]
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_a_trigger_saves_nothing_by_default():
@@ -374,7 +374,7 @@ def test_a_trigger_saves_nothing_by_default():
         logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert not game_state.consume_console_commands()
     finally:
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
 
 
 def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
