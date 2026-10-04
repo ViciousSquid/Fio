@@ -150,7 +150,7 @@ def test_silent_explosion_does_not_queue_sound():
     logic = SimpleNamespace(
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
-        effect_store=effect_store,
+        session_runtime=SimpleNamespace(effect_store=effect_store),
     )
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
