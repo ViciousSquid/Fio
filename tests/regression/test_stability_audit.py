@@ -277,7 +277,7 @@ def test_portal_set_target_relinks_the_renderer_and_transit():
         _check_frames(logic, game_state)
         logic.io_manager._execute_input("a", "SetTarget", "c", "t",
                                         target_id=a.properties["id"])
-        assert logic._portal_target_things[logic._portal_things.index(a)] is c
+        assert logic.portal_runtime.portal_target_things[logic.portal_runtime.portal_things.index(a)] is c
         frame = _frame(logic, game_state)
         try:
             assert _diff_rebuild(frame) == []
