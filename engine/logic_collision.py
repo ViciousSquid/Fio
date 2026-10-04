@@ -49,7 +49,7 @@ class LogicCollision:
             return False
         self._dirty = False
         logic = self.logic
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             logic.world_runtime.notify_authored_visibility_changed()
         return True
 
