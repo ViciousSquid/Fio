@@ -86,6 +86,7 @@ def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
     pytest.importorskip("PyQt5")
     from editor.things import Monster
     from engine.monster_ai import MonsterAI
+    from engine.logic_world import LogicWorld
     from tests.helpers.fakes import FakeLogicThread, FakePlayer
     from tests.helpers.worlds import make_thing
 
@@ -93,8 +94,14 @@ def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
     monster = make_thing(Monster, "grunt", (0.0, 96.0, 0.0), awake=True)
     logic = FakeLogicThread(brushes=ground, things=[monster],
                             player=FakePlayer((0.0, 900.0, 0.0)))
-    logic._monster_things = [monster]
+    logic.world_runtime = LogicWorld(
+        logic,
+        monster_type=Monster,
+        path_node_type=PathNode,
+    )
     ai = MonsterAI(logic)
+    logic.monster_ai = ai
+    logic.world_runtime.build_entity_caches()
     ai.set_spatial_grid(logic.build_spatial_grid())
 
     for _ in range(10):
