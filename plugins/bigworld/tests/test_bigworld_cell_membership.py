@@ -47,7 +47,7 @@ class Logic:
         self.editor_state = SimpleNamespace(
             brushes=list(brushes), things=list(things)
         )
-        self.player = player or Player()
+        self.player_runtime = SimpleNamespace(player=player or Player())
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
 
@@ -71,7 +71,7 @@ def cells_holding(manager, thing):
 
 def walk(s, x, z=0.0, entities=()):
     """Move the player (and any entities travelling with it) and tick."""
-    s.logic.player.pos = [float(x), 0.0, float(z)]
+    s.logic.player_runtime.player.pos = [float(x), 0.0, float(z)]
     for e in entities:
         e.pos = [float(x), 0.0, float(z)]
     s.tick()
