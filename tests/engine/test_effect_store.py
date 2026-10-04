@@ -100,11 +100,7 @@ def test_entity_table_reads_effect_runtime_from_effect_store():
     spawn_time = time.perf_counter()
     store.trigger_explosion(effect, spawn_time)
 
-    # Deliberately poison the compatibility mirrors.  The production path must
-    # take the runtime from EffectStore instead.
-    effect._effect_spawn_time = 999.0
-    effect._effect_animation_phase = 0.99
-    effect._effect_active = False
+    # Runtime state exists only in EffectStore; the authoring entity is unchanged.
 
     table = EntityTable()
     table.begin_frame(
