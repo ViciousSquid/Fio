@@ -108,9 +108,6 @@ def test_logic_combat_constructs_and_ray_tests_aabb():
 def test_logic_editor_constructs_and_processes_an_idle_tick():
     host = SimpleNamespace(
         game_state=_GameState(),
-        EDITOR_CAMERA_SPEED=300.0,
-        EDITOR_CAMERA_FAST_MULT=2.5,
-        EDITOR_MOUSE_SENSITIVITY=0.15,
     )
     host.camera = LogicCamera(host)
     host.camera.set_editor_camera(glm.vec3(0, 0, 0), 0.0, 0.0, host.camera.editor_camera.fov)

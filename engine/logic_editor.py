@@ -37,7 +37,7 @@ class LogicEditor:
         dx, dy = logic.game_state.consume_mouse_delta()
         if dx != 0 or dy != 0:
             camera.yaw += dx * self.EDITOR_MOUSE_SENSITIVITY
-            camera.pitch -= dy * logic.EDITOR_MOUSE_SENSITIVITY
+            camera.pitch -= dy * self.EDITOR_MOUSE_SENSITIVITY
             camera.pitch = max(
                 -89.0,
                 min(89.0, camera.pitch),
