@@ -1179,7 +1179,7 @@ class MainWindow(QMainWindow):
             elif obj in self.state.things:
                 self.state.things.remove(obj)
         self.clone_placement = None
-        self.set_selected_object(None)
+        self.set_selected_objects([])
         # The clone pushed an undo checkpoint it no longer needs.
         self.state.discard_last_checkpoint()
         self.show_toast("Clone cancelled")
@@ -1266,7 +1266,7 @@ class MainWindow(QMainWindow):
         new_model.properties['name'] = model_name
         
         self.state.things.append(new_model)
-        self.set_selected_object(new_model)
+        self.set_selected_objects([new_model])
         self.show_toast(f"Added {model_name}")
 
     def set_selected_object(self, obj):
@@ -2023,7 +2023,7 @@ class MainWindow(QMainWindow):
             self.toggle_face_mode(False)
             return True
         if self.state.selected_object:
-            self.set_selected_object(None)
+            self.set_selected_objects([])
             return True
         return False
 
@@ -2041,7 +2041,7 @@ class MainWindow(QMainWindow):
         
         if active:
             self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
-            self.set_selected_object(None) # Deselect current object to clear gizmos and allow clean hover
+            self.set_selected_objects([]) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
             self.view_3d.setCursor(Qt.CrossCursor)
@@ -3192,7 +3192,7 @@ class MainWindow(QMainWindow):
         if walls:
             self.set_selected_objects(walls)
         else:
-            self.set_selected_object(None)
+            self.set_selected_objects([])
 
         self.show_toast(f"Hollowed with {thickness} unit walls")
 
@@ -3288,7 +3288,7 @@ class MainWindow(QMainWindow):
                 self.state.things.append(new_light)
         
         # Update UI
-        self.set_selected_object(None)
+        self.set_selected_objects([])
         
         # Show confirmation
         light_count = num_lights_x * num_lights_z
@@ -3859,7 +3859,7 @@ class MainWindow(QMainWindow):
             self.set_selected_objects(hits)
             self.show_toast("%s: %d object(s)" % (label, len(hits)))
         else:
-            self.set_selected_object(None)
+            self.set_selected_objects([])
             self.show_toast("%s: nothing found" % label, is_error=True)
         self.update_all_ui()
 
@@ -4282,7 +4282,7 @@ class MainWindow(QMainWindow):
                 self.add_recent_file(file_path)
 
             # Force full UI and view refresh
-            self.set_selected_object(None)
+            self.set_selected_objects([])
             self.update_all_ui()
 
             # Resume play on the new level.
@@ -4628,7 +4628,7 @@ class MainWindow(QMainWindow):
 
             self.unsaved_changes = False
             self.update_title()
-            self.set_selected_object(None)
+            self.set_selected_objects([])
             self.update_all_ui()
 
             launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
