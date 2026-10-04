@@ -56,12 +56,12 @@ def test_the_cull_buffers_are_built_once_per_session_not_per_frame(logic):
     thread = logic(brushes=pillar_grid(6, 6, spacing=300.0))
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         table = thread._render_table
         bounds = table.bounds
         generation = table.generation
         for _ in range(20):
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
         assert table.bounds is bounds, (
             "the projection's centre/half-extent block was reallocated during "
             "a frame; it is built once and refreshed in place")
@@ -81,7 +81,7 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
     thread = logic(brushes=[static, mover])
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         table = thread._render_table
         static_row = table.center[0].copy()
 
@@ -93,7 +93,7 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
         static["pos"] = [9999.0, 0.0, -400.0]
         mover["pos"] = [8888.0, 0.0, -400.0]
         moved(mover)
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
 
         assert np.array_equal(table.center[0], static_row), (
             "the static brush's row was refreshed; the per-frame loop is "
@@ -117,19 +117,19 @@ def test_classification_is_not_re_resolved_per_frame(logic):
     thread = logic(brushes=[brush])
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         table = thread._render_table
         before = int(table.class_bits[0])
 
         brush["shader"] = "Glass"          # no epoch bump: nobody was told
         for _ in range(10):
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
         assert int(table.class_bits[0]) == before, (
             "the classification columns were re-resolved during a frame")
 
         # ...and the editor's coarse change signal is what picks it up.
         thread.editor_state.mark_world_changed()
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         from engine.render_table import CLASS_GLASS
         assert int(table.class_bits[0]) & CLASS_GLASS, (
             "a world-epoch bump did not re-resolve the cold columns")
@@ -150,19 +150,19 @@ def test_entity_classification_is_not_re_resolved_per_frame(logic):
     thread = logic(things=[thing])
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         table = thread._entity_table
         before = int(table.class_bits[0])
 
         thing.properties["render_mode"] = "billboard"   # nobody was told
         thing.properties["sprite_path"] = "s.png"
         for _ in range(10):
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
         assert int(table.class_bits[0]) == before, (
             "the entity classification column was re-resolved during a frame")
 
         thread.editor_state.mark_world_changed()
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         assert int(table.class_bits[0]) & et.ENT_MODE_BILLBOARD, (
             "a world-epoch bump did not re-resolve the entity column")
     finally:
@@ -182,12 +182,12 @@ def test_no_entity_is_copied_or_re_read_on_an_unchanged_frame(logic, monkeypatch
     grunt = make_thing(Monster, "grunt", (0, 96, -300))
     # Editor mode: no AI thread, so nothing can legitimately change a row.
     thread = logic(things=[lamp, grunt])
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     first = list(thread.game_state.get_write_state().visible_things)
     resolved = []
     monkeypatch.setattr(et_module, "sprite_candidates",
                         lambda thing: resolved.append(thing) or ())
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     second = list(thread.game_state.get_write_state().visible_things)
 
     assert first == second == [lamp, grunt]
@@ -202,7 +202,7 @@ def test_the_frustum_test_is_one_batched_numpy_pass(logic):
     centers = np.zeros((500, 3))
     halves = np.ones((500, 3))
 
-    result = thread._aabb_in_frustum_batch(planes, centers, halves)
+    result = thread.render_runtime.aabb_in_frustum_batch(planes, centers, halves)
 
     assert isinstance(result, np.ndarray) and result.dtype == bool, (
         "the batched frustum test returned %r; a NumPy boolean mask is what "
@@ -221,7 +221,7 @@ def test_the_collision_brush_list_is_concatenated_once_not_per_tick(logic):
         before = thread._collision_brushes_cache
         for _ in range(20):
             thread._tick(1.0 / 60.0)
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
         assert thread._collision_brushes_cache is before, (
             "the combined collision brush list was rebuilt during 20 ticks; "
             "it only changes on a model-collision toggle or a play-mode "
@@ -433,7 +433,7 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
 
         for p in thread._portal_things:
             p._fade_alpha, p._fade_target = 0.0, 1.0
-        thread._update_portals(1.0 / 60.0)
+        thread.portal_runtime.update(1.0 / 60.0)
         assert all(p._fade_alpha > 0.0 for p in thread._portal_things)
 
         # And the per-frame path must not walk the level to find them.
@@ -442,7 +442,7 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
         try:
             type(thread).things = property(
                 lambda self: (scanned.append(1), original.fget(self))[1])
-            thread._update_portals(1.0 / 60.0)
+            thread.portal_runtime.update(1.0 / 60.0)
         finally:
             type(thread).things = original
         assert scanned == [], (
@@ -504,7 +504,7 @@ def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
     try:
         assert thread._portal_things == []
         thread._portal_prev_player_pos = None
-        thread._update_portals(1.0 / 60.0)
+        thread.portal_runtime.update(1.0 / 60.0)
         assert thread._portal_prev_player_pos is None, (
             "the portal system did per-frame work on a map with no portals")
     finally:

@@ -128,7 +128,7 @@ def test_setprop_hidden_false_leaves_the_object_visible():
     try:
         _console(state, logic).cmd_set_property("lamp hidden false")
         assert lamp.properties["hidden"] is False
-        logic._prepare_render_state()
+        logic.render_runtime.prepare_render_state()
         table = logic.game_state.get_write_state().entity_table
         assert not table.hidden[table.slot_of_id[lamp.properties["id"]]], (
             "setprop ... hidden false published the lamp as hidden")

@@ -985,7 +985,7 @@ class LogicThread(threading.Thread):
                 self._update_tps_counter()
 
             try:
-                self._prepare_render_state()
+                self.render_runtime.prepare_render_state()
                 self._frame_prepared = True
             except Exception:
                 # Same policy as a bad tick: a frame that cannot be projected
@@ -1254,18 +1254,6 @@ class LogicThread(threading.Thread):
         return runtime
 
     # =========================================================================
-    # PORTAL TRANSIT
-    # =========================================================================
-
-    def note_player_teleported(self):
-        """Invalidate the previous portal segment after a non-portal teleport."""
-        return self.portal_runtime.note_player_teleported()
-
-    def _update_portals(self, delta: float):
-        """Advance portal fade/transit runtime for one simulation tick."""
-        return self.portal_runtime.update(delta)
-
-    # =========================================================================
     # LOGIC TIMER UPDATE
     # =========================================================================
     
@@ -1279,36 +1267,3 @@ class LogicThread(threading.Thread):
     # PARENTED ENTITY RUNTIME
     # =========================================================================
 
-    # FRUSTUM CULLING
-    # =========================================================================
-
-    def _extract_frustum_planes(self, proj_view: glm.mat4):
-        return self.render_runtime.extract_frustum_planes(proj_view)
-
-    def _normalize_plane(self, a, b, c, d):
-        return self.render_runtime.normalize_plane(a, b, c, d)
-
-    def _aabb_in_frustum(self, planes, center, half_size):
-        return self.render_runtime.aabb_in_frustum(planes, center, half_size)
-
-    def _aabb_in_frustum_batch(self, planes, centers, halves):
-        return self.render_runtime.aabb_in_frustum_batch(planes, centers, halves)
-
-    @staticmethod
-    def _aabb_in_frustum_bounds(planes, bounds):
-        return LogicRender.aabb_in_frustum_bounds(planes, bounds)
-
-    # =========================================================================
-    # RENDER STATE PREPARATION
-    # =========================================================================
-
-    def _update_hud_health_alpha(self, now: float) -> float:
-        return self.render_runtime.update_hud_health_alpha(now)
-
-    def _peer_render_dirty(self, own_dirty, peer_table, snapshot_epoch):
-        return self.render_runtime.peer_render_dirty(
-            own_dirty, peer_table, snapshot_epoch
-        )
-
-    def _prepare_render_state(self):
-        return self.render_runtime.prepare_render_state()

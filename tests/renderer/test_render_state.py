@@ -53,7 +53,7 @@ def _frustum_looking_down_negative_z(thread, eye=(0, 0, 0), fov=90.0):
     projection = glm.perspective(glm.radians(fov), 1.0, 1.0, 10000.0)
     view = glm.lookAt(glm.vec3(*eye), glm.vec3(eye[0], eye[1], eye[2] - 1.0),
                       glm.vec3(0, 1, 0))
-    return thread._extract_frustum_planes(projection * view)
+    return thread.render_runtime.extract_frustum_planes(projection * view)
 
 
 # ---------------------------------------------------------------------------
@@ -74,27 +74,27 @@ def test_six_normalised_planes_come_out_of_a_projection(logic):
 def test_a_box_in_front_of_the_camera_is_inside_the_frustum(logic):
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
-    assert thread._aabb_in_frustum(planes, (0, 0, -500), (32, 32, 32)) is True
+    assert thread.render_runtime.aabb_in_frustum(planes, (0, 0, -500), (32, 32, 32)) is True
 
 
 def test_a_box_behind_the_camera_is_outside_the_frustum(logic):
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
-    assert thread._aabb_in_frustum(planes, (0, 0, 500), (32, 32, 32)) is False, (
+    assert thread.render_runtime.aabb_in_frustum(planes, (0, 0, 500), (32, 32, 32)) is False, (
         "a brush 500 units behind the camera was reported visible")
 
 
 def test_a_box_far_off_to_the_side_is_outside_the_frustum(logic):
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
-    assert thread._aabb_in_frustum(planes, (5000, 0, -100), (32, 32, 32)) is False
+    assert thread.render_runtime.aabb_in_frustum(planes, (5000, 0, -100), (32, 32, 32)) is False
 
 
 def test_a_huge_box_straddling_the_camera_is_inside(logic):
     """Conservativeness: a box the camera is inside must never be culled."""
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
-    assert thread._aabb_in_frustum(planes, (0, 0, 0), (10000, 10000, 10000)) is True
+    assert thread.render_runtime.aabb_in_frustum(planes, (0, 0, 0), (10000, 10000, 10000)) is True
 
 
 def test_the_batched_cull_agrees_with_the_scalar_one_everywhere(logic):
@@ -105,8 +105,8 @@ def test_the_batched_cull_agrees_with_the_scalar_one_everywhere(logic):
     centers = rng.uniform(-3000, 3000, size=(400, 3))
     halves = rng.uniform(1, 400, size=(400, 3))
 
-    batched = thread._aabb_in_frustum_batch(planes, centers, halves)
-    scalar = np.array([thread._aabb_in_frustum(planes, c, h)
+    batched = thread.render_runtime.aabb_in_frustum_batch(planes, centers, halves)
+    scalar = np.array([thread.render_runtime.aabb_in_frustum(planes, c, h)
                        for c, h in zip(centers, halves)])
 
     mismatch = np.nonzero(batched != scalar)[0]
@@ -135,7 +135,7 @@ def test_the_batched_cull_agrees_with_the_scalar_one_near_the_planes(logic, seed
         projection = glm.perspective(glm.radians(float(rng.uniform(40, 110))),
                                      float(rng.uniform(1.0, 2.4)), 1.0,
                                      float(rng.uniform(1500, 6000)))
-        planes = thread._extract_frustum_planes(
+        planes = thread.render_runtime.extract_frustum_planes(
             projection * glm.lookAt(eye, eye + look, up))
         halves = rng.uniform(1, 300, size=(1500, 3))
         # Put each box's positive vertex within a few units of a random plane.
@@ -145,8 +145,8 @@ def test_the_batched_cull_agrees_with_the_scalar_one_near_the_planes(logic, seed
         signed = (centers * p[:, :3]).sum(1) + (halves * np.abs(p[:, :3])).sum(1) + p[:, 3]
         centers -= p[:, :3] * (signed - rng.uniform(-3, 3, 1500))[:, None]
 
-        batched = thread._aabb_in_frustum_batch(planes, centers, halves)
-        scalar = np.array([thread._aabb_in_frustum(planes, c, h)
+        batched = thread.render_runtime.aabb_in_frustum_batch(planes, centers, halves)
+        scalar = np.array([thread.render_runtime.aabb_in_frustum(planes, c, h)
                            for c, h in zip(centers, halves)])
         assert np.array_equal(batched, scalar)
 
@@ -158,14 +158,14 @@ def test_the_batched_cull_takes_gathered_rows(logic):
     bounds = np.array([[0, 0, -500, 32, 32, 32], [0, 0, 500, 32, 32, 32],
                        [5000, 0, -100, 32, 32, 32], [0, 0, -900, 8, 8, 8]], float)
     picked = bounds.take([3, 1, 0], axis=0)
-    assert thread._aabb_in_frustum_bounds(planes, picked).tolist() == [True, False, True]
-    assert thread._aabb_in_frustum_bounds(planes, bounds[:1]).tolist() == [True]
+    assert thread.render_runtime.aabb_in_frustum_bounds(planes, picked).tolist() == [True, False, True]
+    assert thread.render_runtime.aabb_in_frustum_bounds(planes, bounds[:1]).tolist() == [True]
 
 
 def test_the_batched_cull_of_an_empty_scene_is_an_empty_result(logic):
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
-    assert list(thread._aabb_in_frustum_batch(planes, [], [])) == []
+    assert list(thread.render_runtime.aabb_in_frustum_batch(planes, [], [])) == []
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ def test_editor_mode_publishes_the_editor_camera(logic):
     thread.editor_camera.pos = glm.vec3(10, 20, 30)
     thread.editor_camera.yaw = 45.0
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     assert published.is_play_mode is False
@@ -191,7 +191,7 @@ def test_every_non_hidden_brush_is_in_the_all_brushes_list(logic):
     brushes.append(box_brush("hidden_one", (0, 0, 0), hidden=True))
     thread = logic(brushes=brushes)
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     names = {b.get("name") for b in published.all_brushes}
@@ -207,7 +207,7 @@ def test_the_visible_list_is_a_subset_of_the_all_brushes_list(logic):
     thread = logic(brushes=pillar_grid(5, 5, spacing=400.0))
     thread.editor_camera.pos = glm.vec3(0, 200, 1500)
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     all_ids = {id(b) for b in published.all_brushes}
@@ -222,7 +222,7 @@ def test_culling_off_makes_everything_visible(logic):
     thread = logic(brushes=brushes)
     thread.culling_enabled = False
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     assert len(published.visible_brushes) == len(brushes), (
@@ -240,7 +240,7 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
     thread.editor_camera.yaw = -90.0        # look down -Z
     thread.editor_camera.pitch = 0.0
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     names = {b.get("name") for b in published.visible_brushes}
@@ -254,7 +254,7 @@ def test_the_culled_count_and_the_visible_list_agree(logic):
     thread = logic(brushes=pillar_grid(6, 6, spacing=500.0))
     thread.editor_camera.pos = glm.vec3(0, 200, 2000)
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     accounted = len(published.visible_brushes) + published.culled_brushes
@@ -270,7 +270,7 @@ def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
     thread = logic(brushes=[mover])
     thread.culling_enabled = False
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     state = thread.game_state.get_write_state()
     table = state.render_table
     slot = int(state.all_brush_slots[0])
@@ -282,7 +282,7 @@ def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
     assert table.center[slot].tolist() == first.tolist(), (
         "the dense frame projection changed before the next render-state publish")
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     assert table.center[slot].tolist() == [0.0, 500.0, -400.0]
 
 def test_a_static_brush_is_submitted_by_reference(logic):
@@ -291,7 +291,7 @@ def test_a_static_brush_is_submitted_by_reference(logic):
     thread = logic(brushes=[wall])
     thread.culling_enabled = False
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     assert thread.game_state.get_write_state().all_brushes[0] is wall
 
@@ -301,7 +301,7 @@ def test_lights_and_entities_reach_the_render_state(logic):
               make_thing(Monster, "grunt", (0, 96, -300))]
     thread = logic(things=things)
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     assert published.entity_table.count == 2
@@ -329,7 +329,7 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
 
     monkeypatch.setattr(table_type, "begin_frame", begin_frame_then_append)
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     assert published.entity_table.count == 0
@@ -337,7 +337,7 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
 
     # The appended entity is reconciled normally on the next publication.
     monkeypatch.setattr(table_type, "begin_frame", original_begin_frame)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     assert published.entity_table.count == 1
@@ -349,7 +349,7 @@ def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
     monster = make_thing(Monster, "grunt", (-50, 96, -700))
     thread = logic(things=[lamp, monster])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     visible = published.visible_things
@@ -372,7 +372,7 @@ def test_all_lights_stays_lazy_until_light_consumer_reads_it(logic):
     monster = make_thing(Monster, "grunt", (-50, 96, -700))
     thread = logic(things=[lamp, monster])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     lights = published.all_lights
@@ -389,7 +389,7 @@ def test_published_entity_rows_carry_their_positions(logic):
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
     thread = logic(things=[lamp, monster])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     slots = published.visible_thing_slots
@@ -402,12 +402,12 @@ def test_a_moved_entity_updates_its_row_without_reconciling(logic):
     monster = make_thing(Monster, "grunt", (0, 96, -300))
     thread = logic(things=[monster])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     table = thread.game_state.get_write_state().entity_table
     generation = table.generation
 
     monster.pos = [800.0, 96.0, -900.0]
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     assert table.pos[0].tolist() == [800.0, 96.0, -900.0]
     assert table.generation == generation
@@ -418,12 +418,12 @@ def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
     first_thing = make_thing(Light, "first", (0, 100, 0))
     second_thing = make_thing(Light, "second", (100, 100, 0))
     thread = logic(things=[first_thing, second_thing])
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     thread.things.remove(second_thing)
     third_thing = make_thing(Light, "third", (900, 100, -700))
     thread.things.append(third_thing)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
     table = published.entity_table
@@ -433,7 +433,7 @@ def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
 
 
 def _publish(thread):
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     assert thread.game_state.request_swap() is True
     return thread.game_state.get_render_state()
 
@@ -452,7 +452,7 @@ def test_a_published_monster_row_is_stable_while_the_ai_moves_it(logic):
     monster.pos = [10.0, 96.0, -300.0]            # the AI moves it
     monster.properties["dead"] = True
     touch(monster)
-    thread._prepare_render_state()                # the next frame is built
+    thread.render_runtime.prepare_render_state()                # the next frame is built
 
     assert frame.entity_table.pos[0].tolist() == [0.0, 96.0, -300.0]
     assert frame.entity_table is not thread.game_state.get_write_state().entity_table
@@ -476,7 +476,7 @@ def test_the_projection_covers_every_brush_in_the_session(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         table = thread._render_table
         assert table.count == len(brushes)
         for index, brush in enumerate(brushes):
@@ -493,7 +493,7 @@ def test_only_movers_and_doors_are_marked_dynamic(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         dynamic = sorted(int(i) for i in thread._render_table.dynamic_slots)
         assert dynamic == [1, 2], (
             "dynamic slots are %s; only the mover and the door move" % (dynamic,))
@@ -507,7 +507,7 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
         table = state.render_table
         slots = state.visible_brush_slots
@@ -529,11 +529,11 @@ def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
     thread.set_play_mode(True)
     thread.culling_enabled = False
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         assert len(thread.game_state.get_write_state().all_brushes) == 1
 
         set_authored_flag(brush, "hidden", True)
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         assert len(thread.game_state.get_write_state().all_brushes) == 0, (
             "hiding a brush mid-session did not remove it from the frame")
     finally:
@@ -547,7 +547,7 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
     thread.culling_enabled = False
     try:
         thread.editor_state.brushes.append(box_brush("second", (100, 0, -400)))
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         names = {b.get("name") for b in thread.game_state.get_write_state().all_brushes}
         assert names == {"first", "second"}, (
             "a brush added mid-session did not reach the renderer; the frame "
@@ -844,7 +844,7 @@ def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
         for published in (state.visible_brushes, state.all_brushes):
             assert published._list is None, (
@@ -880,7 +880,7 @@ def test_the_entity_projection_reaches_the_renderer(logic):
     thread = logic(things=things)
     thread.set_play_mode(True)
     try:
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
 
         assert state.entity_table is thread._entity_table
@@ -898,7 +898,7 @@ def test_entity_slots_index_the_rows_they_were_published_beside(logic):
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
     thread = logic(things=[lamp, monster])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     state = thread.game_state.get_write_state()
     table, slots = state.entity_table, state.visible_thing_slots
 
@@ -915,7 +915,7 @@ def test_a_collected_prop_is_not_published(logic):
     thread.set_play_mode(True)
     try:
         thread._props.collected_ids.add(id(taken))
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
 
         assert list(state.visible_things) == [keep]
@@ -928,7 +928,7 @@ def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
     lamp = make_thing(Light, "lamp", (0, 100, 0))
     thread = logic(things=[lamp, make_thing(Monster, "grunt", (0, 96, -300))])
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     state = thread.game_state.get_write_state()
 
     assert list(state.all_lights) == [lamp]
@@ -942,13 +942,13 @@ def test_whether_the_map_has_portals_is_published(logic):
     from editor.things import Portal
 
     plain = logic(things=[make_thing(Light, "lamp", (0, 100, 0))])
-    plain._prepare_render_state()
+    plain.render_runtime.prepare_render_state()
     assert plain.game_state.get_write_state().has_portals is False
 
     with_portal = logic(things=[make_thing(Portal, "door", (0, 0, 0))])
     with_portal.set_play_mode(True)
     try:
-        with_portal._prepare_render_state()
+        with_portal.render_runtime.prepare_render_state()
         assert with_portal.game_state.get_write_state().has_portals is True
     finally:
         with_portal.set_play_mode(False)

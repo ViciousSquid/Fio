@@ -180,17 +180,17 @@ def test_a_logic_frame_after_undo_rebuilds_the_tables_once(monkeypatch):
     thread = LogicThread(ThreadedGameState(), state)
     try:
         for _ in range(2):                                  # settle both buffers
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
             thread.game_state.request_swap()
         snapshot = state.snapshot()
 
         reconciles = _count_reconciles(monkeypatch, RenderTable)
         state.restore_state(snapshot)                       # e.g. Stop/undo
-        thread._prepare_render_state()
+        thread.render_runtime.prepare_render_state()
         thread.game_state.request_swap()
         state.mark_world_changed([state.brushes[0]])        # e.g. a selection edit
         for _ in range(2):
-            thread._prepare_render_state()
+            thread.render_runtime.prepare_render_state()
             thread.game_state.request_swap()
         assert len(reconciles) == 1, reconciles
         for buffer in (thread.game_state._read_state, thread.game_state._write_state):
@@ -380,7 +380,7 @@ def _play(state, ticks=240):
             logic._tick(logic.TICK_DURATION)
         with logic._monster_lock:
             logic.monster_ai.update(logic.TICK_DURATION)
-        logic._prepare_render_state()
+        logic.render_runtime.prepare_render_state()
         game_state.request_swap()
         if tick % 40 == 0:
             seen.update(_session_world(state))       # includes the spawned/killed
@@ -424,7 +424,7 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
         if restore:
             state.restore_state(before_play)
         for _ in range(2):
-            logic._prepare_render_state()
+            logic.render_runtime.prepare_render_state()
             game_state.request_swap()
         roots = {"logic": logic, "monster_ai": logic.monster_ai}
         # Without a restore the session's objects *are* the editor's world,
@@ -437,7 +437,7 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
 
         state.load_from_data({"brushes": [], "things": []}, save_undo=False)
         for _ in range(2):
-            logic._prepare_render_state()
+            logic.render_runtime.prepare_render_state()
             game_state.request_swap()
         leaks = paths_to(roots, session, [state, state.brushes, state.things])
         assert leaks == [], "after a map load:\n  " + "\n  ".join(leaks[:20])
