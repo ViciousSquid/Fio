@@ -258,7 +258,7 @@ class LogicCombat:
         can kill a monster this list still holds.
         """
         logic = self.logic
-        monsters = logic._monster_things
+        monsters = logic.world_runtime.monster_things
         empty = np.empty(0, dtype=np.int64)
         if not monsters or not len(pos32):
             return monsters, empty, empty
@@ -457,14 +457,14 @@ class LogicCombat:
                     continue
 
             owner_id = int(projectiles.owner_id[i])
-            owner = logic._monster_by_id.get(owner_id)
+            owner = logic.world_runtime.monster_by_id.get(owner_id)
             owner_team = (
                 owner.properties.get('team', '')
                 if owner is not None else None
             )
 
             hit_monster = None
-            for candidate in logic._monster_things:
+            for candidate in logic.world_runtime.monster_things:
                 if id(candidate) == owner_id:
                     continue
                 cp = candidate.properties

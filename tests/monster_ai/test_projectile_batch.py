@@ -15,8 +15,10 @@ import types
 import numpy as np
 import pytest
 
-from engine.logic_combat import LogicCombat
+from engine.logic_combat import LogicCombat, ProjectileStore
 from tests.helpers.worlds import make_thing
+from engine.logic_portals import LogicPortals
+from engine.logic_world import LogicWorld
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
 from editor.things import Monster, LogicRelay  # noqa: E402
@@ -28,10 +30,15 @@ class _Host:
     """Host surface for the real LogicCombat projectile runtime."""
     def __init__(self, things, projectiles):
         self.things = things
-        self._monster_things = [
+        self.editor_state = types.SimpleNamespace(things=list(things), brushes=[])
+        self.world_runtime = LogicWorld(self)
+        self.world_runtime.monster_things = [
             thing for thing in things if isinstance(thing, Monster)
         ]
-        self._monster_by_id = {id(thing): thing for thing in self._monster_things}
+        self.world_runtime.monster_by_id = {
+            id(thing): thing for thing in self.world_runtime.monster_things
+        }
+        self.portal_runtime = LogicPortals(self)
         self.combat_runtime = LogicCombat(self)
         for position, owner in projectiles:
             self.combat_runtime._monster_projectiles.add(
