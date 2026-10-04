@@ -28,12 +28,13 @@ class LogicEditor:
 
     def tick(self, delta: float):
         logic = self.logic
+        camera = logic.camera.get_editor_camera()
 
         dx, dy = logic.game_state.consume_mouse_delta()
         if dx != 0 or dy != 0:
             logic._editor_mouselook_active = True
-            logic.editor_camera.yaw += dx * logic.EDITOR_MOUSE_SENSITIVITY
-            logic.editor_camera.pitch -= dy * logic.EDITOR_MOUSE_SENSITIVITY
+            camera.yaw += dx * logic.EDITOR_MOUSE_SENSITIVITY
+            camera.pitch -= dy * logic.EDITOR_MOUSE_SENSITIVITY
             logic.editor_camera.pitch = max(
                 -89.0,
                 min(89.0, logic.editor_camera.pitch),
@@ -67,4 +68,4 @@ class LogicEditor:
             speed = logic.EDITOR_CAMERA_SPEED
             if Key_Shift in keys:
                 speed *= logic.EDITOR_CAMERA_FAST_MULT
-            logic.editor_camera.pos += move_dir * speed * delta
+            camera.pos += move_dir * speed * delta
