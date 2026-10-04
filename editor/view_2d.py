@@ -3302,7 +3302,7 @@ class View2D(QWidget):
                 
                 self.editor.set_selected_objects(selected_objects)
                 # Focus Properties tab when selecting objects
-                if selected_objects and hasattr(self.main_window, 'properties_tab_widget'):
+                if selected_objects:
                     self._focus_properties_tab()
             else:
                 # If the clicked object is already part of a multi-selection,
@@ -3316,7 +3316,7 @@ class View2D(QWidget):
                     self.editor.set_selected_objects([clicked_object])
                     self.manip_mode = 'resize'  # fresh selection starts in scale mode
                     # Focus Properties tab when selecting an object
-                    if clicked_object and hasattr(self.main_window, 'properties_tab_widget'):
+                    if clicked_object:
                         self._focus_properties_tab()
 
             if clicked_object and not (event.modifiers() & Qt.ShiftModifier):
