@@ -4164,6 +4164,7 @@ class MainWindow(QMainWindow):
 
         loaded = False
         open_level = None
+        scene_replacement_started = False
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the
@@ -4188,6 +4189,7 @@ class MainWindow(QMainWindow):
                           self.state.brushes,
                           self.state.things)
             self.file_path = None
+            scene_replacement_started = True
             self._apply_level_data(level_data)
 
             # --- Find PlayerStart and reposition camera ---
@@ -4258,7 +4260,8 @@ class MainWindow(QMainWindow):
             return True
 
         except Exception as e:
-            if (not loaded and open_level is not None
+            if (not loaded and not scene_replacement_started
+                    and open_level is not None
                     and open_level[2] is not None and open_level[3] is not None
                     and self.state.brushes is open_level[2]
                     and self.state.things is open_level[3]):
