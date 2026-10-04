@@ -1,0 +1,626 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                1024,
+                200,
+                448
+            ],
+            "size": [
+                512,
+                400,
+                640
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "2e0dcbcd-d74f-4225-bfa9-904107907005"
+        },
+        {
+            "pos": [
+                680,
+                320,
+                504
+            ],
+            "size": [
+                176,
+                32,
+                48
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "46220f80-4f6f-4a45-bd6c-df6fb8cba8dd"
+        },
+        {
+            "pos": [
+                684,
+                320,
+                304
+            ],
+            "size": [
+                168,
+                32,
+                48
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9c17a961-6625-4076-b05e-7b0e83fd9edb"
+        },
+        {
+            "pos": [
+                384,
+                104,
+                -760
+            ],
+            "size": [
+                1792,
+                208,
+                496
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9670efa1-6557-477d-97fb-ad6f194f0cbf"
+        },
+        {
+            "pos": [
+                1024,
+                104,
+                -192
+            ],
+            "size": [
+                512,
+                208,
+                640
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0e7b4c63-a288-460e-93de-ae70bb62ce80"
+        },
+        {
+            "pos": [
+                536,
+                104,
+                -266.1333333333333
+            ],
+            "size": [
+                464,
+                208,
+                491.73333333333335
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            1,
+                            0,
+                            0
+                        ],
+                        "d": 768,
+                        "texture": "default.png",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -1,
+                            0,
+                            0
+                        ],
+                        "d": -432,
+                        "texture": "default.png",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0,
+                            1,
+                            0
+                        ],
+                        "d": 208,
+                        "texture": "default.png",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0,
+                            -1,
+                            0
+                        ],
+                        "d": 0,
+                        "texture": "default.png",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0,
+                            0,
+                            1
+                        ],
+                        "d": 0,
+                        "texture": "default.png",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            0,
+                            0,
+                            -1
+                        ],
+                        "d": 512,
+                        "texture": "default.png",
+                        "face": "south"
+                    },
+                    {
+                        "n": [
+                            0,
+                            0.9149178015729321,
+                            0.40364020657629357
+                        ],
+                        "d": -8.180441519946216,
+                        "texture": "default.png"
+                    }
+                ]
+            },
+            "id": "1a817c94-928c-4005-88c9-6619876b168c"
+        }
+    ],
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                784,
+                272,
+                -784
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0,
+                "id": "55f41b17-d732-434a-859c-19ac8a0c3f1e",
+                "io_enabled": true
+            },
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "LogicCommand_1",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "117b2871-4c0f-4304-a6e3-6d077daa7b95"
+                }
+            ]
+        },
+        {
+            "type": "light",
+            "pos": [
+                -160,
+                40,
+                -160
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1,
+                "radius": 512,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "0e6d6d40-9014-470d-9c6c-cc420b102421",
+                "parent_mover": "",
+                "parent_offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                448,
+                48,
+                464
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1,
+                "radius": 512,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "87495dce-29ce-4b69-892c-11a8a8a3e7ec",
+                "parent_mover": "",
+                "parent_offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                432,
+                40,
+                -176
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_4",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1,
+                "radius": 512,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "3a8db2f4-6ab5-4e4a-96ba-07c25a96e3cd",
+                "parent_mover": "",
+                "parent_offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -192,
+                40,
+                544
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_5",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1,
+                "radius": 512,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "305ca295-fe60-4d09-97dc-c417fa43818b",
+                "parent_mover": "",
+                "parent_offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                368,
+                304,
+                -752
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "fdf452f0-2f07-40f2-908d-70bdfa200c2e",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1,
+                "radius": 512,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "monster",
+            "pos": [
+                176,
+                210.9107666015625,
+                352
+            ],
+            "properties": {
+                "type": "monster",
+                "name": "Monster_2",
+                "id": "fceb4d67-27ad-4e8a-b1c6-3870110172b7",
+                "monster_type": "human",
+                "monster_id": -3,
+                "health": -200,
+                "damage": 10,
+                "triggered": false,
+                "wake_on_sight": true,
+                "awake": false,
+                "patrol": false,
+                "patrol_target": "",
+                "patrol_mode": "loop",
+                "variant": "<None>",
+                "sprite_width": 128,
+                "sprite_height": 192,
+                "sight": 512,
+                "can_hear": false,
+                "non_hostile": false,
+                "team": "",
+                "custom_idle": "assets/sprites/monsters/monster_flesh_eye.png",
+                "custom_shoot": "assets/sprites/monsters/monster_flesh_eye.png",
+                "custom_dead": "assets/sprites/monsters/flying/dead.png",
+                "sprite_2d": "assets/sprites/monsters/monster_flesh_eye.png",
+                "dead": false,
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                784.0,
+                272.0,
+                -784.0
+            ],
+            "properties": {
+                "type": "prop",
+                "name": "Prop_1",
+                "id": "5cf93f3a-a699-4c62-8579-0bb6758efe7a",
+                "carry_enabled": false,
+                "collect_enabled": true,
+                "collect_type": "weapon",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": true,
+                "collect_respawns": false,
+                "collect_respawn_time": 20,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun2",
+                "sprite_path": "assets/sprites/gun2.png",
+                "io_enabled": true,
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "logic_command",
+            "pos": [
+                672.0,
+                368.0,
+                -784.0
+            ],
+            "properties": {
+                "type": "logic_command",
+                "name": "LogicCommand_1",
+                "id": "117b2871-4c0f-4304-a6e3-6d077daa7b95",
+                "command": "cam topdown",
+                "disabled": false,
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "monster",
+            "pos": [
+                -480,
+                169.32176208496094,
+                1136
+            ],
+            "properties": {
+                "type": "monster",
+                "name": "Monster_3",
+                "id": "36a85425-01c8-48d6-96ec-4510671bd69a",
+                "monster_type": "flying",
+                "monster_id": 0,
+                "health": -50,
+                "damage": 10,
+                "triggered": false,
+                "wake_on_sight": true,
+                "awake": false,
+                "patrol": false,
+                "patrol_target": "",
+                "patrol_mode": "loop",
+                "variant": "<None>",
+                "sprite_width": 160,
+                "sprite_height": 160,
+                "sight": 512,
+                "can_hear": false,
+                "non_hostile": false,
+                "team": "",
+                "custom_idle": "assets/sprites/monsters/monster_flesh_eye.png",
+                "custom_shoot": "assets/sprites/monsters/monster_flesh_eye.png",
+                "custom_dead": "assets/sprites/monsters/flying/dead.png",
+                "dead": false,
+                "io_enabled": true
+            },
+            "io_connections": []
+        }
+    ],
+    "created": "2026-10-04T03:08:51",
+    "terrain_data": {
+        "enabled": true,
+        "solid": true,
+        "seed": 42,
+        "biome": "Low Poly Valley",
+        "chunk_size": 256,
+        "base_resolution": 48,
+        "offset_x": 0,
+        "offset_z": 0,
+        "offset_y": 0,
+        "min_chunk_x": -5,
+        "max_chunk_x": 5,
+        "min_chunk_z": -5,
+        "max_chunk_z": 5,
+        "use_textures": false,
+        "flat_mode": true,
+        "custom_biome": {
+            "name": "Low Poly Valley",
+            "base_height": 10,
+            "height_scale": 250,
+            "hills_scale": 0.004,
+            "hills_intensity": 0.8,
+            "mountains_enabled": true,
+            "mountains_scale": 0.006,
+            "mountains_intensity": 1.2,
+            "mountains_sharpness": 0.2,
+            "valleys_enabled": true,
+            "valleys_scale": 0.003,
+            "valleys_depth": 0.2,
+            "plateaus_enabled": false,
+            "plateaus_scale": 0.004,
+            "plateaus_intensity": 0.5,
+            "plateaus_flatness": 0.7,
+            "trees_enabled": true,
+            "tree_density": 0.15,
+            "color_gradient": [
+                [
+                    0,
+                    [
+                        0.38,
+                        0.6,
+                        0.25
+                    ]
+                ],
+                [
+                    0.25,
+                    [
+                        0.35,
+                        0.55,
+                        0.22
+                    ]
+                ],
+                [
+                    0.28,
+                    [
+                        0.55,
+                        0.4,
+                        0.25
+                    ]
+                ],
+                [
+                    1,
+                    [
+                        0.65,
+                        0.45,
+                        0.3
+                    ]
+                ]
+            ],
+            "blend_weights": [
+                1,
+                0,
+                0,
+                0
+            ],
+            "terrain_height_scale": 0.003
+        }
+    }
+}
