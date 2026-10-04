@@ -646,7 +646,7 @@ class LogicGraphScene(QGraphicsScene):
         position is a decision, and re-packing it would undo that decision every
         time the window opened.
         """
-        saved = getattr(self.editor_state, '_logic_graph_positions', {}) or {}
+        saved = self.editor_state._logic_graph_positions
         auto = [(key, node) for key, node in self._nodes.items() if key not in saved]
         if not auto:
             return
@@ -806,7 +806,7 @@ class LogicGraphScene(QGraphicsScene):
             node  = EntityNodeItem(entity, etype, ename)
 
             # Restore saved position from map file, or fall back to grid layout
-            saved_positions = getattr(self.editor_state, '_logic_graph_positions', {})
+            saved_positions = self.editor_state._logic_graph_positions
             if eid and eid in saved_positions:
                 pos = saved_positions[eid]
                 node.setPos(pos['x'], pos['y'])
@@ -924,7 +924,7 @@ class LogicGraphScene(QGraphicsScene):
         (i.e. those without saved positions).  Nodes with persisted
         positions are left alone.
         """
-        saved = getattr(self.editor_state, '_logic_graph_positions', {})
+        saved = self.editor_state._logic_graph_positions
 
         # Collect (src_node, dst_node) pairs that need checking
         swapped = set()
