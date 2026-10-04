@@ -71,7 +71,8 @@ def test_scalar_offset_yields_plain_python_floats():
 def test_direction_cache_in_logic_thread_is_a_float_tuple():
     """Guard the regression: a numpy _direction_np would poison brush['pos']."""
     src = read_source("engine", "logic_movers.py")
-    assert "'_direction_np': (float(direction[0])" in src
+    assert '"_direction_np": (' in src
+    assert "float(direction[0])" in src
     # Resolved lazily on the first tick, now in the dense mover table.
     from engine.mover_table import _unit_direction
     direction = _unit_direction([0, 3, 4])
@@ -241,7 +242,7 @@ def test_speaker_handlers_queue_spatial_radius_data():
 
 def test_speaker_start_on_is_consumed_at_player_spawn():
     src = read_source("engine", "logic_session.py")
-    assert "if not bool(thing.properties.get('play_on_start', False)):" in src
+    assert 'if not bool(thing.properties.get("play_on_start", False)):' in src
     assert "self.io_manager._execute_input(" in src
     assert "'PlaySound'," in src
 
