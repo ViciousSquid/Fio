@@ -38,6 +38,8 @@ class FakePlayer:
 
 class FakeLogic:
     def __init__(self, things):
+        from types import SimpleNamespace
+        self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
         self.io_manager = FakeIO()
         self.current_hud_message = ""
