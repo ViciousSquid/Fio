@@ -8,7 +8,6 @@ so that they fail if the event-driven model is ever quietly replaced by a scan.
 """
 
 import pytest
-from types import SimpleNamespace
 from engine.spatial import (SIM_TIER_KEY, TIER_ACTIVE, TIER_DISTANT,
                             TIER_DORMANT, TIER_NAMES, TIER_NEAR,
                             tier_of)
@@ -23,45 +22,19 @@ from plugins.bigworld.tiers import TIER_HYSTERESIS, TierClassifier
 # Fixtures
 # ----------------------------------------------------------------------
 
-class FakeThing:
-    """Minimal stand-in for an engine entity: a position and a property dict."""
+pytest.importorskip("PyQt5", reason="Big World machinery uses the real editor/logic owners")
 
-    def __init__(self, x, z, type_name="monster", uuid=None, **props):
-        self.pos = [float(x), 0.0, float(z)]
-        self.properties = {"type": type_name, "id": uuid or f"t{x}_{z}"}
-        self.properties.update(props)
-
-
-class FakeCamera:
-    def __init__(self):
-        self.overhead_height = 800.0
-        self.overhead_height_limit = None
-        self._footprint = None
-
-    def overhead_ground_footprint(self):
-        return self._footprint
-
-    def effective_overhead_height(self):
-        height = float(self.overhead_height)
-        if self.overhead_height_limit is not None:
-            height = min(height, float(self.overhead_height_limit))
-        return height
+from editor.editor_state import EditorState
+from editor.things import Thing
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
+from engine.view_distance import ViewDistance
 
 
-class FakeLogic:
-    """Stand-in for the streaming host using the real editor-state ownership."""
-
-    def __init__(self, brushes=None, things=None, player=None, render_view_distance=None):
-        self.editor_state = SimpleNamespace()
-        self.editor_state.brushes = list(brushes or [])
-        self.editor_state.things = list(things or [])
-        self.player_runtime = SimpleNamespace(player=player)
-        self.render_runtime = SimpleNamespace(view_distance=render_view_distance or ViewDistance())
-        self.camera = FakeCamera()
-
-class FakePlayer:
-    def __init__(self, x=0.0, z=0.0):
-        self.pos = [float(x), 0.0, float(z)]
+def make_thing(x, z, type_name="monster", uuid=None, **props):
+    properties = {"type": type_name, "id": uuid or f"t{x}_{z}"}
+    properties.update(props)
+    return Thing(pos=[float(x), 0.0, float(z)], properties=properties)
 
 
 def brush(x, z, uuid, size=64.0):
@@ -70,28 +43,34 @@ def brush(x, z, uuid, size=64.0):
 
 
 def grid_world(cells_each_way=6, per_cell=4, cell_size=512.0):
-    """A world of entities spread evenly over a square block of cells."""
+    """A world of real Fio Thing instances spread across a block of cells."""
     things = []
     for cx in range(-cells_each_way, cells_each_way + 1):
         for cz in range(-cells_each_way, cells_each_way + 1):
             for i in range(per_cell):
                 x = cx * cell_size + 64.0 + i * 32.0
                 z = cz * cell_size + 64.0
-                things.append(FakeThing(x, z, uuid=f"e{cx}_{cz}_{i}"))
+                things.append(make_thing(x, z, uuid=f"e{cx}_{cz}_{i}"))
     return things
 
 
 def started_session(things, brushes=None, activation=2048.0,
                     deactivation=2304.0, near=1024.0, at=(0.0, 0.0),
                     render_view_distance=None):
-    logic = FakeLogic(brushes=brushes or [], things=things,
-                      player=FakePlayer(*at), render_view_distance=render_view_distance)
+    """Start BigWorld against a real LogicThread and real scene ownership."""
+    state = EditorState()
+    state.brushes = list(brushes or [])
+    state.things = list(things)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
+    if render_view_distance is not None:
+        logic.render_runtime.view_distance = render_view_distance
+    logic.world_runtime.build_entity_caches()
     session = BigWorldSession(logic, activation_radius=activation,
                               deactivation_radius=deactivation,
                               sim_near_radius=near)
     session.start()
     return session
-
 
 # ----------------------------------------------------------------------
 # Tier semantics
