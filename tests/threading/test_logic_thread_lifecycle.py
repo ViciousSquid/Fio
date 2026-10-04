@@ -214,16 +214,16 @@ def test_play_mode_resets_player_state_every_time(logic):
 def test_leaving_play_mode_clears_the_session_only_state(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
-    thread.collected_keys.add("red")
+    thread.player_runtime.collected_keys.add("red")
     thread.current_hud_message = "you need the red key"
-    thread.bullet_marks.append({"pos": None, "time": 0.0})
+    thread.combat_runtime.bullet_marks.append({"pos": None, "time": 0.0})
 
     thread.session_runtime.apply_play_mode(False)
 
-    assert thread.collected_keys == set(), \
-        "collected keys survived into editor mode: %s" % (thread.collected_keys,)
+    assert thread.player_runtime.collected_keys == set(), \
+        "collected keys survived into editor mode: %s" % (thread.player_runtime.collected_keys,)
     assert thread.current_hud_message == ""
-    assert thread.bullet_marks == []
+    assert thread.combat_runtime.bullet_marks == []
 
 
 def test_a_monsters_runtime_state_is_reset_between_sessions(logic):

@@ -214,7 +214,8 @@ def _window_on(logic, starts_play=True):
 
 
 def _loadout(logic):
-    return (logic.active_weapon, logic.gun2_obtained, logic.player_ammo)
+    combat = logic.combat_runtime
+    return (combat.active_weapon, combat.gun2_obtained, combat.player_ammo)
 
 
 def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing_logic):
@@ -222,9 +223,9 @@ def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing
     cleared it, so a LevelChanger always sent the player on unarmed."""
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
-    playing_logic.active_weapon = "gun2"
-    playing_logic.gun2_obtained = True
-    playing_logic.player_ammo = 5
+    playing_logic.combat_runtime.active_weapon = "gun2"
+    playing_logic.combat_runtime.gun2_obtained = True
+    playing_logic.combat_runtime.player_ammo = 5
     window = _window_on(playing_logic)
 
     assert window.load_level_file(str(path)) is True
@@ -237,15 +238,15 @@ def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing
 def test_only_the_weapons_come_along(tmp_path, playing_logic):
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
-    playing_logic.active_weapon = "gun1"
-    playing_logic.collected_keys.add("blue_key")
+    playing_logic.combat_runtime.active_weapon = "gun1"
+    playing_logic.player_runtime.collected_keys.add("blue_key")
     playing_logic.player_health = 40
     window = _window_on(playing_logic)
 
     window.load_level_file(str(path))
 
-    assert playing_logic.active_weapon == "gun1"
-    assert playing_logic.collected_keys == set()
+    assert playing_logic.combat_runtime.active_weapon == "gun1"
+    assert playing_logic.player_runtime.collected_keys == set()
     assert playing_logic.player_health == 100
 
 
@@ -254,7 +255,7 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing
     waiting to reappear the next time Play is pressed."""
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
-    playing_logic.active_weapon = "gun1"
+    playing_logic.combat_runtime.active_weapon = "gun1"
     window = _window_on(playing_logic, starts_play=False)
 
     window.load_level_file(str(path))
@@ -265,9 +266,9 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing
 
 
 def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
-    playing_logic.active_weapon = "gun2"
-    playing_logic.gun2_obtained = True
-    playing_logic.player_ammo = 3
+    playing_logic.combat_runtime.active_weapon = "gun2"
+    playing_logic.combat_runtime.gun2_obtained = True
+    playing_logic.combat_runtime.player_ammo = 3
     playing_logic.session_runtime.apply_play_mode(False)
     playing_logic.session_runtime.apply_play_mode(True)
     assert _loadout(playing_logic) == (None, False, 0)
