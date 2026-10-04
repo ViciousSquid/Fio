@@ -1574,11 +1574,11 @@ class QtGameView(QOpenGLWidget):
         if render_state:
             self._cached_health = render_state.player_health
             self._cached_max_health = render_state.player_max_health
-            self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
-            self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
-            self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
-            self._cached_hud_message = getattr(render_state, 'hud_message', '')
-            self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
+            self._cached_player_ammo = render_state.player_ammo
+            self._cached_shot_ready = render_state.shot_ready
+            self._cached_active_weapon = render_state.active_weapon
+            self._cached_hud_message = render_state.hud_message
+            self._cached_collected_keys = render_state.collected_keys
             if getattr(render_state, 'muzzle_flash_active', False):
                 self._muzzle_flash_counter = self._muzzle_flash_duration_frames
             self._cached_muzzle_flash = self._muzzle_flash_counter > 0
