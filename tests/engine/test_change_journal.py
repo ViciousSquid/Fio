@@ -213,11 +213,12 @@ def test_a_light_fading_at_runtime_is_re_resolved_each_step():
     table.begin_frame([lamp], 1)
     logic = type("TimingHost", (), {})()
     logic.io_manager = None
-    logic.light_fade_states = {id(lamp): {
+    timing = LogicTiming(logic)
+    timing.light_fade_states = {id(lamp): {
         "entity": lamp, "from": 2.0, "to": 0.0,
         "elapsed": 0.0, "duration": 1.0, "end_off": True}}
 
-    LogicTiming(logic).update_light_fades(0.5)
+    timing.update_light_fades(0.5)
     table.begin_frame([lamp], 1)
     assert table.light_params[0, 0] == pytest.approx(1.0)
 
