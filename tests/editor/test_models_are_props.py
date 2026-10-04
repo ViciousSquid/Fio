@@ -9,7 +9,6 @@ the player does not pick up.
 
 import json
 import os
-import types
 
 import pytest
 
@@ -97,21 +96,12 @@ def test_shipped_maps_load_their_models_as_props(name):
             record["properties"].get("model_path")
 
 
-def test_the_asset_browser_places_a_model_as_a_prop():
-    from editor.main_window import MainWindow
-
-    placed = []
-    host = types.SimpleNamespace(
-        root_dir=ROOT,
-        save_state=lambda: None,
-        state=types.SimpleNamespace(things=placed),
-        set_selected_objects=lambda objs: None,
-        show_toast=lambda text: None,
-    )
-    MainWindow.add_model_to_scene(host, os.path.join(ROOT, DRUM),
-                                  [0, 90, 0], [1, 1, 1])
-    assert len(placed) == 1
-    prop = placed[0]
+def test_the_asset_browser_places_a_model_as_a_prop(main_window):
+    host = main_window
+    host.add_model_to_scene(os.path.join(ROOT, DRUM),
+                            [0, 90, 0], [1, 1, 1])
+    assert len(host.state.things) == 1
+    prop = host.state.things[0]
     assert type(prop) is Prop
     assert prop.properties["render_mode"] == "model"
     assert prop.properties["model_path"] == DRUM
