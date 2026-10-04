@@ -672,50 +672,8 @@ class LogicThread(threading.Thread):
     # =========================================================================
     # CUTSCENE RUNTIME
     # =========================================================================
-
-    def _cutscene_runtime(self):
-        """Return the cutscene runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "cutscene_runtime", None)
-        if runtime is None:
-            runtime = CutsceneRuntime(self)
-            self.cutscene_runtime = runtime
-        return runtime
-
-    @property
-    def cinematic_state(self):
-        """Compatibility view of the active cutscene state."""
-        return self._cutscene_runtime().state
-
-    @cinematic_state.setter
-    def cinematic_state(self, value):
-        self._cutscene_runtime().state = value
-
-    def _load_cutscene_file(self, filename):
-        return self._cutscene_runtime()._load_cutscene_file(filename)
-
-    def _start_json_cutscene(self, entity, filename, data):
-        return self._cutscene_runtime()._start_json_cutscene(entity, filename, data)
-
-    def _finish_json_cutscene(self, cs, fire_finished=True):
-        return self._cutscene_runtime()._finish_json_cutscene(cs, fire_finished)
-
-    def _fire_cinematic_io_events(self):
-        return self._cutscene_runtime()._fire_cinematic_io_events()
-
-    def _update_cinematic_camera(self, delta):
-        return self._cutscene_runtime()._update_cinematic_camera(delta)
-
-    def consume_cinematic_messages(self):
-        return self._cutscene_runtime().consume_cinematic_messages()
-
-
-    # Preserve the private helper surface used by older tests/tools.
-    _cutscene_number = staticmethod(CutsceneRuntime._cutscene_number)
-    _cutscene_vec3 = staticmethod(CutsceneRuntime._cutscene_vec3)
-    _cutscene_yaw = staticmethod(CutsceneRuntime._cutscene_yaw)
-    _set_cutscene_yaw = staticmethod(CutsceneRuntime._set_cutscene_yaw)
-    _cutscene_lerp_angle = staticmethod(CutsceneRuntime._cutscene_lerp_angle)
-    _cutscene_sample = staticmethod(CutsceneRuntime._cutscene_sample)
+    # CutsceneRuntime owns cinematic playback state and behaviour; LogicThread
+    # invokes it directly rather than mirroring its API.
 
     # =========================================================================
     # ENTITY LOOKUP (for I/O system)
@@ -1151,7 +1109,7 @@ class LogicThread(threading.Thread):
         self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         self.game_state.consume_shot()
-        if self.cinematic_state or self.player_dead or self.level_complete_ui:
+        if self.cutscene_runtime.state or self.player_dead or self.level_complete_ui:
             return
         if self.plugins is not None and self.plugins.wants_tick():
             self.plugins.tick(
@@ -1193,8 +1151,8 @@ class LogicThread(threading.Thread):
         self.camera.update_camera_transition(delta)
 
         # ---- Cinematic camera: suppress player input while active ----
-        self._update_cinematic_camera(delta)
-        if self.cinematic_state:
+        self.cutscene_runtime._update_cinematic_camera(delta)
+        if self.cutscene_runtime.state:
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()

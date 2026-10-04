@@ -189,7 +189,7 @@ class CutsceneRuntime:
             aid = str(row.get("id", "") or "")
             if not aid:
                 continue
-            actor = self.logic._find_entity_by_id(aid)
+            actor = self.logic.world_runtime.find_entity_by_id(aid)
             definition = row.get("definition") if row.get("spawn") else None
             if actor is None and isinstance(definition, dict):
                 type_name = str(definition.get("type") or "monster")
@@ -229,7 +229,7 @@ class CutsceneRuntime:
             actors[aid] = actor
 
         if spawned:
-            self.logic._build_entity_caches()
+            self.logic.world_runtime.build_entity_caches()
 
         # The editor Camera stores yaw/pitch in degrees, while the play-mode
         # camera math below uses radians.  Keep the authored JSON human-readable
@@ -362,7 +362,7 @@ class CutsceneRuntime:
                 snapshots = []
                 defenders = [
                     (cs.get("actors") or {}).get(str(aid))
-                    or self.logic._find_entity_by_id(str(aid))
+                    or self.logic.world_runtime.find_entity_by_id(str(aid))
                     for aid in event.get("defenders", []) or []
                 ]
                 defenders = [thing for thing in defenders if thing is not None]
@@ -372,7 +372,7 @@ class CutsceneRuntime:
                 for aid in event.get("attackers", []) or []:
                     actor = (
                         (cs.get("actors") or {}).get(str(aid))
-                        or self.logic._find_entity_by_id(str(aid))
+                        or self.logic.world_runtime.find_entity_by_id(str(aid))
                     )
                     if actor is None or not (
                         MonsterThing is not None and isinstance(actor, MonsterThing)
@@ -440,7 +440,7 @@ class CutsceneRuntime:
             except ValueError:
                 pass
         if spawned:
-            self.logic._build_entity_caches()
+            self.logic.world_runtime.build_entity_caches()
         entity = cs.get("entity")
         self.state = None
         if fire_finished and entity is not None and self.logic.io_manager:
@@ -466,7 +466,7 @@ class CutsceneRuntime:
                     target_id = str(look_at.get("actor", "") or "")
                     target = (cs.get("actors") or {}).get(target_id)
                     if target is None:
-                        target = self.logic._find_entity_by_id(target_id)
+                        target = self.logic.world_runtime.find_entity_by_id(target_id)
                     if target is not None:
                         target_pos = self._cutscene_vec3(target.pos)
                         diff = np.asarray(target_pos, dtype=float) - np.asarray(cs["cam_pos"], dtype=float)
@@ -547,7 +547,7 @@ class CutsceneRuntime:
             input_name = str(event.get('input', '') or '').strip()
             if target_name or target_id or input_name:
                 if not target_name and target_id:
-                    target = self.logic._find_entity_by_id(target_id)
+                    target = self.logic.world_runtime.find_entity_by_id(target_id)
                     target_name = str(
                         getattr(target, 'properties', {}).get('name', '') or target_id
                     )
@@ -580,9 +580,9 @@ class CutsceneRuntime:
                 output_name = str(event.get('output', '') or '').strip()
                 source = None
                 if source_id:
-                    source = self.logic._find_entity_by_id(source_id)
+                    source = self.logic.world_runtime.find_entity_by_id(source_id)
                 if source is None and source_name:
-                    source = self.logic._find_entity_by_name(source_name)
+                    source = self.logic.world_runtime.find_entity_by_name(source_name)
                 if source is not None and output_name:
                     self.logic.io_manager.fire_output(
                         source,

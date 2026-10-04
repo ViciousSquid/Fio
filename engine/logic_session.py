@@ -211,8 +211,8 @@ class LogicSession:
                 logic.cinematic_state
                 and logic.cinematic_state.get("json_cutscene")
             ):
-                logic._finish_json_cutscene(
-                    logic.cinematic_state,
+                logic.cutscene_runtime._finish_json_cutscene(
+                    logic.cutscene_runtime.state,
                     fire_finished=False,
                 )
 
