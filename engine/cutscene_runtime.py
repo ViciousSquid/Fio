@@ -614,7 +614,7 @@ class CutsceneRuntime:
         if not self._fire_cinematic_io_events():
             return
         node_name = cs['current_node']
-        node = self.logic._find_path_node_by_name(node_name)
+        node = self.logic.world_runtime.find_path_node_by_name(node_name)
         if node is None:
             debug_log("IO", f"CinematicCamera: node '{node_name}' not found — aborting")
             entity = cs.get('entity')
@@ -642,7 +642,7 @@ class CutsceneRuntime:
         # next node; otherwise it is the node currently being approached.
         if cs.get('look_ahead'):
             next_name = node.get_next_node_name()
-            look_node = self.logic._find_path_node_by_name(next_name) if next_name else node
+            look_node = self.logic.world_runtime.find_path_node_by_name(next_name) if next_name else node
             path_look_target = np.array(
                 look_node.pos if look_node else node.pos,
                 dtype=float,

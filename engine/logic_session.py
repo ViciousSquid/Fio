@@ -168,7 +168,7 @@ class LogicSession:
             logic._props.start()
 
             # Reset cinematic state.
-            logic.cinematic_state = None
+            logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
             logic._hud_cinematic_last_active = False
             logic._hud_cinematic_fade_started = None
@@ -208,8 +208,8 @@ class LogicSession:
 
         else:
             if (
-                logic.cinematic_state
-                and logic.cinematic_state.get("json_cutscene")
+                logic.cutscene_runtime.state
+                and logic.cutscene_runtime.state.get("json_cutscene")
             ):
                 logic.cutscene_runtime._finish_json_cutscene(
                     logic.cutscene_runtime.state,
@@ -254,7 +254,7 @@ class LogicSession:
             logic._spatial_grid = None
 
             logic.mover_path_states = {}
-            logic.cinematic_state = None
+            logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
             logic._hud_cinematic_last_active = False
             logic._hud_cinematic_fade_started = None
@@ -371,7 +371,7 @@ class LogicSession:
     def release_session_caches(self):
         """Drop every reference held only for the finished play session."""
         logic = self.logic
-        logic._world_runtime().release_session_indexes()
+        logic.world_runtime.release_session_indexes()
         logic._collision_brushes_cache = []
         logic._model_collision_brushes = []
         logic._physics_body_brushes = []
