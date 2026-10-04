@@ -130,17 +130,6 @@ def _owner_double_classes(path):
 EDITOR_TEST_ROOT = ROOT / "tests" / "editor"
 
 MACHINERY_TEST_ROOTS = (
-    "tests/editor",
-    "tests/console",
-    "tests/engine",
-    "tests/io",
-    "tests/physics",
-    "tests/persistence",
-    "tests/renderer",
-    "tests/visual",
-    "tests/monster_ai",
-    "tests/logic",
-    "tests/regression",
     "tests",
     "plugins/bigworld/tests",
     "plugins/tidy/tests",
