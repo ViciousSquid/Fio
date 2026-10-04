@@ -4720,8 +4720,7 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'door_tab_index'):
                 self.tab_widget.setTabVisible(self.door_tab_index, False)
         self.current_object['is_mover'] = is_mover
-        if self.editor.state.mark_world_changed:
-            self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object])
         if is_mover:
             self.current_object.setdefault('speed', 64.0)
             self.current_object.setdefault('distance', 128.0)
@@ -4747,8 +4746,7 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'mover_tab_index'):
                 self.tab_widget.setTabVisible(self.mover_tab_index, False)
         self.current_object['is_door'] = is_door
-        if self.editor.state.mark_world_changed:
-            self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object])
         if is_door:
             self.current_object.setdefault('door_direction', 'up')
             self.current_object.setdefault('door_distance', 128.0)
@@ -5154,8 +5152,7 @@ class PropertyEditor(QWidget):
         # Property edits are live scene mutations, not merely UI state.  The
         # dense render/entity projections cache their cold columns behind the
         # editor's world epoch, so journal this exact object immediately.
-        if self.editor.state.mark_world_changed:
-            self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object])
 
         if key == 'name' and _io_system is not None:
             # A name is read by every *other* entity's panel — the "Targeted by"
