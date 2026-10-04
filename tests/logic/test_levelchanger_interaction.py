@@ -30,7 +30,6 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
     from engine.logic_world import LogicWorld
 
     logic = LogicThread.__new__(LogicThread)
-    logic.play_mode = False
     logic.editor_state = SimpleNamespace(things=list(things), brushes=[])
     logic.player = SimpleNamespace(
         pos=list(player_pos),
