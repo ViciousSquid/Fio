@@ -112,7 +112,6 @@ class FakeLogic:
         self.trigger_runtime = LogicTriggers(self)
         self.world_runtime = LogicWorld(self)
         self._monster_things = []
-        self._bigworld = None
         self.visibility_changes = 0
 
     def _build_entity_caches(self):
@@ -144,7 +143,6 @@ def make_source():
 
 def new_session(logic, source):
     s = DiskStreamingSession(logic, source, load_radius=600.0, evict_radius=700.0)
-    logic._bigworld = s
     return s
 
 
