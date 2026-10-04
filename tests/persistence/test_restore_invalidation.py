@@ -167,7 +167,7 @@ def test_the_announcement_happens_after_the_state_it_describes_moved(session):
     snapshot = savegame.build_snapshot(thread, map_name=MAP)
 
     wall["hidden"] = True
-    thread._spatial_grid.populate(thread.brushes)
+    thread._spatial_grid.populate(thread.editor_state.brushes)
 
     seen = []
     real = thread.world_runtime.notify_authored_visibility_changed
