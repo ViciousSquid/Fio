@@ -34,6 +34,7 @@ import math
 import os
 import sys
 import time
+from types import SimpleNamespace
 import tracemalloc
 import uuid
 
@@ -139,7 +140,7 @@ def write_map(path: str, n_brushes: int, activation_radius=2048.0):
 # ---------------------------------------------------------------------------
 
 class _BenchLogic:
-    """Stand-in logic object for the session (just brushes/things/player.pos)."""
+    """Stand-in logic object exposing the real player-runtime ownership seam."""
 
     class _P:
         def __init__(self, pos):
@@ -148,7 +149,9 @@ class _BenchLogic:
     def __init__(self, brushes, things, player_pos=(0, 0, 0)):
         self.brushes = brushes
         self.things = things
-        self.player = _BenchLogic._P(player_pos)
+        self.player_runtime = SimpleNamespace(
+            player=_BenchLogic._P(player_pos)
+        )
 
 
 def _fmt(v):
@@ -190,7 +193,7 @@ def benchmark_size(n_brushes: int, walk_cells: int = 32,
     t_frame_still = (time.perf_counter() - t0) / reps
 
     # One boundary crossing (the expensive per-move event).
-    logic.player.pos = [mid + 512, 0, mid]
+    logic.player_runtime.player.pos = [mid + 512, 0, mid]
     t0 = time.perf_counter()
     changed = session.tick()
     t_one_cross = time.perf_counter() - t0
@@ -199,7 +202,7 @@ def benchmark_size(n_brushes: int, walk_cells: int = 32,
     crosses = 0
     t0 = time.perf_counter()
     for k in range(1, walk_cells + 1):
-        logic.player.pos = [mid + 512 * k, 0, mid]
+        logic.player_runtime.player.pos = [mid + 512 * k, 0, mid]
         if session.tick():
             crosses += 1
     t_walk = time.perf_counter() - t0
