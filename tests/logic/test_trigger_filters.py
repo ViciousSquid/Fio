@@ -37,7 +37,6 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
         brush['trigger_poll_interval'] = poll_interval
     logic._trigger_brushes = [(1, brush)]
     logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
-    logic.trigger_runtime._refresh_use_triggers()
     logic.fired_once_triggers = set()
     logic.hurt_trigger_timers = {}
     logic.io_manager = None

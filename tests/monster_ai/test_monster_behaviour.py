@@ -497,9 +497,13 @@ def test_firing_queues_the_type_specific_shoot_sound(monster_factory, ai_world,
     ai, logic = ai_world(brushes=flat_ground, things=[monster])
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
-    assert len(logic.game_state.sounds) == 1, (
-        "one shot should queue one sound, got %s" % (logic.game_state.sounds,))
-    assert logic.game_state.sounds[0]["entity_id"] == id(monster)
+    shots = [
+        sound for sound in logic.game_state.sounds
+        if sound.get("entity_id") == id(monster)
+    ]
+    assert len(shots) == 1, (
+        "one shot should queue one shoot sound, got %s" % (logic.game_state.sounds,))
+    assert shots[0]["file"] == "shoot.wav"
 
 
 def test_firing_fires_the_onattack_output(monster_factory, ai_world, flat_ground,

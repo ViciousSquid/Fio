@@ -105,6 +105,7 @@ class FakeLogic:
         self._indexed_things = ()
         self._indexed_brushes = ()
         self._timer_things = []
+        self._props = None
         self._portal_cooldowns = {}
         self._portal_prev_player_pos = None
         self._portal_things = []
