@@ -2460,16 +2460,20 @@ entity to drive them from the I/O system.</i><br>
         system until play mode is toggled.
         """
         logic = self._logic_thread()
-        if logic is not None and hasattr(logic, '_build_entity_caches'):
+        world_runtime = (
+            getattr(logic, 'world_runtime', None)
+            if logic is not None else None
+        )
+        if world_runtime is not None:
             # Console commands run on the UI thread. The rebuild replaces
             # caches a tick walks (the Prop registry above all), so it must
             # land between ticks, never inside one.
             lock = getattr(logic, '_tick_lock', None)
             if lock is None:
-                logic._build_entity_caches()
+                world_runtime.build_entity_caches()
             else:
                 with lock:
-                    logic._build_entity_caches()
+                    world_runtime.build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)
