@@ -31,20 +31,15 @@ from .prop_runtime import PropSession
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import (Speaker, Prop as PropThing, Light,
-                               Monster as MonsterThing, PathNode, LogicTimer,
-                               PlayerStart, Portal, LevelChanger, ENTITY_TYPES)
+    from editor.things import (Light, Monster as MonsterThing, PathNode,
+                               LogicTimer, Portal, LevelChanger)
 except ImportError:
-    Speaker = None
-    PropThing = None
     Light = None
     MonsterThing = None
     PathNode = None
     LogicTimer = None
-    PlayerStart = None
     Portal = None
     LevelChanger = None
-    ENTITY_TYPES = {}
 
 # Import I/O system
 try:
