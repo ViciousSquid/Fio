@@ -128,7 +128,6 @@ class FakeLogic:
         self.trigger_runtime = LogicTriggers(self)
         self.world_runtime = LogicWorld(self)
         self._monster_things = [t for t in self.editor_state.things if t.properties.get("type") == "monster"]
-        self._bigworld = None
         self.visibility_changes = 0
 
     def _build_entity_caches(self):
@@ -162,7 +161,6 @@ def make_world():
 
 def new_session(logic):
     s = BigWorldSession(logic, activation_radius=600.0, deactivation_radius=700.0)
-    logic._bigworld = s
     return s
 
 
