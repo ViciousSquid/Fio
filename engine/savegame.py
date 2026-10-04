@@ -712,7 +712,7 @@ def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
     # Static geometry (pos/size/direction/…) comes from the freshly-loaded map
     # and must keep its runtime type; door/mover animation is restored via the
     # door_states/mover_states dicts, not from the brush record.
-    live_brushes = {b.get("id"): b for b in (getattr(logic, "brushes", []) or []) if b.get("id")}
+    live_brushes = {b.get("id"): b for b in logic.editor_state.brushes if b.get("id")}
     for b_data in level.get("brushes", []):
         live = live_brushes.get(b_data.get("id"))
         if live is None:
