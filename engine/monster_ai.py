@@ -1945,7 +1945,7 @@ the scalar fallback for callers that do not have the dense table.
 
     def _find_path_node_by_name(self, name: str):
         """Return PathNode thing with given name, or None.
-        Uses LogicThread's name cache for O(1) lookup."""
+        Uses LogicWorld's live name cache for O(1) lookup."""
         if not name or PathNode is None:
             return None
         # Use the O(1) name cache on the parent LogicThread
