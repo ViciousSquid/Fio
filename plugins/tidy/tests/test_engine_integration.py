@@ -64,12 +64,6 @@ def _fresh_manager():
     return manager
 
 
-def _tidy(mgr):
-    for plugin in mgr.plugins:
-        if plugin.name == "tidy":
-            return plugin
-    raise AssertionError("tidy plugin not loaded")
-
 def test_handlers_attach_regardless_of_enabled(monkeypatch):
     print("[1] input handlers attach for a plugin disabled at attach time")
     from plugins.tidy.entities import TidyGoal
