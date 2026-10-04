@@ -77,6 +77,7 @@ class FakeLogic:
         self.view_distance = ViewDistance()
         self._tick_lock = threading.RLock()
         self.io_manager = None
+        self.plugins = SimpleNamespace(services={})
         self.player_runtime = LogicPlayer(self)
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
@@ -86,10 +87,6 @@ class FakeLogic:
         self.notarget = False
         self.camera = LogicCamera(self)
         self.collision_runtime = LogicCollision(self)
-        self._model_collision_brushes = []
-        self._physics_body_brushes = []
-        self._collision_brushes_cache = []
-        self._spatial_grid = None
         self.camera.camera_mode = "First Person"
         self.camera.overhead_height = 800.0
         self.camera.overhead_height_limit = None
@@ -112,11 +109,6 @@ class FakeLogic:
         self.timing_runtime = LogicTiming(self)
         self.monster_ai = FakeMonsterAI()
         self._monster_lock = threading.RLock()
-        self._moving_rows = None
-        self._indexed_things = ()
-        self._indexed_brushes = ()
-        self._timer_things = []
-        self._props = None
         self._portal_cooldowns = {}
         self._portal_prev_player_pos = None
         self._portal_things = []
@@ -125,7 +117,6 @@ class FakeLogic:
         self.portal_runtime = LogicPortals(self)
         self.trigger_runtime = LogicTriggers(self)
         self.world_runtime = LogicWorld(self)
-        self._monster_things = []
         self.visibility_changes = 0
 
     def _build_entity_caches(self):
@@ -157,6 +148,7 @@ def make_source():
 
 def new_session(logic, source):
     s = DiskStreamingSession(logic, source, load_radius=600.0, evict_radius=700.0)
+    logic.plugins.services["bigworld"] = s
     return s
 
 
