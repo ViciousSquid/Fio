@@ -333,11 +333,20 @@ def test_logic_world_constructs_and_packs_levelchanger_rows():
 def _contract_host():
     host = object.__new__(LogicThread)
     host.editor_state = SimpleNamespace(brushes=[], things=[])
+
+    # The mover state properties are descriptors: their setters reach the mover
+    # table and therefore require the backing lists to exist first.
+    host.movers = []
+    host.doors = []
+    host.mover_states = {}
+    host.door_states = {}
+
+    special = {"movers", "doors", "mover_states", "door_states"}
     for attribute in {
         attr
         for attrs in LogicThread._RUNTIME_HOST_CONTRACTS.values()
         for attr in attrs
-    }:
+    } - special:
         if attribute not in {"brushes", "things"}:
             setattr(host, attribute, None)
 
