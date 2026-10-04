@@ -97,21 +97,18 @@ def test_logic_combat_constructs_and_ray_tests_aabb():
 def test_logic_editor_constructs_and_processes_an_idle_tick():
     host = SimpleNamespace(
         game_state=_GameState(),
-        editor_camera=SimpleNamespace(
-            yaw=0.0,
-            pitch=0.0,
-            pos=glm.vec3(0, 0, 0),
-        ),
         EDITOR_CAMERA_SPEED=300.0,
         EDITOR_CAMERA_FAST_MULT=2.5,
         EDITOR_MOUSE_SENSITIVITY=0.15,
         _editor_mouselook_active=False,
     )
+    host.camera = LogicCamera(host)
+    host.camera.set_editor_camera(glm.vec3(0, 0, 0), 0.0, 0.0, host.camera.editor_camera.fov)
     runtime = LogicEditor(host)
 
     runtime.tick(1.0 / 60.0)
 
-    assert host.editor_camera.pos == glm.vec3(0, 0, 0)
+    assert host.camera.get_editor_camera().pos == glm.vec3(0, 0, 0)
     assert host._editor_mouselook_active is False
 
 
@@ -276,26 +273,22 @@ def test_logic_session_constructs_and_releases_session_cache_state():
 def test_logic_timing_constructs_and_updates_light_fade():
     light = _Thing()
     light.properties.update({"intensity": 0.0})
-    host = SimpleNamespace(
-        light_fade_states={
-            "lamp": {
-                "entity": light,
-                "elapsed": 0.0,
-                "duration": 1.0,
-                "from": 0.0,
-                "to": 1.0,
-                "end_off": True,
-            }
-        },
-        io_manager=None,
-    )
+    host = SimpleNamespace(io_manager=None, _timer_things=[])
     runtime = LogicTiming(host)
+    runtime.light_fade_states["lamp"] = {
+        "entity": light,
+        "elapsed": 0.0,
+        "duration": 1.0,
+        "from": 0.0,
+        "to": 1.0,
+        "end_off": True,
+    }
 
     runtime.update_light_fades(1.0)
 
     assert light.properties["intensity"] == pytest.approx(1.0)
     assert light.properties["state"] == "off"
-    assert host.light_fade_states == {}
+    assert runtime.light_fade_states == {}
 
 
 def test_logic_triggers_constructs_and_uses_authored_sphere_radius():
