@@ -12,6 +12,7 @@ timer state filed under a memory address.
 """
 
 import pytest
+from types import SimpleNamespace
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
 
@@ -20,6 +21,7 @@ from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import LogicGate, LogicRelay, LogicTimer  # noqa: E402
 from tests.helpers.worlds import box_brush                # noqa: E402
+from engine.logic_timing import LogicTiming                    # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -31,10 +33,9 @@ class World:
         self.manager = IOManager()
         self.manager.set_logic_thread(self)
         self.io_manager = self.manager
-        self.brushes = []
-        self.things = []
+        self.editor_state = SimpleNamespace(brushes=[], things=[])
         self.gate_inputs = {}
-        self.timer_states = {}
+        self.timing_runtime = LogicTiming(self)
         self.door_states = {}
         self.mover_states = {}
         self._timer_things = []
@@ -53,11 +54,11 @@ class World:
     # -- world ------------------------------------------------------------
     def add_brush(self, name, **props):
         brush = box_brush(name, **props)
-        self.brushes.append(brush)
+        self.editor_state.brushes.append(brush)
         return brush
 
     def add(self, thing):
-        self.things.append(thing)
+        self.editor_state.things.append(thing)
         return thing
 
     def _by_name(self, name):
@@ -431,7 +432,7 @@ def test_timer_state_is_filed_under_the_uuid_not_the_object_address(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.send(timer, "Enable")
-    assert set(world.timer_states) == {timer.properties["id"]}
+    assert set(world.timing_runtime.timer_states) == {timer.properties["id"]}
 
 
 def test_a_level_of_disabled_timers_does_no_work(world):
