@@ -1183,8 +1183,14 @@ the scalar fallback for callers that do not have the dense table.
         A direct helper call outside the dense update gathers the table first;
         the play-mode hot path has already gathered it in _update_dense.
         """
-        if self._enemy_ready:
+        # A batch supplied with a MonsterTable is part of the dense tick and
+        # is valid until that tick finishes. Direct helper calls, however,
+        # may be made after authoring/runtime flags changed between calls;
+        # rebuild those rather than returning a stale per-tick answer.
+        if self._enemy_ready and table is not None:
             return self._enemy_nearest if self._enemy_range == max_range else None
+        if self._enemy_ready and table is None:
+            self._enemy_ready = False
         self._enemy_ready = True
         self._enemy_nearest = None
         self._enemy_range = max_range
