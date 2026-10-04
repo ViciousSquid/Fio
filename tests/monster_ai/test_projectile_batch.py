@@ -15,7 +15,7 @@ import types
 import numpy as np
 import pytest
 
-from engine.logic_thread import LogicThread
+from engine.logic_combat import LogicCombat
 from engine.projectile_table import ProjectileStore
 from tests.helpers.worlds import make_thing
 
@@ -26,22 +26,7 @@ pytestmark = pytest.mark.qt
 
 
 class _Host:
-    """The attributes ``_update_monster_projectiles`` reads, and nothing else."""
-
-    PROJECTILE_MONSTER_LIFT = LogicThread.PROJECTILE_MONSTER_LIFT
-    PROJECTILE_MONSTER_RADIUS = LogicThread.PROJECTILE_MONSTER_RADIUS
-    PROJECTILE_PLAYER_RADIUS = LogicThread.PROJECTILE_PLAYER_RADIUS
-    _update_monster_projectiles = LogicThread._update_monster_projectiles
-    _update_monster_projectiles_scalar = LogicThread._update_monster_projectiles_scalar
-    _update_monster_projectiles_dense = LogicThread._update_monster_projectiles_dense
-    _projectile_monster_candidates = LogicThread._projectile_monster_candidates
-    _projectile_wall_candidates = LogicThread._projectile_wall_candidates
-    _projectile_store = LogicThread._projectile_store
-    _publish_projectile_render_snapshot = LogicThread._publish_projectile_render_snapshot
-    # These tests are specifically the batched/dense collision surface.
-    # Force the dense branch regardless of the number of fixtures.
-    PROJECTILE_DENSE_THRESHOLD = 0
-
+    """Host surface for the real LogicCombat projectile runtime."""
     def __init__(self, things, projectiles):
         self.things = things
         self._monster_things = [
@@ -64,8 +49,7 @@ class _Host:
             monster_debug_active=False,
             _apply_monster_damage=lambda m, dmg, attacker=None:
                 host.hits.append(m.properties['name']))
-        self._write = types.SimpleNamespace(projectiles=None)
-        self.game_state = types.SimpleNamespace(get_write_state=lambda: self._write)
+        self.combat_runtime = LogicCombat(self)
 
     def _transit_projectile_through_portals(self, projectiles, index, prev):
         return None
@@ -96,7 +80,7 @@ def test_published_projectile_snapshot_does_not_alias_simulation_store():
     owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
     host = _Host([owner], [((10, 20, 30), owner)])
 
-    snapshot = host._publish_projectile_render_snapshot()
+    snapshot = host.combat_runtime._publish_projectile_render_snapshot()
     assert snapshot.shape == (1, 3)
     assert snapshot.dtype == np.float32
     assert not np.shares_memory(snapshot, host._monster_projectiles.pos)
@@ -126,10 +110,10 @@ def test_small_projectile_set_uses_scalar_path_but_matches_dense():
 
     dense = _Host(things, [projectile])
     scalar = _Host(things, [projectile])
-    scalar.PROJECTILE_DENSE_THRESHOLD = 100
+    scalar.combat_runtime.PROJECTILE_DENSE_THRESHOLD = 100
 
-    dense._update_monster_projectiles(0.0)
-    scalar._update_monster_projectiles(0.0)
+    dense.combat_runtime._update_monster_projectiles(0.0)
+    scalar.combat_runtime._update_monster_projectiles(0.0)
 
     assert dense.hits == scalar.hits == ["target"]
     assert len(dense._monster_projectiles) == len(scalar._monster_projectiles) == 0
@@ -148,7 +132,7 @@ def test_the_first_eligible_monster_in_order_is_hit():
         make_thing(Monster, "far", (500, 0, 0), team="blue"),
     ]
     host = _Host(things, [((0, 64, 0), owner)])
-    host._update_monster_projectiles(0.0)
+    host.combat_runtime._update_monster_projectiles(0.0)
     assert host.hits == ["target"]
     assert len(host._monster_projectiles) == 0
 

@@ -112,7 +112,7 @@ class LogicCombat:
             size = glm.vec3(brush['size'])
             min_b = pos - size * 0.5
             max_b = pos + size * 0.5
-            hit, dist = logic.intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b)
+            hit, dist = self.intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b)
             if hit and dist < closest_brush_dist:
                 closest_brush_dist = dist
                 closest_brush_hit = ray_origin + ray_dir * dist
@@ -176,7 +176,7 @@ class LogicCombat:
                 return
         
         # Record gunfire sound event for AI hearing
-        logic._emit_noise_event(
+        self._emit_noise_event(
             [ray_origin.x, ray_origin.y, ray_origin.z],
             source='gunfire', loudness=_GUNFIRE_LOUDNESS)
 
@@ -348,7 +348,7 @@ class LogicCombat:
         """
         logic = self.logic
         with logic._monster_lock:
-            projectiles = logic._projectile_store()
+            projectiles = self._projectile_store()
             count = len(projectiles)
             if count:
                 logic._projectile_positions = projectiles.pos[:count].astype(
@@ -370,9 +370,9 @@ class LogicCombat:
                 return
 
             if len(projectiles) < self.PROJECTILE_DENSE_THRESHOLD:
-                logic._update_monster_projectiles_scalar(projectiles, delta)
+                self._update_monster_projectiles_scalar(projectiles, delta)
             else:
-                logic._update_monster_projectiles_dense(projectiles, delta)
+                self._update_monster_projectiles_dense(projectiles, delta)
 
 
     def _update_monster_projectiles_scalar(self, projectiles, delta: float):
@@ -578,7 +578,7 @@ class LogicCombat:
 
         live_rows = np.flatnonzero(live)
         owners = projectiles.owner_id[live_rows]
-        monsters, mq, mrow = logic._projectile_monster_candidates(
+        monsters, mq, mrow = self._projectile_monster_candidates(
             pos32[live_rows], owners
         )
         mq = live_rows[mq] if len(mq) else mq
@@ -587,7 +587,7 @@ class LogicCombat:
             monster_hits.setdefault(q, []).append(r)
 
         if grid is not None:
-            wall_hits = logic._projectile_wall_candidates(pos32[live_rows])
+            wall_hits = self._projectile_wall_candidates(pos32[live_rows])
             wall_hits = {
                 int(live_rows[q]): rows
                 for q, rows in wall_hits.items()

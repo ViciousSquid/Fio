@@ -406,7 +406,7 @@ class LogicRender:
         if logic.play_mode and getattr(
             logic, "_monster_projectiles", None
         ):
-            logic._publish_projectile_render_snapshot()
+            logic.combat_runtime._publish_projectile_render_snapshot()
         else:
             logic._projectile_positions = _NO_PROJECTILES
         write_state.projectiles = logic._projectile_positions

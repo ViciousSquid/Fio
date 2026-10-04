@@ -1521,7 +1521,7 @@ the scalar fallback for callers that do not have the dense table.
         direction = direction / dir_len
 
         lifetime = MONSTER_PROJECTILE_MAX_DIST / MONSTER_PROJECTILE_SPEED
-        self.lt._add_monster_projectile(
+        self.lt.combat_runtime._add_monster_projectile(
             (start_pos.x, start_pos.y, start_pos.z),
             (direction.x * MONSTER_PROJECTILE_SPEED,
              direction.y * MONSTER_PROJECTILE_SPEED,

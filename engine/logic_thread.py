@@ -1418,7 +1418,8 @@ class LogicThread(threading.Thread):
         if self.game_state.consume_shot():
             self._handle_shooting()
             
-        self._update_bullet_marks()
+        combat_runtime = self.combat_runtime
+        combat_runtime._update_bullet_marks()
 
         # Clean up expired gunfire sound events (keep for 3 seconds)
         current_time = time.perf_counter()
@@ -1429,7 +1430,7 @@ class LogicThread(threading.Thread):
 
         # Update monster projectiles (flying monster ranged attacks)
         # NOTE: Monster AI itself now runs in MonsterAIThread
-        self._update_monster_projectiles(delta)
+        combat_runtime._update_monster_projectiles(delta)
 
         # ── Player 2 physics (split-screen) ──────────────────────────────────
         self._player_runtime().update_player2(delta)
@@ -1651,49 +1652,6 @@ class LogicThread(threading.Thread):
             origin, direction, box_min, box_max
         )
 
-    def _update_bullet_marks(self):
-        """Compatibility wrapper for bullet-mark ageing."""
-        return LogicThread._combat_runtime(self)._update_bullet_marks()
-
-    def _projectile_store(self):
-        """Return the authoritative dense monster ProjectileStore."""
-        return self._monster_projectiles
-
-    def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
-        """Compatibility wrapper for dense monster projectile creation."""
-        return LogicThread._combat_runtime(self)._add_monster_projectile(
-            pos, vel, owner_id, damage, lifetime
-        )
-
-    def _projectile_monster_candidates(self, pos32, owners):
-        """Compatibility wrapper for dense projectile/monster broad-phase."""
-        return LogicThread._combat_runtime(self)._projectile_monster_candidates(
-            pos32, owners
-        )
-
-    def _projectile_wall_candidates(self, pos32):
-        """Compatibility wrapper for dense projectile/wall broad-phase."""
-        return LogicThread._combat_runtime(self)._projectile_wall_candidates(pos32)
-
-    def _publish_projectile_render_snapshot(self):
-        """Compatibility wrapper for projectile render publication."""
-        return LogicThread._combat_runtime(self)._publish_projectile_render_snapshot()
-
-    def _update_monster_projectiles(self, delta: float):
-        """Compatibility wrapper for projectile simulation dispatch."""
-        return LogicThread._combat_runtime(self)._update_monster_projectiles(delta)
-
-    def _update_monster_projectiles_scalar(self, projectiles, delta: float):
-        """Compatibility wrapper for the scalar projectile path."""
-        return LogicThread._combat_runtime(self)._update_monster_projectiles_scalar(
-            projectiles, delta
-        )
-
-    def _update_monster_projectiles_dense(self, projectiles, delta: float):
-        """Compatibility wrapper for the dense projectile path."""
-        return LogicThread._combat_runtime(self)._update_monster_projectiles_dense(
-            projectiles, delta
-        )
 
     def _emit_noise_event(self, pos, source: str, loudness: float = 1.0):
         """Compatibility wrapper for player noise emission."""

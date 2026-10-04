@@ -55,7 +55,7 @@ def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
     thread = logic()
     thread.play_mode = True
     _add_projectile(thread)
-    thread._update_monster_projectiles(thread.TICK_DURATION)
+    thread.combat_runtime._update_monster_projectiles(thread.TICK_DURATION)
 
     for frame in range(4):
         # No whole tick in the accumulator: only the projection runs.
@@ -71,7 +71,7 @@ def test_leaving_play_publishes_no_projectiles(logic):
     thread = logic()
     thread.play_mode = True
     _add_projectile(thread)
-    thread._update_monster_projectiles(thread.TICK_DURATION)
+    thread.combat_runtime._update_monster_projectiles(thread.TICK_DURATION)
     thread.play_mode = False
     thread._step_frame(0.0)
     thread._publish_frame()
