@@ -86,7 +86,7 @@ class TidySession:
             io.fire_output(entity, output, value)
 
     def start(self):
-        things = list(getattr(self.logic, "things", ()) or ())
+        things = list(self.logic.editor_state.things)
         self.objects = [t for t in things if self._is_tidy_prop(t)]
         self.receptacles = [t for t in things if self._is_type(t, "tidyreceptacle")]
         self.goals = [t for t in things if self._is_type(t, "tidygoal")]
