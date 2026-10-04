@@ -38,78 +38,31 @@ from plugins.bigworld.streaming import (DiskStreamingSession,   # noqa: E402
                                         MemoryCellSource)
 
 
-class FakeThing:
-    def __init__(self, tid, ttype, pos, props=None):
-        self.pos = list(pos)
-        self.properties = dict(props or {})
-        self.properties["id"] = tid
-        self.properties.setdefault("type", ttype)
+pytest.importorskip("PyQt5", reason="Big World disk tests exercise real LogicThread/editor state")
 
-    def to_dict(self):
-        props = {k: v for k, v in self.properties.items() if k != "_io_connections"}
-        return {"type": self.properties.get("type"), "pos": list(self.pos),
-                "properties": props, "io_connections": []}
+from editor.editor_state import EditorState
+from editor.things import Thing
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
 
 
-class FakePlayer:
-    def __init__(self, pos):
-        self.pos = list(pos)
-        self.velocity = [0.0, 0.0, 0.0]
-        self.angle = 0.0
-        self.pitch = 0.0
-        self.camera_height = 40.0
-        self.physics_enabled = True
-        self.on_ground = True
-        self.in_water = False
-        self.swimming = False
+def make_thing(tid, ttype, pos, props=None):
+    properties = dict(props or {})
+    properties["id"] = tid
+    properties.setdefault("type", ttype)
+    return Thing(pos=list(pos), properties=properties)
 
 
-class FakeMonsterAI:
-    def __init__(self):
-        self.monster_states = {}
+def make_logic(player_pos):
+    """A production LogicThread owns the live scene while DiskStreamingSession mutates it."""
+    state = EditorState()
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(player_pos[0]),
+                                      float(player_pos[1]),
+                                      float(player_pos[2])]
+    logic.world_runtime.build_entity_caches()
+    return logic
 
-
-class FakeLogic:
-    def __init__(self, player_pos):
-        self.editor_state = SimpleNamespace(things=[], brushes=[])
-        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
-        self._tick_lock = threading.RLock()
-        self.io_manager = None
-        self.plugins = SimpleNamespace(services={})
-        self.player_runtime = LogicPlayer(self)
-        self.player_runtime.player = FakePlayer(player_pos)
-        self.session_runtime = LogicSession(self)
-        self.interaction_runtime = LogicInteraction(self)
-        self.camera = LogicCamera(self)
-        self.collision_runtime = LogicCollision(self)
-        self.camera.camera_mode = "First Person"
-        self.camera.overhead_height = 800.0
-        self.camera.overhead_height_limit = None
-        self.camera.overhead_tilt = 0.0
-        self.camera.overhead_orientation = "north"
-        self.active_weapon = None
-        self.current_hud_message = ""
-        self.collected_keys = set()
-        self.movers = []
-        self.doors = []
-        self.mover_runtime = LogicMovers(self)
-        self.prop_runtime = PropSession(self)
-        self.combat_runtime = LogicCombat(self)
-        self.timing_runtime = LogicTiming(self)
-        self.monster_ai = FakeMonsterAI()
-        self._portal_cooldowns = {}
-        self._portal_prev_player_pos = None
-        self._portal_things = []
-        self.visibility_changes = 0
-        self._portal_target_things = []
-        self.portal_runtime = LogicPortals(self)
-        self.trigger_runtime = LogicTriggers(self)
-        self.world_runtime = LogicWorld(self)
-        self.visibility_changes = 0
-
-    def _build_entity_caches(self):
-        self._monster_things = [t for t in self.editor_state.things
-                                if t.properties.get("type") == "monster"]
 
 
 A_POS = (100.0, 0.0, 100.0)         # cell (0,0)
@@ -120,10 +73,10 @@ def make_source():
     """A pristine world (the 'disk'): Cell A, far Cell B, a spanning wall, and a
     persistent global. Returned as a MemoryCellSource."""
     things = [
-        FakeThing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
-        FakeThing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
-        FakeThing("B-mon", "monster", [10010.0, 0.0, 110.0], {"health": 80}),
-        FakeThing("gs", "gamestate", [0.0, 0.0, 0.0], {"score": 0}),  # persistent global
+        make_thing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
+        make_thing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
+        make_thing("B-mon", "monster", [10010.0, 0.0, 110.0], {"health": 80}),
+        make_thing("gs", "gamestate", [0.0, 0.0, 0.0], {"score": 0}),  # persistent global
     ]
     brushes = [
         {"id": "A-floor", "pos": [100, 0, 100], "size": [64, 8, 64], "hidden": False},
@@ -136,6 +89,9 @@ def make_source():
 
 def new_session(logic, source):
     s = DiskStreamingSession(logic, source, load_radius=600.0, evict_radius=700.0)
+    if logic.plugins is None:
+        from plugins.manager import get_manager
+        logic.plugins = get_manager()
     logic.plugins.services["bigworld"] = s
     logic.plugins.services["savegame.restore"] = s.restore_saved
     return s
@@ -161,7 +117,7 @@ def find_thing(logic, tid):
 # ---------------------------------------------------------------------------
 
 def test_far_cells_never_resident_and_globals_stay():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     ids = live_ids(logic)
@@ -173,7 +129,7 @@ def test_far_cells_never_resident_and_globals_stay():
 
 
 def test_leaving_a_cell_frees_its_objects():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     assert "A-mon" in live_ids(logic)
@@ -188,7 +144,7 @@ def test_leaving_a_cell_frees_its_objects():
 
 
 def test_base_captured_on_first_stream_in():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     # A's UUIDs have a captured base; B's (never streamed) do not.
@@ -201,7 +157,7 @@ def test_base_captured_on_first_stream_in():
 # ---------------------------------------------------------------------------
 
 def test_change_survives_free_and_reload():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
 
@@ -221,7 +177,7 @@ def test_change_survives_free_and_reload():
 
 
 def test_spanning_brush_freed_only_when_both_cells_leave():
-    logic = FakeLogic((512.0, 0.0, 100.0))          # start on the cell boundary
+    logic = make_logic((512.0, 0.0, 100.0))          # start on the cell boundary
     s = new_session(logic, make_source())
     s.start(player_pos=(512.0, 0.0, 100.0))
     # The spanning wall is resident and referenced by both cells (0,0) and (1,0).
@@ -249,7 +205,7 @@ def _save_dict(logic, s, map_name="world.json"):
 
 
 def test_save_includes_unloaded_cell_then_load_streams_it_back():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
 
@@ -270,7 +226,7 @@ def test_save_includes_unloaded_cell_then_load_streams_it_back():
 
     # Fresh world + fresh disk session; restore, which streams cells at the
     # saved player position (Cell A, since the player was at A_POS at save).
-    logic2 = FakeLogic(A_POS)
+    logic2 = make_logic(A_POS)
     s2 = new_session(logic2, make_source())
     report = savegame.restore_auto(logic2, loaded, current_map_name="world.json")
     assert report["world_mode"] == "bigworld"
@@ -288,14 +244,14 @@ def test_save_includes_unloaded_cell_then_load_streams_it_back():
 def test_load_into_already_started_session():
     """The plugin starts the session at play, then loads a save. Cells streamed
     before the registry was known must still end up with their saved deltas."""
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     find_thing(logic, "A-mon").properties["dead"] = True
     snap = _save_dict(logic, s)
 
     # Fresh world, session already STARTED (streamed pristine Cell A) before load.
-    logic2 = FakeLogic(A_POS)
+    logic2 = make_logic(A_POS)
     s2 = new_session(logic2, make_source())
     s2.start(player_pos=A_POS)
     assert find_thing(logic2, "A-mon").properties.get("dead") is None  # pristine
@@ -310,7 +266,7 @@ def test_load_into_already_started_session():
 
 
 def test_registry_converges_on_revert_in_loaded_cell():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     mon = find_thing(logic, "A-mon")
@@ -323,17 +279,17 @@ def test_registry_converges_on_revert_in_loaded_cell():
 
 
 def test_wrong_world_fails_safely():
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     find_thing(logic, "A-mon").properties["dead"] = True
     snap = _save_dict(logic, s)
 
     # A different world: different UUIDs and name.
-    other_things = [FakeThing("X-1", "monster", [100, 0, 100], {})]
+    other_things = [make_thing("X-1", "monster", [100, 0, 100], {})]
     other_brushes = [{"id": "X-f", "pos": [100, 0, 100], "size": [64, 8, 64]}]
     other_src = MemoryCellSource(other_brushes, other_things, cell_size=512.0)
-    logic2 = FakeLogic(A_POS)
+    logic2 = make_logic(A_POS)
     s2 = new_session(logic2, other_src)
     try:
         savegame.restore_auto(logic2, snap, current_map_name="other.json")
@@ -346,7 +302,7 @@ def test_wrong_world_fails_safely():
 def test_reload_after_revert_shows_base():
     """Free a cell with a change, revert it via a second visit, and confirm the
     registry no longer carries it (delta cleared, base restored on reload)."""
-    logic = FakeLogic(A_POS)
+    logic = make_logic(A_POS)
     s = new_session(logic, make_source())
     s.start(player_pos=A_POS)
     find_thing(logic, "A-mon").properties["dead"] = True
