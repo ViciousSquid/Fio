@@ -162,7 +162,9 @@ class LogicThread(threading.Thread):
     )
 
     _RUNTIME_HOST_CONTRACTS = {
-        "camera": (),
+        "camera": (
+            "player_runtime",
+        ),
         "movers": (
             "editor_state",
             "player",

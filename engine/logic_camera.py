@@ -18,9 +18,8 @@ class LogicCamera:
     """State and calculations for the editor/play camera."""
 
     def __init__(self, host):
-        # Resolve the player from LogicThread at use time. LogicThread can replace
-        # its player during play-mode/session transitions, so this runtime must not
-        # retain a stale object reference.
+        # Resolve the player through LogicPlayer at use time. The player runtime
+        # owns the live actor reference and may replace it across play sessions.
         self._host = host
 
         # Frustum parameters are shared with the render projection. They live
@@ -137,7 +136,7 @@ class LogicCamera:
         player pose, so streaming/culling consumers see exactly the ground the
         view can reach rather than an independent approximation.
         """
-        player = self._host.player
+        player = self._host.player_runtime.player
         if not self.is_overhead() or player is None:
             return None
 

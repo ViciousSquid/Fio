@@ -10,7 +10,8 @@ from engine.logic_camera import LogicCamera
 
 def _runtime(pos=(0, 0, 0), angle=0.0):
     player = SimpleNamespace(pos=glm.vec3(*pos), angle=angle, pitch=0.0)
-    return LogicCamera(SimpleNamespace(player=player))
+    player_runtime = SimpleNamespace(player=player)
+    return LogicCamera(SimpleNamespace(player_runtime=player_runtime))
 
 
 def test_logic_camera_normalizes_overhead_mode_names():
@@ -37,7 +38,7 @@ def test_logic_camera_north_overhead_looks_down_towards_negative_z():
     runtime = _runtime(pos=(10, 20, 30))
     runtime.overhead_height = 100.0
     runtime.overhead_tilt = 45.0
-    cam, direction, up = runtime._overhead_camera(runtime._host.player.pos, 0.0)
+    cam, direction, up = runtime._overhead_camera(runtime._host.player_runtime.player.pos, 0.0)
 
     assert direction.y < 0.0
     assert direction.z < 0.0
