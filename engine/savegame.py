@@ -805,7 +805,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Monster combat state, remapped from stable id back to the live object id.
     try:
         saved_ms = runtime.get("monster_states", {}) or {}
-        if saved_ms and getattr(logic, "monster_ai", None) is not None:
+        if saved_ms and logic.monster_ai is not None:
             by_sid = {}
             for t in logic.world_runtime.monster_things:
                 sid = _thing_id(t)
