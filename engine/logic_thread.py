@@ -185,7 +185,6 @@ class LogicThread(threading.Thread):
             "play_mode",
             "_world_pause_lock",
             "_world_pause_owners",
-            "_monster_spawn_health",
             "io_manager",
             "player",
             "player2",
@@ -406,7 +405,6 @@ class LogicThread(threading.Thread):
         # float32 columns and scalar-dispatches the selected row.
         # Authored health per monster UUID, captured on play-mode enter so the
         # Respawn input has a value to restore (see _reset_all_monsters).
-        self._monster_spawn_health: Dict[str, int] = {}
 
         # Portal slots use the same enumerate(editor_state.things) address space
         # as EntityTable. Links are resolved once when topology changes.

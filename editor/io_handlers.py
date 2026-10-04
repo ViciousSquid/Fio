@@ -1009,9 +1009,7 @@ def register_all_input_handlers(io_manager: IOManager):
             except (TypeError, ValueError):
                 health = None
         if health is None:
-            spawn = getattr(logic, '_monster_spawn_health', None)
-            if isinstance(spawn, dict):
-                health = spawn.get(props.get('id'))
+            health = logic.world_runtime.monster_spawn_health.get(props.get('id'))
         if health is not None:
             props['health'] = health
 

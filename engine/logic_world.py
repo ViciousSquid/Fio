@@ -33,6 +33,7 @@ class LogicWorld:
         self.levelchanger_eligible = np.empty(0, dtype=bool)
         self.monster_things = []
         self.monster_by_id = {}
+        self.monster_spawn_health = {}
         self.name_cache = {}
         self.id_cache = {}
         self.indexed_things = ()

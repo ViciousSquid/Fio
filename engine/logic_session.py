@@ -444,7 +444,7 @@ class LogicSession:
             return
 
         if clear_dead:
-            logic._monster_spawn_health = {}
+            logic.world_runtime.monster_spawn_health = {}
 
         reset = []
         for thing in logic.editor_state.things:
@@ -454,7 +454,7 @@ class LogicSession:
             reset.append(thing)
             if clear_dead:
                 try:
-                    logic._monster_spawn_health[
+                    logic.world_runtime.monster_spawn_health[
                         thing.properties.get("id")
                     ] = int(thing.properties.get("health", 100))
                 except (TypeError, ValueError):
