@@ -375,7 +375,7 @@ class BenchmarkTests:
         monster = Monster(pos=position, properties=props)
         with logic._monster_lock:
             logic.editor_state.things.append(monster)
-            logic._build_entity_caches()
+            logic.world_runtime.build_entity_caches()
         return monster
 
     def _monster_chaos_random_position(self, rng, monster_type):
