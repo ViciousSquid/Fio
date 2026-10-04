@@ -2630,7 +2630,7 @@ class View2D(QWidget):
     def draw_terrain(self, painter, visible_bounds):
         """Draw terrain outline/profile in 2D view."""
         # Check if terrain exists and is enabled
-        if not hasattr(self.editor, 'terrain') or not self.editor.terrain:
+        if not self.editor.terrain:
             return
         terrain = self.editor.terrain
         # Keep the Big World "fill world with terrain" preview live as the view
