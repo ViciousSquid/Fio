@@ -695,25 +695,6 @@ class LogicThread(threading.Thread):
             self.player2_max_health = 100
             self.player2_dead = False
         
-    #: What the player takes with them through a level change: the weapon in
-    #: hand, whether the second gun has been picked up, and the ammunition for
-    #: it. Everything else (health, keys, the level's own state) starts afresh.
-    LOADOUT_FIELDS = ('active_weapon', 'gun2_obtained', 'player_ammo')
-
-    def carried_loadout(self) -> dict:
-        """The player's weapons, as :meth:`restore_loadout` takes them."""
-        with self._tick_lock:
-            return {name: getattr(self, name) for name in self.LOADOUT_FIELDS}
-
-    def restore_loadout(self, loadout: dict) -> None:
-        """Hand the player back the weapons they came through a level change
-        with. Called after play has restarted on the new level, whose start
-        clears them."""
-        with self._tick_lock:
-            for name in self.LOADOUT_FIELDS:
-                if name in loadout:
-                    setattr(self, name, loadout[name])
-
     def set_terrain(self, terrain):
         self.terrain = terrain
     

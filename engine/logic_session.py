@@ -293,6 +293,26 @@ class LogicSession:
                 )
             logic._plugin_emit("play_start" if enabled else "play_stop")
 
+    #: What the player intentionally carries through a level change.
+    LOADOUT_FIELDS = ("active_weapon", "gun2_obtained", "player_ammo")
+
+    def carried_loadout(self) -> dict:
+        """Capture the player's carried weapons for a level change."""
+        logic = self.logic
+        with logic._tick_lock:
+            return {
+                name: getattr(logic, name)
+                for name in self.LOADOUT_FIELDS
+            }
+
+    def restore_loadout(self, loadout: dict) -> None:
+        """Restore a carried weapon loadout after a new session starts."""
+        logic = self.logic
+        with logic._tick_lock:
+            for name in self.LOADOUT_FIELDS:
+                if name in loadout:
+                    setattr(logic, name, loadout[name])
+
     def save_session(
         self,
         path: str,
