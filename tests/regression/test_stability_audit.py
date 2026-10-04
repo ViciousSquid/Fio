@@ -129,12 +129,12 @@ def test_a_dragged_brush_does_not_flicker_after_it_is_deselected():
     state, game_state, logic = _editor(pillar_grid(3, 3))
     _check_frames(logic, game_state)
     brush = state.brushes[4]
-    state.set_selected_object(brush)
+    state.selected_objects = [brush]
     state.save_state()
     _check_frames(logic, game_state)
     brush["pos"] = [brush["pos"][0], brush["pos"][1] + 4.0, brush["pos"][2]]
     _check_frames(logic, game_state, 1)
-    state.set_selected_object(None)
+    state.selected_objects = []
     _check_frames(logic, game_state, 4)
 
 
@@ -165,7 +165,7 @@ def test_random_editor_edits_publish_tables_equal_to_a_rebuild():
         roll = rng.random()
         if roll < 0.3:
             brush = rng.choice(state.brushes)
-            state.set_selected_object(brush)
+            state.selected_objects = [brush]
             state.save_state()
             brush["pos"] = [brush["pos"][0] + 8.0, brush["pos"][1], brush["pos"][2]]
         elif roll < 0.4:
@@ -185,7 +185,7 @@ def test_random_editor_edits_publish_tables_equal_to_a_rebuild():
             thing = rng.choice(state.things)
             thing.pos = [thing.pos[0] + 3.0, thing.pos[1], thing.pos[2]]
         else:
-            state.set_selected_object(None)
+            state.selected_objects = []
         while pending:
             pending.pop(0)()
         logic._step_frame(logic.TICK_DURATION)
