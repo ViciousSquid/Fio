@@ -255,7 +255,7 @@ class LogicCombat:
         count = len(monsters)
         centres = np.empty((count, 3), dtype=np.float32)
         centres[:] = [m.pos for m in monsters]
-        centres[:, 1] += np.float32(logic.PROJECTILE_MONSTER_LIFT)
+        centres[:, 1] += np.float32(self.PROJECTILE_MONSTER_LIFT)
         codes = {}
         team = np.fromiter(
             (codes.setdefault(m.properties.get('team', ''), len(codes))
@@ -263,7 +263,7 @@ class LogicCombat:
             dtype=np.int64, count=count)
         row_of = {id(m): row for row, m in enumerate(monsters)}
 
-        cell = 2.0 * logic.PROJECTILE_MONSTER_RADIUS
+        cell = 2.0 * self.PROJECTILE_MONSTER_RADIUS
         mcx = np.floor(centres[:, 0] / cell).astype(np.int64)
         mcz = np.floor(centres[:, 2] / cell).astype(np.int64)
         mkey = (mcx + (1 << 30)) * (1 << 31) + (mcz + (1 << 30))
@@ -291,7 +291,7 @@ class LogicCombat:
         row = np.concatenate(row_parts)
         d = centres[row] - pos32[query]
         near = (d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1] + d[:, 2] * d[:, 2]
-                < np.float32(logic.PROJECTILE_MONSTER_RADIUS) ** 2)
+                < np.float32(self.PROJECTILE_MONSTER_RADIUS) ** 2)
         owner_row = np.array([row_of.get(o, -1) for o in owners], dtype=np.int64)
         owner = owner_row[query]
         near &= row != owner
@@ -369,7 +369,7 @@ class LogicCombat:
                 logic._projectile_positions = NO_PROJECTILES
                 return
 
-            if len(projectiles) < logic.PROJECTILE_DENSE_THRESHOLD:
+            if len(projectiles) < self.PROJECTILE_DENSE_THRESHOLD:
                 logic._update_monster_projectiles_scalar(projectiles, delta)
             else:
                 logic._update_monster_projectiles_dense(projectiles, delta)
@@ -392,13 +392,13 @@ class LogicCombat:
         )
         if player is not None:
             player_pos = player.pos
-            player_radius_sq = float(logic.PROJECTILE_PLAYER_RADIUS) ** 2
+            player_radius_sq = float(self.PROJECTILE_PLAYER_RADIUS) ** 2
         else:
             player_pos = None
             player_radius_sq = 0.0
 
-        radius_sq = float(logic.PROJECTILE_MONSTER_RADIUS) ** 2
-        lift = float(logic.PROJECTILE_MONSTER_LIFT)
+        radius_sq = float(self.PROJECTILE_MONSTER_RADIUS) ** 2
+        lift = float(self.PROJECTILE_MONSTER_LIFT)
 
         for i in range(count):
             pos = projectiles.pos[i]
@@ -569,7 +569,7 @@ class LogicCombat:
                     + d[:, 1] * d[:, 1]
                     + d[:, 2] * d[:, 2]
                 )
-                < np.float32(logic.PROJECTILE_PLAYER_RADIUS)
+                < np.float32(self.PROJECTILE_PLAYER_RADIUS)
             ) & live
 
         grid = getattr(logic, '_spatial_grid', None)
