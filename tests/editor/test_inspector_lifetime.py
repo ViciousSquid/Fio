@@ -21,11 +21,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from editor import face_texture as ft  # noqa: E402
-from editor.editor_state import EditorState  # noqa: E402
-from editor.main_window import MainWindow  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
@@ -34,47 +31,12 @@ pytestmark = pytest.mark.qt
 
 
 
-@pytest.fixture(scope="session")
-def qt_app():
-    # Only when there is no display: the offscreen plugin cannot create an
-    # OpenGL context, and forcing it here would disable the visual tier for
-    # the whole session when the suite is run under Xvfb.
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    return QApplication.instance() or QApplication([])
-
-
-class FakeHost:
-    """Just enough MainWindow for the rebinding logic under test."""
-
-    _rebind_face_targets = MainWindow._rebind_face_targets
-
-    def __init__(self):
-        self.state = EditorState()
-        self.surface_inspector = None
-        self.face_texture_target = None
-
-
-class FakeInspector:
-    """Stands in for the panel: it only has to hold and be re-pointed."""
-
-    def __init__(self, target):
-        self.target = target
-        self.refreshes = 0
-
-    def set_target(self, brush, face_key, raise_window=True, reveal=True):
-        self.target = (brush, face_key) if brush is not None else None
-
-    def refresh_from_face(self):
-        self.refreshes += 1
-
-
 @pytest.fixture
-def host(qt_app):
-    editor = FakeHost()
+def host(main_window):
+    editor = main_window
     brush = {'name': 'wall', 'pos': [0, 0, 0], 'size': [256, 256, 256]}
     editor.state.brushes.append(brush)
-    editor.state.selected_objects = [brush]
+    editor.set_selected_objects([brush])
     editor.state.save_state()
     return editor
 
@@ -85,8 +47,8 @@ def host(qt_app):
 
 def test_the_inspector_follows_its_brush_through_an_undo(host):
     brush = host.state.brushes[0]
-    host.surface_inspector = FakeInspector((brush, 'top'))
-    host.face_texture_target = (brush, 'top')
+    host.show_surface_inspector(brush, 'top')
+    panel = host.surface_inspector
 
     brush['size'] = [512, 256, 256]
     host.state.save_state()
@@ -94,8 +56,8 @@ def test_the_inspector_follows_its_brush_through_an_undo(host):
     host._rebind_face_targets()
 
     live = host.state.brushes[0]
-    assert host.surface_inspector.target[0] is live
-    assert host.surface_inspector.target[1] == 'top'
+    assert panel.target[0] is live
+    assert panel.target[1] == 'top'
     assert host.face_texture_target[0] is live
 
 
@@ -103,19 +65,21 @@ def test_the_inspector_is_unbound_when_its_brush_is_undone_away(host):
     host.state.save_state()                  # checkpoint at "mouse-down"
     extra = {'name': 'pillar', 'pos': [512, 0, 0], 'size': [64, 256, 64]}
     host.state.brushes.append(extra)
-    host.surface_inspector = FakeInspector((extra, 'top'))
+    host.set_selected_objects([extra])
+    host.show_surface_inspector(extra, 'top')
+    panel = host.surface_inspector
     host.face_texture_target = (extra, 'top')
 
     assert host.state.undo()
     host._rebind_face_targets()
 
-    assert host.surface_inspector.target is None
+    assert panel.target is None
     assert host.face_texture_target is None
 
 
 def test_rebinding_leaves_an_already_live_target_alone(host):
     brush = host.state.brushes[0]
-    host.surface_inspector = FakeInspector((brush, 'north'))
+    host.show_surface_inspector(brush, 'north')
     host._rebind_face_targets()
     assert host.surface_inspector.target == (brush, 'north')
 
