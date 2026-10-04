@@ -420,3 +420,73 @@ def test_a_structural_edit_does_not_rebuild_unchanged_geometry_meshes(
     front.sync(scene, 3, dirty_objects={id(ramps[0])})
     renderer._prepare_geo_meshes(front, np.arange(front.count, dtype=np.int32))
     assert len(built) == len(ramps) + 1
+
+
+
+@pytest.mark.integration
+def test_editor_state_publication_is_submitted_to_the_real_renderer(context, renderer):
+    """EditorState -> LogicRender -> published tables -> real OpenGL renderer.
+
+    The world is authored through the real EditorState and projected by the
+    real LogicThread.  The renderer receives the resulting published tables
+    and slot arrays, not a freshly rebuilt test projection.
+    """
+    import OpenGL.GL as gl
+
+    from editor.editor_state import EditorState
+    from editor.things import Light
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
+    from tests.helpers.worlds import box_brush, make_thing
+
+    state = EditorState()
+    state.brushes = [
+        box_brush("floor", (0, -16, 0), (1024, 32, 1024)),
+        box_brush("cube", (0, 64, 0), (128, 128, 128)),
+    ]
+    state.things = [
+        make_thing(Light, "publication-light", (0, 260, 160),
+                   intensity=2.0, radius=1400.0, state="on",
+                   casts_shadows=True)
+    ]
+
+    logic = LogicThread(ThreadedGameState(), state)
+    try:
+        logic.render_runtime.culling_enabled = False
+        logic.render_runtime.prepare_render_state()
+        assert logic._publish_frame() is True
+
+        published = logic.game_state.get_render_state()
+        try:
+            assert published.render_table.count == 2
+            assert published.entity_table.count == 1
+
+            config = glh.render_config(
+                render_table=published.render_table,
+                render_refs=published.render_refs,
+                all_brush_slots=published.all_brush_slots,
+                visible_brush_slots=published.visible_brush_slots,
+                entity_table=published.entity_table,
+                entity_refs=published.entity_refs,
+                visible_thing_slots=published.visible_thing_slots,
+                thing_hidden=published.thing_hidden,
+            )
+
+            projection, view, eye = glh.camera_matrices(aspect=1.0)
+            context.bind()
+            gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+            with glh.no_gl_errors("published EditorState render"):
+                renderer.render_scene(
+                    projection, view, eye, None, config,
+                    brush_slots=published.all_brush_slots)
+                gl.glFinish()
+
+            image = context.read_pixels()
+            assert not glh.is_blank(image), (
+                "the real renderer received the published tables but submitted "
+                "no visible geometry")
+            assert renderer.render_stats.total_brushes == 2
+        finally:
+            logic.game_state.release_render_state(published)
+    finally:
+        logic.stop()
