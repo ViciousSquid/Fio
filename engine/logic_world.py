@@ -104,7 +104,7 @@ class LogicWorld:
         if (
             logic.play_mode
             and logic.mover_runtime._moving_rows is not None
-            and self.indexed_brushes != logic._moving_rows
+            and self.indexed_brushes != logic.mover_runtime._moving_rows
         ):
             logic.mover_runtime._reindex_moving_brushes()
             logic.collision_runtime.mark_dirty()
@@ -226,8 +226,8 @@ class LogicWorld:
             return
 
         self._rows_watch -= 1
-        brushes_changed = tuple(logic.editor_state.brushes) != logic._indexed_brushes
-        things_changed = tuple(logic.editor_state.things) != logic._indexed_things
+        brushes_changed = tuple(logic.editor_state.brushes) != self.indexed_brushes
+        things_changed = tuple(logic.editor_state.things) != self.indexed_things
         if brushes_changed or things_changed:
             self.build_entity_caches()
 
