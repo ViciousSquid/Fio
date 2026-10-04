@@ -7,8 +7,6 @@ instrument's prepare/tick/AI timings on large maps and long sessions.
 """
 
 import json
-import threading
-from types import SimpleNamespace
 
 import pytest
 
@@ -203,27 +201,21 @@ def test_a_logic_frame_after_undo_rebuilds_the_tables_once(monkeypatch):
 # Console: monster_revive / monster_revive_all
 # ---------------------------------------------------------------------------
 
-class _State:
-    def __init__(self, things):
-        self.things = things
-
-    def find_entity_by_name(self, name):
-        return next((t for t in self.things if t.properties.get("name") == name), None)
-
-
 def _console(things, states):
     from editor.console_commands import ConsoleCommandHandler
+    from editor.main_window import MainWindow
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
-    logic = SimpleNamespace(
-        monster_ai=SimpleNamespace(monster_states=states),
-        session_runtime=SimpleNamespace(monster_lock=threading.RLock()),
-    )
-    window = SimpleNamespace(
-        state=_State(things),
-        view_3d=SimpleNamespace(play_mode=True, logic_thread=logic),
-        update_all_ui=lambda: None,
-    )
-    return ConsoleCommandHandler(window)
+    window = MainWindow(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    window.state.things = list(things)
+    game_state = ThreadedGameState()
+    logic = LogicThread(game_state, window.state)
+    logic.world_runtime.monster_things = list(things)
+    logic.monster_ai.monster_states = states
+    window.view_3d.logic_thread = logic
+    window.view_3d.play_mode = True
+    return ConsoleCommandHandler(window), window, logic
 
 
 def test_monster_revive_drops_the_ai_state_of_that_monster():
@@ -234,7 +226,14 @@ def test_monster_revive_drops_the_ai_state_of_that_monster():
                     properties={"name": "grunt", "dead": True, "health": 0})
     other = Monster(pos=[64.0, 0.0, 0.0], properties={"name": "other"})
     states = {id(grunt): {"shoot_timer": 0.01}, id(other): {"shoot_timer": 0.5}}
-    _console([grunt, other], states).cmd_monster_revive("grunt")
+    handler, window, logic = _console([grunt, other], states)
+    try:
+        handler.cmd_monster_revive("grunt")
+    finally:
+        logic.stop()
+        window.unsaved_changes = False
+        window.close()
+        window.deleteLater()
 
     assert id(grunt) not in states
     assert id(other) in states
@@ -246,7 +245,14 @@ def test_monster_revive_all_clears_the_ai_state():
                         properties={"name": "m%d" % i, "dead": True})
                 for i in range(3)]
     states = {id(m): {"shoot_timer": 0.0} for m in monsters}
-    _console(monsters, states).cmd_monster_revive_all("")
+    handler, window, logic = _console(monsters, states)
+    try:
+        handler.cmd_monster_revive_all("")
+    finally:
+        logic.stop()
+        window.unsaved_changes = False
+        window.close()
+        window.deleteLater()
     assert states == {}
 
 
@@ -258,7 +264,14 @@ def test_monster_revive_keeps_a_parked_monster_parked():
     grunt = Monster(pos=[0.0, 0.0, 0.0],
                     properties={"name": "grunt", "dead": True, "hidden": True,
                                 PARKED_HIDDEN_KEY: True})
-    _console([grunt], {}).cmd_monster_revive("grunt")
+    handler, window, logic = _console([grunt], {})
+    try:
+        handler.cmd_monster_revive("grunt")
+    finally:
+        logic.stop()
+        window.unsaved_changes = False
+        window.close()
+        window.deleteLater()
 
     assert grunt.properties["hidden"] is True          # still parked
     assert authored_hidden(grunt) is False             # but authored visible
