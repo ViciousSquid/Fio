@@ -243,8 +243,8 @@ def test_stopping_play_mode_restores_the_authored_world(session):
 def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
     """Fio's premise, asserted: one representation, no copy in between."""
     state, thread = session()
-    assert thread.brushes is state.brushes
-    assert thread.things is state.things
+    assert thread.editor_state.brushes is state.brushes
+    assert thread.editor_state.things is state.things
 
     thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
