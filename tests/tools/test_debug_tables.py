@@ -585,6 +585,42 @@ def test_debug_tables_tracks_real_terrain_streaming_residency(window):
     assert shown_coords == second_coords
 
 
+
+def test_real_terrain_csg_survives_terrain_serialization(window):
+    """A CSG cutter must remain the terrain source of truth across save/load."""
+    from engine.terrain import Terrain
+    import glm
+
+    terrain = Terrain(seed=0xF10)
+    terrain.set_world_extent(0.0, 0.0, 512.0, 512.0)
+    terrain.set_streaming(True, radius=768.0)
+    terrain._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
+    slot = int(terrain.table.live_slots()[0])
+    terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
+
+    h = float(terrain._get_height_scalar(128.0, 128.0))
+    cut = ((64.0, h - 100.0, 64.0), (192.0, h + 100.0, 192.0))
+    assert terrain.subtract_aabb(*cut)
+    saved = terrain.to_dict()
+    assert saved["csg_subtractions"] == [
+        [64.0, h - 100.0, 64.0, 192.0, h + 100.0, 192.0]
+    ]
+
+    restored = Terrain()
+    restored.from_dict(saved)
+    assert restored.csg_subtractions == terrain.csg_subtractions
+    restored.set_streaming(True, radius=768.0)
+    restored._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
+    restored_slot = int(restored.table.live_slots()[0])
+    restored.table.store(
+        restored_slot, 48, 0, restored._chunk_heights(restored_slot, 48)
+    )
+
+    np.testing.assert_array_equal(
+        restored.table.heights[restored_slot],
+        terrain.table.heights[slot],
+    )
+
 def test_debug_tables_observes_real_terrain_csg_rebuild(window):
     """A terrain CSG edit must dirty and rebuild the dense heightfield row."""
     from engine.terrain import Terrain
