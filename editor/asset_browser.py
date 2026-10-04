@@ -573,15 +573,11 @@ class AssetBrowserTab(QWidget):
 
     def on_inspector_clicked(self):
         """Open (or close) the Surface Inspector."""
-        toggle = getattr(self.editor, 'toggle_surface_inspector', None)
-        if toggle is not None:
-            toggle()
+        self.editor.toggle_surface_inspector()
 
     def on_tint_clicked(self):
         """Tint the selected brush."""
-        tint = getattr(self.editor, 'tint_selected_brush', None)
-        if tint is not None:
-            tint()
+        self.editor.tint_selected_brush()
 
 
 class MapsBrowserTab(QWidget):
