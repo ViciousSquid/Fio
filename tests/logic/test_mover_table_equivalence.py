@@ -665,11 +665,12 @@ class _Side:
         if reference:
             logic = ReferenceLogic(self.brushes, self.things, io, player)
         else:
-            logic = LogicThread.__new__(LogicThread)
-            logic.editor_state = SimpleNamespace(brushes=self.brushes,
-                                                 things=self.things)
-            logic.io_manager = io
-            logic.player_runtime = SimpleNamespace(player=player)
+            logic = SimpleNamespace(
+                editor_state=SimpleNamespace(brushes=self.brushes, things=self.things),
+                io_manager=io,
+                player_runtime=SimpleNamespace(player=player),
+                session_runtime=SimpleNamespace(play_mode=True),
+            )
             logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
             logic.mover_runtime = LogicMovers(logic)
         io.set_logic_thread(logic)
