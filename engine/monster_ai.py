@@ -2050,7 +2050,7 @@ the scalar fallback for callers that do not have the dense table.
             return self._grid.overlaps_wall(mx, my, mz, margin)
 
         # Fallback
-        for brush in self.lt.brushes:
+        for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
             pos = brush['pos']
