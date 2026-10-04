@@ -206,8 +206,6 @@ class LogicThread(threading.Thread):
             "editor_state",
             "player",
             "player_health",
-            "_render_table",
-            "_entity_table",
             "_last_edited",
             "_projectile_positions",
         ),
@@ -355,14 +353,6 @@ class LogicThread(threading.Thread):
         self._hud_health_fade_phase = "idle"
         self.hud_fade_enabled = True
 
-        # RenderState already owns one persistent RenderTable/EntityTable pair.
-        # Keep these aliases only for diagnostics and older tests/code that inspect
-        # the logic thread; the authoritative tables now belong to the write buffer
-        # and therefore cannot be mutated while the renderer is reading the other
-        # buffer.
-        write_state = self.game_state.get_write_state()
-        self._render_table = write_state.render_table
-        self._entity_table = write_state.entity_table
         #: ``id -> object`` of the editor selection the last frame re-read as
         #: edited; see _prepare_render_state.
         self._last_edited = {}
