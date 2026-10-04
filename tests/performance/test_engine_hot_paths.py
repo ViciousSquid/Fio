@@ -183,12 +183,16 @@ def test_no_entity_is_copied_or_re_read_on_an_unchanged_frame(logic, monkeypatch
     # Editor mode: no AI thread, so nothing can legitimately change a row.
     thread = logic(things=[lamp, grunt])
     thread.render_runtime.prepare_render_state()
-    first = list(thread.game_state.get_write_state().visible_things)
+    first_state = thread.game_state.get_write_state()
+    first = [first_state.entity_table.refs[int(slot)]
+             for slot in first_state.visible_thing_slots]
     resolved = []
     monkeypatch.setattr(et_module, "sprite_candidates",
                         lambda thing: resolved.append(thing) or ())
     thread.render_runtime.prepare_render_state()
-    second = list(thread.game_state.get_write_state().visible_things)
+    second_state = thread.game_state.get_write_state()
+    second = [second_state.entity_table.refs[int(slot)]
+              for slot in second_state.visible_thing_slots]
 
     assert first == second == [lamp, grunt]
     assert resolved == [], "an unchanged entity was re-resolved"
@@ -504,7 +508,7 @@ def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
 
     thread = logic(brushes=room(),
                    things=[make_thing(Light, "L%d" % i) for i in range(20)])
-    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.player = Player(0.0, 0.0, 0.0)
     thread.session_runtime.apply_play_mode(True)
     try:
         assert thread._portal_things == []
