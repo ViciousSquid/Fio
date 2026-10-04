@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="Tidy integration uses the real editor/logic tier")
 
 from editor.editor_state import EditorState
-from editor.things import Prop
+from engine.prop_entity import Prop
 from engine.logic_thread import LogicThread
 from engine.threaded_game_state import ThreadedGameState
 
@@ -89,12 +89,12 @@ def test_demo_loader_respects_unsaved_changes(main_window, monkeypatch):
 
     checked = []
     loaded = []
-    real_check = main_window.check_unsaved_changes
     real_load = main_window.load_level_file
+    allow = {"value": False}
 
     def check_unsaved():
         checked.append(True)
-        return real_check()
+        return allow["value"]
 
     def record_load(path):
         loaded.append(path)
@@ -103,21 +103,14 @@ def test_demo_loader_respects_unsaved_changes(main_window, monkeypatch):
     monkeypatch.setattr(main_window, "check_unsaved_changes", check_unsaved)
     monkeypatch.setattr(main_window, "load_level_file", record_load)
 
-    monkeypatch.setattr(
-        main_window,
-        "check_unsaved_changes",
-        lambda: False,
-    )
     PLUGIN._load_demo_map(main_window)
+    _check(checked == [True], "unsaved-change check was shown")
     _check(len(loaded) == 0, "demo did not replace unsaved work")
 
-    monkeypatch.setattr(
-        main_window,
-        "check_unsaved_changes",
-        lambda: True,
-    )
+    allow["value"] = True
     PLUGIN._load_demo_map(main_window)
 
+    _check(checked == [True, True], "existing dialog was still used")
     _check(loaded, "demo loaded through the real MainWindow")
     _check(
         loaded[-1].endswith(os.path.join("plugins", "tidy", "Tidy_Test.json")),
