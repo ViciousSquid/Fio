@@ -6,7 +6,6 @@ Manages all the data for the current level being edited, including:
 - Things (entities)
 - Undo/redo history
 - Serialization/deserialization with I/O connections
-- Lightmap bake state (Stage 1: data structures only)
 """
 
 import json
