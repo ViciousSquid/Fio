@@ -773,7 +773,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         pass
     if "mover_path_states" in runtime:
         try:
-            logic.mover_path_states = {
+            logic.mover_runtime.mover_path_states = {
                 int(i): dict(s)
                 for i, s in (runtime.get("mover_path_states") or {}).items()}
         except Exception:
@@ -797,7 +797,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         saved_ms = runtime.get("monster_states", {}) or {}
         if saved_ms and getattr(logic, "monster_ai", None) is not None:
             by_sid = {}
-            for t in logic._monster_things:
+            for t in logic.world_runtime.monster_things:
                 sid = _thing_id(t)
                 if sid:
                     by_sid[sid] = t
