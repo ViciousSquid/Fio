@@ -158,7 +158,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
                             things=[make_thing(PlayerStart, "spawn", (0, 64, 0))])
 
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
 
     assert switchable.get("hidden") in (None, False)
     thread.io_manager.fire_output(button, "OnTrigger")
@@ -189,7 +189,7 @@ def test_a_delayed_connection_fires_on_the_logic_threads_own_clock(session):
     state, thread = session(brushes=room() + [switchable, button])
 
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     thread.io_manager.fire_output(button, "OnTrigger")
 
     for _ in range(10):                      # ~0.17s
@@ -211,7 +211,7 @@ def test_monsters_run_against_the_live_world_during_a_play_session(session):
                                     monster])
 
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     start_x = monster.pos[0]
 
     for _ in range(30):
@@ -232,7 +232,7 @@ def test_stopping_play_mode_restores_the_authored_world(session):
     authored = json.dumps(state.get_level_data(), sort_keys=True)
 
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     for _ in range(20):
         thread._tick(TICK)
     thread.session_runtime.apply_play_mode(False)
@@ -250,7 +250,7 @@ def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
     assert thread.editor_state.things is state.things
 
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     grid_brushes = {id(b) for bucket in thread.session_runtime.spatial_grid.cells.values()
                     for b in bucket}
     assert grid_brushes <= {id(b) for b in state.brushes}, (
@@ -260,7 +260,7 @@ def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
 def test_an_edit_made_while_play_mode_is_running_reaches_the_runtime(session):
     state, thread = session()
     thread.session_runtime.apply_play_mode(True)
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     thread.render_runtime.culling_enabled = False
 
     state.brushes.append(box_brush("late_addition", (0, 64, -300)))
@@ -437,7 +437,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     # The session activates cells around the player, so the player has to exist
     # before play mode starts - as it does in the editor, which spawns at the
     # PlayerStart before handing the session over.
-    thread.player = Player(0.0, 0.0)
+    thread.player_runtime.player = Player(0.0, 0.0)
     thread.session_runtime.apply_play_mode(True)
     try:
         assert thread.plugins.services.get("bigworld") is not None, (
