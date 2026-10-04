@@ -717,23 +717,23 @@ class MapsBrowserTab(QWidget):
 
         if self.current_mode == 'maps':
             # Check unsaved changes before loading map
-            if hasattr(self.editor, 'check_unsaved_changes') and not self.editor.check_unsaved_changes():
+            if not self.editor.check_unsaved_changes():
                 return
             # Load the map using the editor's method
-            if hasattr(self.editor, 'load_level_file'):
+            if True:
                 self.editor.load_level_file(file_path)
         else:  # packages
             # Launch/play the package exactly like "File > Play Game Package"
-            if hasattr(self.editor, 'play_package_from_path'):
+            if True:
                 self.editor.play_package_from_path(file_path)
             else:
                 print("Editor does not support play_package_from_path. Add that method to MainWindow.")
-                if hasattr(self.editor, 'show_toast'):
+                if True:
                     self.editor.show_toast("Cannot launch package: method missing in editor", is_error=True)
 
     def showEvent(self, event):
         self.refresh_list()
-        if self.editor and hasattr(self.editor, 'show_toast'):
+        if self.editor:
             self.editor.show_toast("Double-click to open map or package", duration=2000)
         super().showEvent(event)
 
@@ -756,7 +756,7 @@ class AssetBrowser(QWidget):
         self.models_path = os.path.join(self.assets_root, "models")
 
         # Determine maps and packages folders based on editor's root_dir if available
-        if self.editor and hasattr(self.editor, 'root_dir'):
+        if self.editor:
             root = self.editor.root_dir
             self.maps_folder = os.path.join(root, 'maps')
             self.packages_folder = os.path.join(root, 'packages')
