@@ -430,7 +430,9 @@ def test_console_hide_and_show_go_through_the_authored_writer():
     logic = types.SimpleNamespace(collision_runtime=types.SimpleNamespace(mark_dirty=lambda: marked.append(1)))
     handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
     handler.editor_state = state
-    handler._logic_thread = lambda: logic
+    handler.main_window = types.SimpleNamespace(
+        view_3d=types.SimpleNamespace(play_mode=False, logic_thread=logic)
+    )
     handler.cmd_hide("wall")
     assert wall["hidden"] is True and marked == [1]
     wall["_bw_parked_hidden"] = True     # parked by a streaming layer

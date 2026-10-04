@@ -243,8 +243,8 @@ class ConsoleCommandHandler:
             if mgr is None or not mgr.has_console_command(cmd):
                 return False
             view_3d = self.main_window.view_3d
-            play = bool(view_3d.play_mode)
-            lt = view_3d.logic_thread if play else None
+            play = bool(view_3d.play_mode) if view_3d is not None else False
+            lt = view_3d.logic_thread if view_3d is not None else None
             handled, reply = mgr.dispatch_console_command(
                 cmd, args, lt, main_window=self.main_window, play_mode=play
             )
@@ -468,8 +468,9 @@ class ConsoleCommandHandler:
         """
         set_authored_flag(entity, 'hidden', hidden)
         if isinstance(entity, dict):
-            if self._in_play_mode():
-                self.main_window.view_3d.logic_thread.collision_runtime.mark_dirty()
+            view = self.main_window.view_3d
+            if view is not None and view.logic_thread is not None:
+                view.logic_thread.collision_runtime.mark_dirty()
 
     def cmd_hide(self, args):
         """hide <name> — Set hidden flag on a brush or entity."""
@@ -1959,7 +1960,8 @@ entity to drive them from the I/O system.</i><br>
 
         # The scene mutation and all derived runtime-cache updates must be
         # one atomic operation while Play Mode is running.
-        logic = self.main_window.view_3d.logic_thread if self._in_play_mode() else None
+        view = self.main_window.view_3d
+        logic = view.logic_thread if view is not None else None
         context = logic._tick_lock if logic is not None else contextlib.nullcontext()
         with context:
             for entity in entities:
@@ -2442,16 +2444,18 @@ entity to drive them from the I/O system.</i><br>
         this, a portal created from the console is invisible to the portal
         system until play mode is toggled.
         """
-        if not self._in_play_mode():
+        view = self.main_window.view_3d
+        if view is None or view.logic_thread is None:
             return
-        logic = self.main_window.view_3d.logic_thread
+        logic = view.logic_thread
         # Console commands run on the UI thread. The rebuild replaces caches a
         # tick walks (the Prop registry above all), so it must land between ticks.
         with logic._tick_lock:
             logic.world_runtime.build_entity_caches()
 
     def _in_play_mode(self):
-        return bool(self.main_window.view_3d.play_mode)
+        view = self.main_window.view_3d
+        return bool(view.play_mode) if view is not None else False
 
     def _current_map_name(self):
         """Basename of the currently loaded map file, or '' if untitled."""

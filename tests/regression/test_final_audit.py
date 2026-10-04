@@ -216,9 +216,11 @@ def _console(things, states):
 
     logic = SimpleNamespace(monster_ai=SimpleNamespace(monster_states=states),
                             _monster_lock=threading.RLock())
-    window = SimpleNamespace(state=_State(things),
-                             view_3d=SimpleNamespace(logic_thread=logic),
-                             update_all_ui=lambda: None)
+    window = SimpleNamespace(
+        state=_State(things),
+        view_3d=SimpleNamespace(play_mode=True, logic_thread=logic),
+        update_all_ui=lambda: None,
+    )
     return ConsoleCommandHandler(window)
 
 
