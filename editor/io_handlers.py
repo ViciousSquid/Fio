@@ -462,13 +462,11 @@ def register_all_input_handlers(io_manager: IOManager):
             return
 
         # ✅ Guard: ensure the state dictionary exists
-        if not hasattr(logic, 'mover_path_states'):
-            logic.mover_path_states = {}
 
         entity['path_target'] = target
         entity['start_on'] = True
-        if idx not in logic.mover_path_states:
-            logic.mover_path_states[idx] = {
+        if idx not in logic.mover_runtime.mover_path_states:
+            logic.mover_runtime.mover_path_states[idx] = {
                 'current_node': target,
                 'lerp_t':       0.0,
                 'origin':       list(entity['pos']),
@@ -482,9 +480,7 @@ def register_all_input_handlers(io_manager: IOManager):
         idx = _get_brush_index(entity, logic)
         if idx >= 0:
             # ✅ Guard: use getattr with default empty dict, then pop safely
-            states = getattr(logic, 'mover_path_states', None)
-            if states is not None:
-                states.pop(idx, None)
+            logic.mover_runtime.mover_path_states.pop(idx, None)
 
     def mover_set_path_target(entity, param, logic):
         """Change the target PathNode name for this mover."""
