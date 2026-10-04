@@ -71,7 +71,7 @@ def test_create_select_component_edit_texture_io_save_undo_redo(session):
     assert len(state.brushes) == 2
 
     # --- select ---------------------------------------------------------
-    state.set_selected_object(brush)
+    state.selected_objects = [brush]
     assert state.selected_objects == [brush]
 
     # --- component edit (drag one corner up) -----------------------------
