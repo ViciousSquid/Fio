@@ -90,6 +90,8 @@ def test_a_map_with_no_bigworld_entity_never_starts_a_session():
             camera = SimpleNamespace(overhead_height_limit=None)
 
         logic = Logic()
+        manager = get_manager()
+        manager.bind_host(logic)
         plugin.on_play_start(logic)
         plugin.on_tick(logic, None)
         plugin.on_play_stop(logic)
