@@ -1662,7 +1662,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
         self._render_config["grid_visible"] = self.grid_visible and not self.play_mode
-        self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
+        self._render_config["terrain"] = self.editor.terrain
         # Both editor and play rendering consume the same canonical dense
         # projection published by LogicRender. There is no editor-side table.
         self._render_config["render_table"] = render_state.render_table
@@ -2269,7 +2269,7 @@ class QtGameView(QOpenGLWidget):
         self._draw_hud(painter, render_state, viewport_width=half, viewport_height=h)
         painter.restore()
         hud_alpha = max(
-            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+            0.0, min(1.0, float(render_state.hud_alpha))
         )
         hud_opacity = 1.0 if self._hud_style == 3 else self._hud_opacity / 100.0
         painter.save()
@@ -2282,7 +2282,7 @@ class QtGameView(QOpenGLWidget):
         p2_max_health = render_state.player2_max_health
         p2_dead = render_state.player2_dead
         health_hud_alpha = 1.0 if self._hud_style == 3 else max(
-            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
+            0.0, min(1.0, float(render_state.hud_health_alpha))
         )
         painter.save()
         painter.setClipRect(half, 0, half, h)
