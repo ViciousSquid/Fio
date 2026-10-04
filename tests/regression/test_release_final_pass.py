@@ -60,7 +60,7 @@ def _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
         logic._tick(logic.TICK_DURATION)
     assert door_a["pos"] == closed_a, "Open aimed at door_b opened door_a"
     assert door_b["pos"][1] > 64.0 + 100.0, "the aimed door did not open"
-    assert (logic.mover_states[state.brushes.index(lift)]["progress"]
+    assert (logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
             >= lift_progress), "the lift lost its progress in the re-key"
 
 
@@ -74,7 +74,7 @@ def test_console_delete_of_a_brush_in_play_keeps_io_aimed_at_the_right_door():
     try:
         for _ in range(20):
             logic._tick(logic.TICK_DURATION)
-        progress = logic.mover_states[state.brushes.index(lift)]["progress"]
+        progress = logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
 
         _console(state, logic).cmd_delete("crate")
         logic._tick(logic.TICK_DURATION)
@@ -96,7 +96,7 @@ def test_editor_delete_then_a_console_command_before_the_next_tick():
     try:
         for _ in range(20):
             logic._tick(logic.TICK_DURATION)
-        progress = logic.mover_states[state.brushes.index(lift)]["progress"]
+        progress = logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
 
         state.save_state()
         state.brushes.remove(crate)                      # editor Delete
