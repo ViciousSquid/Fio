@@ -76,8 +76,8 @@ class StreamingHost:
     A host must additionally expose ``editor_state.brushes``, ``editor_state.things`` and ``player`` —
     those come from the scene, so they are the caller's to supply.
 
-    Every member is read through ``getattr(..., default)`` by the session, so a
-    host that predates one of them still works; this is the documented shape,
+    The host contract is explicit: scene and runtime subsystems are owned by the live
+    engine host, and the session reads them directly.
     not an enforced interface.
     """
 
@@ -208,8 +208,8 @@ class BigWorldSession:
 
     def _current_visual_horizon(self):
         """Return the renderer's useful horizon when the host exposes one."""
-        view_distance = getattr(self.logic, "view_distance", None)
-        return getattr(view_distance, "visual_horizon", None)
+        view_distance = self.logic.view_distance
+        return view_distance.visual_horizon if view_distance is not None else None
 
     def _fitted_view(self):
         """``((activation, deactivation, view_limit), near_rect)`` sized from
@@ -647,7 +647,7 @@ class BigWorldSession:
         """
         if not self.terrain_fill:
             return
-        terrain = getattr(self.logic, "terrain", None)
+        terrain = self.logic.terrain
         if terrain is None:
             return
         # Only cooperate with a terrain that exposes the streaming surface added
@@ -944,7 +944,7 @@ class BigWorldSession:
     # ------------------------------------------------------------------
 
     def _player_pos(self):
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return None
         return getattr(player, "pos", None)
