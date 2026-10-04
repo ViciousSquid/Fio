@@ -134,7 +134,6 @@ class QtGameView(QOpenGLWidget):
         # Cache keys for per-frame expensive rebuilds
         self._io_conn_cache       = None   # last _gather_io_connections result
         self._io_conn_scene_ver   = None   # (len(brushes), len(things)) when cache was built
-        self.visibility_system = None
         self.show_visibility_debug = False
         self.grid_visible = True
         self.sysmon = SysMon(self)
@@ -1011,7 +1010,7 @@ class QtGameView(QOpenGLWidget):
     def _start_logic_thread(self):
         if self._thread_started:
             return
-        self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
+        self.logic_thread = LogicThread(self.game_state, self.editor.state)
         self.logic_thread.player_runtime.p2_turn_sensitivity = float(
             self.editor.config.get(
                 "Controls",
