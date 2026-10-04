@@ -167,9 +167,7 @@ class MonsterAI:
 
         # PERF: iterate the precomputed monster list instead of isinstance-
         # scanning every brush/thing in the level every tick.
-        monster_things = getattr(self.lt, '_monster_things', None)
-        if monster_things is None:
-            monster_things = [t for t in self.lt.things if isinstance(t, MonsterThing)]
+        monster_things = self.lt._monster_things
         # Fitted to an overhead camera, the pass and the enemy searches use
         # the resident monsters only: a parked (DORMANT) monster is hidden and
         # disabled, neither acts nor can be a target, so it is left out rather
