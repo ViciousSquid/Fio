@@ -25,6 +25,8 @@ class LogicPlayer:
 
     def __init__(self, logic):
         self.logic = logic
+        self._player_was_in_water = False
+        self._waterwalk_timer = 0.0
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""
@@ -83,8 +85,8 @@ class LogicPlayer:
             bool(p2['jump']),
             False,
             logic._collision_brushes_cache,
-            logic._mover_brush_list,
-            logic._door_brush_list,
+            logic.mover_runtime._mover_brush_list,
+            logic.mover_runtime._door_brush_list,
             logic.terrain,
             spatial_grid=getattr(logic, '_spatial_grid', None),
         )
@@ -98,7 +100,7 @@ class LogicPlayer:
 
         in_water = bool(player.in_water)
 
-        if in_water and not logic._player_was_in_water:
+        if in_water and not self._player_was_in_water:
             logic.game_state.queue_sound(
                 {'file': 'enterwater.wav', 'volume': 1.0})
             logic.combat_runtime._emit_noise_event(
@@ -106,8 +108,8 @@ class LogicPlayer:
                 source='water_enter',
                 loudness=_WATER_LOUDNESS,
             )
-            logic._waterwalk_timer = 0.0
-        elif not in_water and logic._player_was_in_water:
+            self._waterwalk_timer = 0.0
+        elif not in_water and self._player_was_in_water:
             logic.game_state.queue_sound(
                 {'file': 'exitwater.wav', 'volume': 1.0})
             logic.combat_runtime._emit_noise_event(
@@ -116,7 +118,7 @@ class LogicPlayer:
                 loudness=_WATER_LOUDNESS,
             )
 
-        logic._player_was_in_water = in_water
+        self._player_was_in_water = in_water
 
         wading = (
             in_water
@@ -128,10 +130,10 @@ class LogicPlayer:
             player.velocity.z,
         )
         if wading and horiz_speed > 20.0:
-            logic._waterwalk_timer -= delta
-            if logic._waterwalk_timer <= 0.0:
+            self._waterwalk_timer -= delta
+            if self._waterwalk_timer <= 0.0:
                 logic.game_state.queue_sound(
                     {'file': 'waterwalk.wav', 'volume': 0.8})
-                logic._waterwalk_timer = logic.WATERWALK_INTERVAL
+                self._waterwalk_timer = logic.WATERWALK_INTERVAL
         else:
-            logic._waterwalk_timer = 0.0
+            self._waterwalk_timer = 0.0

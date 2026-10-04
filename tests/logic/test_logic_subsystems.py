@@ -194,8 +194,6 @@ def test_logic_player_constructs_and_reports_water_transition():
         ),
         player2=None,
         game_state=_GameState(),
-        _player_was_in_water=False,
-        _waterwalk_timer=0.0,
         WATERWALK_INTERVAL=0.45,
         _gunfire_events=[],
         _plugin_emit=lambda *args, **kwargs: None,
@@ -210,7 +208,7 @@ def test_logic_player_constructs_and_reports_water_transition():
         "waterwalk.wav",
     ]
     assert host.combat_runtime._gunfire_events[0]["source"] == "water_enter"
-    assert host._player_was_in_water is True
+    assert runtime._player_was_in_water is True
 
 
 def test_logic_portals_constructs_and_rebuilds_target_links():

@@ -174,8 +174,6 @@ class LogicThread(threading.Thread):
             "player",
             "player2",
             "game_state",
-                        "_player_was_in_water",
-            "_waterwalk_timer",
         ),
         "render": (
             "game_state",
@@ -402,10 +400,6 @@ class LogicThread(threading.Thread):
         # Interaction State
         self.current_hud_message = ""
         self.current_hud_key_name = None
-
-        # Water sound state (enter/exit transition + wade footstep cadence)
-        self._player_was_in_water = False
-        self._waterwalk_timer = 0.0
 
         # Visual FX
         self.bullet_marks = []
