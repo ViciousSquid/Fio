@@ -877,15 +877,18 @@ and plugin versions; a save newer than the build understands is rejected by
 
 ### The native surface
 
-`engine.logic_thread.LogicThread` exposes two methods, each returning
-`(ok: bool, message: str)` and requiring an active play session:
+`engine.logic_session.LogicSession` exposes the play-session save/load methods
+through `logic.session_runtime`. Each returns `(ok: bool, message: str)` and
+requires an active play session:
 
 ```python
 # capture the live session → path (save_mode: "full" | "delta" | "both";
 # delta/both also want base_level, the normalized original map to diff against)
-logic.save_session(path, map_name="", save_mode="full", base_level=None)
+logic.session_runtime.save_session(
+    path, map_name="", save_mode="full", base_level=None
+)
 # auto-detect the save's mode and overlay it onto the running session
-logic.load_session(path, map_name="")
+logic.session_runtime.load_session(path, map_name="")
 ```
 
 Lower level, in [`engine/savegame.py`](../engine/savegame.py):
