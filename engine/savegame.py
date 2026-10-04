@@ -333,7 +333,7 @@ def _restore_moving_brushes(logic, saved) -> None:
     render tables learn of a move made outside the tick."""
     if not saved:
         return
-    for brush in getattr(logic, "brushes", []) or []:
+    for brush in logic.editor_state.brushes:
         entry = saved.get(str(brush.get("id")))
         if not entry:
             continue
@@ -366,7 +366,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     monster_states: Dict[str, Any] = {}
     try:
         raw = getattr(logic.monster_ai, "monster_states", {}) or {}
-        by_obj_id = {id(t): t for t in getattr(logic, "_monster_things", [])}
+        by_obj_id = {id(t): t for t in logic._monster_things}
         for obj_id, state in raw.items():
             mon = by_obj_id.get(obj_id)
             sid = _thing_id(mon) if mon is not None else ""
@@ -797,7 +797,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         saved_ms = runtime.get("monster_states", {}) or {}
         if saved_ms and getattr(logic, "monster_ai", None) is not None:
             by_sid = {}
-            for t in getattr(logic, "_monster_things", []) or []:
+            for t in logic._monster_things:
                 sid = _thing_id(t)
                 if sid:
                     by_sid[sid] = t
