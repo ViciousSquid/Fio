@@ -46,7 +46,6 @@ def populated(state):
 def test_a_new_state_is_empty_but_has_an_undo_baseline(state):
     assert state.brushes == []
     assert state.things == []
-    assert state.selected_object is None
     assert len(state.undo_stack) == 1, (
         "a fresh scene should hold exactly one checkpoint (the empty state), "
         "so the first undo has somewhere to go back to; it holds %d"
@@ -148,28 +147,26 @@ def test_a_deleted_entity_is_no_longer_findable(populated):
 # Selection
 # ---------------------------------------------------------------------------
 
-def test_selecting_one_object_sets_both_selection_fields(populated):
+def test_selecting_one_object_updates_the_authoritative_selection(populated):
     brush = populated.brushes[0]
-    populated.set_selected_object(brush)
-    assert populated.selected_object is brush
+    populated.selected_objects = [brush]
     assert populated.selected_objects == [brush], (
-        "the single and multi selection must agree; multi is %s"
+        "the authoritative selection should contain the chosen brush; got %s"
         % (populated.selected_objects,))
 
 
-def test_deselecting_clears_both_selection_fields(populated):
-    populated.set_selected_object(populated.brushes[0])
-    populated.set_selected_object(None)
-    assert populated.selected_object is None
+def test_deselecting_clears_the_authoritative_selection(populated):
+    populated.selected_objects = [populated.brushes[0]]
+    populated.selected_objects = []
     assert populated.selected_objects == []
 
 
 def test_a_selection_survives_a_checkpoint_and_restore(populated):
     brush = populated.brushes[0]
-    populated.set_selected_object(brush)
+    populated.selected_objects = [brush]
     snapshot = populated.snapshot()
 
-    populated.set_selected_object(None)
+    populated.selected_objects = []
     populated.restore_state(snapshot)
 
     assert len(populated.selected_objects) == 1
@@ -181,7 +178,7 @@ def test_a_selection_survives_a_checkpoint_and_restore(populated):
 def test_a_restored_selection_points_at_the_live_objects(populated):
     """Restore rebuilds the brush dicts; the selection must follow the new ones."""
     brush = populated.brushes[0]
-    populated.set_selected_object(brush)
+    populated.selected_objects = [brush]
     snapshot = populated.snapshot()
     populated.restore_state(snapshot)
 
@@ -194,7 +191,7 @@ def test_a_restored_selection_points_at_the_live_objects(populated):
 
 def test_selecting_an_object_that_was_deleted_leaves_an_empty_selection(populated):
     brush = populated.brushes[0]
-    populated.set_selected_object(brush)
+    populated.selected_objects = [brush]
     snapshot = populated.snapshot()
     populated.brushes.remove(brush)
     populated.save_state()
@@ -211,12 +208,11 @@ def test_selecting_an_object_that_was_deleted_leaves_an_empty_selection(populate
 # ---------------------------------------------------------------------------
 
 def test_clearing_the_scene_empties_everything(populated):
-    populated.set_selected_object(populated.brushes[0])
+    populated.selected_objects = [populated.brushes[0]]
     populated.clear_scene()
 
     assert populated.brushes == []
     assert populated.things == []
-    assert populated.selected_object is None
     assert populated.selected_objects == []
     assert populated.terrain_data is None
 
