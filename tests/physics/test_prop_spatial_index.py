@@ -202,42 +202,52 @@ def test_carrying_refiles_the_held_prop():
 # The batch interface
 # ---------------------------------------------------------------------------
 
-class FakePhysics:
-    """Stands in for PhysicsWorld's batch interface."""
+def _real_physics_world(prop):
+    """Build the production PhysicsWorld around a real Prop entity."""
+    from engine.physics import PhysicsWorld, SpatialGrid
 
-    def __init__(self):
-        self.changed = []
-        self.calls = 0
-
-    def entities_that_changed_cell(self):
-        self.calls += 1
-        out, self.changed = self.changed, []
-        return out
-
-    def set_rest_callback(self, entity, cb):
-        pass
-
-    def set_kinematic(self, entity, value):
-        pass
+    grid = SpatialGrid()
+    grid.populate([])
+    world = PhysicsWorld(grid)
+    brush = {
+        "pos": list(prop.pos),
+        "size": [32.0, 32.0, 32.0],
+        "_physics_body": True,
+        "_physics_entity": prop,
+        "_collision_mode": "aabb",
+    }
+    world.rebuild([brush])
+    return world
 
 
 def test_physics_cell_transitions_are_taken_as_a_batch():
-    prop = prop_at(0, 0, 60)
-    physics = FakePhysics()
+    prop = prop_at(0, 0, 60, physics_enabled=True)
+    physics = _real_physics_world(prop)
     session = make_session([prop], physics=physics)
 
-    prop.pos = [CELL_SIZE * 3, 0.0, CELL_SIZE * 3]
-    physics.changed = [prop]
+    # Establish the real PhysicsWorld's baseline, then move the body through
+    # its production handle so entities_that_changed_cell() reports it.
+    assert physics.entities_that_changed_cell() == ()
+    body = physics.bodies[id(prop)]
+    body.wake([12000.0, 0.0, 0.0])
+    physics.step(0.05)
+
     session.sync_physics_positions()
 
+    assert physics.entities_that_changed_cell() == (), (
+        "the PropSession should have consumed the PhysicsWorld cell transition")
     assert session._filed[id(prop)] == cell_of_point(prop.pos[0], prop.pos[2])
-    assert physics.calls == 1, "the session asked more than once per sync"
+    assert prop.pos[0] >= CELL_SIZE, (
+        "the real physics step did not move the body across a spatial cell: %r"
+        % (prop.pos,))
 
 
 def test_a_quiet_frame_refiles_nothing():
-    prop = prop_at(0, 0, 60)
-    physics = FakePhysics()
+    prop = prop_at(0, 0, 60, physics_enabled=True)
+    physics = _real_physics_world(prop)
     session = make_session([prop], physics=physics)
+
+    assert physics.entities_that_changed_cell() == ()
     before = dict(session._filed)
     for _ in range(10):
         session.sync_physics_positions()
