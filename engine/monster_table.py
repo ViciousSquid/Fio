@@ -17,7 +17,7 @@ others:
   always saw. ``MonsterAI.monster_states`` stays the per-monster state record
   (savegames and patrol read it); its four numeric fields are gathered and
   scattered with the rest.
-* **Rows are monsters in ``LogicThread._monster_things`` order**, which is also
+* **Rows are monsters in ``LogicWorld.monster_things`` order**, which is also
   the order the enemy-search batch and the old per-monster loop used, so
   "first in order" means the same monster everywhere.
 * **Per-tick columns are what the kernels produce** -- the resolved target,
