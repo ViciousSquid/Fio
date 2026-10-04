@@ -474,7 +474,7 @@ def test_a_published_monster_row_is_stable_while_the_ai_moves_it(logic):
 def test_the_projection_covers_every_brush_in_the_session(logic):
     brushes = pillar_grid(3, 3, spacing=300.0)
     thread = logic(brushes=brushes)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
         table = thread._render_table
@@ -484,28 +484,28 @@ def test_the_projection_covers_every_brush_in_the_session(logic):
             assert list(table.half[index]) == \
                 pytest.approx([v * 0.5 for v in brush["size"]])
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_only_movers_and_doors_are_marked_dynamic(logic):
     brushes = [box_brush("static"), box_brush("lift", (200, 0, 0), is_mover=True),
                box_brush("gate", (400, 0, 0), is_door=True)]
     thread = logic(brushes=brushes)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
         dynamic = sorted(int(i) for i in thread._render_table.dynamic_slots)
         assert dynamic == [1, 2], (
             "dynamic slots are %s; only the mover and the door move" % (dynamic,))
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_visibility_is_published_as_slots_into_the_projection(logic):
     """The numerical result crosses the thread boundary, not just objects."""
     brushes = pillar_grid(3, 3, spacing=300.0)
     thread = logic(brushes=brushes)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
@@ -518,7 +518,7 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
         for i, brush in enumerate(state.visible_brushes):
             assert table.ids[int(slots[i])] == brush["id"]
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
@@ -526,7 +526,7 @@ def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
     writer Big World and save restores share, which journals the change."""
     brush = box_brush("switchable", (0, 0, -400))
     thread = logic(brushes=[brush])
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.culling_enabled = False
     try:
         thread.render_runtime.prepare_render_state()
@@ -537,13 +537,13 @@ def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
         assert len(thread.game_state.get_write_state().all_brushes) == 0, (
             "hiding a brush mid-session did not remove it from the frame")
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
     """A brush added during play invalidates the fixed-size cache by count."""
     thread = logic(brushes=[box_brush("first", (0, 0, -400))])
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.culling_enabled = False
     try:
         thread.editor_state.brushes.append(box_brush("second", (100, 0, -400)))
@@ -553,7 +553,7 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
             "a brush added mid-session did not reach the renderer; the frame "
             "holds %s" % (sorted(names),))
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_a_new_threaded_state_exposes_empty_dense_projections():
@@ -816,7 +816,7 @@ def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
     second tick before publishing.
     """
     thread = logic(brushes=[box_brush("floor", (0, -16, 0), (512, 32, 512))])
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.muzzle_flash_active = True
         busy = thread.game_state.get_render_state()     # renderer mid-paint
@@ -830,7 +830,7 @@ def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
             "the shot's muzzle flash never reached the renderer")
         assert thread.muzzle_flash_active is False
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
@@ -842,7 +842,7 @@ def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
     """
     brushes = pillar_grid(4, 4, spacing=300.0)
     thread = logic(brushes=brushes)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
@@ -860,7 +860,7 @@ def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
         assert len(materialised) == len(brushes)
         assert materialised[0] is thread.brushes[0]
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 # ---------------------------------------------------------------------------
@@ -878,7 +878,7 @@ def test_the_entity_projection_reaches_the_renderer(logic):
     things = [make_thing(Light, "lamp", (0, 100, 0)),
               make_thing(Monster, "grunt", (0, 96, -300))]
     thread = logic(things=things)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
@@ -890,7 +890,7 @@ def test_the_entity_projection_reaches_the_renderer(logic):
         assert len(state.entity_refs) >= state.entity_table.count
         assert len(state.thing_hidden) >= state.entity_table.count
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_entity_slots_index_the_rows_they_were_published_beside(logic):
@@ -912,7 +912,7 @@ def test_a_collected_prop_is_not_published(logic):
     keep = make_thing(Light, "lamp", (0, 100, 0))
     taken = make_thing(Prop, "medkit", (200, 0, 0), collect_enabled=True, collect_collected=True)
     thread = logic(things=[keep, taken])
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         thread._props.collected_ids.add(id(taken))
         thread.render_runtime.prepare_render_state()
@@ -921,7 +921,7 @@ def test_a_collected_prop_is_not_published(logic):
         assert list(state.visible_things) == [keep]
         assert len(state.visible_thing_slots) == 1
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
@@ -946,12 +946,12 @@ def test_whether_the_map_has_portals_is_published(logic):
     assert plain.game_state.get_write_state().has_portals is False
 
     with_portal = logic(things=[make_thing(Portal, "door", (0, 0, 0))])
-    with_portal.set_play_mode(True)
+    with_portal.session_runtime.apply_play_mode(True)
     try:
         with_portal.render_runtime.prepare_render_state()
         assert with_portal.game_state.get_write_state().has_portals is True
     finally:
-        with_portal.set_play_mode(False)
+        with_portal.session_runtime.apply_play_mode(False)
 
 
 def test_the_renderer_does_not_reuse_texture_ids_across_an_adopt():

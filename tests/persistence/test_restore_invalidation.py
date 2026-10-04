@@ -53,13 +53,13 @@ def session():
         thread = LogicThread(ThreadedGameState(), state)
         made.append(thread)
         thread.player = Player(0.0, 0.0)
-        thread.set_play_mode(True)
+        thread.session_runtime.apply_play_mode(True)
         return state, thread
 
     yield _build
 
     for thread in made:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
         thread.stop()
 
 
