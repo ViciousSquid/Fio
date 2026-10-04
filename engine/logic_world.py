@@ -249,7 +249,4 @@ class LogicWorld:
 
         logic.trigger_runtime.clear_trigger_index()
 
-        logic._portal_things = []
-        logic._portal_target_things = []
-        logic._portal_slots = np.empty(0, dtype=np.int32)
-        logic._portal_target_slots = np.empty(0, dtype=np.int32)
+        logic.portal_runtime.clear_links()

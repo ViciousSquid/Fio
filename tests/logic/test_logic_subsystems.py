@@ -219,8 +219,8 @@ def test_logic_portals_constructs_and_rebuilds_target_links():
 
     runtime.rebuild_links()
 
-    assert host._portal_slots.tolist() == [0, 1]
-    assert host._portal_target_slots.tolist() == [1, 0]
+    assert runtime.portal_slots.tolist() == [0, 1]
+    assert runtime.portal_target_slots.tolist() == [1, 0]
     assert host._portal_target_things == [second, first]
 
 

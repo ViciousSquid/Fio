@@ -37,6 +37,8 @@ class LogicPortals:
         self.portal_target_things = []
         self.portal_slots = np.empty(0, dtype=np.int32)
         self.portal_target_slots = np.empty(0, dtype=np.int32)
+        self._portal_cooldowns = {}
+        self._portal_prev_player_pos = None
 
     def rebuild_links(self):
         """Resolve portal_target names to paired portal slots."""
@@ -84,8 +86,8 @@ class LogicPortals:
         logic = self.logic
         Portal = self.portal_type
 
-        logic._portal_cooldowns.clear()
-        logic._portal_prev_player_pos = None
+        self._portal_cooldowns.clear()
+        self._portal_prev_player_pos = None
 
         if Portal is not None:
             for thing in logic.editor_state.things:
@@ -96,7 +98,14 @@ class LogicPortals:
 
     def note_player_teleported(self):
         """Invalidate the previous movement segment after a non-portal teleport."""
-        self.logic._portal_prev_player_pos = None
+        self._portal_prev_player_pos = None
+
+    def clear_links(self):
+        """Release play-session portal topology references."""
+        self.portal_things = []
+        self.portal_target_things = []
+        self.portal_slots = np.empty(0, dtype=np.int32)
+        self.portal_target_slots = np.empty(0, dtype=np.int32)
 
     def update(self, delta: float):
         """Detect and execute player transit through active portal pairs."""
@@ -105,41 +114,41 @@ class LogicPortals:
 
         if Portal is None or not logic.player:
             return
-        if not len(self._portal_things):
+        if not len(self.portal_things):
             return
 
-        for portal in logic._portal_things:
+        for portal in self.portal_things:
             portal.tick_fade(delta)
 
-        for pid in list(logic._portal_cooldowns):
-            logic._portal_cooldowns[pid] -= delta
-            if logic._portal_cooldowns[pid] <= 0.0:
-                del logic._portal_cooldowns[pid]
+        for pid in list(self._portal_cooldowns):
+            self._portal_cooldowns[pid] -= delta
+            if self._portal_cooldowns[pid] <= 0.0:
+                del self._portal_cooldowns[pid]
 
         cur = (
             float(logic.player.pos.x),
             float(logic.player.pos.y),
             float(logic.player.pos.z),
         )
-        prev = logic._portal_prev_player_pos
+        prev = self._portal_prev_player_pos
         if prev is None:
             prev = cur
 
-        for portal_index, _portal_slot in enumerate(self._portal_slots):
-            portal_a = logic._portal_things[portal_index]
+        for portal_index, _portal_slot in enumerate(self.portal_slots):
+            portal_a = self.portal_things[portal_index]
             if not portal_a.is_active():
                 continue
-            if portal_index >= len(self._portal_target_slots):
+            if portal_index >= len(self.portal_target_slots):
                 continue
 
-            target_slot = int(logic._portal_target_slots[portal_index])
+            target_slot = int(self.portal_target_slots[portal_index])
             if target_slot < 0:
                 continue
 
             portal_b = self._portal_target_things[portal_index]
             if portal_b is None or not portal_b.is_active():
                 continue
-            if id(portal_a) in logic._portal_cooldowns:
+            if id(portal_a) in self._portal_cooldowns:
                 continue
 
             hit = self._segment_crosses_aperture(portal_a, prev, cur)
@@ -151,8 +160,8 @@ class LogicPortals:
             cooldown = getattr(
                 Portal, "TRANSIT_COOLDOWN", _PORTAL_TRANSIT_COOLDOWN
             )
-            logic._portal_cooldowns[id(portal_a)] = cooldown
-            logic._portal_cooldowns[id(portal_b)] = cooldown
+            self._portal_cooldowns[id(portal_a)] = cooldown
+            self._portal_cooldowns[id(portal_b)] = cooldown
 
             if logic.io_manager:
                 logic.io_manager.fire_output(portal_a, "OnTeleport")
@@ -165,7 +174,7 @@ class LogicPortals:
             )
             break
 
-        logic._portal_prev_player_pos = (
+        self._portal_prev_player_pos = (
             float(logic.player.pos.x),
             float(logic.player.pos.y),
             float(logic.player.pos.z),
@@ -263,22 +272,22 @@ class LogicPortals:
         logic = self.logic
         Portal = self.portal_type
 
-        if Portal is None or not len(logic._portal_things):
+        if Portal is None or not len(self.portal_things):
             return
 
         cur = tuple(projectiles.pos[index])
-        for portal_index, _portal_slot in enumerate(self._portal_slots):
-            portal_a = logic._portal_things[portal_index]
+        for portal_index, _portal_slot in enumerate(self.portal_slots):
+            portal_a = self.portal_things[portal_index]
             if not portal_a.is_active():
                 continue
-            if portal_index >= len(logic._portal_target_slots):
+            if portal_index >= len(self.portal_target_slots):
                 continue
 
-            target_slot = int(logic._portal_target_slots[portal_index])
+            target_slot = int(self.portal_target_slots[portal_index])
             if target_slot < 0:
                 continue
 
-            portal_b = logic._portal_target_things[portal_index]
+            portal_b = self.portal_target_things[portal_index]
             if portal_b is None or not portal_b.is_active():
                 continue
 

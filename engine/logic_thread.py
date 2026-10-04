@@ -208,8 +208,6 @@ class LogicThread(threading.Thread):
         ),
         "portals": (
             "player",
-            "_portal_cooldowns",
-            "_portal_prev_player_pos",
         ),
         "combat": (
             "player",
@@ -440,14 +438,6 @@ class LogicThread(threading.Thread):
         # Respawn input has a value to restore (see _reset_all_monsters).
         self._monster_spawn_health: Dict[str, int] = {}
 
-        # ── Portal transit state ───────────────────────────────────────────
-        self._portal_cooldowns: Dict[int, float] = {}
-        # Player position at the end of the previous portal update.  Kept so a
-        # crossing can be tested against the point where the movement *segment*
-        # pierces the aperture (anti-tunnelling), not just the post-move point.
-        self._portal_prev_player_pos = None
-        # Portal name → Portal lookup cache; rebuilt on play start and when
-        # editor_state.things changes. Avoids an O(n) rebuild every physics tick.
         # Portal slots use the same enumerate(editor_state.things) address space
         # as EntityTable. Links are resolved once when topology changes.
 
