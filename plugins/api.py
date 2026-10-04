@@ -713,11 +713,11 @@ class RuntimeAPI:
 
     def player_eye(self):
         """The player's eye position as an ``(x, y, z)`` tuple."""
-        return _player_eye(self.logic.player)
+        return _player_eye(self.logic.player_runtime.player)
 
     def player_forward(self):
         """The player's full look direction (with pitch) as a unit-ish tuple."""
-        return _player_forward(self.logic.player)
+        return _player_forward(self.logic.player_runtime.player)
 
     def raycast_from_crosshair(self, reach: float = 160.0, aim_dot: float = 0.86,
                                type_name: Optional[str] = None,
@@ -730,7 +730,7 @@ class RuntimeAPI:
         This is the query most interaction plugins need — it replaces the
         hand-rolled "what am I looking at" loop.
         """
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None:
             return None
         eye = _player_eye(player)
