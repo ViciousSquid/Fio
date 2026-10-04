@@ -236,7 +236,7 @@ def test_notarget_stops_the_chase_without_stopping_gravity(
         monster_factory, ai_world, flat_ground):
     monster = monster_factory("chaser", (400, 500, 0))
     ai, logic = ai_world(brushes=flat_ground, things=[monster])
-    logic.notarget = True
+    logic.player_runtime.notarget = True
 
     before_x = monster.pos[0]
     for _ in range(10):

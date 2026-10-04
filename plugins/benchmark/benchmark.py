@@ -510,7 +510,7 @@ class BenchmarkRunner:
             QApplication.processEvents()
         logic = getattr(self.main_window.view_3d, "logic_thread", None)
         if logic is not None:
-            logic.notarget = self._original_notarget
+            logic.player_runtime.notarget = self._original_notarget
         if self._original_level_data is not None:
             self.main_window.state.load_from_data(copy.deepcopy(self._original_level_data))
             self.main_window.update_all_ui()
@@ -527,7 +527,7 @@ class BenchmarkRunner:
             camera.fov = fov
         logic = getattr(self.main_window.view_3d, "logic_thread", None)
         if logic is not None:
-            logic.notarget = self._original_notarget
+            logic.player_runtime.notarget = self._original_notarget
         self.main_window.unsaved_changes = self._original_unsaved_changes
         self.main_window.view_3d.update()
         QApplication.processEvents()
@@ -930,7 +930,7 @@ class BenchmarkRunner:
             if label == "monster_chaos_witness":
                 logic = getattr(self.main_window.view_3d, "logic_thread", None)
                 if logic is not None:
-                    logic.notarget = self._original_notarget
+                    logic.player_runtime.notarget = self._original_notarget
             if self.main_window.view_3d.play_mode:
                 if label.startswith(("procedural_", "monster_")):
                     self._bench.finish_live_monster_test(self.main_window)
@@ -1044,7 +1044,7 @@ class BenchmarkRunner:
             logic = getattr(view, "logic_thread", None)
             self._restore_monster_chaos_ai_counter(logic)
             if logic is not None:
-                logic.notarget = self._original_notarget
+                logic.player_runtime.notarget = self._original_notarget
             if view.play_mode:
                 self._bench.finish_live_monster_test(self.main_window)
 
@@ -1278,8 +1278,8 @@ class BenchmarkRunner:
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
             logic = getattr(self.main_window.view_3d, "logic_thread", None)
             self._original_notarget = bool(
-                getattr(logic, "notarget", False)
-            )
+                logic.player_runtime.notarget
+            ) if logic is not None else False
             self._original_unsaved_changes = bool(
                 getattr(self.main_window, "unsaved_changes", False)
             )
