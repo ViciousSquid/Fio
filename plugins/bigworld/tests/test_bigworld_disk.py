@@ -99,12 +99,14 @@ class FakeLogic:
         self._portal_cooldowns = {}
         self._portal_prev_player_pos = None
         self._portal_things = []
+        self.visibility_changes = 0
         self._portal_target_things = []
         self.portal_runtime = LogicPortals(self)
         self.trigger_runtime = LogicTriggers(self)
         self.world_runtime = LogicWorld(self)
         self._monster_things = []
         self._bigworld = None
+        self.visibility_changes = 0
 
     def _build_entity_caches(self):
         self._monster_things = [t for t in self.things
