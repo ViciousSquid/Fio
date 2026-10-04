@@ -30,7 +30,7 @@ from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
 from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic
-from editor.view_2d import View2D
+from editor.view_2d import View2D, singleton_instance
 from editor.editor_state import EditorState
 from editor import component_edit
 from editor import face_texture
@@ -1105,10 +1105,6 @@ class MainWindow(QMainWindow):
         A copy is refused while the scene already holds an instance of its
         type; the toast says so. Brushes and ordinary entities pass through.
         """
-        try:
-            from plugins.integration import singleton_instance
-        except Exception:
-            return list(sources), 0
         kept, skipped = [], 0
         for source in sources:
             props = getattr(source, 'properties', None)
