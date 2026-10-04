@@ -236,17 +236,10 @@ def test_a_rebuild_releases_a_prop_that_left_the_world(real_logic):
         "a released Prop kept the session's authored state")
 
 
-def test_an_empty_registry_is_a_valid_state():
+def test_an_empty_registry_is_a_valid_state(real_logic):
     """A map with no Props still has a session; it just has nothing in it."""
-    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[SimpleNamespace(properties={'type': 'light'})]))
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    logic.player_runtime = SimpleNamespace(
-        player=SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
-    )
-    session = PropSession(logic)
-    session.start()
+    light = Light(pos=[0, 0, 0])
+    logic, session, events = real_logic([light])
     assert session.props == []
     session.tick(1 / 60.0, use_pressed=True)      # must not raise
 
