@@ -424,9 +424,9 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
     thread.camera.player = thread.player
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert thread._portal_things == portals
-        assert thread._portal_slots.tolist() == [50, 51, 52]
-        assert thread._portal_target_slots.tolist() == [-1, -1, -1]
+        assert thread.portal_runtime.portal_things == portals
+        assert thread.portal_runtime.portal_slots.tolist() == [50, 51, 52]
+        assert thread.portal_runtime.portal_target_slots.tolist() == [-1, -1, -1]
 
         # Fades still advance, and they advance for portals the name index
         # cannot hold (an unnamed portal is still a portal).
