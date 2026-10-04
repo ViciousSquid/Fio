@@ -209,10 +209,6 @@ class LogicThread(threading.Thread):
             "collected_keys",
             "current_hud_message",
             "current_hud_key_name",
-            "_levelchanger_things",
-            "_levelchanger_centres",
-            "_levelchanger_radii",
-            "_levelchanger_eligible",
             "level_complete_ui",
             "io_manager",
         ),
@@ -252,7 +248,6 @@ class LogicThread(threading.Thread):
             "_props",
             "monster_ai",
             "_monster_lock",
-            "_levelchanger_things",
             "_timer_things",
             "_name_cache",
             "_id_cache",
@@ -483,13 +478,9 @@ class LogicThread(threading.Thread):
         # The Prop registry (engine.prop_runtime.PropSession).  Created on
         # play-mode enter and None in the editor, where nothing simulates.
         self._props = None
-        self._levelchanger_things = []
         # Dense LevelChanger activation columns. Spatial data is rebuilt with
         # the entity caches; the per-tick interaction path only consumes these
         # float32 columns and scalar-dispatches the selected row.
-        self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
-        self._levelchanger_radii = np.empty(0, dtype=np.float32)
-        self._levelchanger_eligible = np.empty(0, dtype=bool)
         self._monster_things = []
         self._monster_by_id = {}
         self._timer_things = []
