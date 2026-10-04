@@ -147,7 +147,7 @@ def test_logic_movers_constructs_and_indexes_mover_brushes():
         "pos": [0, 0, 0],
     }
     host = SimpleNamespace(
-        brushes=[mover],
+        editor_state=SimpleNamespace(brushes=[mover], things=[]),
         movers=[],
         mover_path_states={},
         _mover_brush_list=[],
@@ -170,7 +170,7 @@ def test_logic_parenting_constructs_and_updates_parented_light():
 
     brush = {"name": "lift", "is_mover": True, "pos": [0, 0, 0]}
     light = Light()
-    host = SimpleNamespace(brushes=[brush], things=[light], _parented_lights=[])
+    host = SimpleNamespace(editor_state=SimpleNamespace(brushes=[brush], things=[light]), _parented_lights=[])
 
     runtime = LogicParenting(host, light_type=Light)
     runtime._init_parented_lights()
@@ -216,7 +216,7 @@ def test_logic_player_constructs_and_reports_water_transition():
 def test_logic_portals_constructs_and_rebuilds_target_links():
     first = _Portal("A", "B")
     second = _Portal("B", "A")
-    host = SimpleNamespace(things=[first, second])
+    host = SimpleNamespace(editor_state=SimpleNamespace(brushes=[], things=[first, second]))
     runtime = LogicPortals(host, portal_type=_Portal)
 
     runtime.rebuild_links()
