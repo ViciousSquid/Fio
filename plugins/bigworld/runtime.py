@@ -227,9 +227,8 @@ class BigWorldSession:
         screen's box, which does follow the camera's turn; changing it only
         re-tiers.
         """
-        footprint = getattr(self.logic, "overhead_ground_footprint", None)
         try:
-            fp = footprint() if callable(footprint) else None
+            fp = self.logic.camera.overhead_ground_footprint()
         except Exception:
             fp = None
         if not fp:
@@ -265,14 +264,10 @@ class BigWorldSession:
 
     def _camera_height(self) -> float:
         """How high the host's overhead camera floats, ceiling included."""
-        effective = getattr(self.logic, "effective_overhead_height", None)
         try:
-            height = effective() if callable(effective) else None
+            return float(self.logic.camera.effective_overhead_height())
         except Exception:
-            height = None
-        if height is None:
-            height = getattr(self.logic, "overhead_height", 800.0)
-        return float(height or 800.0)
+            return float(self.logic.camera.overhead_height or 800.0)
 
     def _tier_near_radius(self) -> float:
         """The near circle the tiers are configured with: the authored one, or
@@ -363,7 +358,7 @@ class BigWorldSession:
         """Hold the host's overhead camera at or under *height* (None: no
         ceiling). Guarded, like the published radii."""
         try:
-            self.logic.overhead_height_limit = height
+            self.logic.camera.overhead_height_limit = height
         except Exception:
             pass
 
