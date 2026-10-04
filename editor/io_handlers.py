@@ -795,7 +795,7 @@ def register_all_input_handlers(io_manager: IOManager):
         except ImportError:                              # pragma: no cover
             from editor.io_system import count_incoming_connections
         return count_incoming_connections(
-            logic.brushes, logic.things,
+            logic.editor_state.brushes, logic.editor_state.things,
             target_name=entity.properties.get('name', ''),
             target_id=entity.properties.get('id', ''),
             input_name='Trigger')
@@ -1870,7 +1870,7 @@ def _get_brush_index(brush: dict, logic) -> int:
     brush dict with every brush before it (about a millisecond per input at
     40k brushes). The table's answer is used only if the list confirms it.
     """
-    brushes = logic.brushes
+    brushes = logic.editor_state.brushes
     mover_runtime = getattr(logic, 'mover_runtime', None)
     if mover_runtime is not None:
         try:
