@@ -692,7 +692,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         current = self.io_source.currentData() if hasattr(self, "io_source") else None
         self.io_source.blockSignals(True)
         self.io_source.clear()
-        for thing in getattr(self.main_window.state, "things", []) or []:
+        for thing in self.main_window.state.things:
             props = getattr(thing, "properties", {})
             if props.get("_cutscene_temporary"):
                 continue
@@ -712,7 +712,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.io_output.blockSignals(True)
         self.io_output.clear()
         source_id = str(self.io_source.currentData() or "")
-        source = next((t for t in getattr(self.main_window.state, "things", []) or []
+        source = next((t for t in self.main_window.state.things
                        if str(getattr(t, "properties", {}).get("id", "")) == source_id), None)
         if source is not None:
             entity_type = str(source.properties.get("type", ""))
@@ -1680,7 +1680,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         aid = str(aid or "")
         if not aid:
             return None
-        for obj in getattr(self.main_window.state, "things", []) or []:
+        for obj in self.main_window.state.things:
             if str(getattr(obj, "properties", {}).get("id", "")) == aid:
                 return obj
         return None
