@@ -429,8 +429,10 @@ class LogicThread(threading.Thread):
 
         # Trigger state remains on LogicThread for compatibility; LogicTriggers
         # owns the algorithms that operate on it.
+        # LogicTriggers owns trigger detection and activation state.
+        self.trigger_runtime = LogicTriggers(self)
         self.fired_once_triggers: set = set()
-        self._reset_trigger_state()
+        self.trigger_runtime._reset_trigger_state()
 
         # Logic Gate State
         self.gate_inputs = {}
@@ -524,8 +526,6 @@ class LogicThread(threading.Thread):
         # CutsceneRuntime owns cinematic playback state. LogicThread remains
         # the simulation orchestrator and delegates the state machine here.
         self.cutscene_runtime = CutsceneRuntime(self)
-        # LogicTriggers owns trigger detection and activation logic.
-        self.trigger_runtime = LogicTriggers(self)
         # LogicPortals owns portal topology, transit and fade runtime.
         self.portal_runtime = LogicPortals(self, portal_type=Portal)
         # LogicParenting owns mover-parented light and portal transforms.
@@ -1324,7 +1324,7 @@ class LogicThread(threading.Thread):
         player_runtime.update_water_sounds(delta)
 
         # Gameplay
-        self._handle_interactions(use_key)
+        self.interaction_runtime.handle(use_key)
         if self._props is not None:
             self._props.tick(delta, use_key)
         physics_world = getattr(self, '_physics_world', None)
@@ -1335,7 +1335,7 @@ class LogicThread(threading.Thread):
             if self._props is not None:
                 self._props.sync_physics_positions()
 
-        self._handle_triggers(use_key, delta)
+        self.trigger_runtime._handle_triggers(use_key, delta)
 
         # Plugin tick: runs last in the gameplay sequence so the use-key edge is
         # intact and any plugin HUD prompt is the final word for the frame. The
@@ -1428,68 +1428,6 @@ class LogicThread(threading.Thread):
     # TRIGGER HANDLING
     # =========================================================================
 
-    def _trigger_runtime(self):
-        """Return the trigger subsystem, creating it for lightweight test doubles."""
-        runtime = getattr(self, "trigger_runtime", None)
-        if runtime is None:
-            runtime = LogicTriggers(self)
-            self.trigger_runtime = runtime
-        return runtime
-
-    def _reset_trigger_state(self):
-        return self._trigger_runtime()._reset_trigger_state()
-
-    @staticmethod
-    def _trigger_filters(brush):
-        return LogicTriggers._trigger_filters(brush)
-
-    @staticmethod
-    def use_trigger_contains(distance_sq, use_radius):
-        return LogicTriggers.use_trigger_contains(distance_sq, use_radius)
-
-    def _refresh_use_triggers(self):
-        return self._trigger_runtime()._refresh_use_triggers()
-
-    def _use_prompt_candidates(self):
-        return self._trigger_runtime()._use_prompt_candidates()
-
-    def _sample_use_prompt(self):
-        return self._trigger_runtime()._sample_use_prompt()
-
-    def _trigger_poll_interval(self, brush):
-        return self._trigger_runtime()._trigger_poll_interval(brush)
-
-    def _poll_triggers(self, use_key_pressed=False, trigger_ids=None):
-        return self._trigger_runtime()._poll_triggers(
-            use_key_pressed=use_key_pressed, trigger_ids=trigger_ids
-        )
-
-    def _handle_triggers(self, use_key_pressed: bool, delta=None):
-        return self._trigger_runtime()._handle_triggers(use_key_pressed, delta)
-
-    def _on_trigger_enter(self, brush, trigger_id, activator_type='player',
-                          activator_entity=None):
-        return self._trigger_runtime()._on_trigger_enter(
-            brush, trigger_id, activator_type=activator_type,
-            activator_entity=activator_entity
-        )
-
-    def _on_trigger_exit(self, brush, trigger_id, activator_type='player',
-                         activator_entity=None):
-        return self._trigger_runtime()._on_trigger_exit(
-            brush, trigger_id, activator_type=activator_type,
-            activator_entity=activator_entity
-        )
-
-    def _process_hurt_trigger(self, brush, trigger_id, poll_interval=1.0):
-        return self._trigger_runtime()._process_hurt_trigger(
-            brush, trigger_id, poll_interval
-        )
-
-    def _apply_player_damage(self, damage):
-        return self._trigger_runtime()._apply_player_damage(damage)
-
-    # =========================================================================
     # INTERACTIONS
     # =========================================================================
 
@@ -1497,23 +1435,6 @@ class LogicThread(threading.Thread):
         """Compatibility wrapper for dense LevelChanger geometry."""
         return self._world_runtime().refresh_levelchanger_table()
 
-    def _interaction_runtime(self):
-        """Return the player/world interaction runtime."""
-        runtime = getattr(self, "interaction_runtime", None)
-        if runtime is None:
-            runtime = LogicInteraction(self)
-            try:
-                self.interaction_runtime = runtime
-            except Exception:
-                pass
-        return runtime
-
-    def _handle_interactions(self, use_key_pressed: bool):
-        return LogicThread._interaction_runtime(self).handle(use_key_pressed)
-
-    # =========================================================================
-
-    # =========================================================================
     # PARENTED ENTITY RUNTIME
     # =========================================================================
 

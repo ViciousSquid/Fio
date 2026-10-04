@@ -27,7 +27,10 @@ def _levelchanger(name="LevelChanger_1", pos=(0.0, 0.0, 0.0), radius=128.0, **pr
 def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
     logic = LogicThread.__new__(LogicThread)
     logic._levelchanger_things = list(things)
-    logic._refresh_levelchanger_table()
+    from engine.logic_world import LogicWorld
+    from engine.logic_interaction import LogicInteraction
+    logic.world_runtime = LogicWorld(logic)
+    logic.world_runtime.refresh_levelchanger_table()
     logic.player = SimpleNamespace(
         pos=list(player_pos),
         angle=float(angle),
@@ -68,11 +71,11 @@ def test_levelchanger_radius_boundary_is_squared_without_glm_distance(monkeypatc
         ),
     )
 
-    logic._handle_interactions(False)
+    logic.interaction_runtime.handle(False)
     assert logic.current_hud_message == ""
 
     logic.player.pos = [60.0, 0.0, 60.0]
-    logic._handle_interactions(False)
+    logic.interaction_runtime.handle(False)
     assert logic.current_hud_message == "[E] Complete Level"
 
 
@@ -86,7 +89,7 @@ def test_levelchanger_first_matching_row_wins_after_vectorised_filter():
         fire_output=lambda entity, output: fired.append((entity.properties["name"], output))
     )
 
-    logic._handle_interactions(True)
+    logic.interaction_runtime.handle(True)
 
     assert logic.current_hud_message == "[E] Complete Level"
     assert logic.level_complete_ui["target_map"] == "NextMap"

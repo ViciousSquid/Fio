@@ -106,7 +106,7 @@ class LogicInteraction:
                 or eligible is None
                 or len(centres) != len(logic._levelchanger_things)
             ):
-                logic._refresh_levelchanger_table()
+                logic.world_runtime.refresh_levelchanger_table()
                 centres = logic._levelchanger_centres
                 radii = logic._levelchanger_radii
                 eligible = logic._levelchanger_eligible

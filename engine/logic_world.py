@@ -57,7 +57,7 @@ class LogicWorld:
             if brush.get("is_trigger")
         ]
         logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
-        logic._refresh_use_triggers()
+        logic.trigger_runtime._refresh_use_triggers()
 
         if logic._props is not None:
             logic._props.rebuild(logic.things)
@@ -104,7 +104,7 @@ class LogicWorld:
             logic._reindex_moving_brushes()
             logic.mark_collision_dirty()
 
-        logic._rebuild_portal_links()
+        logic.portal_runtime.rebuild_links()
 
     def find_entity_by_name(self, name: str):
         """Resolve an entity by name against the live world/session cache."""
@@ -202,7 +202,7 @@ class LogicWorld:
         """Rebuild collision after an authored visibility change."""
         logic = self.logic
         self.notify_visibility_changed()
-        logic._refresh_collision_brushes_cache()
+        logic.collision_runtime.refresh_collision_brushes_cache()
         grid = getattr(logic, "_spatial_grid", None)
         if grid is not None:
             grid.populate(logic._collision_brushes_cache)

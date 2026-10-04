@@ -122,11 +122,7 @@ class LogicTriggers:
         # Evaluated per tick by _sample_use_prompt; kept as an attribute only
         # so the render state and tests can read the frame's current prompt.
         self.logic._trigger_use_prompt = ""
-        refresh = getattr(self.logic, "_refresh_use_triggers", None)
-        if callable(refresh):
-            refresh()
-        else:
-            self._refresh_use_triggers()
+        self._refresh_use_triggers()
 
     @staticmethod
     def use_trigger_contains(distance_sq, use_radius):
@@ -178,7 +174,7 @@ class LogicTriggers:
         for bid, brush in self.logic._use_trigger_entries:
             if brush.get('disabled', False):
                 continue
-            if 'player' not in self.logic._trigger_filters(brush):
+            if 'player' not in self._trigger_filters(brush):
                 continue
             # A spent 'once' trigger does nothing, so it must not keep
             # advertising itself -- 2.4.2 suppressed the prompt for exactly
@@ -204,7 +200,7 @@ class LogicTriggers:
         if player is None or not self.logic._use_trigger_entries:
             return ""
 
-        candidates = list(self.logic._use_prompt_candidates())
+        candidates = list(self._use_prompt_candidates())
         if not candidates:
             return ""
 
@@ -216,7 +212,7 @@ class LogicTriggers:
 
         offset = centres - origin
         distance_sq = np.einsum('ij,ij->i', offset, offset)
-        in_range = self.logic.use_trigger_contains(distance_sq, radii)
+        in_range = self.use_trigger_contains(distance_sq, radii)
         if not in_range.any():
             return ""
 
@@ -274,7 +270,7 @@ class LogicTriggers:
         # The use-activated subset can change if a brush's activation mode is
         # edited mid-session; refreshing it here keeps the per-tick prompt pass
         # correct without walking the whole trigger list every frame.
-        self.logic._refresh_use_triggers()
+        self._refresh_use_triggers()
 
         # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
@@ -302,7 +298,7 @@ class LogicTriggers:
             else:
                 bounds = brush_aabb_bounds(brush)
 
-            filters = self.logic._trigger_filters(brush)
+            filters = self._trigger_filters(brush)
             filter_mask = (
                 (1 if 'player' in filters else 0) |
                 (2 if 'props' in filters else 0) |
@@ -432,7 +428,7 @@ class LogicTriggers:
                             # handled below, but it must not fire OnStartTouch
                             # merely because the player entered its AABB.
                             if _trigger_activation(brush) != 'use':
-                                self.logic._on_trigger_enter(
+                                self._on_trigger_enter(
                                     brush,
                                     bid,
                                     activator_type=activator_type,
@@ -453,7 +449,7 @@ class LogicTriggers:
 
                         if activator is not None:
                             if _trigger_activation(brush) != 'use':
-                                self.logic._on_trigger_exit(
+                                self._on_trigger_exit(
                                     brush,                                    bid,
                                     activator_type=activator_type,
                                     activator_entity=activator,
@@ -508,7 +504,7 @@ class LogicTriggers:
             # The sphere is what decides; the broad-phase box only nominated
             # this trigger as a candidate. Same predicate the prompt uses, so
             # what the player is shown and what pressing E does cannot drift.
-            if not self.logic.use_trigger_contains(
+            if not self.use_trigger_contains(
                     distance_sq, float(brush.get('use_radius', 96.0))):
                 continue
             if distance_sq > 1.0e-8:
@@ -523,7 +519,7 @@ class LogicTriggers:
             if _trigger_is_once(brush) and bid in self.logic.fired_once_triggers:
                 continue
 
-            self.logic._on_trigger_enter(
+            self._on_trigger_enter(
                 brush,
                 bid,
                 activator_type='player',
@@ -543,10 +539,10 @@ class LogicTriggers:
                 and brush.get('trigger_action') == 'hurt'
                 and _trigger_activation(brush) != 'use'
             ):
-                self.logic._process_hurt_trigger(
+                self._process_hurt_trigger(
                     brush,
                     bid,
-                    self.logic._trigger_poll_interval(brush),
+                    self._trigger_poll_interval(brush),
                 )
 
         # Use prompts are no longer sampled here: _sample_use_prompt evaluates
@@ -571,7 +567,7 @@ class LogicTriggers:
         # stages had just set, which is what silently removed "NEED: <key>",
         # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
         # "[E] Complete Level" and "[E] Drop" from the HUD.
-        self.logic._trigger_use_prompt = self.logic._sample_use_prompt()
+        self.logic._trigger_use_prompt = self._sample_use_prompt()
         if self.logic._trigger_use_prompt:
             self.logic.current_hud_message = self.logic._trigger_use_prompt
 
@@ -590,14 +586,14 @@ class LogicTriggers:
                     self.logic._trigger_poll_elapsed_by_bid.get(bid, 0.0)
                     + scheduler_tick
                 )
-                interval = self.logic._trigger_poll_interval(brush)
+                interval = self._trigger_poll_interval(brush)
                 if elapsed + self.logic.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
                 self.logic._trigger_poll_elapsed_by_bid[bid] = elapsed
 
             if due_ids:
-                self.logic._poll_triggers(trigger_ids=due_ids)
+                self._poll_triggers(trigger_ids=due_ids)
 
     def _apply_player_damage(self, damage):
         with self.logic._player_damage_lock:
@@ -686,7 +682,7 @@ class LogicTriggers:
             # Only the player has damage/health semantics at present.
             if activator_type == 'player':
                 damage = _trigger_damage(brush)
-                self.logic._apply_player_damage(damage)
+                self._apply_player_damage(damage)
                 self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
         elif action == 'target':
@@ -737,7 +733,7 @@ class LogicTriggers:
             self.logic.hurt_trigger_timers[trigger_id] -= float(poll_interval)
             if self.logic.hurt_trigger_timers[trigger_id] <= 0:
                 damage = _trigger_damage(brush)
-                self.logic._apply_player_damage(damage)
+                self._apply_player_damage(damage)
                 self.logic.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
 
 

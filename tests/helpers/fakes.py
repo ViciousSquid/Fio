@@ -18,6 +18,7 @@ import time
 import glm
 
 from engine.logic_combat import LogicCombat
+from engine.logic_triggers import LogicTriggers
 from engine.physics import SpatialGrid
 from engine.projectile_table import ProjectileStore
 
@@ -96,15 +97,24 @@ class FakeLogicThread:
         self._monster_lock = threading.RLock()
         self._gunfire_events = []
         self.combat_runtime = LogicCombat(self)
+        self._player_damage_lock = threading.Lock()
+        self.god_mode = False
+        self.buddha_mode = False
+        self.trigger_runtime = LogicTriggers(self)
         self._noise_events = self._gunfire_events
         self._name_cache = {}
         self._monster_things = None
+        self.hurt_trigger_timers = {}
+        self.HURT_INTERVAL = 0.5
         self.damage_applied = []
         self.rebuild_name_cache()
 
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
         return self._monster_projectiles.add(
             pos, vel, owner_id, damage, lifetime)
+
+    def _plugin_emit(self, *args, **kwargs):
+        return None
 
     # -- entity lookup ----------------------------------------------------
     def rebuild_name_cache(self):

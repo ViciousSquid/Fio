@@ -98,7 +98,7 @@ class LogicSession:
             logic.notarget = False
 
             # Reset collection state.
-            logic._reset_trigger_state()
+            logic.trigger_runtime._reset_trigger_state()
             logic.collected_keys.clear()
             for thing in logic.things:
                 if PropThing and isinstance(thing, PropThing):
@@ -217,7 +217,7 @@ class LogicSession:
                 )
 
             self.stop_monster_ai()
-            logic._reset_trigger_state()
+            logic.trigger_runtime._reset_trigger_state()
             logic.fired_once_triggers.clear()
             logic.collected_keys.clear()
             logic.active_speakers.clear()
