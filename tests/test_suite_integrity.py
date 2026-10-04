@@ -138,6 +138,8 @@ MACHINERY_TEST_ROOTS = (
     "tests/renderer",
     "tests/visual",
     "tests/monster_ai",
+    "tests/logic",
+    "tests/regression",
 )
 
 #: These names have appeared as substitutes for production owners in behavioural
@@ -148,6 +150,33 @@ MACHINERY_OWNER_DOUBLES = {
     "FakeRenderer", "_FakeRenderer", "FakeLogicThread",
 }
 
+
+def test_machinery_tests_do_not_use_namespace_production_owners():
+    """A fake namespace must not stand in for a production subsystem owner."""
+    owner_names = {"logic", "host", "renderer", "physics", "ai", "main_window"}
+    offenders = []
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Assign):
+                    continue
+                if not isinstance(node.value, ast.Call):
+                    continue
+                func = node.value.func
+                if not (isinstance(func, ast.Name) and func.id == "SimpleNamespace"):
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in owner_names:
+                        offenders.append("%s:%d (%s=SimpleNamespace)" % (
+                            _rel(path), node.lineno, target.id))
+    assert not offenders, (
+        "machinery tests construct production owners with SimpleNamespace; use the real "
+        "Fio owner fixture/object instead:\n  " + "\n  ".join(offenders)
+    )
 
 def test_machinery_tests_do_not_replace_production_owners():
     """Behavioural machinery tests must call the real subsystem owners."""
