@@ -428,7 +428,7 @@ class LogicSession:
         if logic.io_manager is not None:
             logic.io_manager.reset()
 
-        for player in (logic.player, getattr(logic, "player2", None)):
+        for player in (logic.player, logic.player2):
             if player is not None:
                 player.ground_object = None
 
