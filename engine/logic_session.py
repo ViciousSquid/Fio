@@ -257,7 +257,7 @@ class LogicSession:
                 grid.clear()
             logic._spatial_grid = None
 
-            logic.mover_path_states = {}
+            logic.mover_runtime.mover_path_states = {}
             logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
             logic._hud_cinematic_last_active = False
