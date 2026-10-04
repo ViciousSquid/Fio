@@ -2536,7 +2536,7 @@ entity to drive them from the I/O system.</i><br>
 
         # Already playing → overlay straight onto the live session.
         if self._in_play_mode():
-            lt = self._logic_thread()
+            lt = self.main_window.view_3d.logic_thread
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
@@ -2588,7 +2588,7 @@ entity to drive them from the I/O system.</i><br>
                                "Player Start in the level?).")
             return
 
-        lt = self._logic_thread()
+        lt = self.main_window.view_3d.logic_thread
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
