@@ -167,7 +167,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
 
     for _ in range(10):
         thread._tick(TICK)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     published = thread.game_state.get_write_state()
     assert "switchable" not in {b.get("name") for b in published.all_brushes}, (
         "the hidden brush was still submitted to the renderer")
@@ -261,7 +261,7 @@ def test_an_edit_made_while_play_mode_is_running_reaches_the_runtime(session):
     thread.culling_enabled = False
 
     state.brushes.append(box_brush("late_addition", (0, 64, -300)))
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     names = {b.get("name") for b in thread.game_state.get_write_state().all_brushes}
     assert "late_addition" in names, (
@@ -354,7 +354,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
                             things=[make_thing(Light, "lamp", (0, 200, 0))])
     thread.culling_enabled = False
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     first = thread.game_state.get_write_state()
     first_count = len(first.all_brushes)
     assert first_count == 6, "the room is six brushes, the frame has %d" % first_count
@@ -364,7 +364,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
     state.brushes.append(box_brush("new_pillar", (0, 64, 0), (64, 128, 64)))
     state.things.append(make_thing(Light, "lamp2", (100, 200, 0)))
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     second = thread.game_state.get_write_state()
     assert len(second.all_brushes) == first_count + 1, (
         "the rebuilt frame holds %d brushes, expected %d"
@@ -378,11 +378,11 @@ def test_a_geometry_edit_reaches_the_renderers_derived_mesh(session):
     thread.culling_enabled = False
     brush = state.brushes[0]
 
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     before = bg.get_shape(brush).bounds[1][1]
 
     state.clip_brush(brush, (0.0, 1.0, 0.0), 64.0)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     after = bg.get_convex(state.brushes[0]).bounds[1][1]
 
     assert after < before, (
