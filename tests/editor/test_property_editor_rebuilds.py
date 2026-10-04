@@ -76,13 +76,13 @@ class FakeHost(QWidget):
         self.saves = 0
         self.dirty_marks = 0
 
-        def mark_dirty(self):
-            self.dirty_marks += 1
-
         # update_object_prop() repaints the viewports after a value changes.
         # PyQt aborts the process on an unhandled exception inside a slot, so
         # a missing view here is a hard crash rather than a failed assert.
         self.view_3d = _FakeView()
+
+    def mark_dirty(self):
+        self.dirty_marks += 1
 
     def save_state(self):
         self.saves += 1
