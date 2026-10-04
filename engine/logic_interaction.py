@@ -26,7 +26,7 @@ class LogicInteraction:
         self.current_hud_key_name = None
 
         reach_distance = 80.0
-        px, py, pz = logic.player_runtime.player.pos
+        px, py, pz = logic.player.pos
 
         found_door_idx = -1
         found_door_brush = None
@@ -118,9 +118,9 @@ class LogicInteraction:
             if in_range.any():
                 forward = np.asarray(
                     (
-                        math.sin(logic.player_runtime.player.angle),
+                        math.sin(logic.player.angle),
                         0.0,
-                        math.cos(logic.player_runtime.player.angle),
+                        math.cos(logic.player.angle),
                     ),
                     dtype=np.float32,
                 )

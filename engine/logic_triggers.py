@@ -219,7 +219,7 @@ class LogicTriggers:
         moment the player moves or turns instead of up to a poll interval
         later. The arithmetic is one batched pass over that subset.
         """
-        player = self.logic.player_runtime.player
+        player = self.logic.player
         if player is None or not self._use_trigger_entries:
             return ""
 
@@ -274,7 +274,7 @@ class LogicTriggers:
         polling interval has elapsed are included in the NumPy broad-phase.
         With the default 1.0 s setting this preserves the old 1 Hz workload.
         """
-        if not self.logic.player_runtime.player:
+        if not self.logic.player:
             return
 
         if use_key_pressed:
@@ -358,9 +358,9 @@ class LogicTriggers:
         # Snapshot ALL eligible entities into one compact array.
         # The first row is always the player; props and monsters follow.
         # ------------------------------------------------------------------
-        entities = [self.logic.player_runtime.player]
+        entities = [self.logic.player]
         entity_types = [1]  # player
-        entity_ids = [id(self.logic.player_runtime.player)]
+        entity_ids = [id(self.logic.player)]
 
         for entity in (self.logic.prop_runtime.props if True else ()):
             if not getattr(entity, 'properties', {}).get('disabled', False):
@@ -438,7 +438,7 @@ class LogicTriggers:
                 if brush:
                     for activator_type, entity_id in entered:
                         if activator_type == 'player':
-                            activator = self.logic.player_runtime.player
+                            activator = self.logic.player
                         elif activator_type == 'props':
                             activator = (self.logic.prop_runtime.by_id(entity_id)
                                          if True else None)
@@ -463,7 +463,7 @@ class LogicTriggers:
                 if brush:
                     for activator_type, entity_id in exited:
                         if activator_type == 'player':
-                            activator = self.logic.player_runtime.player
+                            activator = self.logic.player
                         elif activator_type == 'props':
                             activator = (self.logic.prop_runtime.by_id(entity_id)
                                          if True else None)
@@ -533,7 +533,7 @@ class LogicTriggers:
             if distance_sq > 1.0e-8:
                 to_trigger = offset / math.sqrt(distance_sq)
                 p_forward = np.asarray(
-                    [math.sin(self.logic.player_runtime.player.angle), 0.0, math.cos(self.logic.player_runtime.player.angle)],
+                    [math.sin(self.logic.player.angle), 0.0, math.cos(self.logic.player.angle)],
                     dtype=np.float32,
                 )
                 if float(np.dot(p_forward, to_trigger)) <= 0.5:
@@ -546,7 +546,7 @@ class LogicTriggers:
                 brush,
                 bid,
                 activator_type='player',
-                activator_entity=self.logic.player_runtime.player,
+                activator_entity=self.logic.player,
             )
 
         # ------------------------------------------------------------------
@@ -622,22 +622,22 @@ class LogicTriggers:
         with self.logic._player_damage_lock:
             if self.logic.player_runtime.god_mode:
                 return
-            was_alive = self.logic.player_runtime.player_health > 0
-            self.logic.player_runtime.player_health = max(0, self.logic.player_runtime.player_health - damage)
-            if self.logic.player_runtime.buddha_mode and self.logic.player_runtime.player_health < 2:
-                self.logic.player_runtime.player_health = 2
-            became_dead = was_alive and self.logic.player_runtime.player_health <= 0
+            was_alive = self.logic.player_health > 0
+            self.logic.player_health = max(0, self.logic.player_health - damage)
+            if self.logic.player_runtime.buddha_mode and self.logic.player_health < 2:
+                self.logic.player_health = 2
+            became_dead = was_alive and self.logic.player_health <= 0
             took_damage = was_alive and damage > 0
 
             # Queue the pain response at the instant damage is applied. Copy the
             # player position so subsequent movement cannot move the sound
             # source before the render thread consumes the request.
             pain_position = None
-            if took_damage and self.logic.player_runtime.player:
+            if took_damage and self.logic.player:
                 pain_position = (
-                    float(self.logic.player_runtime.player.pos.x),
-                    float(self.logic.player_runtime.player.pos.y),
-                    float(self.logic.player_runtime.player.pos.z),
+                    float(self.logic.player.pos.x),
+                    float(self.logic.player.pos.y),
+                    float(self.logic.player.pos.z),
                 )
 
         if took_damage and pain_position is not None:
@@ -654,7 +654,7 @@ class LogicTriggers:
             })
 
         # Emit outside the lock so a handler can't deadlock on the damage path.
-        self.logic._plugin_emit("player_damage", damage=damage, health=self.logic.player_runtime.player_health)
+        self.logic._plugin_emit("player_damage", damage=damage, health=self.logic.player_health)
         if became_dead:
             self.logic._plugin_emit("player_death")
 
@@ -677,12 +677,12 @@ class LogicTriggers:
             target_node_name = brush.get('target_node', '')
             if target_node_name:
                 node = self.logic.world_runtime.find_path_node_by_name(target_node_name)
-                if node and (activator_entity or self.logic.player_runtime.player):
-                    activator = activator_entity or self.logic.player_runtime.player
+                if node and (activator_entity or self.logic.player):
+                    activator = activator_entity or self.logic.player
                     dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-                    if activator is self.logic.player_runtime.player:
-                        self.logic.player_runtime.player.pos = dest
-                        self.logic.player_runtime.player.velocity = glm.vec3(0, 0, 0)
+                    if activator is self.logic.player:
+                        self.logic.player.pos = dest
+                        self.logic.player.velocity = glm.vec3(0, 0, 0)
                         self.logic.portal_runtime.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
