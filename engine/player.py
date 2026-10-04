@@ -2,6 +2,7 @@ import math
 import glm
 from .constants import (
     TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY,
+    PM_STOPSPEED, PM_ACCELERATE, PM_AIRACCELERATE, PM_FRICTION, PM_CROUCH_SCALE,
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
@@ -184,6 +185,9 @@ class Player:
         # Pre-computed half-extents (constant for the lifetime of this player instance)
         self._half = glm.vec3(self.width / 2.0, self.height / 2.0, self.depth / 2.0)
 
+        # Quake III jump latch: holding jump does not auto-repeat on landing.
+        self._jump_held = False
+
     def get_view_matrix(self):
         """Calculate the view matrix for rendering."""
         cam_pos = self.pos + glm.vec3(0, self.camera_height, 0)
@@ -255,21 +259,41 @@ class Player:
 
         swimming = self.swimming and self.physics_enabled
 
-        if swimming:
-            self._apply_swim_physics(delta, move_input, right_vec, jump, crouch)
-        else:
-            target_speed = self.speed * (0.5 if crouch else 1.0)
+        # Preserve the existing kinematic/no-physics path.
+        if not self.physics_enabled:
+            self._jump_held = bool(jump)
+            target_speed = self.speed * (PM_CROUCH_SCALE if crouch else 1.0)
             if self.in_water:
                 target_speed *= WATER_WADE_SPEED_MULT
-
             self.velocity.x = wish_dir.x * target_speed
             self.velocity.z = wish_dir.z * target_speed
-
-        if not self.physics_enabled:
             self.pos += self.velocity * delta
             return
 
+        if swimming:
+            self._apply_swim_physics(delta, move_input, right_vec, jump, crouch)
+        else:
+            target_speed = self.speed * (PM_CROUCH_SCALE if crouch else 1.0)
+            if self.in_water:
+                target_speed *= WATER_WADE_SPEED_MULT
+
+            # Retain analog input strength, but never let diagonal input exceed
+            # the nominal run speed.
+            input_strength = min(glm.length(glm.vec3(move_input.x, 0.0, move_input.z)), 1.0)
+            wish_speed = target_speed * input_strength
+
+            # Quake III movement: ground friction + projected acceleration;
+            # weak air acceleration retains momentum and enables strafing.
+            if self.on_ground:
+                self._apply_move_friction(delta)
+                self._accelerate(wish_dir, wish_speed, PM_ACCELERATE, delta)
+            else:
+                self._accelerate(wish_dir, wish_speed, PM_AIRACCELERATE, delta)
+
         # --- 2. Gravity & Jumping (suspended while swimming) ---
+
+        jump_pressed = bool(jump) and not self._jump_held
+        self._jump_held = bool(jump)
 
         if not swimming:
             self.velocity.y += GRAVITY * delta
@@ -281,7 +305,7 @@ class Player:
             if self.in_water and self.velocity.y < WATER_MAX_SINK_SPEED:
                 self.velocity.y = WATER_MAX_SINK_SPEED
 
-            if jump and self.on_ground:
+            if jump_pressed and self.on_ground:
                 self.velocity.y = JUMP_STRENGTH
                 self.on_ground  = False
                 self.ground_object = None
@@ -331,6 +355,48 @@ class Player:
         if self.pos.y < -2000:
             self.pos     = glm.vec3(0, 100, 0)
             self.velocity = glm.vec3(0, 0, 0)
+
+    # ------------------------------------------------------------------
+    # Quake-style ground / air movement
+    # ------------------------------------------------------------------
+
+    def _apply_move_friction(self, delta):
+        """Apply Quake III ground friction to horizontal velocity."""
+        speed = math.hypot(float(self.velocity.x), float(self.velocity.z))
+        if speed < 1.0:
+            self.velocity.x = 0.0
+            self.velocity.z = 0.0
+            return
+
+        control = max(speed, PM_STOPSPEED)
+        drop = control * PM_FRICTION * delta
+        newspeed = max(speed - drop, 0.0)
+
+        if newspeed == 0.0:
+            self.velocity.x = 0.0
+            self.velocity.z = 0.0
+            return
+
+        scale = newspeed / speed
+        self.velocity.x *= scale
+        self.velocity.z *= scale
+
+    def _accelerate(self, wish_dir, wish_speed, accelerate, delta):
+        """Apply Quake III's projected acceleration step."""
+        if wish_speed <= 0.0 or glm.length(wish_dir) < 0.0001:
+            return
+
+        current_speed = (
+            float(self.velocity.x) * float(wish_dir.x)
+            + float(self.velocity.z) * float(wish_dir.z)
+        )
+        add_speed = wish_speed - current_speed
+        if add_speed <= 0.0:
+            return
+
+        accel_speed = min(accelerate * delta * wish_speed, add_speed)
+        self.velocity.x += accel_speed * wish_dir.x
+        self.velocity.z += accel_speed * wish_dir.z
 
     # ------------------------------------------------------------------
     # Water / swimming
