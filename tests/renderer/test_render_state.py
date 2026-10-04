@@ -208,6 +208,50 @@ def test_session_reset_reinitialises_render_owned_hud_fade_state(logic):
 # The published render state
 # ---------------------------------------------------------------------------
 
+def test_render_state_borrow_pins_the_published_buffer_until_release(logic):
+    """A real renderer borrow must block publication, then release it cleanly."""
+    thread = logic(brushes=[box_brush("first", (0, 0, -100))])
+    game = thread.game_state
+    thread.render_runtime.culling_enabled = False
+
+    thread.render_runtime.prepare_render_state()
+    assert game.request_swap() is True
+    snapshot = game.get_render_state()
+    try:
+        write = game.get_write_state()
+        write.render_table.sync([box_brush("second", (0, 0, -200))], 1)
+        assert game.request_swap() is False
+        assert game.declined_swaps >= 1
+        assert game.published("render_table") is snapshot.render_table
+    finally:
+        game.release_render_state(snapshot)
+
+    assert game._read_leases == 0
+    assert game.published("render_table").count == 1
+    assert game.published("render_table").brushes[0]["name"] == "second"
+
+
+def test_render_state_lease_finalizer_releases_a_real_borrow(logic):
+    """Dropping an un-released production snapshot must not wedge publication."""
+    import gc
+
+    thread = logic(brushes=[box_brush("first", (0, 0, -100))])
+    game = thread.game_state
+    thread.render_runtime.culling_enabled = False
+    thread.render_runtime.prepare_render_state()
+    assert game.request_swap() is True
+
+    snapshot = game.get_render_state()
+    assert game._read_leases == 1
+    del snapshot
+    gc.collect()
+
+    assert game._read_leases == 0
+    game.get_write_state().render_table.sync([box_brush("second", (0, 0, -200))], 1)
+    assert game.request_swap() is True
+    assert game.published("render_table").brushes[0]["name"] == "second"
+
+
 def test_editor_mode_publishes_the_editor_camera_and_dense_projection(logic):
     wall = box_brush("wall")
     lamp = make_thing(Light, "lamp", (0, 100, 0))
