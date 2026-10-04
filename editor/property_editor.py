@@ -4851,13 +4851,11 @@ class PropertyEditor(QWidget):
             if checked:
                 if btn:
                     btn.setText("■ Stop Preview")
-                if hasattr(self.editor, 'start_mover_preview'):
-                    self.editor.start_mover_preview(self.current_object)
+                self.editor.start_mover_preview(self.current_object)
             else:
                 if btn:
                     btn.setText("▶ Preview Door")
-                if hasattr(self.editor, 'stop_mover_preview'):
-                    self.editor.stop_mover_preview()
+                self.editor.stop_mover_preview()
 
     def on_respawn_toggled(self, state):
         collect_respawns = bool(state)
@@ -4875,8 +4873,7 @@ class PropertyEditor(QWidget):
         self._set_prop_key_sprite(collect_key_name)
         self._refresh_prop_collection_ui(self.current_object)
         self._refresh_prop_collection_appearance(self.current_object)
-        if hasattr(self.editor, 'view_3d'):
-            self.editor.view_3d.update()
+        self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
     def _set_prop_key_sprite(self, collect_key_name):
