@@ -203,18 +203,10 @@ def test_the_registry_is_derived_from_the_authoritative_thing_list(real_logic):
     assert session.by_id(id(light)) is None
 
 
-def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
+def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others(real_logic):
     """A spawn elsewhere in the map must not reset a Prop already registered."""
     settled = Prop(pos=[0, 0, 0])
-    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[settled]))
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    logic.player_runtime = SimpleNamespace(
-        player=SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
-    )
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([settled])
 
     settled.pos = [10.0, 20.0, 30.0]          # it has moved since it was adopted
     home = list(settled.properties['_prop_home_pos'])
