@@ -100,12 +100,6 @@ def __getattr__(name):
     (on this module's Thing when the editor tier is absent). Resolved lazily
     because that module imports this one.
     """
-    if name == 'Model':
-        import warnings
-        warnings.warn("plugins.entitybase.Model is gone: subclass Thing (or "
-                      "use a Prop) and set model_path", DeprecationWarning,
-                      stacklevel=2)
-        return Thing
     if name == 'Prop':
         from engine.prop_entity import Prop
         globals()['Prop'] = Prop
