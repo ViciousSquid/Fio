@@ -31,6 +31,8 @@ class LogicWorld:
         self.levelchanger_centres = np.empty((0, 3), dtype=np.float32)
         self.levelchanger_radii = np.empty(0, dtype=np.float32)
         self.levelchanger_eligible = np.empty(0, dtype=bool)
+        self.monster_things = []
+        self.monster_by_id = {}
 
     def build_entity_caches(self):
         """Build lookup and hot-path entity indexes for the current world."""
@@ -75,16 +77,14 @@ class LogicWorld:
         self.refresh_levelchanger_table()
 
         MonsterThing = self.monster_type
-        logic._monster_things = [
+        self.monster_things = [
             thing
             for thing in logic.editor_state.things
             if MonsterThing and isinstance(thing, MonsterThing)
         ]
-        logic._monster_by_id = {
-            id(thing): thing for thing in logic._monster_things
-        }
+        self.monster_by_id = {id(thing): thing for thing in self.monster_things}
 
-        live = logic._monster_by_id
+        live = self.monster_by_id
         with logic._monster_lock:
             states = logic.monster_ai.monster_states
             for key in [key for key in states if key not in live]:
@@ -240,8 +240,8 @@ class LogicWorld:
         logic._indexed_brushes = ()
         logic._moving_rows = None
 
-        logic._monster_by_id = {}
-        logic._monster_things = []
+        self.monster_by_id = {}
+        self.monster_things = []
         logic._timer_things = []
 
         self.levelchanger_things = []
