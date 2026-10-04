@@ -146,24 +146,12 @@ def test_non_physics_prop_still_falls_to_ground_on_drop(real_logic):
     assert 'OnRest' in io.names()
 
 
-def test_respawn_fades_in_over_two_seconds():
+def test_respawn_fades_in_over_two_seconds(real_logic):
     prop = Prop(pos=[0.0, 0.0, 0.0], properties={
         'collect_enabled': True,
         'collect_respawns': True,
     })
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop], brushes=[]), io_manager=IO(),
-        player_runtime=SimpleNamespace(player=SimpleNamespace(
-            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-            camera_height=40.0,
-        )),
-        _plugin_emit=lambda *args, **kwargs: None,
-    )
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop])
 
     assert prop._respawn_fade_alpha == 1.0
     assert session.collect_prop(prop) is True
