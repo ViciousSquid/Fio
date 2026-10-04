@@ -172,6 +172,81 @@ def test_machinery_tests_do_not_use_namespace_production_owners():
         "Fio owner fixture/object instead:\n  " + "\n  ".join(offenders)
     )
 
+
+PRODUCTION_OWNER_NAMES = {
+    "LogicThread",
+    "MainWindow",
+    "QtGameView",
+    "Renderer_F",
+    "BaseRenderer",
+    "Terrain",
+    "PhysicsWorld",
+    "PropSession",
+    "PluginHost",
+}
+
+
+def _dotted_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return "%s.%s" % (prefix, node.attr) if prefix else node.attr
+    return None
+
+
+def test_machinery_tests_do_not_construct_production_owners_by_bypassing_init():
+    """Production owners must execute their constructors in machinery tests."""
+    offenders = []
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func_name = _dotted_name(node.func)
+                if func_name not in {"object.__new__", "__new__"}:
+                    continue
+                if not node.args:
+                    continue
+                owner = _dotted_name(node.args[0])
+                if owner in PRODUCTION_OWNER_NAMES:
+                    offenders.append("%s:%d (%s)" % (
+                        _rel(path), node.lineno, func_name + "(" + owner + ")"))
+    assert not offenders, (
+        "machinery tests bypass production-owner constructors; exercise the real "
+        "constructor instead:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_machinery_tests_do_not_patch_production_owner_classes():
+    """Do not replace production-owner methods before the code under test runs."""
+    offenders = []
+    patch_names = {"monkeypatch.setattr", "mock.patch.object", "patch.object"}
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                func_name = _dotted_name(node.func)
+                if func_name not in patch_names:
+                    continue
+                target = _dotted_name(node.args[0])
+                if target in PRODUCTION_OWNER_NAMES:
+                    offenders.append("%s:%d (%s)" % (_rel(path), node.lineno, func_name))
+    assert not offenders, (
+        "machinery tests patch production-owner classes instead of exercising their "
+        "methods directly:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_machinery_tests_do_not_replace_production_owners():
     """Behavioural machinery tests must call the real subsystem owners."""
     offenders = []
