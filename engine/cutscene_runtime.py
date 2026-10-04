@@ -493,7 +493,7 @@ class CutsceneRuntime:
                 self._set_cutscene_yaw(
                     actor, self._cutscene_number(frame.get("yaw", 0.0))
                 )
-                physics_world = getattr(self.logic, "_physics_world", None)
+                physics_world = self.logic.session_runtime.physics_world
                 if physics_world is not None:
                     try:
                         physics_world.sync_entity_position(actor, wake=True)
