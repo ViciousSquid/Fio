@@ -30,6 +30,14 @@ GRAVITY = -500.0
 JUMP_STRENGTH = 180.0
 TERMINAL_VELOCITY = -500.0
 
+# Quake III-style player movement. These values are kept in Fio's world-unit
+# scale; the important part is the projected acceleration/friction model.
+PM_STOPSPEED = 100.0
+PM_ACCELERATE = 10.0
+PM_AIRACCELERATE = 1.0
+PM_FRICTION = 6.0
+PM_CROUCH_SCALE = 0.25
+
 # --- Water Physics Constants ---
 WATER_SWIM_SPEED_MULT = 0.55    # Horizontal swim speed as a fraction of run speed
 WATER_VERTICAL_SPEED_MULT = 0.85  # Swim up/down speed as a fraction of swim speed
