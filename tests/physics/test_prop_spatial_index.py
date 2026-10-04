@@ -20,27 +20,44 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+pytest.importorskip("PyQt5", reason="PropSession ownership tests use the real LogicThread")
+
+from editor.editor_state import EditorState            # noqa: E402
+from editor.things import Light                         # noqa: E402
+from engine.logic_thread import LogicThread             # noqa: E402
+from engine.player import Player                        # noqa: E402
+from engine.threaded_game_state import ThreadedGameState # noqa: E402
 from engine.prop_entity import Prop                     # noqa: E402
 from engine.prop_runtime import PropSession             # noqa: E402
 from engine.spatial import CELL_SIZE, cell_of_point, cells_of_points  # noqa: E402
 
+pytestmark = pytest.mark.qt
+
+_ACTIVE_LOGICS = []
+
+
+@pytest.fixture(autouse=True)
+def _stop_real_logic_threads():
+    start = len(_ACTIVE_LOGICS)
+    yield
+    for logic in _ACTIVE_LOGICS[start:]:
+        logic.stop()
+    del _ACTIVE_LOGICS[start:]
+
 
 def make_session(props=(), physics=None):
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=list(props), brushes=[]),
-        player_runtime=SimpleNamespace(
-            player=SimpleNamespace(
-                pos=[0.0, 0.0, 0.0],
-                angle=0.0,
-                pitch=0.0,
-                camera_height=40.0,
-            )
-        ),
-        interaction_runtime=SimpleNamespace(current_hud_message=""),
-        io_manager=None,
-        session_runtime=SimpleNamespace(physics_world=physics, spatial_grid=None),
-    )
-    session = PropSession(logic)
+    state = EditorState()
+    state.things = list(props)
+    state.brushes = []
+
+    logic = LogicThread(ThreadedGameState(), state)
+    _ACTIVE_LOGICS.append(logic)
+    logic.player_runtime.player = Player(0.0, 0.0)
+    logic.player_runtime.player.camera_height = 40.0
+    logic.session_runtime.physics_world = physics
+    logic.session_runtime.spatial_grid = None
+
+    session = logic.prop_runtime
     session.start()
     return session
 
@@ -183,7 +200,7 @@ def test_moved_brings_a_stale_cell_back_into_line():
 def test_moved_ignores_a_thing_that_is_not_a_registered_prop():
     """Callers must not have to ask whether what they moved was a Prop."""
     session = make_session([prop_at(0, 0, 60)])
-    session.moved(SimpleNamespace(pos=[1.0, 2.0, 3.0], properties={}))   # no raise
+    session.moved(Light(pos=[1.0, 2.0, 3.0], properties={}))   # no raise
 
 
 def test_carrying_refiles_the_held_prop():
