@@ -103,6 +103,7 @@ class FakeLogicThread:
         self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
         self._monster_things = []
+        self._monster_by_id = {}
         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
         self.HURT_INTERVAL = 0.5
