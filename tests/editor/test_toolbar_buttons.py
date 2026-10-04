@@ -1,6 +1,6 @@
 """Tests for the tool toolbar's button styling.
 
-The real ``create_tool_toolbar`` is run against a stand-in window, so these
+The real ``create_tool_toolbar`` is exercised on the real MainWindow, so these
 check the buttons the editor actually builds rather than a copy of the
 stylesheet kept in the test.
 """
