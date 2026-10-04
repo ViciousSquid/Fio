@@ -73,7 +73,7 @@ class StreamingHost:
     the code that depends on it, and so a head-less test or a world-generation
     benchmark can stand in for the logic thread without a live play session.
 
-    A host must additionally expose ``brushes``, ``things`` and ``player`` —
+    A host must additionally expose ``editor_state.brushes``, ``editor_state.things`` and ``player`` —
     those come from the scene, so they are the caller's to supply.
 
     Every member is read through ``getattr(..., default)`` by the session, so a
@@ -403,8 +403,8 @@ class BigWorldSession:
             self._release_view_horizon = bound_view_horizon(
                 self.logic, self._authored_activation_radius)
         self._sync_visual_horizon()
-        brushes = list(getattr(self.logic, "brushes", None) or [])
-        things = list(getattr(self.logic, "things", None) or [])
+        brushes = list(self.logic.editor_state.brushes)
+        things = list(self.logic.editor_state.things)
         self.manager.index_world(brushes, things)
 
         # Snapshot the pristine world *before* parking/gameplay mutates anything —
@@ -516,11 +516,11 @@ class BigWorldSession:
 
     def _clear_transient_markers(self) -> None:
         """Drop this session's own activation markers from every object."""
-        for brush in getattr(self.logic, "brushes", None) or ():
+        for brush in self.logic.editor_state.brushes:
             if isinstance(brush, dict):
                 for key in self.TRANSIENT_KEYS:
                     brush.pop(key, None)
-        for thing in getattr(self.logic, "things", None) or ():
+        for thing in self.logic.editor_state.things:
             props = getattr(thing, "properties", None)
             if isinstance(props, dict):
                 for key in self.TRANSIENT_KEYS:
