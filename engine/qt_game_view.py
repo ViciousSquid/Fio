@@ -3954,7 +3954,7 @@ class QtGameView(QOpenGLWidget):
             return
         if self.play_mode and event.key() == Qt.Key_F6:
             if self.logic_thread:
-                new_state = self.logic_thread.toggle_model_collision()
+                new_state = self.logic_thread.collision_runtime.toggle_model_collision()
                 status = "ON" if new_state else "OFF"
                 if hasattr(self.editor, 'show_toast'):
                     self.editor.show_toast(f"Model Collision: {status}")
