@@ -2135,7 +2135,7 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("sg"):
             return
         view_3d = self.main_window.view_3d
-        view_3d.show_spatial_grid = not getattr(view_3d, 'show_spatial_grid', False)
+        view_3d.show_spatial_grid = not view_3d.show_spatial_grid
         state = "ON" if view_3d.show_spatial_grid else "OFF"
         self.main_window.show_toast(f"Spatial Grid: {state}")
         debug_log("Info", f"Spatial grid display set to {state}")
@@ -2152,7 +2152,7 @@ entity to drive them from the I/O system.</i><br>
         elif arg in ("off", "0", "false"):
             player.physics_enabled = False
         else:
-            player.physics_enabled = not getattr(player, 'physics_enabled', True)
+            player.physics_enabled = not player.physics_enabled
 
         state = "ON" if player.physics_enabled else "OFF"
         self.main_window.show_toast(f"Physics: {state}")
@@ -2319,7 +2319,7 @@ entity to drive them from the I/O system.</i><br>
         elif arg in ("off", "0", "false"):
             view_3d.show_glasses = False
         elif arg == "toggle":
-            view_3d.show_glasses = not getattr(view_3d, 'show_glasses', True)
+            view_3d.show_glasses = not view_3d.show_glasses
         else:
             debug_log("Error", "Usage: showglasses [on|off|1|0|toggle]")
             return
