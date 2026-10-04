@@ -18,6 +18,169 @@ from engine.monster_constants import MONSTER_VARIANTS
 from engine.constants import water_high_quality
 from editor.tooltips import set_tooltips_enabled
 
+
+def _plugin_to_float(text):
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _plugin_section_header(text):
+    lbl = QLabel(text.upper())
+    font = lbl.font()
+    font.setBold(True)
+    font.setLetterSpacing(font.PercentageSpacing, 108)
+    lbl.setFont(font)
+    lbl.setStyleSheet(
+        "color:#F08000; border:none; border-bottom:1px solid #555;"
+        "margin-top:8px; padding:3px 0 2px 0;")
+    return lbl
+
+
+def _plugin_widget_for_spec(editor_self, spec, value):
+    t = (getattr(spec, "type", "string") or "string").lower()
+    name = spec.name
+
+    if t == "enum" and spec.choices:
+        choices = [str(choice) for choice in spec.choices]
+        default = spec.default if spec.default is not None else choices[0]
+        current = str(value if value is not None else default)
+        if current not in choices:
+            choices = [current] + choices
+        return _make_combo(
+            choices,
+            current,
+            lambda text, key=name: editor_self.update_object_prop(key, text),
+        )
+
+    if t == "bool":
+        checked = (
+            value if isinstance(value, bool)
+            else str(value).strip().lower() in ("1", "true", "yes", "on")
+        )
+        return _make_checkbox(
+            "",
+            checked,
+            lambda checked, key=name:
+            editor_self.update_object_prop(key, checked),
+        )
+
+    if t == "int":
+        lo = int(spec.min) if spec.min is not None else -99999
+        hi = int(spec.max) if spec.max is not None else 99999
+        try:
+            current = int(float(value))
+        except (TypeError, ValueError):
+            current = int(spec.default) if isinstance(spec.default, (int, float)) else 0
+        spin = _make_spin(current, lo, hi)
+        spin.editingFinished.connect(
+            lambda widget=spin, key=name:
+            editor_self.update_object_prop(key, widget.value()))
+        return spin
+
+    if t == "float":
+        edit = QLineEdit("" if value is None else str(value))
+        edit.editingFinished.connect(
+            lambda widget=edit, key=name:
+            editor_self.update_object_prop(key, _plugin_to_float(widget.text())))
+        return edit
+
+    edit = QLineEdit("" if value is None else str(value))
+    edit.editingFinished.connect(
+        lambda widget=edit, key=name:
+        editor_self.update_object_prop(key, widget.text()))
+    return edit
+
+
+def _render_plugin_schema_rows(editor_self, form, thing, specs):
+    hidden = {"name", "id", "type", "_io_connections"}
+    hidden.update(getattr(thing, "EDITOR_HIDDEN_PROPERTIES", ()) or ())
+    covered = set()
+    current_group = None
+
+    for spec in specs:
+        if spec.name in hidden:
+            continue
+        covered.add(spec.name)
+        group = getattr(spec, "group", "") or ""
+        if group and group != current_group:
+            current_group = group
+            form.addRow(_plugin_section_header(group))
+        value = thing.properties.get(spec.name, spec.default)
+        label = (spec.label or spec.name.replace("_", " ").title()) + ":"
+        widget = _plugin_widget_for_spec(editor_self, spec, value)
+        if getattr(spec, "help", ""):
+            widget.setToolTip(spec.help)
+        form.addRow(label, widget)
+
+    uncovered = [
+        (key, value)
+        for key, value in sorted(thing.properties.items())
+        if key not in hidden and key not in covered
+    ]
+    if uncovered and current_group is not None:
+        form.addRow(_plugin_section_header("Other"))
+
+    for key, value in uncovered:
+        label = key.replace("_", " ").title() + ":"
+        if isinstance(value, bool):
+            widget = _make_checkbox(
+                "",
+                value,
+                lambda checked, field=key:
+                editor_self.update_object_prop(field, checked),
+            )
+        elif isinstance(value, int):
+            widget = _make_spin(value, -99999, 99999)
+            widget.editingFinished.connect(
+                lambda spin=widget, field=key:
+                editor_self.update_object_prop(field, spin.value()))
+        elif isinstance(value, float):
+            widget = QLineEdit(str(value))
+            widget.editingFinished.connect(
+                lambda edit=widget, field=key:
+                editor_self.update_object_prop(field, _plugin_to_float(edit.text())))
+        else:
+            widget = QLineEdit("" if value is None else str(value))
+            widget.editingFinished.connect(
+                lambda edit=widget, field=key:
+                editor_self.update_object_prop(field, edit.text()))
+        form.addRow(label, widget)
+
+
+def _append_plugin_extra_fields(editor_self, form, thing, specs):
+    for spec in specs:
+        if spec.name in ("name", "id", "type", "_io_connections"):
+            continue
+        value = thing.properties.get(spec.name, spec.default)
+        label = (spec.label or spec.name.replace("_", " ").title()) + ":"
+        widget = _plugin_widget_for_spec(editor_self, spec, value)
+        if getattr(spec, "help", ""):
+            widget.setToolTip(spec.help)
+        form.addRow(label, widget)
+
+
+def _wire_plugin_lazy_section(section, factory, thing, label):
+    state = {"built": False}
+
+    def build(*_args):
+        if state["built"]:
+            return
+        state["built"] = True
+        try:
+            inner = factory(thing)
+        except Exception as exc:
+            debug_log("Plugins", f"property section '{label}' failed ({exc})")
+            return
+        if inner is not None:
+            section.addWidget(inner)
+
+    section.toggle.toggled.connect(lambda checked: checked and build())
+    if section.toggle.isChecked():
+        build()
+
+
 def _project_root() -> str:
     """Return Fio's project root independently of the process working directory."""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -805,6 +968,39 @@ class PropertyEditor(QWidget):
             self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
 
         layout.addWidget(self.tab_widget)
+
+        from plugins.manager import get_manager
+        entity_type = thing.properties.get('type')
+        plugin_tabs = (
+            get_manager().property_tabs_for(entity_type)
+            if entity_type else []
+        )
+        if plugin_tabs:
+            pending = {}
+            for label, factory in plugin_tabs:
+                placeholder = QWidget()
+                placeholder_layout = QVBoxLayout(placeholder)
+                placeholder_layout.setContentsMargins(0, 0, 0, 0)
+                index = self.tab_widget.addTab(placeholder, label)
+                pending[index] = (placeholder, factory)
+            self.tab_widget._fio_pending_tabs = pending
+
+            def build_plugin_tab(index, widget=self.tab_widget, entity=thing):
+                pending_tabs = getattr(widget, '_fio_pending_tabs', None)
+                if not pending_tabs or index not in pending_tabs:
+                    return
+                placeholder, factory = pending_tabs.pop(index)
+                try:
+                    inner = factory(entity)
+                except Exception as exc:
+                    debug_log("Plugins", f"custom tab build failed ({exc})")
+                    return
+                if inner is not None:
+                    placeholder.layout().addWidget(inner)
+
+            self.tab_widget.currentChanged.connect(build_plugin_tab)
+            build_plugin_tab(self.tab_widget.currentIndex())
+
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
@@ -2017,6 +2213,18 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
 
+        entity_type = thing.properties.get('type')
+        if entity_type:
+            from plugins.manager import get_manager
+            plugin_sections = get_manager().property_sections_for(entity_type)
+            for label, factory, expanded in plugin_sections:
+                section = CollapsibleSection(label, expanded=expanded)
+                section.setObjectName(f"fio_property_section:{label}")
+                _wire_plugin_lazy_section(section, factory, thing, label)
+                tab_layout.insertWidget(
+                    max(0, tab_layout.count() - 1),
+                    section)
+
         tab_layout.addStretch()
         return w
 
@@ -3067,6 +3275,24 @@ class PropertyEditor(QWidget):
         preserved for entities that have not yet been migrated to explicit
         editor property classification.
         """
+
+        from plugins.manager import get_manager
+        manager = get_manager()
+        entity_type = thing.properties.get('type')
+        plugin_schema = (
+            manager.property_schema_for(entity_type)
+            if entity_type else None
+        )
+        plugin_owner = (
+            manager.plugin_for_type(entity_type)
+            if entity_type else None
+        )
+        if plugin_schema and plugin_owner is not None:
+            _render_plugin_schema_rows(self, form, thing, plugin_schema)
+            extra = manager.extra_fields_for(entity_type)
+            if extra:
+                _append_plugin_extra_fields(self, form, thing, extra)
+            return
         _MONSTER_ONLY = {
             'awake',
             'damage',
@@ -3360,6 +3586,12 @@ class PropertyEditor(QWidget):
                 QLabel(key.replace('_', ' ').title() + ":"),
                 edit,
             )
+
+
+        if entity_type:
+            extra = manager.extra_fields_for(entity_type)
+            if extra:
+                _append_plugin_extra_fields(self, form, thing, extra)
 
     def _build_monster_type_row(self, form, thing):
         from engine.monster_constants import MONSTER_TYPES
