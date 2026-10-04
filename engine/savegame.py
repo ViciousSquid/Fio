@@ -201,7 +201,7 @@ def _capture_pending_events(logic) -> list:
     the restored world the same way it would have in the old one.
 
     Timers are not captured here; a timer's countdown is its own state (see
-    ``logic.timer_states``) and this is only the queue.
+    ``logic.timing_runtime.timer_states``) and this is only the queue.
     """
     manager = getattr(logic, "io_manager", None)
     if manager is None:
@@ -403,7 +403,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "mover_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.mover_states.items()},
         "monster_states": monster_states,
         "timer_states": {str(k): dict(s)
-                         for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
+                         for k, s in logic.timing_runtime.timer_states.items()},
         "pending_io_events": _capture_pending_events(logic),
         "moving_brushes": _capture_moving_brushes(logic),
         "mover_path_states": {
@@ -814,7 +814,10 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # reload the way every other piece of entity state does.
     try:
         saved_timers = runtime.get("timer_states", {}) or {}
-        logic.timer_states = {str(k): dict(s) for k, s in saved_timers.items()}
+        logic.timing_runtime.timer_states.clear()
+        logic.timing_runtime.timer_states.update(
+            {str(k): dict(s) for k, s in saved_timers.items()}
+        )
     except Exception:
         pass
 
