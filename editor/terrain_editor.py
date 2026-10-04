@@ -1896,7 +1896,7 @@ class TerrainEditorPanel(QWidget):
         )
         view_3d.set_terrain_sculpt_active(bool(self.isVisible() and tab_visible))
 
-    def _update_stamp_texture_label():
+    def _update_stamp_texture_label(self):
         browser = getattr(self.editor, 'asset_browser', None) if self.editor else None
         path = browser.get_selected_filepath() if browser is not None else None
         if path:
