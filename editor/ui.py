@@ -89,7 +89,15 @@ LAYOUT_VERSION = 3
 
 
 
-def (MainWindow):
+def _log(message: str):
+    try:
+        from editor.debug_console import debug_log
+        debug_log("Plugins", message)
+    except Exception:
+        print(f"[Plugins] {message}")
+
+
+def _disabled_from_config(MainWindow):
     """Read the persisted set of disabled plugin names from settings.ini."""
     cfg = getattr(MainWindow, "config", None)
     if cfg is None:
