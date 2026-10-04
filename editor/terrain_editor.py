@@ -1884,7 +1884,7 @@ class TerrainEditorPanel(QWidget):
         self._sync_terrain_brush_activation()
 
     def _sync_terrain_brush_activation(self):
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        view_3d = self.editor.view_3d if self.editor else None
         if view_3d is None or getattr(view_3d, 'play_mode', False):
             return
         tabs = getattr(self, '_terrain_tabs', None)
@@ -1897,7 +1897,7 @@ class TerrainEditorPanel(QWidget):
         view_3d.set_terrain_sculpt_active(bool(self.isVisible() and tab_visible))
 
     def _update_stamp_texture_label(self):
-        browser = getattr(self.editor, 'asset_browser', None) if self.editor else None
+        browser = self.editor.asset_browser if self.editor else None
         path = browser.get_selected_filepath() if browser is not None else None
         if path:
             self.stamp_texture_label.setText(
@@ -1941,7 +1941,7 @@ class TerrainEditorPanel(QWidget):
 
     def _sync_sculpt_to_viewport(self):
         """Push current shared brush settings to the 3D view."""
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        view_3d = self.editor.view_3d if self.editor else None
         if view_3d is None:
             return
         view_3d.terrain_sculpt_mode = (
@@ -1966,7 +1966,7 @@ class TerrainEditorPanel(QWidget):
 
     def clear_texture_stamps(self):
         """Remove every baked terrain texture paint."""
-        if not getattr(self.terrain, 'texture_paint_maps', None):
+        if not self.terrain.texture_paint_maps:
             return
         if self.editor:
             self.editor.state.terrain_data = self.terrain.to_dict()
@@ -1975,12 +1975,12 @@ class TerrainEditorPanel(QWidget):
         if self.editor:
             self.editor.state.terrain_data = self.terrain.to_dict()
         self.terrain_changed.emit()
-        if self.editor and hasattr(self.editor, 'show_toast'):
+        if self.editor and self.editor.show_toast:
             self.editor.show_toast("Terrain texture paint cleared")
 
     def request_close(self):
         """Close the panel and disable its 3D brush."""
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
         if self.editor:
@@ -1992,14 +1992,14 @@ class TerrainEditorPanel(QWidget):
 
     def closeEvent(self, event):
         """Disable the terrain brush when the panel is closed."""
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
         super().closeEvent(event)
 
     def hideEvent(self, event):
         """Disable the terrain brush when the panel is hidden."""
-        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
         if hasattr(self, '_stats_timer'):
@@ -2012,7 +2012,7 @@ class TerrainEditorPanel(QWidget):
         self.terrain_generated.emit()
         self.terrain_changed.emit()
         self.hide_progress()
-        if self.editor and hasattr(self.editor, 'show_toast'):
+        if self.editor and self.editor.show_toast:
             self.editor.show_toast("Terrain regenerated!")
     
     def reset_to_defaults(self):
