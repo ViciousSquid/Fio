@@ -37,13 +37,15 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
-from editor.io_handlers import register_all_input_handlers   # noqa: E402
-from editor.io_system import IOManager, OutputConnection      # noqa: E402
-from editor.things import PathNode                             # noqa: E402
-from engine.logic_movers import DOOR_DIRECTION_MAP, LogicMovers  # noqa: E402
-from engine.logic_world import LogicWorld                              # noqa: E402
-from engine.logic_movers import LogicMovers                    # noqa: E402
-from engine.savegame import _public_state                      # noqa: E402
+from editor.editor_state import EditorState                       # noqa: E402
+from editor.io_handlers import register_all_input_handlers       # noqa: E402
+from editor.io_system import IOManager, OutputConnection          # noqa: E402
+from editor.things import PathNode                                 # noqa: E402
+from engine.logic_movers import DOOR_DIRECTION_MAP, LogicMovers   # noqa: E402
+from engine.logic_thread import LogicThread                        # noqa: E402
+from engine.player import Player                                    # noqa: E402
+from engine.savegame import _public_state                           # noqa: E402
+from engine.threaded_game_state import ThreadedGameState            # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -631,27 +633,43 @@ class _Side:
         self.brushes = copy.deepcopy(brushes)
         self.things = copy.deepcopy(things)
         self.events = []
-        io = IOManager()
+        ground = self.brushes[ride_index] if ride_index is not None else None
+        player = Player(1.0, 3.0)
+        player.pos = glm.vec3(1.0, 2.0, 3.0)
+        player.ground_object = ground
+
+        self.reference = reference
         if reference:
+            io = IOManager()
             register_reference_input_handlers(io)
+            entities = self.brushes + self.things
+
+            def by_name(name):
+                for entity in entities:
+                    if io._get_entity_name(entity) == name:
+                        return entity
+                return None
+
+            def by_id(eid):
+                for entity in entities:
+                    if io._get_entity_id(entity) == eid:
+                        return entity
+                return None
+
+            io.set_entity_finder(by_name)
+            io.set_entity_finder_by_id(by_id)
+            logic = ReferenceLogic(self.brushes, self.things, io, player)
+            io.set_logic_thread(logic)
         else:
-            register_all_input_handlers(io)
-        entities = self.brushes + self.things
+            state = EditorState()
+            state.brushes = self.brushes
+            state.things = self.things
+            logic = LogicThread(ThreadedGameState(), state)
+            logic.player_runtime.player = player
+            logic.session_runtime.play_mode = True
+            logic.world_runtime.build_entity_caches()
+            io = logic.io_manager
 
-        def by_name(name):
-            for entity in entities:
-                if io._get_entity_name(entity) == name:
-                    return entity
-            return None
-
-        def by_id(eid):
-            for entity in entities:
-                if io._get_entity_id(entity) == eid:
-                    return entity
-            return None
-
-        io.set_entity_finder(by_name)
-        io.set_entity_finder_by_id(by_id)
         fire = io.fire_output
 
         def recording_fire(source, output, value=None, activator_entity=None):
@@ -659,21 +677,6 @@ class _Side:
             return fire(source, output, value=value, activator_entity=activator_entity)
 
         io.fire_output = recording_fire
-        ground = self.brushes[ride_index] if ride_index is not None else None
-        player = SimpleNamespace(pos=glm.vec3(1.0, 2.0, 3.0), ground_object=ground)
-        self.reference = reference
-        if reference:
-            logic = ReferenceLogic(self.brushes, self.things, io, player)
-        else:
-            logic = SimpleNamespace(
-                editor_state=SimpleNamespace(brushes=self.brushes, things=self.things),
-                io_manager=io,
-                player_runtime=SimpleNamespace(player=player),
-                session_runtime=SimpleNamespace(play_mode=True),
-            )
-            logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
-            logic.mover_runtime = LogicMovers(logic)
-        io.set_logic_thread(logic)
         self.io = io
         self.logic = logic
         if reference:
