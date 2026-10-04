@@ -61,7 +61,7 @@ def _draw(renderer, context, brushes, eye, target):
     cfg = glh.render_config(all_brushes=brushes, all_things=[], render_mode=RENDER_MODE_LIT)
     context.bind()
     gl.glClearColor(0.1, 0.1, 0.1, 1.0)
-    renderer.render_scene(projection, view, eye_vec, brushes, [], None, cfg,
+    renderer.render_scene(projection, view, eye_vec, None, cfg,
                           brush_slots=cfg["all_brush_slots"])
     gl.glFinish()
     return context.read_pixels()[:, :, :3].astype(int)
