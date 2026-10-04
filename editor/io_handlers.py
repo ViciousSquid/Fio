@@ -518,15 +518,15 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
     
     def trigger_enable(entity, param, logic):
-        entity['disabled'] = False
+        set_authored_flag(entity, 'disabled', False)
         debug_log('Trigger', f"Enabled trigger '{entity.get('name', 'unnamed')}'")
     
     def trigger_disable(entity, param, logic):
-        entity['disabled'] = True
+        set_authored_flag(entity, 'disabled', True)
         debug_log('Trigger', f"Disabled trigger '{entity.get('name', 'unnamed')}'")
     
     def trigger_toggle(entity, param, logic):
-        entity['disabled'] = not entity.get('disabled', False)
+        set_authored_flag(entity, 'disabled', not authored_flag(entity, 'disabled'))
     
     def trigger_touch_test(entity, param, logic):
         if not logic.player:
@@ -686,10 +686,10 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def prop_enable(entity, param, logic):
-        entity.properties['disabled'] = False
+        set_authored_flag(entity, 'disabled', False)
 
     def prop_disable(entity, param, logic):
-        entity.properties['disabled'] = True
+        set_authored_flag(entity, 'disabled', True)
 
     def prop_collect(entity, param, logic):
         session = getattr(logic, '_props', None)
@@ -977,7 +977,7 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def path_node_toggle(entity, param, logic):
-        entity.properties['disabled'] = not entity.properties.get('disabled', False)
+        set_authored_flag(entity, 'disabled', not authored_flag(entity, 'disabled'))
 
     io_manager.register_input_handler('path_node', 'toggle', path_node_toggle)
     
@@ -1114,9 +1114,9 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def brush_toggle_solid(entity, param, logic):
         """Toggle a generic brush's solidity (Enable/Disable ↔ 'disabled')."""
-        entity['disabled'] = not entity.get('disabled', False)
+        set_authored_flag(entity, 'disabled', not authored_flag(entity, 'disabled'))
         name = entity.get('name', 'unnamed')
-        state = "non-solid" if entity.get('disabled') else "solid"
+        state = "non-solid" if authored_flag(entity, 'disabled') else "solid"
         debug_log('IO', f"Brush '{name}' toggled → {state}")
 
     # Register for every brush-based type
@@ -1474,10 +1474,10 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log("IO", f"LogicSpawner '{entity.name}' spawned '{spawn_type}' at {spawn_pos}")
 
     def spawner_enable(entity, param, logic):
-        entity.properties['disabled'] = False
+        set_authored_flag(entity, 'disabled', False)
 
     def spawner_disable(entity, param, logic):
-        entity.properties['disabled'] = True
+        set_authored_flag(entity, 'disabled', True)
 
     def spawner_set_target(entity, param, logic):
         """Change spawn location to a different PathNode."""
