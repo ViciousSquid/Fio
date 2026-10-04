@@ -241,9 +241,6 @@ class LogicThread(threading.Thread):
         self.terrain = None
         self._first_tick = False
         
-        # Frustum culling settings
-        self.culling_enabled = True
-
         # Camera state and camera math live in LogicCamera. LogicThread keeps
         # only the small forwarding surface needed by the rest of the engine.
         self.camera = LogicCamera(self)

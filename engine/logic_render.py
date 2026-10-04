@@ -25,6 +25,7 @@ class LogicRender:
     def __init__(self, logic):
         self.logic = logic
         self.view_distance = ViewDistance()
+        self.culling_enabled = True
         self._last_edited = {}
 
     def extract_frustum_planes(self, proj_view: glm.mat4):
@@ -510,7 +511,7 @@ class LogicRender:
         total_count = table.count
 
         keep, all_slots = table.shown()
-        if logic.culling_enabled and total_count:
+        if self.culling_enabled and total_count:
             visible_slots = np.flatnonzero(
                 keep
                 & self.aabb_in_frustum_bounds(
