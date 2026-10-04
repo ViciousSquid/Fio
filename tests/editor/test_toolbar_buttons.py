@@ -20,8 +20,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QAction, QApplication, QMainWindow, QPushButton,
 )
 
-from editor.main_window import MainWindow  # noqa: E402
-from editor.ui import LAYOUT_VERSION, RotatablePlayButton, Ui_MainWindow  # noqa: E402
+from editor.ui import LAYOUT_VERSION  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -45,31 +44,9 @@ def qt_app():
     yield app
 
 
-class FakeEditorWindow(QMainWindow):
-    """The slice of MainWindow ``create_tool_toolbar`` reaches for.
-
-    Every callback it wires up is a no-op here: the toolbar is being built
-    to look at, not to drive.
-    """
-
-    tool_mode = 'brush'
-
-    def __init__(self):
-        super().__init__()
-        self.config = configparser.ConfigParser()
-        self.play_button = RotatablePlayButton("Play")
-        self.terrain_action = QAction("Terrain", self)
-        self.procedural_action = QAction("Procedural", self)
-
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
-
 @pytest.fixture
-def toolbar(qt_app):
-    window = FakeEditorWindow()
-    Ui_MainWindow().create_tool_toolbar(window)
-    return window
+def toolbar(main_window):
+    return main_window
 
 # ────────────────────────────
 # Toolbar docking topology
@@ -222,33 +199,17 @@ def test_the_tool_buttons_show_state_the_same_way_the_grid_button_does(toolbar):
             "copy" % name)
 
 
-def test_only_one_tool_button_is_checked_at_a_time(qt_app):
-    """Whatever the editor's state, exactly one strip in the group is lit.
-
-    Driven through the real ``_sync_tool_group_buttons`` — the method the
-    editor calls after every tool and component-mode change — against the
-    buttons ``create_tool_toolbar`` actually builds.
-    """
+def test_only_one_tool_button_is_checked_at_a_time(main_window):
+    """Drive the real MainWindow toolbar synchroniser and live buttons."""
     from editor import component_edit as ce
 
-    class SyncingWindow(FakeEditorWindow):
-        _sync_tool_group_buttons = MainWindow._sync_tool_group_buttons
-
-        def __init__(self):
-            super().__init__()
-            self.components = ce.ComponentController()
-            self.tool_mode = 'brush'
-
-    window = SyncingWindow()
-    Ui_MainWindow().create_tool_toolbar(window)
-
+    window = main_window
     cases = [
         ('select', ce.MODE_OBJECT, 'select_tool_btn'),
         ('brush', ce.MODE_OBJECT, 'brush_tool_btn'),
         ('select', ce.MODE_VERTEX, 'vertex_mode_btn'),
         ('select', ce.MODE_EDGE, 'edge_mode_btn'),
         ('select', ce.MODE_FACE, 'face_mode_btn'),
-        # A component mode supersedes the base tool, whichever it is.
         ('brush', ce.MODE_FACE, 'face_mode_btn'),
     ]
     for tool_mode, component_mode, expected in cases:
@@ -258,8 +219,8 @@ def test_only_one_tool_button_is_checked_at_a_time(qt_app):
 
         lit = [name for name in TOOL_GROUP if getattr(window, name).isChecked()]
         assert lit == [expected], (
-            "tool_mode=%r, component mode=%r: expected only %s to be lit, "
-            "got %s" % (tool_mode, component_mode, expected, lit or "nothing"))
+            "tool_mode=%r, component mode=%r: expected only %s to be lit, got %s"
+            % (tool_mode, component_mode, expected, lit or "nothing"))
 
 
 def test_the_editing_action_buttons_keep_their_plain_group_strip(toolbar):
