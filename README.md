@@ -15,7 +15,7 @@ Designed on low-power ARM hardware with an efficiency-first philosophy.
 ### What makes Fio different
 
 
-* **Edit and play in the same runtime** — no compile, bake or scene-import pipeline.
+* 1990s editor ergonomics + modern engine architecture
 * **The world is executable** — entities, state, spatial relationships and gameplay logic are part of the live world.
 * **Classic brush/CSG editing** with arbitrary convex polyhedra.
 * **Entity I/O gameplay** inspired by Source, providing a composable alternative to traditional scripting.
