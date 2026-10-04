@@ -47,6 +47,7 @@ class _Window:
 
     def _apply_level_data(self, level_data):
         self.calls.append("replace scene")
+        self.state.load_from_data(level_data)
         self.applied.append(level_data)
         if self.fail_apply:
             raise RuntimeError("entity failed to build")
