@@ -471,15 +471,10 @@ def test_bind_with_no_arguments_opens_the_dialog(main_window, monkeypatch, accep
     logged = []
     monkeypatch.setattr(debug_console.DebugLogger, "log",
                         lambda self, c, m: logged.append((c, m)))
-    host = QMainWindow()
-    host.state = SimpleNamespace()
-    try:
-        ConsoleCommandHandler(host).handle_command("bind")
-        assert shown == ["Bind Key"]
-        if accept:
-            assert ("Error", "No key selected") in logged
-    finally:
-        sip.delete(host)
+    ConsoleCommandHandler(main_window).handle_command("bind")
+    assert shown == ["Bind Key"]
+    if accept:
+        assert ("Error", "No key selected") in logged
 
 
 # ---------------------------------------------------------------------------
