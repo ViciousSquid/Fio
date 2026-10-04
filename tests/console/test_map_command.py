@@ -78,7 +78,7 @@ def test_a_saved_game_names_its_map_by_basename_in_maps_only(main_window, projec
     assert window.file_path == str(project / "maps" / "start.json")
 
 
-def test_map_logic_cannot_bind_keys_but_the_user_can(main_window, tmp_path):
+def test_map_logic_cannot_bind_keys_but_the_user_can(main_window, qt_app):
     """A map cannot persist key bindings through the real play console."""
     from engine.qt_game_view import QtGameView
 
