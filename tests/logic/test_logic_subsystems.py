@@ -102,7 +102,6 @@ def test_logic_editor_constructs_and_processes_an_idle_tick():
         EDITOR_CAMERA_SPEED=300.0,
         EDITOR_CAMERA_FAST_MULT=2.5,
         EDITOR_MOUSE_SENSITIVITY=0.15,
-        _editor_mouselook_active=False,
     )
     host.camera = LogicCamera(host)
     host.camera.set_editor_camera(glm.vec3(0, 0, 0), 0.0, 0.0, host.camera.editor_camera.fov)
@@ -111,7 +110,6 @@ def test_logic_editor_constructs_and_processes_an_idle_tick():
     runtime.tick(1.0 / 60.0)
 
     assert host.camera.get_editor_camera().pos == glm.vec3(0, 0, 0)
-    assert host._editor_mouselook_active is False
 
 
 def test_logic_interaction_constructs_and_opens_a_nearby_door():
