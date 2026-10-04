@@ -739,7 +739,7 @@ class SpatialGrid:
         tuples already resolved by :meth:`SpatialGrid._build_los_rows`.
         """
         # PERF: hoist the ray endpoints/direction to scalars once and inline the
-        # slab test below (bit-identical to LogicThread.intersect_ray_aabb).
+        # slab test below (bit-identical to the previous ray/AABB slab test).
         # This avoids two throwaway glm.vec3 constructions + a Python call per
         # brush along the ray -- the dominant cost of AI line-of-sight at tick
         # rate.
