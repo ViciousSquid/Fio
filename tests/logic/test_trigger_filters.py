@@ -42,7 +42,7 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
     logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
     logic.TICK_DURATION = LogicThread.TICK_DURATION
-    logic.doors = []
+    logic.mover_runtime.doors = []
     logic.mover_runtime = LogicMovers(logic)
     logic.interaction_runtime = LogicInteraction(logic)
     logic.io_manager = None
