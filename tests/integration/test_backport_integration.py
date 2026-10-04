@@ -402,7 +402,7 @@ def test_tick_exception_enters_a_controlled_fault_state():
     assert "try:" in block and "self._tick(self.TICK_DURATION)" in block
     assert "except Exception:" in block
     assert "traceback.format_exc()" in block, "traceback must be reported"
-    assert "self._apply_play_mode(False)" in block
+    assert "self.session_runtime.apply_play_mode(False)" in block
     assert "accumulator = 0.0" in block
     assert "break" in block
     assert "debug_log(" in block, "the failure must reach the console"
