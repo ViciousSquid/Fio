@@ -404,7 +404,7 @@ class PropSession:
             weapon = p.get("collect_weapon", "gun1")
             self.logic.combat_runtime.active_weapon = weapon
             if weapon == "gun2" and not self.logic.combat_runtime.gun2_obtained:
-                self.logic.gun2_obtained = True
+                self.logic.combat_runtime.gun2_obtained = True
                 try:
                     current_ammo = max(
                         0, int(self.logic.combat_runtime.player_ammo))
