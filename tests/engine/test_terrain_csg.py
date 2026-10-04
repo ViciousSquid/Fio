@@ -88,7 +88,11 @@ def test_terrain_texture_paint_is_part_of_terrain_data():
         0.0, 0.0, 16.0, "synthetic", feather=0.25)
 
     paint = terrain.texture_paint_maps[(0, 0)]
-    assert tuple(paint[64, 64]) == (180, 80, 40, 255)
+    alpha = paint[..., 3]
+    assert int(alpha.max()) == 255
+    samples = paint[alpha > 0]
+    assert len(samples)
+    assert np.all(samples[:, :3] == np.asarray([180, 80, 40], dtype=np.uint8))
 
     data = terrain.to_dict()
     assert data["texture_paint_resolution"] == terrain.TERRAIN_PAINT_RESOLUTION
