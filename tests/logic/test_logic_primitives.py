@@ -22,6 +22,7 @@ from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import LogicGate, LogicRelay, LogicTimer  # noqa: E402
 from tests.helpers.worlds import box_brush                # noqa: E402
 from engine.logic_timing import LogicTiming                    # noqa: E402
+from engine.logic_world import LogicWorld                          # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -38,9 +39,7 @@ class World:
         self.timing_runtime = LogicTiming(self)
         self.door_states = {}
         self.mover_states = {}
-        self.world_runtime = __import__('engine.logic_world', fromlist=['LogicWorld']).LogicWorld(
-            self, timer_type=LogicTimer
-        )
+        self.world_runtime = LogicWorld(self, timer_type=LogicTimer)
         self.log = []
 
         self.manager.set_entity_finder(self._by_name)
