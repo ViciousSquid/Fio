@@ -54,7 +54,9 @@ def test_logic_camera_player_orientation_changes_overhead_horizontal_direction()
     _, direction_a, _ = runtime._overhead_camera(runtime._host.player.pos, 0.0)
     _, direction_b, _ = runtime._overhead_camera(runtime._host.player.pos, 1.57079632679)
 
-    assert direction_a.z < 0.0
+    # Player angle 0 faces +Z in the engine's first-person convention;
+    # the overhead camera preserves that horizontal heading while raking down.
+    assert direction_a.z > 0.0
     assert direction_b.x > 0.0
     assert direction_a.x != pytest.approx(direction_b.x)
 
