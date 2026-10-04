@@ -19,6 +19,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from engine import savegame
+from engine.logic_camera import LogicCamera
 from engine.logic_movers import LogicMovers
 from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
@@ -86,14 +87,12 @@ class FakeLogic:
         self.god_mode = False
         self.buddha_mode = False
         self.notarget = False
-        self.camera = SimpleNamespace(
-            camera_mode="First Person",
-            overhead_height=800.0,
-            overhead_height_limit=None,
-            overhead_tilt=0.0,
-            overhead_orientation="north",
-            overhead_ground_footprint=lambda: None,
-        )
+        self.camera = LogicCamera(self)
+        self.camera.camera_mode = "First Person"
+        self.camera.overhead_height = 800.0
+        self.camera.overhead_height_limit = None
+        self.camera.overhead_tilt = 0.0
+        self.camera.overhead_orientation = "north"
         self.active_weapon = None
         self.current_hud_message = ""
         self.player_health = 100
