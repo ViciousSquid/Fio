@@ -70,32 +70,49 @@ def test_what_it_shows_is_a_copy_of_the_sampled_frame(window):
 
 @pytest.fixture
 def monster_window(window):
-    """The instrument attached to a monster AI that has run one dense tick."""
-    import threading
-
+    """The instrument attached to the real MonsterAI after a dense tick."""
+    from editor.editor_state import EditorState
     from editor.things import Monster
-    from engine.monster_ai import MonsterAI
-    from tests.helpers.fakes import FakeLogicThread, FakePlayer
-    from tests.helpers.worlds import make_thing
+    from engine.logic_thread import LogicThread
+    from engine.monster_ai import MonsterAIThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
+    from tests.helpers.worlds import box_brush, make_thing
 
     instrument, game_state = window
-    things = [make_thing(Monster, "m%d" % i, (300.0 * (i + 1), 96, 0),
-                         monster_type="human", awake=True, team="red")
-              for i in range(3)]
-    things.append(make_thing(Monster, "corpse", (0, 96, 900), dead=True))
-    logic = FakeLogicThread(brushes=[box_brush("ground", (0, -16, 0), (8192, 32, 8192))],
-                            things=things, player=FakePlayer((0.0, 0.0, 0.0)))
-    logic.world_runtime.monster_things = list(things)
-    logic.world_runtime.monster_by_id = {id(thing): thing for thing in things}
-    ai = MonsterAI(logic)
-    ai.set_spatial_grid(logic.build_spatial_grid())
-    ai.update(1.0 / 30.0)
+    state = EditorState()
+    state.brushes = [
+        box_brush("ground", (0, -16, 0), (8192, 32, 8192))
+    ]
+    state.things = [
+        *[
+            make_thing(
+                Monster, "m%d" % i, (300.0 * (i + 1), 96, 0),
+                monster_type="human", awake=True, team="red",
+            )
+            for i in range(3)
+        ],
+        make_thing(Monster, "corpse", (0, 96, 900), dead=True),
+    ]
+
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player = Player(0.0, 0.0)
+    logic.player_runtime.player.pos.y = 0.0
+    logic.world_runtime.build_entity_caches()
+    logic.session_runtime.spatial_grid.populate(state.brushes)
+    logic.monster_ai.set_spatial_grid(logic.session_runtime.spatial_grid)
+    logic.monster_ai.update(1.0 / 30.0)
+
+    ai_thread = MonsterAIThread(
+        logic, logic.monster_ai, logic.session_runtime.monster_lock
+    )
+    ai_thread.update_ms = 2.0
+    ai_thread.lock_wait_ms = 0.5
+    logic.session_runtime.monster_ai_thread = ai_thread
+
     view = instrument.main_window.view_3d
-    view.logic_thread.monster_ai = ai
-    view.logic_thread.session_runtime.monster_lock = threading.RLock()
-    view.logic_thread.session_runtime.monster_ai_thread = SimpleNamespace(
-        update_ms=2.0, lock_wait_ms=0.5)
-    return instrument, ai, view.logic_thread.session_runtime.monster_lock
+    view.logic_thread = logic
+    return instrument, logic.monster_ai, view.logic_thread.session_runtime.monster_lock
 
 
 def test_the_monster_table_is_shown_after_a_dense_tick(monster_window):
