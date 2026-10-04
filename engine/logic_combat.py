@@ -15,6 +15,7 @@ import numpy as np
 
 from .constants import is_solid_world_brush, is_water_brush
 from .change_journal import touch
+from .projectile_table import ProjectileStore
 from .monster_constants import (
     MONSTER_PROJECTILE_MAX_DIST,
     NON_FIRING_WEAPONS,
@@ -47,6 +48,8 @@ class LogicCombat:
 
     def __init__(self, logic):
         self.logic = logic
+        self._monster_projectiles = ProjectileStore()
+        self._gunfire_events = []
 
     def _handle_shooting(self):
         logic = self.logic
@@ -224,7 +227,7 @@ class LogicCombat:
         """Add one projectile directly to the dense numeric store."""
         logic = self.logic
         with logic._monster_lock:
-            return logic._monster_projectiles.add(
+            return self._monster_projectiles.add(
                 pos, vel, owner_id, damage, lifetime
             )
 
@@ -348,7 +351,7 @@ class LogicCombat:
         """
         logic = self.logic
         with logic._monster_lock:
-            projectiles = logic._monster_projectiles
+            projectiles = self._monster_projectiles
             count = len(projectiles)
             if count:
                 logic._projectile_positions = projectiles.pos[:count].astype(
@@ -364,7 +367,7 @@ class LogicCombat:
         logic = self.logic
 
         with logic._monster_lock:
-            projectiles = logic._monster_projectiles
+            projectiles = self._monster_projectiles
             if not projectiles:
                 logic._projectile_positions = NO_PROJECTILES
                 return
@@ -678,14 +681,14 @@ class LogicCombat:
     def _emit_noise_event(self, pos, source: str, loudness: float = 1.0):
         """Record an audible player action so hearing monsters can react.
 
-        Stored in the shared player-noise list (logic._gunfire_events); every
+        Stored in the shared player-noise list (self._gunfire_events); every
         event carries a position, timestamp, a source tag and a loudness
         multiplier that scales how far it can be heard. Used by the monster
         AI both to wake sleeping monsters and to steer awake ones toward the
         source (see MonsterAI._hears_noise / _investigate_sounds).
         """
         logic = self.logic
-        logic._gunfire_events.append({
+        self._gunfire_events.append({
             'pos': [float(pos[0]), float(pos[1]), float(pos[2])],
             'time': time.perf_counter(),
             'source': source,
@@ -695,11 +698,19 @@ class LogicCombat:
                           source=source, loudness=float(loudness))
 
 
+    def prune_noise_events(self, max_age: float = 3.0):
+        """Discard player-noise events older than *max_age* seconds."""
+        current_time = time.perf_counter()
+        self._gunfire_events = [
+            event for event in self._gunfire_events
+            if (current_time - event['time']) < max_age
+        ]
+
     def get_recent_noise_events(self, max_age: float = 3.0) -> list:
         logic = self.logic
         current_time = time.perf_counter()
         return [
-            e for e in logic._gunfire_events
+            e for e in self._gunfire_events
             if (current_time - e['time']) < max_age
         ]
 
