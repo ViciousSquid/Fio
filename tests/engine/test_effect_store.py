@@ -97,7 +97,8 @@ def test_entity_table_reads_effect_runtime_from_effect_store():
     )
     store = EffectStore()
     store.begin_session([effect])
-    store.trigger_explosion(effect, time.perf_counter())
+    spawn_time = time.perf_counter()
+    store.trigger_explosion(effect, spawn_time)
 
     # Deliberately poison the compatibility mirrors.  The production path must
     # take the runtime from EffectStore instead.
@@ -114,7 +115,7 @@ def test_entity_table_reads_effect_runtime_from_effect_store():
     )
 
     assert table.effect_type[0] == FAMILY_EXPLOSION
-    assert float(table.effect_spawn_time[0]) == pytest.approx(123.456)
+    assert float(table.effect_spawn_time[0]) == pytest.approx(spawn_time)
     assert float(table.effect_lifetime[0]) == pytest.approx(0.75)
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
