@@ -28,7 +28,7 @@ def _trigger_is_once(brush) -> bool:
 
 def _trigger_activation(brush) -> str:
     """'touch' or 'use'. Older editor builds wrote the setting under
-    ``trigger_collect_activation``; it is honoured when the real key is absent."""
+    The canonical field is ``trigger_activation``."""
     value = brush.get('trigger_activation')
     if value is None:
         value = brush.get('trigger_collect_activation', 'touch')
