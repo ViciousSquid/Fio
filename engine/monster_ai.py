@@ -167,7 +167,7 @@ class MonsterAI:
 
         # PERF: iterate the precomputed monster list instead of isinstance-
         # scanning every brush/thing in the level every tick.
-        monster_things = self.lt._monster_things
+        monster_things = self.lt.world_runtime.monster_things
         # Fitted to an overhead camera, the pass and the enemy searches use
         # the resident monsters only: a parked (DORMANT) monster is hidden and
         # disabled, neither acts nor can be a target, so it is left out rather
@@ -1132,7 +1132,7 @@ all accumulated time when it runs, so simulation time is not lost.
 
     def _find_monster_by_id(self, monster_id: int):
         """Return a living Monster thing by Python id, or None."""
-        monster_by_id = self.lt._monster_by_id
+        monster_by_id = self.lt.world_runtime.monster_by_id
         return monster_by_id.get(monster_id)
 
     #: Below this many monsters the batch costs more to assemble than the walk
