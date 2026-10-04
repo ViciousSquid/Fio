@@ -13,6 +13,7 @@ import time
 from .change_journal import JOURNAL, STATE
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
 from .monster_ai import MonsterAIThread
+from .effect_table import EffectStore
 
 try:
     from editor.things import (
@@ -40,6 +41,7 @@ class LogicSession:
         self.physics_world = None
         self.spatial_grid = None
         self._world_pause_lock = threading.Lock()
+        self.effect_store = EffectStore()
 
     def set_world_paused(self, owner, paused: bool = True) -> None:
         """Hold or release a world pause owned by *owner*."""
@@ -105,7 +107,7 @@ class LogicSession:
             logic.collision_runtime.refresh_collision_brushes_cache()
 
             # Runtime effect state belongs to this play session, not authoring.
-            logic.effect_store.begin_session(logic.editor_state.things)
+            self.effect_store.begin_session(logic.editor_state.things)
 
             # Reset player stats.
             logic.player_runtime.player_health = 100
