@@ -1536,7 +1536,7 @@ entity to drive them from the I/O system.</i><br>
         #     connections use. ---
         io = None
         try:
-            if (hasattr(self.main_window, 'view_3d')
+            if (self.main_window.view_3d
                     and self.main_window.view_3d.logic_thread):
                 io = self.main_window.view_3d.logic_thread.io_manager
         except Exception:
@@ -2263,7 +2263,7 @@ entity to drive them from the I/O system.</i><br>
 
     def cmd_pos(self, args):
         """pos — Open the live camera-position floating window."""
-        view_3d = getattr(self.main_window, "view_3d", None)
+        view_3d = self.main_window.view_3d
         if view_3d is None or not hasattr(view_3d, "show_pos_window"):
             debug_log("Error", "Camera position window is unavailable.")
             return
@@ -2337,7 +2337,7 @@ entity to drive them from the I/O system.</i><br>
         if not config.has_section('Display'):
             config.add_section('Display')
         config.set('Display', 'show_fps', str(show))
-        if hasattr(self.main_window, 'show_fps_checkbox'):
+        if self.main_window.show_fps_checkbox:
             self.main_window.show_fps_checkbox.setChecked(show)
         self.main_window.save_config()
         self.main_window.view_3d.update()
@@ -2373,7 +2373,7 @@ entity to drive them from the I/O system.</i><br>
 
     def _saves_dir(self):
         """Absolute path to the saves directory (created on demand)."""
-        root = getattr(self.main_window, 'root_dir', os.getcwd())
+        root = self.main_window.root_dir
         path = os.path.join(root, 'saves')
         try:
             os.makedirs(path, exist_ok=True)
@@ -2428,7 +2428,7 @@ entity to drive them from the I/O system.</i><br>
 
     def _current_map_name(self):
         """Basename of the currently loaded map file, or '' if untitled."""
-        fp = getattr(self.main_window, 'file_path', None)
+        fp = self.main_window.file_path
         return os.path.basename(fp) if fp else ""
 
     def _save_mode(self):
@@ -2452,7 +2452,7 @@ entity to drive them from the I/O system.</i><br>
         so it compares like-for-like with the live level. Returns ``None`` when
         the base map can't be resolved — the saver then degrades to a full save.
         """
-        fp = getattr(self.main_window, 'file_path', None)
+        fp = self.main_window.file_path
         if not fp:
             return None
         try:
