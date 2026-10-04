@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from engine.logic_combat import LogicCombat, ProjectileStore
+from engine.logic_collision import LogicCollision
 from tests.helpers.worlds import make_thing
 from engine.logic_portals import LogicPortals
 from engine.logic_world import LogicWorld
@@ -39,6 +40,7 @@ class _Host:
             id(thing): thing for thing in self.world_runtime.monster_things
         }
         self.portal_runtime = LogicPortals(self)
+        self.collision_runtime = LogicCollision(self)
         self.combat_runtime = LogicCombat(self)
         for position, owner in projectiles:
             self.combat_runtime._monster_projectiles.add(
