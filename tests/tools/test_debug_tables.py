@@ -7,6 +7,7 @@ borrow permanently -- with it open, the renderer never saw another frame.
 """
 
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -75,6 +76,7 @@ def monster_window(window):
     from editor.things import Monster
     from engine.logic_thread import LogicThread
     from engine.monster_ai import MonsterAIThread
+    from engine.physics import SpatialGrid
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
     from tests.helpers.worlds import box_brush, make_thing
@@ -99,6 +101,7 @@ def monster_window(window):
     logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos.y = 0.0
     logic.world_runtime.build_entity_caches()
+    logic.session_runtime.spatial_grid = SpatialGrid(cell_size=512.0)
     logic.session_runtime.spatial_grid.populate(state.brushes)
     logic.monster_ai.set_spatial_grid(logic.session_runtime.spatial_grid)
     logic.monster_ai.update(1.0 / 30.0)
