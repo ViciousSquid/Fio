@@ -2619,8 +2619,7 @@ class QtGameView(QOpenGLWidget):
                 if self.logic_thread:
                     self.logic_thread.camera.set_frustum_aspect(self._cached_aspect_ratio)
         status = "ON" if self.splitscreen_mode else "OFF"
-        if hasattr(self.editor, 'show_toast'):
-            self.editor.show_toast(f"Split-Screen: {status}  [F9]")
+        self.editor.show_toast(f"Split-Screen: {status}  [F9]")
 
     def _exit_play_mode(self):
         if not self.play_mode:
@@ -3290,7 +3289,7 @@ class QtGameView(QOpenGLWidget):
         # A left click here also drops copies being carried by the cursor, so
         # a clone started in a 2D view can be committed from the 3D view too.
         if (not self.play_mode and event.button() == Qt.LeftButton and
-                getattr(self.editor, 'clone_placement_active', None) is not None and
+                self.editor.clone_placement_active() is not None and
                 self.editor.clone_placement_active()):
             self.editor.finish_clone_placement()
             return
@@ -3869,7 +3868,7 @@ class QtGameView(QOpenGLWidget):
             self._toggle_splitscreen()
             return
         if self.play_mode and event.key() == Qt.Key_F12:
-            if getattr(self.editor, 'is_kiosk_mode', False):
+            if self.editor.is_kiosk_mode:
                 self.editor.exit_kiosk_mode(keep_play_mode=True)
             else:
                 self.editor.enter_kiosk_mode()
