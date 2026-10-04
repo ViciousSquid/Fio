@@ -33,14 +33,18 @@ class LogicPortals:
     def __init__(self, logic, *, portal_type=None):
         self.logic = logic
         self.portal_type = portal_type
+        self.portal_things = []
+        self.portal_target_things = []
+        self.portal_slots = np.empty(0, dtype=np.int32)
+        self.portal_target_slots = np.empty(0, dtype=np.int32)
 
     def rebuild_links(self):
         """Resolve portal_target names to paired portal slots."""
         logic = self.logic
         Portal = self.portal_type
 
-        logic._portal_things = []
-        logic._portal_target_things = []
+        self._portal_things = []
+        self._portal_target_things = []
         portal_slots = []
         portal_target_slots = []
 
@@ -54,7 +58,7 @@ class LogicPortals:
             if not (Portal and isinstance(thing, Portal)):
                 continue
 
-            logic._portal_things.append(thing)
+            self.portal_things.append(thing)
             portal_slots.append(slot)
 
             target_name = thing.properties.get("portal_target", "")
@@ -65,13 +69,13 @@ class LogicPortals:
                 and isinstance(logic.editor_state.things[target_slot], Portal)
             ):
                 portal_target_slots.append(target_slot)
-                logic._portal_target_things.append(logic.editor_state.things[target_slot])
+                self.portal_target_things.append(logic.editor_state.things[target_slot])
             else:
                 portal_target_slots.append(-1)
-                logic._portal_target_things.append(None)
+                self.portal_target_things.append(None)
 
-        logic._portal_slots = np.asarray(portal_slots, dtype=np.int32)
-        logic._portal_target_slots = np.asarray(
+        self.portal_slots = np.asarray(portal_slots, dtype=np.int32)
+        self._portal_target_slots = np.asarray(
             portal_target_slots, dtype=np.int32
         )
 
@@ -121,7 +125,7 @@ class LogicPortals:
         if prev is None:
             prev = cur
 
-        for portal_index, _portal_slot in enumerate(logic._portal_slots):
+        for portal_index, _portal_slot in enumerate(self._portal_slots):
             portal_a = logic._portal_things[portal_index]
             if not portal_a.is_active():
                 continue
