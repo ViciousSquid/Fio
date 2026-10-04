@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 
 from engine.logic_combat import LogicCombat
-from engine.projectile_table import ProjectileStore
 from tests.helpers.worlds import make_thing
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
@@ -49,6 +48,7 @@ class _Host:
             monster_debug_active=False,
             _apply_monster_damage=lambda m, dmg, attacker=None:
                 host.hits.append(m.properties['name']))
+
     def _transit_projectile_through_portals(self, projectiles, index, prev):
         return None
 
