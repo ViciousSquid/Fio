@@ -24,8 +24,7 @@ class RecordingIO:
 class CutsceneWorld:
     def __init__(self):
         self.source = SimpleNamespace(properties={"id": "source-1", "name": "Door"})
-        self.things = [self.source]
-        self.brushes = []
+        self.editor_state = SimpleNamespace(things=[self.source], brushes=[])
         self.play_mode = False
         self.io_manager = RecordingIO(self)
         self.runtime = CutsceneRuntime(self)
