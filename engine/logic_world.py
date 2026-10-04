@@ -23,6 +23,7 @@ class LogicWorld:
         path_node_type=None,
     ):
         self.logic = logic
+        self.visibility_changes = 0
         self.levelchanger_type = levelchanger_type
         self.monster_type = monster_type
         self.timer_type = timer_type
@@ -201,7 +202,7 @@ class LogicWorld:
 
     def notify_visibility_changed(self):
         """Record a drawable-world invalidation without rebuilding collision."""
-        self.logic.visibility_changes += 1
+        self.visibility_changes += 1
 
     def notify_authored_visibility_changed(self):
         """Rebuild collision after an authored visibility change."""

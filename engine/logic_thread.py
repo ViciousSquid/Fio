@@ -345,10 +345,6 @@ class LogicThread(threading.Thread):
         
         # Mover and door animation state are owned by mover_runtime.
         # Model collision pseudo-brushes for things with model_path
-        # Bumped every time the set of drawable objects changes, so a consumer
-        # that caches across frames can tell whether its cache still describes
-        # this world.  See notify_visibility_changed().
-        self.visibility_changes = 0
 
 
         # Interaction state is owned by interaction_runtime.

@@ -100,7 +100,7 @@ def test_the_cheap_notification_does_not_rebuild_the_collision_grid(session):
     assert [id(b) for b in thread.session_runtime.spatial_grid._all_solid] == \
            [id(b) for b in before], (
         "the cheap drawable-set notification rebuilt the collision grid")
-    assert thread.visibility_changes > 0, "the drawable-set counter did not move"
+    assert thread.world_runtime.visibility_changes > 0, "the drawable-set counter did not move"
 
 
 # ---------------------------------------------------------------------------
