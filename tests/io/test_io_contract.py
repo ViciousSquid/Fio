@@ -45,6 +45,7 @@ from engine.logic_timing import LogicTiming                        # noqa: E402
 from engine.logic_portals import LogicPortals                     # noqa: E402
 from engine.logic_world import LogicWorld                         # noqa: E402
 from engine.logic_session import LogicSession                     # noqa: E402
+from engine.logic_player import LogicPlayer                         # noqa: E402
 from engine.logic_combat import LogicCombat                       # noqa: E402
 from engine.logic_collision import LogicCollision                 # noqa: E402
 from engine.effect_table import EffectStore                      # noqa: E402
@@ -80,7 +81,7 @@ class HostStub:
         self.editor_state = type("EditorStateStub", (), {})()
         self.editor_state.brushes = []
         self.editor_state.things = []
-        self.player = None
+        self.player_runtime = LogicPlayer(self)
         self.terrain = None
 
         self._monster_lock = __import__("threading").RLock()
