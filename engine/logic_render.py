@@ -399,7 +399,7 @@ class LogicRender:
             write_state.underwater_tint = list(logic.player_runtime.player.water_tint)
         else:
             write_state.player_underwater = False
-        write_state.collected_keys = set(logic.player_runtime.player_runtime.collected_keys)
+        write_state.collected_keys = set(logic.player_runtime.collected_keys)
         write_state.hud_message = logic.interaction_runtime.current_hud_message
         write_state.hud_prompt_key = logic.interaction_runtime.current_hud_key_name
         write_state.active_weapon = logic.combat_runtime.active_weapon

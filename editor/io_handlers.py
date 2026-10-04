@@ -514,7 +514,7 @@ def register_all_input_handlers(io_manager: IOManager):
         min_b = pos - half_size
         max_b = pos + half_size
         
-        player_pos = logic.player_runtime.player.pos
+        player_pos = logic.player.pos
         if (min_b.x <= player_pos.x <= max_b.x and
             min_b.y <= player_pos.y <= max_b.y and
             min_b.z <= player_pos.z <= max_b.z):
@@ -533,12 +533,12 @@ def register_all_input_handlers(io_manager: IOManager):
         """Teleport the player to the named PathNode."""
         target_name = param or entity.get('target_node', '')
         node = logic.world_runtime.find_path_node_by_name(target_name)
-        if not node or not logic.player_runtime.player:
+        if not node or not logic.player:
             return
         dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-        logic.player_runtime.player.pos = dest
+        logic.player.pos = dest
         # Zero velocity to prevent carry-over momentum
-        logic.player_runtime.player.velocity = glm.vec3(0, 0, 0)
+        logic.player.velocity = glm.vec3(0, 0, 0)
         logic.portal_runtime.note_player_teleported()
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnTeleport')

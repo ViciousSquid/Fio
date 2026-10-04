@@ -620,11 +620,11 @@ class LogicTriggers:
 
     def _apply_player_damage(self, damage):
         with self.logic._player_damage_lock:
-            if self.logic.player_runtime.player_runtime.god_mode:
+            if self.logic.player_runtime.god_mode:
                 return
             was_alive = self.logic.player_runtime.player_health > 0
             self.logic.player_runtime.player_health = max(0, self.logic.player_runtime.player_health - damage)
-            if self.logic.player_runtime.player_runtime.buddha_mode and self.logic.player_runtime.player_health < 2:
+            if self.logic.player_runtime.buddha_mode and self.logic.player_runtime.player_health < 2:
                 self.logic.player_runtime.player_health = 2
             became_dead = was_alive and self.logic.player_runtime.player_health <= 0
             took_damage = was_alive and damage > 0

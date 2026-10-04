@@ -396,7 +396,7 @@ class LogicCombat:
         player = logic.player_runtime.player
         player_can_be_hit = (
             player is not None
-            and not logic.player_runtime.player_runtime.god_mode
+            and not logic.player_runtime.god_mode
             and not logic.player_runtime.player_dead
         )
         if player is not None:
@@ -609,7 +609,7 @@ class LogicCombat:
             if (
                 player_hit[i]
                 and logic.player_runtime.player
-                and not logic.player_runtime.player_runtime.god_mode
+                and not logic.player_runtime.god_mode
                 and not logic.player_runtime.player_dead
             ):
                 damage = float(projectiles.damage[i])

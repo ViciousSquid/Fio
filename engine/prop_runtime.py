@@ -389,7 +389,7 @@ class PropSession:
         elif collect_type == "key":
             key_name = p.get("collect_key_name", "")
             if key_name:
-                self.logic.player_runtime.player_runtime.collected_keys.add(key_name)
+                self.logic.player_runtime.collected_keys.add(key_name)
                 self.logic.interaction_runtime.current_hud_key_name = key_name
         elif collect_type == "ammo":
             try:

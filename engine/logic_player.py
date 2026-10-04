@@ -90,7 +90,7 @@ class LogicPlayer:
         turn_input = float(p2['look_dx'])
         self.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
         self.player2.pitch -= float(p2['look_dy']) * 0.002
-        logic.player_runtime.player2.pitch = max(-1.5, min(1.5, logic.player_runtime.player2.pitch))
+        logic.player2.pitch = max(-1.5, min(1.5, logic.player2.pitch))
 
         self.player2.update(
             delta,
@@ -107,7 +107,7 @@ class LogicPlayer:
     def update_water_sounds(self, delta):
         """Queue sounds and monster-noise events from player water state."""
         logic = self.logic
-        player = logic.player_runtime.player
+        player = logic.player
         if not player:
             return
 
