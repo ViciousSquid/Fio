@@ -42,10 +42,6 @@ class _Camera(LogicCamera):
         self.overhead_height_limit = None
         self.overhead_tilt = tilt
         self.overhead_orientation = orientation
-        self.player = types.SimpleNamespace(
-            pos=glm.vec3(100.0, 50.0, -40.0),
-            angle=0.0,
-        )
         self._overhead = overhead
 
     def is_overhead(self):
