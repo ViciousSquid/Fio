@@ -2598,12 +2598,12 @@ class QtGameView(QOpenGLWidget):
             self.setCursor(Qt.ArrowCursor)
             if self.logic_thread:
                 self.logic_thread.session_runtime.apply_play_mode(False)
-                self.logic_thread.player = None
+                self.logic_thread.player_runtime.player = None
                 self.logic_thread.camera.player = None
             self.player = None
             self.player2 = None
             if self.logic_thread:
-                self.logic_thread.player2 = None
+                self.logic_thread.player_runtime.player2 = None
             if self.height() > 0:
                 self._cached_aspect_ratio = self.width() / self.height()
                 if self.logic_thread:
@@ -2622,11 +2622,11 @@ class QtGameView(QOpenGLWidget):
                 self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
                 self.player2.pos.y = pos[1]
                 if self.logic_thread:
-                    self.logic_thread.player2 = self.player2
+                    self.logic_thread.player_runtime.player2 = self.player2
             else:
                 self.player2 = None
                 if self.logic_thread:
-                    self.logic_thread.player2 = None
+                    self.logic_thread.player_runtime.player2 = None
             w, h = self.width(), self.height()
             if h > 0:
                 vp_w = (w // 2) if self.splitscreen_mode else w
