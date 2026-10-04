@@ -175,8 +175,8 @@ class MemoryCellSource(CellSource):
         then clear the live scene and stream cells in/out, genuinely freeing the
         objects of unloaded cells (the only retained copy is here).
         """
-        return cls(list(getattr(logic, "brushes", None) or []),
-                   list(getattr(logic, "things", None) or []),
+        return cls(list(logic.editor_state.brushes),
+                   list(logic.editor_state.things),
                    cell_size=cell_size, persistent_types=persistent_types)
 
     # -- query ----------------------------------------------------------
