@@ -17,45 +17,37 @@ from engine.effect_table import EffectStore
 from engine.threaded_game_state import ThreadedGameState
 from editor.io_system import IOManager, get_input_names, get_output_names
 from editor.io_handlers import register_all_input_handlers
-from types import SimpleNamespace
 
 import numpy as np
 
 
 def _io_for(effect, events=None):
-    """Deliver inputs to *effect* the way the logic thread does.
+    """Drive the Effect I/O path through the production LogicThread."""
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
 
-    Through ``IOManager._execute_input``: the handler writes the Effect, and
-    the dispatcher journals it, so the next frame's table resolves the row.
-    """
-    io = IOManager()
-    register_all_input_handlers(io)
-    io.set_entity_finder(lambda name: effect)
-    effect_store = EffectStore()
-    effect_store.begin_session([effect])
-    game_state = ThreadedGameState()
-    if events is None:
-        logic = SimpleNamespace(
-            io_manager=io,
-            game_state=game_state,
-            session_runtime=SimpleNamespace(effect_store=effect_store),
-        )
-    else:
-        logic = SimpleNamespace(
-            io_manager=SimpleNamespace(
-                fire_output=lambda entity, name, value=None: events.append((name, value)),
-                get_game_state=lambda: game_state,
-            ),
-            game_state=game_state,
-            session_runtime=SimpleNamespace(effect_store=effect_store),
-        )
-    io.set_logic_thread(logic)
+    state = EditorState()
+    state.things = [effect]
+    state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.world_runtime.build_entity_caches()
+    logic.session_runtime.effect_store.begin_session([effect])
+
+    if events is not None:
+        real_fire_output = logic.io_manager.fire_output
+
+        def record_and_dispatch(entity, name, value=None):
+            events.append((name, value))
+            return real_fire_output(entity, name, value)
+
+        logic.io_manager.fire_output = record_and_dispatch
 
     def send(input_name, param=""):
-        io._execute_input(effect.properties.get("name", ""), input_name,
-                          param, "test")
-    send.effect_store = effect_store
-    return send
+        logic.io_manager._execute_input(effect.properties.get("name", ""),
+                                        input_name, param, "test")
+
+    send.effect_store = logic.session_runtime.effect_store
+    return send, logic
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
@@ -99,67 +91,35 @@ def test_orb_defaults_to_blue_square_animation():
 
 
 def test_explosion_trigger_queues_centered_sound():
+    from editor.io_handlers import register_all_input_handlers
+
     effect = Effect(
         pos=(10.0, 20.0, 30.0),
-        properties={
-            "effect_type": EFFECT_FIRE,
-            "silent": False,
-        },
+        properties={"effect_type": EFFECT_FIRE, "silent": False},
     )
-    table = EntityTable()
-    table.begin_frame([effect], epoch=1, effect_runtime=True)
+    send, logic = _io_for(effect)
+    register_all_input_handlers(logic.io_manager)
+    logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
-    queued = []
-    game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
-    effect_store = EffectStore()
-    effect_store.begin_session([effect])
-    logic = SimpleNamespace(
-        game_state=game_state,
-        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
-        session_runtime=SimpleNamespace(effect_store=effect_store),
-    )
-    io_manager = IOManager()
-    register_all_input_handlers(io_manager)
-    explode = io_manager._input_handlers[("effect", "explode")]
-
-    explode(effect, "", logic)
-
-    assert queued == [{
+    assert logic.game_state.sound_queue == [{
         "action": "play",
         "file": "assets/sounds/explode.mp3",
         "volume": 1.0,
         "position": [10.0, 20.0, 30.0],
     }]
 
-
 def test_silent_explosion_does_not_queue_sound():
+    from editor.io_handlers import register_all_input_handlers
+
     effect = Effect(
         pos=(1.0, 2.0, 3.0),
-        properties={
-            "effect_type": EFFECT_FIRE,
-            "silent": True,
-        },
+        properties={"effect_type": EFFECT_FIRE, "silent": True},
     )
-    table = EntityTable()
-    table.begin_frame([effect], epoch=1, effect_runtime=True)
+    _send, logic = _io_for(effect)
+    register_all_input_handlers(logic.io_manager)
+    logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
-    queued = []
-    game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
-    effect_store = EffectStore()
-    effect_store.begin_session([effect])
-    logic = SimpleNamespace(
-        game_state=game_state,
-        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
-        session_runtime=SimpleNamespace(effect_store=effect_store),
-    )
-    io_manager = IOManager()
-    register_all_input_handlers(io_manager)
-    explode = io_manager._input_handlers[("effect", "explode")]
-
-    explode(effect, "", logic)
-
-    assert queued == []
-
+    assert logic.game_state.sound_queue == []
 
 def test_animation_origin_is_shared_across_render_buffers():
     """Alternating RenderState buffers must not reset an animated GIF's phase.
