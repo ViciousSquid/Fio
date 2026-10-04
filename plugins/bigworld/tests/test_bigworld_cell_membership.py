@@ -17,6 +17,7 @@ Plain Python throughout, like the rest of the plugin's bookkeeping.
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
@@ -42,8 +43,9 @@ class Player:
 
 class Logic:
     def __init__(self, brushes=(), things=(), player=None):
-        self.brushes = list(brushes)
-        self.things = list(things)
+        self.editor_state = SimpleNamespace(
+            brushes=list(brushes), things=list(things)
+        )
         self.player = player or Player()
 
 
