@@ -590,7 +590,7 @@ class LogicTriggers:
         # "[E] Complete Level" and "[E] Drop" from the HUD.
         self._trigger_use_prompt = self._sample_use_prompt()
         if self._trigger_use_prompt:
-            self.logic.current_hud_message = self._trigger_use_prompt
+            self.logic.interaction_runtime.current_hud_message = self._trigger_use_prompt
 
         step = float(delta) if delta is not None else float(self.logic.TICK_DURATION)
         self._trigger_poll_elapsed += max(0.0, step)

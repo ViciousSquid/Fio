@@ -229,8 +229,8 @@ class LogicSession:
             logic.parenting_runtime._reset_parented_lights()
             logic.parenting_runtime._reset_parented_portals()
             logic.collision_runtime.clear_angled_brush_collision()
-            logic.current_hud_message = ""
-            logic.current_hud_key_name = None
+            logic.interaction_runtime.current_hud_message = ""
+            logic.interaction_runtime.current_hud_key_name = None
             logic.gate_inputs = {}
             logic.timing_runtime.timer_states.clear()
             logic.timing_runtime.light_fade_states.clear()
@@ -266,7 +266,7 @@ class LogicSession:
             # Reset portal runtime state.
             logic.portal_runtime.reset_session()
 
-            logic.level_complete_ui = None
+            logic.interaction_runtime.level_complete_ui = None
             logic.combat_runtime._monster_projectiles.clear()
             logic.combat_runtime.projectile_positions = _NO_PROJECTILES
             logic._gunfire_events.clear()

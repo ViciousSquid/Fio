@@ -760,7 +760,7 @@ class LogicThread(threading.Thread):
             return
 
         # ---- Level Complete UI: freeze player input ----
-        if self.level_complete_ui:
+        if self.interaction_runtime.level_complete_ui:
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
@@ -799,7 +799,7 @@ class LogicThread(threading.Thread):
             self.plugins.tick(
                 self,
                 use_pressed=use_key,
-                interaction_consumed=bool(self.current_hud_message),
+                interaction_consumed=bool(self.interaction_runtime.current_hud_message),
                 delta=delta,
                 # Pass the getter, not the keys: the manager calls it only if a
                 # plugin actually ticks/listens, so an idle session never pays
