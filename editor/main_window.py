@@ -1023,9 +1023,6 @@ class MainWindow(QMainWindow):
         exactly on top of it, and clipboard copy/paste is untouched.
         """
         sources = list(self.state.selected_objects or [])
-        if self.primary_selection() is not None and \
-                self.primary_selection() not in sources:
-            sources.append(self.primary_selection())
         if not sources:
             return
         sources, skipped = self._drop_singleton_copies(sources)
@@ -1883,8 +1880,6 @@ class MainWindow(QMainWindow):
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
         sources = list(self.state.selected_objects or [])
-        if self.primary_selection() is not None and self.primary_selection() not in sources:
-            sources.append(self.primary_selection())
 
         if sources:
             clipboard = []
@@ -3415,8 +3410,6 @@ class MainWindow(QMainWindow):
         # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
             sources = list(self.state.selected_objects or [])
-            if self.primary_selection() is not None and self.primary_selection() not in sources:
-                sources.append(self.primary_selection())
 
             if sources:
                 clipboard = []
@@ -3783,9 +3776,6 @@ class MainWindow(QMainWindow):
     def _selected_brushes(self):
         """Every brush in the current selection (things filtered out)."""
         objs = list(self.state.selected_objects or [])
-        if self.primary_selection() is not None and \
-                self.primary_selection() not in objs:
-            objs.append(self.primary_selection())
         return [o for o in objs if isinstance(o, dict)]
 
     def component_drag_targets(self):
@@ -4078,8 +4068,8 @@ class MainWindow(QMainWindow):
                 # of what used to be one brush.
                 self.set_selected_objects(pieces)
             self.update_views()
-            if self.primary_selection() in pieces:
-                self.property_editor.set_object(self.primary_selection())
+            if pieces:
+                self.property_editor.set_object(pieces[0])
         else:
             # Nothing changed — drop the checkpoint we just pushed.
             self.state.discard_last_checkpoint()
