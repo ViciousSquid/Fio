@@ -105,7 +105,7 @@ def _snapshot(ai, logic):
                 state['shoot_timer'], state['anim_timer'], state['in_sight'],
                 state.get('vel_y')),
         ))
-    store = logic._monster_projectiles
+    store = logic.combat_runtime._monster_projectiles
     projectiles = [
         (tuple(store.pos[i]), tuple(store.vel[i]), float(store.damage[i]))
         for i in range(len(store))
@@ -128,7 +128,7 @@ def test_dense_pass_matches_the_per_monster_path(seed):
             assert dense[1] == ref[1], (tick, "player damage")
             assert dense[2] == ref[2], (tick, "projectiles")
     # The scenario is not vacuous: monsters moved, shot and fell.
-    assert dense_logic.damage_applied or dense_logic._monster_projectiles
+    assert dense_logic.damage_applied or dense_logic.combat_runtime._monster_projectiles
     faller = next(m for m in dense_logic._monster_things if m.name == "faller")
     assert faller.pos[1] < 400
 
