@@ -35,6 +35,19 @@ class LogicCollision:
 
     def __init__(self, logic):
         self.logic = logic
+        self._dirty = False
+
+    def mark_dirty(self):
+        self._dirty = True
+
+    def rebuild_if_dirty(self) -> bool:
+        if not self._dirty:
+            return False
+        self._dirty = False
+        logic = self.logic
+        with logic._monster_lock:
+            logic.world_runtime.notify_authored_visibility_changed()
+        return True
 
     def angled_brush_is_solid(self, brush):
         """Which angled brushes get solid mesh collision.

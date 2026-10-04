@@ -114,6 +114,20 @@ class LogicRender:
         weights = np.concatenate((normals, np.abs(normals)), axis=1)
         return (weights @ bounds.T >= -p[:, 3:]).all(axis=0)
 
+    def set_hud_fade_enabled(self, enabled: bool):
+        """Enable or disable the damage-driven health HUD fade."""
+        logic = self.logic
+        with logic._tick_lock:
+            enabled = bool(enabled)
+            if enabled == logic.hud_fade_enabled:
+                return
+            logic.hud_fade_enabled = enabled
+            logic._hud_health_alpha = 0.5 if enabled else 1.0
+            logic._hud_health_fade_started = None
+            logic._hud_health_fade_from = logic._hud_health_alpha
+            logic._hud_health_fade_phase = "idle"
+            logic._hud_health_last_value = logic.player_health
+
     def update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
         logic = self.logic

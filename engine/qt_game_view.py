@@ -550,7 +550,7 @@ class QtGameView(QOpenGLWidget):
         self._refresh_hud_status_font()
         logic_thread = getattr(self, "logic_thread", None)
         if logic_thread is not None and hasattr(logic_thread, "set_hud_fade_enabled"):
-            logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+            logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
 
     def set_hud_style(self, style, font_name=None):
         """Apply a HUD style immediately for the current runtime session."""
@@ -591,7 +591,7 @@ class QtGameView(QOpenGLWidget):
         self._hud_fade_enabled = bool(enabled)
         logic_thread = getattr(self, "logic_thread", None)
         if logic_thread is not None and hasattr(logic_thread, "set_hud_fade_enabled"):
-            logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+            logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
         self.update()
         return True
 
@@ -1024,7 +1024,7 @@ class QtGameView(QOpenGLWidget):
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
         self.logic_thread.set_gui_fault_teardown(self._logic_tick_fault_signal.emit)
         if hasattr(self.logic_thread, "set_hud_fade_enabled"):
-            self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+            self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
@@ -2613,7 +2613,7 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
                 if hasattr(self.logic_thread, "set_hud_fade_enabled"):
-                    self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+                    self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
                 self.logic_thread.set_play_mode(True)
 
             if self.splitscreen_mode:

@@ -688,19 +688,6 @@ class LogicThread(threading.Thread):
         self.player = player
         self.camera.player = player
 
-    def set_hud_fade_enabled(self, enabled: bool):
-        """Enable or disable the damage-driven health HUD fade."""
-        with self._tick_lock:
-            enabled = bool(enabled)
-            if enabled == self.hud_fade_enabled:
-                return
-            self.hud_fade_enabled = enabled
-            self._hud_health_alpha = 0.5 if enabled else 1.0
-            self._hud_health_fade_started = None
-            self._hud_health_fade_from = self._hud_health_alpha
-            self._hud_health_fade_phase = "idle"
-            self._hud_health_last_value = self.player_health
-
     def set_player2(self, player2: Optional[Player]) -> None:
         """Set or clear Player 2 for split-screen mode."""
         self.player2 = player2
@@ -888,30 +875,9 @@ class LogicThread(threading.Thread):
     def _tick(self, delta: float):
         if self.play_mode:
             self._tick_play_mode(delta)
-            if self._collision_dirty:
-                self._rebuild_collision_for_authored_change()
+            self.collision_runtime.rebuild_if_dirty()
         else:
             self._tick_editor_mode(delta)
-
-    #: Set when an I/O input changed a brush's authored ``hidden`` during play;
-    #: see :meth:`mark_collision_dirty`.
-    _collision_dirty = False
-
-    def mark_collision_dirty(self):
-        """A brush's authored visibility changed at runtime (I/O Show/Hide/Kill).
-
-        The collision grid files brushes by their authored ``hidden`` once, so
-        a wall revealed by ``Show`` was drawn but walked through, and a hidden
-        one still blocked monsters' sight. Callable from any thread: the rebuild
-        itself runs once, at the end of the tick, on the logic thread.
-        """
-        self._collision_dirty = True
-
-    def _rebuild_collision_for_authored_change(self):
-        self._collision_dirty = False
-        # The monster AI thread queries the grid while populate() refills it.
-        with self._monster_lock:
-            self.world_runtime.notify_authored_visibility_changed()
 
     def _tick_editor_mode(self, delta: float):
         return self.editor_runtime.tick(delta)
