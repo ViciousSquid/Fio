@@ -152,7 +152,161 @@ class LogicThread(threading.Thread):
     EDITOR_CAMERA_SPEED = 300.0
     EDITOR_CAMERA_FAST_MULT = 2.5
     EDITOR_MOUSE_SENSITIVITY = 0.15
-    
+
+    # Construction-time host contracts for the extracted Logic runtimes.
+    #
+    # These are deliberately the shared attributes a runtime may assume exist
+    # after LogicThread.__init__ has completed. Session-specific contents are
+    # reset by LogicSession, but the host containers themselves are created here.
+    # mover_runtime, parenting_runtime and player_runtime stay lazy for lightweight
+    # test doubles; their host contracts are still validated below.
+    _RUNTIME_HOSTS = (
+        "camera",
+        "render_runtime",
+        "session_runtime",
+        "interaction_runtime",
+        "editor_runtime",
+        "trigger_runtime",
+        "portal_runtime",
+        "combat_runtime",
+        "timing_runtime",
+        "collision_runtime",
+        "world_runtime",
+    )
+
+    _RUNTIME_HOST_CONTRACTS = {
+        "camera": (
+            "player",
+        ),
+        "movers": (
+            "editor_state",
+            "movers",
+            "doors",
+            "mover_states",
+            "door_states",
+            "mover_path_states",
+            "_mover_brush_list",
+            "_door_brush_list",
+        ),
+        "parenting": (
+            "editor_state",
+            "_parented_lights",
+            "_parented_portals",
+        ),
+        "player": (
+            "player",
+            "player2",
+            "game_state",
+            "_collision_brushes_cache",
+            "_mover_brush_list",
+            "_player_was_in_water",
+            "_waterwalk_timer",
+        ),
+        "render": (
+            "game_state",
+            "editor_state",
+            "player",
+            "player_health",
+            "_render_table",
+            "_entity_table",
+            "_last_edited",
+            "_projectile_positions",
+        ),
+        "session": (
+            "editor_state",
+            "play_mode",
+            "_world_pause_lock",
+            "_world_pause_owners",
+            "_collision_brushes_cache",
+            "_model_collision_brushes",
+            "_physics_body_brushes",
+            "_mover_brush_list",
+            "_door_brush_list",
+            "_monster_spawn_health",
+            "io_manager",
+            "player",
+            "player2",
+        ),
+        "interaction": (
+            "player",
+            "doors",
+            "door_states",
+            "collected_keys",
+            "current_hud_message",
+            "current_hud_key_name",
+            "_levelchanger_things",
+            "_levelchanger_centres",
+            "_levelchanger_radii",
+            "_levelchanger_eligible",
+            "level_complete_ui",
+            "io_manager",
+        ),
+        "editor": (
+            "game_state",
+            "editor_camera",
+            "_editor_mouselook_active",
+        ),
+        "triggers": (
+            "player",
+            "fired_once_triggers",
+            "_trigger_brushes",
+            "_trigger_contacts",
+            "player_in_triggers",
+            "_nonplayer_trigger_contacts",
+            "_trigger_poll_elapsed_by_bid",
+            "_trigger_use_generation",
+            "_trigger_use_seen",
+            "_use_trigger_entries",
+            "_trigger_use_prompt",
+            "hurt_trigger_timers",
+        ),
+        "portals": (
+            "player",
+            "_portal_cooldowns",
+            "_portal_prev_player_pos",
+            "_portal_things",
+            "_portal_target_things",
+            "_portal_slots",
+            "_portal_target_slots",
+        ),
+        "combat": (
+            "player",
+            "active_weapon",
+            "bullet_marks",
+            "_monster_projectiles",
+            "_projectile_positions",
+            "_gunfire_events",
+            "_collision_brushes_cache",
+            "io_manager",
+        ),
+        "timing": (
+            "_timer_things",
+            "timer_states",
+            "light_fade_states",
+            "io_manager",
+        ),
+        "collision": (
+            "model_collision_enabled",
+            "_model_collision_brushes",
+            "_physics_body_brushes",
+            "_collision_brushes_cache",
+        ),
+        "world": (
+            "editor_state",
+            "_props",
+            "monster_ai",
+            "_monster_lock",
+            "_levelchanger_things",
+            "_timer_things",
+            "_name_cache",
+            "_id_cache",
+            "_monster_by_id",
+            "_indexed_things",
+            "_indexed_brushes",
+            "_moving_rows",
+        ),
+    }
+
     def __init__(self, game_state: ThreadedGameState, 
                  editor_state, 
                  visibility_system: Optional[Any] = None):
@@ -457,6 +611,28 @@ class LogicThread(threading.Thread):
         self._gui_fault_teardown = None
         self._gui_fault_teardown_requested = False
         self._tick_fault_message = ""
+
+        # Fail immediately if the extraction changed construction order or
+        # forgot a host-owned attribute needed by one of the runtimes.
+        self._validate_runtime_contracts()
+
+    def _validate_runtime_contracts(self):
+        """Validate the construction-level seam between LogicThread and runtimes."""
+        for runtime_name in self._RUNTIME_HOSTS:
+            runtime = getattr(self, runtime_name, None)
+            assert runtime is not None, (
+                f"{runtime_name} was not constructed before runtime validation"
+            )
+            assert getattr(runtime, "logic", self) is self, (
+                f"{runtime_name}.logic must point at this LogicThread"
+            )
+
+        for runtime_name, attributes in self._RUNTIME_HOST_CONTRACTS.items():
+            missing = [name for name in attributes if not hasattr(self, name)]
+            assert not missing, (
+                f"{runtime_name} runtime host contract missing: "
+                + ", ".join(missing)
+            )
 
     @property
     def brushes(self):
