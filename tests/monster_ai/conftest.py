@@ -13,7 +13,7 @@ pytest.importorskip("PyQt5", reason="editor.things (Monster/PathNode) needs PyQt
 from editor.editor_state import EditorState
 from editor.io_system import IOManager
 from editor.things import Monster, PathNode
-from engine.io_handlers import register_all_input_handlers
+from editor.io_handlers import register_all_input_handlers
 from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI
 from engine.physics import SpatialGrid
