@@ -342,6 +342,27 @@ class _Group:
         player = logic.player
         if not player:
             return None
+        ground = getattr(player, 'ground_object', None)
+        row = self.row_of_obj.get(id(ground))
+        if row is None or self.brushes[row] is not ground:
+            return None
+        return player, row
+
+    def _walk(self, logic, delta, table):
+        """One pass in list order: vectorised between sequence points."""
+        io = logic.io_manager
+        ride = self._ride(logic)
+        version = self.version
+        self.dirty.clear()
+        cursor = 0
+        plan = self._plan(logic, cursor, delta, io)
+        while True:
+            seq_rows = plan['seq']
+            at = np.searchsorted(seq_rows, cursor)
+            stop = int(seq_rows[at]) if at < len(seq_rows) else len(self.index)
+            self._commit(plan, cursor, stop, ride)
+            if stop >= len(self.index):
+                return
             ran = self._one(logic, stop, delta, io, ride)
             cursor = stop + 1
             if self.version != version:
@@ -349,11 +370,10 @@ class _Group:
             if ran:
                 table.sync()
                 self.take_dirty()
-                # A synchronous I/O sequence point may have changed a later
-                # row through a path/state/cache side effect that is not visible
-                # in this group's dirty set. Re-plan the remaining suffix
-                # unconditionally so the vectorised span after the sequence
-                # point sees the same state the legacy ordered loop would.
+                # A synchronous I/O sequence point can change later state
+                # through a path/state/cache side effect. Re-plan the remaining
+                # suffix unconditionally so the next vectorised span sees the
+                # same state as the ordered legacy loop.
                 plan = self._plan(logic, cursor, delta, io)
 
 
