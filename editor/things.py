@@ -2007,7 +2007,7 @@ def _load_core_entity_types():
 
 
 def __getattr__(name):
-        module_name = _CORE_ENTITY_MODULES.get(name)
+    module_name = _CORE_ENTITY_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
