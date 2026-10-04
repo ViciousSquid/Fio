@@ -225,7 +225,7 @@ class LogicSession:
             logic.trigger_runtime.fired_once_triggers.clear()
             logic.collected_keys.clear()
             logic.active_speakers.clear()
-            logic.hurt_trigger_timers.clear()
+            logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.mover_runtime._reset_movers()
             logic.mover_runtime._reset_doors()
             logic.parenting_runtime._reset_parented_lights()
@@ -234,8 +234,8 @@ class LogicSession:
             logic.current_hud_message = ""
             logic.current_hud_key_name = None
             logic.gate_inputs = {}
-            logic.timer_states = {}
-            logic.light_fade_states.clear()
+            logic.timing_runtime.timer_states.clear()
+            logic.timing_runtime.light_fade_states.clear()
             logic.active_weapon = None
             logic.bullet_marks = []
             logic.player_dead = False
