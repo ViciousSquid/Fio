@@ -45,7 +45,7 @@ def _published(thread, name):
 # ---------------------------------------------------------------------------
 
 def _add_projectile(thread, pos=(0.0, 100.0, 0.0), vel=(0.0, 0.0, 10.0)):
-    thread._monster_projectiles.add(pos, vel, 0, 5, 10.0)
+    thread.combat_runtime._monster_projectiles.add(pos, vel, 0, 5, 10.0)
 
 
 def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
