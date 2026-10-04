@@ -862,7 +862,7 @@ class TickContext:
     value as a single press. ``keys`` is the raw held-key set (Qt key codes on
     the engine host); prefer :meth:`key_down` to test it by name.
 
-    HUD helpers replace poking ``logic.current_hud_message`` directly:
+    HUD helpers replace poking ``logic.interaction_runtime.current_hud_message`` directly:
     :meth:`set_prompt` writes a contextual line only if nothing higher-priority
     (including the core's own prompt) already claimed it this tick, and
     :meth:`toast` shows a timed message for a few seconds.
