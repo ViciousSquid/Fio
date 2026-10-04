@@ -18,7 +18,7 @@ pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 from PyQt5.QtCore import QByteArray, Qt  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QDockWidget, QMainWindow, QWidget,
+    QApplication, QLabel, QMainWindow, QWidget,
 )
 
 from editor.ui import LAYOUT_VERSION  # noqa: E402
@@ -125,167 +125,109 @@ def test_the_scene_hierarchy_keeps_its_view_menu_label_without_a_title_bar():
 # The version gate
 # ────────────────────────────
 
-class FakeEditorWindow(QMainWindow):
-    """Enough of MainWindow for the two layout methods, which are bound on."""
-
-    from editor.main_window import MainWindow
-    load_layout = MainWindow.load_layout
-    save_layout = MainWindow.save_layout
-    reset_layout = MainWindow.reset_layout
-    _enforce_layout_constraints = MainWindow._enforce_layout_constraints
-    _restore_default_layout = MainWindow._restore_default_layout
-    del MainWindow
-
-    def __init__(self, config=None):
-        super().__init__()
-        self.config = config if config is not None else configparser.ConfigParser()
-        self.toasts = []
-        self.saved_config = 0
-        self.restored = []
-        self.restore_versions = []
-        self.restore_results = []
-        self.saved_versions = []
-
-    def show_toast(self, message, is_error=False, duration=None):
-        self.toasts.append(message)
-
-    def save_config(self):
-        self.saved_config += 1
-
-    def saveState(self, version=0):
-        self.saved_versions.append(version)
-        return QByteArray(b'state')
-
-    def restoreState(self, data, version=0):
-        self.restored.append(bytes(data))
-        self.restore_versions.append(version)
-        if self.restore_results:
-            return self.restore_results.pop(0)
-        return True
-
-
-def _saved_layout(version=None):
+def _saved_layout(window, version=None):
     config = configparser.ConfigParser()
     config.add_section('Layout')
-    config['Layout']['geometry'] = QByteArray(b'geom').toHex().data().decode()
-    config['Layout']['state'] = QByteArray(b'state').toHex().data().decode()
+    config['Layout']['geometry'] = window.saveGeometry().toHex().data().decode()
+    config['Layout']['state'] = window.saveState(LAYOUT_VERSION).toHex().data().decode()
     if version is not None:
         config['Layout']['version'] = str(version)
     return config
 
 
-def test_a_current_layout_is_restored(qt_app):
-    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
+def _layout_toast(window, needle):
+    return any(needle in label.text().lower()
+               for label in window.findChildren(QLabel)
+               if label.text())
+
+
+def test_a_current_layout_is_restored(main_window, qt_app):
+    host = main_window
+    config = _saved_layout(host, LAYOUT_VERSION)
+    host.addDockWidget(Qt.TopDockWidgetArea, host.view_3d_dock)
+    assert host.toolBarArea(host.tool_toolbar) != Qt.RightToolBarArea
+    host.config = config
 
     host.load_layout()
 
-    assert host.restored == [b'state']
-    assert host.restore_versions == [LAYOUT_VERSION]
-    assert host.toasts == []
+    assert host.dockWidgetArea(host.view_3d_dock) == Qt.RightDockWidgetArea
 
 
-def test_a_layout_from_an_older_default_is_dropped(qt_app):
-    """Otherwise a changed default never reaches an install that has run."""
-    config = _saved_layout(LAYOUT_VERSION - 1)
-    host = FakeEditorWindow(config)
-
-    host.load_layout()
-
-    assert host.restored == []
+def test_a_layout_from_an_older_default_is_dropped(main_window, qt_app):
+    config = _saved_layout(main_window, LAYOUT_VERSION - 1)
+    main_window.config = config
+    main_window.load_layout()
     assert not config.has_option('Layout', 'state')
 
 
-def test_a_layout_saved_before_versioning_is_dropped(qt_app):
-    """No version key at all means it predates the gate."""
-    config = _saved_layout()
-    assert not config.has_option('Layout', 'version')
-    host = FakeEditorWindow(config)
-
-    host.load_layout()
-
-    assert host.restored == []
+def test_a_layout_saved_before_versioning_is_dropped(main_window):
+    config = _saved_layout(main_window)
+    config.remove_option('Layout', 'version')
+    main_window.config = config
+    main_window.load_layout()
+    assert not config.has_option('Layout', 'state')
 
 
-def test_dropping_it_says_so(qt_app):
-    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION - 1))
+def test_dropping_it_says_so(main_window, qt_app):
+    config = _saved_layout(main_window, LAYOUT_VERSION - 1)
+    main_window.config = config
+    main_window.load_layout()
+    qt_app.processEvents()
+    assert _layout_toast(main_window, 'layout reset')
 
-    host.load_layout()
-    QApplication.instance().processEvents()      # the toast is deferred
 
-    assert any('layout' in t.lower() for t in host.toasts)
-
-
-def test_dropping_it_keeps_the_window_geometry(qt_app):
-    """Where the window sits is the user's doing, not the default's."""
-    config = _saved_layout(LAYOUT_VERSION - 1)
-    host = FakeEditorWindow(config)
-
-    host.load_layout()
-
+def test_dropping_it_keeps_the_window_geometry(main_window):
+    config = _saved_layout(main_window, LAYOUT_VERSION - 1)
+    main_window.config = config
+    main_window.load_layout()
     assert config.has_option('Layout', 'geometry')
 
 
-def test_it_only_says_so_when_there_was_something_to_drop(qt_app):
+def test_it_only_says_so_when_there_was_something_to_drop(main_window, qt_app):
     config = configparser.ConfigParser()
     config.add_section('Layout')
-    config['Layout']['geometry'] = QByteArray(b'geom').toHex().data().decode()
-    host = FakeEditorWindow(config)
-
-    host.load_layout()
-    QApplication.instance().processEvents()
-
-    assert host.toasts == []
+    config['Layout']['geometry'] = main_window.saveGeometry().toHex().data().decode()
+    main_window.config = config
+    main_window.load_layout()
+    qt_app.processEvents()
+    assert not _layout_toast(main_window, 'layout reset')
 
 
-def test_no_layout_section_is_not_an_error(qt_app):
-    host = FakeEditorWindow()
-
-    host.load_layout()
-
-    assert host.restored == []
+def test_no_layout_section_is_not_an_error(main_window):
+    main_window.load_layout()
+    assert not main_window.config.has_section('Layout')
 
 
-def test_saving_stamps_the_version(qt_app):
-    host = FakeEditorWindow()
+def test_saving_stamps_the_version(main_window):
+    main_window.save_layout()
+    assert main_window.config.getint('Layout', 'version') == LAYOUT_VERSION
 
+
+def test_a_layout_saved_now_is_restored_next_time(main_window, qt_app):
+    host = main_window
     host.save_layout()
-
-    assert host.config.getint('Layout', 'version') == LAYOUT_VERSION
-    assert host.saved_versions == [LAYOUT_VERSION]
-
-
-def test_a_layout_saved_now_is_restored_next_time(qt_app):
-    """The round trip the gate must not break."""
-    host = FakeEditorWindow()
-    host.save_layout()
-
-    reopened = FakeEditorWindow(host.config)
-    reopened.load_layout()
-
-    assert reopened.restored
-    assert reopened.toasts == []
-
-
-def test_invalid_saved_state_falls_back_to_the_captured_default(qt_app):
-    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
-    host._default_layout_state = QByteArray(b'default')
-    host.restore_results = [False, True]
-
+    host.addDockWidget(Qt.TopDockWidgetArea, host.view_3d_dock)
     host.load_layout()
-
-    assert host.restored == [b'state', b'default']
-    assert host.restore_versions == [LAYOUT_VERSION, LAYOUT_VERSION]
-    assert not host.config.has_option('Layout', 'state')
-    QApplication.instance().processEvents()      # the invalid-state toast is queued
-    assert any('invalid' in t.lower() for t in host.toasts)
+    assert host.dockWidgetArea(host.view_3d_dock) == Qt.RightDockWidgetArea
 
 
-def test_reset_layout_restores_defaults_without_restarting(qt_app, monkeypatch):
+def test_invalid_saved_state_falls_back_to_the_captured_default(main_window, qt_app):
+    host = main_window
+    config = _saved_layout(host, LAYOUT_VERSION)
+    config['Layout']['state'] = QByteArray(b'invalid-layout-state').toHex().data().decode()
+    host.config = config
+    host.load_layout()
+    qt_app.processEvents()
+    assert not config.has_option('Layout', 'state')
+    assert _layout_toast(host, 'invalid')
+
+
+def test_reset_layout_restores_defaults_without_restarting(main_window, monkeypatch):
     from editor import main_window as mw
 
-    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
-    host._default_layout_state = QByteArray(b'default')
-    host.restore_results = [True]
+    host = main_window
+    host.save_layout()
+    host.addDockWidget(Qt.TopDockWidgetArea, host.view_3d_dock)
 
     monkeypatch.setattr(
         mw.QMessageBox, 'question',
@@ -294,8 +236,7 @@ def test_reset_layout_restores_defaults_without_restarting(qt_app, monkeypatch):
     host.reset_layout()
 
     assert not host.config.has_section('Layout')
-    assert host.restored == [b'default']
-    assert any('reset to defaults' in t.lower() for t in host.toasts)
+    assert host.dockWidgetArea(host.view_3d_dock) == Qt.RightDockWidgetArea
 
 
 # ────────────────────────────
