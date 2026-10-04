@@ -9,7 +9,7 @@ from engine.logic_movers import LogicMovers
 
 def _host(brushes):
     host = SimpleNamespace(
-        brushes=brushes,
+        editor_state=SimpleNamespace(brushes=brushes, things=[]),
         movers=[],
         doors=[],
         mover_path_states={},
