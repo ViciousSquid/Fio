@@ -8,8 +8,7 @@ so that they fail if the event-driven model is ever quietly replaced by a scan.
 """
 
 import pytest
-
-from editor.editor_state import EditorState
+from types import SimpleNamespace
 from engine.spatial import (SIM_TIER_KEY, TIER_ACTIVE, TIER_DISTANT,
                             TIER_DORMANT, TIER_NAMES, TIER_NEAR,
                             tier_of)
@@ -53,7 +52,7 @@ class FakeLogic:
     """Stand-in for the streaming host using the real editor-state ownership."""
 
     def __init__(self, brushes=None, things=None, player=None, view_distance=None):
-        self.editor_state = EditorState()
+        self.editor_state = SimpleNamespace()
         self.editor_state.brushes = list(brushes or [])
         self.editor_state.things = list(things or [])
         self.player = player
