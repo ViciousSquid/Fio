@@ -706,7 +706,7 @@ class LogicThread(threading.Thread):
 
     def _init_logic_timers(self):
         """Compatibility wrapper for timer initialisation."""
-        return self._timing_runtime().init_logic_timers()
+        return LogicThread._timing_runtime(self).init_logic_timers()
 
     def set_terrain(self, terrain):
         self.terrain = terrain
