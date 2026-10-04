@@ -1,5 +1,6 @@
 """Player damage should queue a spatial pain sound at the damage location."""
 
+import glm
 import pytest
 
 pytest.importorskip("PyQt5", reason="LogicThread uses the editor world state")
@@ -57,4 +58,4 @@ def test_no_pain_sound_when_damage_is_ignored():
     LogicTriggers(logic)._apply_player_damage(10)
 
     assert logic.player_runtime.player_health == 100
-    assert logic.game_state.consume_sounds() == []
+    assert logic.game_state.consume_sounds() == ()
