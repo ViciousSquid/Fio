@@ -26,7 +26,7 @@ Dedicated cutscene playback state machine. `LogicThread` remains the simulation 
 
 Cutscene files are resolved only beneath the project's `cutscenes/` directory. Camera tracks support position, yaw, pitch, FOV, interpolation, teleport and look-at behaviour. Actor tracks can temporarily remove existing monsters from normal simulation, spawn authored temporary actors and restore the captured world when playback ends. Timed fights and cinematic messages are also handled here.
 
-This separation is intentional: `LogicThread` schedules the runtime update, while `CutsceneRuntime` owns the cutscene state machine. The public compatibility wrappers on `LogicThread` preserve the existing integration surface for editor I/O and tests.
+This separation is intentional: `LogicThread` schedules the runtime update, while `CutsceneRuntime` owns the cutscene state machine. Editor I/O and tests reach the dedicated runtime owners directly.
 
 ### `effect_entity.py`
 Unified Effect world primitive. FIRE, ORB, EXPLOSION and CUSTOM are behaviours of the same authored entity, with procedural animation and optional intrinsic dynamic light. Runtime/render state is projected into EntityTable rather than maintained as a second effect renderer.
