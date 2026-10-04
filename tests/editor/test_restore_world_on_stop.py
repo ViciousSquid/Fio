@@ -7,6 +7,8 @@ flag with them, so the session leaves no trace.
 """
 
 
+import configparser
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="the play toggle lives on the editor window")
@@ -16,24 +18,6 @@ from editor.things import Monster                  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing  # noqa: E402
 
 pytestmark = pytest.mark.qt
-
-
-def _play_a_session(window):
-    wall = window.state.brushes[0]
-    grunt = window.state.things[0]
-    from editor.things import PlayerStart
-
-    window.state.things.append(PlayerStart(pos=[0, 64, -128]))
-    window.enter_play_mode()
-    assert window.view_3d.play_mode
-
-    window.state.brushes[0]["hidden"] = True
-    window.state.brushes[0]["disabled"] = True
-    grunt.properties["dead"] = True
-    grunt.pos = [500.0, 64.0, 0.0]
-    window.state.save_state()
-    window.unsaved_changes = True
-    window._exit_play_mode()
 
 
 def _play_a_session(window):
@@ -89,8 +73,15 @@ def test_stop_keeps_the_play_changes_when_restore_is_disabled(main_window):
 
 
 
-def test_stop_keeps_what_happened_in_play_by_default():
-    window = _Window(restore=False)
+def test_stop_keeps_what_happened_in_play_by_default(main_window):
+    window = main_window
+    window.config.add_section("Settings")
+    window.config.set("Settings", "restore_world_on_stop", "false")
+    window.state.brushes[:] = [box_brush("wall", (0, 64, 0))]
+    window.state.things[:] = [
+        make_thing(Monster, "grunt", (100, 64, 0), health=50)
+    ]
+    window.state.save_state()
     _play_a_session(window)
     assert window.state.brushes[0]["hidden"] is True
     assert window.state.things[0].properties["dead"] is True
