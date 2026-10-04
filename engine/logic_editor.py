@@ -35,13 +35,13 @@ class LogicEditor:
             logic._editor_mouselook_active = True
             camera.yaw += dx * logic.EDITOR_MOUSE_SENSITIVITY
             camera.pitch -= dy * logic.EDITOR_MOUSE_SENSITIVITY
-            logic.editor_camera.pitch = max(
+            camera.pitch = max(
                 -89.0,
-                min(89.0, logic.editor_camera.pitch),
+                min(89.0, camera.pitch),
             )
 
         keys = logic.game_state.get_keys()
-        yaw_rad = math.radians(logic.editor_camera.yaw)
+        yaw_rad = math.radians(camera.yaw)
         forward = glm.vec3(math.cos(yaw_rad), 0, math.sin(yaw_rad))
         forward = glm.normalize(forward)
         right = glm.normalize(
