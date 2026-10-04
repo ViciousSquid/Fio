@@ -225,7 +225,7 @@ class View2D(QWidget):
 
     def _clip_active(self):
         """True when the global clip mode is on (toggled by the X button)."""
-        return bool(getattr(self.main_window, 'clip_mode', False))
+        return bool(self.main_window.clip_mode)
 
     def _axis_indices(self):
         """(axis1_idx, axis2_idx, depth_idx) for this ortho view."""
@@ -248,7 +248,7 @@ class View2D(QWidget):
     # ------------------------------------------------------------------
     def _rotate_active(self):
         """True when the global free-rotate mode is on (rotate toolbar button)."""
-        return bool(getattr(self.main_window, 'rotate_mode', False))
+        return bool(self.main_window.rotate_mode)
 
     def _rotate_axis_vec(self):
         """3D rotation axis for this view: e_axis1 x e_axis2, so a positive drag
@@ -1338,7 +1338,7 @@ class View2D(QWidget):
 
         # --- REVISED: Logic/Trigger Connections ---
         # Only draw if the global toggle is ON (F1)
-        show_f1_key = getattr(self.editor, 'show_logic_links', False)
+        show_f1_key = self.editor.show_logic_links
         
         if show_f1_key:
             self.draw_logic_connections(painter, visible_bounds)
