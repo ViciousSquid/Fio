@@ -140,7 +140,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
                          {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]}],
             )
             camera = SimpleNamespace(overhead_height_limit=None)
-            player = None
+            player_runtime = SimpleNamespace(player=None)
             render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
         logic = Logic()
