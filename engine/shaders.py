@@ -211,7 +211,7 @@ def light_ubo_source(source):
 
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS """ + str(MAX_SHADOW_LIGHTS) + """
-uniform samplerCube shadowMaps[MAX_SHADOW_LIGHTS];
+uniform samplerCube shadowMaps[""" + str(MAX_SHADOW_LIGHTS) + """];
 
 highp float _sampleShadowCube(int idx, highp vec3 dir) {
     if (idx == 0) return texture(shadowMaps[0], dir).r;
