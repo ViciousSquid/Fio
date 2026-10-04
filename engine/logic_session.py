@@ -85,7 +85,7 @@ class LogicSession:
             logic._tick_fault_message = ""
 
             if hasattr(logic.editor_state, "config"):
-                logic.player_runtime.p2_turn_sensitivity = float(
+                logic.player_runtime.player_runtime.p2_turn_sensitivity = float(
                     logic.editor_state.config.get(
                         "Controls",
                         "p2_turn_sensitivity",
@@ -117,16 +117,16 @@ class LogicSession:
             logic.effect_store.begin_session(logic.editor_state.things)
 
             # Reset player stats.
-            logic.player_runtime.player_health = 100
-            logic.player_runtime.player_max_health = 100
-            logic.player_runtime.player_dead = False
-            logic.player_runtime.god_mode = False
-            logic.player_runtime.buddha_mode = False
-            logic.player_runtime.notarget = False
+            logic.player_runtime.player_runtime.player_health = 100
+            logic.player_runtime.player_runtime.player_max_health = 100
+            logic.player_runtime.player_runtime.player_dead = False
+            logic.player_runtime.player_runtime.god_mode = False
+            logic.player_runtime.player_runtime.buddha_mode = False
+            logic.player_runtime.player_runtime.notarget = False
 
             # Reset collection state.
             logic.trigger_runtime._reset_trigger_state()
-            logic.player_runtime.collected_keys.clear()
+            logic.player_runtime.player_runtime.collected_keys.clear()
             for thing in logic.editor_state.things:
                 if PropThing and isinstance(thing, PropThing):
                     # Restores what the author set; forcing carry here made every
@@ -140,8 +140,8 @@ class LogicSession:
             logic.interaction_runtime.current_hud_key_name = None
 
             # Reset water sound state (no spurious enter/exit on spawn).
-            logic.player_runtime._player_was_in_water = False
-            logic.player_runtime._waterwalk_timer = 0.0
+            logic.player_runtime.player_runtime._player_was_in_water = False
+            logic.player_runtime.player_runtime._waterwalk_timer = 0.0
 
             logic.timing_runtime.timer_states.clear()
 
@@ -157,9 +157,9 @@ class LogicSession:
             logic.combat_runtime.muzzle_flash_active = False
 
             # Reset P2 stats through the player runtime owner.
-            logic.player_runtime.player2_health = 100
-            logic.player_runtime.player2_max_health = 100
-            logic.player_runtime.player2_dead = False
+            logic.player_runtime.player_runtime.player2_health = 100
+            logic.player_runtime.player_runtime.player2_max_health = 100
+            logic.player_runtime.player_runtime.player2_dead = False
 
             self.reset_all_monsters(clear_dead=True)
 
@@ -201,7 +201,7 @@ class LogicSession:
             # fast 1.5-second fade-in followed by the 4-second fade-out.
             hud_now = time.perf_counter()
             logic.render_runtime._hud_health_alpha = 0.0
-            logic.render_runtime._hud_health_last_value = logic.player_runtime.player_health
+            logic.render_runtime._hud_health_last_value = logic.player_runtime.player_runtime.player_health
             logic.render_runtime._hud_health_fade_started = hud_now
             logic.render_runtime._hud_health_fade_from = 0.0
             logic.render_runtime._hud_health_fade_phase = "in"
@@ -243,7 +243,7 @@ class LogicSession:
             self.stop_monster_ai()
             logic.trigger_runtime._reset_trigger_state()
             logic.trigger_runtime.fired_once_triggers.clear()
-            logic.player_runtime.collected_keys.clear()
+            logic.player_runtime.player_runtime.collected_keys.clear()
             logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.mover_runtime._reset_movers()
             logic.mover_runtime._reset_doors()
@@ -256,7 +256,7 @@ class LogicSession:
             logic.timing_runtime.light_fade_states.clear()
             logic.combat_runtime.active_weapon = None
             logic.combat_runtime.bullet_marks = []
-            logic.player_runtime.player_dead = False
+            logic.player_runtime.player_runtime.player_dead = False
             logic.combat_runtime.muzzle_flash_active = False
 
             logic.prop_runtime.stop()
@@ -425,7 +425,7 @@ class LogicSession:
         if logic.io_manager is not None:
             logic.io_manager.reset()
 
-        for player in (logic.player, logic.player_runtime.player2):
+        for player in (logic.player_runtime.player, logic.player_runtime.player_runtime.player2):
             if player is not None:
                 player.ground_object = None
 

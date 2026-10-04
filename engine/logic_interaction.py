@@ -26,7 +26,7 @@ class LogicInteraction:
         self.current_hud_key_name = None
 
         reach_distance = 80.0
-        px, py, pz = logic.player.pos
+        px, py, pz = logic.player_runtime.player.pos
 
         found_door_idx = -1
         found_door_brush = None
@@ -74,7 +74,7 @@ class LogicInteraction:
                             )
                         door_consumed_use = use_key_pressed
                     elif needs_key:
-                        has_key = key_name in logic.player_runtime.collected_keys
+                        has_key = key_name in logic.player_runtime.player_runtime.collected_keys
                         if has_key:
                             self.current_hud_message = "[E] Use"
                             self.current_hud_key_name = key_name or None
@@ -118,9 +118,9 @@ class LogicInteraction:
             if in_range.any():
                 forward = np.asarray(
                     (
-                        math.sin(logic.player.angle),
+                        math.sin(logic.player_runtime.player.angle),
                         0.0,
-                        math.cos(logic.player.angle),
+                        math.cos(logic.player_runtime.player.angle),
                     ),
                     dtype=np.float32,
                 )

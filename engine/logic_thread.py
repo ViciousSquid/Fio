@@ -252,8 +252,6 @@ class LogicThread(threading.Thread):
         self.game_state = game_state
         self.editor_state = editor_state
         self.visibility_system = visibility_system
-        self.player = None
-        
         self.running = False
         self.terrain = None
         
@@ -626,7 +624,7 @@ class LogicThread(threading.Thread):
             )
 
     def _tick_play_mode(self, delta):
-        if not self.player:
+        if not self.player_runtime.player:
             return
         self.world_runtime.watch_world_rows()
 
@@ -693,7 +691,7 @@ class LogicThread(threading.Thread):
         self.prop_runtime.tick(delta, use_key)
         physics_world = self.session_runtime.physics_world
         if physics_world is not None:
-            physics_world.step(delta, self.player)
+            physics_world.step(delta, self.player_runtime.player)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
             self.prop_runtime.sync_physics_positions()

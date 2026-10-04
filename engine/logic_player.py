@@ -25,6 +25,7 @@ class LogicPlayer:
 
     def __init__(self, logic):
         self.logic = logic
+        self.player = None
         self.player2 = None
         self._player_was_in_water = False
         self._waterwalk_timer = 0.0
@@ -43,7 +44,7 @@ class LogicPlayer:
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""
         logic = self.logic
-        player = logic.player
+        player = self.player
         if not player:
             return
 
