@@ -359,7 +359,7 @@ def _contract_host():
     # rather than a generic stub with no state properties.
     host.mover_runtime = LogicMovers(host)
     for runtime_name in LogicThread._RUNTIME_HOSTS:
-        if runtime_name == "camera":
+        if runtime_name in ("camera", "mover_runtime"):
             continue
         setattr(host, runtime_name, SimpleNamespace(logic=host))
     return host
