@@ -137,6 +137,7 @@ MACHINERY_TEST_ROOTS = (
     "tests/persistence",
     "tests/renderer",
     "tests/visual",
+    "tests/monster_ai",
 )
 
 #: These names have appeared as substitutes for production owners in behavioural
