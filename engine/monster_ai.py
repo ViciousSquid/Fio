@@ -2117,7 +2117,7 @@ class MonsterAIThread(threading.Thread):
 
             accumulator += frame_time
 
-            # The world is paused (LogicThread.set_world_paused): monsters hold
+            # The world is paused through LogicSession's pause ownership:
             # still, and the paused time is dropped rather than caught up on
             # resume, which would fast-forward every monster at once.
             if self.lt.session_runtime.world_paused:
