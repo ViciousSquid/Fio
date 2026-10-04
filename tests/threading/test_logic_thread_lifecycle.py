@@ -439,7 +439,7 @@ def test_a_play_tick_with_no_player_does_nothing(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     try:
-        thread.player = None
+        thread.player_runtime.player = None
         thread._tick(TICK)      # must not raise
     finally:
         thread.session_runtime.apply_play_mode(False)
@@ -453,7 +453,7 @@ def test_the_io_manager_advances_with_the_tick(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         before = thread.io_manager.current_time
-        thread.player = Player(0.0, 0.0)
+        thread.player_runtime.player = Player(0.0, 0.0)
         thread._tick(TICK)
         assert thread.io_manager.current_time > before, (
             "the I/O clock did not advance with the tick (%.4f -> %.4f); "
