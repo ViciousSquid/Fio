@@ -877,30 +877,30 @@ class LogicThread(threading.Thread):
         return LogicCollision.clear_brush_collision(brush)
 
     def _prepare_angled_brush_collision(self):
-        return self._collision_runtime().prepare_angled_brush_collision()
+        return LogicThread._collision_runtime(self).prepare_angled_brush_collision()
 
     def _clear_angled_brush_collision(self):
-        return self._collision_runtime().clear_angled_brush_collision()
+        return LogicThread._collision_runtime(self).clear_angled_brush_collision()
 
     def _build_model_collision_brushes(self):
-        return self._collision_runtime().build_model_collision_brushes()
+        return LogicThread._collision_runtime(self).build_model_collision_brushes()
 
     def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
-        return self._collision_runtime().compute_model_collision_mesh(
+        return LogicThread._collision_runtime(self).compute_model_collision_mesh(
             model_path, world_pos, scale, rotation
         )
 
     def _compute_mesh_bounds(self, mesh_tris):
-        return self._collision_runtime().compute_mesh_bounds(mesh_tris)
+        return LogicThread._collision_runtime(self).compute_mesh_bounds(mesh_tris)
 
     def _compute_model_bounds(self, model_path):
-        return self._collision_runtime().compute_model_bounds(model_path)
+        return LogicThread._collision_runtime(self).compute_model_bounds(model_path)
 
     def _toggle_model_collision(self, enabled: bool = None):
-        return self._collision_runtime().toggle_model_collision(enabled)
+        return LogicThread._collision_runtime(self).toggle_model_collision(enabled)
 
     def _refresh_collision_brushes_cache(self):
-        return self._collision_runtime().refresh_collision_brushes_cache()
+        return LogicThread._collision_runtime(self).refresh_collision_brushes_cache()
 
     # MAIN LOOP
     # =========================================================================
