@@ -179,8 +179,7 @@ class LogicThread(threading.Thread):
             "player",
             "player2",
             "game_state",
-            "_collision_brushes_cache",
-            "_mover_brush_list",
+                        "_mover_brush_list",
             "_player_was_in_water",
             "_waterwalk_timer",
         ),
@@ -251,9 +250,6 @@ class LogicThread(threading.Thread):
         ),
         "collision": (
             "model_collision_enabled",
-            "_model_collision_brushes",
-            "_physics_body_brushes",
-            "_collision_brushes_cache",
         ),
         "world": (
             "editor_state",
@@ -428,12 +424,7 @@ class LogicThread(threading.Thread):
         self._parented_portals: list = []
 
         # Model collision pseudo-brushes for things with model_path
-        self._model_collision_brushes: list = []
-        self._physics_body_brushes: list = []
         self._physics_world = None
-        # PERF: cached editor_state.brushes + model collision geometry (see
-        # collision_runtime.refresh_collision_brushes_cache)
-        self._collision_brushes_cache: list = []
         # Bumped every time the set of drawable objects changes, so a consumer
         # that caches across frames can tell whether its cache still describes
         # this world.  See notify_visibility_changed().
