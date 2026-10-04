@@ -107,8 +107,16 @@ def _ai(bigworld, overhead):
     """An AI whose host has (or has not) a Big World session, fitted (or not)
     to an overhead camera."""
     ai = MonsterAI.__new__(MonsterAI)
-    ai.lt = types.SimpleNamespace(_bigworld=object() if bigworld else None,
-                                  sim_view_rect=RECT if (bigworld and overhead) else None)
+    session = types.SimpleNamespace(
+        tiers=types.SimpleNamespace(
+            near_rect=RECT if (bigworld and overhead) else None
+        )
+    )
+    ai.lt = types.SimpleNamespace(
+        plugins=types.SimpleNamespace(
+            services={"bigworld": session} if bigworld else {}
+        )
+    )
     ai._tick_monsters = None
     ai._offscreen_accum = 0.0
     ai._owed = {}
@@ -174,8 +182,6 @@ def test_a_screen_with_nothing_off_it_is_the_plain_tick():
 @pytest.mark.parametrize("bigworld,overhead", [(False, False), (False, True), (True, False)])
 def test_without_big_world_and_an_overhead_camera_nothing_changes(bigworld, overhead):
     ai = _ai(bigworld, overhead)
-    # Even a box left on the host is ignored without a live session.
-    ai.lt.sim_view_rect = RECT if overhead else None
     assert ai._view_rect() is None
     monsters = [_thing(900.0), _thing(tier=TIER_DORMANT)]
     assert ai._offscreen_rows(monsters, TICK, PLAYER, ai._view_rect()) == (None, None)

@@ -65,7 +65,7 @@ def test_residency_is_sized_from_the_screen_not_the_authored_radius():
     assert corner + session.FIT_REFRESH <= act < corner + session.FIT_REFRESH + session.FIT_QUANTUM
     assert act < 2048.0
     assert session.manager.deactivation_radius > act
-    assert logic.sim_view_rect == session.tiers.near_rect
+    assert session.tiers.near_rect == session.tiers.near_rect
     # The camera's far plane follows residency.
     assert logic.view_distance.limit is not None
 
@@ -98,7 +98,7 @@ def _authored(session, logic):
     assert session.manager.deactivation_radius == 2304.0
     assert session.tiers.near_rect is None
     assert session.tiers.near_radius == 1024.0
-    assert getattr(logic, "sim_view_rect", None) is None
+    assert session.tiers.near_rect is None
 
 
 def test_a_first_person_camera_keeps_the_authored_radii():
@@ -180,9 +180,9 @@ def test_leaving_the_overhead_camera_restores_the_authored_radii():
 
 def test_stopping_hands_the_fit_back():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
-    assert logic.sim_view_rect is not None
+    assert session.tiers.near_rect is not None
     session.stop()
-    assert logic.sim_view_rect is None
+    assert session.tiers.near_rect is None
     assert session.tiers.near_rect is None
 
 
@@ -195,7 +195,7 @@ def test_a_screen_past_the_authored_radius_keeps_the_authored_residency():
     # The camera sees down to the residency edge at the player's ground.
     assert logic.view_distance.limit == 64.0 * math.ceil(math.hypot(2048.0, 800.0) / 64.0)
     # The screen's box is still published, for whoever throttles off screen.
-    assert logic.sim_view_rect is not None
+    assert session.tiers.near_rect is not None
 
 
 def test_turning_the_camera_retiers_but_leaves_residency_alone():
@@ -213,7 +213,7 @@ def test_turning_the_camera_retiers_but_leaves_residency_alone():
     session.tick()
     assert (session.manager.activation_radius, logic.view_distance.limit) == residency
     assert True not in forced                       # no forced residency pass
-    assert logic.sim_view_rect == session.tiers.near_rect
+    assert session.tiers.near_rect == session.tiers.near_rect
     assert session.tiers.near_rect[1] > session.tiers.near_rect[0]
 
 

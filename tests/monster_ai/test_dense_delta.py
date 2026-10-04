@@ -11,6 +11,7 @@ agree with each other.
 """
 
 import numpy as np
+from types import SimpleNamespace
 import pytest
 
 from engine.monster_constants import MONSTER_SHOOT_INTERVAL
@@ -34,17 +35,17 @@ def test_a_zero_tick_matches_the_per_monster_path(seed):
 def test_a_per_row_delta_equal_to_the_tick_is_the_plain_tick():
     plain_ai, plain_logic = _world(3, dense=True)
     rows_ai, rows_logic = _world(3, dense=True)
-    n = len(rows_logic._monster_things)
+    n = len(rows_logic.world_runtime.monster_things)
     for _ in range(int(2 * MONSTER_SHOOT_INTERVAL / TICK)):
-        plain_ai._update_dense(plain_logic._monster_things, TICK, plain_logic.player.pos)
-        rows_ai._update_dense(rows_logic._monster_things, np.full(n, TICK),
+        plain_ai._update_dense(plain_logic.world_runtime.monster_things, TICK, plain_logic.player.pos)
+        rows_ai._update_dense(rows_logic.world_runtime.monster_things, np.full(n, TICK),
                               rows_logic.player.pos)
     assert _snapshot(plain_ai, plain_logic) == _snapshot(rows_ai, rows_logic)
 
 
 def test_a_sit_out_row_skips_only_that_monster():
     ai, logic = _world(4, dense=True)
-    monsters = logic._monster_things
+    monsters = logic.world_runtime.monster_things
     before = [tuple(m.pos) for m in monsters]
     sit = np.zeros(len(monsters), dtype=bool)
     sit[0] = True
@@ -58,15 +59,18 @@ def test_a_zero_per_row_delta_is_still_a_tick_not_a_skip():
     sit-out mask skips a row."""
     zero_ai, zero_logic = _world(6, dense=True)
     plain_ai, plain_logic = _world(6, dense=True)
-    n = len(zero_logic._monster_things)
-    zero_ai._update_dense(zero_logic._monster_things, np.zeros(n), zero_logic.player.pos)
-    plain_ai._update_dense(plain_logic._monster_things, 0.0, plain_logic.player.pos)
+    n = len(zero_logic.world_runtime.monster_things)
+    zero_ai._update_dense(zero_logic.world_runtime.monster_things, np.zeros(n), zero_logic.player.pos)
+    plain_ai._update_dense(plain_logic.world_runtime.monster_things, 0.0, plain_logic.player.pos)
     assert _snapshot(zero_ai, zero_logic) == _snapshot(plain_ai, plain_logic)
 
 
 def _fit(logic, rect=(300.0, 300.0)):
-    logic._bigworld = object()
-    logic.sim_view_rect = rect
+    logic.plugins = SimpleNamespace(
+        services={"bigworld": SimpleNamespace(
+            tiers=SimpleNamespace(near_rect=rect)
+        )}
+    )
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
@@ -87,7 +91,7 @@ def test_off_screen_monsters_step_once_per_interval_and_on_screen_ones_every_tic
     ai, logic = _world(2, dense=True)
     player = logic.player.pos
     _fit(logic, rect=(1.0e6, 1.0e6))             # everything on screen
-    on = list(logic._monster_things)
+    on = list(logic.world_runtime.monster_things)
     _fit(logic, rect=(0.0, 0.0))                 # everything off screen
     moved = []
     for _ in range(6):
@@ -108,7 +112,7 @@ def test_a_fitted_pass_keeps_nothing_past_stop():
     ai.update(TICK)
     assert ai._tick_monsters is None                 # no Big World: nothing kept
     _fit(logic)
-    parked = logic._monster_things[0]
+    parked = logic.world_runtime.monster_things[0]
     parked.properties[SIM_TIER_KEY] = TIER_DORMANT
     ai.update(TICK)
     assert ai._tick_monsters is not None and parked not in ai._tick_monsters

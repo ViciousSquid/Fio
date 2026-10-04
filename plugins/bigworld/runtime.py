@@ -351,7 +351,6 @@ class BigWorldSession:
         if changed or rect != self.tiers.near_rect:
             self.tiers.set_near_rect(rect)
             self._tier_pos = None        # re-tier on the next tick
-            self._publish_view_rect()
         return changed
 
     def _set_camera_ceiling(self, height) -> None:
@@ -359,19 +358,6 @@ class BigWorldSession:
         ceiling). Guarded, like the published radii."""
         try:
             self.logic.camera.overhead_height_limit = height
-        except Exception:
-            pass
-
-    def _publish_view_rect(self) -> None:
-        """Tell the host the screen's box, ``(hx, hz)`` around the player, or
-        None when tiers are not fitted to an overhead camera.
-
-        Inside it is on screen; outside it, though resident, is not. Like the
-        relevance radii this publishes and does not manage: what a host does
-        with off-screen entities is its own business.
-        """
-        try:
-            self.logic.sim_view_rect = self.tiers.near_rect
         except Exception:
             pass
 
@@ -506,7 +492,6 @@ class BigWorldSession:
         self._fit = None
         self._fit_pos = self._tier_pos = None
         self.tiers.set_near_rect(None)
-        self._publish_view_rect()
         self._set_camera_ceiling(None)
         self._restore_terrain()
         if self._release_view_horizon is not None:
