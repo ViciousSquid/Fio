@@ -53,9 +53,9 @@ def test_levelchanger_activation_uses_float32_dense_columns():
     ])
 
     assert logic.world_runtime.levelchanger_centres.shape == (2, 3)
-    assert logic._levelchanger_centres.dtype == np.float32
+    assert logic.world_runtime.levelchanger_centres.dtype == np.float32
     assert logic.world_runtime.levelchanger_radii.shape == (2,)
-    assert logic._levelchanger_radii.dtype == np.float32
+    assert logic.world_runtime.levelchanger_radii.dtype == np.float32
     assert logic.world_runtime.levelchanger_eligible.dtype == np.bool_
 
 
@@ -69,7 +69,7 @@ def test_levelchanger_radius_boundary_is_squared_without_glm_distance():
 
     logic.player.pos = [60.0, 0.0, 60.0]
     logic.interaction_runtime.handle(False)
-    assert logic.current_hud_message == "[E] Complete Level"
+    assert logic.interaction_runtime.current_hud_message == "[E] Complete Level"
 
 
 def test_levelchanger_first_matching_row_wins_after_vectorised_filter():
@@ -84,6 +84,6 @@ def test_levelchanger_first_matching_row_wins_after_vectorised_filter():
 
     logic.interaction_runtime.handle(True)
 
-    assert logic.current_hud_message == "[E] Complete Level"
+    assert logic.interaction_runtime.current_hud_message == "[E] Complete Level"
     assert logic.level_complete_ui["target_map"] == "NextMap"
     assert fired == [("First", "OnUse")]
