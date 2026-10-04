@@ -370,7 +370,7 @@ class LogicThread(threading.Thread):
                 f"{runtime_name} was not constructed before runtime validation"
             )
             if runtime_name != "camera":
-                assert getattr(runtime, "logic", self) is self, (
+                assert runtime.logic is self, (
                     f"{runtime_name}.logic must point at this LogicThread"
                 )
 
