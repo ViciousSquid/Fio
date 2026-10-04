@@ -273,7 +273,7 @@ if __name__ == "__main__":
 
     splash.set_progress(100, "Ready.")
 
-    window.show()
+    window.showMaximized()
     splash.finish(window)
 
     sys.exit(app.exec_())
