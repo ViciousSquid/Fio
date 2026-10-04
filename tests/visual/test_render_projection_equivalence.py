@@ -624,7 +624,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
                                    show_triggers_as_solid=True)
         context.bind()
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-        renderer.render_scene(projection, view, eye, brushes, things, selected,
+        renderer.render_scene(projection, view, eye, selected,
                               config, brush_slots=slots)
         gl.glFinish()
         return context.read_pixels().astype(np.int16)
