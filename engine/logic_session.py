@@ -350,8 +350,8 @@ class LogicSession:
         try:
             from engine import savegame
 
-            session = getattr(logic, "_bigworld", None)
-            if session is not None and getattr(session, "streaming", False):
+            session = logic.plugins.services.get("bigworld")
+            if session is not None and session.streaming:
                 with logic._tick_lock:
                     session.commit_all()
                     snapshot = savegame.build_snapshot(
