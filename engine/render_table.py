@@ -326,9 +326,9 @@ class RenderTable:
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
-        #: slot -> the brush dict, as an object array, for publishing rows as
-        #: objects on demand (``PublishedBrushes``). Rebuilt only when the rows
-        #: change.
+        #: slot -> the brush dict, retained only for cache-boundary resolution
+        #: and resource/object lookup. Frame rendering consumes the dense
+        #: numeric columns; this reference array is rebuilt only when rows change.
         self.refs = np.empty(0, dtype=object)
         #: ``~hidden`` and its slots, cached until a ``hidden`` value changes.
         self._shown_mask = np.empty(0, dtype=bool)
