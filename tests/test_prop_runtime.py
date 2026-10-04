@@ -179,20 +179,9 @@ def test_respawn_fade_state_resets_when_session_restarts(real_logic):
     assert prop._respawn_fade_alpha == 1.0
 
 
-def test_carried_billboard_keeps_its_facing_when_player_turns():
+def test_carried_billboard_keeps_its_facing_when_player_turns(real_logic):
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True})
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        player_runtime=SimpleNamespace(player=SimpleNamespace(
-            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-            camera_height=40.0,
-        )),
-    )
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop])
 
     session.tick(1 / 60, use_pressed=True)
     assert session.held is prop
