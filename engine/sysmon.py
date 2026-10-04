@@ -240,10 +240,10 @@ class SysMon:
                 )
 
         if editor is not None:
-            state = getattr(editor, "state", None)
-            brushes = getattr(state, "brushes", []) if state is not None else []
+            state = editor.state
+            brushes = state.brushes
             total_tris = len(brushes) * 12
-            terrain = getattr(editor, "terrain", None)
+            terrain = editor.terrain
             if terrain is not None:
                 try:
                     total_tris += int(terrain.get_tri_count())
@@ -273,7 +273,7 @@ class SysMon:
             "culled_surfaces": culled_surfaces,
             "tps": float(logic_thread.actual_tps or 0.0),
             "things": int(
-                len(getattr(getattr(editor, "state", None), "things", []) or [])
+                len(editor.state.things)
             ),
             "draw_calls": int(
                 getattr(
