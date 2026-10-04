@@ -453,7 +453,7 @@ class SceneHierarchy(QWidget):
 
     def _get_terrain_display_name(self):
         """Get a display name for the terrain based on its data."""
-        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        terrain_data = self.main_window.state.terrain_data
         if terrain_data:
             biome = terrain_data.get('biome', '')
             if biome:
@@ -740,11 +740,10 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 self.main_window.state.terrain_data = None
                 # Remove the live terrain object so the 3D view stops rendering it
-                if hasattr(self.main_window, 'terrain'):
-                    self.main_window.terrain = None
-                panel = getattr(self.main_window, '_current_overlay', None)
+                self.main_window.terrain = None
+                panel = self.main_window._current_overlay
                 if panel is not None:
-                    if getattr(self.main_window, '_current_overlay', None) is panel:
+                    if self.main_window._current_overlay is panel:
                         self.main_window._close_current_overlay()
                     self.main_window.terrain_editor_window = None
                 self.main_window.set_selected_objects([])
@@ -943,10 +942,8 @@ class SceneHierarchy(QWidget):
                 action.triggered.connect(lambda checked, c=colour_name: self.set_thing_colour(thing_obj, c, checked))
 
             menu.addSeparator()
-            inspect_action = None
-            if hasattr(self.main_window, 'show_entity_inspector'):
-                inspect_action = menu.addAction("Inspect")
-                inspect_action.setToolTip("Open a live, read-only view of this entity")
+            inspect_action = menu.addAction("Inspect")
+            inspect_action.setToolTip("Open a live, read-only view of this entity")
             properties_action = menu.addAction("Properties")
             properties_action.setToolTip("Show this object in the Properties panel")
 
