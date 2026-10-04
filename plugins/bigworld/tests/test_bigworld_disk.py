@@ -74,6 +74,10 @@ class FakeLogic:
         self.notarget = False
         self.camera = LogicCamera(self)
         self.collision_runtime = LogicCollision(self)
+        self._model_collision_brushes = []
+        self._physics_body_brushes = []
+        self._collision_brushes_cache = []
+        self._spatial_grid = None
         self.camera.camera_mode = "First Person"
         self.camera.overhead_height = 800.0
         self.camera.overhead_height_limit = None
