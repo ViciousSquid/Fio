@@ -184,3 +184,28 @@ The current application dependency baseline is maintained in the repository root
 - **I/O is compositional.** Small primitives and parameterised operations combine instead of requiring a large scripting vocabulary.
 - **Cutscenes are data-driven.** Camera, actor and event tracks are authored as data and executed by the runtime state machine.
 - **The hot path is allowed to be numerical.** The editor remains flexible and object-oriented while the engine projects large homogeneous data into dense execution representations.
+
+## Security and trust boundaries
+
+### Plugins
+
+Fio's plugin model is deliberately an **in-process Python extension model, not a sandbox**. The editor discovers and imports Python packages from `plugins/` during startup so plugin-provided entity types, I/O definitions and editor extensions can participate in the normal machinery.
+
+Anything placed in `plugins/` must therefore be trusted code. A plugin has the same process and OS privileges as the editor. Do not install untrusted, downloaded or user-supplied Python packages into this directory expecting the plugin API to constrain them.
+
+`.fiopak` packages do not automatically install plugin code. A package can declare dependencies on plugins, but those plugins must already exist in the host's trusted `plugins/` directory.
+
+### `.fiopak` packages are untrusted input
+
+Package export produces ZIP-based `.fiopak` archives, while package loading may consume archives obtained from elsewhere. Asset extraction therefore has explicit memory limits before ZIP entries are inflated:
+
+- **128 MiB maximum declared uncompressed size per asset entry**
+- **512 MiB maximum cumulative asset data admitted to the in-memory cache**
+
+An entry exceeding its limit is rejected, and the cumulative limit prevents a package from exhausting memory by loading many individually acceptable assets. These limits apply at the engine package-reading boundary rather than relying on the editor UI to validate package contents.
+
+### Docker is not a sandbox
+
+The Docker image runs Fio as an unprivileged `fio` user rather than root. However, the supplied Compose configuration is **not an isolation boundary**: it deliberately gives the graphical application access to host facilities including the X11 socket, host networking and `/dev/dri`.
+
+Use the container for reproducible packaging/runtime environments, not as a mechanism for safely executing untrusted plugins, packages or Python code.
