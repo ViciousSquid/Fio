@@ -33,16 +33,9 @@ def _v3(value):
 
 def _selected_actors(main_window):
     out = []
-    for obj in getattr(main_window.state, "selected_objects", []) or []:
+    for obj in main_window.state.selected_objects:
         if getattr(obj, "properties", {}).get("type") == "monster":
             out.append(obj)
-    single = getattr(main_window.state, "selected_object", None)
-    if (
-        single is not None
-        and getattr(single, "properties", {}).get("type") == "monster"
-        and single not in out
-    ):
-        out.append(single)
     return out
 
 
@@ -551,7 +544,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         return None
 
     def _preview_start(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         if self._preview_camera_baseline is None:
             camera = self.main_window.view_3d.camera
             self._preview_camera_baseline = {
@@ -952,7 +945,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             "name": str(actor.properties.get("display_name") or actor.properties.get("name")),
             "spawn": True,
         }
-        self.main_window.set_selected_object(actor)
+        self.main_window.set_selected_objects([actor])
         self.main_window.update_all_ui()
         self._refresh_actor_lists()
         self._select_actor_id(str(actor.properties.get("id")))
@@ -1023,19 +1016,12 @@ class CutsceneWizard(QtWidgets.QDialog):
         if aid in self.temporary_actor_ids:
             state = self.main_window.state
 
-            # Clear both editor selection fields before rebuilding the actor
-            # references. Otherwise the removed temporary actor can remain in
-            # selection and be captured again by "+ Selected".
-            if hasattr(state, "selected_objects"):
-                state.selected_objects = [
-                    actor for actor in (state.selected_objects or [])
-                    if str(getattr(actor, "properties", {}).get("id", "")) != aid
-                ]
-            if (
-                getattr(state, "selected_object", None) is not None
-                and str(getattr(state.selected_object, "properties", {}).get("id", "")) == aid
-            ):
-                state.selected_object = None
+            # Remove the deleted temporary actor from the authoritative
+            # multi-selection so "+ Selected" cannot capture it again.
+            state.selected_objects = [
+                actor for actor in state.selected_objects
+                if str(getattr(actor, "properties", {}).get("id", "")) != aid
+            ]
 
             state.things[:] = [
                 actor for actor in state.things
@@ -1671,14 +1657,10 @@ class CutsceneWizard(QtWidgets.QDialog):
         ]
         self.temporary_actor_ids.clear()
         self._cleaned = True
-        try:
-            selected = getattr(self.main_window.state, "selected_object", None)
-            if selected is not None and bool(
-                getattr(selected, "properties", {}).get("_cutscene_temporary")
-            ):
-                self.main_window.set_selected_object(None)
-        except Exception:
-            pass
+        self.main_window.state.selected_objects = [
+            obj for obj in self.main_window.state.selected_objects
+            if str(getattr(obj, "properties", {}).get("id", "")) not in ids
+        ]
         try:
             self.main_window.update_all_ui()
         except Exception:
