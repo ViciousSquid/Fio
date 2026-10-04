@@ -337,8 +337,12 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                                 tex['east'] = wall_tex
                                 pos = [world_x - CELL_SIZE/2, FLOOR_SURFACE + ceil_h/2, world_z]
                                 size = [64, ceil_h, CELL_SIZE]
+                            visible_face = {
+                                "north": "south", "south": "north",
+                                "east": "west", "west": "east",
+                            }[face]
                             for hidden_face in ["north","south","east","west","top","down"]:
-                                if hidden_face != face:
+                                if hidden_face != visible_face:
                                     tex[hidden_face] = "nodraw.jpg"
                             brushes.append({
                                 "pos": pos,
@@ -366,8 +370,12 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                             tex['east'] = wall_tex
                             pos = [world_x - CELL_SIZE/2, FLOOR_SURFACE + ceil_h/2, world_z]
                             size = [64, ceil_h, CELL_SIZE]
+                        visible_face = {
+                            "north": "south", "south": "north",
+                            "east": "west", "west": "east",
+                        }[face]
                         for hidden_face in ["north","south","east","west","top","down"]:
-                            if hidden_face != face:
+                            if hidden_face != visible_face:
                                 tex[hidden_face] = "nodraw.jpg"
                         brushes.append({
                             "pos": pos,
