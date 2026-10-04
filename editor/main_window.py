@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow):
         immediate click still leaves the copy beside the original instead of
         exactly on top of it, and clipboard copy/paste is untouched.
         """
-        sources = list(self.primary_selection()s or [])
+        sources = list(self.state.selected_objects or [])
         if self.primary_selection() is not None and \
                 self.primary_selection() not in sources:
             sources.append(self.primary_selection())
@@ -1275,7 +1275,7 @@ class MainWindow(QMainWindow):
         # overlay stale, since the brushes it was drawing handles for changed.
         self.components.clear()
         self.components.invalidate()
-        self.primary_selection()s = list(objects or [])
+        self.state.selected_objects = list(objects or [])
         primary = self.primary_selection()
         if self.config.getboolean('Display', 'sync_selection', fallback=True):
             self.view_3d.selected_object = primary
@@ -1882,7 +1882,7 @@ class MainWindow(QMainWindow):
 
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
-        sources = list(self.primary_selection()s or [])
+        sources = list(self.state.selected_objects or [])
         if self.primary_selection() is not None and self.primary_selection() not in sources:
             sources.append(self.primary_selection())
 
@@ -3154,7 +3154,7 @@ class MainWindow(QMainWindow):
         }
 
         self.state.brushes.append(inner_brush)
-        self.primary_selection()s = [inner_brush]
+        self.state.selected_objects = [inner_brush]
 
         # Only subtract the temporary inner volume from the selected outer
         # brush.  An enclosed many-sided brush therefore survives unchanged.
@@ -3233,7 +3233,7 @@ class MainWindow(QMainWindow):
         }
         
         self.state.brushes.append(inner_brush)
-        self.primary_selection()s = [inner_brush]
+        self.state.selected_objects = [inner_brush]
         # One undo step for the whole room: the checkpoint above covers it.
         self.perform_subtraction(push_undo=False)
 
@@ -3414,7 +3414,7 @@ class MainWindow(QMainWindow):
         # Ctrl+C: Copy the current selection.  The clipboard stores a
         # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            sources = list(self.primary_selection()s or [])
+            sources = list(self.state.selected_objects or [])
             if self.primary_selection() is not None and self.primary_selection() not in sources:
                 sources.append(self.primary_selection())
 
@@ -3516,7 +3516,7 @@ class MainWindow(QMainWindow):
         # Delete key
         if self.primary_selection() and event.key() == Qt.Key_Delete:
             self.save_state()
-            for obj in list(self.primary_selection()s):
+            for obj in list(self.state.selected_objects):
                 if isinstance(obj, dict):
                     if obj in self.state.brushes:
                         self.state.brushes.remove(obj)
@@ -3782,7 +3782,7 @@ class MainWindow(QMainWindow):
 
     def _selected_brushes(self):
         """Every brush in the current selection (things filtered out)."""
-        objs = list(self.primary_selection()s or [])
+        objs = list(self.state.selected_objects or [])
         if self.primary_selection() is not None and \
                 self.primary_selection() not in objs:
             objs.append(self.primary_selection())
@@ -3979,11 +3979,11 @@ class MainWindow(QMainWindow):
 
     def selected_objects_list(self):
         """The authoritative current selection as a plain list."""
-        return list(self.primary_selection()s or [])
+        return list(self.state.selected_objects or [])
 
     def primary_selection(self):
         """Return the first object in the authoritative multi-selection."""
-        selected = self.primary_selection()s
+        selected = self.state.selected_objects
         return selected[0] if selected else None
 
     def apply_rotation_to_selection(self, angle_deg, axis, undoable=True,
