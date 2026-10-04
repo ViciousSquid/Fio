@@ -63,6 +63,7 @@ def ai_world():
             id(t): t for t in logic.world_runtime.monster_things
         }
         ai = MonsterAI(logic)
+        logic.monster_ai = ai
         ai.set_spatial_grid(logic.build_spatial_grid())
         return ai, logic
     return _build
