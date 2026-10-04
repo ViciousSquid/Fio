@@ -30,10 +30,10 @@ class _Camera(LogicCamera):
     def __init__(self, aspect=16 / 9, height=800.0, tilt=0.0, overhead=True,
                  orientation="north", fov=90.0):
         host = types.SimpleNamespace(
-            player=types.SimpleNamespace(
+            player_runtime=types.SimpleNamespace(player=types.SimpleNamespace(
                 pos=glm.vec3(100.0, 50.0, -40.0),
                 angle=0.0,
-            )
+            ))
         )
         super().__init__(host)
         self.frustum_aspect = aspect
@@ -83,7 +83,7 @@ def test_a_turning_camera_moves_the_box_but_not_the_reach():
     cam = _Camera(orientation="player", tilt=20.0)
     seen = []
     for degrees in range(0, 360, 15):
-        cam._host.player.angle = math.radians(degrees)
+        cam._host.player_runtime.player.angle = math.radians(degrees)
         seen.append(cam.overhead_ground_footprint())
     reaches = [r for _hx, _hz, r in seen]
     assert max(reaches) - min(reaches) < 1e-3 * reaches[0]
