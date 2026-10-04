@@ -74,7 +74,13 @@ class LogicTriggers:
         """
         filters = brush.get('trigger_filters', ['player'])
         if isinstance(filters, str):
-            filters = [filters]
+            # Editor-authored filters historically accepted both comma- and
+            # whitespace-separated spellings (e.g. "player, props monsters").
+            filters = [
+                token
+                for part in filters.replace(",", " ").split()
+                for token in (part,)
+            ]
         if not isinstance(filters, (list, tuple, set)):
             filters = ['player']
         return {
@@ -116,7 +122,11 @@ class LogicTriggers:
         # Evaluated per tick by _sample_use_prompt; kept as an attribute only
         # so the render state and tests can read the frame's current prompt.
         self.logic._trigger_use_prompt = ""
-        self.logic._refresh_use_triggers()
+        refresh = getattr(self.logic, "_refresh_use_triggers", None)
+        if callable(refresh):
+            refresh()
+        else:
+            self._refresh_use_triggers()
 
     @staticmethod
     def use_trigger_contains(distance_sq, use_radius):
@@ -140,7 +150,12 @@ class LogicTriggers:
         keeping two that can drift apart.
         """
         radius = np.asarray(use_radius, dtype=np.float64)
-        return distance_sq < radius * radius
+        result = np.asarray(distance_sq) < radius * radius
+        # Preserve the historical scalar-bool API while retaining NumPy
+        # vectorisation for batched prompt/culling callers.
+        if np.ndim(result) == 0:
+            return bool(result)
+        return result
 
     def _refresh_use_triggers(self):
         """The use-activated subset of the trigger list, in trigger order.
@@ -226,6 +241,8 @@ class LogicTriggers:
         try:
             value = float(brush.get('trigger_poll_interval', 1.0))
         except (TypeError, ValueError):
+            return 1.0
+        if not math.isfinite(value) or value <= 0.0:
             return 1.0
 
         allowed = (1.0, 0.5, 0.25)
