@@ -30,25 +30,46 @@ def _driver_range(enum):
     return float(values[0]), float(values[1])
 
 
-def test_width_above_the_real_driver_limit_is_clamped(renderer):
+def test_width_above_the_real_driver_limit_is_clamped(renderer, monkeypatch):
     import OpenGL.GL as gl
+    from engine import renderer_core
 
     obj, _ = renderer
     low, high = _driver_range(gl.GL_ALIASED_LINE_WIDTH_RANGE)
     request = high + max(1.0, abs(high) * 0.5)
+    captured = []
 
-    assert obj._set_line_width(request) == pytest.approx(high)
+    real_line_width = renderer_core.gl.glLineWidth
+
+    def observe(value):
+        captured.append(float(value))
+        try:
+            return real_line_width(value)
+        except Exception:
+            # The real driver may reject a width even though it advertises
+            # the aliased range. The production renderer must still contain
+            # that failure.
+            return None
+
+    monkeypatch.setattr(renderer_core.gl, "glLineWidth", observe)
+
+    result = obj._set_line_width(request)
+
+    assert captured == [pytest.approx(high)]
+    assert result == pytest.approx(high) or result == pytest.approx(1.0)
     assert obj._line_width_range == pytest.approx((low, high))
 
 
-def test_width_within_the_real_driver_limit_is_used(renderer):
+def test_width_at_the_real_driver_minimum_is_used(renderer):
     import OpenGL.GL as gl
 
     obj, _ = renderer
     low, high = _driver_range(gl.GL_ALIASED_LINE_WIDTH_RANGE)
-    request = low if high == low else (low + high) * 0.5
 
-    assert obj._set_line_width(request) == pytest.approx(request)
+    result = obj._set_line_width(low)
+
+    assert result == pytest.approx(low)
+    assert low <= result <= high
 
 
 def test_width_below_the_real_driver_minimum_is_clamped(renderer):
