@@ -49,7 +49,7 @@ def _console(state, logic):
 
 def _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
                                        lift_progress):
-    for index, brush in logic.doors + logic.movers:
+    for index, brush in logic.mover_runtime.doors + logic.mover_runtime.movers:
         assert state.brushes[index] is brush, (
             f"door/mover {brush['name']} is keyed by index {index}, which now "
             f"holds {state.brushes[index]['name'] if index < len(state.brushes) else 'nothing'}")
