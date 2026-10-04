@@ -23,7 +23,8 @@ from engine import entity_table as etm                    # noqa: E402
 from engine import render_table as rtm                    # noqa: E402
 from engine.change_journal import touch                   # noqa: E402
 from engine.entity_table import EntityTable               # noqa: E402
-from engine.logic_thread import LogicThread, Key_W        # noqa: E402
+from engine.logic_player import KEY_W
+from engine.logic_thread import LogicThread        # noqa: E402
 from engine.mover_table import MoverTable                 # noqa: E402
 from engine.player import Player                          # noqa: E402
 from engine.render_table import RenderTable               # noqa: E402
@@ -308,7 +309,7 @@ def test_a_wall_revealed_by_io_show_is_solid():
     _state, game_state, logic = _play([floor, wall])
     try:
         logic.io_manager._execute_input("wall", "Show", "", "t", target_id=wall["id"])
-        game_state.set_keys({Key_W})
+        game_state.set_keys({KEY_W})
         for _ in range(240):
             logic._step_frame(logic.TICK_DURATION)
         assert logic.player.pos.z < 284.0
