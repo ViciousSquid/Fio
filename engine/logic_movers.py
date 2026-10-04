@@ -65,7 +65,7 @@ class LogicMovers:
         logic.mover_path_states = {}
         logic.movers = []
         states = {}
-        for i, brush in enumerate(logic.brushes):
+        for i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_mover"):
                 logic.movers.append((i, brush))
                 if "original_pos" not in brush:
@@ -92,7 +92,7 @@ class LogicMovers:
     def _reset_movers(self):
         logic = self.logic
         logic.movers = []
-        for _i, brush in enumerate(logic.brushes):
+        for _i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_mover") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
@@ -103,7 +103,7 @@ class LogicMovers:
         logic = self.logic
         logic.doors = []
         states = {}
-        for i, brush in enumerate(logic.brushes):
+        for i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_door"):
                 speed = float(brush.get("door_speed", brush.get("speed", 128.0)))
                 distance = float(brush.get("door_distance", brush.get("distance", 128.0)))
@@ -134,12 +134,12 @@ class LogicMovers:
 
         self.door_states = states
         logic._door_brush_list = [b for _, b in logic.doors]
-        logic._moving_rows = tuple(logic.brushes)
+        logic._moving_rows = tuple(logic.editor_state.brushes)
 
     def _reset_doors(self):
         logic = self.logic
         logic.doors = []
-        for _i, brush in enumerate(logic.brushes):
+        for _i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_door") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
