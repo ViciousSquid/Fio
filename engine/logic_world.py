@@ -33,13 +33,17 @@ class LogicWorld:
         self.levelchanger_eligible = np.empty(0, dtype=bool)
         self.monster_things = []
         self.monster_by_id = {}
+        self.name_cache = {}
+        self.id_cache = {}
+        self.indexed_things = ()
+        self.indexed_brushes = ()
 
     def build_entity_caches(self):
         """Build lookup and hot-path entity indexes for the current world."""
         logic = self.logic
 
-        logic._name_cache = {}
-        logic._id_cache = {}
+        self.name_cache = {}
+        self.id_cache = {}
 
         for brush in logic.editor_state.brushes:
             name = brush.get("name")
@@ -97,12 +101,12 @@ class LogicWorld:
             if LogicTimer and isinstance(thing, LogicTimer)
         ]
 
-        logic._indexed_things = tuple(logic.editor_state.things)
-        logic._indexed_brushes = tuple(logic.editor_state.brushes)
+        self.indexed_things = tuple(logic.editor_state.things)
+        self.indexed_brushes = tuple(logic.editor_state.brushes)
 
         if (
             logic.play_mode
-            and logic._moving_rows is not None
+            and logic.mover_runtime._moving_rows is not None
             and logic._indexed_brushes != logic._moving_rows
         ):
             logic.mover_runtime._reindex_moving_brushes()
