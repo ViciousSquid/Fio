@@ -622,9 +622,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        camera = getattr(getattr(self, 'view_3d', None), 'camera', None)
-        if camera is not None:
-            try:
+        camera = self.view_3d.camera
+        try:
                 import glm
                 front = camera.get_front_vector()
                 distance = max(radius * 3.0, 128.0)
@@ -1391,7 +1390,7 @@ class MainWindow(QMainWindow):
         terrain = self.terrain
         if terrain is None and fill and allow_create:
             terrain = self._ensure_terrain()
-        if terrain is None or not hasattr(terrain, 'editor_fill_world'):
+        if terrain is None:
             return
         if not fill:
             terrain.editor_unfill_world()
@@ -1424,12 +1423,11 @@ class MainWindow(QMainWindow):
     def _refresh_terrain_editor_size_lock(self):
         """If the Terrain Editor is open, lock/unlock its Size tab to match
         whether Big World currently owns the world size."""
-        panel = getattr(self, 'terrain_editor_window', None)
+        panel = self.terrain_editor_window
         terrain = self.terrain
-        if panel is not None and hasattr(panel, 'set_bigworld_managed') and terrain is not None:
+        if panel is not None and terrain is not None:
             try:
-                panel.set_bigworld_managed(
-                    getattr(terrain, '_authored_bounds', None) is not None)
+                panel.set_bigworld_managed(terrain._authored_bounds is not None)
             except Exception:
                 pass
 
@@ -1439,10 +1437,7 @@ class MainWindow(QMainWindow):
     def highlight_in_hierarchy(self, obj):
         """Highlight an object in the scene hierarchy without selecting it.
         Used for locked objects when locked_not_selectable_2d is enabled."""
-        if hasattr(self.scene_hierarchy, 'highlight_item'):
-            self.scene_hierarchy.highlight_item(obj)
-        elif hasattr(self.scene_hierarchy, 'scroll_to_item'):
-            self.scene_hierarchy.scroll_to_item(obj)
+        self.scene_hierarchy.highlight_item(obj)
 
 
     def update_play_button_color(self):
