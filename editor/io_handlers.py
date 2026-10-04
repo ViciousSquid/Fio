@@ -556,16 +556,14 @@ def register_all_input_handlers(io_manager: IOManager):
     def trigger_teleport(entity, param, logic):
         """Teleport the player to the named PathNode."""
         target_name = param or entity.get('target_node', '')
-        node = logic._find_path_node_by_name(target_name)
+        node = logic.world_runtime.find_path_node_by_name(target_name)
         if not node or not logic.player:
             return
         dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
         logic.player.pos = dest
         # Zero velocity to prevent carry-over momentum
         logic.player.velocity = glm.vec3(0, 0, 0)
-        teleported = getattr(logic, 'note_player_teleported', None)
-        if teleported is not None:
-            teleported()
+        logic.portal_runtime.note_player_teleported()
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnTeleport')
         debug_log("IO", f"Trigger teleported player → '{target_name}' ({dest.x:.0f}, {dest.y:.0f}, {dest.z:.0f})")
@@ -1196,7 +1194,7 @@ def register_all_input_handlers(io_manager: IOManager):
             return
 
         target = entity.properties.get('path_target', '')
-        node = logic._find_path_node_by_name(target)
+        node = logic.world_runtime.find_path_node_by_name(target)
         if not node:
             debug_log("IO", f"LogicCamera '{entity.name}': path_target "
                       f"'{target}' not found — aborting start.")
@@ -1326,9 +1324,9 @@ def register_all_input_handlers(io_manager: IOManager):
 
         target = None
         if hasattr(logic, '_find_entity_by_id'):
-            target = logic._find_entity_by_id(target_ref)
+            target = logic.world_runtime.find_entity_by_id(target_ref)
         if target is None and hasattr(logic, '_find_entity_by_name'):
-            target = logic._find_entity_by_name(target_ref)
+            target = logic.world_runtime.find_entity_by_name(target_ref)
 
         target_pos = _camera_target_position(target)
         if target is None or target_pos is None:
@@ -1412,7 +1410,7 @@ def register_all_input_handlers(io_manager: IOManager):
         target_name = entity.properties.get('target_node', '')
         node = None
         if target_name:
-            node = logic._find_path_node_by_name(target_name)
+            node = logic.world_runtime.find_path_node_by_name(target_name)
             if not node:
                 debug_log("IO", f"LogicSpawner '{entity.name}': target_node '{target_name}' not found. Falling back to spawner position.")
         else:
@@ -1470,7 +1468,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
         # ---- rebuild caches so the new entity can be found by name/id ----
         if hasattr(logic, '_build_entity_caches'):
-            logic._build_entity_caches()
+            logic.world_runtime.build_entity_caches()
 
         # ---- fire outputs ----
         if logic.io_manager:
@@ -1831,9 +1829,7 @@ def register_all_input_handlers(io_manager: IOManager):
         """Change the paired portal target by name."""
         if param:
             entity.properties['portal_target'] = param.strip()
-            relink = getattr(logic, '_rebuild_portal_links', None)
-            if relink is not None:
-                relink()
+            logic.portal_runtime.rebuild_links()
             name = entity.properties.get('name', 'unnamed')
             debug_log('IO', f"Portal '{name}' target set to '{param.strip()}'")
 

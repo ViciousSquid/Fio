@@ -80,10 +80,8 @@ def test_the_logic_thread_implements_both_visibility_notifications(session):
     announcement went nowhere and every durable cache below stayed stale.
     """
     _state, thread = session(brushes=[box_brush("floor", (0, -16, 0), (1024, 32, 1024))])
-    for hook in ("notify_visibility_changed", "notify_authored_visibility_changed"):
-        assert callable(getattr(thread, hook, None)), (
-            "LogicThread is the streaming host and the savegame host; it must "
-            "implement %s(), or the announcement has no receiver" % hook)
+    assert callable(thread.world_runtime.notify_visibility_changed)
+    assert callable(thread.world_runtime.notify_authored_visibility_changed)
 
 
 def test_the_cheap_notification_does_not_rebuild_the_collision_grid(session):
@@ -98,7 +96,7 @@ def test_the_cheap_notification_does_not_rebuild_the_collision_grid(session):
 
     before = list(thread._spatial_grid._all_solid)
     floor["hidden"] = True                      # as a parking pass would not
-    thread.notify_visibility_changed()
+    thread.world_runtime.notify_visibility_changed()
     assert [id(b) for b in thread._spatial_grid._all_solid] == \
            [id(b) for b in before], (
         "the cheap drawable-set notification rebuilt the collision grid")
@@ -172,13 +170,13 @@ def test_the_announcement_happens_after_the_state_it_describes_moved(session):
     thread._spatial_grid.populate(thread.brushes)
 
     seen = []
-    real = thread.notify_authored_visibility_changed
+    real = thread.world_runtime.notify_authored_visibility_changed
 
     def _record():
         seen.append(bool(wall.get("hidden")))
         real()
 
-    thread.notify_authored_visibility_changed = _record
+    thread.world_runtime.notify_authored_visibility_changed = _record
     savegame.restore_auto(thread, snapshot, current_map_name=MAP)
 
     assert seen == [False], (

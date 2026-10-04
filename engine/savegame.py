@@ -824,7 +824,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # refresh the monster sprite cache so dead/alive billboards match the
     # restored health immediately.
     try:
-        logic._build_entity_caches()
+        logic.world_runtime.build_entity_caches()
     except Exception:
         pass
     try:
@@ -840,36 +840,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # every restore path funnels through, and therefore *after* the state it
     # describes has actually moved: announcing up front would have a host
     # rebuild those caches from the pre-restore world.
-    _notify_authored_visibility_changed(logic)
-
-
-def _notify_authored_visibility_changed(logic) -> None:
-    """Tell the host that objects' authored hidden/disabled state has moved.
-
-    Two hooks, tried in order, because they are two different costs and a host
-    may implement either:
-
-    ``notify_authored_visibility_changed``
-        rebuild what is built to last (the collision grid). O(world), and only
-        an authored change — an edit, an I/O Show/Hide, a restore — ever needs
-        it. Streaming does not: parking stashes the authored value rather than
-        overwriting it, which is exactly why the grid can survive it.
-    ``notify_visibility_changed``
-        the cheap drawable-set bump a streaming layer uses. Accepted as a
-        fallback so an older host still lands the change on the next frame.
-
-    A host with neither is not an error: it has no cache to invalidate.
-    """
-    for hook in ("notify_authored_visibility_changed",
-                 "notify_visibility_changed"):
-        fn = getattr(logic, hook, None)
-        if fn is None:
-            continue
-        try:
-            fn()
-        except Exception:
-            pass
-        return
+    logic.world_runtime.notify_authored_visibility_changed()
 
 
 def restore_snapshot(logic, data: dict) -> None:

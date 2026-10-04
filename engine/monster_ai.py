@@ -896,7 +896,7 @@ all accumulated time when it runs, so simulation time is not lost.
                 # Empty string: clear override and fall back to normal logic
                 thing.properties.pop('target_name', None)
             else:
-                target_entity = self.lt._find_entity_by_name(target_name)
+                target_entity = self.lt.world_runtime.find_entity_by_name(target_name)
                 if target_entity is not None and hasattr(target_entity, 'pos'):
                     # Valid named target found — use its position
                     override_target_pos = glm.vec3(target_entity.pos)

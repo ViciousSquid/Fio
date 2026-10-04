@@ -282,7 +282,7 @@ def test_leaving_play_releases_the_sessions_monsters():
                     for i in range(4)]
     thread = LogicThread(ThreadedGameState(), state)
     try:
-        thread._build_entity_caches()
+        thread.world_runtime.build_entity_caches()
         ai = thread.monster_ai
         ai.update(1.0 / 30.0)                 # no player: nothing gathered yet
         ai.table.gather(thread._monster_things)
@@ -327,13 +327,13 @@ def test_editor_io_reaches_the_live_entity():
         assert state.things[0].properties["state"] == "off"
 
         # A session's caches, then the world replaced (restore / map load).
-        thread._build_entity_caches()
+        thread.world_runtime.build_entity_caches()
         ghost = state.things[0]
         state.things = [lamp()]
         thread.io_manager._execute_input("lamp", "TurnOff", "", "console",
                                          target_id="lamp-id")
         assert state.things[0].properties["state"] == "off"
-        assert thread._find_entity_by_name("lamp") is not ghost
+        assert thread.world_runtime.find_entity_by_name("lamp") is not ghost
     finally:
         thread.stop()
 
@@ -441,8 +441,8 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
             game_state.request_swap()
         leaks = paths_to(roots, session, [state, state.brushes, state.things])
         assert leaks == [], "after a map load:\n  " + "\n  ".join(leaks[:20])
-        assert [n for n in names if logic._find_entity_by_name(n)] == []
-        assert [i for i in ids if logic._find_entity_by_id(i)] == []
+        assert [n for n in names if logic.world_runtime.find_entity_by_name(n)] == []
+        assert [i for i in ids if logic.world_runtime.find_entity_by_id(i)] == []
     finally:
         logic.stop()
 
@@ -481,12 +481,12 @@ def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
 
         assert api.despawn(grunt) is True
         assert grunt not in logic._monster_things
-        assert logic._find_entity_by_name("grunt") is None
+        assert logic.world_runtime.find_entity_by_name("grunt") is None
         assert id(grunt) not in logic.monster_ai.monster_states
 
         spawned = api.spawn(Monster, (100.0, 64.0, 0.0), {"name": "fresh"})
         assert spawned in logic._monster_things
-        assert logic._find_entity_by_name("fresh") is spawned
+        assert logic.world_runtime.find_entity_by_name("fresh") is spawned
     finally:
         logic.stop()
 
@@ -506,7 +506,7 @@ def test_console_delete_during_play_removes_the_entity_from_the_session():
         console = ConsoleCommandHandler(window)
         console.cmd_delete("grunt")
         assert grunt not in logic._monster_things
-        assert logic._find_entity_by_name("grunt") is None
+        assert logic.world_runtime.find_entity_by_name("grunt") is None
 
         console.cmd_delete("wall")
         logic._tick(logic.TICK_DURATION)          # collision rebuilds at tick end
@@ -530,7 +530,7 @@ def test_objects_added_or_removed_in_the_editor_during_play_join_the_session():
         state.brushes.append(wall)
         logic._tick(logic.TICK_DURATION)
         assert added in logic._monster_things
-        assert logic._find_entity_by_name("added") is added
+        assert logic.world_runtime.find_entity_by_name("added") is added
         assert any(b is wall for b in logic._collision_brushes_cache)
 
         state.save_state()
