@@ -41,8 +41,7 @@ class OverheadLogic:
     """A streaming host whose overhead camera shows +/- (hx, hz) of ground."""
 
     def __init__(self, things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
-        self.brushes = []
-        self.editor_state = type('State', (), {'things': things, 'brushes': self.brushes})()
+        self.editor_state = type('State', (), {'things': things, 'brushes': []})()
         self.player = FakePlayer(*at)
         self.view_distance = ViewDistance()
         self.footprint = footprint
