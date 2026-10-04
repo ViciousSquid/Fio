@@ -1199,7 +1199,7 @@ the scalar fallback for callers that do not have the dense table.
         if table is None:
             monsters = getattr(self, '_tick_monsters', None)
             if monsters is None:
-                monsters = self.lt._monster_things
+                monsters = self.lt.world_runtime.monster_things
             if not monsters:
                 return None
 
@@ -1237,7 +1237,7 @@ the scalar fallback for callers that do not have the dense table.
         """Return the small compatibility signature used by direct queries."""
         monsters = self._tick_monsters
         if monsters is None:
-            monsters = self.lt._monster_things
+            monsters = self.lt.world_runtime.monster_things
         return tuple(
             (
                 id(monster),
@@ -1357,7 +1357,7 @@ the scalar fallback for callers that do not have the dense table.
         # are hidden and never a candidate), else the logic thread's list.
         monster_things = getattr(self, '_tick_monsters', None)
         if monster_things is None:
-            monster_things = self.lt._monster_things
+            monster_things = self.lt.world_runtime.monster_things
 
         for t in monster_things:
             if t is thing:
@@ -1404,7 +1404,7 @@ the scalar fallback for callers that do not have the dense table.
         # are hidden and never a candidate), else the logic thread's list.
         monster_things = getattr(self, '_tick_monsters', None)
         if monster_things is None:
-            monster_things = self.lt._monster_things
+            monster_things = self.lt.world_runtime.monster_things
 
         for t in monster_things:
             if t is shooter:
