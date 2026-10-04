@@ -1182,7 +1182,14 @@ class EntityTable:
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
             store_index = -1
             if effect_store is not None:
-                store_index = effect_store.sync_authored(thing)
+                store_index = effect_store.index_of(thing)
+                if store_index < 0:
+                    store_index = effect_store.sync_authored(thing)
+                else:
+                    # Refresh authored position/lifetime without clobbering
+                    # execution state such as an active explosion.
+                    effect_store.pos[store_index] = effect_store._position(thing)
+                    effect_store.lifetime[store_index] = effect_store._lifetime(thing)
                 self.effect_store_index[slot] = store_index
                 self.effect_type[slot] = effect_store.family_id[store_index]
             else:
@@ -1386,7 +1393,10 @@ class EntityTable:
             slot = int(slot)
             thing = things[slot]
             self.pos[slot] = _pos_of(thing)
-            self._resolve_row(slot, thing, effect_store=effect_store)
+            if effect_store is None:
+                self._resolve_row(slot, thing)
+            else:
+                self._resolve_row(slot, thing, effect_store=effect_store)
 
 
 _EMPTY: dict = {}
