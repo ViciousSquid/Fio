@@ -14,6 +14,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the instrument is a Qt window")
 
 from engine.threaded_game_state import ThreadedGameState      # noqa: E402
+from editor.things import Light                                 # noqa: E402
 from tests.helpers.worlds import box_brush                    # noqa: E402
 
 pytestmark = pytest.mark.qt
