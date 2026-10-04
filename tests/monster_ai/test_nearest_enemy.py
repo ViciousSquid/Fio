@@ -277,7 +277,7 @@ def test_falling_monsters_agree_tick_after_tick(ai_world, monster_factory):
              for i in range(72)]
     monsters = _teamed(monster_factory, specs)
     ai, logic = ai_world(brushes=room(2048, 512, 2048), things=monsters)
-    logic._monster_things = list(monsters)
+    logic.world_runtime.monster_things = list(monsters)
     ai.set_spatial_grid(logic.build_spatial_grid())
 
     for tick in range(40):
