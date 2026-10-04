@@ -1591,8 +1591,6 @@ class QtGameView(QOpenGLWidget):
                 camera_pos = render_state.player_pos
             else:
                 camera_pos = render_state.editor_camera_pos
-            brushes_to_render = render_state.visible_brushes
-            things_to_render = render_state.visible_things
             if not self.play_mode:
                 self.camera.pos = glm.vec3(render_state.editor_camera_pos)
                 self.camera.yaw = render_state.editor_camera_yaw
@@ -1605,8 +1603,6 @@ class QtGameView(QOpenGLWidget):
         else:
             self.view_matrix = self.camera.get_view_matrix()
             camera_pos = self.camera.pos
-            brushes_to_render = self.editor.state.brushes
-            things_to_render = self.editor.state.things
         # In overhead play mode the camera is lifted far above the scene, so a
         # 0.1 near plane wastes almost all depth precision at ground level and
         # coplanar surfaces z-fight ("flicker"). Nothing sits within a fraction
@@ -1662,14 +1658,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
-        if render_state and hasattr(render_state, 'all_brushes'):
-            self._render_config["all_brushes"] = render_state.all_brushes
-        else:
-            self._render_config["all_brushes"] = self.editor.state.brushes
-        if render_state and hasattr(render_state, 'all_lights'):
-            self._render_config["all_lights"] = render_state.all_lights
-        else:
-            self._render_config["all_lights"] = None
+        if not (render_state and self.use_threading and self.logic_thread):
             etable = self._editor_entity_table
             generation = etable.generation
             hidden = etable.begin_frame(
@@ -1757,7 +1746,6 @@ class QtGameView(QOpenGLWidget):
 
             self.renderer.render_scene(
                 _split_proj, self.view_matrix, camera_pos,
-                brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
                 clear=False, brush_slots=_main_brush_slots,
             )
@@ -1786,7 +1774,6 @@ class QtGameView(QOpenGLWidget):
             gl.glDisable(gl.GL_BLEND)
             gl.glDisable(gl.GL_STENCIL_TEST)
 
-            p2_brushes = render_state.all_brushes if hasattr(render_state, 'all_brushes') else brushes_to_render
             _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
 
@@ -1797,7 +1784,6 @@ class QtGameView(QOpenGLWidget):
             _p2_brush_slots = self._render_config.get("all_brush_slots")
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
-                p2_brushes, things_to_render,
                 self.selected_object, self._render_config,
                 clear=False, brush_slots=_p2_brush_slots
             )
@@ -1824,7 +1810,6 @@ class QtGameView(QOpenGLWidget):
         else:
             self.renderer.render_scene(
                 self.projection_matrix, self.view_matrix, camera_pos,
-                brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
                 brush_slots=_main_brush_slots,
             )
