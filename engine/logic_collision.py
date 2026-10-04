@@ -36,6 +36,7 @@ class LogicCollision:
     def __init__(self, logic):
         self.logic = logic
         self._dirty = False
+        self.model_collision_enabled = True
         self._model_collision_brushes = []
         self._physics_body_brushes = []
         self._collision_brushes_cache = []
@@ -138,7 +139,7 @@ class LogicCollision:
         custom AABB.
         """
         logic = self.logic
-        model_collision_enabled = bool(getattr(logic, 'model_collision_enabled', True))
+        model_collision_enabled = self.model_collision_enabled
         brushes = []
 
         for thing in logic.editor_state.things:
@@ -473,13 +474,13 @@ class LogicCollision:
         Returns the new state. Works in both play mode and editor mode."""
         logic = self.logic
         if enabled is None:
-            logic.model_collision_enabled = not logic.model_collision_enabled
+            self.model_collision_enabled = not self.model_collision_enabled
         else:
-            logic.model_collision_enabled = bool(enabled)
+            self.model_collision_enabled = bool(enabled)
 
         # Rebuild collision brushes in both play mode and editor mode
         # (editor mode uses them for visualization via showcollision command)
-        if logic.model_collision_enabled:
+        if self.model_collision_enabled:
             self._model_collision_brushes = self.build_model_collision_brushes()
             self._physics_body_brushes = [
                 b for b in self._model_collision_brushes
@@ -497,7 +498,7 @@ class LogicCollision:
                     logic._physics_world.rebuild(self._physics_body_brushes)
         self.refresh_collision_brushes_cache()
 
-        return logic.model_collision_enabled
+        return self.model_collision_enabled
 
 
     def refresh_collision_brushes_cache(self):

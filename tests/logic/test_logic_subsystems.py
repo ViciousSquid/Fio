@@ -78,6 +78,8 @@ def test_logic_collision_constructs_and_classifies_brushes():
     assert runtime.angled_brush_is_solid({"geometry": {}}) is True
     assert runtime.angled_brush_is_solid({"hidden": True}) is False
     assert runtime.angled_brush_is_solid({"is_trigger": True}) is False
+    assert runtime.toggle_model_collision(False) is False
+    assert runtime.toggle_model_collision(True) is True
 
 
 def test_logic_combat_constructs_and_ray_tests_aabb():

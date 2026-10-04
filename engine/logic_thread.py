@@ -220,7 +220,6 @@ class LogicThread(threading.Thread):
             "io_manager",
         ),
         "collision": (
-            "model_collision_enabled",
         ),
         "world": (
             "editor_state",
@@ -382,9 +381,7 @@ class LogicThread(threading.Thread):
         # this world.  See notify_visibility_changed().
         self.visibility_changes = 0
 
-        # Global toggle for model collision (F6 in play mode)
-        self.model_collision_enabled = True
-        
+
         # Interaction State
         self.current_hud_message = ""
         self.current_hud_key_name = None
