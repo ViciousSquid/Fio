@@ -130,6 +130,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
         plugin = next(p for p in manager.plugins if p.name == 'bigworld')
 
         from plugins.bigworld.entities import BigWorldSettings
+        from engine.view_distance import ViewDistance
         settings = BigWorldSettings(pos=[0, 0, 0])
 
         class Logic:
@@ -140,6 +141,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
             )
             camera = SimpleNamespace(overhead_height_limit=None)
             player = None
+            view_distance = ViewDistance()
 
         logic = Logic()
         plugin.on_play_start(logic)
