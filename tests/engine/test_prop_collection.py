@@ -178,9 +178,9 @@ def test_the_showcase_shotgun_is_a_gun_again():
     session.start()
 
     assert session.collect_prop(prop) is True
-    assert logic.active_weapon == "gun2"
-    assert logic.gun2_obtained is True
-    assert logic.player_ammo >= 8
+    assert logic.combat_runtime.active_weapon == "gun2"
+    assert logic.combat_runtime.gun2_obtained is True
+    assert logic.combat_runtime.player_ammo >= 8
 
 
 @pytest.mark.parametrize("sprite, kind, field, value", [
