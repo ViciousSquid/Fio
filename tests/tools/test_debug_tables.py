@@ -92,10 +92,10 @@ def monster_window(window):
     ai.update(1.0 / 30.0)
     view = instrument.main_window.view_3d
     view.logic_thread.monster_ai = ai
-    view.logic_thread._monster_lock = threading.RLock()
-    view.logic_thread.monster_ai_thread = SimpleNamespace(
+    view.logic_thread.session_runtime.monster_lock = threading.RLock()
+    view.logic_thread.session_runtime.monster_ai_thread = SimpleNamespace(
         update_ms=2.0, lock_wait_ms=0.5)
-    return instrument, ai, view.logic_thread._monster_lock
+    return instrument, ai, view.logic_thread.session_runtime.monster_lock
 
 
 def test_the_monster_table_is_shown_after_a_dense_tick(monster_window):
