@@ -123,7 +123,7 @@ class PluginManager:
         self._tick_work = False
         self._tick_work_gen = -1
         self._tick_work_sub_gen = -1
-        # Editor-UI extensions plugins register (consumed by integration.py):
+        # Editor-UI extensions plugins register; native editor owners consume these:
         # extra property fields appended to an entity's panel, and whole custom
         # property tabs. Both keyed/filtered by normalised entity type.
         self._extra_fields: dict = {}       # type -> list[PropertySpec]
@@ -808,7 +808,7 @@ class PluginManager:
             self._tick_work_sub_gen = self.events.gen
         return self._tick_work
 
-    # -- editor-UI extensions (consumed by plugins.integration) -------------
+    # -- editor-UI extensions ------------------------------------------------
     def register_extra_fields(self, entity_type: str, specs):
         """Append extra editable fields to *entity_type*'s property panel.
 
@@ -831,7 +831,7 @@ class PluginManager:
 
         *factory(thing)* returns a widget; *label* names the tab. If
         *entity_type* is given the tab shows only for that type, else for every
-        entity. Consumed by the editor integration when it builds a panel.
+        entity. Consumed by PropertyEditor when it builds a panel.
         """
         self._property_tabs.append(
             (label, factory,
