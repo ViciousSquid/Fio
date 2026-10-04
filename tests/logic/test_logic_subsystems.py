@@ -7,6 +7,7 @@ initialization-order regressions at the subsystem boundary.
 """
 
 from types import SimpleNamespace
+import threading
 
 import glm
 import numpy as np
@@ -252,6 +253,11 @@ def test_logic_session_constructs_and_releases_session_cache_state():
         player=player,
         player2=None,
     )
+    host.play_mode = False
+    host._monster_lock = threading.RLock()
+    host.monster_ai = SimpleNamespace(monster_states={})
+    host.trigger_runtime = LogicTriggers(host)
+    host.portal_runtime = LogicPortals(host)
     host.world_runtime = LogicWorld(host)
     host.collision_runtime = LogicCollision(host)
     host.mover_runtime = LogicMovers(host)
@@ -312,6 +318,10 @@ def test_logic_world_constructs_and_packs_levelchanger_rows():
         editor_state=SimpleNamespace(brushes=[], things=[first, second]),
     )
     host.trigger_runtime = LogicTriggers(host)
+    host.play_mode = False
+    host._monster_lock = threading.RLock()
+    host.monster_ai = SimpleNamespace(monster_states={})
+    host.portal_runtime = LogicPortals(host)
     from engine.prop_runtime import PropSession
     host.session_runtime = SimpleNamespace(physics_world=None)
     host.prop_runtime = PropSession(host)
