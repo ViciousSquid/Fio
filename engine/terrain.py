@@ -18,12 +18,6 @@ from . import shaders
 from . import terrain_style
 from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
 
-# ============================================================================
-# COMPATIBILITY EXPORTS
-# ============================================================================
-TERRAIN_VERTEX_SHADER = shaders.DEFAULT_SHADERS['terrain.vert']
-TERRAIN_FRAGMENT_SHADER = shaders.DEFAULT_SHADERS['terrain.frag']
-
 
 def grass_vertex_count(segments: int) -> int:
     """Vertices per blade instance: (segments - 1) quads plus the tip."""
