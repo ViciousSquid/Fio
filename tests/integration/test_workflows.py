@@ -437,7 +437,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     thread.player = Player(0.0, 0.0)
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert getattr(thread, "_bigworld", None) is not None, (
+        assert thread._bigworld is not None, (
             "a map carrying a BigWorldSettings entity did not start a session")
         assert far.get("hidden") is True, (
             "the brush 20000 units away is outside the activation radius and "
