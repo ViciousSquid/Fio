@@ -101,7 +101,7 @@ class LogicPlayer:
         if in_water and not logic._player_was_in_water:
             logic.game_state.queue_sound(
                 {'file': 'enterwater.wav', 'volume': 1.0})
-            logic._emit_noise_event(
+            logic.combat_runtime._emit_noise_event(
                 player.pos,
                 source='water_enter',
                 loudness=_WATER_LOUDNESS,
@@ -110,7 +110,7 @@ class LogicPlayer:
         elif not in_water and logic._player_was_in_water:
             logic.game_state.queue_sound(
                 {'file': 'exitwater.wav', 'volume': 1.0})
-            logic._emit_noise_event(
+            logic.combat_runtime._emit_noise_event(
                 player.pos,
                 source='water_exit',
                 loudness=_WATER_LOUDNESS,

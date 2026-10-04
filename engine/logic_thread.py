@@ -27,6 +27,7 @@ from .camera import Camera
 from .change_journal import moved, touch
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
+from .logic_player import LogicPlayer
 from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
 from .logic_parenting import LogicParenting
 from .logic_portals import LogicPortals, _PORTAL_TRANSIT_COOLDOWN, _PORTAL_PLAYER_EXIT_EPSILON
@@ -339,6 +340,7 @@ class LogicThread(threading.Thread):
         # Camera state and camera math live in LogicCamera. LogicThread keeps
         # only the small forwarding surface needed by the rest of the engine.
         self.camera = LogicCamera(self)
+        self.player_runtime = LogicPlayer(self)
         self.editor_camera = self.camera.editor_camera
         # HUD visibility follows LogicCamera control. When a cinematic ends,
         # the entire HUD fades back in over four seconds.
@@ -1179,7 +1181,7 @@ class LogicThread(threading.Thread):
 
         # Player movement/physics live in LogicPlayer; this method retains
         # authoritative tick ordering and the existing consumed-input surface.
-        player_runtime = self._player_runtime()
+        player_runtime = self.player_runtime
         player_runtime.update_primary(delta, keys, mouse_dx, mouse_dy)
         player_runtime.update_water_sounds(delta)
 
@@ -1238,20 +1240,7 @@ class LogicThread(threading.Thread):
         combat_runtime._update_monster_projectiles(delta)
 
         # ── Player 2 physics (split-screen) ──────────────────────────────────
-        self._player_runtime().update_player2(delta)
-
-    # =========================================================================
-    # WATER SOUNDS
-    # =========================================================================
-
-    def _player_runtime(self):
-        """Return the player runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "player_runtime", None)
-        if runtime is None:
-            from .logic_player import LogicPlayer
-            runtime = LogicPlayer(self)
-            self.player_runtime = runtime
-        return runtime
+        self.player_runtime.update_player2(delta)
 
     # =========================================================================
     # LOGIC TIMER UPDATE
