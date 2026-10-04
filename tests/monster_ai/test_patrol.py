@@ -42,7 +42,7 @@ def test_a_chain_is_built_from_the_next_node_links(monster_factory,
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)
 
@@ -60,7 +60,7 @@ def test_a_cyclic_chain_terminates(monster_factory, path_node_factory, ai_world,
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)
 
@@ -96,7 +96,7 @@ def test_a_node_that_rejects_the_monster_type_ends_the_chain(
                               patrol=True, patrol_target="a")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, a, b],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)
 
@@ -111,7 +111,7 @@ def test_patrol_is_ignored_when_the_flag_is_off(monster_factory, path_node_facto
     monster = monster_factory("idle", (0, 96, 0), patrol=False, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
     before = list(monster.pos)
 
     for _ in range(20):
@@ -131,7 +131,7 @@ def test_a_patrolling_monster_walks_toward_its_current_node(
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)      # builds the chain
     x_after_build = monster.pos[0]
@@ -152,7 +152,7 @@ def test_arriving_at_a_node_fires_onmonsterarrived_once(
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
     logic.io_manager = io_manager
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     for _ in range(3):
         ai.update(TICK)
@@ -171,7 +171,7 @@ def test_a_wait_time_holds_the_monster_and_fires_the_wait_outputs(
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
     logic.io_manager = io_manager
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)
     assert _state(ai, monster)["patrol_waiting"] is True, (
@@ -212,7 +212,7 @@ def test_loop_mode_returns_to_the_first_node(monster_factory, path_node_factory,
                               patrol_target="n0", patrol_mode="loop")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     assert _walk_until_index(ai, monster, 2), "never reached the last node"
     assert _walk_until_index(ai, monster, 0), (
@@ -229,7 +229,7 @@ def test_once_mode_stops_at_the_last_node(monster_factory, path_node_factory,
                               patrol_target="n0", patrol_mode="once")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     for _ in range(4000):
         ai.update(TICK)
@@ -254,7 +254,7 @@ def test_ping_pong_mode_reverses_at_the_end(monster_factory, path_node_factory,
                               patrol_target="n0", patrol_mode="ping_pong")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     assert _walk_until_index(ai, monster, 2), "never reached the last node"
     assert _walk_until_index(ai, monster, 1), (
@@ -274,7 +274,7 @@ def test_an_unknown_patrol_mode_falls_back_to_loop(monster_factory,
                               patrol_target="n0", patrol_mode="sideways")
     ai, logic = ai_world(brushes=flat_ground, things=[monster] + nodes,
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     assert _walk_until_index(ai, monster, 1)
     assert _walk_until_index(ai, monster, 0), (
@@ -293,7 +293,7 @@ def test_changing_the_patrol_target_rebuilds_the_chain(monster_factory,
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="a")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, a, b],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     ai.update(TICK)
     assert _state(ai, monster)["patrol_chain"] == ["a"]
@@ -311,12 +311,12 @@ def test_deleting_the_current_node_mid_patrol_clears_the_chain(
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
     ai.update(TICK)
     assert _state(ai, monster)["patrol_chain"] == ["n0"]
 
     logic.things.remove(node)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
     ai.update(TICK)
 
     assert _state(ai, monster)["patrol_chain"] == [], (
@@ -331,7 +331,7 @@ def test_seeing_the_player_overrides_patrol(monster_factory, path_node_factory,
                               patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=(0.0, 96.0, 0.0))
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     for _ in range(10):
         ai.update(TICK)
@@ -348,7 +348,7 @@ def test_turning_patrol_off_clears_the_chain_state(monster_factory,
     monster = monster_factory("walker", (0, 96, 0), patrol=True, patrol_target="n0")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
                          player_pos=FAR_PLAYER)
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
     ai.update(TICK)
     assert _state(ai, monster)["patrol_at_target"] is True
 
