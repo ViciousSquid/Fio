@@ -55,7 +55,7 @@ class FakeLogic:
         self.editor_state = SimpleNamespace()
         self.editor_state.brushes = list(brushes or [])
         self.editor_state.things = list(things or [])
-        self.player = player
+        self.player_runtime = SimpleNamespace(player=player)
         self.render_runtime = SimpleNamespace(view_distance=render_view_distance or ViewDistance())
         self.camera = FakeCamera()
 
@@ -151,7 +151,7 @@ def test_loitering_on_a_boundary_does_not_flap():
     last = tier_of(watched)
     for step in range(24):
         x = 0.0 if step % 2 else 520.0     # oscillate across a cell boundary
-        session.logic.player.pos = [x, 0.0, 0.0]
+        session.logic.player_runtime.player.pos = [x, 0.0, 0.0]
         session.tick()
         now = tier_of(watched)
         if now != last:
@@ -177,7 +177,7 @@ def test_no_resident_entity_is_dormant_and_no_dormant_one_is_resident():
     things = grid_world(cells_each_way=6)
     session = started_session(things)
     for pos in [(0.0, 0.0), (1500.0, 0.0), (3000.0, 1200.0), (-2600.0, -900.0)]:
-        session.logic.player.pos = [pos[0], 0.0, pos[1]]
+        session.logic.player_runtime.player.pos = [pos[0], 0.0, pos[1]]
         session.tick()
         for t in things:
             resident = session.manager.is_thing_active(t)
@@ -272,7 +272,7 @@ def test_persistent_globals_are_never_demoted_by_distance():
     boss = FakeThing(0, 0, type_name="worldmanager", uuid="wm")
     things.append(boss)
     session = started_session(things)
-    session.logic.player.pos = [12000.0, 0.0, 12000.0]
+    session.logic.player_runtime.player.pos = [12000.0, 0.0, 12000.0]
     session.tick()
     assert tier_of(boss) == TIER_NEAR
 
@@ -286,7 +286,7 @@ def test_tiering_never_touches_uuids():
     before = [t.properties["id"] for t in things]
     session = started_session(things)
     for x in (0.0, 2000.0, -3000.0, 6000.0):
-        session.logic.player.pos = [x, 0.0, 0.0]
+        session.logic.player_runtime.player.pos = [x, 0.0, 0.0]
         session.tick()
     assert [t.properties["id"] for t in things] == before
 
@@ -294,7 +294,7 @@ def test_tiering_never_touches_uuids():
 def test_play_stop_removes_every_tier_stamp():
     things = grid_world(cells_each_way=5)
     session = started_session(things)
-    session.logic.player.pos = [2000.0, 0.0, 0.0]
+    session.logic.player_runtime.player.pos = [2000.0, 0.0, 0.0]
     session.tick()
     assert any(SIM_TIER_KEY in t.properties for t in things)
     session.stop()
@@ -323,7 +323,7 @@ def test_tiering_does_no_work_without_a_cell_crossing():
     session.tiers.update = lambda *a, **k: (calls.append(1), real_update(*a, **k))[1]
 
     for _ in range(200):
-        session.logic.player.pos = [10.0, 0.0, 10.0]   # same cell every frame
+        session.logic.player_runtime.player.pos = [10.0, 0.0, 10.0]   # same cell every frame
         session.tick()
     assert calls == [], "tier evaluation ran without a cell crossing"
 
@@ -338,9 +338,9 @@ def test_evaluation_scales_with_the_active_set_not_the_world():
     def cells_evaluated(cells_each_way):
         things = grid_world(cells_each_way=cells_each_way, per_cell=2)
         session = started_session(things)
-        session.logic.player.pos = [520.0, 0.0, 0.0]
+        session.logic.player_runtime.player.pos = [520.0, 0.0, 0.0]
         before = session.manager._last_player_cell
-        session.manager.update(session.logic.player.pos)
+        session.manager.update(session.logic.player_runtime.player.pos)
         assert session.manager._last_player_cell != before
         delta = session.tiers.update(session.manager, 520.0, 0.0)
         return delta.evaluated_cells, len(things)
@@ -362,12 +362,12 @@ def test_a_crossing_restamps_a_ring_not_the_resident_set():
     """Only cells whose band actually changed pay for stamping."""
     things = grid_world(cells_each_way=10, per_cell=4)
     session = started_session(things)
-    session.logic.player.pos = [520.0, 0.0, 0.0]
+    session.logic.player_runtime.player.pos = [520.0, 0.0, 0.0]
     session.tick()
 
-    session.logic.player.pos = [1032.0, 0.0, 0.0]      # one cell further out
+    session.logic.player_runtime.player.pos = [1032.0, 0.0, 0.0]      # one cell further out
     before = session.manager._last_player_cell
-    session.manager.update(session.logic.player.pos)
+    session.manager.update(session.logic.player_runtime.player.pos)
     assert session.manager._last_player_cell != before
     delta = session.tiers.update(session.manager, 1032.0, 0.0)
 
@@ -421,7 +421,7 @@ def test_the_session_reads_the_player_not_the_camera():
     session.tick()
     assert session.tiers.cell_tier((0, 0)) == near_origin
 
-    session.logic.player.pos = [20000.0, 0.0, 20000.0]
+    session.logic.player_runtime.player.pos = [20000.0, 0.0, 20000.0]
     session.tick()
     assert session.tiers.cell_tier((0, 0)) == TIER_DORMANT
 
@@ -442,7 +442,7 @@ def test_the_session_reads_the_player_not_the_camera():
 
 def _walk_to(session, x, z=0.0):
     """Move the player to ``(x, z)`` and let the session re-tier."""
-    session.logic.player.pos = [float(x), 0.0, float(z)]
+    session.logic.player_runtime.player.pos = [float(x), 0.0, float(z)]
     session.tick()
     return session
 
