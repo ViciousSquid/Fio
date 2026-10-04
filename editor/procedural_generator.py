@@ -1,6 +1,7 @@
 import random
 import heapq
 import math
+import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
     QGroupBox, QFormLayout, QTextEdit, QCheckBox, QScrollArea, QFrame,
@@ -29,6 +30,36 @@ STEP_TREAD = 32                  # depth of each step along the run direction
 UPPER_FLOOR_HEIGHT = 128         # default height of an upper floor above the lower one
 MEZZANINE_THICK = 16             # thickness of an upper-floor platform slab
 UPPER_FLOOR_HEADROOM = 224       # clearance kept above an upper floor
+
+RANDOM_WALL_TEXTURES = [
+    "sci_fi_metal_panel01.jpg",
+    "sci_fi_mtlwall.jpg",
+    "sci_fi_texture_275.jpg",
+    "scifi_light_blu.png",
+    "concrete02.png",
+    "Stone_09-512x512.png",
+    "sci_fi_metal_wall_panel.jpg",
+]
+RANDOM_FLOOR_TEXTURES = [
+    "cobblestone.jpg",
+    "concrete02.png",
+    "Metal_08-512x512.png",
+    "Tile_03-512x512.png",
+]
+TEXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "textures")
+
+
+def _resolve_texture(texture_name):
+    """Return an existing texture filename, falling back to default.png."""
+    name = str(texture_name or "").strip()
+    if name and os.path.isfile(os.path.join(TEXTURE_DIR, name)):
+        return name
+    return "default.png"
+
+
+def _choose_random_texture(choices):
+    """Choose from the requested texture set, resolving missing assets safely."""
+    return _resolve_texture(random.choice(choices))
 
 # ----------------------------------------------------------------------
 # Grid and map generation
@@ -613,7 +644,14 @@ def create_map_data(params, yield_hook=None):
                                       floor_height + UPPER_FLOOR_HEADROOM)
             mezzanine_rooms.append(idx)
 
-    brushes = generate_brushes_from_grid(grid, params['wall_tex'], params['floor_tex'], yield_hook=yield_hook)
+    wall_tex = _resolve_texture(params.get('wall_tex', 'default.png'))
+    floor_tex = _resolve_texture(params.get('floor_tex', 'default.png'))
+    if params.get('random_wall_texture', False):
+        wall_tex = _choose_random_texture(RANDOM_WALL_TEXTURES)
+    if params.get('random_floor_texture', False):
+        floor_tex = _choose_random_texture(RANDOM_FLOOR_TEXTURES)
+
+    brushes = generate_brushes_from_grid(grid, wall_tex, floor_tex, yield_hook=yield_hook)
 
     # Add the staircases and upper-floor platforms for the chosen rooms.
     upper_floor_infos = []
@@ -629,11 +667,13 @@ def create_map_data(params, yield_hook=None):
     player_z = start_room.world_y + start_room.world_h / 2
     player_y = FLOOR_SURFACE + PLAYER_SPAWN_Y_OFFSET
 
-    gun_x = player_x + CELL_SIZE//2
+    # The starting weapon is deliberately weighted: gun1 is 60%, gun2 is 40%.
+    # It occupies exactly the PlayerStart coordinates so the player collects it
+    # immediately on spawn.
+    starting_gun = "gun1" if random.random() < 0.60 else "gun2"
+    gun_x = player_x
+    gun_y = player_y
     gun_z = player_z
-    gun_y = FLOOR_SURFACE + ENTITY_Y_OFFSET
-     # Random starting weapon
-    starting_gun = random.choice(["gun1", "gun2"])
 
     exit_room = grid.rooms[-2] if len(grid.rooms) > 2 else grid.rooms[0]
     exit_x = exit_room.world_x + exit_room.world_w / 2
@@ -847,7 +887,7 @@ def create_map_data(params, yield_hook=None):
                     print(f"Warning: Could not place collectible Prop #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
     # ------------------- AMMO COLLECTIBLE SPAWNING -------------------
-    if params.get('spawn_ammo', False):
+    if starting_gun == "gun2":
         ammo_count = params.get('ammo_count', 4)
         # Keep ammo out of monster rooms when possible, matching health pickup
         # placement so the generated combat spaces remain intentional.
@@ -1057,6 +1097,14 @@ class ProceduralMapWidget(QWidget):
         self.wall_tex.setMaximumHeight(50)
         form.addRow("Wall Texture:", self.wall_tex)
 
+        self.random_wall_texture = QCheckBox("Random Wall Texture")
+        self.random_wall_texture.setChecked(False)
+        form.addRow(self.random_wall_texture)
+
+        self.random_floor_texture = QCheckBox("Random Floor Texture")
+        self.random_floor_texture.setChecked(False)
+        form.addRow(self.random_floor_texture)
+
         self.spawn_monsters = QCheckBox("Spawn Monsters")
         self.spawn_monsters.setChecked(True)
         self.monster_amount = QSpinBox()
@@ -1072,17 +1120,9 @@ class ProceduralMapWidget(QWidget):
         self.health_amount.setValue(6)
         form.addRow(self.spawn_health, self.health_amount)
 
-        # Ammo pickups
-        self.spawn_ammo = QCheckBox("Spawn Ammo")
-        self.spawn_ammo.setChecked(True)
-        self.ammo_amount = QSpinBox()
-        self.ammo_amount.setRange(1, 64)
-        self.ammo_amount.setValue(4)
-        form.addRow(self.spawn_ammo, self.ammo_amount)
-
         # Upper floors (steps + raised platforms)
         self.enable_floors = QCheckBox("Steps")
-        self.enable_floors.setChecked(True)
+        self.enable_floors.setChecked(False)
         self.floor_amount = QSpinBox()
         self.floor_amount.setRange(0, 16)
         self.floor_amount.setValue(2)
@@ -1133,6 +1173,8 @@ class ProceduralMapWidget(QWidget):
             'max_room': self.max_room.value(),
             'wall_tex': self.wall_tex.toPlainText().strip(),
             'floor_tex': "default.png",
+            'random_wall_texture': self.random_wall_texture.isChecked(),
+            'random_floor_texture': self.random_floor_texture.isChecked(),
             'spawn_monsters': self.spawn_monsters.isChecked(),
             'monster_count': self.monster_amount.value(),
             'world_width': world_width,
@@ -1140,8 +1182,6 @@ class ProceduralMapWidget(QWidget):
             # --- Collectibles ---
             'spawn_health': self.spawn_health.isChecked(),
             'health_count': self.health_amount.value(),
-            'spawn_ammo': self.spawn_ammo.isChecked(),
-            'ammo_count': self.ammo_amount.value(),
             # --- Upper / lower floors ---
             'enable_floors': self.enable_floors.isChecked(),
             'floor_room_count': self.floor_amount.value(),
