@@ -14,10 +14,10 @@ a fake that is kinder than the real thing.
 
 import threading
 import time
+from types import SimpleNamespace
 
 import glm
 
-from editor.editor_state import EditorState
 from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
@@ -86,7 +86,7 @@ class FakeLogicThread:
     """
 
     def __init__(self, brushes=(), things=(), player=None, io_manager=None):
-        self.editor_state = EditorState()
+        self.editor_state = SimpleNamespace()
         self.editor_state.brushes = list(brushes)
         self.editor_state.things = list(things)
         self.player = player
