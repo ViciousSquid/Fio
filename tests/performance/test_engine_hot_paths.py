@@ -471,7 +471,8 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
     player = Player(0.0, -10.0, 0.0)
     player.pos = glm.vec3(0.0, 20.0, -4.0)
     player.velocity = glm.vec3(0.0, 0.0, -120.0)
-    thread.set_player(player)
+    thread.player = player
+    thread.camera.player = player
     thread.session_runtime.apply_play_mode(True)
     try:
         expected = map_point(
