@@ -1896,7 +1896,7 @@ class QtGameView(QOpenGLWidget):
                 self._draw_hud(painter, render_state)
         if self.play_mode and render_state and render_state.player_dead:
             self._draw_death_screen(painter)
-        if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
+        if self.play_mode and self._cached_level_complete_ui:
             self._draw_level_complete_overlay(painter)
         if self.play_mode:
             logic_thread = self.logic_thread
@@ -3781,7 +3781,7 @@ class QtGameView(QOpenGLWidget):
             self.setFocus()
             return
 
-        if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
+        if self.play_mode and self._cached_level_complete_ui:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_E):
                 self._confirm_level_complete()
                 return
