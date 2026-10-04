@@ -169,7 +169,10 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
         thread._tick(TICK)
     thread.render_runtime.prepare_render_state()
     published = thread.game_state.get_write_state()
-    assert "switchable" not in {b.get("name") for b in published.all_brushes}, (
+    assert "switchable" not in {
+        published.render_refs[int(slot)]["name"]
+        for slot in published.all_brush_slots
+    }, (
         "the hidden brush was still submitted to the renderer")
 
     thread.session_runtime.apply_play_mode(False)
@@ -360,7 +363,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
 
     thread.render_runtime.prepare_render_state()
     first = thread.game_state.get_write_state()
-    first_count = len(first.all_brushes)
+    first_count = len(first.all_brush_slots)
     assert first_count == 6, "the room is six brushes, the frame has %d" % first_count
     assert first.entity_table.count == 1
 
@@ -370,9 +373,9 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
 
     thread.render_runtime.prepare_render_state()
     second = thread.game_state.get_write_state()
-    assert len(second.all_brushes) == first_count + 1, (
+    assert len(second.all_brush_slots) == first_count + 1, (
         "the rebuilt frame holds %d brushes, expected %d"
-        % (len(second.all_brushes), first_count + 1))
+        % (len(second.all_brush_slots), first_count + 1))
     assert second.entity_table.count == 2
 
 
