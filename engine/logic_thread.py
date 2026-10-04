@@ -243,17 +243,7 @@ class LogicThread(threading.Thread):
         ),
         "triggers": (
             "player",
-            "fired_once_triggers",
             "_trigger_brushes",
-            "_trigger_contacts",
-            "player_in_triggers",
-            "_nonplayer_trigger_contacts",
-            "_trigger_poll_elapsed_by_bid",
-            "_trigger_use_generation",
-            "_trigger_use_seen",
-            "_use_trigger_entries",
-            "_trigger_use_prompt",
-            "hurt_trigger_timers",
         ),
         "portals": (
             "player",
@@ -419,11 +409,7 @@ class LogicThread(threading.Thread):
             except Exception as exc:
                 print(f"[LogicThread] plugin attach skipped: {exc}")
 
-        # Trigger state remains on LogicThread for compatibility; LogicTriggers
-        # owns the algorithms that operate on it.
-        # LogicTriggers owns trigger detection and activation state.
         self.trigger_runtime = LogicTriggers(self)
-        self.fired_once_triggers: set = set()
         self.trigger_runtime._reset_trigger_state()
 
         # Logic Gate State
@@ -435,9 +421,6 @@ class LogicThread(threading.Thread):
 
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
         
-        # Hurt trigger timers remain on LogicThread for compatibility;
-        # LogicTriggers owns their processing.
-        self.hurt_trigger_timers: Dict[int, float] = {}
         self.HURT_INTERVAL = 0.5
         
         # Collection state
