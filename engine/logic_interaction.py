@@ -27,7 +27,7 @@ class LogicInteraction:
 
         found_door_idx = -1
         found_door_brush = None
-        for i, brush in logic.doors:
+        for i, brush in logic.mover_runtime.doors:
             pos = brush["pos"]
             size = brush["size"]
             dx = abs(pos[0] - px)
