@@ -3735,6 +3735,23 @@ class View2D(QWidget):
             "Create two portals already cross-linked and facing each other"
         )
 
+        plugin_actions = {}
+        from plugins.manager import get_manager
+        manager = get_manager()
+        plugin_entries = [
+            (plugin, label, cls)
+            for plugin, label, cls in manager.menu_entries()
+            if manager.is_enabled(plugin)
+        ]
+        if plugin_entries:
+            plugin_menu = menu.addMenu("Plugins")
+            plugin_submenus = {}
+            for plugin, label, cls in plugin_entries:
+                submenu = plugin_submenus.setdefault(
+                    plugin, plugin_menu.addMenu(plugin.name))
+                action_item = submenu.addAction(label)
+                plugin_actions[action_item] = (plugin, label, cls)
+
         # Open the menu using the captured position
         action = menu.exec_(self.mapToGlobal(click_pos))
         
@@ -3746,6 +3763,20 @@ class View2D(QWidget):
             self.select_brushes_inside(clicked_brush)
             return
         
+        plugin_choice = plugin_actions.get(action)
+        if plugin_choice is not None:
+            plugin, label, cls = plugin_choice
+            world_pos = self.snap_to_grid(self.screen_to_world(click_pos))
+            ax1, ax2 = self.get_axes()
+            ax_map = {'x': 0, 'y': 1, 'z': 2}
+            pos_3d = [0, 40, 0]
+            pos_3d[ax_map[ax1]] = world_pos.x()
+            pos_3d[ax_map[ax2]] = world_pos.y()
+            if self.view_type == 'top':
+                pos_3d[1] = 40
+            self._place_plugin_entity(plugin, cls, label, pos_3d)
+            return
+
         # Calculate World Position for new object using the captured position
         world_pos = self.snap_to_grid(self.screen_to_world(click_pos))
         ax1, ax2 = self.get_axes()
@@ -3848,6 +3879,75 @@ class View2D(QWidget):
             if hasattr(self.main_window, 'properties_tab_widget'):
                 self._focus_properties_tab()
             self.update()
+
+    def _place_plugin_entity(self, plugin, cls, label, pos_3d):
+        """Place a plugin entity from this view's native context-menu path."""
+        from plugins.manager import get_manager
+
+        manager = get_manager()
+        if not manager.is_enabled(plugin):
+            if hasattr(self.main_window, "show_toast"):
+                self.main_window.show_toast(
+                    f"Plugin '{plugin.name}' is disabled", is_error=True)
+            return
+
+        try:
+            probe = cls(pos=list(pos_3d))
+            properties = getattr(probe, "properties", None)
+            ttype = properties.get("type") if isinstance(properties, dict) else None
+            if _singleton_blocked(self.main_window, self.editor.state, ttype):
+                return
+
+            wizard = manager.entity_wizard_for(ttype) if ttype else None
+            if wizard is not None:
+                authored = wizard(self.main_window)
+                if authored is None:
+                    return
+                thing = cls(pos=list(pos_3d), properties=dict(authored))
+            else:
+                thing = probe
+
+            self.main_window.save_state()
+            self.editor.state.things.append(thing)
+            self.editor.set_selected_object(thing)
+            if hasattr(self.main_window, 'properties_tab_widget'):
+                self._focus_properties_tab()
+            self.update()
+        except Exception as exc:
+            from editor.debug_console import debug_log
+            debug_log("Plugins", f"2D placement failed: {exc}")
+
+
+def singleton_instance(things, ttype):
+    """Return the existing entity for a registered per-map singleton type."""
+    if not ttype:
+        return None
+    from plugins.manager import get_manager
+    manager = get_manager()
+    if not manager.is_singleton_entity(ttype):
+        return None
+    norm = manager._normalise_type(ttype)
+    for thing in things or []:
+        props = getattr(thing, "properties", None)
+        if not isinstance(props, dict):
+            continue
+        if manager._normalise_type(props.get("type", "")) == norm:
+            return thing
+    return None
+
+
+def _singleton_blocked(main_window, editor_state, ttype) -> bool:
+    """Select an existing singleton instead of creating a duplicate."""
+    existing = singleton_instance(getattr(editor_state, "things", []), ttype)
+    if existing is None:
+        return False
+    main_window.set_selected_object(existing)
+    main_window.update_views()
+    main_window.show_toast(
+        "Only one of this entity is allowed per map - selected the existing one.",
+        is_error=True)
+    return True
+
 
     def get_brush_at(self, screen_pos):
         """Returns the brush at the given screen position, or None."""

@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the plugin registries are editor-tier")
 
-from plugins.integration import _singleton_blocked, singleton_instance  # noqa: E402
+from editor.view_2d import _singleton_blocked, singleton_instance  # noqa: E402
 from plugins.manager import get_manager, load_plugins  # noqa: E402
 
 
