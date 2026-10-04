@@ -26,6 +26,7 @@ from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
 from engine.logic_timing import LogicTiming
 from engine.logic_world import LogicWorld                       # noqa: E402
+from engine.view_distance import ViewDistance                    # noqa: E402
 from plugins.bigworld import persistence          # noqa: E402
 from plugins.bigworld.runtime import BigWorldSession  # noqa: E402
 
@@ -84,6 +85,7 @@ class FakeLogic:
         self.editor_state = FakeEditorState(things, brushes)
         self.terrain = None
         self.player = FakePlayer(player_pos)
+        self.view_distance = ViewDistance()
         self.player2 = None
         self.god_mode = False
         self.buddha_mode = False
