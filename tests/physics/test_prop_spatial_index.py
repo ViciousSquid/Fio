@@ -118,7 +118,7 @@ def test_adopting_and_releasing_file_and_unfile():
     session.start()
     assert session.props_within(0.0, 0.0, 200.0) == [prop]
 
-    logic.things.remove(prop)
+    logic.editor_state.things.remove(prop)
     session.rebuild()
     assert session.props_within(0.0, 0.0, 200.0) == []
     assert session._filed == {}, "a released Prop left an entry in the index"
