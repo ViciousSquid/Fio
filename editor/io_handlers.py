@@ -188,6 +188,8 @@ def register_all_input_handlers(io_manager: IOManager):
         effect_type = str(param or "").strip().upper()
         if effect_type not in EFFECT_TYPES:
             return
+        if entity.properties.get("effect_type") == effect_type:
+            return
         entity.properties["effect_type"] = effect_type
         entity.properties["preview"] = False
         if effect_type == "ORB":
