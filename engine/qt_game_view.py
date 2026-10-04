@@ -1876,9 +1876,9 @@ class QtGameView(QOpenGLWidget):
             self._draw_fps_counter(painter)
         if self.play_mode and self.show_sprites_in_play_mode:
             self._draw_sprites_text(painter)
-        if self.play_mode and getattr(self, 'show_render_menu', False):
+        if self.play_mode and self.show_render_menu:
             self._draw_render_menu(painter)
-        _hud_visible_override = getattr(self, "_hud_runtime_visible", None)
+        _hud_visible_override = self._hud_runtime_visible
         _hud_visible = (
             _hud_visible_override
             if _hud_visible_override is not None
@@ -2008,7 +2008,7 @@ class QtGameView(QOpenGLWidget):
         return max(42, min(68, int(viewport_height * 0.085)))
 
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
-        if getattr(self, "_hud_style", 1) == 0:
+        if self._hud_style == 0:
             return
         # A LogicCamera owns the player's view completely: no HUD is shown
         # while the cinematic is running.
@@ -2252,7 +2252,7 @@ class QtGameView(QOpenGLWidget):
         painter.restore()
 
     def _draw_hud_splitscreen(self, painter, render_state):
-        if getattr(self, "_hud_style", 1) == 0:
+        if self._hud_style == 0:
             return
         if render_state is not None and getattr(
             render_state, "cinematic_camera_active", False
@@ -2601,8 +2601,8 @@ class QtGameView(QOpenGLWidget):
     def _toggle_splitscreen(self):
         self.splitscreen_mode = not self.splitscreen_mode
         if self.play_mode:
-            pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
-            angle = getattr(self, '_last_player_start_angle', 0)
+            pos = self._last_player_start_pos
+            angle = self._last_player_start_angle
             if self.splitscreen_mode:
                 self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
                 self.player2.pos.y = pos[1]
@@ -2633,8 +2633,8 @@ class QtGameView(QOpenGLWidget):
         if editor is not None and hasattr(editor, '_exit_play_mode'):
             editor._exit_play_mode()
             return
-        pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
-        angle = getattr(self, '_last_player_start_angle', 0)
+        pos = self._last_player_start_pos
+        angle = self._last_player_start_angle
         self.toggle_play_mode(pos, angle)
 
     def set_cull_distance(self, distance):
@@ -3917,7 +3917,7 @@ class QtGameView(QOpenGLWidget):
                         self.editor.show_toast(f"Grid Size: {new_size}")
                 return
         if self.play_mode:
-            if getattr(self, 'show_render_menu', False):
+            if self.show_render_menu:
                 if event.key() == Qt.Key_1:
                     self.current_render_mode = RENDER_MODE_LIT
                     self.update()
