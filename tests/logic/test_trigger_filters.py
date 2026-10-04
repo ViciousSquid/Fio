@@ -1,6 +1,5 @@
 """Trigger detection: activator filters and the per-trigger poll scheduler."""
 import math
-from types import SimpleNamespace
 
 import glm
 import pytest
