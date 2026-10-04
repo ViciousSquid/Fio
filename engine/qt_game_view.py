@@ -1069,6 +1069,20 @@ class QtGameView(QOpenGLWidget):
         self.sysmon.record_frame_time(delta * 1000.0)
         self._process_sound_queue()
         self._process_console_command_queue()
+
+        # The viewport owns editor camera input; LogicRender owns the
+        # render-time projection. Synchronise the camera state across that
+        # execution boundary so editor rendering still follows the live
+        # viewport camera without rebuilding render tables here.
+        if self.logic_thread and not self.play_mode:
+            with self.logic_thread._tick_lock:
+                self.logic_thread.camera.set_editor_camera(
+                    self.camera.pos,
+                    self.camera.yaw,
+                    self.camera.pitch,
+                    self.camera.fov,
+                )
+
         if self.use_threading and self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
