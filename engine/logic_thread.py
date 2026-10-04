@@ -40,7 +40,6 @@ from .logic_render import LogicRender
 from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
-from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
 
@@ -269,9 +268,7 @@ class LogicThread(threading.Thread):
             "player",
             "active_weapon",
             "bullet_marks",
-            "_monster_projectiles",
             "_projectile_positions",
-            "_gunfire_events",
             "_collision_brushes_cache",
             "io_manager",
         ),
@@ -1010,12 +1007,8 @@ class LogicThread(threading.Thread):
         combat_runtime = self.combat_runtime
         combat_runtime._update_bullet_marks()
 
-        # Clean up expired gunfire sound events (keep for 3 seconds)
-        current_time = time.perf_counter()
-        self._gunfire_events = [
-            e for e in self._gunfire_events
-            if (current_time - e['time']) < 3.0
-        ]
+        # Clean up expired player-noise events through combat ownership.
+        combat_runtime.prune_noise_events(3.0)
 
         # Update monster projectiles (flying monster ranged attacks)
         # NOTE: Monster AI itself now runs in MonsterAIThread
