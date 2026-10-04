@@ -520,7 +520,7 @@ class _Side:
         if not states:
             return moving
         mover_states = logic.mover_states if self.reference else logic.mover_runtime.mover_states
-        door_states = logic.mover_runtime.door_states if self.reference else logic.mover_runtime.door_states
+        door_states = logic.door_states if self.reference else logic.mover_runtime.door_states
         return dict(moving, **{
             # Sorted by index: the loop's dicts iterate in insertion order (a
             # popped-and-recreated state moves to the end), the views in row
