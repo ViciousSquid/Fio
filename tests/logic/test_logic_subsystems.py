@@ -125,7 +125,6 @@ def test_logic_interaction_constructs_and_opens_a_nearby_door():
     host = SimpleNamespace(
         player=SimpleNamespace(pos=glm.vec3(0, 0, 0)),
         doors=[(0, door)],
-        door_states={0: {"state": "closed"}},
         collected_keys=set(),
         io_manager=None,
         current_hud_message="stale",
@@ -135,11 +134,12 @@ def test_logic_interaction_constructs_and_opens_a_nearby_door():
         _plugin_emit=lambda *args, **kwargs: opened.append((args, kwargs)),
     )
     host.mover_runtime = LogicMovers(host)
+    host.mover_runtime.door_states = {0: {"state": "closed"}}
     runtime = LogicInteraction(host)
 
     runtime.handle(True)
 
-    assert host.door_states[0]["state"] == "opening"
+    assert host.mover_runtime.door_states[0]["state"] == "opening"
     assert host.current_hud_message == "[E] Open"
 
 
@@ -152,7 +152,6 @@ def test_logic_movers_constructs_and_indexes_mover_brushes():
     host = SimpleNamespace(
         brushes=[mover],
         movers=[],
-        mover_states={},
         mover_path_states={},
         _mover_brush_list=[],
     )
@@ -161,7 +160,7 @@ def test_logic_movers_constructs_and_indexes_mover_brushes():
     runtime._init_movers()
 
     assert host.movers == [(0, mover)]
-    assert host.mover_states[0]["progress"] == pytest.approx(0.0)
+    assert runtime.mover_states[0]["progress"] == pytest.approx(0.0)
     assert mover["original_pos"] == [0, 0, 0]
 
 
@@ -201,10 +200,12 @@ def test_logic_player_constructs_and_reports_water_transition():
         _player_was_in_water=False,
         _waterwalk_timer=0.0,
         WATERWALK_INTERVAL=0.45,
+        combat_runtime=None,
         _emit_noise_event=lambda pos, source, loudness: noise.append(
             (tuple(pos), source, loudness)
         ),
     )
+    host.combat_runtime = LogicCombat(host)
     runtime = LogicPlayer(host)
 
     runtime.update_water_sounds(0.1)
@@ -252,7 +253,7 @@ def test_logic_session_constructs_and_releases_session_cache_state():
     player = SimpleNamespace(ground_object=object())
 
     host = SimpleNamespace(
-        _world_runtime=lambda: world,
+        world_runtime=world,
         _collision_brushes_cache=[1],
         _model_collision_brushes=[2],
         _physics_body_brushes=[3],
