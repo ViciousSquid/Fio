@@ -197,6 +197,32 @@ def _dotted_name(node):
     return None
 
 
+def test_machinery_tests_do_not_use_object_new_as_a_constructor_bypass():
+    """Never allocate an object with object.__new__ in a machinery test.
+
+    object.__new__ deliberately skips the class constructor. That is exactly
+    how a behavioural test can appear to exercise production code while
+    silently omitting the owner's real initialization.
+    """
+    offenders = []
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if _dotted_name(node.func) != "object.__new__":
+                    continue
+                offenders.append("%s:%d" % (_rel(path), node.lineno))
+    assert not offenders, (
+        "machinery tests bypass constructors with object.__new__; use the real "
+        "production constructor instead:\\n  " + "\\n  ".join(offenders)
+    )
+
+
 def test_machinery_tests_do_not_construct_production_owners_by_bypassing_init():
     """Production owners must execute their constructors in machinery tests."""
     offenders = []
