@@ -947,8 +947,7 @@ class QtGameView(QOpenGLWidget):
         self.set_cull_distance(self.cull_distance)
         self._preload_assets()
         self.load_all_sprite_textures()
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'brushes'):
-            self.preload_level_textures()
+        self.preload_level_textures()
         self._start_logic_thread()
         self._init_debug_resources()
         if hasattr(self, 'debug_console_window'):
@@ -2891,10 +2890,8 @@ class QtGameView(QOpenGLWidget):
 
             # One paint click is one undo step. The compact terrain snapshot
             # already carries the baked terrain material data.
-            if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
-                self.editor.state.terrain_data = terrain.to_dict()
-                if hasattr(self.editor, 'save_state'):
-                    self.editor.save_state()
+            self.editor.state.terrain_data = terrain.to_dict()
+                self.editor.save_state()
 
             added = terrain.paint_texture_at(
                 wx, wz, radius, texture_name,
@@ -2908,8 +2905,7 @@ class QtGameView(QOpenGLWidget):
                     self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
                 return
 
-            if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'terrain_data'):
-                self.editor.state.terrain_data = terrain.to_dict()
+            self.editor.state.terrain_data = terrain.to_dict()
             if hasattr(self.editor, 'show_toast'):
                 self.editor.show_toast(f"Painted {os.path.basename(texture_path)}")
             # The viewport already renders on its regular 60 Hz update loop.
@@ -3096,8 +3092,7 @@ class QtGameView(QOpenGLWidget):
 
     def _component_targets(self):
         """Brushes a component pick may test — the selection, never the scene."""
-        getter = getattr(self.editor, 'component_drag_targets', None)
-        return getter() if getter is not None else []
+        return self.editor.component_drag_targets()
 
     def _world_per_pixel(self, distance):
         """World units one screen pixel covers ``distance`` from the eye."""
@@ -3177,10 +3172,7 @@ class QtGameView(QOpenGLWidget):
         snapping and hiding the grid silently stopped it — the same gesture
         behaving differently depending on which view it started in.
         """
-        getter = getattr(self.editor, 'component_grid_step', None)
-        if getter is not None:
-            return getter(self.grid_size)
-        return self.grid_size
+        return self.editor.component_grid_step(self.grid_size)
 
     def _camera_position(self):
         pos = self.logic_thread.camera.get_editor_camera().pos
