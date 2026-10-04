@@ -125,7 +125,7 @@ def test_effect_inputs_update_the_logic_owned_store():
     io = IOManager()
     register_all_input_handlers(io)
     logic = SimpleNamespace(
-        effect_store=store,
+        session_runtime=SimpleNamespace(effect_store=store),
         game_state=None,
         io_manager=SimpleNamespace(
             get_game_state=lambda: None,
