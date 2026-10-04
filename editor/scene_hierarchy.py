@@ -474,7 +474,7 @@ class SceneHierarchy(QWidget):
         self._highlight_timer.stop()
         
         # Get selected objects list for multi-selection support
-        selected_objects = getattr(self.main_window.state, 'selected_objects', [])
+        selected_objects = self.main_window.state.selected_objects
         
         # Define font for headers
         header_font = QFont()
