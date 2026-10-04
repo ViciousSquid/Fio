@@ -145,32 +145,68 @@ MACHINERY_OWNER_DOUBLES = {
 }
 
 
+def _simple_namespace_aliases(tree):
+    """Resolve common SimpleNamespace import aliases without importing tests."""
+    aliases = {"SimpleNamespace", "types.SimpleNamespace"}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "types":
+            for alias in node.names:
+                if alias.name == "SimpleNamespace":
+                    aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "types":
+                    prefix = alias.asname or "types"
+                    aliases.add(prefix + ".SimpleNamespace")
+    return aliases
+
+
+def _assigned_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
 def test_machinery_tests_do_not_use_namespace_production_owners():
-    """A fake namespace must not stand in for a production subsystem owner."""
-    owner_names = {"logic", "host", "renderer", "physics", "ai", "main_window", "window", "view", "view_3d"}
+    """A fake namespace must not stand in for a production subsystem owner.
+
+    Resolve aliases and attribute assignments too, so qualified imports and
+    host.view_3d = SimpleNamespace(...) cannot evade the guard.
+    """
+    owner_names = {
+        "logic", "host", "renderer", "physics", "ai", "main_window",
+        "window", "view", "view_3d", "logic_thread", "game_state",
+        "editor", "state",
+    }
     offenders = []
     for root_name in MACHINERY_TEST_ROOTS:
         base = ROOT / root_name
         if not base.is_dir():
             continue
         for path in sorted(base.rglob("test_*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            tree = ast.parse(
+                path.read_text(encoding="utf-8", errors="replace"), str(path)
+            )
+            namespace_names = _simple_namespace_aliases(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Assign):
                     continue
                 if not isinstance(node.value, ast.Call):
                     continue
-                func = node.value.func
-                if _dotted_name(func) not in {"SimpleNamespace", "types.SimpleNamespace"}:
+                if _dotted_name(node.value.func) not in namespace_names:
                     continue
                 for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id in owner_names:
+                    assigned = _assigned_name(target)
+                    if assigned in owner_names:
                         offenders.append("%s:%d (%s=SimpleNamespace)" % (
-                            _rel(path), node.lineno, target.id))
+                            _rel(path), node.lineno, assigned))
     assert not offenders, (
         "machinery tests construct production owners with SimpleNamespace; use the real "
         "Fio owner fixture/object instead:\n  " + "\n  ".join(offenders)
     )
+
 
 
 PRODUCTION_OWNER_NAMES = {
