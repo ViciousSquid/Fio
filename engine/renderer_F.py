@@ -865,7 +865,7 @@ class Renderer_F(BaseRenderer):
             sprite_slots = np.empty(0, dtype=np.int32)
             effect_slots = np.empty(0, dtype=np.int32)
 
-        lights = self._get_active_lights((), config)
+        lights = self._get_active_lights(config)
         return table, groups, model_slots, sprite_slots, effect_slots, lights
 
     #: How close (world units) a published glasses position must be to the
