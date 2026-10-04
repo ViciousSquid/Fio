@@ -172,7 +172,6 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state = ThreadedGameState()
         self.logic_thread: Optional[LogicThread] = None
-        self.use_threading = True
         self._thread_started = False
 
         self.face_mode_active = False
@@ -1083,7 +1082,7 @@ class QtGameView(QOpenGLWidget):
                     self.camera.fov,
                 )
 
-        if self.use_threading and self.logic_thread:
+        if self.logic_thread:
             keys = set() if self.console_overlay_active else self.editor.keys_pressed
             self.game_state.set_keys(keys)
             # Update Player 2 input from arrow keys (if no gamepad)
@@ -2948,11 +2947,8 @@ class QtGameView(QOpenGLWidget):
         inv_view = glm.inverse(self.view_matrix)
         world = inv_view * eye
         ray_dir = glm.normalize(glm.vec3(world))
-        if self.use_threading and self.logic_thread:
-            ec = self.logic_thread.camera.get_editor_camera()
-            ray_origin = ec.pos
-        else:
-            ray_origin = self.camera.pos
+        ec = self.logic_thread.camera.get_editor_camera()
+        ray_origin = ec.pos
         return ray_origin, ray_dir
 
     def get_object_at_3d(self, mx, my, cycle=False):
@@ -3192,10 +3188,7 @@ class QtGameView(QOpenGLWidget):
         return self.grid_size
 
     def _camera_position(self):
-        if self.use_threading and self.logic_thread:
-            pos = self.logic_thread.camera.get_editor_camera().pos
-        else:
-            pos = self.camera.pos
+        pos = self.logic_thread.camera.get_editor_camera().pos
         return np.array([float(pos.x), float(pos.y), float(pos.z)])
 
     def _update_component_drag(self, pos):
@@ -3441,10 +3434,8 @@ class QtGameView(QOpenGLWidget):
             return
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
-            if self.use_threading and self.logic_thread:
+            if self.logic_thread:
                 self.game_state.set_mouse_delta(float(dx), float(dy))
-            else:
-                self.camera.rotate(dx, dy)
             center = self.mapToGlobal(self.rect().center())
             QCursor.setPos(center)
             self.last_mouse_pos = self.mapFromGlobal(center)
