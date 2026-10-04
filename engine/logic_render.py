@@ -332,12 +332,13 @@ class LogicRender:
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch
         else:
-            write_state.editor_camera_pos = glm.vec3(logic.editor_camera.pos)
-            write_state.editor_camera_yaw = logic.editor_camera.yaw
-            write_state.editor_camera_pitch = logic.editor_camera.pitch
-            write_state.editor_camera_fov = logic.editor_camera.fov
-            view_matrix = logic.editor_camera.get_view_matrix()
-            fov = logic.editor_camera.fov
+            editor_camera = logic.camera.get_editor_camera()
+            write_state.editor_camera_pos = glm.vec3(editor_camera.pos)
+            write_state.editor_camera_yaw = editor_camera.yaw
+            write_state.editor_camera_pitch = editor_camera.pitch
+            write_state.editor_camera_fov = editor_camera.fov
+            view_matrix = editor_camera.get_view_matrix()
+            fov = editor_camera.fov
 
         write_state.camera_view_matrix = view_matrix
 
