@@ -159,12 +159,12 @@ def test_look_and_fire_over_a_paused_world_are_discarded(playing):
     playing.game_state.queue_shot()
     _ticks(playing, 1)
     assert playing.player.angle == angle
-    assert playing.muzzle_flash_active is False
+    assert playing.combat_runtime.muzzle_flash_active is False
 
     playing.session_runtime.set_world_paused("menu", False)
     _ticks(playing, 1)
     assert playing.player.angle == angle, "look input queued over a menu landed on resume"
-    assert playing.muzzle_flash_active is False
+    assert playing.combat_runtime.muzzle_flash_active is False
     assert len(playing.combat_runtime.get_recent_noise_events()) == events_before
 
 
