@@ -810,17 +810,17 @@ def test_logic_camera_json_cutscene_spawns_and_removes_temporary_actor():
         "settings": {"restore_actors": True},
     }
 
-    assert len(logic.things) == 1
+    assert len(logic.editor_state.things) == 1
     assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
     assert len(logic.things) == 2
     spawned = logic.cutscene_runtime.state["actors"]["spawned-1"]
-    assert spawned in logic.things
+    assert spawned in logic.editor_state.things
     assert spawned.properties["_cutscene_runtime"] is True
 
     logic.cutscene_runtime._update_cinematic_camera(1.0)
 
     assert logic.cutscene_runtime.state is None
-    assert spawned not in logic.things
+    assert spawned not in logic.editor_state.things
 
 
 
