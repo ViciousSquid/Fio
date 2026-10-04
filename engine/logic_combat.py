@@ -13,7 +13,8 @@ import time
 import glm
 import numpy as np
 
-from .constants import is_solid_world_brush
+from .constants import is_solid_world_brush, is_water_brush
+from .change_journal import touch
 from .monster_constants import (
     MONSTER_PROJECTILE_MAX_DIST,
     NON_FIRING_WEAPONS,
@@ -22,13 +23,18 @@ from .monster_constants import (
 )
 
 try:
+    from editor.things import Monster as MonsterThing
+except ImportError:
+    MonsterThing = None
+
+try:
     from editor.debug_console import debug_log
 except ImportError:
     def debug_log(category, message):
         print(f"[{category}] {message}")
 
 
-#: Shared, read-only "no projectiles" array for the published frame.
+# Gunfire sound loudness multiplier used by monster hearing.\n_GUNFIRE_LOUDNESS = 1.0\n\n#: Shared, read-only "no projectiles" array for the published frame.
 NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
 NO_PROJECTILES.flags.writeable = False
 
