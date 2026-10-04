@@ -196,8 +196,6 @@ class LogicThread(threading.Thread):
             "play_mode",
             "_world_pause_lock",
             "_world_pause_owners",
-            "_model_collision_brushes",
-            "_physics_body_brushes",
             "_mover_brush_list",
             "_door_brush_list",
             "_monster_spawn_health",
@@ -240,7 +238,6 @@ class LogicThread(threading.Thread):
             "active_weapon",
             "bullet_marks",
             "_projectile_positions",
-            "_collision_brushes_cache",
             "io_manager",
         ),
         "timing": (
