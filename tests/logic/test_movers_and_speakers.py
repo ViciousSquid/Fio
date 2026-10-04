@@ -243,7 +243,7 @@ def test_speaker_handlers_queue_spatial_radius_data():
 def test_speaker_start_on_is_consumed_at_player_spawn():
     src = read_source("engine", "logic_session.py")
     assert 'if not bool(thing.properties.get("play_on_start", False)):' in src
-    assert "self.io_manager._execute_input(" in src
+    assert "logic.io_manager._execute_input(" in src
     assert "'PlaySound'," in src
 
 
