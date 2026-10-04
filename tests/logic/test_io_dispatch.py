@@ -611,27 +611,25 @@ class _CutsceneEntityRecorder:
 
 
 def _json_cutscene_logic(camera, actors, recorder=None):
+    from editor.editor_state import EditorState
     from types import SimpleNamespace
+    from engine.cutscene_runtime import CutsceneRuntime
     from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
 
     recorder = recorder or _CutsceneEntityRecorder()
-    state = SimpleNamespace(things=[camera] + list(actors), brushes=[])
-    logic = LogicThread.__new__(LogicThread)
-    logic.editor_state = state
-    logic.cinematic_state = None
+    state = EditorState()
+    state.things = [camera] + list(actors)
+    state.brushes = []
+    logic = LogicThread(ThreadedGameState(), state)
     logic.io_manager = recorder
-    logic.monster_ai = SimpleNamespace(forget_monsters=lambda: None)
-    logic._find_entity_by_id = lambda entity_id: next(
-        (thing for thing in logic.things
-         if thing.properties.get("id") == entity_id),
-        None,
+    logic.cutscene_runtime = CutsceneRuntime(logic)
+    logic.monster_ai = SimpleNamespace(
+        monster_states={},
+        forget_monsters=lambda: None,
     )
-    logic._find_entity_by_name = lambda name: next(
-        (thing for thing in logic.things
-         if thing.properties.get("name") == name),
-        None,
-    )
-    logic._build_entity_caches = lambda: None
+    logic._gunfire_events = []
+    logic._plugin_emit = lambda *args, **kwargs: None
     return logic
 
 
@@ -667,10 +665,10 @@ def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
         "settings": {"restore_actors": True},
     }
 
-    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
-    LogicThread._update_cinematic_camera(logic, 0.5)
+    assert logic.cutscene_runtime._start_json_cutscene(camera, "cutscenes/test.json", data)
+    logic.cutscene_runtime._update_cinematic_camera(0.5)
 
-    assert logic.cinematic_state is not None
+    assert logic.cutscene_runtime.state is not None
     assert logic.cinematic_state["cam_pos"] == pytest.approx([5.0, 10.0, 0.0])
     assert logic.cinematic_state["cam_angle"] == pytest.approx(math.pi / 4.0)
     assert logic.cinematic_state["cam_pitch"] == pytest.approx(math.pi / 12.0)
@@ -984,9 +982,15 @@ def test_logic_camera_start_uses_cutscene_file_runtime():
 
     logic = SimpleNamespace(
         io_manager=recorder,
-        _load_cutscene_file=_load,
-        _start_json_cutscene=_start,
-        _fire_cinematic_io_events=lambda: True,
+        cutscene_runtime=SimpleNamespace(
+            state=None,
+            _load_cutscene_file=_load,
+            _start_json_cutscene=_start,
+            _fire_cinematic_io_events=lambda: True,
+        ),
+        world_runtime=SimpleNamespace(
+            find_path_node_by_name=lambda name: None,
+        ),
     )
     manager._input_handlers[("logic_camera", "start")](camera, "", logic)
 
@@ -1010,11 +1014,14 @@ class _CameraOutputRecorder:
 def _camera_logic(camera, nodes, recorder=None):
     from engine.logic_thread import LogicThread
     lookup = {node.properties['name']: node for node in nodes}
-    logic = LogicThread.__new__(LogicThread)
-    logic.cinematic_state = None
+    from types import SimpleNamespace
+    from engine.cutscene_runtime import CutsceneRuntime
+    logic = SimpleNamespace()
     logic.io_manager = recorder or _CameraOutputRecorder()
-    logic._name_cache = lookup
-    logic._find_path_node_by_name = lambda name: lookup.get(name)
+    logic.world_runtime = SimpleNamespace(
+        find_path_node_by_name=lambda name: lookup.get(name)
+    )
+    logic.cutscene_runtime = CutsceneRuntime(logic)
     return logic
 
 
