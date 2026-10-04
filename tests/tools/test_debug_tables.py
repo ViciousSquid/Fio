@@ -607,7 +607,8 @@ def test_debug_tables_observes_real_terrain_csg_rebuild(window):
         (192.0, h + 100.0, 192.0),
     )
 
-    terrain.table.mark_dirty_region(128.0, 128.0, 128.0)
+    # subtract_aabb owns invalidation: it must mark the affected dense row
+    # dirty without the test repairing the production state by hand.
     assert bool(terrain.table.dirty[slot])
 
     terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
