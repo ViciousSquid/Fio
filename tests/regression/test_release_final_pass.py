@@ -218,26 +218,14 @@ def test_setpos_refuses_non_finite_coordinates(coords):
 # ---------------------------------------------------------------------------
 
 def _window_host(state):
-    """What MainWindow._load_level/_apply_level_data touch, on a real
-    EditorState, bound to the real methods."""
+    """Use the real MainWindow for level replacement regressions."""
     from editor.main_window import MainWindow
+    from tests.helpers.paths import REPO_ROOT
 
-    host = SimpleNamespace(
-        state=state, file_path="maps/open.json", unsaved_changes=False,
-        terrain=None, terrain_editor_window=None, _current_overlay=None,
-        _pre_play_world=None,
-        view_3d=SimpleNamespace(play_mode=False, logic_thread=None,
-                                terrain=None, renderer=None,
-                                camera=SimpleNamespace(pos=None, yaw=0.0,
-                                                       pitch=0.0)),
-        config=SimpleNamespace(getboolean=lambda *a, **k: False),
-        toasts=[])
-    host.show_toast = lambda msg, **k: host.toasts.append(msg)
-    for name in ("update_title", "update_all_ui", "set_selected_objects",
-                 "add_recent_file", "center_2d_views_on", "_refresh_logic_graph"):
-        setattr(host, name, lambda *a, **k: None)
-    for name in ("_load_level", "_apply_level_data", "_clear_terrain"):
-        setattr(host, name, getattr(MainWindow, name).__get__(host))
+    host = MainWindow(str(REPO_ROOT))
+    host.state = state
+    host.file_path = "maps/open.json"
+    host.unsaved_changes = False
     return host
 
 
@@ -262,12 +250,17 @@ def test_a_map_that_fails_to_parse_leaves_the_open_level_alone():
 
     corrupt = copy.deepcopy(good)
     corrupt["things"][0]["pos"] = 5            # a map's shape; unparseable
-    assert host._load_level(corrupt, "maps/corrupt.json") is False
+    try:
+        assert host._load_level(corrupt, "maps/corrupt.json") is False
 
-    assert state.brushes == brushes and state.things == things, (
-        "a map that failed to parse emptied the open level")
-    assert host.file_path == "maps/open.json"
-    assert host.unsaved_changes is False
+        assert state.brushes == brushes and state.things == things, (
+            "a map that failed to parse emptied the open level")
+        assert host.file_path == "maps/open.json"
+        assert host.unsaved_changes is False
+    finally:
+        host.unsaved_changes = False
+        host.close()
+        host.deleteLater()
 
 
 def test_opening_a_terrain_map_keeps_its_terrain():
@@ -282,9 +275,14 @@ def test_opening_a_terrain_map_keeps_its_terrain():
     assert level.get("terrain_data")
     state = EditorState()
     host = _window_host(state)
-    host._apply_level_data(level)
-    assert state.terrain_data == level["terrain_data"]
-    assert host.terrain is not None
+    try:
+        host._apply_level_data(level)
+        assert state.terrain_data == level["terrain_data"]
+        assert host.terrain is not None
+    finally:
+        host.unsaved_changes = False
+        host.close()
+        host.deleteLater()
 
 
 # ---------------------------------------------------------------------------
