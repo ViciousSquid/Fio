@@ -525,16 +525,16 @@ def test_escape_is_accepted_so_the_dialog_never_sees_it(inspector):
     assert event.isAccepted()
 
 
-def test_escape_is_handled_by_the_editor_host(qt_app):
+def test_escape_is_handled_by_the_editor_host(main_window):
     """Escape is routed through the real MainWindow cancellation machinery."""
     from editor.main_window import MainWindow
 
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    host = MainWindow(root)
+    host = main_window
     brush = make_box()
     host.state.brushes.append(brush)
-    host.state.selected_objects = [brush]
-    panel = SurfaceInspector(host)
+    host.set_selected_objects([brush])
+    host.show_surface_inspector(brush, 'north')
+    panel = host.surface_inspector
     panel.set_target(brush, 'north')
     panel.show()
     try:
@@ -543,11 +543,7 @@ def test_escape_is_handled_by_the_editor_host(qt_app):
         assert host.primary_selection() is None
         assert panel.isVisible()
     finally:
-        host.unsaved_changes = False
-        panel.deleteLater()
-        host.close()
-        host.deleteLater()
-        qt_app.processEvents()
+        panel.hide()
 
 
 def test_other_keys_still_reach_the_dialog(inspector):
@@ -619,8 +615,9 @@ def test_the_picker_follows_a_target_set_from_the_3d_view(inspector):
 
 def test_the_picker_relists_when_the_brush_changes(qt_app):
     """A clipped brush grows a cut face; the picker has to pick it up."""
-    host = FakeHost()
-    panel = SurfaceInspector(host)
+    host = main_window
+    host.show_surface_inspector()
+    panel = host.surface_inspector
     brush = make_box(size=(128, 128, 128))
     panel.set_target(brush, 'north')
     before = panel.face_combo.count()
@@ -637,8 +634,9 @@ def test_the_picker_relists_when_the_brush_changes(qt_app):
 
 def test_a_face_the_brush_no_longer_has_is_still_shown(main_window):
     """Never silently retarget: an orphaned face stays selected, and visible."""
-    host = FakeHost()
-    panel = SurfaceInspector(host)
+    host = main_window
+    host.show_surface_inspector()
+    panel = host.surface_inspector
     brush = make_box()
     panel.set_target(brush, '#99')          # a cut face this brush lacks
 
@@ -835,8 +833,9 @@ def test_the_rotate_field_wraps(inspector):
 
 def test_it_opens_with_no_target_at_all(main_window):
     """A tool should open when it is asked for, selection or not."""
-    host = FakeHost()
-    panel = SurfaceInspector(host)
+    host = main_window
+    host.show_surface_inspector()
+    panel = host.surface_inspector
 
     panel.set_target(None, None)
 
@@ -845,8 +844,9 @@ def test_it_opens_with_no_target_at_all(main_window):
 
 
 def test_an_untargeted_panel_greys_out_what_needs_a_face(main_window):
-    host = FakeHost()
-    panel = SurfaceInspector(host)
+    host = main_window
+    host.show_surface_inspector()
+    panel = host.surface_inspector
 
     panel.set_target(None, None)
 
@@ -859,8 +859,9 @@ def test_an_untargeted_panel_greys_out_what_needs_a_face(main_window):
 
 def test_face_mode_stays_available_with_no_target(main_window):
     """Turning Face Mode on is how you go and pick a face to edit."""
-    host = FakeHost()
-    panel = SurfaceInspector(host)
+    host = main_window
+    host.show_surface_inspector()
+    panel = host.surface_inspector
 
     panel.set_target(None, None)
 
@@ -946,7 +947,7 @@ def test_surface_inspector_shortcut_is_ignored_during_play_mode(main_window):
 
 def test_the_shortcut_opens_the_panel_with_nothing_selected(main_window):
     """It used to refuse with "Select a brush or a face first"."""
-    host = FakeEditorWindow()
+    host = main_window
 
     host.toggle_surface_inspector()
 
@@ -956,7 +957,7 @@ def test_the_shortcut_opens_the_panel_with_nothing_selected(main_window):
 
 
 def test_opening_it_empty_binds_nothing(main_window):
-    host = FakeEditorWindow()
+    host = main_window
 
     host.toggle_surface_inspector()
 
@@ -964,7 +965,7 @@ def test_opening_it_empty_binds_nothing(main_window):
 
 
 def test_the_shortcut_still_closes_it(main_window):
-    host = FakeEditorWindow()
+    host = main_window
     host.toggle_surface_inspector()
 
     host.toggle_surface_inspector()
@@ -974,7 +975,7 @@ def test_the_shortcut_still_closes_it(main_window):
 
 def test_an_open_empty_panel_binds_when_a_brush_is_selected(main_window):
     """Otherwise opening it first would leave it useless."""
-    host = FakeEditorWindow()
+    host = main_window
     host.toggle_surface_inspector()
     brush = make_box()
 
@@ -986,7 +987,7 @@ def test_an_open_empty_panel_binds_when_a_brush_is_selected(main_window):
 
 def test_a_panel_already_in_the_selection_is_left_alone(main_window):
     """Re-binding on every click would undo a face picked from the dropdown."""
-    host = FakeEditorWindow()
+    host = main_window
     brush = make_box()
     host.state.selected_objects = [brush]
     host.toggle_surface_inspector()
@@ -998,7 +999,7 @@ def test_a_panel_already_in_the_selection_is_left_alone(main_window):
 
 
 def test_it_follows_the_selection_to_another_brush(main_window):
-    host = FakeEditorWindow()
+    host = main_window
     one, two = make_box(), make_box(pos=(256, 0, 0))
     host.state.selected_objects = [one]
     host.toggle_surface_inspector()
@@ -1011,7 +1012,7 @@ def test_it_follows_the_selection_to_another_brush(main_window):
 
 
 def test_deselecting_does_not_blank_a_panel_being_worked_in(main_window):
-    host = FakeEditorWindow()
+    host = main_window
     brush = make_box()
     host.state.selected_objects = [brush]
     host.toggle_surface_inspector()
@@ -1023,7 +1024,7 @@ def test_deselecting_does_not_blank_a_panel_being_worked_in(main_window):
 
 
 def test_a_closed_panel_is_not_woken_by_a_selection(main_window):
-    host = FakeEditorWindow()
+    host = main_window
 
     host.state.selected_objects = [make_box()]
     host.sync_surface_inspector()
