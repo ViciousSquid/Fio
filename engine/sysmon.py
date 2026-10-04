@@ -223,9 +223,9 @@ class SysMon:
             p95_frame_ms = 0.0
 
         vram_used_mb, vram_total_mb = self._get_vram_info()
-        logic_thread = getattr(self.parent, "logic_thread", None)
-        renderer = getattr(self.parent, "renderer", None)
-        editor = getattr(self.parent, "editor", None)
+        logic_thread = self.parent.logic_thread
+        renderer = self.parent.renderer
+        editor = self.parent.editor
 
         visible_tris = int(self.stats.get("visible_tris", 0))
         culled_tris = int(self.stats.get("culled_tris", 0))
@@ -271,7 +271,7 @@ class SysMon:
             "culled_tris": culled_tris,
             "visible_surfaces": visible_surfaces,
             "culled_surfaces": culled_surfaces,
-            "tps": float(getattr(logic_thread, "actual_tps", 0.0) or 0.0),
+            "tps": float(logic_thread.actual_tps or 0.0),
             "things": int(
                 len(getattr(getattr(editor, "state", None), "things", []) or [])
             ),
@@ -359,7 +359,7 @@ class SysMon:
         cache['total_brushes'] = self.stats.get('total_brushes', 0)
         cache['visible_brushes'] = self.stats.get('visible_brushes', 0)
         cache['culled_brushes'] = self.stats.get('culled_brushes', 0)
-        cache['tps'] = getattr(logic_thread, 'actual_tps', 0.0)
+        cache['tps'] = logic_thread.actual_tps
 
         cache['brush_text'] = f"Brushes:  {cache['total_brushes']} "
         cache['tri_text'] = f"Tris:     {total_tris} "
