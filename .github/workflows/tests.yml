@@ -13,8 +13,8 @@ jobs:
     name: Core (headless, no Qt, no GL)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
           cache: pip
@@ -55,8 +55,8 @@ jobs:
     name: Editor + engine (Qt, offscreen)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
           cache: pip
@@ -89,8 +89,8 @@ jobs:
     name: Renderer (OpenGL, software rasteriser)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
           cache: pip
@@ -127,8 +127,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
           cache: pip
@@ -146,7 +146,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
           FIO_BENCH_OUT: benchmark.json
         run: xvfb-run -a python -m pytest tests/performance/test_renderer_benchmark.py -m benchmark --run-benchmarks -q -s
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: renderer-benchmark
@@ -157,8 +157,8 @@ jobs:
     name: Fio launch (CPython 3.14, Qt + software GL)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
           cache: pip
