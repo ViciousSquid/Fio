@@ -386,7 +386,8 @@ def test_debug_tables_is_an_oracle_for_a_real_authored_world(real_world_window):
         light.pos.tolist()
     )
     assert bool(instrument.entities.light_casts_shadows[light_slot])
-    assert instrument.entities.light_params[light_slot, 0] == pytest.approx(2.0)\n    assert instrument.entities.light_params[light_slot, 1] == pytest.approx(1000.0)
+    assert instrument.entities.light_params[light_slot, 0] == pytest.approx(1.2)
+    assert instrument.entities.light_params[light_slot, 1] == pytest.approx(512.0)
 
     sprite = next(thing for thing in state.things if thing.properties["id"] == "audit_sprite")
     sprite_slot = instrument.entities.slot_of_id[sprite.properties["id"]]
