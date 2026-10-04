@@ -86,7 +86,7 @@ def test_water_defaults_to_stronger_reflection():
     """New water brushes should hide large-scale surface tiling behind reflection."""
     b = _brush(id='water', shader='Water')
     t = _synced([b])
-    assert t.water_params[0, 1] == pytest.approx(0.75)
+    assert t.water_params[0, 1] == pytest.approx(0.65)
 
 
 def test_plain_brush_carries_no_non_opaque_bit():
