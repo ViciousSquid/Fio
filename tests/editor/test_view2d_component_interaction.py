@@ -12,7 +12,6 @@ one undo step.
 
 import os
 import sys
-import types
 
 import pytest
 
@@ -20,15 +19,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
-import configparser  # noqa: E402
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt5.QtGui import QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QTabWidget  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog  # noqa: E402
 
 from editor import component_edit as ce  # noqa: E402
-from editor.editor_state import EditorState  # noqa: E402
-from editor.main_window import MainWindow  # noqa: E402
 from editor.view_2d import View2D  # noqa: E402
 from editor.things import Portal  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
@@ -37,147 +33,6 @@ from engine import brush_geometry as bg  # noqa: E402
 # against the offscreen platform plugin.
 pytestmark = pytest.mark.qt
 
-
-
-@pytest.fixture(scope="session")
-def qt_app():
-    # Only when there is no display: the offscreen plugin cannot create an
-    # OpenGL context, and forcing it here would disable the visual tier for
-    # the whole session when the suite is run under Xvfb.
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
-class _Stub3DView:
-    """Stands in for the GL viewport, which cannot exist in a test runner."""
-
-    play_mode = False
-    face_mode_active = False
-    grid_size = 16
-
-    def __init__(self):
-        # Read by View2D's 60 Hz camera-tracking timer, which starts with the
-        # view: a host that lacks it raises from that timer once the view is
-        # shown, inside a Qt slot, aborting the run.
-        import glm
-        self.camera = types.SimpleNamespace(pos=glm.vec3(0.0, 0.0, 0.0),
-                                            yaw=0.0, pitch=0.0)
-
-    def update(self):
-        pass
-
-
-class _StubTabs:
-    """Stands in for the 2D-view tab widget the clone offset is read from."""
-
-    def __init__(self, view):
-        self._view = view
-
-    def currentWidget(self):
-        return self._view
-
-
-class _StubSpin:
-    def __init__(self, value):
-        self._value = value
-
-    def value(self):
-        return self._value
-
-
-class _StubPropertyEditor:
-    def __init__(self):
-        self.target = None
-
-    def set_object(self, obj):
-        self.target = obj
-
-
-class FakeEditorWindow(QWidget):
-    """A host with just enough of MainWindow for the 2D view to talk to.
-
-    The selection and component logic are the *real* MainWindow methods, bound
-    onto this object, so the tests exercise shipping code rather than a
-    reimplementation of it.
-    """
-
-    # Real implementations, bound to this stand-in host.
-    _selected_brushes = MainWindow._selected_brushes
-    component_drag_targets = MainWindow.component_drag_targets
-    _selection_skips_locked = MainWindow._selection_skips_locked
-    _marker_brush = MainWindow._marker_brush
-    _area_selection_objects = MainWindow._area_selection_objects
-    _apply_area_selection = MainWindow._apply_area_selection
-    select_touching = MainWindow.select_touching
-    select_inside = MainWindow.select_inside
-    select_partial_tall = MainWindow.select_partial_tall
-    select_complete_tall = MainWindow.select_complete_tall
-    set_selected_objects = MainWindow.set_selected_objects
-    set_component_mode = MainWindow.set_component_mode
-    cycle_component_mode = MainWindow.cycle_component_mode
-    _sync_component_buttons = MainWindow._sync_component_buttons
-    _sync_tool_group_buttons = MainWindow._sync_tool_group_buttons
-    clone_placement_active = MainWindow.clone_placement_active
-    move_clone_placement = MainWindow.move_clone_placement
-    finish_clone_placement = MainWindow.finish_clone_placement
-    cancel_clone_placement = MainWindow.cancel_clone_placement
-    _translate_object = staticmethod(MainWindow._translate_object)
-    _copy_name = staticmethod(MainWindow._copy_name)
-    _drop_singleton_copies = MainWindow._drop_singleton_copies
-    selection_centre = MainWindow.selection_centre
-    selected_objects_list = MainWindow.selected_objects_list
-    primary_selection = MainWindow.primary_selection
-    apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
-    apply_clip_to_selection = MainWindow.apply_clip_to_selection
-    perform_subtraction = MainWindow.perform_subtraction
-    hollow_selected_brush = MainWindow.hollow_selected_brush
-    # Cloning arms a 500 ms timer that calls this; without it the timer fires
-    # in whichever later test next processes events, raises, and -- with no
-    # Qt exception hook under pytest -- aborts the whole run.
-    _clear_flash = MainWindow._clear_flash
-
-    def __init__(self):
-        super().__init__()
-        self.config = configparser.ConfigParser()
-        self.terrain = None
-        self.config.add_section('Controls')
-        self.config.add_section('Display')
-        self.state = EditorState()
-        self.state.selected_objects = []
-        self.components = ce.ComponentController()
-        self.clone_placement = None
-        self.tool_mode = 'select'
-        self.clip_mode = False
-        self.rotate_mode = False
-        self.grid_visible = True
-        self.unsaved_changes = False
-        self.view_3d = _Stub3DView()
-        self.properties_tab_widget = QTabWidget(self)
-        self.properties_tab_widget.addTab(QWidget(), "Properties")
-        self.property_editor = _StubPropertyEditor()
-        self.toasts = []
-
-    # -- the widget-bound bits the real window would provide ---------------
-    def save_state(self):
-        self.state.save_state()
-        self.components.invalidate()
-
-    def show_toast(self, message, is_error=False, duration=None):
-        self.toasts.append(message)
-
-    def refresh_views(self):
-        pass
-
-    def update_all_ui(self):
-        self.property_editor.set_object(self.primary_selection())
-
-    def update_views(self):
-        pass
-
-    def _active_2d_view(self):
-        return self.view_top
 
 
 def make_box(pos=(0, 0, 0), size=(64, 64, 64), **extra):
@@ -191,17 +46,14 @@ def make_box(pos=(0, 0, 0), size=(64, 64, 64), **extra):
 
 
 @pytest.fixture
-def editor(qt_app):
-    host = FakeEditorWindow()
-    view = View2D(host, host, 'top')
+def editor(main_window):
+    host = main_window
+    view = host.view_top
     view.resize(800, 600)
     view.zoom_factor = 1.0
     view.pan_offset = QPointF(0.0, 0.0)
     view.grid_size = 16
     view.snap_to_grid_enabled = True
-    host.view_top = view
-    host.view_side = view
-    host.view_front = view
     return host, view
 
 
@@ -623,7 +475,7 @@ def test_area_selection_needs_exactly_one_brush(editor):
     host.set_selected_objects([a, b])
     host.select_inside()
     assert a in host.state.brushes and b in host.state.brushes
-    assert any('exactly one' in t for t in host.toasts)
+    assert 'EXACTLY ONE' in host.ui.notification_label.text()
 
 
 def test_area_selection_skips_hidden_geometry(editor):
@@ -641,7 +493,6 @@ def test_area_selection_skips_hidden_geometry(editor):
 
 def test_subtract_is_one_undo_step(editor):
     host, _ = editor
-    host.perform_subtraction = types.MethodType(MainWindow.perform_subtraction, host)
     target = make_box(pos=(0, 0, 0), size=(256, 64, 256))
     cutter = make_box(pos=(0, 0, 0), size=(64, 64, 64))
     host.state.brushes.extend([target, cutter])
@@ -935,7 +786,7 @@ def test_rotate_with_nothing_selected_says_so(editor):
 
     press(view, (64, 0))
     assert not view.rotate_dragging
-    assert any('select something' in t.lower() for t in host.toasts)
+    assert 'SELECT SOMETHING' in host.ui.notification_label.text()
 
 
 # ---------------------------------------------------------------------------
@@ -997,10 +848,6 @@ def test_a_cloned_entity_has_its_own_position(editor):
 def test_shift_space_clones_entities_as_well_as_brushes(editor):
     host, _ = editor
     from editor.things import Light
-    host.clone_selected_object = types.MethodType(
-        MainWindow.clone_selected_object, host)
-    host.right_tabs = _StubTabs(host.view_top)
-    host.grid_size_spinbox = _StubSpin(16)
 
     light = Light(pos=[0, 0, 0])
     light.properties['name'] = 'lamp'
