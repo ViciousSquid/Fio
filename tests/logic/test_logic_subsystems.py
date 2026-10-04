@@ -209,7 +209,7 @@ def test_logic_player_constructs_and_reports_water_transition():
         "enterwater.wav",
         "waterwalk.wav",
     ]
-    assert host._gunfire_events[0]["source"] == "water_enter"
+    assert host.combat_runtime._gunfire_events[0]["source"] == "water_enter"
     assert host._player_was_in_water is True
 
 
