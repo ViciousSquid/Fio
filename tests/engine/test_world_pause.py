@@ -175,7 +175,7 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
         "movers": copy.deepcopy(playing.mover_runtime.mover_states),
         "doors": copy.deepcopy(playing.mover_runtime.door_states),
         "timers": copy.deepcopy(playing.timing_runtime.timer_states),
-        "fades": copy.deepcopy(playing.light_fade_states),
+        "fades": copy.deepcopy(playing.timing_runtime.light_fade_states),
         "projectiles": playing._projectile_positions.copy(),
         "noise": copy.deepcopy(playing.combat_runtime._gunfire_events),
     }
@@ -187,8 +187,8 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
     assert playing.player.angle == before["player_angle"]
     assert playing.mover_runtime.mover_states == before["movers"]
     assert playing.mover_runtime.door_states == before["doors"]
-    assert playing.timer_states == before["timers"]
-    assert playing.light_fade_states == before["fades"]
+    assert playing.timing_runtime.timer_states == before["timers"]
+    assert playing.timing_runtime.light_fade_states == before["fades"]
     assert np.array_equal(playing._projectile_positions, before["projectiles"])
     assert playing.combat_runtime._gunfire_events == before["noise"]
 
