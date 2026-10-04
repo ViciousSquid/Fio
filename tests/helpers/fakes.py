@@ -12,20 +12,6 @@ own implementation rather than a simplified one, so a test cannot pass against
 a fake that is kinder than the real thing.
 """
 
-import threading
-import time
-from types import SimpleNamespace
-
-import glm
-
-from engine.logic_combat import LogicCombat
-from engine.logic_session import LogicSession
-from engine.logic_triggers import LogicTriggers
-from engine.logic_world import LogicWorld
-from engine.logic_portals import LogicPortals
-from engine.physics import SpatialGrid
-from engine.prop_runtime import PropSession
-
 
 class ManualClock:
     """A clock that only moves when a test moves it.
@@ -45,91 +31,6 @@ class ManualClock:
 
     def __call__(self):
         return self.now
-
-
-class FakePlayer:
-    """The slice of :class:`engine.player.Player` the AI and I/O paths read."""
-
-    def __init__(self, pos=(0.0, 0.0, 0.0), angle=0.0, pitch=0.0):
-        self.pos = glm.vec3(*pos)
-        self.angle = float(angle)
-        self.pitch = float(pitch)
-        self.camera_height = 50.0
-        self.eye_underwater = False
-        self.water_tint = [0.0, 0.4, 0.6]
-        self.damage_taken = []
-
-    def take_damage(self, amount):
-        self.damage_taken.append(amount)
-
-
-class FakeGameState:
-    """The slice of :class:`engine.threaded_game_state.ThreadedGameState` the
-    AI and I/O paths use: a place to queue sounds and console commands."""
-
-    def __init__(self):
-        self.sounds = []
-        self.console_commands = []
-
-    def queue_sound(self, request):
-        self.sounds.append(dict(request))
-
-    def queue_console_command(self, command):
-        self.console_commands.append(command)
-
-
-class FakeLogicThread:
-    """The parent object :class:`engine.monster_ai.MonsterAI` talks to.
-
-    MonsterAI reads a well-defined set of attributes off its logic thread (see
-    its current ``self.lt`` references); every one of them is here,
-    with the same meaning.  ``intersect_ray_aabb`` is the engine's own slab
-    test, copied rather than approximated, because line-of-sight results would
-    otherwise depend on which implementation the test happened to get.
-    """
-
-    def __init__(self, brushes=(), things=(), player=None, io_manager=None):
-        self.editor_state = SimpleNamespace()
-        self.editor_state.brushes = list(brushes)
-        self.editor_state.things = list(things)
-        self.player_runtime = SimpleNamespace(
-            player=player,
-            god_mode=False,
-            buddha_mode=False,
-            notarget=False,
-            player_health=100,
-            player_max_health=100,
-            player_dead=False,
-            player2_health=100,
-            player2_max_health=100,
-            player2_dead=False,
-            damage_lock=threading.Lock(),
-        )
-        self.play_mode = False
-        self.io_manager = io_manager
-        self.game_state = FakeGameState()
-        self.plugins = SimpleNamespace(services={})
-        self.combat_runtime = LogicCombat(self)
-        self.session_runtime = LogicSession(self)
-        self.trigger_runtime = LogicTriggers(self)
-        self._id_cache = {}
-        self.portal_runtime = LogicPortals(self)
-        self.world_runtime = LogicWorld(self)
-        self.prop_runtime = PropSession(self)
-        self.damage_applied = []
-
-    def _plugin_emit(self, event, **payload):
-        if event == "player_damage":
-            self.damage_applied.append(payload["damage"])
-        elif event == "player_death":
-            self.player_runtime.player_dead = True
-
-    # -- convenience ------------------------------------------------------
-    def build_spatial_grid(self):
-        """Populate a real :class:`SpatialGrid` from this world's brushes."""
-        grid = SpatialGrid()
-        grid.populate(self.editor_state.brushes)
-        return grid
 
 
 class RecordingIOManager:
