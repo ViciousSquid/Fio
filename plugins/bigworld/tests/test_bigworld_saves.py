@@ -60,14 +60,15 @@ class FakePlayer:
 
 
 class FakeEditorState:
-    def __init__(self, logic):
-        self.logic = logic
+    def __init__(self, things, brushes):
+        self.things = things
+        self.brushes = brushes
 
     def get_level_data(self):
         return {
             "version": 3,
-            "brushes": [copy.deepcopy(b) for b in self.logic.editor_state.brushes],
-            "things": [t.to_dict() for t in self.logic.editor_state.things],
+            "brushes": [copy.deepcopy(b) for b in self.brushes],
+            "things": [t.to_dict() for t in self.things],
         }
 
 
@@ -79,9 +80,8 @@ class FakeMonsterAI:
 class FakeLogic:
     def __init__(self, things, brushes, player_pos):
         self.play_mode = True
-        self.editor_state = SimpleNamespace(things=things, brushes=brushes)
+        self.editor_state = FakeEditorState(things, brushes)
         self.terrain = None
-        self.editor_state = FakeEditorState(self)
         self.player = FakePlayer(player_pos)
         self.player2 = None
         self.god_mode = False
@@ -291,11 +291,11 @@ def test_full_unload_save_load_reload_sequence():
     assert report["mode"] == "delta"
     assert report["world_mode"] == "bigworld"
 
-    by_id = {t.properties["id"]: t for t in logic2.things}
+    by_id = {t.properties["id"]: t for t in logic2.editor_state.things}
     # Cell A changes present even though A was unloaded when saved.
     assert by_id["A-mon"].properties.get("dead") is True
     assert by_id["A-key"].properties.get("collected") is True
-    assert {b["id"]: b for b in logic2.brushes}["A-door"]["hidden"] is True
+    assert {b["id"]: b for b in logic2.editor_state.brushes}["A-door"]["hidden"] is True
     # Cell B change present too.
     assert by_id["B-mon"].properties.get("dead") is True
     # The registry is handed to the live session for later streaming.
