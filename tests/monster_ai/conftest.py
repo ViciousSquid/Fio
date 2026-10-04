@@ -66,6 +66,14 @@ def ai_world(request):
         logic.world_runtime.build_entity_caches()
         ai = MonsterAI(logic)
         logic.monster_ai = ai
+        logic.damage_applied = []
+        real_apply_damage = logic.trigger_runtime._apply_player_damage
+
+        def record_damage(amount, *args, **kwargs):
+            logic.damage_applied.append(int(amount))
+            return real_apply_damage(amount, *args, **kwargs)
+
+        logic.trigger_runtime._apply_player_damage = record_damage
         grid = SpatialGrid()
         grid.populate(state.brushes)
         ai.set_spatial_grid(grid)
