@@ -883,7 +883,7 @@ class QtGameView(QOpenGLWidget):
         """
         self.camera_mode = str(mode)
         lt = getattr(self, "logic_thread", None)
-        if lt is not None and hasattr(lt, "set_camera_mode"):
+        if lt is not None:
             lt.camera.set_camera_mode(self.camera_mode)
         self.update()
 
@@ -1026,8 +1026,7 @@ class QtGameView(QOpenGLWidget):
         if hasattr(self.logic_thread, "set_hud_fade_enabled"):
             self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
-        if hasattr(self.logic_thread, "set_camera_mode"):
-            self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
+        self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
         self._sync_view_distance()
         self.logic_thread.start()
