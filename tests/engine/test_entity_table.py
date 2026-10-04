@@ -69,12 +69,22 @@ def test_a_dead_monster_row_interns_a_distinct_dead_sprite_recipe():
     assert any(candidate[1] == "dead.png" for candidate in table.sprite_recipes()[dead_id])
 
 
-@pytest.mark.gl
-def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth():
-    from engine.renderer_core import BaseRenderer
-    import numpy as np
 
-    renderer = BaseRenderer.__new__(BaseRenderer)
+@pytest.fixture
+def renderer():
+    pytest.importorskip("PyQt5", reason="renderer construction requires Qt")
+    pytest.importorskip("OpenGL", reason="sprite cache test requires OpenGL")
+    from tests.helpers.gl import GLTestContext, make_renderer
+
+    with GLTestContext(64, 64):
+        value = make_renderer()
+        try:
+            yield value
+        finally:
+            value.cleanup()
+
+@pytest.mark.gl
+def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth(renderer):
     renderer._sprite_recipes_seen = None
     renderer._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
     renderer._sprite_gl_resolved = 0
@@ -95,14 +105,10 @@ def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth():
 
 
 @pytest.mark.gl
-def test_sprite_gl_cache_survives_the_render_buffers_alternating():
+def test_sprite_gl_cache_survives_the_render_buffers_alternating(renderer):
     """Each render buffer's EntityTable interns its own recipe list and the
     renderer sees them alternately; resolving must happen once per list, not
     once per frame."""
-    from engine.renderer_core import BaseRenderer
-    import numpy as np
-
-    renderer = BaseRenderer.__new__(BaseRenderer)
     renderer._sprite_recipes_seen = None
     renderer._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
     renderer._sprite_gl_resolved = 0
