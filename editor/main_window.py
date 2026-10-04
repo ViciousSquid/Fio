@@ -2168,9 +2168,8 @@ class MainWindow(QMainWindow):
         Inspector on it. Returns False when there is no play session to pick
         in. Plugins arm it from their own commands.
         """
-        view = getattr(self, 'view_3d', None)
-        begin = getattr(view, 'begin_actor_pick', None)
-        return bool(begin(on_pick)) if begin is not None else False
+        view = self.view_3d
+        return bool(view.begin_actor_pick(on_pick))
 
     def sync_surface_inspector(self):
         """Point an open Surface Inspector at something worth editing.
