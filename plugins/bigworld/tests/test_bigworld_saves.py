@@ -90,7 +90,7 @@ class FakeLogic:
         self.editor_state = FakeEditorState(things, brushes)
         self.terrain = None
         self.player = FakePlayer(player_pos)
-        self.view_distance = ViewDistance()
+        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
         self._tick_lock = threading.RLock()
         self.io_manager = None
         self.plugins = SimpleNamespace(services={})

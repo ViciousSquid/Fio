@@ -48,7 +48,7 @@ class Logic:
             brushes=list(brushes), things=list(things)
         )
         self.player = player or Player()
-        self.view_distance = ViewDistance()
+        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
 
 def brush(x, z, uuid, size=64.0):

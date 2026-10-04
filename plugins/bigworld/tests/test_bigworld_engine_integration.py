@@ -141,7 +141,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
             )
             camera = SimpleNamespace(overhead_height_limit=None)
             player = None
-            view_distance = ViewDistance()
+            render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
         logic = Logic()
         plugin.on_play_start(logic)
@@ -160,6 +160,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
 def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
     from types import SimpleNamespace
     from plugins.bigworld.runtime import BigWorldSession
+    from engine.view_distance import ViewDistance
 
     far = {'id': 'far', 'pos': [30000, 0, 0], 'size': [64, 64, 64]}
     near = {'id': 'near', 'pos': [0, 0, 0], 'size': [64, 64, 64], 'hidden': True}
@@ -167,6 +168,7 @@ def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
     class Logic:
         editor_state = SimpleNamespace(things=[], brushes=[])
         player = None
+        render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
     logic = Logic()
     logic.editor_state.brushes = [near, far]
