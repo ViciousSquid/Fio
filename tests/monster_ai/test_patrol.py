@@ -315,7 +315,7 @@ def test_deleting_the_current_node_mid_patrol_clears_the_chain(
     ai.update(TICK)
     assert _state(ai, monster)["patrol_chain"] == ["n0"]
 
-    logic.things.remove(node)
+    logic.editor_state.things.remove(node)
     logic.world_runtime.build_entity_caches()
     ai.update(TICK)
 
