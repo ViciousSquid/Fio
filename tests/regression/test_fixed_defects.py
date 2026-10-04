@@ -117,6 +117,7 @@ def test_a_patrol_node_directly_overhead_does_not_produce_nan():
     pytest.importorskip("PyQt5")
     from editor.things import Monster, PathNode
     from engine.monster_ai import MonsterAI
+    from engine.logic_world import LogicWorld
     from tests.helpers.fakes import FakeLogicThread, FakePlayer
     from tests.helpers.worlds import make_thing
 
@@ -126,8 +127,14 @@ def test_a_patrol_node_directly_overhead_does_not_produce_nan():
                          patrol=True, patrol_target="above")
     logic = FakeLogicThread(brushes=ground, things=[monster, node],
                             player=FakePlayer((100000.0, 0.0, 0.0)))
-    logic._monster_things = [monster]
+    logic.world_runtime = LogicWorld(
+        logic,
+        monster_type=Monster,
+        path_node_type=PathNode,
+    )
     ai = MonsterAI(logic)
+    logic.monster_ai = ai
+    logic.world_runtime.build_entity_caches()
     ai.set_spatial_grid(logic.build_spatial_grid())
 
     for _ in range(10):
