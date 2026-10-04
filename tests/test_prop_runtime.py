@@ -44,7 +44,7 @@ def test_core_prop_carry_drop_rest_without_plugins():
         '_collision_mode': 'aabb',
     }])
     logic = SimpleNamespace(
-        things=[prop], io_manager=io,
+        editor_state=SimpleNamespace(things=[prop]), io_manager=io,
         _spatial_grid=grid, _physics_world=physics,
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
@@ -97,7 +97,7 @@ def test_non_physics_prop_still_falls_to_ground_on_drop():
     io = IO()
     grid = _floor_grid()
     logic = SimpleNamespace(
-        things=[prop], io_manager=io,
+        editor_state=SimpleNamespace(things=[prop]), io_manager=io,
         _spatial_grid=grid, _physics_world=None,
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
@@ -218,7 +218,7 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
     home = list(settled.properties['_prop_home_pos'])
 
     spawned = Prop(pos=[100, 0, 0])
-    logic.things.append(spawned)
+    logic.editor_state.things.append(spawned)
     session.rebuild()
 
     assert session.props == [settled, spawned]
