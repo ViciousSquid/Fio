@@ -972,7 +972,7 @@ class MainWindow(QMainWindow):
                     self.view_3d.renderer.setup_terrain_shader(self.terrain)
                 
                 # Wire up terrain to logic thread for collision
-                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+                if self.view_3d is not None and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             finally:
                 # Always close the progress dialog
@@ -1397,7 +1397,7 @@ class MainWindow(QMainWindow):
                 self.terrain.from_dict(self.state.terrain_data)
             if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
-            if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
+            if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             if hasattr(self.state, 'terrain_data'):
                 self.state.terrain_data = self.terrain.to_dict()
@@ -4190,7 +4190,7 @@ class MainWindow(QMainWindow):
             if getattr(self.view_3d, 'renderer', None):
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
 
-            if getattr(self.view_3d, 'logic_thread', None):
+            if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
 
     def load_level_file(self, filePath):
