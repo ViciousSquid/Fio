@@ -38,7 +38,7 @@ def logic():
     thread = LogicThread(ThreadedGameState(), state)
     thread.player = Player(0.0, 0.0)
     yield thread
-    thread.set_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
     thread.stop()
 
 
@@ -76,7 +76,7 @@ def test_no_tick_runs_against_a_half_built_session(logic, monkeypatch):
     # spatial grid and the Prop session do not exist yet.
     seen, finished = _frame_from_inside(logic, monkeypatch, logic.mover_runtime, "_init_doors")
 
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
 
     assert finished.wait(DEADLINE), "the concurrent frame never ran"
     assert seen == [(True, True)], (
@@ -88,7 +88,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
     """Leaving play flips the flag first, so no *new* play tick starts; the
     hazard is the one already running, which teardown used to pull the Prop
     session and the spatial grid out from under."""
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     monkeypatch.setattr(logic.render_runtime, "prepare_render_state", lambda: None)
     events = []
     entered, release = threading.Event(), threading.Event()
@@ -112,7 +112,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
         target=lambda: logic._step_frame(logic.TICK_DURATION), daemon=True)
     frame.start()
     assert entered.wait(DEADLINE), "the play tick never started"
-    stopper = threading.Thread(target=lambda: logic.set_play_mode(False),
+    stopper = threading.Thread(target=lambda: logic.session_runtime.apply_play_mode(False),
                                daemon=True)
     stopper.start()
     time.sleep(0.3)
@@ -126,11 +126,11 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
 
 
 def test_leaving_play_waits_for_the_monster_thread(logic):
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     ai_thread = logic.monster_ai_thread
     assert ai_thread is not None and ai_thread.is_alive()
 
-    logic.set_play_mode(False)
+    logic.session_runtime.apply_play_mode(False)
 
     assert not ai_thread.is_alive(), (
         "the monster thread was still running after play mode ended; its next "
