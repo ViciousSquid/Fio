@@ -383,7 +383,7 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
         brush = box_brush("trig", is_trigger=True, trigger_type="Once")
         panel.current_object = brush
         panel.populate_for_brush(brush)
-        panel._widgets["trigger_collect_activation_combo"].setCurrentText("use")
+        panel._widgets["trigger_activation_combo"].setCurrentText("use")
         panel._widgets["trigger_save_combo"].setCurrentText("quicksave")
         assert brush["trigger_activation"] == "use"
         assert "trigger_collect_activation" not in brush
