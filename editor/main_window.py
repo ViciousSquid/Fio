@@ -994,7 +994,7 @@ class MainWindow(QMainWindow):
         Terrain menu action and by the Big World fill (which surfaces it so the
         generated ground can be customised). No-op without a terrain.
         """
-        if getattr(self, 'terrain', None) is None:
+        if self.terrain is None:
             return
         # Already open → just make sure it's visible and on top.
         if getattr(self, 'terrain_editor_window', None) is not None:
@@ -1384,7 +1384,7 @@ class MainWindow(QMainWindow):
         terrain to fill even on a map that never opened the terrain editor.
         Must be called on the main thread (GL setup), never from a paint event.
         """
-        if getattr(self, 'terrain', None) is not None:
+        if self.terrain is not None:
             return self.terrain
         try:
             from engine.terrain import Terrain
@@ -1429,7 +1429,7 @@ class MainWindow(QMainWindow):
             and self._bigworld_truthy(settings.properties.get('enabled', True), True)
             and self._bigworld_truthy(settings.properties.get('terrain_fill', False))
         )
-        terrain = getattr(self, 'terrain', None)
+        terrain = self.terrain
         if terrain is None and fill and allow_create:
             terrain = self._ensure_terrain()
         if terrain is None or not hasattr(terrain, 'editor_fill_world'):
@@ -1466,7 +1466,7 @@ class MainWindow(QMainWindow):
         """If the Terrain Editor is open, lock/unlock its Size tab to match
         whether Big World currently owns the world size."""
         panel = getattr(self, 'terrain_editor_window', None)
-        terrain = getattr(self, 'terrain', None)
+        terrain = self.terrain
         if panel is not None and hasattr(panel, 'set_bigworld_managed') and terrain is not None:
             try:
                 panel.set_bigworld_managed(
@@ -2524,7 +2524,7 @@ class MainWindow(QMainWindow):
 
     def _resync_terrain_after_history(self):
         """Reload live terrain when an undo/redo changed authored terrain data."""
-        terrain = getattr(self, 'terrain', None)
+        terrain = self.terrain
         terrain_data = getattr(self.state, 'terrain_data', None)
         if terrain is None or not isinstance(terrain_data, dict):
             return
@@ -2855,7 +2855,7 @@ class MainWindow(QMainWindow):
         # Terrain is a heightfield, so terrain CSG is deliberately limited to
         # plain AABB brushes. A brush carrying custom convex geometry is still a
         # valid CSG cutter for ordinary brushes, but never becomes a terrain cut.
-        if getattr(self, 'terrain', None) is not None and isinstance(self.state.terrain_data, dict):
+        if self.terrain is not None and isinstance(self.state.terrain_data, dict):
             # Keep the undo checkpoint's compact terrain-CSG snapshot in sync with
             # the live terrain before the operation mutates it.
             self.state.terrain_data = self.terrain.to_dict()
@@ -2867,7 +2867,7 @@ class MainWindow(QMainWindow):
         subtract_brush = self.state.selected_object
 
         terrain_cut = False
-        if (target_brush is None and getattr(self, 'terrain', None) is not None
+        if (target_brush is None and self.terrain is not None
                 and brush_geometry.is_plain_aabb_brush(subtract_brush)):
             sub_pos = subtract_brush['pos']
             sub_size = subtract_brush['size']
@@ -2879,7 +2879,7 @@ class MainWindow(QMainWindow):
                  sub_pos[1] + sub_size[1] / 2,
                  sub_pos[2] + sub_size[2] / 2],
             )
-        elif (target_brush is None and getattr(self, 'terrain', None) is not None
+        elif (target_brush is None and self.terrain is not None
               and not brush_geometry.is_plain_aabb_brush(subtract_brush)):
             self.show_toast(
                 "Terrain CSG requires a plain axis-aligned box brush",
