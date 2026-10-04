@@ -162,6 +162,7 @@ class LogicThread(threading.Thread):
     # test doubles; their host contracts are still validated below.
     _RUNTIME_HOSTS = (
         "camera",
+        "mover_runtime",
         "render_runtime",
         "session_runtime",
         "interaction_runtime",
@@ -623,9 +624,14 @@ class LogicThread(threading.Thread):
             assert runtime is not None, (
                 f"{runtime_name} was not constructed before runtime validation"
             )
-            assert getattr(runtime, "logic", self) is self, (
-                f"{runtime_name}.logic must point at this LogicThread"
-            )
+            if runtime_name == "camera":
+                assert getattr(runtime, "player", self.player) is self.player, (
+                    "camera.player must point at this LogicThread player"
+                )
+            else:
+                assert getattr(runtime, "logic", self) is self, (
+                    f"{runtime_name}.logic must point at this LogicThread"
+                )
 
         for runtime_name, attributes in self._RUNTIME_HOST_CONTRACTS.items():
             missing = [name for name in attributes if not hasattr(self, name)]
