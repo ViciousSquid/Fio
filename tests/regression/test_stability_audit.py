@@ -415,7 +415,7 @@ def test_a_hidden_light_does_not_light_the_running_world():
     _table, slots = renderer._get_active_lights(config)
     assert sorted(slots.tolist()) == [0, 2]
     config["play_mode"] = False
-    _table, slots = Renderer_F._get_active_lights(config)
+    _table, slots = renderer._get_active_lights(config)
     assert sorted(slots.tolist()) == [0, 1, 2]
 
 
