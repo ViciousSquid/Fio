@@ -1968,11 +1968,11 @@ class TerrainEditorPanel(QWidget):
         """Remove every baked terrain texture paint."""
         if not getattr(self.terrain, 'texture_paint_maps', None):
             return
-        if self.editor and hasattr(self.editor, 'save_state'):
+        if self.editor:
             self.editor.state.terrain_data = self.terrain.to_dict()
             self.editor.save_state()
         self.terrain.clear_texture_paint()
-        if self.editor and hasattr(self.editor, 'state'):
+        if self.editor:
             self.editor.state.terrain_data = self.terrain.to_dict()
         self.terrain_changed.emit()
         if self.editor and hasattr(self.editor, 'show_toast'):
