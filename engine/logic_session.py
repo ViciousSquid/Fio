@@ -396,9 +396,9 @@ class LogicSession:
         """Drop every reference held only for the finished play session."""
         logic = self.logic
         logic.world_runtime.release_session_indexes()
-        logic._collision_brushes_cache = []
-        logic._model_collision_brushes = []
-        logic._physics_body_brushes = []
+        logic.collision_runtime._collision_brushes_cache = []
+        logic.collision_runtime._model_collision_brushes = []
+        logic.collision_runtime._physics_body_brushes = []
         logic._mover_brush_list = []
         logic._door_brush_list = []
         logic._monster_spawn_health = {}
