@@ -718,7 +718,7 @@ class DiskStreamingSession:
         player = self.logic.player
         if player is None:
             return None
-        return getattr(player, "pos", None)
+        return player.pos
 
     def player_cell(self):
         pos = self._player_pos()
