@@ -213,31 +213,29 @@ def test_follow_selection_names_the_render_row_key_and_run(window):
 # ---------------------------------------------------------------------------
 
 def _terrain_host(instrument):
-    """Give the instrument's host a terrain with a few built chunks."""
+    """Attach a real generated Terrain with real dense height rows."""
     from engine.terrain import Terrain
-    terrain = Terrain()
-    for cx in range(3):
-        slot = terrain.table.ensure(
-            cx, 0, terrain.chunk_size, terrain.offset_x, terrain.offset_z
-        )
-        if cx < 2:
-            terrain.table.store(
-                slot, 48, 0,
-                np.full((51, 51), 10.0 * cx, dtype=np.float32),
-            )
-    terrain.table.release([terrain.table.slot_of_coord[(2, 0)]])
-    terrain.enabled = True
-    terrain.streaming = True
-    terrain.stream_radius = 2048.0
-    terrain.drawn_slots = np.array([0, 1], dtype=np.intp)
-    terrain.culled_chunks = 0
-    terrain.total_triangles = 9216
-    terrain._height_pages = [7]
-    terrain._page_layers = 512
-    terrain.use_textures = True
-    terrain.grass_enabled = False
-    terrain.UPDATE_BUDGET_MS = 4.0
-    terrain.MAX_UPDATES_PER_FRAME = 2
+
+    terrain = Terrain(seed=0xF10)
+    terrain.set_world_extent(0.0, 0.0, 512.0, 256.0)
+    terrain.set_streaming(True, radius=768.0)
+
+    # Exercise the production residency calculation rather than manufacturing
+    # table rows. The Debug Tables instrument is observing the same dense table
+    # used by terrain streaming.
+    class Camera:
+        x = 128.0
+        z = 128.0
+
+    terrain._stream_chunks(Camera())
+    slots = terrain.table.live_slots()
+    assert len(slots) >= 2
+
+    # Exercise the production heightfield construction and TerrainTable.store
+    # path. The test intentionally avoids fabricated height arrays.
+    for slot in slots[:2]:
+        terrain._upload_chunk(int(slot), 48)
+
     instrument.main_window.terrain = terrain
     return terrain
 
