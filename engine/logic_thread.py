@@ -360,8 +360,9 @@ class LogicThread(threading.Thread):
 
     def _validate_runtime_contracts(self):
         """Validate the construction-level seam between LogicThread and runtimes."""
+        host_state = vars(self)
         for runtime_name in self._RUNTIME_HOSTS:
-            runtime = getattr(self, runtime_name)
+            runtime = host_state.get(runtime_name)
             assert runtime is not None, (
                 f"{runtime_name} was not constructed before runtime validation"
             )
@@ -371,7 +372,7 @@ class LogicThread(threading.Thread):
                 )
 
         for runtime_name, attributes in self._RUNTIME_HOST_CONTRACTS.items():
-            missing = [name for name in attributes if not hasattr(self, name)]
+            missing = [name for name in attributes if name not in host_state]
             assert not missing, (
                 f"{runtime_name} runtime host contract missing: "
                 + ", ".join(missing)
