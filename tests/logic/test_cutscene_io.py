@@ -26,6 +26,7 @@ class CutsceneWorld:
         self.source = SimpleNamespace(properties={"id": "source-1", "name": "Door"})
         self.editor_state = SimpleNamespace(things=[self.source], brushes=[])
         self.io_manager = RecordingIO(self)
+        self.session_runtime = SimpleNamespace(play_mode=False)
         self.runtime = CutsceneRuntime(self)
         self.world_runtime = LogicWorld(self)
 

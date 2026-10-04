@@ -80,7 +80,6 @@ class HostStub:
         self.editor_state = type("EditorStateStub", (), {})()
         self.editor_state.brushes = []
         self.editor_state.things = []
-        self.play_mode = False
         self.player = None
         self.terrain = None
 

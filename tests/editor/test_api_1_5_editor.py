@@ -433,7 +433,9 @@ def test_the_inspector_hands_providers_logic_only_in_play_mode(api, inspector_ho
     api.register_entity_inspector(lambda e, logic: seen.append(logic) or {"title": "x"})
 
     class View:
-        logic_thread = types.SimpleNamespace(play_mode=play_mode)
+        logic_thread = types.SimpleNamespace(
+            session_runtime=types.SimpleNamespace(play_mode=play_mode)
+        )
 
     inspector_host.view_3d = View()
     a = Thing(pos=[0, 0, 0], properties={"type": "t"})
