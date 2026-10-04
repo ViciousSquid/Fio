@@ -3918,37 +3918,6 @@ class View2D(QWidget):
             debug_log("Plugins", f"2D placement failed: {exc}")
 
 
-def singleton_instance(things, ttype):
-    """Return the existing entity for a registered per-map singleton type."""
-    if not ttype:
-        return None
-    from plugins.manager import get_manager
-    manager = get_manager()
-    if not manager.is_singleton_entity(ttype):
-        return None
-    norm = manager._normalise_type(ttype)
-    for thing in things or []:
-        props = getattr(thing, "properties", None)
-        if not isinstance(props, dict):
-            continue
-        if manager._normalise_type(props.get("type", "")) == norm:
-            return thing
-    return None
-
-
-def _singleton_blocked(main_window, editor_state, ttype) -> bool:
-    """Select an existing singleton instead of creating a duplicate."""
-    existing = singleton_instance(getattr(editor_state, "things", []), ttype)
-    if existing is None:
-        return False
-    main_window.set_selected_object(existing)
-    main_window.update_views()
-    main_window.show_toast(
-        "Only one of this entity is allowed per map - selected the existing one.",
-        is_error=True)
-    return True
-
-
     def get_brush_at(self, screen_pos):
         """Returns the brush at the given screen position, or None."""
         world_pos = self.screen_to_world(screen_pos)
@@ -4435,3 +4404,36 @@ def _singleton_blocked(main_window, editor_state, ttype) -> bool:
         # the pan correction is a plain difference in world space.
         self.pan_offset += QPointF(before.x() - after.x(), before.y() - after.y())
         self.update()
+
+
+def singleton_instance(things, ttype):
+    """Return the existing entity for a registered per-map singleton type."""
+    if not ttype:
+        return None
+    from plugins.manager import get_manager
+    manager = get_manager()
+    if not manager.is_singleton_entity(ttype):
+        return None
+    norm = manager._normalise_type(ttype)
+    for thing in things or []:
+        props = getattr(thing, "properties", None)
+        if not isinstance(props, dict):
+            continue
+        if manager._normalise_type(props.get("type", "")) == norm:
+            return thing
+    return None
+
+
+def _singleton_blocked(main_window, editor_state, ttype) -> bool:
+    """Select an existing singleton instead of creating a duplicate."""
+    existing = singleton_instance(getattr(editor_state, "things", []), ttype)
+    if existing is None:
+        return False
+    main_window.set_selected_object(existing)
+    main_window.update_views()
+    main_window.show_toast(
+        "Only one of this entity is allowed per map - selected the existing one.",
+        is_error=True)
+    return True
+
+
