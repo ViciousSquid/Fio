@@ -132,7 +132,7 @@ class LogicSession:
             logic._last_player_shot_time = float("-inf")
 
             # Reset visual FX.
-            logic.bullet_marks = []
+            logic.combat_runtime.bullet_marks = []
             logic.muzzle_flash_active = False
 
             # Reset P2 stats.
@@ -200,8 +200,8 @@ class LogicSession:
                     ):
                         del thing._fade_nominal
 
-            logic._monster_projectiles.clear()
-            logic._projectile_positions = _NO_PROJECTILES
+            logic.combat_runtime._monster_projectiles.clear()
+            logic.combat_runtime.projectile_positions = _NO_PROJECTILES
             logic._gunfire_events.clear()
 
             # Spawn I/O is deliberately before timers and AI, matching the

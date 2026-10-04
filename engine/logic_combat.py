@@ -49,6 +49,8 @@ class LogicCombat:
     def __init__(self, logic):
         self.logic = logic
         self._monster_projectiles = ProjectileStore()
+        self.bullet_marks = []
+        self.projectile_positions = NO_PROJECTILES
         self._gunfire_events = []
 
     def _handle_shooting(self):
@@ -184,7 +186,7 @@ class LogicCombat:
             source='gunfire', loudness=_GUNFIRE_LOUDNESS)
 
         if closest_brush_hit is not None:
-            logic.bullet_marks.append({
+            self.bullet_marks.append({
                 'pos': closest_brush_hit,
                 'time': time.perf_counter()
             })
@@ -214,8 +216,8 @@ class LogicCombat:
     def _update_bullet_marks(self):
         logic = self.logic
         current_time = time.perf_counter()
-        logic.bullet_marks = [
-            m for m in logic.bullet_marks 
+        self.bullet_marks = [
+            m for m in self.bullet_marks 
             if (current_time - m['time']) < logic.BULLET_FADE_TIME
         ]
 
@@ -354,12 +356,12 @@ class LogicCombat:
             projectiles = self._monster_projectiles
             count = len(projectiles)
             if count:
-                logic._projectile_positions = projectiles.pos[:count].astype(
+                self.projectile_positions = projectiles.pos[:count].astype(
                     np.float32, copy=True
                 )
             else:
-                logic._projectile_positions = NO_PROJECTILES
-            return logic._projectile_positions
+                self.projectile_positions = NO_PROJECTILES
+            return self.projectile_positions
 
 
     def _update_monster_projectiles(self, delta: float):
@@ -369,7 +371,7 @@ class LogicCombat:
         with logic._monster_lock:
             projectiles = self._monster_projectiles
             if not projectiles:
-                logic._projectile_positions = NO_PROJECTILES
+                self.projectile_positions = NO_PROJECTILES
                 return
 
             if len(projectiles) < self.PROJECTILE_DENSE_THRESHOLD:
@@ -520,10 +522,10 @@ class LogicCombat:
             live_count = len(survivors)
             # Publication makes the immutable render snapshot copy once.
             # Keep the simulation-side value as a view until then.
-            logic._projectile_positions = projectiles.pos[:live_count]
+            self.projectile_positions = projectiles.pos[:live_count]
         else:
             projectiles.clear()
-            logic._projectile_positions = NO_PROJECTILES
+            self.projectile_positions = NO_PROJECTILES
 
 
     def _update_monster_projectiles_dense(self, projectiles, delta: float):
@@ -667,7 +669,7 @@ class LogicCombat:
         # consuming its frame even while the next logic tick mutates the store.
         # Publication makes the immutable render snapshot copy once.
         # The compacted store is authoritative until that boundary.
-        logic._projectile_positions = (
+        self.projectile_positions = (
             projectiles.pos[:len(survivors)]
             if len(survivors) else NO_PROJECTILES
         )

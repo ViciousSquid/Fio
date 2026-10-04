@@ -179,7 +179,6 @@ class LogicThread(threading.Thread):
             "player",
             "player_health",
             "_last_edited",
-            "_projectile_positions",
         ),
         "session": (
             "editor_state",
@@ -212,8 +211,6 @@ class LogicThread(threading.Thread):
         "combat": (
             "player",
             "active_weapon",
-            "bullet_marks",
-            "_projectile_positions",
             "io_manager",
         ),
         "timing": (
@@ -387,7 +384,6 @@ class LogicThread(threading.Thread):
         self.current_hud_key_name = None
 
         # Visual FX
-        self.bullet_marks = []
         self.BULLET_FADE_TIME = 20.0
         
         # Active weapon / ammunition
@@ -438,16 +434,9 @@ class LogicThread(threading.Thread):
 
         self.level_complete_ui = None
 
-        # Monster projectiles (flying monster ranged attacks). The public list
-        # surface is retained for compatibility, while numeric simulation state
-        # lives in ProjectileStore's persistent NumPy columns.
-        self._monster_projectiles: ProjectileStore = ProjectileStore()
         #: Dense execution state for Effect primitives. Authoring Effects remain
         #: in editor_state.things; this store owns their runtime phase and origin.
         self.effect_store: EffectStore = EffectStore()
-        #: Their positions as the (N, 3) float32 array each frame publishes.
-        self._projectile_positions = _NO_PROJECTILES
-
         # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
         self._gunfire_events: list = []
 

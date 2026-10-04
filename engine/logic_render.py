@@ -422,8 +422,8 @@ class LogicRender:
         ):
             logic.combat_runtime._publish_projectile_render_snapshot()
         else:
-            logic._projectile_positions = _NO_PROJECTILES
-        write_state.projectiles = logic._projectile_positions
+            logic.combat_runtime.projectile_positions = _NO_PROJECTILES
+        write_state.projectiles = logic.combat_runtime.projectile_positions
         write_state.monster_debug_active = logic.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(
             logic.monster_ai._debug_rays
@@ -439,7 +439,7 @@ class LogicRender:
                     - (current_time - m["time"]) / logic.BULLET_FADE_TIME,
                 ),
             }
-            for m in logic.bullet_marks
+            for m in logic.combat_runtime.bullet_marks
             if current_time - m["time"] < logic.BULLET_FADE_TIME
         ]
 
