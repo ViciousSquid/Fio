@@ -9,7 +9,7 @@ The event-driven world model is documented in **[`LOGIC.md`](LOGIC.md)**.
 ## Editor modules
 
 ### `__init__.py`
-Package initialiser. Bootstraps plugins before maps or the main window are built so plugin-provided entity types, I/O definitions and editor integrations are available throughout the application.
+Package initialiser. Loads the plugin registry before maps or the main window are built so plugin-provided entity types and I/O definitions are available to the native editor extension points.
 
 ### `asset_browser.py`
 Texture and model browser with live thumbnails, OBJ/GLB previews, FIT / TILE / FACE texture actions and drag-and-drop support.
@@ -118,10 +118,10 @@ Every 3D model is a `Prop` with `render_mode='model'`. A Prop is neither solid n
 Per-area tooltip enable/disable support. Original tooltip text is retained on Qt widgets so it can be restored without maintaining a second description table.
 
 ### `ui.py`
-Shared Qt UI widgets, dialogs, styling helpers and layout utilities.
+Shared Qt UI widgets, dialogs, styling helpers and layout utilities. `Ui_MainWindow` also owns the Plugins menu bar and its live enable/disable state.
 
 ### `view_2d.py`
-Orthographic top, front and side editing views. Handles brush drawing, selection, transforms, grid snapping, marquee selection, rotation, cloning, entity placement and the clip tool's screen-to-world mapping.
+Orthographic top, front and side editing views. Handles brush drawing, selection, transforms, grid snapping, marquee selection, rotation, cloning, entity placement, plugin placement entries and the clip tool's screen-to-world mapping.
 
 Component-mode editing is delegated to `component_edit`, so the 2D view supplies interaction mapping while the shared model owns the actual editing rules.
 

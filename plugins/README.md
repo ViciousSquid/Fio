@@ -1,11 +1,11 @@
 # Fio Plugin System
 
 Plugins add new concepts to Fio: new placeable entity types, their I/O, and
-runtime behaviour — **without editing the core editor or engine**. Drop a Python
-package into this `plugins/` directory and it is discovered automatically at
-startup, wired into the editor's menus, property panel, I/O editor, serializer
-and 3D renderer, and dispatched through the play lifecycle in both the editor and
-the standalone `.fiopak` player.
+runtime behaviour. Drop a Python package into this `plugins/` directory and it
+is discovered automatically at startup, registered with the plugin manager, and
+consumed by explicit extension points in the editor and engine. The editor's
+native owners remain responsible for their own state, menus, property panels,
+and runtime boundaries.
 
 > **New here?** Skip to [Writing a plugin](#writing-a-plugin) for the 30-line
 > version, then keep [`API.md`](API.md) open as the flat reference.
@@ -124,15 +124,12 @@ tiny bootstrap in `editor/__init__.py`.
 | File | Role |
 |------|------|
 | `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`) and per-tick dispatch (`_tick_play_mode`). Play start/stop dispatch is owned by `LogicSession.apply_play_mode`. All guarded and optional. |
-| `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
-| [`integration.py`](integration.py) | Installs the editor hooks: auto-enable/disable of disabled-by-default plugins onto `EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ &lt;plugin&gt;** submenu onto `View2D`'s right-click menu; and a top-level **Plugins** menu onto `Ui_MainWindow`. |
+| `editor/__init__.py` | Bootstrap: `load_plugins()`, run once when the editor package is first imported (before any map loads). |
+| `editor/editor_state.py` | Native plugin auto-enable/disable at scene load/clear. |
+| `editor/view_2d.py` | Native plugin placement entries in the 2D context menu and singleton enforcement. |
+| `editor/ui.py` | Native Plugins menu bar and plugin enable/disable actions. |
+| `editor/property_editor.py` | Native plugin property schemas, extra fields, sections, and tabs. |
 | `editor/package_exporter.py` | Exports world/maps/assets only; plugin code is never added to the archive. |
-
-> The right-click **Plugins ▸ &lt;plugin&gt;** submenu is injected by temporarily
-> swapping `QMenu.exec_` on the class while the 2D view builds its menu. That
-> swap must be reversed precisely — using the class's raw `exec_` **descriptor**,
-> not the unbound-method wrapper — or every later `menu.exec_(pos)` in the app
-> breaks. See the comments in [`integration.py`](integration.py) if you touch it.
 
 ---
 
@@ -309,7 +306,7 @@ manifest. This removes executable-code loading from world containers entirely.
 Plugin gameplay runs in **both** hosts:
 
 - **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
-  (via `plugins.integration`).
+  through the native plugin manager hooks.
 - **Standalone `.fiopak` player** (`player/`, incl. the Android build) — the
   `player.plugin_host.PlayerPluginHost` loads the installed plugins, builds
   entity instances from the map, and drives the same lifecycle/tick from the
@@ -367,5 +364,5 @@ python -m plugins.bigworld.tests.test_bigworld
 | Use the open-ended engine seam | [`host.py`](host.py) / [API §PluginHost](API.md#pluginhost--the-open-ended-engine-seam) |
 | Read a complete gameplay plugin | [`tidy/`](tidy/) |
 | Read a runtime-layer plugin | [`bigworld/README.md`](bigworld/README.md) |
-| Understand editor wiring | [`integration.py`](integration.py) |
+| Understand editor wiring | `editor/editor_state.py`, `editor/view_2d.py`, `editor/ui.py`, `editor/property_editor.py` |
 | Write for the PyQt-free player | [`entitybase.py`](entitybase.py) |
