@@ -40,11 +40,15 @@ def _doors_world():
 
 def _console(state, logic):
     from editor.console_commands import ConsoleCommandHandler
-    window = SimpleNamespace(state=state,
-                             view_3d=SimpleNamespace(logic_thread=logic,
-                                                     play_mode=True),
-                             update_all_ui=lambda: None)
-    return ConsoleCommandHandler(window)
+    from editor.main_window import MainWindow
+    from tests.helpers.paths import REPO_ROOT
+
+    window = MainWindow(str(REPO_ROOT))
+    window.state = state
+    window.view_3d.logic_thread = logic
+    window.view_3d.play_mode = True
+    handler = ConsoleCommandHandler(window)
+    return handler, window
 
 
 def _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
@@ -76,7 +80,7 @@ def test_console_delete_of_a_brush_in_play_keeps_io_aimed_at_the_right_door():
             logic._tick(logic.TICK_DURATION)
         progress = logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
 
-        _console(state, logic).cmd_delete("crate")
+        _console(state, logic)[0].cmd_delete("crate")
         logic._tick(logic.TICK_DURATION)
 
         _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
@@ -100,7 +104,7 @@ def test_editor_delete_then_a_console_command_before_the_next_tick():
 
         state.save_state()
         state.brushes.remove(crate)                      # editor Delete
-        _console(state, logic).cmd_set_property("lift label up")
+        _console(state, logic)[0].cmd_set_property("lift label up")
         logic._tick(logic.TICK_DURATION)
 
         _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
