@@ -97,6 +97,12 @@ def _log(message: str):
         print(f"[Plugins] {message}")
 
 
+def _plugin_menu_name(plugin):
+    """Return the human-readable name used for a plugin's editor menu."""
+    name = str(getattr(plugin, "name", "") or "")
+    return name[:1].upper() + name[1:] if name else name
+
+
 def _disabled_from_config(MainWindow):
     """Read the persisted set of disabled plugin names from settings.ini."""
     cfg = getattr(MainWindow, "config", None)
@@ -194,7 +200,7 @@ def _build_plugins_menu(MainWindow):
     menu.aboutToShow.connect(_sync_with_live_state)
 
     for plugin in mgr.plugins:
-        sub = menu.addMenu(plugin.name)
+        sub = menu.addMenu(_plugin_menu_name(plugin))
 
         # Plugin-owned actions sit at the very top, and are hidden outright
         # while that plugin is off rather than shown greyed out.
@@ -250,12 +256,12 @@ def _build_plugins_menu(MainWindow):
         about.triggered.connect(
             lambda _checked=False, p=plugin:
             QMessageBox.information(
-                MainWindow, f"{p.name} v{p.version}",
+                MainWindow, f"{_plugin_menu_name(p)} v{p.version}",
                 f"{p.description or '(no description)'}\n\n"
                 f"Version: {p.version}\n"
                 f"Category: {p.category}\n"
                 f"Place its entities from here or the 2D view's right-click "
-                f"menu under Plugins ▸ {p.name}."))
+                f"menu under Plugins ▸ {_plugin_menu_name(p)}."))
 
 
 
