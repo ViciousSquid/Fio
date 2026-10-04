@@ -295,10 +295,10 @@ fitted to that screen:
 - **NEAR** is the screen's box (with a margin), not the near circle; everything
   else resident is ACTIVE (or DISTANT past the active band). Tiers are refreshed
   every 128 units of movement.
-- The session publishes the box as `logic.sim_view_rect = (hx, hz)` -- half
+- The session owns the fitted box as `session.tiers.near_rect = (hx, hz)` -- half
   extents around the player, `None` when not fitted. Inside it is on screen.
 
-Fio's own monster AI reads `sim_view_rect`: parked monsters are left out of its
+Fio's own monster AI reads the session's `tiers.near_rect`: parked monsters are left out of its
 pass, and monsters outside the box are thought about once every 0.2 s with the
 time they sat out, so they cover the same ground at a fraction of the cost. A
 monster that walks onto the screen runs at full rate from the next tick.
