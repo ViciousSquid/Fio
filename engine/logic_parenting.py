@@ -25,7 +25,7 @@ class LogicParenting:
         if not Light:
             return
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if not isinstance(thing, Light):
                 continue
 
@@ -34,7 +34,7 @@ class LogicParenting:
                 continue
 
             brush = None
-            for candidate in logic.brushes:
+            for candidate in logic.editor_state.brushes:
                 if candidate.get("is_mover") and candidate.get("name") == parent_name:
                     brush = candidate
                     break
@@ -83,7 +83,7 @@ class LogicParenting:
         if Portal is None:
             return
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if not isinstance(thing, Portal):
                 continue
 
@@ -92,7 +92,7 @@ class LogicParenting:
                 continue
 
             brush = None
-            for candidate in logic.brushes:
+            for candidate in logic.editor_state.brushes:
                 if candidate.get("is_mover") and candidate.get("name") == parent_name:
                     brush = candidate
                     break
