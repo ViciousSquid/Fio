@@ -116,9 +116,11 @@ class BigWorldPlugin(FioPlugin):
     def on_play_start(self, logic):
         things = logic.editor_state.things
         if not self.map_uses_bigworld(things):
-            # No opt-in: behave as ordinary Fio, and in particular leave the
-            # streaming runtime unimported. Checking this *before* the import
-            # below is the whole point — see the note at the top of the module.
+            # PluginManager.services is shared across logic instances, so an
+            # ordinary map must clear a Big World service published by the
+            # previous play session before returning to the normal path.
+            self._host.provide("bigworld", None)
+            self._host.provide("savegame.restore", None)
             return
 
         # Big World owns the camera ceiling only while a BigWorld session is
@@ -129,9 +131,13 @@ class BigWorldPlugin(FioPlugin):
 
         settings = find_settings_thing(things)
         if settings is None:
-            return  # map didn't opt in; behave as ordinary Fio
+            self._host.provide("bigworld", None)
+            self._host.provide("savegame.restore", None)
+            return
         cfg = config_from_settings(settings)
         if not cfg["enabled"]:
+            self._host.provide("bigworld", None)
+            self._host.provide("savegame.restore", None)
             return
         session = None
         restore_handler = None
