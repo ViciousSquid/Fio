@@ -60,12 +60,12 @@ def _project(brushes, things, epoch):
         "brush_display_mode": "Textured",
         "play_mode": True,
         "camera_distance_cull": False,
-        "shadows_enabled": True,
+        "shadows_enabled": bool(shadows),
         "grid_visible": False,
     }
 
 
-def _draw(renderer, context, brushes, things, epoch, eye, target):
+def _draw(renderer, context, brushes, things, epoch, eye, target, shadows=True):
     import OpenGL.GL as gl
 
     projection, view, eye_vec = glh.camera_matrices(
@@ -166,7 +166,7 @@ def test_generated_brush_field_casts_a_moved_light_shadow(renderer, context):
         "monster_count": 0,
         "spawn_health": False,
     }
-    data = create_map_data(params, seed=0xF10)
+    import random\n\n    random.seed(0xF10)\n    data = create_map_data(params)
     state = EditorState()
     state.load_from_data(data)
 
