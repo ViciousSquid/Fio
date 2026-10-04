@@ -520,14 +520,14 @@ class Terrain:
         self._init_shader()
     
     def _compile_program(self, vertex_name):
-        if gl is None or compileProgram is None or compileShader is None:
-            return 0
         """Compile the terrain fragment shader against *vertex_name*.
 
         Returns the program, or 0 when there is no GL context yet (harmless:
         update_and_render() recompiles on the GL thread at first draw) or the
         compile genuinely failed (reported).
         """
+        if gl is None or compileProgram is None or compileShader is None:
+            return 0
         try:
             vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
             fragment_code = shaders.light_ubo_source(
