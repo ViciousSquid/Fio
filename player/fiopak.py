@@ -39,6 +39,13 @@ _START_MAP_KEYS = ("map_path", "start_map", "main_map")
 # Sub-directories an asset might live under when only a bare filename is known.
 _ASSET_SUBDIRS = ("", "textures", "models", "sounds", "sprites", "materials")
 
+# Resource limits for untrusted .fiopak asset entries. These are checked
+# against ZIP metadata before decompression so a hostile archive cannot make
+# one asset (or a sequence of assets) consume unbounded process memory.
+MAX_ASSET_ENTRY_BYTES = 128 * 1024 * 1024
+MAX_TOTAL_ASSET_BYTES = 512 * 1024 * 1024
+
+
 
 class PackageError(Exception):
     """Raised when a ``.fiopak`` is missing, corrupt, or has no usable map."""
@@ -77,6 +84,7 @@ class FioPackage:
         # Small byte cache so repeated reads of the same asset (e.g. a texture
         # shared by many faces) hit memory instead of re-inflating the entry.
         self._cache: Dict[str, bytes] = {}
+        self._asset_bytes_loaded = 0
         self._manifest: Dict = self._load_manifest()
 
     # ------------------------------------------------------------------
@@ -239,9 +247,32 @@ class FioPackage:
         resolved = self._resolve(norm)
         if resolved is None:
             return None
-        data = self._read_raw(resolved)
-        if data is not None:
-            self._cache[norm] = data
+
+        # Cache by the resolved archive entry, not the caller's spelling, so
+        # aliases ("floor.png" vs "assets/textures/floor.png") cannot bypass
+        # the cumulative memory budget by inflating the same entry repeatedly.
+        cached = self._cache.get(resolved)
+        if cached is not None:
+            return cached
+
+        try:
+            info = self._zf.getinfo(resolved)
+        except KeyError:
+            return None
+
+        declared_size = int(info.file_size)
+        if declared_size > MAX_ASSET_ENTRY_BYTES:
+            return None
+        if self._asset_bytes_loaded + declared_size > MAX_TOTAL_ASSET_BYTES:
+            return None
+
+        try:
+            data = self._zf.read(resolved)
+        except (KeyError, zipfile.BadZipFile):
+            return None
+
+        self._asset_bytes_loaded += declared_size
+        self._cache[resolved] = data
         return data
 
     def _resolve(self, norm: str) -> Optional[str]:
