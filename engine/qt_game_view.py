@@ -2763,7 +2763,7 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def raycast_terrain(self, mx: int, my: int):
-        terrain = getattr(self.editor, 'terrain', None)
+        terrain = self.editor.terrain
         if terrain is None or not terrain.enabled:
             return None
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
