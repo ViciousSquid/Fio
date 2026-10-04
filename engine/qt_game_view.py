@@ -1830,8 +1830,7 @@ class QtGameView(QOpenGLWidget):
         # changed; here it is a version check and a draw call.
         if not self.play_mode:
             _components = self._components()
-            if _components is not None and _components.is_component_mode() and \
-                    hasattr(self.renderer, 'draw_component_overlay'):
+            if _components is not None and _components.is_component_mode():
                 _targets = self._component_targets()
                 if _targets:
                     self.renderer.draw_component_overlay(
