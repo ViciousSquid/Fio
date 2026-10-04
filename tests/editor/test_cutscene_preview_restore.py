@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the cutscene wizard uses Qt")
 
 from editor.cutscene_wizard import CutsceneWizard  # noqa: E402
+from editor.editor_state import EditorState  # noqa: E402
 
 
 class _Timer:
