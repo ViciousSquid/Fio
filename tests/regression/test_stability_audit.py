@@ -406,12 +406,13 @@ def test_a_hidden_light_does_not_light_the_running_world():
     selection ignored ``hidden``, so parked lights kept lighting and kept
     taking light and shadow slots. The editor preview still shows them."""
     from engine.renderer_F import Renderer_F
+    renderer = Renderer_F.__new__(Renderer_F)
     lamps = [make_thing(Light, "lamp%d" % i, (i * 100.0, 64, 0)) for i in range(3)]
     lamps[1].properties["hidden"] = True
     table = EntityTable()
     hidden = table.begin_frame(lamps, epoch=1)
     config = {"entity_table": table, "thing_hidden": hidden, "play_mode": True}
-    _table, slots = Renderer_F._get_active_lights(config)
+    _table, slots = renderer._get_active_lights(config)
     assert sorted(slots.tolist()) == [0, 2]
     config["play_mode"] = False
     _table, slots = Renderer_F._get_active_lights(config)
