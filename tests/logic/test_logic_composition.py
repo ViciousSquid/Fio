@@ -82,10 +82,10 @@ class Level:
         return None
 
     def _by_id(self, entity_id):
-        for b in self.brushes:
+        for b in self.editor_state.brushes:
             if b.get("id") == entity_id:
                 return b
-        for t in self.things:
+        for t in self.editor_state.things:
             if t.properties.get("id") == entity_id:
                 return t
         return None
