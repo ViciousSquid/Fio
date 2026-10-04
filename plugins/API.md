@@ -503,7 +503,7 @@ def player_forward(self)  # -> (x, y, z) full look direction, includes pitch
 ```python
 def spawn(self, cls, pos=None, properties=None)
 ```
-Instantiate *cls*, append it to `logic.things`, emit an `entity_spawned` event,
+Instantiate *cls*, append it to `logic.editor_state.things`, emit an `entity_spawned` event,
 and return the entity (or `None` if construction fails).
 
 ```python
