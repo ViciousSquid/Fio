@@ -384,8 +384,10 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
         w = room.world_w
         h = room.world_h
         ceil_h = room.ceiling_height
-        tex = {f: "nodraw.jpg" for f in ["north","south","east","west","top","down"]}
+        tex = {f: wall_tex for f in ["north","south","east","west","top","down"]}
         tex['down'] = floor_tex
+        for hidden_face in ["north","south","east","west","top"]:
+            tex[hidden_face] = "nodraw.jpg"
         brushes.append({
             "pos": [cx + w/2, FLOOR_SURFACE + ceil_h, cz + h/2],
             "size": [w, 64, h],
