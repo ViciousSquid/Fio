@@ -678,7 +678,7 @@ def test_a_monster_removed_from_the_world_leaves_its_state_behind_harmlessly(
     ai.update(TICK)
 
     logic.editor_state.things.remove(b)
-    logic._monster_things = [a]
+    logic.world_runtime.monster_things = [a]
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
 
