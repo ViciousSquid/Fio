@@ -31,6 +31,7 @@ def test_placing_a_second_one_selects_the_first(settings_cls):
     toasts, selected = [], []
     window = SimpleNamespace(
         set_selected_object=selected.append,
+        update_views=lambda: None,
         show_toast=lambda text, is_error=False: toasts.append(text))
     state = SimpleNamespace(things=[existing])
 
