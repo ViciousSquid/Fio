@@ -391,12 +391,11 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
         qt_app.processEvents()
 
 
-def test_a_hidden_light_does_not_light_the_running_world():
+def test_a_hidden_light_does_not_light_the_running_world(main_window):
     """Big World parks an out-of-range light by hiding it; the dense light
     selection ignored ``hidden``, so parked lights kept lighting and kept
     taking light and shadow slots. The editor preview still shows them."""
-    from engine.renderer_F import Renderer_F
-    renderer = Renderer_F.__new__(Renderer_F)
+    renderer = main_window.view_3d.renderer
     lamps = [make_thing(Light, "lamp%d" % i, (i * 100.0, 64, 0)) for i in range(3)]
     lamps[1].properties["hidden"] = True
     table = EntityTable()
@@ -447,10 +446,9 @@ def test_a_nan_view_distance_is_ignored():
     assert vd.fog_color == (0.0, 0.5, 1.0)
 
 
-def test_getprop_with_extra_arguments_prints_usage():
+def test_getprop_with_extra_arguments_prints_usage(main_window):
     from editor.console_commands import ConsoleCommandHandler
-    handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
-    handler.editor_state = EditorState()
+    handler = ConsoleCommandHandler(main_window)
     handler.cmd_get_property("a b c")      # used to raise ValueError
 
 
