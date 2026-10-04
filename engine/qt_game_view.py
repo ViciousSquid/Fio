@@ -1587,7 +1587,7 @@ class QtGameView(QOpenGLWidget):
             self._cached_bullet_marks = list(render_state.bullet_marks)
             self._cached_projectiles = np.array(render_state.projectiles, dtype=np.float32).reshape(-1, 3)
             self._cached_monster_rays = list(render_state.monster_debug_rays)
-            self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
+            self._cached_level_complete_ui = render_state.level_complete_ui
             self._cached_underwater = render_state.player_underwater
             self._cached_underwater_tint = render_state.underwater_tint
             self._cached_p2_underwater = render_state.player2_underwater
@@ -1837,7 +1837,7 @@ class QtGameView(QOpenGLWidget):
                         self.projection_matrix, self.view_matrix,
                         _components.overlay(_targets), _components.version)
         if render_state:
-            visible = len(getattr(render_state, 'visible_brush_slots', ()))
+            visible = len(render_state.visible_brush_slots)
             actual_total = len(self.editor.state.brushes)
             total = actual_total if actual_total > 0 else render_state.total_brushes
             culled = max(0, total - visible)
@@ -2036,11 +2036,11 @@ class QtGameView(QOpenGLWidget):
         # gives control back to the player. The health count has its own
         # independent opacity state, normally resting at 50% when idle.
         hud_alpha = max(
-            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+            0.0, min(1.0, float(render_state.hud_alpha))
         )
         hud_opacity = 1.0 if self._hud_style == 3 else self._hud_opacity / 100.0
         health_hud_alpha = 1.0 if self._hud_style == 3 else max(
-            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
+            0.0, min(1.0, float(render_state.hud_health_alpha))
         )
         # _draw_hud owns this painter opacity for everything it draws: weapon,
         # health/ammo, crosshair, messages, prompts, overhead icons and keys.
