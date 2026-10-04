@@ -2264,9 +2264,6 @@ entity to drive them from the I/O system.</i><br>
     def cmd_pos(self, args):
         """pos — Open the live camera-position floating window."""
         view_3d = self.main_window.view_3d
-        if view_3d is None or not hasattr(view_3d, "show_pos_window"):
-            debug_log("Error", "Camera position window is unavailable.")
-            return
         view_3d.show_pos_window()
         debug_log("Info", "Camera position window opened")
 
@@ -2303,10 +2300,7 @@ entity to drive them from the I/O system.</i><br>
         if not self._require_play_mode("ss"):
             return
         view_3d = self.main_window.view_3d
-        if hasattr(view_3d, '_toggle_splitscreen'):
-            view_3d._toggle_splitscreen()
-        else:
-            debug_log("Error", "Split-screen toggle not available.")
+        view_3d._toggle_splitscreen()
 
     def cmd_show_glasses(self, args):
         """showglasses [on|off|1|0|toggle] — Toggle player glasses billboards."""
