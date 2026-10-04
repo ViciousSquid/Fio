@@ -1367,7 +1367,7 @@ class BenchmarkRunner:
 
         def counted_update(ai_self, delta):
             if self._monster_chaos_ai_counting:
-                monsters = getattr(ai_self.lt, "_monster_things", None) or ()
+                monsters = ai_self.lt.world_runtime.monster_things
                 active_count = 0
                 for monster in monsters:
                     props = getattr(monster, "properties", {})
