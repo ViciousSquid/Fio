@@ -69,11 +69,11 @@ class LogicMovers:
     def _init_movers(self):
         logic = self.logic
         self.mover_path_states = {}
-        logic.movers = []
+        self.movers = []
         states = {}
         for i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_mover"):
-                logic.movers.append((i, brush))
+                self.movers.append((i, brush))
                 if "original_pos" not in brush:
                     brush["original_pos"] = list(brush["pos"])
 
@@ -82,7 +82,7 @@ class LogicMovers:
 
                 path_target = brush.get("path_target", "")
                 if path_target and brush.get("start_on", False):
-                    logic.mover_path_states[i] = {
+                    self.mover_path_states[i] = {
                         "current_node": path_target,
                         "lerp_t": 0.0,
                         "origin": list(brush["pos"]),
@@ -93,21 +93,21 @@ class LogicMovers:
                     states[i] = {"progress": 0.0, "forward": True}
 
         self.mover_states = states
-        self._mover_brush_list = [b for _, b in logic.movers]
+        self._mover_brush_list = [b for _, b in self.movers]
 
     def _reset_movers(self):
         logic = self.logic
-        logic.movers = []
+        self.movers = []
         for _i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_mover") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
         self.mover_states = {}
-        logic._mover_brush_list = []
+        self._mover_brush_list = []
 
     def _init_doors(self):
         logic = self.logic
-        logic.doors = []
+        self.doors = []
         states = {}
         for i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_door"):
@@ -120,7 +120,7 @@ class LogicMovers:
                     lip = float(brush.get("door_lip", 0.0))
                     distance = max(1.0, distance - lip)
 
-                logic.doors.append((i, brush))
+                self.doors.append((i, brush))
                 if "original_pos" not in brush:
                     brush["original_pos"] = list(brush["pos"])
 
@@ -139,18 +139,18 @@ class LogicMovers:
                 }
 
         self.door_states = states
-        self._door_brush_list = [b for _, b in logic.doors]
+        self._door_brush_list = [b for _, b in self.doors]
         self._moving_rows = tuple(logic.editor_state.brushes)
 
     def _reset_doors(self):
         logic = self.logic
-        logic.doors = []
+        self.doors = []
         for _i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_door") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
         self.door_states = {}
-        logic._door_brush_list = []
+        self._door_brush_list = []
 
     def _trigger_door_open(self, door_idx: int, brush: dict):
         """Start opening a door if it is currently closed or closing."""
@@ -172,9 +172,9 @@ class LogicMovers:
         identity; newly added movers and doors use normal initial state.
         """
         logic = self.logic
-        movers, doors = logic.movers, logic.doors
+        movers, doors = self.movers, self.doors
         m_states, d_states = self.mover_states, self.door_states
-        paths = logic.mover_path_states
+        paths = self.mover_path_states
 
         kept_m = {
             id(brush): (
@@ -192,19 +192,19 @@ class LogicMovers:
         self._init_doors()
 
         m_new = {index: dict(state) for index, state in self.mover_states.items()}
-        for index, brush in logic.movers:
+        for index, brush in self.movers:
             if id(brush) in kept_m:
                 state, path = kept_m[id(brush)]
                 m_new.pop(index, None)
-                logic.mover_path_states.pop(index, None)
+                self.mover_path_states.pop(index, None)
                 if state is not None:
                     m_new[index] = state
                 if path is not None:
-                    logic.mover_path_states[index] = path
+                    self.mover_path_states[index] = path
         self.mover_states = m_new
 
         d_new = {index: dict(state) for index, state in self.door_states.items()}
-        for index, brush in logic.doors:
+        for index, brush in self.doors:
             if id(brush) in kept_d:
                 d_new.pop(index, None)
                 if kept_d[id(brush)] is not None:
@@ -217,7 +217,7 @@ class LogicMovers:
 
     def _update_mover_path(self, idx: int, brush: dict, delta: float):
         logic = self.logic
-        state = logic.mover_path_states[idx]
+        state = self.mover_path_states[idx]
         node_name = state["current_node"]
         if not node_name:
             return
@@ -225,7 +225,7 @@ class LogicMovers:
         node = logic.world_runtime.find_path_node_by_name(node_name)
         if node is None:
             debug_log("IO", f"Mover path: node '{node_name}' not found — stopping")
-            logic.mover_path_states.pop(idx, None)
+            self.mover_path_states.pop(idx, None)
             return
 
         if state["waiting"]:
@@ -241,7 +241,7 @@ class LogicMovers:
                     brush["start_on"] = False
                     if logic.io_manager:
                         logic.io_manager.fire_output(brush, "OnFullyClosed")
-                    logic.mover_path_states.pop(idx, None)
+                    self.mover_path_states.pop(idx, None)
             return
 
         origin = np.array(state["origin"], dtype=float)
@@ -287,7 +287,7 @@ class LogicMovers:
                 else:
                     if logic.io_manager:
                         logic.io_manager.fire_output(brush, "OnFullyClosed")
-                    logic.mover_path_states.pop(idx, None)
+                    self.mover_path_states.pop(idx, None)
         else:
             t = state["lerp_t"]
             eased = (
