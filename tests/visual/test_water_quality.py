@@ -65,8 +65,7 @@ def render(context, quality, high_quality=None):
         context.bind()
         gl.glClearColor(0.55, 0.7, 0.85, 1.0)
         with glh.no_gl_errors(f"{quality} water"):
-            renderer.render_scene(projection, view, eye, brushes, things, None,
-                                  config, brush_slots=config["all_brush_slots"])
+            renderer.render_scene(projection, view, eye, None, config, brush_slots=config["all_brush_slots"])
             gl.glFinish()
         return context.read_pixels().astype(np.float64)
     finally:
@@ -105,12 +104,10 @@ def test_cheap_water_makes_no_depth_copy(context):
         config = glh.render_config(all_brushes=brushes, all_things=things,
                                    all_lights=things, play_mode=True, time=1.0)
         context.bind()
-        renderer.render_scene(projection, view, eye, brushes, things, None,
-                              config, brush_slots=config["all_brush_slots"])
+        renderer.render_scene(projection, view, eye, None, config, brush_slots=config["all_brush_slots"])
         assert calls == []
         renderer.water_quality = 'expensive'
-        renderer.render_scene(projection, view, eye, brushes, things, None,
-                              config, brush_slots=config["all_brush_slots"])
+        renderer.render_scene(projection, view, eye, None, config, brush_slots=config["all_brush_slots"])
         assert calls, "expensive water never copied the depth buffer"
     finally:
         renderer.cleanup()
