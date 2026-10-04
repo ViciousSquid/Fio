@@ -43,8 +43,8 @@ class LogicPortals:
         logic = self.logic
         Portal = self.portal_type
 
-        self._portal_things = []
-        self._portal_target_things = []
+        self.portal_things = []
+        self.portal_target_things = []
         portal_slots = []
         portal_target_slots = []
 
@@ -75,7 +75,7 @@ class LogicPortals:
                 self.portal_target_things.append(None)
 
         self.portal_slots = np.asarray(portal_slots, dtype=np.int32)
-        self._portal_target_slots = np.asarray(
+        self.portal_target_slots = np.asarray(
             portal_target_slots, dtype=np.int32
         )
 
@@ -105,7 +105,7 @@ class LogicPortals:
 
         if Portal is None or not logic.player:
             return
-        if not len(logic._portal_things):
+        if not len(self._portal_things):
             return
 
         for portal in logic._portal_things:
@@ -129,14 +129,14 @@ class LogicPortals:
             portal_a = logic._portal_things[portal_index]
             if not portal_a.is_active():
                 continue
-            if portal_index >= len(logic._portal_target_slots):
+            if portal_index >= len(self._portal_target_slots):
                 continue
 
             target_slot = int(logic._portal_target_slots[portal_index])
             if target_slot < 0:
                 continue
 
-            portal_b = logic._portal_target_things[portal_index]
+            portal_b = self._portal_target_things[portal_index]
             if portal_b is None or not portal_b.is_active():
                 continue
             if id(portal_a) in logic._portal_cooldowns:
@@ -267,7 +267,7 @@ class LogicPortals:
             return
 
         cur = tuple(projectiles.pos[index])
-        for portal_index, _portal_slot in enumerate(logic._portal_slots):
+        for portal_index, _portal_slot in enumerate(self._portal_slots):
             portal_a = logic._portal_things[portal_index]
             if not portal_a.is_active():
                 continue
