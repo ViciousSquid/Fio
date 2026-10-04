@@ -14,10 +14,12 @@ import os
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from engine import savegame
+from engine.logic_movers import LogicMovers
 from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld                       # noqa: E402
@@ -84,10 +86,14 @@ class FakeLogic:
         self.god_mode = False
         self.buddha_mode = False
         self.notarget = False
-        self.camera_mode = "First Person"
-        self.overhead_height = 800.0
-        self.overhead_tilt = 0.0
-        self.overhead_orientation = "north"
+        self.camera = SimpleNamespace(
+            camera_mode="First Person",
+            overhead_height=800.0,
+            overhead_height_limit=None,
+            overhead_tilt=0.0,
+            overhead_orientation="north",
+            overhead_ground_footprint=lambda: None,
+        )
         self.active_weapon = None
         self.current_hud_message = ""
         self.player_health = 100
@@ -97,8 +103,9 @@ class FakeLogic:
         self.player2_max_health = 100
         self.player2_dead = False
         self.collected_keys = set()
-        self.door_states = {}
-        self.mover_states = {}
+        self.movers = []
+        self.doors = []
+        self.mover_runtime = LogicMovers(self)
         self.monster_ai = FakeMonsterAI()
         self._monster_lock = threading.RLock()
         self._moving_rows = None
