@@ -509,7 +509,6 @@ def test_subtract_is_one_undo_step(editor):
 def test_subtract_can_fold_into_a_caller_s_undo_step(editor):
     """Hollow opens one checkpoint and runs a subtract inside it."""
     host, _ = editor
-    host.perform_subtraction = types.MethodType(MainWindow.perform_subtraction, host)
     target = make_box(pos=(0, 0, 0), size=(256, 64, 256))
     cutter = make_box(pos=(0, 0, 0), size=(64, 64, 64))
     host.state.brushes.extend([target, cutter])
@@ -871,10 +870,6 @@ def test_shift_space_clones_entities_as_well_as_brushes(editor):
 
 def test_cloning_a_named_brush_gives_the_copy_its_own_name(editor):
     host, _ = editor
-    host.clone_selected_object = types.MethodType(
-        MainWindow.clone_selected_object, host)
-    host.right_tabs = _StubTabs(host.view_top)
-    host.grid_size_spinbox = _StubSpin(16)
 
     brush = make_box()
     brush['name'] = 'pillar'
