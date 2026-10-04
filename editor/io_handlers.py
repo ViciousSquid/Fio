@@ -235,13 +235,8 @@ def register_all_input_handlers(io_manager: IOManager):
         entity.properties["preview"] = False
         logic.effect_store.trigger_explosion(entity, now)
 
-        game_state = getattr(logic, 'game_state', None)
-        if game_state is None and hasattr(logic, 'io_manager'):
-            game_state = logic.io_manager.get_game_state()
-        if (
-            game_state is not None
-            and not bool(entity.properties.get('silent', False))
-        ):
+        game_state = logic.game_state
+        if not bool(entity.properties.get('silent', False)):
             try:
                 source_position = [
                     float(entity.pos.x),
@@ -559,20 +554,6 @@ def register_all_input_handlers(io_manager: IOManager):
     # SPEAKER INPUTS
     # ==========================================================================
     
-    def _speaker_game_state(logic):
-        """Resolve the game_state a speaker request must be queued on.
-
-        Tries the logic thread directly, then the I/O manager, mirroring the
-        original two-path lookup. Returns None when neither is available.
-        """
-        if getattr(logic, 'game_state', None) is not None:
-            return logic.game_state
-        if hasattr(logic, 'io_manager'):
-            gs = logic.io_manager.get_game_state()
-            if gs is not None:
-                return gs
-        return None
-
     def speaker_play(entity, param, logic):
         """Start playing sound - queues to main thread via game_state."""
         entity_name = entity.properties.get('name', 'unnamed')
@@ -591,11 +572,7 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log('Error', f"No sound file configured for speaker '{entity_name}'!")
             return
 
-        game_state = _speaker_game_state(logic)
-
-        if game_state is None:
-            debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
-            return
+        game_state = logic.game_state
 
         # Speaker position/radius are consumed on the render thread so audio
         # attenuation follows the authored radius in the editor. Global
@@ -636,9 +613,7 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.active_speakers.discard(speaker_id)
         # Actually silence the channel on the audio thread -- a looping sound
         # would otherwise play forever (StopSound could not reach the mixer).
-        game_state = _speaker_game_state(logic)
-        if game_state is not None:
-            game_state.queue_sound({'action': 'stop', 'entity_id': speaker_id})
+        logic.game_state.queue_sound({'action': 'stop', 'entity_id': speaker_id})
         debug_log('Speaker', f"Stopped speaker '{entity.properties.get('name', 'unnamed')}'")
         logic.io_manager.fire_output(entity, 'OnSoundFinished')
     
@@ -1346,14 +1321,10 @@ def register_all_input_handlers(io_manager: IOManager):
         if not cmd:
             debug_log("IO", f"LogicCommand '{entity.name}': no command to run.")
             return
-        gs = getattr(logic, 'game_state', None)
-        if gs is not None and hasattr(gs, 'queue_console_command'):
-            gs.queue_console_command(cmd)
-            debug_log("IO", f"LogicCommand '{entity.name}': queued '{cmd}'")
-            if logic.io_manager:
-                logic.io_manager.fire_output(entity, 'OnCommand', cmd)
-        else:
-            debug_log("Error", f"LogicCommand '{entity.name}': no console queue available.")
+        logic.game_state.queue_console_command(cmd)
+        debug_log("IO", f"LogicCommand '{entity.name}': queued '{cmd}'")
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnCommand', cmd)
 
     def command_set(entity, param, logic):
         """Set the default command string this entity will run."""
