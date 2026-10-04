@@ -61,7 +61,7 @@ class _Portal:
 
 def test_logic_camera_constructs_and_computes_overhead_footprint():
     player = SimpleNamespace(pos=glm.vec3(0, 0, 0), angle=0.0)
-    runtime = LogicCamera(player=player)
+    runtime = LogicCamera(SimpleNamespace(player=player))
 
     runtime.set_camera_mode("overhead")
     runtime.overhead_height = 400.0
