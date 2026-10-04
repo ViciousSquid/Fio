@@ -582,7 +582,7 @@ isn't present on this host, rather than raising:
 | Accessor | Returns |
 |----------|---------|
 | `host.logic` / `host.engine` | the play session's logic object |
-| `host.scene` | the live `things` list (the *actual* list — mutating it affects the scene) |
+| `host.scene` | the live `editor_state.things` list (the *actual* list — mutating it affects the scene) |
 | `host.player` | the player object |
 | `host.io` | the `IOManager` |
 | `host.globals` | the [`GlobalStore`](#globalstore--cross-level-storage) |
