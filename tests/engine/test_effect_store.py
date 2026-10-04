@@ -1,4 +1,5 @@
 import pytest
+import time
 
 pytest.importorskip("PyQt5", reason="Effect is an editor Thing")
 pytestmark = pytest.mark.qt
@@ -96,7 +97,7 @@ def test_entity_table_reads_effect_runtime_from_effect_store():
     )
     store = EffectStore()
     store.begin_session([effect])
-    store.trigger_explosion(effect, 123.456)
+    store.trigger_explosion(effect, time.perf_counter())
 
     # Deliberately poison the compatibility mirrors.  The production path must
     # take the runtime from EffectStore instead.
