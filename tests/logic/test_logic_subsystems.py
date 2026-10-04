@@ -297,9 +297,11 @@ def test_logic_timing_constructs_and_updates_light_fade():
     assert runtime.light_fade_states == {}
 
 
-def test_logic_triggers_constructs_and_uses_authored_sphere_radius():
+def test_logic_triggers_constructs_and_owns_hurt_cadence():
     runtime = LogicTriggers(SimpleNamespace())
 
+    assert runtime.HURT_INTERVAL == pytest.approx(0.5)
+    assert not hasattr(runtime.logic, "HURT_INTERVAL")
     assert runtime._trigger_filters({"trigger_filters": "Player"}) == {"player"}
 
     inside = runtime.use_trigger_contains(

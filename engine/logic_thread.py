@@ -317,7 +317,6 @@ class LogicThread(threading.Thread):
 
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
         
-        self.HURT_INTERVAL = 0.5
         
         # Collection state
         

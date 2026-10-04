@@ -111,7 +111,6 @@ class FakeLogicThread:
         self.portal_runtime = LogicPortals(self)
         self.world_runtime = LogicWorld(self)
         self.prop_runtime = PropSession(self)
-        self.HURT_INTERVAL = 0.5
         self.damage_applied = []
 
     def _plugin_emit(self, event, **payload):

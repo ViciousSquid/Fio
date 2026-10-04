@@ -59,6 +59,8 @@ def _trigger_save(brush):
 class LogicTriggers:
     """Trigger subsystem for a single LogicThread host."""
 
+    HURT_INTERVAL = 0.5
+
     def __init__(self, logic):
         self.logic = logic
         self.fired_once_triggers = set()
@@ -704,7 +706,7 @@ class LogicTriggers:
             if activator_type == 'player':
                 damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
-                self.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
+                self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
         elif action == 'target':
             if self.logic.io_manager:
@@ -755,6 +757,6 @@ class LogicTriggers:
             if self.hurt_trigger_timers[trigger_id] <= 0:
                 damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
-                self.hurt_trigger_timers[trigger_id] = self.logic.HURT_INTERVAL
+                self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
 
