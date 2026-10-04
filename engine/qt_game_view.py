@@ -2967,7 +2967,9 @@ class QtGameView(QOpenGLWidget):
                 self.editor.state.terrain_data = terrain.to_dict()
             if hasattr(self.editor, 'show_toast'):
                 self.editor.show_toast(f"Painted {os.path.basename(texture_path)}")
-            self.update()
+            # The viewport already renders on its regular 60 Hz update loop.
+            # Do not force a second repaint for every stamp click; the extra
+            # update request makes the terrain change appear as a visual flash.
             return
 
         if mode == 'raise':
