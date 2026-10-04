@@ -1160,8 +1160,6 @@ class PathNode(Thing):
         except (TypeError, ValueError):
             return 1.0
 
-    # Keep old name as alias so MonsterAI still works without changes
-    get_patrol_speed = get_speed
 
     def get_next_node_name(self) -> str:
         """Return the name of the next node in the chain, or ''."""
