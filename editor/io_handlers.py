@@ -231,11 +231,9 @@ def register_all_input_handlers(io_manager: IOManager):
     def effect_explode(entity, param, logic):
         """Switch an Effect to EXPLOSION permanently and play it once."""
         now = time.perf_counter()
-        if not entity.trigger_explosion(now):
-            return
-        effect_store = getattr(logic, "effect_store", None)
-        if effect_store is not None:
-            effect_store.trigger_explosion(entity, now)
+        entity.properties["effect_type"] = "EXPLOSION"
+        entity.properties["preview"] = False
+        logic.effect_store.trigger_explosion(entity, now)
 
         game_state = getattr(logic, 'game_state', None)
         if game_state is None and hasattr(logic, 'io_manager'):
