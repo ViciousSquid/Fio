@@ -104,7 +104,7 @@ class FakeLogicThread:
         self.god_mode = False
         self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
-                self._id_cache = {}
+         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
         self.prop_runtime = PropSession(self)
         self.HURT_INTERVAL = 0.5
