@@ -212,7 +212,7 @@ class View2D(QWidget):
 
     def _drag_in_progress(self):
         """True while any of this view's drag tools is mid-gesture."""
-        components = getattr(self.main_window, 'components', None)
+        components = self.main_window.components
         if components is not None and components.drag is not None:
             return True
         return bool(self.rotate_dragging or self.is_group_rotating or
@@ -821,7 +821,7 @@ class View2D(QWidget):
             # user to release and press again for every single step.
             self.main_window.refresh_views()
             sel = self._selected_brush()
-            if sel is not None and hasattr(self.main_window, 'property_editor'):
+            if sel is not None:
                 self.main_window.property_editor.set_object(sel)
 
     def commit_rotate(self):
@@ -1034,12 +1034,12 @@ class View2D(QWidget):
 
     def _store_previous_tab_index(self):
         """Store the current tab index before switching to Properties."""
-        if hasattr(self.main_window, 'properties_tab_widget'):
+        if self.main_window.properties_tab_widget:
             self.main_window._previous_tab_index = self.main_window.properties_tab_widget.currentIndex()
 
     def _focus_properties_tab(self):
         """Focus the Properties tab in the properties dock."""
-        if hasattr(self.main_window, 'properties_tab_widget'):
+        if self.main_window.properties_tab_widget:
             self._store_previous_tab_index()
             self.main_window.properties_tab_widget.setCurrentIndex(0)
 
@@ -1082,7 +1082,7 @@ class View2D(QWidget):
         if event.key() == Qt.Key_F1:
             # Keep the View-menu action and the 2D/3D shortcut in sync.
             current_state = self.editor.show_logic_links
-            if hasattr(self.main_window, 'set_connection_links_enabled'):
+            if True:
                 self.main_window.set_connection_links_enabled(not current_state)
             else:
                 self.editor.show_logic_links = not current_state
@@ -2021,7 +2021,7 @@ class View2D(QWidget):
         # 2D is a QPainter view, not the renderer's OpenGL context. Never load
         # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
         # 3D view's current GL context. The 3D renderer loads it on its next frame.
-        if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
+        if not self.main_window.view_3d.renderer:
             return None
 
         renderer = self.main_window.view_3d.renderer
@@ -2106,7 +2106,7 @@ class View2D(QWidget):
         # unique shared vertices as sequential flat triangles, which gives wrong
         # edges AND crashes when vertex_count % 3 != 0.
         obj = None
-        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
+        if model_path and self.main_window.view_3d.renderer:
             obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
@@ -3573,7 +3573,7 @@ class View2D(QWidget):
                 if hits:
                     self.editor.set_selected_objects(hits)
                     self.manip_mode = 'resize'
-                    if hasattr(self.main_window, 'properties_tab_widget'):
+                    if self.main_window.properties_tab_widget:
                         self._focus_properties_tab()
                     self.main_window.show_toast(f"Selected {len(hits)} object(s)")
                 else:
@@ -3876,7 +3876,7 @@ class View2D(QWidget):
             self.editor.state.things.append(new_thing)
             self.editor.set_selected_objects([new_thing])
             # Focus the Properties tab when creating a new thing
-            if hasattr(self.main_window, 'properties_tab_widget'):
+            if self.main_window.properties_tab_widget:
                 self._focus_properties_tab()
             self.update()
 
@@ -3910,7 +3910,7 @@ class View2D(QWidget):
             self.main_window.save_state()
             self.editor.state.things.append(thing)
             self.editor.set_selected_objects([thing])
-            if hasattr(self.main_window, 'properties_tab_widget'):
+            if self.main_window.properties_tab_widget:
                 self._focus_properties_tab()
             self.update()
         except Exception as exc:
@@ -4136,11 +4136,11 @@ class View2D(QWidget):
 
         if inside:
             self.editor.set_selected_objects(inside)
-            if hasattr(self.main_window, 'show_toast'):
+            if True:
                 self.main_window.show_toast(f"Selected {len(inside)} object(s) inside box")
         else:
             self.editor.set_selected_objects([])
-            if hasattr(self.main_window, 'show_toast'):
+            if True:
                 self.main_window.show_toast("No objects inside box", is_error=True)
 
         self.update()
@@ -4163,11 +4163,11 @@ class View2D(QWidget):
                     new_radius = max(32.0, current_radius - step)  # Minimum radius of 32
                 selected.properties['radius'] = new_radius
                 # Update property editor if visible
-                if hasattr(self.main_window, 'property_editor'):
+                if True:
                     self.main_window.property_editor.set_object(selected)
                 self.update()
                 self.main_window.view_3d.update()
-                if hasattr(self.main_window, 'show_toast'):
+                if True:
                     self.main_window.show_toast(f"Light radius: {new_radius:.0f}")
                 event.accept()
                 return
@@ -4182,11 +4182,11 @@ class View2D(QWidget):
                     new_intensity = max(0.1, current_intensity - step)  # Min intensity 0.1
                 selected.properties['intensity'] = round(new_intensity, 2)
                 # Update property editor if visible
-                if hasattr(self.main_window, 'property_editor'):
+                if True:
                     self.main_window.property_editor.set_object(selected)
                 self.update()
                 self.main_window.view_3d.update()
-                if hasattr(self.main_window, 'show_toast'):
+                if True:
                     self.main_window.show_toast(f"Light intensity: {new_intensity:.2f}")
                 event.accept()
                 return
