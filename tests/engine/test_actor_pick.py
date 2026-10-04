@@ -11,6 +11,7 @@ the renderer publishes. The second half drives the view's pick mode on a light
 host that borrows ``QtGameView``'s methods (a real view needs a GL context).
 """
 
+import os
 import types
 
 import glm
@@ -369,9 +370,19 @@ def test_closing_the_console_overlay_keeps_an_armed_picks_cursor(view):
 
 def test_the_main_window_arms_the_views_pick(qt_app):
     from editor.main_window import MainWindow
-    armed = []
-    host = types.SimpleNamespace(view_3d=types.SimpleNamespace(
-        begin_actor_pick=lambda on_pick=None: armed.append(on_pick) or True))
-    assert MainWindow.begin_actor_pick(host) is True
-    assert armed == [None]
-    assert MainWindow.begin_actor_pick(types.SimpleNamespace(view_3d=None)) is False
+
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    host = MainWindow(root)
+    host.view_3d.play_mode = True
+    try:
+        assert host.begin_actor_pick() is True
+        assert host.view_3d.actor_pick_active
+        host.view_3d.cancel_actor_pick()
+
+        host.view_3d.play_mode = False
+        assert host.begin_actor_pick() is False
+    finally:
+        host.unsaved_changes = False
+        host.close()
+        host.deleteLater()
+        qt_app.processEvents()
