@@ -56,6 +56,8 @@ class _Camera:
 def _fake_wizard():
     actor = _Actor((10, 20, 30), 45.0)
     camera = _Camera()
+    state = EditorState()
+    state.things = [actor]
     wizard = types.SimpleNamespace(
         _preview_rate=1.0,
         _preview_time=0.98,
@@ -75,6 +77,7 @@ def _fake_wizard():
         actor_meta={"actor": {}},
         actor_objects={"actor": actor},
         main_window=types.SimpleNamespace(
+            state=state,
             view_3d=types.SimpleNamespace(
                 camera=camera,
                 logic_thread=types.SimpleNamespace(
