@@ -802,7 +802,7 @@ class MainWindow(QMainWindow):
             key = event.key()
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
                 # Only nudge if we have a selected object and not in play mode
-                selected = self.state.selected_object
+                selected = self.primary_selection()
                 if selected and not getattr(self.view_3d, 'play_mode', False):
                     # Determine which 2D view to use for nudging
                     current_view = self.right_tabs.currentWidget()
@@ -1022,10 +1022,10 @@ class MainWindow(QMainWindow):
         immediate click still leaves the copy beside the original instead of
         exactly on top of it, and clipboard copy/paste is untouched.
         """
-        sources = list(self.state.selected_objects or [])
-        if self.state.selected_object is not None and \
-                self.state.selected_object not in sources:
-            sources.append(self.state.selected_object)
+        sources = list(self.primary_selection()s or [])
+        if self.primary_selection() is not None and \
+                self.primary_selection() not in sources:
+            sources.append(self.primary_selection())
         if not sources:
             return
         sources, skipped = self._drop_singleton_copies(sources)
@@ -1195,12 +1195,12 @@ class MainWindow(QMainWindow):
 
     def tint_selected_brush(self):
         """Open colour picker dialog to tint the selected brush - unified with property editor."""
-        if not isinstance(self.state.selected_object, dict):
+        if not isinstance(self.primary_selection(), dict):
             self.show_toast("Select a brush first", is_error=True)
             return
         
         self.save_state()
-        brush = self.state.selected_object
+        brush = self.primary_selection()
         
         # Get current colour (0.0-1.0 range) and convert to 0-255
         current = brush.get('colour', [0.8, 0.8, 0.8])
@@ -1269,43 +1269,21 @@ class MainWindow(QMainWindow):
         self.set_selected_objects([new_model])
         self.show_toast(f"Added {model_name}")
 
-    def set_selected_object(self, obj):
-        """Set a single selected object (backwards compatibility)."""
-        # Component handles belong to a selection: drop them and mark the
-        # overlay stale, since the brushes it was drawing handles for changed.
-        self.components.clear()
-        self.components.invalidate()
-        if obj is None:
-            self.state.selected_objects = []
-            self.state.selected_object = None
-        else:
-            self.state.selected_objects = [obj]
-            self.state.selected_object = obj
-        
-        if self.config.getboolean('Display', 'sync_selection', fallback=True):
-            self.view_3d.selected_object = self.state.selected_object
-        else:
-            self.view_3d.selected_object = None
-        self.update_all_ui()
-
     def set_selected_objects(self, objects):
-        """Set multiple selected objects."""
-        # Component handles belong to a selection: drop them and mark the
+        """Set the authoritative multi-selection."""
+        # Component handles belong to the selection: drop them and mark the
         # overlay stale, since the brushes it was drawing handles for changed.
         self.components.clear()
         self.components.invalidate()
-        self.state.selected_objects = objects if objects else []
-        # For backwards compatibility, selected_object is the first one (or None)
-        self.state.selected_object = objects[0] if objects else None
-        
+        self.primary_selection()s = list(objects or [])
+        primary = self.primary_selection()
         if self.config.getboolean('Display', 'sync_selection', fallback=True):
-            self.view_3d.selected_object = self.state.selected_object
+            self.view_3d.selected_object = primary
         else:
             self.view_3d.selected_object = None
-        self.update_all_ui()
 
     def update_all_ui(self):
-        self.property_editor.set_object(self.state.selected_object)
+        self.property_editor.set_object(self.primary_selection())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
         self.update_views()
@@ -1465,7 +1443,7 @@ class MainWindow(QMainWindow):
                 pass
 
     def select_object(self, obj):
-        self.set_selected_object(obj)
+        self.set_selected_objects([obj])
 
     def highlight_in_hierarchy(self, obj):
         """Highlight an object in the scene hierarchy without selecting it.
@@ -1904,9 +1882,9 @@ class MainWindow(QMainWindow):
 
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
-        sources = list(self.state.selected_objects or [])
-        if self.state.selected_object is not None and self.state.selected_object not in sources:
-            sources.append(self.state.selected_object)
+        sources = list(self.primary_selection()s or [])
+        if self.primary_selection() is not None and self.primary_selection() not in sources:
+            sources.append(self.primary_selection())
 
         if sources:
             clipboard = []
@@ -2022,7 +2000,7 @@ class MainWindow(QMainWindow):
         if getattr(self.view_3d, 'face_mode_active', False):
             self.toggle_face_mode(False)
             return True
-        if self.state.selected_object:
+        if self.primary_selection():
             self.set_selected_objects([])
             return True
         return False
@@ -2134,7 +2112,7 @@ class MainWindow(QMainWindow):
             return
 
         # --- Otherwise: rotate every face of the selected brush together ---
-        selected = self.state.selected_object
+        selected = self.primary_selection()
         if isinstance(selected, dict):
             self.save_state()
             for face_name in self.ALL_FACE_KEYS:
@@ -2838,7 +2816,7 @@ class MainWindow(QMainWindow):
         (Hollow, which runs a subtract as one step of a larger operation) fold
         this into that single step instead of stacking a second one.
         """
-        if not isinstance(self.state.selected_object, dict):
+        if not isinstance(self.primary_selection(), dict):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush for CSG Subtract")
             return
 
@@ -2853,8 +2831,8 @@ class MainWindow(QMainWindow):
         if push_undo:
             self.save_state()
 
-        self.state.selected_object['operation'] = 'subtract'
-        subtract_brush = self.state.selected_object
+        self.primary_selection()['operation'] = 'subtract'
+        subtract_brush = self.primary_selection()
 
         terrain_cut = False
         if (target_brush is None and self.terrain is not None
@@ -3115,11 +3093,11 @@ class MainWindow(QMainWindow):
         thickness.  Other brushes, including arbitrary/many-sided geometry
         already enclosed by the box, are intentionally left untouched.
         """
-        if not isinstance(self.state.selected_object, dict):
+        if not isinstance(self.primary_selection(), dict):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush to hollow.")
             return
 
-        outer_brush = self.state.selected_object
+        outer_brush = self.primary_selection()
 
         if outer_brush.get('lock', False):
             QMessageBox.warning(self, "Brush Locked", "Cannot hollow a locked brush.")
@@ -3176,7 +3154,7 @@ class MainWindow(QMainWindow):
         }
 
         self.state.brushes.append(inner_brush)
-        self.state.selected_object = inner_brush
+        self.primary_selection()s = [inner_brush]
 
         # Only subtract the temporary inner volume from the selected outer
         # brush.  An enclosed many-sided brush therefore survives unchanged.
@@ -3198,11 +3176,11 @@ class MainWindow(QMainWindow):
 
     def create_room_from_brush(self):
         """Create a room by hollowing the brush and placing lights inside."""
-        if not isinstance(self.state.selected_object, dict):
+        if not isinstance(self.primary_selection(), dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to convert to a room.")
             return
 
-        outer_brush = self.state.selected_object
+        outer_brush = self.primary_selection()
         
         # Check if brush is locked
         if outer_brush.get('lock', False):
@@ -3255,7 +3233,7 @@ class MainWindow(QMainWindow):
         }
         
         self.state.brushes.append(inner_brush)
-        self.state.selected_object = inner_brush
+        self.primary_selection()s = [inner_brush]
         # One undo step for the whole room: the checkpoint above covers it.
         self.perform_subtraction(push_undo=False)
 
@@ -3436,9 +3414,9 @@ class MainWindow(QMainWindow):
         # Ctrl+C: Copy the current selection.  The clipboard stores a
         # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            sources = list(self.state.selected_objects or [])
-            if self.state.selected_object is not None and self.state.selected_object not in sources:
-                sources.append(self.state.selected_object)
+            sources = list(self.primary_selection()s or [])
+            if self.primary_selection() is not None and self.primary_selection() not in sources:
+                sources.append(self.primary_selection())
 
             if sources:
                 clipboard = []
@@ -3536,9 +3514,9 @@ class MainWindow(QMainWindow):
             return
 
         # Delete key
-        if self.state.selected_object and event.key() == Qt.Key_Delete:
+        if self.primary_selection() and event.key() == Qt.Key_Delete:
             self.save_state()
-            for obj in list(self.state.selected_objects):
+            for obj in list(self.primary_selection()s):
                 if isinstance(obj, dict):
                     if obj in self.state.brushes:
                         self.state.brushes.remove(obj)
@@ -3549,16 +3527,16 @@ class MainWindow(QMainWindow):
             return
 
         # H / Shift+H
-        if self.state.selected_object and event.key() == Qt.Key_H:
+        if self.primary_selection() and event.key() == Qt.Key_H:
             if event.modifiers() == Qt.ShiftModifier:
                 self.unhide_all_brushes()
-            elif isinstance(self.state.selected_object, dict):
+            elif isinstance(self.primary_selection(), dict):
                 self.hide_selected_brush()
             return
 
         # Shift+Space: clone the selection and hand it to the cursor to place.
         # Plain Space is deliberately left free.
-        if (self.state.selected_object and event.key() == Qt.Key_Space and
+        if (self.primary_selection() and event.key() == Qt.Key_Space and
                 event.modifiers() == Qt.ShiftModifier):
             self.clone_selected_object()
             return
@@ -3605,10 +3583,10 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def hide_selected_brush(self):
-        if isinstance(self.state.selected_object, dict):
+        if isinstance(self.primary_selection(), dict):
             self.save_state()
-            self.state.selected_object['hidden'] = True
-            touch(self.state.selected_object)
+            self.primary_selection()['hidden'] = True
+            touch(self.primary_selection())
             self.update_all_ui()
 
     def unhide_all_brushes(self):
@@ -3804,10 +3782,10 @@ class MainWindow(QMainWindow):
 
     def _selected_brushes(self):
         """Every brush in the current selection (things filtered out)."""
-        objs = list(self.state.selected_objects or [])
-        if self.state.selected_object is not None and \
-                self.state.selected_object not in objs:
-            objs.append(self.state.selected_object)
+        objs = list(self.primary_selection()s or [])
+        if self.primary_selection() is not None and \
+                self.primary_selection() not in objs:
+            objs.append(self.primary_selection())
         return [o for o in objs if isinstance(o, dict)]
 
     def component_drag_targets(self):
@@ -4000,12 +3978,13 @@ class MainWindow(QMainWindow):
         return ((lo + hi) * 0.5).tolist()
 
     def selected_objects_list(self):
-        """The current selection as a plain list (brushes and entities)."""
-        selected = list(self.state.selected_objects or [])
-        if self.state.selected_object is not None and \
-                self.state.selected_object not in selected:
-            selected.append(self.state.selected_object)
-        return selected
+        """The authoritative current selection as a plain list."""
+        return list(self.primary_selection()s or [])
+
+    def primary_selection(self):
+        """Return the first object in the authoritative multi-selection."""
+        selected = self.primary_selection()s
+        return selected[0] if selected else None
 
     def apply_rotation_to_selection(self, angle_deg, axis, undoable=True,
                                     pivot=None):
@@ -4099,8 +4078,8 @@ class MainWindow(QMainWindow):
                 # of what used to be one brush.
                 self.set_selected_objects(pieces)
             self.update_views()
-            if self.state.selected_object in pieces:
-                self.property_editor.set_object(self.state.selected_object)
+            if self.primary_selection() in pieces:
+                self.property_editor.set_object(self.primary_selection())
         else:
             # Nothing changed — drop the checkpoint we just pushed.
             self.state.discard_last_checkpoint()
