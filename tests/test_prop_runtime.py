@@ -137,6 +137,7 @@ def test_respawn_fades_in_over_two_seconds():
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
         ),
+        _plugin_emit=lambda *args, **kwargs: None,
     )
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
