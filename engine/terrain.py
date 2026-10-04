@@ -1,6 +1,12 @@
 import os
 import numpy as np
-import OpenGL.GL as gl
+try:
+    import OpenGL.GL as gl
+    from OpenGL.GL.shaders import compileProgram, compileShader
+except ImportError:  # Headless/core tier: terrain data logic is still usable.
+    gl = None
+    compileProgram = None
+    compileShader = None
 import glm
 import ctypes
 from dataclasses import dataclass, field
@@ -8,7 +14,6 @@ from typing import List, Dict, Tuple, Optional
 import math
 import time
 import random
-from OpenGL.GL.shaders import compileProgram, compileShader
 from . import shaders
 from . import terrain_style
 from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
@@ -515,6 +520,8 @@ class Terrain:
         self._init_shader()
     
     def _compile_program(self, vertex_name):
+        if gl is None or compileProgram is None or compileShader is None:
+            return 0
         """Compile the terrain fragment shader against *vertex_name*.
 
         Returns the program, or 0 when there is no GL context yet (harmless:
