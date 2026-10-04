@@ -2,11 +2,15 @@
 
 import pytest
 
+pytest.importorskip("PyQt5", reason="LogicThread uses the editor world state")
+
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.logic_triggers import LogicTriggers
 from engine.player import Player
 from engine.threaded_game_state import ThreadedGameState
+
+pytestmark = pytest.mark.qt
 
 
 def _logic(player_pos=(10.0, 20.0, 30.0), health=100):
