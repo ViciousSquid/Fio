@@ -53,7 +53,7 @@ def test_logic_camera_player_orientation_changes_overhead_horizontal_direction()
     runtime.overhead_tilt = 45.0
 
     _, direction_a, _ = runtime._overhead_camera(runtime._host.player_runtime.player.pos, 0.0)
-    _, direction_b, _ = runtime._overhead_camera(runtime._host.player_runtime.player.pos, 1.57079632679)
+    _, direction_b, _ = runtime._overhead_camera(runtime._host.player.pos, 1.57079632679)
 
     # Player angle 0 faces +Z in the engine's first-person convention;
     # the overhead camera preserves that horizontal heading while raking down.
