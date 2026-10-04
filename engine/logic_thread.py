@@ -877,15 +877,6 @@ class LogicThread(threading.Thread):
     def _fire_player_spawn_outputs(self):
         return self.session_runtime.fire_player_spawn_outputs()
 
-    @staticmethod
-    def _timer_key(thing):
-        """Compatibility wrapper for stable timer identity."""
-        return LogicTiming.timer_key(thing)
-
-    def _init_logic_timers(self):
-        """Compatibility wrapper for timer initialisation."""
-        return LogicThread._timing_runtime(self).init_logic_timers()
-
     def set_terrain(self, terrain):
         self.terrain = terrain
     
