@@ -333,15 +333,19 @@ def test_logic_world_constructs_and_packs_levelchanger_rows():
 def _contract_host():
     host = object.__new__(LogicThread)
     host.editor_state = SimpleNamespace(brushes=[], things=[])
-    for runtime_name in LogicThread._RUNTIME_HOSTS:
-        setattr(host, runtime_name, SimpleNamespace(logic=host))
     for attribute in {
         attr
         for attrs in LogicThread._RUNTIME_HOST_CONTRACTS.values()
         for attr in attrs
     }:
-        if not hasattr(host, attribute):
+        if attribute not in {"brushes", "things"}:
             setattr(host, attribute, None)
+
+    host.camera = SimpleNamespace(player=host.player)
+    for runtime_name in LogicThread._RUNTIME_HOSTS:
+        if runtime_name == "camera":
+            continue
+        setattr(host, runtime_name, SimpleNamespace(logic=host))
     return host
 
 
