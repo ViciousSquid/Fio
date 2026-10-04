@@ -88,6 +88,195 @@ class RotatablePlayButton(QPushButton):
 LAYOUT_VERSION = 3
 
 
+
+def (MainWindow):
+    """Read the persisted set of disabled plugin names from settings.ini."""
+    cfg = getattr(MainWindow, "config", None)
+    if cfg is None:
+        return set()
+    try:
+        raw = cfg.get("Plugins", "disabled", fallback="")
+    except Exception:
+        raw = ""
+    return {n.strip().lower() for n in raw.split(",") if n.strip()}
+
+
+def _persist_disabled(MainWindow):
+    """Write the current disabled-plugin set back to settings.ini."""
+    from plugins.manager import get_manager
+    cfg = getattr(MainWindow, "config", None)
+    if cfg is None:
+        return
+    mgr = get_manager()
+    disabled = sorted(mgr.plugin_package_name(p).lower()
+                      for p in mgr.plugins if not mgr.is_enabled(p))
+    try:
+        if not cfg.has_section("Plugins"):
+            cfg.add_section("Plugins")
+        cfg.set("Plugins", "disabled", ", ".join(disabled))
+        if hasattr(MainWindow, "save_config"):
+            MainWindow.save_config()
+    except Exception as exc:
+        _log(f"could not persist plugin toggle: {exc}")
+
+
+def _build_plugins_menu(MainWindow):
+    from PyQt5.QtWidgets import QMessageBox
+    from plugins.manager import get_manager
+
+    mgr = get_manager()
+
+    # Apply any persisted enable/disable choices before drawing the menu.
+    # Through set_enabled, not the attribute: the manager caches which plugins
+    # tick and dispatch keyed on its enabled generation, and a plugin is told
+    # (on_enabled_changed) so it can release what it holds.
+    persisted_off = _disabled_from_config(MainWindow)
+    for plugin in mgr.plugins:
+        if mgr.plugin_package_name(plugin).lower() in persisted_off or \
+                plugin.name.lower() in persisted_off:
+            mgr.set_enabled(plugin, False)
+
+    menubar = MainWindow.menuBar()
+
+    # Insert Plugins immediately before Help
+    help_action = None
+    for action in menubar.actions():
+        if action.text().replace("&", "") == "Help":
+            help_action = action
+            break
+
+    # Drop a previously built menu, so a rebuild never leaves two "Plugins"
+    # entries in the menu bar.
+    for action in list(menubar.actions()):
+        if action.text().replace("&", "") == "Plugins":
+            menubar.removeAction(action)
+
+    menu = QMenu("Plugins", menubar)
+    if help_action:
+        menubar.insertMenu(help_action, menu)
+    else:
+        menubar.addMenu(menu)
+
+    if not mgr.plugins:
+        act = menu.addAction("No plugins loaded")
+        act.setEnabled(False)
+        return
+
+    # (plugin, "Enabled" toggle, plugin-owned actions) per submenu, re-read
+    # from the live enabled state every time the menu opens. The menu is built
+    # once at startup, but a plugin's state changes after that without the
+    # menu being involved -- above all a level that auto-enables its plugin
+    # (Big World for a map with a BigWorldSettings entity). Without the
+    # refresh the toggle kept showing that plugin as off while it ran.
+    rows = []
+
+    def _sync_with_live_state():
+        for plugin, toggle, actions in rows:
+            on = mgr.is_enabled(plugin)
+            if toggle.isChecked() != on:
+                # Reflect the state; do not fire _toggle_plugin, which would
+                # persist it and turn an auto-enable into a manual one.
+                toggle.blockSignals(True)
+                toggle.setChecked(on)
+                toggle.blockSignals(False)
+            for act in actions:
+                act.setVisible(on)
+                act.setEnabled(on)
+
+    menu.aboutToShow.connect(_sync_with_live_state)
+
+    for plugin in mgr.plugins:
+        sub = menu.addMenu(plugin.name)
+
+        # Plugin-owned actions sit at the very top, and are hidden outright
+        # while that plugin is off rather than shown greyed out.
+        # _run_plugin_menu_action refuses to call them without their plugin, so
+        # a visible one is an offer the editor cannot honour -- Tidy's "Load
+        # Demo map" looked available and silently did nothing.
+        plugin_actions = []
+        enabled = mgr.is_enabled(plugin)
+        for label, callback, tooltip in [
+            (label, callback, tooltip)
+            for pl, label, callback, tooltip in mgr.menu_actions()
+            if pl is plugin
+        ]:
+            act = sub.addAction(label)
+            if tooltip:
+                act.setToolTip(tooltip)
+            act.triggered.connect(
+                lambda _checked=False, p=plugin, cb=callback:
+                _run_plugin_menu_action(MainWindow, p, cb))
+            plugin_actions.append(act)
+        if plugin_actions:
+            # The separator belongs to the group: with the actions hidden it
+            # would otherwise sit above "Enabled" on its own.
+            plugin_actions.append(sub.addSeparator())
+        for act in plugin_actions:
+            act.setVisible(enabled)
+            act.setEnabled(enabled)
+
+        # Enable/disable toggle (checked = on).
+        toggle = sub.addAction("Enabled")
+        toggle.setCheckable(True)
+        toggle.setChecked(mgr.is_enabled(plugin))
+        toggle.toggled.connect(
+            lambda checked, p=plugin, acts=plugin_actions:
+            _toggle_plugin(MainWindow, p, checked, acts))
+        rows.append((plugin, toggle, plugin_actions))
+        sub.addSeparator()
+
+        # Placement entries for this plugin's entities.
+        entries = [(label, cls) for pl, label, cls in mgr.menu_entries()
+                   if pl is plugin]
+        if entries:
+            place_hdr = sub.addAction("Add entity (at origin):")
+            place_hdr.setEnabled(False)
+            for label, cls in entries:
+                act = sub.addAction(f"   {label}")
+                act.triggered.connect(
+                    lambda _checked=False, c=cls, l=label, p=plugin:
+                    _place_plugin_entity(MainWindow, p, c, l))
+            sub.addSeparator()
+
+        about = sub.addAction("About…")
+        about.triggered.connect(
+            lambda _checked=False, p=plugin:
+            QMessageBox.information(
+                MainWindow, f"{p.name} v{p.version}",
+                f"{p.description or '(no description)'}\n\n"
+                f"Version: {p.version}\n"
+                f"Category: {p.category}\n"
+                f"Place its entities from here or the 2D view's right-click "
+                f"menu under Plugins ▸ {p.name}."))
+
+
+
+def _run_plugin_menu_action(MainWindow, plugin, callback):
+    """Invoke a plugin-owned editor menu action safely."""
+    if not getattr(plugin, "enabled", False):
+        return
+    try:
+        callback(MainWindow)
+    except Exception as exc:
+        _log(f"plugin menu action failed for '{plugin.name}': {exc}")
+
+
+def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
+    from plugins.manager import get_manager
+    get_manager().set_enabled(plugin, enabled)
+    for action in menu_actions or ():
+        try:
+            action.setVisible(bool(enabled))
+            action.setEnabled(bool(enabled))
+        except Exception:
+            pass
+    _persist_disabled(MainWindow)
+    if hasattr(MainWindow, "show_toast"):
+        state = "enabled" if enabled else "disabled"
+        MainWindow.show_toast(f"Plugin '{plugin.name}' {state}"
+                              + ("" if enabled else " (restart to fully unload)"))
+
+
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
@@ -240,6 +429,7 @@ class Ui_MainWindow(object):
         MainWindow.tools_menu = menubar.addMenu('Tools')
         MainWindow.debug_menu = menubar.addMenu('Debug')
         help_menu = menubar.addMenu('Help')
+        _build_plugins_menu(MainWindow)
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
         MainWindow.file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
