@@ -107,6 +107,18 @@ def _wait_for(predicate, timeout=DEADLINE, what="condition"):
 # The world is shared, not copied
 # ---------------------------------------------------------------------------
 
+def test_runtime_contracts_reject_a_runtime_bound_to_the_wrong_host(logic):
+    """The extracted domains must remain owned by this LogicThread instance."""
+    thread = logic()
+    runtime = thread.player_runtime
+    runtime.logic = object()
+    try:
+        with pytest.raises(AssertionError, match="player_runtime\\.logic"):
+            thread._validate_runtime_contracts()
+    finally:
+        runtime.logic = thread
+
+
 def test_the_logic_thread_reads_the_editor_state_live(logic):
     """Fio's whole premise: one world, no serialisation between the two."""
     state_brushes = [box_brush("wall")]
