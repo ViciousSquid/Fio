@@ -55,7 +55,7 @@ class ReferenceLogic:
         self.brushes = brushes
         self.things = things
         self.io_manager = io_manager
-        self.player = player
+        self.player_runtime = SimpleNamespace(player=player)
         self.movers = []
         self.doors = []
         self.mover_states = {}
@@ -217,7 +217,7 @@ class ReferenceLogic:
             ny = original[1] + (direction[1] * distance) * eased
             nz = original[2] + (direction[2] * distance) * eased
             brush['pos'] = [nx, ny, nz]
-            if self.player and self.player.ground_object == brush:
+            if self.player_runtime.player and self.player_runtime.player.ground_object == brush:
                 self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
     def _update_mover_path(self, idx: int, brush: dict, delta: float):
@@ -265,7 +265,7 @@ class ReferenceLogic:
             move_delta = new_pos - np.array(brush['pos'])
             brush['pos'] = new_pos.tolist()
 
-            if self.player and self.player.ground_object == brush:
+            if self.player_runtime.player and self.player_runtime.player.ground_object == brush:
                 self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
 
             if self.io_manager:
@@ -295,7 +295,7 @@ class ReferenceLogic:
             move_delta = new_pos - np.array(brush['pos'])
             brush['pos'] = new_pos.tolist()
 
-            if self.player and self.player.ground_object == brush:
+            if self.player_runtime.player and self.player_runtime.player.ground_object == brush:
                 self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
 
     def _update_doors(self, delta: float):
@@ -351,7 +351,7 @@ class ReferenceLogic:
             ny = original[1] + (direction[1] * distance) * progress
             nz = original[2] + (direction[2] * distance) * progress
             brush['pos'] = [nx, ny, nz]
-            if self.player and self.player.ground_object == brush:
+            if self.player_runtime.player and self.player_runtime.player.ground_object == brush:
                 self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
 
