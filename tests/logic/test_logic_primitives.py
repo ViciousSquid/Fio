@@ -35,7 +35,6 @@ class World:
         self.manager.set_logic_thread(self)
         self.io_manager = self.manager
         self.editor_state = SimpleNamespace(brushes=[], things=[])
-        self.gate_inputs = {}
         self.timing_runtime = LogicTiming(self)
         self.door_states = {}
         self.mover_states = {}
@@ -308,8 +307,8 @@ def test_two_gates_keep_separate_signals(world):
     second = world.add(LogicGate(pos=[0, 0, 0],
                                  properties={"name": "gate", "logic_type": "OR"}))
     world.send(first, "Trigger", "a")
-    assert world.gate_inputs[first.properties["id"]] == {"a"}
-    assert second.properties["id"] not in world.gate_inputs
+    assert world.manager.gate_inputs[first.properties["id"]] == {"a"}
+    assert second.properties["id"] not in world.manager.gate_inputs
 
 
 def test_unnamed_signals_from_different_sources_are_different_signals(world):

@@ -81,8 +81,6 @@ class HostStub:
         self.editor_state.brushes = []
         self.editor_state.things = []
         self.play_mode = False
-        self.gate_inputs = {}
-        self.active_speakers = set()
         self.player = None
         self.terrain = None
 

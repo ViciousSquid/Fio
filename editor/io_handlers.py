@@ -782,7 +782,7 @@ def register_all_input_handlers(io_manager: IOManager):
         when asked to.
         """
         gate_key = _gate_key(entity)
-        active = len(logic.gate_inputs.get(gate_key, ()))
+        active = len(logic.io_manager.gate_inputs.get(gate_key, ()))
         expected = max(1, _gate_expected_inputs(entity, logic))
         logic_type = str(entity.properties.get('logic_type', 'AND')).upper()
 
@@ -817,7 +817,7 @@ def register_all_input_handlers(io_manager: IOManager):
         if authored_flag(entity, 'disabled'):
             return
         gate_key = _gate_key(entity)
-        signals = logic.gate_inputs.setdefault(gate_key, set())
+        signals = logic.io_manager.gate_inputs.setdefault(gate_key, set())
         source = param.strip() if param else ''
         if not source:
             # An unnamed signal is identified by whoever fired it, so two
@@ -854,7 +854,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def gate_reset(entity, param, logic):
         """De-assert every input signal."""
-        logic.gate_inputs.pop(_gate_key(entity), None)
+        logic.io_manager.gate_inputs.pop(_gate_key(entity), None)
 
     io_manager.register_input_handler('logic_gate', 'trigger', gate_trigger)
     io_manager.register_input_handler('logic_gate', 'clearinput', gate_clear_input)

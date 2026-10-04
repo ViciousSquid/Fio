@@ -308,9 +308,6 @@ class LogicThread(threading.Thread):
         self.trigger_runtime = LogicTriggers(self)
         self.trigger_runtime._reset_trigger_state()
 
-        # Logic Gate State
-        self.gate_inputs = {}
-        
         # Countdown state for logic_timer entities, keyed by the timer's UUID
         # (see LogicThread._timer_key) so it survives a save and can never be
         # confused with another entity's.

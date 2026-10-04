@@ -42,7 +42,6 @@ class Level:
         self.editor_state = type("EditorStateStub", (), {})()
         self.editor_state.brushes = []
         self.editor_state.things = []
-        self.gate_inputs = {}
         self.timing_runtime = LogicTiming(self)
         self.world_runtime = LogicWorld(self, timer_type=LogicTimer)
         self.opened = []

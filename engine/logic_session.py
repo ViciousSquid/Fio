@@ -143,7 +143,6 @@ class LogicSession:
             logic.player_runtime._player_was_in_water = False
             logic.player_runtime._waterwalk_timer = 0.0
 
-            logic.gate_inputs = {}
             logic.timing_runtime.timer_states.clear()
 
             # Reset active weapon / ammunition.
@@ -254,7 +253,6 @@ class LogicSession:
             logic.collision_runtime.clear_angled_brush_collision()
             logic.interaction_runtime.current_hud_message = ""
             logic.interaction_runtime.current_hud_key_name = None
-            logic.gate_inputs = {}
             logic.timing_runtime.timer_states.clear()
             logic.timing_runtime.light_fade_states.clear()
             logic.combat_runtime.active_weapon = None

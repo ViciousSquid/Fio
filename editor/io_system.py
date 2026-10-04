@@ -307,6 +307,10 @@ class IOManager:
         # start of the next update() instead -- on the tick's thread.
         self._tick_thread = None
         self._foreign_outputs = deque()
+
+        # LogicGate signal state belongs to the event dispatcher: it is
+        # transient, session-local I/O state, not world-owner state.
+        self.gate_inputs = {}
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -373,6 +377,7 @@ class IOManager:
         """Reset for new play session."""
         self.pending_events.clear()
         self._foreign_outputs.clear()
+        self.gate_inputs.clear()
         self.current_time = 0.0
         self._source_entity = None
         self._source_id = ""
