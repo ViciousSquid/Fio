@@ -82,7 +82,7 @@ class LogicCombat:
         })
         logic._plugin_emit("player_shoot", weapon=logic.active_weapon)
         yaw_rad = logic.player.angle
-        if logic.is_overhead():
+        if logic.camera.is_overhead():
             # Top-down aiming is planar: the player rotates to face a target and
             # fires along that ground heading. The overhead camera and sprite
             # both ignore pitch, so there is no way to aim vertically — folding

@@ -49,7 +49,7 @@ class LogicSession:
 
         # Likewise a camera ceiling: a session that sets one (Big World) sets
         # it again from its play-start hook, which runs after this.
-        logic.overhead_height_limit = None
+        logic.camera.overhead_height_limit = None
 
         if enabled:
             # A new Play session clears any previous fault marker.
@@ -169,7 +169,7 @@ class LogicSession:
 
             # Reset cinematic state.
             logic.cinematic_state = None
-            logic.camera_transition = None
+            logic.camera.camera_transition = None
             logic._hud_cinematic_last_active = False
             logic._hud_cinematic_fade_started = None
 
@@ -255,7 +255,7 @@ class LogicSession:
 
             logic.mover_path_states = {}
             logic.cinematic_state = None
-            logic.camera_transition = None
+            logic.camera.camera_transition = None
             logic._hud_cinematic_last_active = False
             logic._hud_cinematic_fade_started = None
             logic._hud_health_alpha = 0.5

@@ -246,7 +246,7 @@ class LogicRender:
                 player_angle = logic.player.angle
                 player_pitch = logic.player.pitch
                 camera_height = logic.player.camera_height
-                ct = logic.camera_transition
+                ct = logic.camera.camera_transition
                 if ct:
                     dur = ct["duration"]
                     t = (
@@ -287,7 +287,7 @@ class LogicRender:
                         up_vec,
                     )
                     fov = a[3] + (b[3] - a[3]) * t
-                elif logic.is_overhead():
+                elif logic.camera.is_overhead():
                     cam_pos, direction, up_vec = logic.camera._overhead_camera(
                         player_pos,
                         player_angle,
@@ -297,7 +297,7 @@ class LogicRender:
                         cam_pos + direction,
                         up_vec,
                     )
-                    fov = logic.frustum_fov
+                    fov = logic.camera.frustum_fov
                 else:
                     cam_pos = player_pos + glm.vec3(
                         0,
@@ -314,7 +314,7 @@ class LogicRender:
                         cam_pos + direction,
                         glm.vec3(0, 1, 0),
                     )
-                    fov = logic.frustum_fov
+                    fov = logic.camera.frustum_fov
                 write_state.player_pos = player_pos
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch
@@ -401,7 +401,7 @@ class LogicRender:
             )
         else:
             write_state.shot_ready = False
-        write_state.camera_transition_active = bool(logic.camera_transition)
+        write_state.camera_transition_active = bool(logic.camera.camera_transition)
 
         if logic.play_mode and getattr(
             logic, "_monster_projectiles", None
@@ -436,7 +436,7 @@ class LogicRender:
         )
         projection = glm.perspective(
             glm.radians(fov),
-            logic.frustum_aspect,
+            logic.camera.frustum_aspect,
             1.0,
             far,
         )

@@ -884,7 +884,7 @@ class QtGameView(QOpenGLWidget):
         self.camera_mode = str(mode)
         lt = getattr(self, "logic_thread", None)
         if lt is not None and hasattr(lt, "set_camera_mode"):
-            lt.set_camera_mode(self.camera_mode)
+            lt.camera.set_camera_mode(self.camera_mode)
         self.update()
 
     def _is_overhead(self) -> bool:
@@ -1027,7 +1027,7 @@ class QtGameView(QOpenGLWidget):
             self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         if hasattr(self.logic_thread, "set_camera_mode"):
-            self.logic_thread.set_camera_mode(getattr(self, "camera_mode", "First Person"))
+            self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
         self._sync_view_distance()
         self.logic_thread.start()
@@ -1059,7 +1059,7 @@ class QtGameView(QOpenGLWidget):
         else:
             self._cached_aspect_ratio = 1.0
         if self.logic_thread:
-            self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+            self.logic_thread.camera.set_frustum_aspect(self._cached_aspect_ratio)
         if self.console_overlay_active:
             self._console_input.setGeometry(0, height - 36, width, 36)
 
@@ -2631,7 +2631,7 @@ class QtGameView(QOpenGLWidget):
                 if self.height() > 0:
                     self._cached_aspect_ratio = (self.width() // 2) / self.height()
                     if self.logic_thread:
-                        self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+                        self.logic_thread.camera.set_frustum_aspect(self._cached_aspect_ratio)
         else:
             # Leaving Play Mode is an audio lifecycle boundary: stop both
             # looping speaker channels and one-shot mixer channels, and discard
@@ -2659,7 +2659,7 @@ class QtGameView(QOpenGLWidget):
             if self.height() > 0:
                 self._cached_aspect_ratio = self.width() / self.height()
                 if self.logic_thread:
-                    self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+                    self.logic_thread.camera.set_frustum_aspect(self._cached_aspect_ratio)
             self._play_mode_hint = ""
             self._play_mode_hint_timer.stop()
             self._cached_hint_text = None
@@ -2684,7 +2684,7 @@ class QtGameView(QOpenGLWidget):
                 vp_w = (w // 2) if self.splitscreen_mode else w
                 self._cached_aspect_ratio = vp_w / h
                 if self.logic_thread:
-                    self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
+                    self.logic_thread.camera.set_frustum_aspect(self._cached_aspect_ratio)
         status = "ON" if self.splitscreen_mode else "OFF"
         if hasattr(self.editor, 'show_toast'):
             self.editor.show_toast(f"Split-Screen: {status}  [F9]")

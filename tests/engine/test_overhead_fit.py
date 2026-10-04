@@ -231,9 +231,9 @@ def test_a_play_mode_change_drops_the_ceiling(entering):
     from engine.threaded_game_state import ThreadedGameState
     logic = LogicThread(ThreadedGameState(), EditorState())
     try:
-        logic.overhead_height_limit = 1024.0
-        logic._apply_play_mode(entering)
-        assert logic.overhead_height_limit is None
+        logic.camera.overhead_height_limit = 1024.0
+        logic.session_runtime.apply_play_mode(entering)
+        assert logic.camera.overhead_height_limit is None
     finally:
-        logic._apply_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
         logic.stop()
