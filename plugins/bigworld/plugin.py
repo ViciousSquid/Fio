@@ -114,7 +114,7 @@ class BigWorldPlugin(FioPlugin):
         logic._bigworld = None
         # Only a running session publishes a camera-fitted view (see the runtime).
         logic.sim_view_rect = None
-        things = getattr(logic, "things", None) or []
+        things = logic.editor_state.things
         if not self.map_uses_bigworld(things):
             # No opt-in: behave as ordinary Fio, and in particular leave the
             # streaming runtime unimported. Checking this *before* the import
