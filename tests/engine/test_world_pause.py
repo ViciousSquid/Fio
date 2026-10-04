@@ -237,20 +237,6 @@ def test_a_paused_tick_reports_a_hud_prompt_as_consuming_the_use_key(playing):
 # The monster AI thread
 # ---------------------------------------------------------------------------
 
-class _CountingAI:
-    def __init__(self):
-        self.updates = 0
-
-    def update(self, delta):
-        self.updates += 1
-
-
-class _Host:
-    class _Session:
-        world_paused = False
-    session_runtime = _Session()
-
-
 def _wait_for(predicate, timeout=2.0):
     deadline = time.perf_counter() + timeout
     while time.perf_counter() < deadline:
@@ -260,36 +246,47 @@ def _wait_for(predicate, timeout=2.0):
     return predicate()
 
 
-def test_the_monster_ai_thread_idles_while_the_world_is_paused():
-    host, ai = _Host(), _CountingAI()
-    thread = MonsterAIThread(host, ai, threading.Lock(), tick_rate=100)
+def _start_real_monster_ai_thread(logic, monkeypatch):
+    ai = logic.monster_ai
+    calls = {"count": 0}
+    real_update = ai.update
+
+    def counted(delta):
+        calls["count"] += 1
+        return real_update(delta)
+
+    monkeypatch.setattr(ai, "update", counted)
+    thread = MonsterAIThread(logic, ai, threading.Lock(), tick_rate=100)
     thread.start()
+    return thread, calls
+
+
+def test_the_monster_ai_thread_idles_while_the_world_is_paused(logic, monkeypatch):
+    thread, calls = _start_real_monster_ai_thread(logic, monkeypatch)
     try:
-        assert _wait_for(lambda: ai.updates > 3), "the control: the AI runs"
-        host.session_runtime.world_paused = True
-        time.sleep(0.05)                     # let an in-flight frame finish
-        frozen = ai.updates
+        assert _wait_for(lambda: calls["count"] > 3), "the real AI runs"
+        logic.session_runtime.set_world_paused("menu", True)
+        time.sleep(0.05)
+        frozen = calls["count"]
         time.sleep(0.3)
-        assert ai.updates == frozen
-        host.session_runtime.world_paused = False
-        assert _wait_for(lambda: ai.updates > frozen), "the AI did not resume"
+        assert calls["count"] == frozen
+        logic.session_runtime.set_world_paused("menu", False)
+        assert _wait_for(lambda: calls["count"] > frozen), "the real AI did not resume"
     finally:
         thread.stop()
         thread.join(timeout=2.0)
 
 
-def test_the_monster_ai_does_not_fast_forward_after_a_pause():
-    """0.5 s paused at 100 Hz would be ~50 catch-up updates in one burst."""
-    host, ai = _Host(), _CountingAI()
-    host.session_runtime.world_paused = True
-    thread = MonsterAIThread(host, ai, threading.Lock(), tick_rate=100)
-    thread.start()
+def test_the_monster_ai_does_not_fast_forward_after_a_pause(logic, monkeypatch):
+    """0.5 s paused at 100 Hz must not become a burst of catch-up updates."""
+    logic.session_runtime.set_world_paused("menu", True)
+    thread, calls = _start_real_monster_ai_thread(logic, monkeypatch)
     try:
         time.sleep(0.5)
-        assert ai.updates == 0
-        host.session_runtime.world_paused = False
+        assert calls["count"] == 0
+        logic.session_runtime.set_world_paused("menu", False)
         time.sleep(0.03)
-        assert ai.updates < 15
+        assert calls["count"] < 15
     finally:
         thread.stop()
         thread.join(timeout=2.0)
