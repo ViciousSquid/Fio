@@ -105,18 +105,6 @@ class FakeLogicThread:
             player2_dead=False,
         )
         self.play_mode = False
-        self.player_runtime = SimpleNamespace(
-            player=player,
-            god_mode=False,
-            buddha_mode=False,
-            notarget=False,
-            player_health=100,
-            player_max_health=100,
-            player_dead=False,
-            player2_health=100,
-            player2_max_health=100,
-            player2_dead=False,
-        )
         self.io_manager = io_manager
         self.game_state = FakeGameState()
         self.plugins = SimpleNamespace(services={})

@@ -31,7 +31,7 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
 
     logic = LogicThread.__new__(LogicThread)
     logic.editor_state = SimpleNamespace(things=list(things), brushes=[])
-    logic.player = SimpleNamespace(
+    logic.player_runtime.player = SimpleNamespace(
         pos=list(player_pos),
         angle=float(angle),
     )
@@ -66,7 +66,7 @@ def test_levelchanger_radius_boundary_is_squared_without_glm_distance():
     logic.interaction_runtime.handle(False)
     assert logic.interaction_runtime.current_hud_message == ""
 
-    logic.player.pos = [60.0, 0.0, 60.0]
+    logic.player_runtime.player.pos = [60.0, 0.0, 60.0]
     logic.interaction_runtime.handle(False)
     assert logic.interaction_runtime.current_hud_message == "[E] Complete Level"
 

@@ -368,7 +368,7 @@ def _contract_host():
         if attribute not in {"brushes", "things"}:
             setattr(host, attribute, None)
 
-    host.camera = SimpleNamespace(player=host.player)
+    host.camera = SimpleNamespace(player_runtime=SimpleNamespace(player=host.player))
     # The mover state properties delegate through mover_runtime. Use the real
     # subsystem here so hasattr(host, "mover_states") exercises that contract
     # rather than a generic stub with no state properties.

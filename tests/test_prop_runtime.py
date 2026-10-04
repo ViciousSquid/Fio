@@ -199,7 +199,7 @@ def test_carried_billboard_keeps_its_facing_when_player_turns():
     assert session.held is prop
     assert prop._carry_sprite_yaw == 0.0
 
-    logic.player.angle = 1.25
+    logic.player_runtime.player.angle = 1.25
     session.tick(1 / 60, use_pressed=False)
     assert prop._carry_sprite_yaw == 0.0
 
@@ -211,7 +211,7 @@ def test_the_registry_is_derived_from_the_authoritative_thing_list():
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
     logic.combat_runtime = LogicCombat(logic)
-    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
+    logic.player_runtime.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
 
@@ -227,7 +227,7 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
     logic.combat_runtime = LogicCombat(logic)
-    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
+    logic.player_runtime.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
 
@@ -250,7 +250,7 @@ def test_a_rebuild_releases_a_prop_that_left_the_world():
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
     logic.combat_runtime = LogicCombat(logic)
-    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
+    logic.player_runtime.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
     session.held = other
@@ -271,7 +271,7 @@ def test_an_empty_registry_is_a_valid_state():
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
     logic.combat_runtime = LogicCombat(logic)
-    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
+    logic.player_runtime.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
     assert session.props == []
