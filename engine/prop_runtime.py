@@ -381,7 +381,7 @@ class PropSession:
             value_num = 25
 
         if collect_type == "health":
-            player_runtime = self.logic.player_runtime.player_runtime
+            player_runtime = self.logic.player_runtime
             player_runtime.player_health = min(
                 player_runtime.player_max_health,
                 player_runtime.player_health + value_num,
