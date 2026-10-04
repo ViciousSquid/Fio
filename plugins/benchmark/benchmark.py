@@ -79,9 +79,6 @@ class BenchmarkRunner:
         self._live_stress_phase = ""
         self._live_stress_label = None
         self._live_stress_value = None
-        self._live_stress_deadline = 0.0
-        self._live_stress_timeout = False
-        self._live_stress_timeout_reason = ""
         self._live_watchdog_thread = None
         self._live_watchdog_stop = None
         self._live_io_elapsed = None
@@ -147,45 +144,6 @@ class BenchmarkRunner:
         The external benchmark manager owns the hard supervision boundary.
         """
         return 60.0
-
-    def _start_live_stress_monitor(self, label):
-        """Compatibility no-op: process supervision is external now."""
-        self._live_stress_timeout = False
-        self._live_stress_timeout_reason = ""
-        self._live_stress_deadline = 0.0
-
-    def _stop_live_stress_monitor(self):
-        """Compatibility no-op: the external manager supervises Fio."""
-        self._live_stress_deadline = 0.0
-
-    def _live_watchdog_beat(self):
-        """Compatibility no-op; the manager observes the real process."""
-        return
-
-    def _on_live_stress_timeout(self, reason):
-        if not self._live_stress_active:
-            return
-        self._live_stress_timeout = True
-        self._live_stress_timeout_reason = str(reason)
-        self._append(
-            "<span style='color:#ff8a00; font-weight:bold;'>"
-            "LIVE TEST TIMEOUT</span> — %s" % self._html_escape(reason)
-        )
-    
-
-    def _start_monitor_for_risky_test(self, label, timeout_s, process):
-        """Legacy worker supervision hook; no longer used for live tests."""
-        return
-
-    def _monitor_beat(self, phase=None, deadline=None):
-        """Compatibility no-op; timeout supervision belongs to the manager."""
-        return
-
-    def _monitor_failed(self):
-        return False, ""
-
-    def _stop_monitor(self):
-        return
 
     def _worker_timeout_for(self, label):
         """Return the hard wall-clock timeout for an isolated stress test."""
@@ -370,7 +328,6 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._worker_active = False
         self._terminate_worker_process()
-        self._stop_monitor()
     
         result = {
             "test": label,
