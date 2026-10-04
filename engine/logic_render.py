@@ -461,8 +461,6 @@ class LogicRender:
 
         table = write_state.render_table
         etable = write_state.entity_table
-        logic._render_table = table
-        logic._entity_table = etable
 
         render_dirty_snapshot = logic.editor_state.render_dirty_snapshot()
         snapshot_epoch, _current_dirty = render_dirty_snapshot
