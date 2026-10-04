@@ -978,9 +978,6 @@ class LogicThread(threading.Thread):
     def start_camera_transition(self, target_mode=None, duration=1.0):
         return self.camera.start_camera_transition(target_mode, duration)
 
-    def _update_camera_transition(self, delta):
-        self.camera.update_camera_transition(delta)
-
     # =========================================================================
     # MOVER/DOOR RUNTIME
     # =========================================================================
@@ -1343,7 +1340,8 @@ class LogicThread(threading.Thread):
 
         # ---- Camera transition (First Person <-> Overhead tween) ----
         # Advances even while a cinematic runs so a queued toggle resolves; it
-        # only affects the view matrix when no cinematic is overriding it.        self._update_camera_transition(delta)
+        # only affects the view matrix when no cinematic is overriding it.
+        self.camera.update_camera_transition(delta)
 
         # ---- Cinematic camera: suppress player input while active ----
         self._update_cinematic_camera(delta)
