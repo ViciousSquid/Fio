@@ -508,12 +508,10 @@ def test_effect_texture_inputs_ignore_invalid_variants():
     effect = Effect(properties={"id": "invalid-effect-input"})
     table = EntityTable()
     table.begin_frame([effect], epoch=1, effect_runtime=True)
-    io_manager = IOManager()
-    register_all_input_handlers(io_manager)
-    logic = SimpleNamespace(
-        things=[effect],
-        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
-    )
+    send = _io_for(effect)
+    logic = send.logic
+    register_all_input_handlers(logic.io_manager)
+    io_manager = logic.io_manager
 
     io_manager._input_handlers[("effect", "setfiretexture")](effect, "6", logic)
     io_manager._input_handlers[("effect", "setfiretexture")](effect, "fire01", logic)
