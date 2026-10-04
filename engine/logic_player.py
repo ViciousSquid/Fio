@@ -59,7 +59,7 @@ class LogicPlayer:
             move_dir,
             jump,
             crouch,
-            logic._collision_brushes_cache,
+            logic.collision_runtime._collision_brushes_cache,
             logic.mover_runtime._mover_brush_list,
             logic.mover_runtime._door_brush_list,
             logic.terrain,
@@ -85,11 +85,11 @@ class LogicPlayer:
             p2_dir,
             bool(p2['jump']),
             False,
-            logic._collision_brushes_cache,
+            logic.collision_runtime._collision_brushes_cache,
             logic.mover_runtime._mover_brush_list,
             logic.mover_runtime._door_brush_list,
             logic.terrain,
-            spatial_grid=getattr(logic, '_spatial_grid', None),
+            spatial_grid=logic.session_runtime.spatial_grid,
         )
 
     def update_water_sounds(self, delta):
