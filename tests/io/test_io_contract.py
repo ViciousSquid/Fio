@@ -40,6 +40,7 @@ from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import ENTITY_TYPES, PathNode, Thing           # noqa: E402
 from engine.cutscene_runtime import CutsceneRuntime              # noqa: E402
 from engine.logic_movers import LogicMovers                       # noqa: E402
+from engine.logic_triggers import LogicTriggers                   # noqa: E402
 from engine.logic_portals import LogicPortals                     # noqa: E402
 from engine.logic_world import LogicWorld                         # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
@@ -89,6 +90,15 @@ class HostStub:
         self.terrain = None
         self._timer_things = []
         self._monster_spawn_health = {}
+        self._moving_rows = None
+        self._props = None
+        self._monster_things = []
+        self._monster_by_id = {}
+        self._monster_lock = __import__("threading").RLock()
+        self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
+        self.collision_runtime = type("CollisionRuntimeStub", (), {"mark_dirty": lambda self: None})()
+        self.trigger_runtime = LogicTriggers(self)
+        self.trigger_runtime._reset_trigger_state()
         self.editor_state = self
 
     #: ``editor_state`` points back at the stub so ``logic.editor_state.things``
