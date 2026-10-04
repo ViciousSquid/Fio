@@ -222,11 +222,11 @@ def test_the_collision_brush_list_is_concatenated_once_not_per_tick(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.player = Player(0.0, 0.0)
-        before = thread._collision_brushes_cache
+        before = thread.collision_runtime._collision_brushes_cache
         for _ in range(20):
             thread._tick(1.0 / 60.0)
             thread.render_runtime.prepare_render_state()
-        assert thread._collision_brushes_cache is before, (
+        assert thread.collision_runtime._collision_brushes_cache is before, (
             "the combined collision brush list was rebuilt during 20 ticks; "
             "it only changes on a model-collision toggle or a play-mode "
             "transition")

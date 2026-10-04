@@ -254,13 +254,13 @@ def test_leaving_play_mode_removes_the_model_collision_pseudo_brushes(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     thread.session_runtime.apply_play_mode(False)
-    assert thread._model_collision_brushes == [], (
+    assert thread.collision_runtime._model_collision_brushes == [], (
         "model collision brushes built for the session were left behind")
     # The session's collision set is rebuilt when Play starts; kept past
     # Stop it pinned the session's brushes (see test_final_audit).
-    assert thread._collision_brushes_cache == []
+    assert thread.collision_runtime._collision_brushes_cache == []
     thread.session_runtime.apply_play_mode(True)
-    assert thread._collision_brushes_cache == thread.editor_state.brushes
+    assert thread.collision_runtime._collision_brushes_cache == thread.editor_state.brushes
 
 
 def test_the_render_projection_survives_the_play_mode_round_trip(logic):
