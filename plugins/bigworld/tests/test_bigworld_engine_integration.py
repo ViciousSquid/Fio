@@ -158,6 +158,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
 
 
 def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
+    from types import SimpleNamespace
     from plugins.bigworld.runtime import BigWorldSession
 
     far = {'id': 'far', 'pos': [30000, 0, 0], 'size': [64, 64, 64]}
