@@ -682,9 +682,10 @@ class DebugTablesWindow(QMainWindow):
             self.timer.stop()
 
     def _game_state(self):
-        view = getattr(self.main_window, "view_3d", None)
-        logic = getattr(view, "logic_thread", None)
-        return getattr(logic, "game_state", None) if logic is not None else None
+        view = self.main_window.view_3d
+        if view is None or view.logic_thread is None:
+            return None
+        return view.logic_thread.game_state
 
     def refresh(self):
         started = time.perf_counter()
@@ -720,9 +721,10 @@ class DebugTablesWindow(QMainWindow):
         self._update_follow()
 
     def _monster_ai(self):
-        view = getattr(self.main_window, "view_3d", None)
-        logic = getattr(view, "logic_thread", None)
-        return logic, getattr(logic, "monster_ai", None)
+        view = self.main_window.view_3d
+        if view is None or view.logic_thread is None:
+            return None, None
+        return view.logic_thread, view.logic_thread.monster_ai
 
     def _copy_monster_table(self):
         """Copy the AI's MonsterTable, without ever making the AI wait.
@@ -835,8 +837,8 @@ class DebugTablesWindow(QMainWindow):
             rates = ((published - last[1]) / span, (declined - last[2]) / span)
             self._last_counters = (now, published, declined)
             self._last_rates = rates
-        logic = getattr(view, "logic_thread", None)
-        ai = getattr(logic, "monster_ai_thread", None)
+        logic = view.logic_thread if view is not None else None
+        ai = logic.monster_ai_thread if logic is not None else None
         return {
             "tick": float(getattr(logic, "tick_ms", 0.0)),
             "ai": float(getattr(ai, "update_ms", 0.0)) if ai is not None else 0.0,
