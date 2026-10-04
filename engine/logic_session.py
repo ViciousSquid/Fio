@@ -91,7 +91,7 @@ class LogicSession:
             logic.collision_runtime.refresh_collision_brushes_cache()
 
             # Runtime effect state belongs to this play session, not authoring.
-            logic.effect_store.begin_session(logic.things)
+            logic.effect_store.begin_session(logic.editor_state.things)
 
             # Reset player stats.
             logic.player_health = 100
@@ -104,7 +104,7 @@ class LogicSession:
             # Reset collection state.
             logic.trigger_runtime._reset_trigger_state()
             logic.collected_keys.clear()
-            for thing in logic.things:
+            for thing in logic.editor_state.things:
                 if PropThing and isinstance(thing, PropThing):
                     # Restores what the author set; forcing carry here made every
                     # Prop -- scenery models included -- carryable.
@@ -147,10 +147,10 @@ class LogicSession:
                 logic.io_manager.reset()
                 from editor.io_system import get_connections
 
-                for brush in logic.brushes:
+                for brush in logic.editor_state.brushes:
                     for conn in get_connections(brush):
                         conn.reset()
-                for thing in logic.things:
+                for thing in logic.editor_state.things:
                     for conn in get_connections(thing):
                         conn.reset()
 
@@ -161,7 +161,7 @@ class LogicSession:
 
             logic._spatial_grid = SpatialGrid(cell_size=512.0)
             logic._spatial_grid.populate(
-                logic.brushes + logic._model_collision_brushes
+                logic.editor_state.brushes + logic._model_collision_brushes
             )
             logic._physics_world = PhysicsWorld(logic._spatial_grid)
             logic._physics_world.rebuild(logic._physics_body_brushes)
@@ -194,7 +194,7 @@ class LogicSession:
             # Reset light fade transitions for a clean play session.
             logic.light_fade_states.clear()
             if Light is not None:
-                for thing in logic.things:
+                for thing in logic.editor_state.things:
                     if isinstance(thing, Light) and hasattr(
                         thing, "_fade_nominal"
                     ):
@@ -446,7 +446,7 @@ class LogicSession:
             logic._monster_spawn_health = {}
 
         reset = []
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if not isinstance(thing, MonsterThing):
                 continue
 
@@ -477,7 +477,7 @@ class LogicSession:
         if not logic.io_manager or not Speaker:
             return
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if not isinstance(thing, Speaker):
                 continue
             if not bool(thing.properties.get("play_on_start", False)):
@@ -505,7 +505,7 @@ class LogicSession:
         if not PlayerStart:
             return
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             if isinstance(thing, PlayerStart):
                 logic.io_manager.fire_output(
                     thing,
