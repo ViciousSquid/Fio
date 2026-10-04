@@ -19,6 +19,7 @@ def panel(qt_app):
     editor = types.SimpleNamespace(
         state=types.SimpleNamespace(things=[], brushes=[]),
         view_3d=QWidget(),
+        mark_dirty=lambda: None,
     )
     widget = PropertyEditor(editor)
     yield widget
