@@ -232,7 +232,7 @@ class LogicRender:
         write_state.is_play_mode = logic.play_mode
 
         if logic.play_mode and logic.player:
-            cs = logic.cinematic_state
+            cs = logic.cutscene_runtime.state
             if cs and "cam_pos" in cs:
                 cam_pos = glm.vec3(*cs["cam_pos"])
                 cam_angle = cs.get("cam_angle", 0.0)
@@ -342,7 +342,7 @@ class LogicRender:
 
         write_state.camera_view_matrix = view_matrix
 
-        cinematic_active = bool(logic.cinematic_state)
+        cinematic_active = bool(logic.cutscene_runtime.state)
         now = time.perf_counter()
         if cinematic_active:
             logic._hud_cinematic_last_active = True
@@ -377,7 +377,7 @@ class LogicRender:
             0,
             int(getattr(logic, "player_ammo", 0)),
         )
-        if logic.play_mode and logic.player and not logic.cinematic_state:
+        if logic.play_mode and logic.player and not logic.cutscene_runtime.state:
             write_state.player_underwater = bool(
                 getattr(logic.player, "eye_underwater", False)
             )
