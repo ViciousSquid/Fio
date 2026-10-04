@@ -82,7 +82,8 @@ def monster_window(window):
     things.append(make_thing(Monster, "corpse", (0, 96, 900), dead=True))
     logic = FakeLogicThread(brushes=[box_brush("ground", (0, -16, 0), (8192, 32, 8192))],
                             things=things, player=FakePlayer((0.0, 0.0, 0.0)))
-    logic._monster_things = list(things)
+    logic.world_runtime.monster_things = list(things)
+    logic.world_runtime.monster_by_id = {id(thing): thing for thing in things}
     ai = MonsterAI(logic)
     ai.set_spatial_grid(logic.build_spatial_grid())
     ai.update(1.0 / 30.0)
