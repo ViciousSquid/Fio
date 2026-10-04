@@ -318,7 +318,7 @@ def test_resetting_monsters_for_play_journals_their_sprite_state(logic):
     table.begin_frame(thread.things, 1)
     dead_sprite = table.sprite_recipes()[table.sprite_key_id[0]]
 
-    thread._reset_all_monsters(clear_dead=True)
+    thread.session_runtime.reset_all_monsters(clear_dead=True)
     table.begin_frame(thread.things, 1)
     sprite = table.sprite_recipes()[table.sprite_key_id[0]]
     assert sprite != dead_sprite

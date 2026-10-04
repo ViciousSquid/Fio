@@ -110,7 +110,7 @@ def _play(brushes=(), things=()):
     state, game_state, logic = _editor(brushes, things)
     logic.player = Player(0.0, 0.0, 0.0)
     logic.set_play_mode(True)
-    logic._stop_monster_ai()
+    logic.session_runtime.stop_monster_ai()
     return state, game_state, logic
 
 
