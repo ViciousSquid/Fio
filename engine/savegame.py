@@ -408,7 +408,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "moving_brushes": _capture_moving_brushes(logic),
         "mover_path_states": {
             str(i): _jsonify(_public_state(s))
-            for i, s in (getattr(logic, "mover_path_states", {}) or {}).items()},
+            for i, s in (logic.mover_runtime.mover_path_states or {}).items()},
     }
 
     return {
