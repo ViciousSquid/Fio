@@ -238,9 +238,9 @@ def test_culling_on_drops_what_is_behind_the_camera(logic):
                box_brush("behind", (0, 0, 6000), (64, 64, 64))]
     thread = logic(brushes=brushes)
     thread.culling_enabled = True
-    thread.editor_camera.pos = glm.vec3(0, 0, 0)
-    thread.editor_camera.yaw = -90.0        # look down -Z
-    thread.editor_camera.pitch = 0.0
+    thread.camera.get_editor_camera().pos = glm.vec3(0, 0, 0)
+    thread.camera.get_editor_camera().yaw = -90.0        # look down -Z
+    thread.camera.get_editor_camera().pitch = 0.0
 
     thread.render_runtime.prepare_render_state()
 
@@ -317,7 +317,7 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_between_
     thread.render_runtime.prepare_render_state()
 
     monster = make_thing(Monster, "late_monster", (0, 96, -300))
-    thread.things.append(monster)
+    thread.editor_state.things.append(monster)
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
@@ -361,9 +361,9 @@ def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
     thread = logic(things=[first_thing, second_thing])
     thread.render_runtime.prepare_render_state()
 
-    thread.things.remove(second_thing)
+    thread.editor_state.things.remove(second_thing)
     third_thing = make_thing(Light, "third", (900, 100, -700))
-    thread.things.append(third_thing)
+    thread.editor_state.things.append(third_thing)
     thread.render_runtime.prepare_render_state()
 
     published = thread.game_state.get_write_state()
