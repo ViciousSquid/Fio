@@ -1,0 +1,216 @@
+name: Native Windows ARM64 Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-arm64:
+    name: Windows ARM64 / Python 3.14 / PyQt5 source / Nuitka
+    runs-on: windows-11-vs2026-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up native ARM64 Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: 'arm64'
+          cache: pip
+
+      - name: Verify native architecture
+        shell: pwsh
+        run: |
+          $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          $proc = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          $py = python -c "import platform,struct; print(platform.machine()); print(struct.calcsize('P') * 8)"
+          Write-Host "OS architecture: $arch"
+          Write-Host "Process architecture: $proc"
+          Write-Host "Python:"
+          Write-Host $py
+          if ($arch -ne 'Arm64' -or $proc -ne 'Arm64') {
+            throw "This job is not running natively on Windows ARM64."
+          }
+          if ((python -c "import struct; print(struct.calcsize('P') * 8)") -ne '64') {
+            throw "Python is not 64-bit."
+          }
+          if ((python -c "import platform; print(platform.machine().lower())") -notmatch 'arm64|aarch64') {
+            throw "Python does not report an ARM64 machine."
+          }
+
+      - name: Locate Visual Studio ARM64 toolchain
+        shell: pwsh
+        run: |
+          $vswhere = "$env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            $vswhere = "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+          }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vs) {
+            throw "Visual Studio ARM64 C++ toolchain was not found."
+          }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (-not (Test-Path $vcvars)) {
+            throw "vcvarsall.bat not found at $vcvars"
+          }
+          "VS_INSTALL=$vs" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Visual Studio: $vs"
+          Write-Host "ARM64 environment script: $vcvars"
+
+      - name: Cache native Qt 5.15.2
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\fio\qt-arm64
+          key: fio-qt-5.15.2-win-arm64-v1
+
+      - name: Build Qt 5.15.2 for Windows ARM64
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          mkdir C:\fio 2>nul
+          cd /d C:\fio
+
+          curl.exe -L --fail --retry 5 ^
+            -o qt-everywhere-src-5.15.2.tar.xz ^
+            https://download.qt.io/archive/qt/5.15/5.15.2/single/qt-everywhere-src-5.15.2.tar.xz
+
+          certutil -hashfile qt-everywhere-src-5.15.2.tar.xz SHA256 | findstr /i 3a530d1b243b5dec00bc54937455471aaa3e56849d2593edb8ded07228202240
+
+          tar.exe -xf qt-everywhere-src-5.15.2.tar.xz
+          cd qt-everywhere-src-5.15.2
+          mkdir build
+          cd build
+
+          ..\configure.bat ^
+            -platform win32-msvc ^
+            -release ^
+            -opensource ^
+            -confirm-license ^
+            -prefix C:\fio\qt-arm64 ^
+            -opengl desktop ^
+            -nomake examples ^
+            -nomake tests ^
+            -no-icu ^
+            -no-dbus ^
+            -no-openssl ^
+            -skip qt3d ^
+            -skip qtactiveqt ^
+            -skip qtcanvas3d ^
+            -skip qtcharts ^
+            -skip qtconnectivity ^
+            -skip qtdatavis3d ^
+            -skip qtdeclarative ^
+            -skip qtgamepad ^
+            -skip qtgraphicaleffects ^
+            -skip qtlocation ^
+            -skip qtmultimedia ^
+            -skip qtnetworkauth ^
+            -skip qtpurchasing ^
+            -skip qtquickcontrols ^
+            -skip qtquickcontrols2 ^
+            -skip qtquicktimeline ^
+            -skip qtremoteobjects ^
+            -skip qtscxml ^
+            -skip qtsensors ^
+            -skip qtserialbus ^
+            -skip qtserialport ^
+            -skip qtspeech ^
+            -skip qtwebchannel ^
+            -skip qtwebengine ^
+            -skip qtwebsockets ^
+            -skip qtwebview ^
+            -skip qtwayland
+
+          nmake
+          nmake install
+
+      - name: Verify Qt ARM64
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          if not exist C:\fio\qt-arm64\bin\qmake.exe exit /b 1
+          if not exist C:\fio\qt-arm64\bin\Qt5Core.dll exit /b 1
+          C:\fio\qt-arm64\bin\qmake.exe -query
+          dumpbin /headers C:\fio\qt-arm64\bin\Qt5Core.dll | findstr /i "machine"
+          if errorlevel 1 exit /b 1
+
+      - name: Install ARM64 Python dependencies
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install numpy==2.5.3 Pillow==11.3.0 PyOpenGL==3.1.10 pygame-ce==2.5.8 PyGLM==2.8.3
+          python -m pip install "sip==6.9.1" "PyQt-builder==1.17.0" "PyQt5-sip==12.15.0"
+
+      - name: Build PyQt5 5.15.11 from source
+        shell: cmd
+        env:
+          QMAKE: C:\fio\qt-arm64\bin\qmake.exe
+        run: |
+          call "%VCVARS%" arm64
+          python -m pip install --no-build-isolation --no-binary=PyQt5 --no-deps --config-settings="--confirm-license=" PyQt5==5.15.11
+
+      - name: Verify native PyQt5
+        shell: cmd
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          call "%VCVARS%" arm64
+          python -c "from PyQt5.QtWidgets import QApplication; from PyQt5.QtGui import QSurfaceFormat; from PyQt5.QtCore import QT_VERSION_STR; import PyQt5.QtCore as QC; print('Qt:', QT_VERSION_STR); print('PyQt5:', QC.PYQT_VERSION_STR); app=QApplication([]); print('QApplication OK')"
+          python -c "import PyQt5.QtCore as m; print(m.__file__)"
+
+      - name: Install Nuitka
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m pip install "nuitka==4.2.2" zstandard
+
+      - name: Verify Nuitka ARM64 toolchain
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m nuitka --version
+
+      - name: Build Fio with Nuitka
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m nuitka ^
+            --standalone ^
+            --output-filename=Fio ^
+            --assume-yes-for-downloads ^
+            --plugin-enable=pyqt5 ^
+            --include-qt-plugins=sensible,platforms,styles,imageformats ^
+            --include-package=engine ^
+            --include-package=editor ^
+            --include-package=PIL ^
+            --include-data-dir=assets=assets ^
+            --include-package=plugins ^
+            --include-package-data=plugins ^
+            --include-data-dir=tools=tools ^
+            --include-data-dir=maps=maps ^
+            --include-data-files=settings.ini=settings.ini ^
+            --include-data-files=editor/version.txt=editor/version.txt ^
+            --windows-icon-from-ico=assets/icon.ico ^
+            --windows-console-mode=force ^
+            --output-dir=build ^
+            main.py
+
+      - name: Validate ARM64 executable
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          if not exist build\main.dist\Fio.exe exit /b 1
+          dumpbin /headers build\main.dist\Fio.exe | findstr /i "machine"
+          if errorlevel 1 exit /b 1
+          python -c "from pathlib import Path; p=Path('build/main.dist/Fio.exe'); print(f'Fio.exe: {p.stat().st_size:,} bytes')"
+
+      - name: Upload ARM64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fio-windows-arm64
+          path: build/main.dist/
