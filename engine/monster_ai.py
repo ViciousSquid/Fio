@@ -1822,9 +1822,9 @@ the scalar fallback for callers that do not have the dense table.
                     return
                 to_node = d_vec
                 dist_to_node = d_dist
-                speed_mult = detour_node.get_patrol_speed()
+                speed_mult = detour_node.get_speed()
         else:
-            speed_mult = node.get_patrol_speed()
+            speed_mult = node.get_speed()
 
         # ---- Movement toward node ----
         dir_len = glm.length(to_node)
