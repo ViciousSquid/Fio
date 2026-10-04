@@ -3,6 +3,9 @@ version: '3.8'
 services:
   fio-editor:
     build: .
+    # SECURITY WARNING: this compose service is NOT an isolation boundary.
+    # It uses the host network, mounts the host X11 socket, and exposes /dev/dri
+    # directly to the container. Do not use it to run untrusted plugins or code.
     container_name: fio_container
     environment:
       - DISPLAY=${DISPLAY}
