@@ -81,7 +81,7 @@ class FakeHost(QWidget):
         # a missing view here is a hard crash rather than a failed assert.
         self.view_3d = _FakeView()
 
-    def mark_dirty(self):
+    def mark_as_modified(self):
         self.dirty_marks += 1
 
     def save_state(self):
