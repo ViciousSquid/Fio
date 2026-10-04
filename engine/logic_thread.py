@@ -158,8 +158,9 @@ class LogicThread(threading.Thread):
     # These are deliberately the shared attributes a runtime may assume exist
     # after LogicThread.__init__ has completed. Session-specific contents are
     # reset by LogicSession, but the host containers themselves are created here.
-    # mover_runtime, parenting_runtime and player_runtime stay lazy for lightweight
-    # test doubles; their host contracts are still validated below.
+    # parenting_runtime and player_runtime stay lazy for lightweight test
+    # doubles; mover_runtime exists because the mover state property initializes it.
+    # Their host contracts are still validated below.
     _RUNTIME_HOSTS = (
         "camera",
         "mover_runtime",
