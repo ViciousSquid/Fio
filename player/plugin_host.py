@@ -11,9 +11,9 @@ Responsibilities:
 
 * **Load** plugins already installed with the player runtime. A ``.fiopak``
   is only a world container and is never used as a source of Python code.
-* **Bridge** the player's free-look camera to the minimal ``logic`` interface
-  plugin runtimes expect (``things`` / ``player`` / ``io_manager`` /
-  ``current_hud_message``), building entity instances from the map's data.
+* **Bridge** the player's free-look camera into the real ``LogicPlayer`` owner
+  exposed by the bridge, while providing the plugin host's scene/I/O surfaces
+  and building entity instances from the map's data.
 * **Dispatch** ``on_play_start`` / ``on_tick`` / ``on_play_stop`` each frame.
 
 Everything is guarded: if the plugin system isn't present or a package needs no
