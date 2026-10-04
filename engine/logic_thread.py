@@ -245,7 +245,6 @@ class LogicThread(threading.Thread):
             "monster_ai",
             "_monster_lock",
             "_timer_things",
-            "_moving_rows",
         ),
     }
 
@@ -728,7 +727,6 @@ class LogicThread(threading.Thread):
 
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
-    _moving_rows = None
     _rows_epoch = None
     _rows_watch = 0
 
