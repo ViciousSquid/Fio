@@ -21,7 +21,6 @@ from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
 from engine.physics import SpatialGrid
-from engine.projectile_table import ProjectileStore
 
 
 class ManualClock:
@@ -95,25 +94,18 @@ class FakeLogicThread:
         self.notarget = False
         self.io_manager = io_manager
         self.game_state = FakeGameState()
-        self._monster_projectiles = ProjectileStore()
         self._monster_lock = threading.RLock()
-        self._gunfire_events = []
         self.combat_runtime = LogicCombat(self)
         self._player_damage_lock = threading.Lock()
         self.god_mode = False
         self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
-        self._noise_events = self._gunfire_events
         self._monster_things = None
         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
         self.hurt_trigger_timers = {}
         self.HURT_INTERVAL = 0.5
         self.damage_applied = []
-
-    def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
-        return self._monster_projectiles.add(
-            pos, vel, owner_id, damage, lifetime)
 
     def _plugin_emit(self, event, **payload):
         if event == "player_damage":
