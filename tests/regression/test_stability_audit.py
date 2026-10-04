@@ -9,6 +9,7 @@ that check; the Debug Tables instrument shows the same columns by hand.
 """
 
 import json
+import os
 import random
 
 import numpy as np
@@ -18,6 +19,7 @@ pytest.importorskip("PyQt5", reason="drives the real editor state and logic thre
 
 from editor import io_system as io                         # noqa: E402
 from editor.editor_state import EditorState               # noqa: E402
+from editor.main_window import MainWindow                 # noqa: E402
 from editor.things import Light, Monster, PlayerStart, Portal  # noqa: E402
 from engine import entity_table as etm                    # noqa: E402
 from engine import render_table as rtm                    # noqa: E402
@@ -33,6 +35,7 @@ from engine.threaded_game_state import ThreadedGameState  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid  # noqa: E402
 
 pytestmark = [pytest.mark.qt, pytest.mark.integration]
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 #: Entity columns that are a function of wall-clock time (the Effect clock).
 _CLOCK_COLUMNS = {"effect_elapsed", "effect_alive", "light_params",
@@ -369,15 +372,9 @@ def test_a_trigger_saves_nothing_by_default():
 
 def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
     """The Activation combo writes the canonical trigger activation field."""
-    import types
-    from PyQt5.QtWidgets import QWidget
     from editor.property_editor import PropertyEditor
 
-    editor = types.SimpleNamespace(
-        state=types.SimpleNamespace(things=[], brushes=[]),
-        view_3d=QWidget(),
-        mark_as_modified=lambda: None,
-    )
+    editor = MainWindow(ROOT)
     panel = PropertyEditor(editor)
     try:
         brush = box_brush("trig", is_trigger=True, trigger_type="Once")
@@ -390,6 +387,10 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
         assert brush["trigger_save"] == "quicksave"
     finally:
         panel.deleteLater()
+        editor.unsaved_changes = False
+        editor.close()
+        editor.deleteLater()
+        qt_app.processEvents()
 
 
 def test_a_hidden_light_does_not_light_the_running_world():
@@ -411,24 +412,30 @@ def test_a_hidden_light_does_not_light_the_running_world():
 
 
 def test_console_hide_and_show_go_through_the_authored_writer():
-    import types
     from editor.console_commands import ConsoleCommandHandler
+
+    editor = MainWindow(ROOT)
+    game_state = ThreadedGameState()
+    logic = LogicThread(game_state, editor.state)
+    editor.view_3d.logic_thread = logic
     wall = box_brush("wall", (0, 64, 200))
     wall["name"] = "wall"
-    state = EditorState()
-    state.brushes = [wall]
-    marked = []
-    logic = types.SimpleNamespace(collision_runtime=types.SimpleNamespace(mark_dirty=lambda: marked.append(1)))
-    handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
-    handler.editor_state = state
-    handler.main_window = types.SimpleNamespace(
-        view_3d=types.SimpleNamespace(play_mode=False, logic_thread=logic)
-    )
-    handler.cmd_hide("wall")
-    assert wall["hidden"] is True and marked == [1]
-    wall["_bw_parked_hidden"] = True     # parked by a streaming layer
-    handler.cmd_show("wall")
-    assert wall["_bw_parked_hidden"] is False, "Show landed on the parked value"
+    editor.state.brushes = [wall]
+    handler = ConsoleCommandHandler(editor)
+    try:
+        handler.cmd_hide("wall")
+        assert wall["hidden"] is True
+        assert logic.collision_runtime._dirty is True
+
+        wall["_bw_parked_hidden"] = True     # parked by a streaming layer
+        handler.cmd_show("wall")
+        assert wall["_bw_parked_hidden"] is False, "Show landed on the parked value"
+    finally:
+        logic.stop()
+        editor.unsaved_changes = False
+        editor.close()
+        editor.deleteLater()
+        qt_app.processEvents()
 
 
 def test_a_nan_view_distance_is_ignored():
