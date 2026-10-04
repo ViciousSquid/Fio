@@ -222,7 +222,7 @@ def test_a_light_fading_at_runtime_is_re_resolved_each_step():
     table.begin_frame([lamp], 1)
     assert table.light_params[0, 0] == pytest.approx(1.0)
 
-    LogicTiming(logic).update_light_fades(0.5)
+    timing.update_light_fades(0.5)
     table.begin_frame([lamp], 1)
     assert table.light_params[0, 0] == pytest.approx(0.0)
     assert not table.light_enabled[0]
