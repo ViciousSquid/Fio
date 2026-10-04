@@ -3084,7 +3084,7 @@ class QtGameView(QOpenGLWidget):
     # keeps, so nothing here touches the render loop or the wider scene.
 
     def _components(self):
-        return getattr(self.editor, 'components', None)
+        return self.editor.components
 
     def _component_mode_active(self):
         controller = self._components()
