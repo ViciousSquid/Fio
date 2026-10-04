@@ -386,7 +386,10 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
     from editor.property_editor import PropertyEditor
 
     editor = types.SimpleNamespace(
-        state=types.SimpleNamespace(things=[], brushes=[]), view_3d=QWidget())
+        state=types.SimpleNamespace(things=[], brushes=[]),
+        view_3d=QWidget(),
+        mark_as_modified=lambda: None,
+    )
     panel = PropertyEditor(editor)
     try:
         brush = box_brush("trig", is_trigger=True, trigger_type="Once")
