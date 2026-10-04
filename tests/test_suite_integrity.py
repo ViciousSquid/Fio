@@ -117,6 +117,37 @@ CRITICAL_MODULES = {
 }
 
 
+def _owner_double_classes(path):
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+    names = {"FakeHost", "FakeEditorWindow", "_MainWindow", "InspectorHost"}
+    return [
+        (node.name, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name in names
+    ]
+
+
+EDITOR_TEST_ROOT = ROOT / "tests" / "editor"
+
+
+def test_editor_tests_do_not_reintroduce_fake_owner_windows():
+    """Editor tests must cross the real MainWindow ownership boundary.
+
+    Narrow leaf doubles (painters, dialogs, file selectors, etc.) are fine;
+    these names specifically identify an object pretending to own editor
+    state while production methods are exercised against it.
+    """
+    offenders = []
+    for path in sorted(EDITOR_TEST_ROOT.rglob("test_*.py")):
+        for name, line in _owner_double_classes(path):
+            offenders.append("%s:%d (%s)" % (_rel(path), line, name))
+
+    assert not offenders, (
+        "editor tests contain fake owner windows; drive the real MainWindow "
+        "fixture instead:\n  " + "\n  ".join(offenders)
+    )
+
+
 @pytest.mark.parametrize("rel,minimum", sorted(CRITICAL_MODULES.items()))
 def test_a_module_guarding_a_known_regression_still_has_tests(rel, minimum):
     path = ROOT / rel
