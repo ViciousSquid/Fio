@@ -192,14 +192,7 @@ def _render(renderer, context, brushes, things):
 
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(
-        projection,
-        view,
-        eye,
-        brushes,
-        things,
-        None,
-        config,
+    renderer.render_scene(projection, view, eye, None, config,
         brush_slots=config["all_brush_slots"],
     )
     gl.glFinish()
