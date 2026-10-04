@@ -202,7 +202,6 @@ class LogicThread(threading.Thread):
         "world": (
             "editor_state",
             "monster_ai",
-            "_monster_lock",
         ),
     }
 
@@ -298,7 +297,6 @@ class LogicThread(threading.Thread):
         # Visual FX
 
         # Monster AI (delegated to separate class + thread)
-        self._player_damage_lock = threading.Lock()
         self.monster_ai = MonsterAI(self)
 
 
