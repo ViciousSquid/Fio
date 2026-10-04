@@ -6,10 +6,13 @@ import random
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from tests.helpers.paths import read_source  # noqa: E402
+
+pytestmark = pytest.mark.qt
 
 
 # ---------------------------------------------------------------------------
@@ -111,127 +114,136 @@ class _FakeChannel:
 
 
 class _FakeSound:
+    """Leaf audio-device stand-in; production QtGameView does the queue work."""
+
     def __init__(self):
         self.plays = []
 
     def play(self, loops=0):
-        ch = _FakeChannel()
-        self.plays.append((loops, ch))
-        return ch
+        channel = _FakeChannel()
+        self.plays.append((loops, channel))
+        return channel
 
 
-class _FakeGameState:
-    def __init__(self, requests):
-        self._requests = requests
-
-    def consume_sounds(self):
-        out, self._requests = self._requests, []
-        return out
-
-
-class _SpeakerHost:
-    """Minimal stand-in exercising the exact _process_sound_queue logic."""
-
-    def __init__(self, requests, sound):
-        self.game_state = _FakeGameState(requests)
-        self._sound = sound
-
-    def _get_sound_instance(self, name):
-        return self._sound
-
-    # Mirrors engine.qt_game_view.QtGameView._process_sound_queue.
-    def _process_sound_queue(self):
-        speaker_channels = getattr(self, "_speaker_channels", None)
-        if speaker_channels is None:
-            speaker_channels = self._speaker_channels = {}
-        for request in self.game_state.consume_sounds():
-            action = request.get('action', 'play')
-            entity_id = request.get('entity_id')
-            if action == 'stop':
-                channel = speaker_channels.pop(entity_id, None)
-                if channel is not None:
-                    channel.stop()
-                continue
-            sound_file = request.get('file')
-            volume = request.get('volume', 1.0)
-            if not sound_file:
-                continue
-            sound = self._get_sound_instance(sound_file)
-            if not sound:
-                continue
-            loops = -1 if request.get('looping') else 0
-            if entity_id is not None:
-                prev = speaker_channels.pop(entity_id, None)
-                if prev is not None:
-                    prev.stop()
-            channel = sound.play(loops=loops)
-            if channel:
-                channel.set_volume(volume)
-                if entity_id is not None and loops != 0:
-                    speaker_channels[entity_id] = channel
+def _real_speaker(main_window, monkeypatch, requests, sound):
+    view = main_window.view_3d
+    view.game_state.clear_sounds()
+    view._speaker_channels = {}
+    view.game_state.queue_sound(requests[0]) if requests else None
+    for request in requests[1:]:
+        view.game_state.queue_sound(request)
+    monkeypatch.setattr(view, "_get_sound_instance", lambda _name: sound)
+    return view
 
 
-def test_looping_speaker_plays_with_infinite_loops():
+def test_looping_speaker_plays_with_infinite_loops(main_window, monkeypatch):
     snd = _FakeSound()
-    host = _SpeakerHost(
-        [{'action': 'play', 'file': 'hum.wav', 'volume': 0.5,
-          'looping': True, 'entity_id': 1}], snd)
-    host._process_sound_queue()
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{
+            "action": "play",
+            "file": "hum.wav",
+            "volume": 0.5,
+            "looping": True,
+            "entity_id": 1,
+        }],
+        snd,
+    )
+    view._process_sound_queue()
     assert snd.plays[0][0] == -1
     assert snd.plays[0][1].volume == 0.5
-    assert 1 in host._speaker_channels
+    assert 1 in view._speaker_channels
 
 
-def test_non_looping_speaker_plays_once_and_is_not_tracked():
+def test_non_looping_speaker_plays_once_and_is_not_tracked(main_window, monkeypatch):
     snd = _FakeSound()
-    host = _SpeakerHost(
-        [{'action': 'play', 'file': 'ding.wav', 'looping': False,
-          'entity_id': 2}], snd)
-    host._process_sound_queue()
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{
+            "action": "play",
+            "file": "ding.wav",
+            "looping": False,
+            "entity_id": 2,
+        }],
+        snd,
+    )
+    view._process_sound_queue()
     assert snd.plays[0][0] == 0
-    assert 2 not in host._speaker_channels
+    assert 2 not in view._speaker_channels
 
 
-def test_stop_sound_silences_a_looping_channel():
+def test_stop_sound_silences_a_looping_channel(main_window, monkeypatch):
     snd = _FakeSound()
-    host = _SpeakerHost(
-        [{'action': 'play', 'file': 'hum.wav', 'looping': True, 'entity_id': 3}],
-        snd)
-    host._process_sound_queue()
-    channel = host._speaker_channels[3]
-    host.game_state._requests = [{'action': 'stop', 'entity_id': 3}]
-    host._process_sound_queue()
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{
+            "action": "play",
+            "file": "hum.wav",
+            "looping": True,
+            "entity_id": 3,
+        }],
+        snd,
+    )
+    view._process_sound_queue()
+    channel = view._speaker_channels[3]
+    view.game_state.queue_sound({"action": "stop", "entity_id": 3})
+    view._process_sound_queue()
     assert channel.stopped
-    assert 3 not in host._speaker_channels
+    assert 3 not in view._speaker_channels
 
 
-def test_retriggering_a_looping_speaker_does_not_stack():
+def test_retriggering_a_looping_speaker_does_not_stack(main_window, monkeypatch):
     snd = _FakeSound()
-    host = _SpeakerHost(
-        [{'action': 'play', 'file': 'hum.wav', 'looping': True, 'entity_id': 4}],
-        snd)
-    host._process_sound_queue()
-    first = host._speaker_channels[4]
-    host.game_state._requests = [
-        {'action': 'play', 'file': 'hum.wav', 'looping': True, 'entity_id': 4}]
-    host._process_sound_queue()
-    assert first.stopped, "the previous looping channel must be stopped first"
-    assert host._speaker_channels[4] is not first
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{
+            "action": "play",
+            "file": "hum.wav",
+            "looping": True,
+            "entity_id": 4,
+        }],
+        snd,
+    )
+    view._process_sound_queue()
+    first = view._speaker_channels[4]
+    view.game_state.queue_sound({
+        "action": "play",
+        "file": "hum.wav",
+        "looping": True,
+        "entity_id": 4,
+    })
+    view._process_sound_queue()
+    assert first.stopped
+    assert view._speaker_channels[4] is not first
 
 
-def test_stop_for_an_unknown_entity_is_harmless():
-    host = _SpeakerHost([{'action': 'stop', 'entity_id': 999}], _FakeSound())
-    host._process_sound_queue()  # must not raise
+def test_stop_for_an_unknown_entity_is_harmless(main_window, monkeypatch):
+    snd = _FakeSound()
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{"action": "stop", "entity_id": 999}],
+        snd,
+    )
+    view._process_sound_queue()
 
 
-def test_legacy_request_without_action_still_plays():
+def test_legacy_request_without_action_still_plays(main_window, monkeypatch):
     """Existing callers queue a bare {'file','volume'} dict."""
     snd = _FakeSound()
-    host = _SpeakerHost([{'file': 'splash.wav', 'volume': 0.8}], snd)
-    host._process_sound_queue()
+    view = _real_speaker(
+        main_window,
+        monkeypatch,
+        [{"file": "splash.wav", "volume": 0.8}],
+        snd,
+    )
+    view._process_sound_queue()
     assert snd.plays[0][0] == 0
     assert snd.plays[0][1].volume == 0.8
-
 
 def test_speaker_handlers_queue_spatial_radius_data():
     src = read_source("editor", "io_handlers.py")
