@@ -127,8 +127,7 @@ class _FakeSound:
 
 def _real_speaker(main_window, monkeypatch, requests, sound):
     view = main_window.view_3d
-    view.game_state.clear_sounds()
-    view._speaker_channels = {}
+    view.stop_all_sounds()
     view.game_state.queue_sound(requests[0]) if requests else None
     for request in requests[1:]:
         view.game_state.queue_sound(request)
