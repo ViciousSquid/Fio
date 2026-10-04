@@ -49,7 +49,7 @@ def session():
     yield _build
 
     for thread in made:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
         thread.stop()
 
 
@@ -157,7 +157,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
     state, thread = session(brushes=brushes + [switchable, button],
                             things=[make_thing(PlayerStart, "spawn", (0, 64, 0))])
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
 
     assert switchable.get("hidden") in (None, False)
@@ -172,7 +172,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
     assert "switchable" not in {b.get("name") for b in published.all_brushes}, (
         "the hidden brush was still submitted to the renderer")
 
-    thread.set_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
     assert thread._spatial_grid is None
     assert thread.monster_ai_thread is None
 
@@ -185,7 +185,7 @@ def test_a_delayed_connection_fires_on_the_logic_threads_own_clock(session):
         target_id=switchable["id"], delay=0.5))
     state, thread = session(brushes=room() + [switchable, button])
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
     thread.io_manager.fire_output(button, "OnTrigger")
 
@@ -207,7 +207,7 @@ def test_monsters_run_against_the_live_world_during_a_play_session(session):
                             things=[make_thing(PlayerStart, "spawn", (0, 64, 0)),
                                     monster])
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
     start_x = monster.pos[0]
 
@@ -228,11 +228,11 @@ def test_stopping_play_mode_restores_the_authored_world(session):
     state, thread = session(brushes=room(), things=[monster, lamp])
     authored = json.dumps(state.get_level_data(), sort_keys=True)
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
     for _ in range(20):
         thread._tick(TICK)
-    thread.set_play_mode(False)
+    thread.session_runtime.apply_play_mode(False)
 
     after = json.dumps(state.get_level_data(), sort_keys=True)
     assert after == authored, (
@@ -246,7 +246,7 @@ def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
     assert thread.brushes is state.brushes
     assert thread.things is state.things
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
     grid_brushes = {id(b) for bucket in thread._spatial_grid.cells.values()
                     for b in bucket}
@@ -256,7 +256,7 @@ def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
 
 def test_an_edit_made_while_play_mode_is_running_reaches_the_runtime(session):
     state, thread = session()
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
     thread.culling_enabled = False
 
@@ -398,13 +398,13 @@ def test_an_ordinary_map_starts_no_bigworld_session(session):
     """The gate: a map with no BigWorldSettings entity pays nothing."""
     state, thread = session(things=[make_thing(PlayerStart, "spawn")])
 
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         assert getattr(thread, "_bigworld", None) is None, (
             "an ordinary map started a Big World session: %r"
             % getattr(thread, "_bigworld", None))
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
 
 def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
@@ -431,7 +431,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     # before play mode starts - as it does in the editor, which spawns at the
     # PlayerStart before handing the session over.
     thread.player = Player(0.0, 0.0)
-    thread.set_play_mode(True)
+    thread.session_runtime.apply_play_mode(True)
     try:
         assert getattr(thread, "_bigworld", None) is not None, (
             "a map carrying a BigWorldSettings entity did not start a session")
@@ -441,7 +441,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
         assert near.get("hidden") in (None, False), (
             "the brush at the player's feet was parked")
     finally:
-        thread.set_play_mode(False)
+        thread.session_runtime.apply_play_mode(False)
 
     assert getattr(thread, "_bigworld", None) is None, \
         "the streaming session outlived play mode"

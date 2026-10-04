@@ -186,9 +186,9 @@ def playing_logic():
 
     logic = LogicThread(ThreadedGameState(), EditorState())
     logic.player = Player(0.0, 0.0)
-    logic.set_play_mode(True)
+    logic.session_runtime.apply_play_mode(True)
     yield logic
-    logic.set_play_mode(False)
+    logic.session_runtime.apply_play_mode(False)
 
 
 def _window_on(logic, starts_play=True):
@@ -199,13 +199,13 @@ def _window_on(logic, starts_play=True):
 
     def exit_play():
         window.calls.append("exit play")
-        logic.set_play_mode(False)
+        logic.session_runtime.apply_play_mode(False)
         window.view_3d.play_mode = False
 
     def enter_play():
         window.calls.append("enter play")
         if starts_play:              # a map without a PlayerStart does not
-            logic.set_play_mode(True)
+            logic.session_runtime.apply_play_mode(True)
             window.view_3d.play_mode = True
 
     window._exit_play_mode = exit_play
@@ -259,7 +259,7 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing
 
     window.load_level_file(str(path))
     assert not playing_logic.play_mode
-    playing_logic.set_play_mode(True)
+    playing_logic.session_runtime.apply_play_mode(True)
 
     assert _loadout(playing_logic) == (None, False, 0)
 
@@ -268,8 +268,8 @@ def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
     playing_logic.active_weapon = "gun2"
     playing_logic.gun2_obtained = True
     playing_logic.player_ammo = 3
-    playing_logic.set_play_mode(False)
-    playing_logic.set_play_mode(True)
+    playing_logic.session_runtime.apply_play_mode(False)
+    playing_logic.session_runtime.apply_play_mode(True)
     assert _loadout(playing_logic) == (None, False, 0)
 
 
