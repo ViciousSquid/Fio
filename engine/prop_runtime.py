@@ -230,7 +230,7 @@ class PropSession:
     # -- interaction ------------------------------------------------------
 
     def tick(self, delta, use_pressed):
-        player = self.logic.player_runtime.player
+        player = self.logic.player
         if player is None:
             return
 
@@ -294,7 +294,7 @@ class PropSession:
             # position still follows the player's view, but the sprite itself
             # no longer rotates with the camera.
             try:
-                best._carry_sprite_yaw = float(self.logic.player_runtime.player.angle)
+                best._carry_sprite_yaw = float(self.logic.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
             self._falling.pop(id(best), None)
@@ -311,7 +311,7 @@ class PropSession:
         )
 
     def _collect_walk_over(self):
-        player = self.logic.player_runtime.player
+        player = self.logic.player
         if player is None:
             return False
 

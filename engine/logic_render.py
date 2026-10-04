@@ -250,7 +250,7 @@ class LogicRender:
         write_state = logic.game_state.get_write_state()
         write_state.is_play_mode = logic.session_runtime.play_mode
 
-        if logic.session_runtime.play_mode and logic.player_runtime.player:
+        if logic.session_runtime.play_mode and logic.player:
             cs = logic.cutscene_runtime.state
             if cs and "cam_pos" in cs:
                 cam_pos = glm.vec3(*cs["cam_pos"])
@@ -272,13 +272,13 @@ class LogicRender:
                 fov = cs["fov"] if cs.get("fov") else 90.0
             else:
                 player_pos = glm.vec3(
-                    logic.player_runtime.player.pos.x,
-                    logic.player_runtime.player.pos.y,
-                    logic.player_runtime.player.pos.z,
+                    logic.player.pos.x,
+                    logic.player.pos.y,
+                    logic.player.pos.z,
                 )
-                player_angle = logic.player_runtime.player.angle
-                player_pitch = logic.player_runtime.player.pitch
-                camera_height = logic.player_runtime.player.camera_height
+                player_angle = logic.player.angle
+                player_pitch = logic.player.pitch
+                camera_height = logic.player.camera_height
                 ct = logic.camera.camera_transition
                 if ct:
                     dur = ct["duration"]
@@ -394,9 +394,9 @@ class LogicRender:
         write_state.player_max_health = logic.player_runtime.player_max_health
         write_state.player_dead = logic.player_runtime.player_dead
         write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
-        if logic.session_runtime.play_mode and logic.player_runtime.player and not logic.cutscene_runtime.state:
-            write_state.player_underwater = bool(logic.player_runtime.player.eye_underwater)
-            write_state.underwater_tint = list(logic.player_runtime.player.water_tint)
+        if logic.session_runtime.play_mode and logic.player and not logic.cutscene_runtime.state:
+            write_state.player_underwater = bool(logic.player.eye_underwater)
+            write_state.underwater_tint = list(logic.player.water_tint)
         else:
             write_state.player_underwater = False
         write_state.collected_keys = set(logic.player_runtime.collected_keys)

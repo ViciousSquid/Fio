@@ -922,7 +922,7 @@ class BigWorldSession:
     # ------------------------------------------------------------------
 
     def _player_pos(self):
-        player = self.logic.player_runtime.player
+        player = self.logic.player
         if player is None:
             return None
         return player.pos
