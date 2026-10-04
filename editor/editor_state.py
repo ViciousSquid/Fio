@@ -639,9 +639,9 @@ class EditorState:
         return out
 
     def _selection_list(self):
-        """The current selection, primary object first, with no duplicates."""
+        """Return the authoritative current selection without duplicates."""
         selection = []
-        for obj in getattr(self, 'selected_objects', None) or ():
+        for obj in self.selected_objects:
             if not any(obj is existing for existing in selection):
                 selection.append(obj)
         return selection
@@ -657,7 +657,7 @@ class EditorState:
         """
         if not identifiers:
             self.selected_objects = []
-                return
+            return
         # Same reasoning as _selection_identifiers: one pass to build the id
         # lookups instead of scanning the scene once per selected object.
         by_id = {'brush': {}, 'thing': {}}
