@@ -133,10 +133,12 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
         settings = BigWorldSettings(pos=[0, 0, 0])
 
         class Logic:
-            things = [settings]
+            editor_state = SimpleNamespace(
+                things=[settings],
+                brushes=[{'id': 'a', 'pos': [0, 0, 0], 'size': [64, 64, 64]},
+                         {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]}],
+            )
             camera = SimpleNamespace(overhead_height_limit=None)
-            brushes = [{'id': 'a', 'pos': [0, 0, 0], 'size': [64, 64, 64]},
-                       {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]}]
             player = None
 
         logic = Logic()
@@ -160,7 +162,7 @@ def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
     near = {'id': 'near', 'pos': [0, 0, 0], 'size': [64, 64, 64], 'hidden': True}
 
     class Logic:
-        things = []
+        editor_state = SimpleNamespace(things=[], brushes=[])
         player = None
 
     logic = Logic()
