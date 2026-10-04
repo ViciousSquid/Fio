@@ -38,6 +38,7 @@ from editor.io_handlers import register_all_input_handlers   # noqa: E402
 from editor.io_system import IOManager, OutputConnection      # noqa: E402
 from editor.things import PathNode                             # noqa: E402
 from engine.logic_thread import DOOR_DIRECTION_MAP, LogicThread  # noqa: E402
+from engine.logic_world import LogicWorld                              # noqa: E402
 from engine.logic_movers import LogicMovers                    # noqa: E402
 from engine.savegame import _public_state                      # noqa: E402
 
