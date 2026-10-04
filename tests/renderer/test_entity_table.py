@@ -244,7 +244,6 @@ def test_renderer_consumes_active_lights_as_entity_slots():
     renderer = Renderer_F.__new__(Renderer_F)
 
     packet = renderer._get_active_lights(
-        [on, off],
         {'entity_table': table, 'all_lights': []},
     )
 
