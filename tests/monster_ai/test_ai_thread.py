@@ -136,11 +136,14 @@ def test_stopping_twice_is_harmless(ai_thread):
 
 
 def test_stopping_a_thread_that_never_started_is_harmless():
-    thread = MonsterAIThread(LogicThread(ThreadedGameState(), EditorState()), CountingAI(), threading.RLock())
-    thread.stop()
-    assert thread.running is False
-    assert thread.is_alive() is False
-
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    try:
+        thread = MonsterAIThread(logic, CountingAI(), threading.RLock())
+        thread.stop()
+        assert thread.running is False
+        assert thread.is_alive() is False
+    finally:
+        logic.stop()
 
 def test_a_restarted_ai_runs_on_a_fresh_thread(ai_thread):
     first_ai, second_ai = CountingAI(), CountingAI()
@@ -159,13 +162,18 @@ def test_a_restarted_ai_runs_on_a_fresh_thread(ai_thread):
 
 
 def test_the_thread_is_a_daemon_so_it_cannot_hold_the_process_open():
-    thread = MonsterAIThread(FakeLogicThread(), CountingAI(), threading.RLock())
-    assert thread.daemon is True, (
-        "a non-daemon AI thread would keep Fio alive after the window closed")
-    assert thread.name == "MonsterAIThread", (
-        "the thread should be identifiable in a stack dump; it is named %r"
-        % thread.name)
-
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    try:
+        thread = MonsterAIThread(logic, CountingAI(), threading.RLock())
+        assert thread.daemon is True, (
+            "a non-daemon AI thread would keep Fio alive after the window closed"
+        )
+        assert thread.name == "MonsterAIThread", (
+            "the thread should be identifiable in a stack dump; it is named %r"
+            % thread.name
+        )
+    finally:
+        logic.stop()
 
 # ---------------------------------------------------------------------------
 # The lock
