@@ -451,8 +451,7 @@ class DebugTablesWindow(QMainWindow):
     def _follow_export_text(self):
         """Return the current FOLLOW SELECTION chain, or an explicit empty state."""
         selected = next(
-            iter(getattr(getattr(self.main_window, "state", None),
-                         "selected_objects", []) or []),
+            iter(self.main_window.state.selected_objects),
             None,
         )
         if selected is None:
