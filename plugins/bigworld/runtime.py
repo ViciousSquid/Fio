@@ -650,17 +650,11 @@ class BigWorldSession:
         terrain = self.logic.terrain
         if terrain is None:
             return
-        # Only cooperate with a terrain that exposes the streaming surface added
-        # to engine.terrain.Terrain; fail safe on anything else.
-        if not (hasattr(terrain, "set_streaming")
-                and hasattr(terrain, "set_world_extent")):
-            return
-
         self._terrain = terrain
         self._terrain_saved = {
-            "streaming": getattr(terrain, "streaming", False),
-            "stream_radius": getattr(terrain, "stream_radius", 1536.0),
-            "stream_evict_padding": getattr(terrain, "stream_evict_padding", 512.0),
+            "streaming": terrain.streaming,
+            "stream_radius": terrain.stream_radius,
+            "stream_evict_padding": terrain.stream_evict_padding,
             "min_chunk_x": terrain.min_chunk_x,
             "max_chunk_x": terrain.max_chunk_x,
             "min_chunk_z": terrain.min_chunk_z,
@@ -947,7 +941,7 @@ class BigWorldSession:
         player = self.logic.player
         if player is None:
             return None
-        return getattr(player, "pos", None)
+        return player.pos
 
     def player_cell(self):
         pos = self._player_pos()
@@ -965,9 +959,9 @@ class BigWorldSession:
         if terrain is not None:
             s["terrain_fill"] = True
             s["terrain_infinite"] = bool(self.terrain_infinite)
-            s["terrain_streaming"] = bool(getattr(terrain, "streaming", False))
-            s["terrain_chunks"] = int(getattr(terrain, "streamed_chunks", 0))
-            s["terrain_stream_radius"] = float(getattr(terrain, "stream_radius", 0.0))
+            s["terrain_streaming"] = bool(terrain.streaming)
+            s["terrain_chunks"] = int(terrain.streamed_chunks)
+            s["terrain_stream_radius"] = float(terrain.stream_radius)
         else:
             s["terrain_fill"] = False
         s.update(self.tiers.stats())
