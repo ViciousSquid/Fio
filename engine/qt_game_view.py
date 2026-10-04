@@ -882,7 +882,7 @@ class QtGameView(QOpenGLWidget):
 
     def _is_overhead(self) -> bool:
         # PERF: cached — recompute only when camera_mode changes.
-        cm = getattr(self, "camera_mode", "")
+        cm = self.camera_mode
         if cm != self._camera_mode_raw:
             self._camera_mode_raw = cm
             self._camera_mode_overhead = str(cm).strip().lower() in (
@@ -1030,7 +1030,7 @@ class QtGameView(QOpenGLWidget):
         if self.logic_thread is not None:
             self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
-        self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
+        self.logic_thread.camera.set_camera_mode(self.camera_mode)
         self.logic_thread.session_runtime.apply_play_mode(False)
         self._sync_view_distance()
         self.logic_thread.start()
@@ -1057,7 +1057,7 @@ class QtGameView(QOpenGLWidget):
     def resizeGL(self, width, height):
         super().resizeGL(width, height)
         if height > 0:
-            vp_w = (width // 2) if getattr(self, 'splitscreen_mode', False) else width
+            vp_w = (width // 2) if self.splitscreen_mode else width
             self._cached_aspect_ratio = vp_w / height
         else:
             self._cached_aspect_ratio = 1.0
@@ -3100,7 +3100,7 @@ class QtGameView(QOpenGLWidget):
     def _world_per_pixel(self, distance):
         """World units one screen pixel covers ``distance`` from the eye."""
         height = max(self.height(), 1)
-        fov = float(getattr(self.camera, 'fov', 75.0))
+        fov = float(self.camera.fov)
         return 2.0 * max(distance, 1.0) * math.tan(math.radians(fov) * 0.5) / height
 
     def _pick_component_3d(self, mx, my):
