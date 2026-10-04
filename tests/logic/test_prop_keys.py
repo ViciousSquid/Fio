@@ -1,40 +1,23 @@
-"""Colored key collection: sprite identity, inventory, doors, and Prop I/O."""
+"""Colored key collection through the real PropSession and LogicThread."""
 
 import pytest
-from types import SimpleNamespace
 
 pytest.importorskip("PyQt5", reason="logic tests require editor Thing definitions")
 
-from editor.io_handlers import register_all_input_handlers
-from editor.io_system import IOManager, OutputConnection
+from editor.editor_state import EditorState
+from editor.io_system import OutputConnection
 from editor.things import Prop
-from engine.prop_runtime import PropSession
-
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
 
 pytestmark = pytest.mark.qt
 
 
-class Logic:
-    def __init__(self, things):
-        self.editor_state = SimpleNamespace(things=list(things), brushes=[])
-        self.io_manager = None
-        self.player_runtime = type("PlayerRuntime", (), {
-            "collected_keys": set(),
-            "player_health": 100,
-            "player_max_health": 100,
-            "player_dead": False,
-            "player2_health": 100,
-            "player2_max_health": 100,
-            "player2_dead": False,
-        })()
-        self.interaction_runtime = SimpleNamespace(
-            current_hud_message="",
-            current_hud_key_name=None,
-        )
-        self.player_runtime.player_health = 100
-        self.player_runtime.player_max_health = 100
-        self.session_runtime = SimpleNamespace(physics_world=None, spatial_grid=None)
-        self._plugin_emit = lambda *args, **kwargs: None
+@pytest.fixture
+def logic(request):
+    value = LogicThread(ThreadedGameState(), EditorState())
+    request.addfinalizer(value.stop)
+    return value
 
 
 @pytest.mark.parametrize(
@@ -67,10 +50,9 @@ def test_key_prop_defaults_to_blue():
 
 
 @pytest.mark.parametrize("key_name", ["red_key", "yellow_key"])
-def test_colored_key_collects_the_key_and_fires_on_collected_to_a_door(key_name):
-    manager = IOManager()
-    register_all_input_handlers(manager)
-
+def test_colored_key_collects_the_key_and_fires_on_collected_to_a_door(
+    logic, key_name
+):
     prop = Prop(
         properties={
             "name": f"{key_name}_prop",
@@ -95,20 +77,17 @@ def test_colored_key_collects_the_key_and_fires_on_collected_to_a_door(key_name)
         )
     ]
 
-    logic = Logic([prop])
-    logic.io_manager = manager
-    manager.set_logic_thread(logic)
-    manager.set_entity_finder(lambda name: door if name == door["name"] else None)
-    manager.set_entity_finder_by_id(
-        lambda entity_id: door if entity_id == door["id"] else None
-    )
+    logic.editor_state.things[:] = [prop]
+    logic.editor_state.brushes[:] = [door]
+    logic.world_runtime.build_entity_caches()
 
-    session = PropSession(logic)
-    logic.prop_runtime = session
+    session = logic.prop_runtime
     session.start()
-    assert session.collect_prop(prop) is True
-
-    assert key_name in logic.player_runtime.collected_keys
-    assert prop.properties["collect_collected"] is True
-    assert id(prop) in session.collected_ids
-    assert door["door_locked"] is False
+    try:
+        assert session.collect_prop(prop) is True
+        assert key_name in logic.player_runtime.collected_keys
+        assert prop.properties["collect_collected"] is True
+        assert id(prop) in session.collected_ids
+        assert door["door_locked"] is False
+    finally:
+        session.stop()
