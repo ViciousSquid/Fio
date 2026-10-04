@@ -433,7 +433,7 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
         unnamed = Portal(pos=[500, 0, 0])
         thread.editor_state.things.append(unnamed)
         thread.world_runtime.build_entity_caches()
-        assert unnamed in thread._portal_things
+        assert unnamed in thread.portal_runtime.portal_things
         assert '' not in [p.properties.get('name', '') for p in thread._portal_things]
 
         for p in thread._portal_things:
