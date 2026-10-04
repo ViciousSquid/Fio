@@ -1915,7 +1915,7 @@ class QtGameView(QOpenGLWidget):
         if self.sysmon.is_active():
             self.sysmon.draw(
                 painter, self.fps, self.logic_thread, self.renderer,
-                self.editor.state, getattr(self.editor, 'terrain', None)
+                self.editor.state, self.editor.terrain
             )
 
         self.floating_windows.draw_all(painter)
