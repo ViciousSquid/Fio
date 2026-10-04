@@ -129,6 +129,83 @@ def _owner_double_classes(path):
 
 EDITOR_TEST_ROOT = ROOT / "tests" / "editor"
 
+# Removed by the 2.6 ownership migration. These names must not reappear in
+# production code, including through getattr/hasattr/string-based compatibility
+# probes. The authoritative selection is EditorState.selected_objects.
+LEGACY_SELECTION_NAMES = frozenset({
+    "selected_object",
+    "set_selected_object",
+    "selected_type",
+    "selected_index",
+})
+
+PRODUCTION_SOURCE_ROOTS = ("editor", "engine", "plugins", "player")
+
+
+def _production_python_files():
+    """Yield production Python files, excluding tests and generated trees."""
+    for root in PRODUCTION_SOURCE_ROOTS:
+        base = ROOT / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if "tests" in path.parts or SKIP_DIRS.intersection(path.parts):
+                continue
+            yield path
+    main = ROOT / "main.py"
+    if main.is_file():
+        yield main
+
+
+def _legacy_selection_uses(tree):
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in LEGACY_SELECTION_NAMES:
+            offenders.append(node)
+        elif isinstance(node, ast.Name) and node.id in LEGACY_SELECTION_NAMES:
+            offenders.append(node)
+        elif isinstance(node, ast.Constant) and node.value in LEGACY_SELECTION_NAMES:
+            offenders.append(node)
+    return offenders
+
+
+def test_production_code_has_no_removed_selection_api():
+    """The pre-2.6 singular selection surface is a deleted API, not fallback."""
+    offenders = []
+    for path in _production_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+        for node in _legacy_selection_uses(tree):
+            offenders.append("%s:%d" % (_rel(path), node.lineno))
+    assert not offenders, (
+        "removed 2.6 selection API has returned to production code; use the "
+        "authoritative EditorState.selected_objects path instead:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_logic_thread_does_not_reintroduce_authoritative_world_aliases():
+    """LogicThread must orchestrate EditorState, never own mirror lists."""
+    path = ROOT / "engine" / "logic_thread.py"
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+    logic_class = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "LogicThread"
+    )
+    offenders = []
+    for node in ast.walk(logic_class):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {"brushes", "things"}:
+            offenders.append("%s:%d (method/property %s)" % (_rel(path), node.lineno, node.name))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                    if target.value.id == "self" and target.attr in {"brushes", "things"}:
+                        offenders.append("%s:%d (self.%s)" % (_rel(path), node.lineno, target.attr))
+    assert not offenders, (
+        "LogicThread has regained world-state ownership aliases; EditorState is "
+        "the sole authoritative owner:\n  " + "\n  ".join(offenders)
+    )
+
+
 MACHINERY_TEST_ROOTS = (
     "tests",
     "plugins/bigworld/tests",
