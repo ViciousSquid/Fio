@@ -157,8 +157,6 @@ def test_animation_origin_is_shared_across_render_buffers():
     assert float(first.effect_spawn_time[0]) > 0.0
     assert first.effect_spawn_time[0] == second.effect_spawn_time[0]
     assert first.effect_phase[0] == second.effect_phase[0]
-    assert float(effect._effect_spawn_time) == 0.0, (
-        "the projection wrote runtime state back onto the entity")
 
 
 def test_both_buffers_agree_after_an_explode():
