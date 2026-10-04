@@ -689,7 +689,7 @@ class CutsceneWizard(QtWidgets.QDialog):
     # ------------------------------------------------------------------
     def _refresh_io_sources(self):
         """Refresh the I/O source list from the live map entities."""
-        current = self.io_source.currentData() if hasattr(self, "io_source") else None
+        current = self.io_source.currentData()
         self.io_source.blockSignals(True)
         self.io_source.clear()
         for thing in self.main_window.state.things:
