@@ -215,14 +215,14 @@ def test_leaving_play_mode_clears_the_session_only_state(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     thread.player_runtime.collected_keys.add("red")
-    thread.current_hud_message = "you need the red key"
+    thread.interaction_runtime.current_hud_message = "you need the red key"
     thread.combat_runtime.bullet_marks.append({"pos": None, "time": 0.0})
 
     thread.session_runtime.apply_play_mode(False)
 
     assert thread.player_runtime.collected_keys == set(), \
         "collected keys survived into editor mode: %s" % (thread.player_runtime.collected_keys,)
-    assert thread.current_hud_message == ""
+    assert thread.interaction_runtime.current_hud_message == ""
     assert thread.combat_runtime.bullet_marks == []
 
 
