@@ -40,13 +40,13 @@ class _Host:
             id(thing): thing for thing in self.world_runtime.monster_things
         }
         self.portal_runtime = LogicPortals(self)
+        self.session_runtime = types.SimpleNamespace(monster_lock=threading.RLock())
         self.collision_runtime = LogicCollision(self)
         self.combat_runtime = LogicCombat(self)
         for position, owner in projectiles:
             self.combat_runtime._monster_projectiles.add(
                 position, (0.0, 0.0, 0.0), id(owner), 5, 5.0)
         self._collision_brushes_cache = []
-        self._monster_lock = threading.RLock()
         self.player_runtime = types.SimpleNamespace(
             player=None,
             god_mode=True,
