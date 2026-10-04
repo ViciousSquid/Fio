@@ -220,9 +220,13 @@ Big World publishes ``sim_view_rect`` only for the fitted overhead camera.
 First-person sessions return ``None``, preserving the normal all-monster
 tick path.
 """
-        if getattr(self.lt, '_bigworld', None) is None:
+        plugins = self.lt.plugins
+        if plugins is None:
             return None
-        rect = getattr(self.lt, 'sim_view_rect', None)
+        session = plugins.services.get("bigworld")
+        if session is None:
+            return None
+        rect = session.tiers.near_rect
         return rect if rect else None
 
     #: Seconds between AI passes for monsters off screen (see
