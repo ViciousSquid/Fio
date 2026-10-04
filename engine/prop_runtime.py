@@ -71,7 +71,7 @@ class PropSession:
     def rebuild(self, things=None):
         """Re-derive the Prop registry from the authoritative Thing list."""
         if things is None:
-            things = self.logic.things
+            things = self.logic.editor_state.things
         current = [t for t in things if self.is_prop(t)]
         current_ids = {id(t) for t in current}
 
