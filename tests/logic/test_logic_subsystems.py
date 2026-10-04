@@ -200,10 +200,8 @@ def test_logic_player_constructs_and_reports_water_transition():
         _player_was_in_water=False,
         _waterwalk_timer=0.0,
         WATERWALK_INTERVAL=0.45,
-        combat_runtime=None,
-        _emit_noise_event=lambda pos, source, loudness: noise.append(
-            (tuple(pos), source, loudness)
-        ),
+        _gunfire_events=[],
+        _plugin_emit=lambda *args, **kwargs: None,
     )
     host.combat_runtime = LogicCombat(host)
     runtime = LogicPlayer(host)
@@ -214,7 +212,7 @@ def test_logic_player_constructs_and_reports_water_transition():
         "enterwater.wav",
         "waterwalk.wav",
     ]
-    assert noise[0][1] == "water_enter"
+    assert host._gunfire_events[0]["source"] == "water_enter"
     assert host._player_was_in_water is True
 
 
