@@ -83,9 +83,9 @@ def grid_world(cells_each_way=6, per_cell=4, cell_size=512.0):
 
 def started_session(things, brushes=None, activation=2048.0,
                     deactivation=2304.0, near=1024.0, at=(0.0, 0.0),
-                    view_distance=None):
+                    render_view_distance=None):
     logic = FakeLogic(brushes=brushes or [], things=things,
-                      player=FakePlayer(*at), render_view_distance=view_distance)
+                      player=FakePlayer(*at), render_view_distance=render_view_distance)
     session = BigWorldSession(logic, activation_radius=activation,
                               deactivation_radius=deactivation,
                               sim_near_radius=near)
