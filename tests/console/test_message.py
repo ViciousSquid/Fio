@@ -9,35 +9,9 @@ from editor.console_commands import ConsoleCommandHandler
 pytestmark = pytest.mark.qt
 
 
-class _State:
-    pass
-
-
-class _View:
-    def __init__(self, play_mode=True):
-        self.play_mode = play_mode
-        self.messages = []
-        self.messages2 = []
-        self.messages3 = []
-
-    def show_view_message(self, text):
-        self.messages.append(text)
-
-    def show_view_message2(self, text):
-        self.messages2.append(text)
-
-    def show_view_message3(self, text):
-        self.messages3.append(text)
-
-
-class _MainWindow:
-    def __init__(self, play_mode=True):
-        self.state = _State()
-        self.view_3d = _View(play_mode=play_mode)
-
-
-def test_message_command_accepts_quoted_text_and_truncates_to_50_chars():
-    window = _MainWindow()
+def test_message_command_accepts_quoted_text_and_truncates_to_50_chars(main_window):
+    window = main_window
+    window.view_3d.play_mode = True
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command('message "Hello, this is a message with spaces."')
@@ -51,16 +25,18 @@ def test_message_command_accepts_quoted_text_and_truncates_to_50_chars():
     assert len(window.view_3d.messages[-1]) == 50
 
 
-def test_message_command_is_play_mode_only():
-    window = _MainWindow(play_mode=False)
+def test_message_command_is_play_mode_only(main_window):
+    window = main_window
+    window.view_3d.play_mode = False
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command('message "Hello"')
 
     assert window.view_3d.messages == []
 
-def test_message2_command_uses_the_second_independent_line():
-    window = _MainWindow()
+def test_message2_command_uses_the_second_independent_line(main_window):
+    window = main_window
+    window.view_3d.play_mode = True
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command('message "First"')
@@ -70,7 +46,7 @@ def test_message2_command_uses_the_second_independent_line():
     assert window.view_3d.messages2 == ["Second"]
 
 
-def test_message3_command_uses_the_third_line():
+def test_message3_command_uses_the_third_line(main_window):
     window = _MainWindow()
     handler = ConsoleCommandHandler(window)
 
