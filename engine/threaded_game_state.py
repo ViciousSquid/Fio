@@ -12,49 +12,6 @@ from .entity_table import EntityTable
 # common empty path avoids allocating a throwaway list on every rendered frame.
 _EMPTY_DRAIN: tuple = ()
 
-class PublishedObjects:
-    """Lazy object view over a dense slot selection."""
-
-    __slots__ = ('_refs', '_slots', '_list', '_label')
-
-    def __init__(self, refs, slots, label="PublishedObjects"):
-        self._refs = refs
-        self._slots = slots
-        self._list = None
-        self._label = label
-
-    def materialise(self):
-        if self._list is None:
-            self._list = self._refs[self._slots].tolist() if len(self._slots) else []
-        return self._list
-
-    def __len__(self):
-        return len(self._slots)
-
-    def __bool__(self):
-        return len(self._slots) > 0
-
-    def __iter__(self):
-        return iter(self.materialise())
-
-    def __getitem__(self, index):
-        return self.materialise()[index]
-
-    def __repr__(self):
-        return '<%s %d%s>' % (self._label, len(self._slots), '' if self._list is None else ' materialised')
-
-
-class PublishedBrushes(PublishedObjects):
-    __slots__ = ()
-    def __init__(self, refs, slots):
-        super().__init__(refs, slots, "PublishedBrushes")
-
-
-class PublishedEntities(PublishedObjects):
-    __slots__ = ()
-    def __init__(self, refs, slots):
-        super().__init__(refs, slots, "PublishedEntities")
-
 class RenderState:
     """
     A snapshot of the game state specifically for the renderer.
@@ -96,12 +53,6 @@ class RenderState:
         self.splitscreen_active = False
         
         # Scene Data
-        self.visible_brushes = []
-        self.all_brushes = []
-        self.visible_things = []
-        # Authoritative Light objects for renderer lighting; avoids scanning
-        # the full Thing set every render frame.
-        self.all_lights = []
         # The entity half of the dense projection (engine.entity_table), with
         # the slots the frame published and the live hidden mask it read.  The
         # renderer classifies entities into passes from these rather than
@@ -197,10 +148,6 @@ class RenderState:
         self.player2_dead = False
         self.player2_underwater = False
         self.splitscreen_active = False
-        self.visible_brushes = []
-        self.all_brushes = []
-        self.visible_things = []
-        self.all_lights = []
         # Keep the dense projection objects across buffer recycling.  Their
         # published slot vectors below are emptied, so an interstitial frame
         # cannot draw stale rows, while the next LogicThread publish reuses the
