@@ -2012,8 +2012,7 @@ class QtGameView(QOpenGLWidget):
             return
         # A LogicCamera owns the player's view completely: no HUD is shown
         # while the cinematic is running.
-        if render_state is not None and getattr(
-            render_state, "cinematic_camera_active", False
+        if render_state is not None and render_state.cinematic_camera_active
         ):
             return
         if viewport_width is None:
@@ -2254,8 +2253,7 @@ class QtGameView(QOpenGLWidget):
     def _draw_hud_splitscreen(self, painter, render_state):
         if self._hud_style == 0:
             return
-        if render_state is not None and getattr(
-            render_state, "cinematic_camera_active", False
+        if render_state is not None and render_state.cinematic_camera_active
         ):
             return
         w, h = self.width(), self.height()
