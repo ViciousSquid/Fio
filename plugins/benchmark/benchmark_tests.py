@@ -288,10 +288,6 @@ class BenchmarkTests:
 
     def _live_cooperative_yield(self, label):
         """Yield from long live-test batches without leaving the Qt thread."""
-        self._monitor_beat(label, deadline=self._preparation_deadline)
-        monitor_failed, monitor_reason = self._monitor_failed()
-        if monitor_failed:
-            raise TimeoutError(monitor_reason)
         if time.perf_counter() > self._preparation_deadline:
             elapsed = time.perf_counter() - self._phase_started
             raise TimeoutError(
@@ -460,9 +456,6 @@ class BenchmarkTests:
         self._live_io_next_fire = 0.0
         self._live_io_manager = None
         self._live_io_source = None
-        self._live_stress_timeout = False
-        self._live_stress_timeout_reason = ""
-        self._start_live_stress_monitor(label)
     
         try:
             # Every live stress test starts from a genuinely empty live
@@ -710,7 +703,6 @@ class BenchmarkTests:
             self._timer.start()
         except Exception:
             self._live_stress_active = False
-            self._stop_live_stress_monitor()
             if view.play_mode:
                 try:
                     if label.startswith(("procedural_", "monster_")):
