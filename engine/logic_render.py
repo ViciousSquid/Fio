@@ -418,9 +418,7 @@ class LogicRender:
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(logic.camera.camera_transition)
 
-        if logic.play_mode and getattr(
-            logic, "_monster_projectiles", None
-        ):
+        if logic.play_mode and logic.combat_runtime._monster_projectiles:
             logic.combat_runtime._publish_projectile_render_snapshot()
         else:
             logic.combat_runtime.projectile_positions = _NO_PROJECTILES
