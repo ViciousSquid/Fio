@@ -9,8 +9,6 @@ dropped. Distances are compared squared, so no square root runs per object.
 The radius itself is *not* here any more. It is a live camera setting the
 editor and the console can move mid-session, so it lives on
 :class:`engine.view_distance.ViewDistance` and the renderer reads it per frame;
-:data:`CAMERA_RENDER_CULL_DISTANCE` below is only that setting's default value,
-kept under its old name for callers and tests that want the number.
 
 The logic lives here, apart from :mod:`engine.renderer_F`, for two reasons: it
 carries no OpenGL/glm/Qt dependency, so it is unit-testable headlessly; and it
@@ -28,8 +26,6 @@ from typing import Callable, List, Optional, Sequence
 
 from engine.view_distance import DEFAULT_VIEW_DISTANCE
 
-#: World-slab margin used to keep tall/floating entities inside the broad phase.
-
 #: How far above and below the world's geometry the visible slab is extended, so
 #: a tall billboard, a floating light or a jumping actor at the very top or
 #: bottom of the world is never clipped out of the relevant region.
@@ -37,7 +33,7 @@ WORLD_SLAB_MARGIN = 512.0
 
 
 def visible_xz_bounds(cam, corners, y_min, y_max,
-                      max_dist=CAMERA_RENDER_CULL_DISTANCE):
+                      max_dist=DEFAULT_VIEW_DISTANCE):
     """The XZ box the camera can actually see, given the world's height slab.
 
     Fio has two play cameras and the player switches between them mid-session, so
