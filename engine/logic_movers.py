@@ -2,8 +2,7 @@
 
 LogicThread remains the simulation orchestrator. This module owns
 mover/door initialization, state-table access, row reindexing, path-following,
-door activation, and per-tick advancement while preserving the existing
-LogicThread compatibility surface.
+door activation, and per-tick advancement.
 """
 
 from __future__ import annotations
@@ -37,19 +36,11 @@ class LogicMovers:
 
     def __init__(self, logic):
         self.logic = logic
+        self._mover_table = MoverTable()
 
     def _movers(self):
-        """Return the dense mover table, preserving LogicThread storage compatibility.
-
-        Keeping the dense table on the LogicThread host preserves compatibility
-        with tests and tools that inspect or seed the table directly.
-        """
-        logic = self.logic
-        table = logic.__dict__.get("_mover_table")
-        if table is None:
-            table = MoverTable()
-            logic.__dict__["_mover_table"] = table
-        return table
+        """Return the dense mover table owned by this runtime."""
+        return self._mover_table
 
     @property
     def mover_states(self):

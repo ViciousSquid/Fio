@@ -1,8 +1,7 @@
 """Portal runtime delegated from LogicThread.
 
 Owns portal topology caching, portal fade/transit state, player transit and
-projectile transit. LogicThread remains the tick-order orchestrator and keeps
-the existing private/public method surface as compatibility wrappers.
+projectile transit. LogicThread remains the tick-order orchestrator.
 """
 
 from __future__ import annotations

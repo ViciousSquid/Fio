@@ -472,8 +472,7 @@ class LogicThread(threading.Thread):
         self._mover_brush_list = []
         self._door_brush_list = []
         
-        # Mover and door animation state live in a dense table (self._movers());
-        # mover_states and door_states are mapping views over it.
+        # Mover and door animation state are owned by mover_runtime.
         # Parented lights
         self._parented_lights: list = []
 

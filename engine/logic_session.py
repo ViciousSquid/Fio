@@ -1,8 +1,7 @@
 """Play-session lifecycle delegated from LogicThread.
 
 Owns play-mode enter/exit, native save/load, session cache teardown, monster
-thread lifetime/reset, and player-spawn I/O initialisation. LogicThread keeps
-the public/private compatibility surface as thin delegation wrappers.
+thread lifetime/reset, and player-spawn I/O initialisation.
 """
 
 from __future__ import annotations

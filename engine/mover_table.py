@@ -23,7 +23,8 @@ approximately, and that is most of what is here:
   with no state yet (created lazily, as the loop did), and rows whose direction
   has not been resolved yet (resolved on first use, as the loop did).
 * **The state dicts stay the interface.** I/O handlers and saved games read and
-  write ``logic.mover_states[i]`` / ``logic.door_states[i]`` as dicts.
+  write ``logic.mover_runtime.mover_states[i]`` /
+  ``logic.mover_runtime.door_states[i]`` as dicts.
   :class:`StateView` and :class:`RowState` are mappings over the columns, so
   that code is unchanged. A state set for an index that is not a row (a door
   opened outside play mode) is kept as the plain dict it was given.
