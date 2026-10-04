@@ -191,9 +191,6 @@ class LogicThread(threading.Thread):
         "interaction": (
             "player",
             "collected_keys",
-            "current_hud_message",
-            "current_hud_key_name",
-            "level_complete_ui",
             "io_manager",
         ),
         "editor": (
@@ -372,9 +369,7 @@ class LogicThread(threading.Thread):
         self.visibility_changes = 0
 
 
-        # Interaction State
-        self.current_hud_message = ""
-        self.current_hud_key_name = None
+        # Interaction state is owned by interaction_runtime.
 
         # Visual FX
         self.BULLET_FADE_TIME = 20.0
@@ -419,7 +414,7 @@ class LogicThread(threading.Thread):
         # Portal slots use the same enumerate(editor_state.things) address space
         # as EntityTable. Links are resolved once when topology changes.
 
-        self.level_complete_ui = None
+        # Level-complete UI state is owned by interaction_runtime
 
         #: Dense execution state for Effect primitives. Authoring Effects remain
         #: in editor_state.things; this store owns their runtime phase and origin.
@@ -707,13 +702,13 @@ class LogicThread(threading.Thread):
         self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         self.game_state.consume_shot()
-        if self.cutscene_runtime.state or self.player_dead or self.level_complete_ui:
+        if self.cutscene_runtime.state or self.player_dead or self.interaction_runtime.level_complete_ui:
             return
         if self.plugins is not None and self.plugins.wants_tick():
             self.plugins.tick(
                 self,
                 use_pressed=use_key,
-                interaction_consumed=bool(self.current_hud_message),
+                interaction_consumed=bool(self.interaction_runtime.current_hud_message),
                 delta=delta,
                 keys=self.game_state.get_keys,
             )

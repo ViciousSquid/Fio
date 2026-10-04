@@ -115,12 +115,12 @@ class LogicSession:
             # Reset speaker/interaction state.
             logic.active_speakers.clear()
             logic.trigger_runtime.hurt_trigger_timers.clear()
-            logic.current_hud_message = ""
-            logic.current_hud_key_name = None
+            logic.interaction_runtime.current_hud_message = ""
+            logic.interaction_runtime.current_hud_key_name = None
 
             # Reset water sound state (no spurious enter/exit on spawn).
-            logic._player_was_in_water = False
-            logic._waterwalk_timer = 0.0
+            logic.player_runtime._player_was_in_water = False
+            logic.player_runtime._waterwalk_timer = 0.0
 
             logic.gate_inputs = {}
             logic.timing_runtime.timer_states.clear()
@@ -190,7 +190,7 @@ class LogicSession:
             # Reset portal runtime state.
             logic.portal_runtime.reset_session()
 
-            logic.level_complete_ui = None
+            logic.interaction_runtime.level_complete_ui = None
 
             # Reset light fade transitions for a clean play session.
             logic.timing_runtime.light_fade_states.clear()

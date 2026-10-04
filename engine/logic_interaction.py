@@ -16,11 +16,14 @@ class LogicInteraction:
 
     def __init__(self, logic):
         self.logic = logic
+        self.current_hud_message = ""
+        self.current_hud_key_name = None
+        self.level_complete_ui = None
 
     def handle(self, use_key_pressed: bool):
         logic = self.logic
-        logic.current_hud_message = ""
-        logic.current_hud_key_name = None
+        self.current_hud_message = ""
+        self.current_hud_key_name = None
 
         reach_distance = 80.0
         px, py, pz = logic.player.pos
@@ -63,7 +66,7 @@ class LogicInteraction:
                     key_name = found_door_brush.get("door_key_name", "")
 
                     if is_locked:
-                        logic.current_hud_message = "Locked"
+                        self.current_hud_message = "Locked"
                         if use_key_pressed and logic.io_manager:
                             logic.io_manager.fire_output(
                                 found_door_brush,
@@ -73,8 +76,8 @@ class LogicInteraction:
                     elif needs_key:
                         has_key = key_name in logic.collected_keys
                         if has_key:
-                            logic.current_hud_message = "[E] Use"
-                            logic.current_hud_key_name = key_name or None
+                            self.current_hud_message = "[E] Use"
+                            self.current_hud_key_name = key_name or None
                             if use_key_pressed:
                                 logic.mover_runtime._trigger_door_open(
                                     found_door_idx,
@@ -82,10 +85,10 @@ class LogicInteraction:
                                 )
                                 door_consumed_use = True
                         else:
-                            logic.current_hud_message = "Need"
-                            logic.current_hud_key_name = key_name or None
+                            self.current_hud_message = "Need"
+                            self.current_hud_key_name = key_name or None
                     else:
-                        logic.current_hud_message = "[E] Open"
+                        self.current_hud_message = "[E] Open"
                         if use_key_pressed:
                             logic.mover_runtime._trigger_door_open(
                                 found_door_idx,
@@ -131,13 +134,13 @@ class LogicInteraction:
                     # Preserve authored list order: first matching row wins.
                     row = int(candidates[0])
                     thing = world.levelchanger_things[row]
-                    logic.current_hud_message = "[E] Complete Level"
+                    self.current_hud_message = "[E] Complete Level"
                     if use_key_pressed:
                         target_map = thing.properties.get(
                             "target_map",
                             "",
                         )
-                        logic.level_complete_ui = {
+                        self.level_complete_ui = {
                             "active": True,
                             "target_map": target_map,
                             "title": "Complete",

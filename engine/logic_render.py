@@ -385,8 +385,8 @@ class LogicRender:
         else:
             write_state.player_underwater = False
         write_state.collected_keys = set(logic.collected_keys)
-        write_state.hud_message = logic.current_hud_message
-        write_state.hud_prompt_key = logic.current_hud_key_name
+        write_state.hud_message = logic.interaction_runtime.current_hud_message
+        write_state.hud_prompt_key = logic.interaction_runtime.current_hud_key_name
         write_state.active_weapon = logic.combat_runtime.active_weapon
         write_state.muzzle_flash_active = logic.muzzle_flash_active
         if logic.combat_runtime.active_weapon == "gun1":
@@ -613,5 +613,5 @@ class LogicRender:
         else:
             write_state.splitscreen_active = False
 
-        write_state.level_complete_ui = logic.level_complete_ui
+        write_state.level_complete_ui = logic.interaction_runtime.level_complete_ui
         write_state.prepare_ms = (time.perf_counter() - started) * 1000.0
