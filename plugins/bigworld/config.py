@@ -187,11 +187,9 @@ def bound_view_horizon(logic, radius: float):
     requested view distance already inside the radius is left alone.
 
     Returns a zero-argument callable that restores the previous limit.  A host
-    with no view-distance object (a head-less test, a benchmark) gets a no-op.
+    The render runtime owns the camera view-distance object.
     """
-    view_distance = getattr(logic, "view_distance", None)
-    if view_distance is None or not hasattr(view_distance, "limit"):
-        return lambda: None
+    view_distance = logic.render_runtime.view_distance
     previous = view_distance.limit
     try:
         radius = float(radius)

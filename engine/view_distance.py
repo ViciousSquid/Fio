@@ -11,8 +11,8 @@ about the world except how much of it is on screen.
 
 The editor's "Cull Dist" spinbox and the ``r_viewdistance`` console command
 both write :attr:`ViewDistance.distance` here, and everything downstream reads
-it: the broad-phase distance cull, the projection's far plane, the logic
-thread's frustum, and the distance fog the shaders apply.
+it: the broad-phase distance cull, the projection's far plane, the render
+runtime's frustum, and the distance fog the shaders apply.
 
 **Fog and clipping work together.** A far plane on its own pops geometry out of
 existence at a hard edge. So the fog is derived from the same distance and is
@@ -93,7 +93,8 @@ def clamp_color(color, default=DEFAULT_FOG_COLOR):
 class ViewDistance:
     """The camera's draw distance, and the fog that hides its far plane.
 
-    One instance is shared by the viewport, the renderer and the logic thread,
+    One instance is shared by the viewport, the renderer and the render
+    runtime,
     so a change from the editor spinbox or the console is picked up by the next
     frame everywhere with no rebuild and no reload -- that is what makes the
     spinbox update the fog in real time.

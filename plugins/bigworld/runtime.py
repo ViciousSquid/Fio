@@ -208,8 +208,7 @@ class BigWorldSession:
 
     def _current_visual_horizon(self):
         """Return the renderer's useful horizon when the host exposes one."""
-        view_distance = self.logic.view_distance
-        return view_distance.visual_horizon if view_distance is not None else None
+        return self.logic.render_runtime.view_distance.visual_horizon
 
     def _fitted_view(self):
         """``((activation, deactivation, view_limit), near_rect)`` sized from

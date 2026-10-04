@@ -16,6 +16,7 @@ import numpy as np
 from .change_journal import JOURNAL, STATE
 from .entity_table import ENT_PROP
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
+from .view_distance import ViewDistance
 
 
 class LogicRender:
@@ -23,6 +24,7 @@ class LogicRender:
 
     def __init__(self, logic):
         self.logic = logic
+        self.view_distance = ViewDistance()
         self._last_edited = {}
 
     def extract_frustum_planes(self, proj_view: glm.mat4):
@@ -442,9 +444,7 @@ class LogicRender:
         ]
 
         far = (
-            logic.view_distance.far_plane
-            if logic.view_distance is not None
-            else 10000.0
+            self.view_distance.far_plane
         )
         projection = glm.perspective(
             glm.radians(fov),

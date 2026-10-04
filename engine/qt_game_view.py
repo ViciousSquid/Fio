@@ -1015,6 +1015,17 @@ class QtGameView(QOpenGLWidget):
         if self._thread_started:
             return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
+        initial_view_distance = self.view_distance
+        render_view_distance = self.logic_thread.render_runtime.view_distance
+        render_view_distance.distance = initial_view_distance.distance
+        render_view_distance.fog_enabled = initial_view_distance.fog_enabled
+        render_view_distance.fog_start = initial_view_distance.fog_start
+        render_view_distance.fog_end = initial_view_distance.fog_end
+        render_view_distance.fog_density = initial_view_distance.fog_density
+        render_view_distance.fog_color = initial_view_distance.fog_color
+        render_view_distance.ambient = initial_view_distance.ambient
+        render_view_distance.limit = initial_view_distance.limit
+        self.view_distance = render_view_distance
         self.logic_thread.set_gui_fault_teardown(self._logic_tick_fault_signal.emit)
         if self.logic_thread is not None:
             self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
@@ -2667,7 +2678,7 @@ class QtGameView(QOpenGLWidget):
     def _sync_view_distance(self):
         """Push the shared view-distance object at everything that reads it.
 
-        The renderer and the logic thread hold the *same* instance rather than
+        The render runtime and renderer hold the *same* instance rather than
         a copy, so this only has to run when one of them is created or swapped
         — and the per-frame LOD bands, which are plain numbers, are refreshed
         here too.
@@ -2677,9 +2688,6 @@ class QtGameView(QOpenGLWidget):
             self.renderer.view_distance = self.view_distance
             self.renderer.lod_manager.cull_dist_sq = distance * distance
             self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
-        lt = getattr(self, 'logic_thread', None)
-        if lt is not None and hasattr(lt, 'set_view_distance'):
-            lt.view_distance = self.view_distance
 
     def switch_renderer(self, mode: str):
         if mode == self._renderer_mode:
