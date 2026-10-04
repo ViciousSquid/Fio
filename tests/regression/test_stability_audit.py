@@ -411,7 +411,7 @@ def test_a_hidden_light_does_not_light_the_running_world():
     table = EntityTable()
     hidden = table.begin_frame(lamps, epoch=1)
     config = {"entity_table": table, "thing_hidden": hidden, "play_mode": True}
-    _table, slots = Renderer_F._get_active_lights(None, None, config)
+    _table, slots = Renderer_F._get_active_lights(config)
     assert sorted(slots.tolist()) == [0, 2]
     config["play_mode"] = False
     _table, slots = Renderer_F._get_active_lights(None, None, config)
