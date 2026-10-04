@@ -36,6 +36,19 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.TRIGGER_POLL_TICK = LogicThread.TRIGGER_POLL_TICK
     logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
     logic.TICK_DURATION = LogicThread.TICK_DURATION
+    brush = {
+        'id': 'trigger_1',
+        'pos': [0, 0, 0],
+        'size': [20, 20, 20],
+        'is_trigger': True,
+        'trigger_type': 'Multiple',
+        'trigger_activation': 'touch',
+        'trigger_action': 'target',
+    }
+    if filters is not None:
+        brush['trigger_filters'] = filters
+    if poll_interval is not None:
+        brush['trigger_poll_interval'] = poll_interval
     logic._events = []
     def _plugin_emit(event, **payload):
         if event == "trigger_enter":
