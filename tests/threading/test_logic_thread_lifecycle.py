@@ -296,24 +296,24 @@ def test_health_hud_fades_in_on_spawn_then_settles_at_50_percent(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     try:
-        start = thread._hud_health_fade_started
+        start = thread.render_runtime._hud_health_fade_started
         assert start is not None
-        assert thread._hud_health_fade_phase == "in"
-        assert thread._hud_health_alpha == 0.0
+        assert thread.render_runtime._hud_health_fade_phase == "in"
+        assert thread.render_runtime._hud_health_alpha == 0.0
 
         alpha = thread.render_runtime.update_hud_health_alpha(start + 0.75)
         assert alpha == pytest.approx(0.5)
 
         alpha = thread.render_runtime.update_hud_health_alpha(start + 1.5)
         assert alpha == pytest.approx(1.0)
-        assert thread._hud_health_fade_phase == "out"
+        assert thread.render_runtime._hud_health_fade_phase == "out"
 
         alpha = thread.render_runtime.update_hud_health_alpha(start + 3.5)
         assert alpha == pytest.approx(0.75)
 
         alpha = thread.render_runtime.update_hud_health_alpha(start + 5.5)
         assert alpha == pytest.approx(0.5)
-        assert thread._hud_health_fade_phase == "idle"
+        assert thread.render_runtime._hud_health_fade_phase == "idle"
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -331,8 +331,8 @@ def test_disabling_health_hud_fade_keeps_full_alpha_after_damage(logic):
         alpha = thread.render_runtime.update_hud_health_alpha(0.0)
 
         assert alpha == pytest.approx(1.0)
-        assert thread._hud_health_fade_phase == "idle"
-        assert thread._hud_health_fade_started is None
+        assert thread.render_runtime._hud_health_fade_phase == "idle"
+        assert thread.render_runtime._hud_health_fade_started is None
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -341,31 +341,31 @@ def test_health_change_uses_fast_fade_in_then_slow_fade_out(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     try:
-        start = thread._hud_health_fade_started
+        start = thread.render_runtime._hud_health_fade_started
         assert start is not None
         thread.render_runtime.update_hud_health_alpha(start + 5.5)
-        assert thread._hud_health_alpha == pytest.approx(0.5)
+        assert thread.render_runtime._hud_health_alpha == pytest.approx(0.5)
 
         change = start + 10.0
         thread.player_health = 75
 
         alpha = thread.render_runtime.update_hud_health_alpha(change)
         assert alpha == pytest.approx(0.5)
-        assert thread._hud_health_fade_phase == "in"
+        assert thread.render_runtime._hud_health_fade_phase == "in"
 
         alpha = thread.render_runtime.update_hud_health_alpha(change + 0.75)
         assert alpha == pytest.approx(0.75)
 
         alpha = thread.render_runtime.update_hud_health_alpha(change + 1.5)
         assert alpha == pytest.approx(1.0)
-        assert thread._hud_health_fade_phase == "out"
+        assert thread.render_runtime._hud_health_fade_phase == "out"
 
         alpha = thread.render_runtime.update_hud_health_alpha(change + 3.5)
         assert alpha == pytest.approx(0.75)
 
         alpha = thread.render_runtime.update_hud_health_alpha(change + 5.5)
         assert alpha == pytest.approx(0.5)
-        assert thread._hud_health_fade_phase == "idle"
+        assert thread.render_runtime._hud_health_fade_phase == "idle"
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -374,26 +374,26 @@ def test_further_health_changes_restart_the_fast_fade_from_current_opacity(logic
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
     try:
-        start = thread._hud_health_fade_started
+        start = thread.render_runtime._hud_health_fade_started
         assert start is not None
         thread.render_runtime.update_hud_health_alpha(start + 5.5)
-        assert thread._hud_health_alpha == pytest.approx(0.5)
+        assert thread.render_runtime._hud_health_alpha == pytest.approx(0.5)
 
         first_change = start + 8.0
         thread.player_health = 90
         thread.render_runtime.update_hud_health_alpha(first_change)
         thread.render_runtime.update_hud_health_alpha(first_change + 1.5)
-        assert thread._hud_health_alpha == pytest.approx(1.0)
+        assert thread.render_runtime._hud_health_alpha == pytest.approx(1.0)
 
         second_change = first_change + 3.0
         thread.player_health = 80
         alpha = thread.render_runtime.update_hud_health_alpha(second_change)
         assert alpha == pytest.approx(0.8125)
-        assert thread._hud_health_fade_phase == "in"
+        assert thread.render_runtime._hud_health_fade_phase == "in"
 
         alpha = thread.render_runtime.update_hud_health_alpha(second_change + 1.5)
         assert alpha == pytest.approx(1.0)
-        assert thread._hud_health_fade_phase == "out"
+        assert thread.render_runtime._hud_health_fade_phase == "out"
     finally:
         thread.session_runtime.apply_play_mode(False)
 
