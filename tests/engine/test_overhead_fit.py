@@ -3,7 +3,7 @@ about monsters off screen.
 
 The AI's camera-derived behaviour -- leaving parked monsters out, throttling
 off-screen ones -- runs only inside a Big World session that publishes the
-overhead screen's box (``sim_view_rect``). With Big World off, or with a
+overhead screen's box (``BigWorldSession.tiers.near_rect``). With Big World off, or with a
 first-person camera, every monster runs every tick exactly as before.
 """
 
