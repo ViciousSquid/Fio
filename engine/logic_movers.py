@@ -1,6 +1,6 @@
 """Mover and door runtime delegated from LogicThread.
 
-LogicThread remains the simulation orchestrator and state host. This module owns
+LogicThread remains the simulation orchestrator. This module owns
 mover/door initialization, state-table access, row reindexing, path-following,
 door activation, and per-tick advancement while preserving the existing
 LogicThread compatibility surface.
@@ -95,7 +95,7 @@ class LogicMovers:
                 elif not brush.get("move_once", False):
                     states[i] = {"progress": 0.0, "forward": True}
 
-        logic.mover_states = states
+        self.mover_states = states
         logic._mover_brush_list = [b for _, b in logic.movers]
 
     def _reset_movers(self):
@@ -105,7 +105,7 @@ class LogicMovers:
             if brush.get("is_mover") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
-        logic.mover_states = {}
+        self.mover_states = {}
         logic._mover_brush_list = []
 
     def _init_doors(self):
@@ -141,7 +141,7 @@ class LogicMovers:
                     ),
                 }
 
-        logic.door_states = states
+        self.door_states = states
         logic._door_brush_list = [b for _, b in logic.doors]
         logic._moving_rows = tuple(logic.brushes)
 
@@ -152,15 +152,15 @@ class LogicMovers:
             if brush.get("is_door") and "original_pos" in brush:
                 brush["pos"] = list(brush["original_pos"])
                 moved(brush)
-        logic.door_states = {}
+        self.door_states = {}
         logic._door_brush_list = []
 
     def _trigger_door_open(self, door_idx: int, brush: dict):
         """Start opening a door if it is currently closed or closing."""
         logic = self.logic
-        if door_idx not in logic.door_states:
+        if door_idx not in self.door_states:
             return
-        state = logic.door_states[door_idx]
+        state = self.door_states[door_idx]
         if state["state"] in ("closed", "closing"):
             state["state"] = "opening"
             if logic.io_manager:
@@ -176,7 +176,7 @@ class LogicMovers:
         """
         logic = self.logic
         movers, doors = logic.movers, logic.doors
-        m_states, d_states = logic.mover_states, logic.door_states
+        m_states, d_states = self.mover_states, self.door_states
         paths = logic.mover_path_states
 
         kept_m = {
@@ -194,7 +194,7 @@ class LogicMovers:
         self._init_movers()
         self._init_doors()
 
-        m_new = {index: dict(state) for index, state in logic.mover_states.items()}
+        m_new = {index: dict(state) for index, state in self.mover_states.items()}
         for index, brush in logic.movers:
             if id(brush) in kept_m:
                 state, path = kept_m[id(brush)]
@@ -204,15 +204,15 @@ class LogicMovers:
                     m_new[index] = state
                 if path is not None:
                     logic.mover_path_states[index] = path
-        logic.mover_states = m_new
+        self.mover_states = m_new
 
-        d_new = {index: dict(state) for index, state in logic.door_states.items()}
+        d_new = {index: dict(state) for index, state in self.door_states.items()}
         for index, brush in logic.doors:
             if id(brush) in kept_d:
                 d_new.pop(index, None)
                 if kept_d[id(brush)] is not None:
                     d_new[index] = kept_d[id(brush)]
-        logic.door_states = d_new
+        self.door_states = d_new
 
     def _update_movers(self, delta: float):
         """Advance every mover one tick."""
@@ -225,7 +225,7 @@ class LogicMovers:
         if not node_name:
             return
 
-        node = logic._find_path_node_by_name(node_name)
+        node = logic.world_runtime.find_path_node_by_name(node_name)
         if node is None:
             debug_log("IO", f"Mover path: node '{node_name}' not found — stopping")
             logic.mover_path_states.pop(idx, None)

@@ -44,7 +44,7 @@ class LogicInteraction:
 
         door_consumed_use = False
         if found_door_brush:
-            door_state = logic.door_states.get(
+            door_state = logic.mover_runtime.door_states.get(
                 found_door_idx, {}
             ).get("state", "closed")
 

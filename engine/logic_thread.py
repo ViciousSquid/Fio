@@ -183,8 +183,6 @@ class LogicThread(threading.Thread):
             "editor_state",
             "movers",
             "doors",
-            "mover_states",
-            "door_states",
             "mover_path_states",
             "_mover_brush_list",
             "_door_brush_list",
@@ -231,7 +229,6 @@ class LogicThread(threading.Thread):
         "interaction": (
             "player",
             "doors",
-            "door_states",
             "collected_keys",
             "current_hud_message",
             "current_hud_key_name",
@@ -377,6 +374,7 @@ class LogicThread(threading.Thread):
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
         self.editor_runtime = LogicEditor(self)
+        self.mover_runtime = LogicMovers(self)
         # LogicWorld owns entity lookup, indexing and LevelChanger projections.
         self.world_runtime = LogicWorld(
             self,
@@ -476,12 +474,6 @@ class LogicThread(threading.Thread):
         
         # Mover and door animation state live in a dense table (self._movers());
         # mover_states and door_states are mapping views over it.
-        # Mover Animation State
-        self.mover_states = {}
-        
-        # Door Animation State
-        self.door_states = {}
-
         # Parented lights
         self._parented_lights: list = []
 
@@ -853,33 +845,7 @@ class LogicThread(threading.Thread):
     # =========================================================================
     # MOVER/DOOR RUNTIME
     # =========================================================================
-
-    def _mover_runtime(self):
-        """Return the mover/door runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "mover_runtime", None)
-        if runtime is None:
-            runtime = LogicMovers(self)
-            self.mover_runtime = runtime
-        return runtime
-
-    def _movers(self):
-        return self._mover_runtime()._movers()
-
-    @property
-    def mover_states(self):
-        return self._mover_runtime().mover_states
-
-    @mover_states.setter
-    def mover_states(self, states):
-        self._mover_runtime().mover_states = states
-
-    @property
-    def door_states(self):
-        return self._mover_runtime().door_states
-
-    @door_states.setter
-    def door_states(self, states):
-        self._mover_runtime().door_states = states
+    # LogicMovers owns mover/door row state and table access.
 
 
     # MAIN LOOP
