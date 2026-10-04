@@ -9,9 +9,10 @@ pytest.importorskip("PyQt5", reason="renderer tests need the production Qt/OpenG
 pytest.importorskip("OpenGL")
 
 from editor.things import Portal
+from tests.helpers.worlds import make_thing
 from engine.entity_table import EntityTable
 from tests.helpers import gl as glh
-from engine.portal_transform import basis_from_rotation, map_point, mirror_point
+from engine.portal_transform import map_point, mirror_point
 
 pytestmark = pytest.mark.gl
 
@@ -32,20 +33,8 @@ def renderer():
 
 
 def _portals(glasses=True):
-    first = Portal(pos=list(A_POS), properties={
-        "name": "Portal_A",
-        "id": "portal-a",
-        "glasses": glasses,
-        "portal_target": "Portal_B",
-        "rotation": [180.0, 0.0, 0.0],
-    })
-    second = Portal(pos=list(B_POS), properties={
-        "name": "Portal_B",
-        "id": "portal-b",
-        "glasses": True,
-        "portal_target": "Portal_A",
-        "rotation": [270.0, 0.0, 0.0],
-    })
+    first = make_thing(Portal, "Portal_A", A_POS, id="portal-a", glasses=glasses, portal_target="Portal_B", rotation=[180.0, 0.0, 0.0])
+    second = make_thing(Portal, "Portal_B", B_POS, id="portal-b", glasses=True, portal_target="Portal_A", rotation=[270.0, 0.0, 0.0])
     table = EntityTable()
     table.begin_frame([first, second], epoch=1)
     return first, second, table
