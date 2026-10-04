@@ -73,6 +73,9 @@ class FakeHost(QWidget):
     def show_toast(self, message, is_error=False, duration=None):
         pass
 
+    def mark_as_modified(self):
+        pass
+
 
 def water_brush():
     return {
