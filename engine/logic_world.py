@@ -37,6 +37,7 @@ class LogicWorld:
         self.id_cache = {}
         self.indexed_things = ()
         self.indexed_brushes = ()
+        self.timer_things = []
 
     def build_entity_caches(self):
         """Build lookup and hot-path entity indexes for the current world."""
@@ -89,7 +90,7 @@ class LogicWorld:
                 del states[key]
 
         LogicTimer = self.timer_type
-        logic._timer_things = [
+        self.timer_things = [
             thing
             for thing in logic.editor_state.things
             if LogicTimer and isinstance(thing, LogicTimer)
@@ -240,7 +241,7 @@ class LogicWorld:
 
         self.monster_by_id = {}
         self.monster_things = []
-        logic._timer_things = []
+        self.timer_things = []
 
         self.levelchanger_things = []
         self.levelchanger_centres = np.empty((0, 3), dtype=np.float32)

@@ -57,10 +57,10 @@ class LogicTiming:
     def init_logic_timers(self):
         """Arm every authored timer whose start_on property is enabled."""
         logic = self.logic
-        if not logic._timer_things:
+        if not logic.world_runtime.timer_things:
             return
 
-        for thing in logic._timer_things:
+        for thing in logic.world_runtime.timer_things:
             if not thing.properties.get("start_on", False):
                 continue
 
@@ -81,10 +81,10 @@ class LogicTiming:
     def update_logic_timers(self, delta: float):
         """Advance enabled timers and fire their I/O outputs."""
         logic = self.logic
-        if not logic._timer_things:
+        if not logic.world_runtime.timer_things:
             return
 
-        for thing in logic._timer_things:
+        for thing in logic.world_runtime.timer_things:
             if not thing.properties.get("timer_enabled", False):
                 continue
 

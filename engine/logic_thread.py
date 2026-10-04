@@ -217,7 +217,6 @@ class LogicThread(threading.Thread):
             "io_manager",
         ),
         "timing": (
-            "_timer_things",
             "io_manager",
         ),
         "collision": (
@@ -433,7 +432,6 @@ class LogicThread(threading.Thread):
         # Dense LevelChanger activation columns. Spatial data is rebuilt with
         # the entity caches; the per-tick interaction path only consumes these
         # float32 columns and scalar-dispatches the selected row.
-        self._timer_things = []
         # Authored health per monster UUID, captured on play-mode enter so the
         # Respawn input has a value to restore (see _reset_all_monsters).
         self._monster_spawn_health: Dict[str, int] = {}

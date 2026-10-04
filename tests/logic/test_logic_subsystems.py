@@ -271,7 +271,7 @@ def test_logic_session_constructs_and_releases_session_cache_state():
 def test_logic_timing_constructs_and_updates_light_fade():
     light = _Thing()
     light.properties.update({"intensity": 0.0})
-    host = SimpleNamespace(io_manager=None, _timer_things=[])
+    host = SimpleNamespace(io_manager=None, world_runtime=SimpleNamespace(timer_things=[]))
     runtime = LogicTiming(host)
     runtime.light_fade_states["lamp"] = {
         "entity": light,
