@@ -1447,10 +1447,6 @@ class LogicThread(threading.Thread):
             self.player_runtime = runtime
         return runtime
 
-    # Keep the historical helper as a forwarding surface for tests/tools.
-    def _update_water_sounds(self, delta: float):
-        return self._player_runtime().update_water_sounds(delta)
-
     # =========================================================================
     # PORTAL TRANSIT
     # =========================================================================
