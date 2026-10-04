@@ -40,11 +40,6 @@ class World:
         self._timer_things = []
         self.log = []
 
-        # The timer update lives on LogicThread and is called here unbound, so
-        # the shim supplies the one helper it reaches for through ``self``.
-        from engine.logic_thread import LogicThread
-        self._timer_key = LogicThread._timer_key
-
         self.manager.set_entity_finder(self._by_name)
         self.manager.set_entity_finder_by_id(self._by_id)
         register_all_input_handlers(self.manager)
@@ -335,14 +330,14 @@ def test_unnamed_signals_from_different_sources_are_different_signals(world):
 # ===========================================================================
 
 def test_a_timer_fires_when_its_interval_elapses(world):
-    from engine.logic_thread import LogicThread
+    from engine.logic_timing import LogicTiming
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.to_sink(timer, "OnTimer")
     world._timer_things = [timer]
     world.send(timer, "Enable")
 
-    LogicThread._update_logic_timers(world, 0.5)
+    LogicTiming(world).update_logic_timers( 0.5)
     assert world.hits == 0
     LogicThread._update_logic_timers(world, 0.6)
     assert world.hits == 1
