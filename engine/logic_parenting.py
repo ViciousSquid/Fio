@@ -17,10 +17,12 @@ class LogicParenting:
         self.logic = logic
         self.light_type = light_type
         self.portal_type = portal_type
+        self._parented_lights = []
+        self._parented_portals = []
 
     def _init_parented_lights(self):
         logic = self.logic
-        logic._parented_lights = []
+        self._parented_lights = []
         Light = self.light_type
         if not Light:
             return
@@ -56,19 +58,19 @@ class LogicParenting:
                 ]
                 thing.properties["parent_offset"] = offset
 
-            logic._parented_lights.append((thing, brush, offset))
+            self._parented_lights.append((thing, brush, offset))
 
     def _reset_parented_lights(self):
         logic = self.logic
-        for light, _brush, _offset in logic._parented_lights:
+        for light, _brush, _offset in self._parented_lights:
             original = light.properties.pop("_original_pos", None)
             if original is not None:
                 light.pos = list(original)
-        logic._parented_lights = []
+        self._parented_lights = []
 
     def _update_parented_lights(self):
         logic = self.logic
-        for light, brush, offset in logic._parented_lights:
+        for light, brush, offset in self._parented_lights:
             bpos = brush["pos"]
             light.pos = [
                 bpos[0] + offset[0],
@@ -78,7 +80,7 @@ class LogicParenting:
 
     def _init_parented_portals(self):
         logic = self.logic
-        logic._parented_portals = []
+        self._parented_portals = []
         Portal = self.portal_type
         if Portal is None:
             return
@@ -114,13 +116,13 @@ class LogicParenting:
             local_pos = thing.get_parent_local_pos()
             local_yaw = thing.get_parent_local_yaw()
 
-            logic._parented_portals.append(
+            self._parented_portals.append(
                 (thing, brush, local_pos, local_yaw)
             )
 
     def _reset_parented_portals(self):
         logic = self.logic
-        for portal, _brush, _local_pos, _local_yaw in logic._parented_portals:
+        for portal, _brush, _local_pos, _local_yaw in self._parented_portals:
             original = portal.properties.pop("_original_pos", None)
             if original is not None:
                 portal.pos = list(original)
@@ -129,11 +131,11 @@ class LogicParenting:
             if original_yaw is not None:
                 portal.set_yaw_degrees(original_yaw)
 
-        logic._parented_portals = []
+        self._parented_portals = []
 
     def _update_parented_portals(self):
         logic = self.logic
-        for portal, brush, local_pos, local_yaw in logic._parented_portals:
+        for portal, brush, local_pos, local_yaw in self._parented_portals:
             mover_pos = brush["pos"]
             mover_yaw = brush.get("rotation_yaw", 0.0)
 

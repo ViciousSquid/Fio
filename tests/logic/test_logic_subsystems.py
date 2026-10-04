@@ -170,7 +170,7 @@ def test_logic_parenting_constructs_and_updates_parented_light():
 
     brush = {"name": "lift", "is_mover": True, "pos": [0, 0, 0]}
     light = Light()
-    host = SimpleNamespace(editor_state=SimpleNamespace(brushes=[brush], things=[light]), _parented_lights=[])
+    host = SimpleNamespace(editor_state=SimpleNamespace(brushes=[brush], things=[light]))
 
     runtime = LogicParenting(host, light_type=Light)
     runtime._init_parented_lights()
@@ -179,7 +179,7 @@ def test_logic_parenting_constructs_and_updates_parented_light():
     runtime._update_parented_lights()
 
     assert light.pos == [14, 7, 20]
-    assert len(host._parented_lights) == 1
+    assert len(runtime._parented_lights) == 1
 
 
 def test_logic_player_constructs_and_reports_water_transition():

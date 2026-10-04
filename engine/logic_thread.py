@@ -167,8 +167,6 @@ class LogicThread(threading.Thread):
         ),
         "parenting": (
             "editor_state",
-            "_parented_lights",
-            "_parented_portals",
         ),
         "player": (
             "player",
@@ -381,12 +379,6 @@ class LogicThread(threading.Thread):
         
         
         # Mover and door animation state are owned by mover_runtime.
-        # Parented lights
-        self._parented_lights: list = []
-
-        # Parented portals (same system as lights — attach to movers)
-        self._parented_portals: list = []
-
         # Model collision pseudo-brushes for things with model_path
         self._physics_world = None
         # Bumped every time the set of drawable objects changes, so a consumer
