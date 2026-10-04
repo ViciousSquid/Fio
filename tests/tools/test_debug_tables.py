@@ -434,6 +434,47 @@ def test_debug_tables_detects_the_real_brush_set_change(real_world_window):
     assert instrument.render.center[slot].tolist() == pytest.approx(added["pos"])
 
 
+
+def test_debug_tables_survives_a_real_map_save_load_round_trip(real_world_window):
+    """Reloading real map data must rebuild the same dense rows from scratch."""
+    instrument, original_state, _ = real_world_window
+    instrument.refresh()
+    original_render_ids = set(instrument.render.slot_of_id)
+    original_entity_ids = set(instrument.entities.slot_of_id)
+
+    # Use EditorState's actual persistence normalization, then feed that data
+    # through a fresh EditorState and fresh LogicThread. This deliberately
+    # avoids copying any dense table from the first world.
+    level_data = original_state.get_level_data()
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
+
+    reloaded = EditorState()
+    reloaded.load_from_data(level_data, save_undo=False)
+    logic = LogicThread(ThreadedGameState(), reloaded)
+    logic._prepare_render_state()
+    assert logic.game_state.request_swap() is True
+
+    instrument.main_window.state = reloaded
+    instrument.main_window.view_3d.logic_thread = logic
+    instrument.refresh()
+
+    assert set(instrument.render.slot_of_id) == original_render_ids
+    assert set(instrument.entities.slot_of_id) == original_entity_ids
+    assert instrument.render.count == len(reloaded.brushes)
+    assert instrument.entities.count == len(reloaded.things)
+
+    for brush in reloaded.brushes:
+        slot = instrument.render.slot_of_id[brush["id"]]
+        assert instrument.render.center[slot].tolist() == pytest.approx(brush["pos"])
+
+    for thing in reloaded.things:
+        slot = instrument.entities.slot_of_id[thing.properties["id"]]
+        assert instrument.entities.pos[slot].tolist() == pytest.approx(
+            thing.pos.tolist()
+        )
+
 def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
     """A real Terrain must populate Debug Tables from its dense TerrainTable."""
     from engine.terrain import Terrain
