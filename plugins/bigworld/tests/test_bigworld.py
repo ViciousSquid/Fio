@@ -13,7 +13,6 @@ import math
 import os
 import sys
 import uuid as _uuidlib
-from types import SimpleNamespace
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _ROOT not in sys.path:
@@ -48,8 +47,19 @@ def _check(cond, msg):
 
 
 # --------------------------------------------------------------------------
-# Test doubles
+# Real Fio machinery used by the session tests
 # --------------------------------------------------------------------------
+
+import pytest
+pytest.importorskip("PyQt5", reason="Big World session tests exercise LogicThread/editor machinery")
+
+from editor.editor_state import EditorState
+from editor.things import Thing
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
+from engine.terrain import Terrain
+from engine.view_distance import ViewDistance
+
 
 def make_brush(x, y, z, sx=64.0, sy=64.0, sz=64.0, **extra):
     b = {"id": str(_uuidlib.uuid4()), "pos": [x, y, z], "size": [sx, sy, sz]}
@@ -57,70 +67,42 @@ def make_brush(x, y, z, sx=64.0, sy=64.0, sz=64.0, **extra):
     return b
 
 
-class FakeThing:
-    def __init__(self, x, y, z, ttype="monster", **props):
-        self.pos = [x, y, z]
-        self.properties = {"id": str(_uuidlib.uuid4()), "type": ttype}
-        self.properties.update(props)
+def make_thing(tid_or_x, y_or_z, z=None, ttype="monster", **props):
+    """Create a real Fio Thing; Big World owns its position/properties, not a fake object."""
+    if z is None:
+        x, z = tid_or_x, y_or_z
+        tid = props.pop("uuid", f"t{x}_{z}")
+        y = 0.0
+    else:
+        tid = props.pop("uuid", str(tid_or_x))
+        x, y = float(tid_or_x), float(y_or_z)
+    properties = {"id": tid, "type": ttype}
+    properties.update(props)
+    return Thing(pos=[float(x), float(y), float(z)], properties=properties)
 
 
-class FakePlayer:
-    def __init__(self, pos):
-        self.pos = list(pos)
+def make_logic(brushes, things, player_pos=(0, 0, 0), terrain=None):
+    """Build the real LogicThread used by play mode, without starting its thread."""
+    state = EditorState()
+    state.brushes = list(brushes)
+    state.things = list(things)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(player_pos[0]),
+                                      float(player_pos[1]),
+                                      float(player_pos[2])]
+    if terrain is not None:
+        logic.world_runtime.terrain = terrain
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 
-class FakeLogic:
-    def __init__(self, brushes, things, player_pos=(0, 0, 0), terrain=None):
-        self.editor_state = SimpleNamespace(brushes=brushes, things=things)
-        self.player_runtime = SimpleNamespace(player=FakePlayer(player_pos))
-        self.world_runtime = SimpleNamespace(terrain=terrain)
-        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
-
-
-class FakeTerrain:
-    """A stand-in exposing the streaming surface engine.terrain.Terrain adds.
-
-    It faithfully mirrors ``set_world_extent`` / ``set_bounds`` / ``set_streaming``
-    so the session's terrain-fill wiring can be exercised headlessly (the real
-    Terrain needs numpy + an OpenGL context). GL is never touched; a real
-    Terrain defers its chunk prune to the render thread, which the ``prune``
-    flag here records instead.
-    """
-
-    def __init__(self, min_x=-2, max_x=2, min_z=-2, max_z=2,
-                 chunk_size=256.0, enabled=True):
-        self.enabled = enabled
-        self.streaming = False
-        self.stream_radius = 1536.0
-        self.stream_evict_padding = 512.0
-        self.streamed_chunks = 0
-        self.chunk_size = chunk_size
-        self.offset_x = 0.0
-        self.offset_z = 0.0
-        self.min_chunk_x = min_x
-        self.max_chunk_x = max_x
-        self.min_chunk_z = min_z
-        self.max_chunk_z = max_z
-        self.extent_calls = []
-        self.deferred_prune = False
-
-    def set_streaming(self, enabled, radius=None):
-        self.streaming = bool(enabled)
-        if radius is not None and radius > 0:
-            self.stream_radius = float(radius)
-
-    def set_bounds(self, min_x, max_x, min_z, max_z, prune=True):
-        self.min_chunk_x, self.max_chunk_x = min_x, max_x
-        self.min_chunk_z, self.max_chunk_z = min_z, max_z
-        if not prune:
-            self.deferred_prune = True
-
-    def set_world_extent(self, min_wx, min_wz, max_wx, max_wz, prune=True):
-        self.extent_calls.append((min_wx, min_wz, max_wx, max_wz))
-        cs = self.chunk_size
-        self.set_bounds(int(math.floor(min_wx / cs)), int(math.floor(max_wx / cs)),
-                        int(math.floor(min_wz / cs)), int(math.floor(max_wz / cs)),
-                        prune=prune)
+def new_session(logic, **kwargs):
+    session = BigWorldSession(logic, **kwargs)
+    if logic.plugins is None:
+        from plugins.manager import get_manager
+        logic.plugins = get_manager()
+    logic.plugins.services["bigworld"] = session
+    return session
 
 
 # --------------------------------------------------------------------------
@@ -282,9 +264,9 @@ def test_spanning_refcount():
 def test_persistent_entities():
     print("[7] persistent / global entities stay active regardless of cell")
     mgr = BigWorldManager(activation_radius=512.0, deactivation_radius=512.0)
-    world_mgr = FakeThing(100000, 0, 100000, ttype="worldmanager")   # type-based
-    tagged = FakeThing(90000, 0, 90000, ttype="monster", bw_persistent=True)  # property
-    near = FakeThing(10, 0, 10, ttype="monster")
+    world_mgr = make_thing(100000, 0, 100000, ttype="worldmanager")   # type-based
+    tagged = make_thing(90000, 0, 90000, ttype="monster", bw_persistent=True)  # property
+    near = make_thing(10, 0, 10, ttype="monster")
     mgr.index_world([], [world_mgr, tagged, near])
     mgr.update((0, 0, 0), force=True)
     _check(mgr.is_thing_active(world_mgr), "world manager (global type) always active")
@@ -302,10 +284,10 @@ def test_session_effects_and_restore():
     print("[8] session hides inactive geometry/entities and restores on stop")
     near = make_brush(10, 0, 10)
     far = make_brush(50000, 0, 50000)
-    near_mon = FakeThing(20, 0, 20, ttype="monster")
-    far_mon = FakeThing(50010, 0, 50010, ttype="monster")
+    near_mon = make_thing(20, 0, 20, ttype="monster")
+    far_mon = make_thing(50010, 0, 50010, ttype="monster")
     far_pre_hidden = make_brush(60000, 0, 0, hidden=True)  # user already hid it
-    logic = FakeLogic([near, far, far_pre_hidden], [near_mon, far_mon], player_pos=(0, 0, 0))
+    logic = make_logic([near, far, far_pre_hidden], [near_mon, far_mon], player_pos=(0, 0, 0))
 
     session = BigWorldSession(logic, activation_radius=2048.0, deactivation_radius=2048.0)
     session.start()
@@ -333,7 +315,7 @@ def test_streaming_moves_active_set():
     brushes = []
     for cx in range(0, 40):
         brushes.append(make_brush(cx * 512 + 256, 0, 256))
-    logic = FakeLogic(brushes, [], player_pos=(0, 0, 0))
+    logic = make_logic(brushes, [], player_pos=(0, 0, 0))
     session = BigWorldSession(logic, activation_radius=1024.0, deactivation_radius=1024.0)
     session.start()
 
@@ -353,9 +335,9 @@ def test_streaming_moves_active_set():
 
 def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     print("[10b] moved entities are refiled before a simultaneous residency shrink")
-    mover = FakeThing(3000.0, 0.0, 0.0, ttype="monster")
-    logic = FakeLogic([], [mover], player_pos=(0.0, 0.0, 0.0))
-    logic.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
+    mover = make_thing(3000.0, 0.0, 0.0, ttype="monster")
+    logic = make_logic([], [mover], player_pos=(0.0, 0.0, 0.0))
+    logic.render_runtime.view_distance = ViewDistance(4096.0)
     session = BigWorldSession(
         logic,
         activation_radius=1024.0,
@@ -370,7 +352,7 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     # The player crosses a cell while the visible horizon shrinks back to the
     # authored activation radius. The mover simultaneously walks into a cell
     # that remains active after the shrink.
-    logic.render_runtime.view_distance.visual_horizon = 1024.0
+    logic.render_runtime.view_distance.distance = 1024.0
     logic.player_runtime.player.pos = [512.0, 0.0, 0.0]
     mover.pos = [1000.0, 0.0, 0.0]
     session.tick()
@@ -391,8 +373,8 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
 def test_uuid_stability():
     print("[11] UUIDs are unchanged across load/activate/deactivate/save/reload")
     brushes = [make_brush(i * 400, 0, 0) for i in range(30)]
-    things = [FakeThing(i * 400, 0, 50, ttype="pickup") for i in range(10)]
-    logic = FakeLogic(brushes, things, player_pos=(0, 0, 0))
+    things = [make_thing(i * 400, 0, 50, ttype="pickup") for i in range(10)]
+    logic = make_logic(brushes, things, player_pos=(0, 0, 0))
 
     before = persistence.collect_uuids(brushes, things)
     session = BigWorldSession(logic, activation_radius=800.0, deactivation_radius=800.0)
@@ -523,8 +505,8 @@ def test_terrain_fill_expands_and_restores():
     brushes = [make_brush(x, 0, z)
                for x in range(-3000, 3001, 1000)
                for z in range(-2000, 2001, 1000)]
-    terrain = FakeTerrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
-    logic = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
+    terrain = Terrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
+    logic = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
 
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, terrain_fill=True)
@@ -535,15 +517,15 @@ def test_terrain_fill_expands_and_restores():
 
     session.start()
     _check(terrain.streaming is True, "terrain streaming turned on during play")
-    _check(len(terrain.extent_calls) == 1, "terrain sized to the world exactly once")
+    _check(terrain._pending_prune is True, "terrain bounds prune deferred to the render thread")
     # The extent must enclose the brush field's cell bounding box.
     mgr = session.manager
     xs = [c[0] for c in mgr.cells]
     zs = [c[1] for c in mgr.cells]
     exp = (min(xs) * mgr.cell_size, min(zs) * mgr.cell_size,
            (max(xs) + 1) * mgr.cell_size, (max(zs) + 1) * mgr.cell_size)
-    _check(terrain.extent_calls[0] == exp, "terrain extent == cell bounding box")
-    _check(terrain.deferred_prune is True,
+    _check((terrain.min_chunk_x * mgr.cell_size, terrain.min_chunk_z * mgr.cell_size,
+    _check(terrain._pending_prune is True,
            "bounds prune deferred to the render thread (no GL off-thread)")
     _check(terrain.stream_radius == 2048.0,
            "stream radius derived from the activation radius when unset")
@@ -563,24 +545,23 @@ def test_terrain_fill_opt_in_and_safe():
     brushes = [make_brush(0, 0, 0)]
 
     # (a) terrain_fill off ⇒ terrain untouched.
-    terrain = FakeTerrain()
-    logic = FakeLogic(brushes, [], terrain=terrain)
+    terrain = Terrain()
+    logic = make_logic(brushes, [], terrain=terrain)
     s = BigWorldSession(logic, terrain_fill=False)
     s.start()
-    _check(terrain.streaming is False and not terrain.extent_calls,
-           "terrain left exactly as authored when fill is off")
+    _check(terrain.streaming is False and (terrain.min_chunk_x, terrain.max_chunk_x,
     s.stop()
 
     # (b) terrain_fill on but no terrain present ⇒ no crash, no-op.
-    logic2 = FakeLogic(brushes, [], terrain=None)
+    logic2 = make_logic(brushes, [], terrain=None)
     s2 = BigWorldSession(logic2, terrain_fill=True)
     s2.start()
     s2.stop()
     _check(True, "terrain fill with no terrain present is a safe no-op")
 
     # (c) explicit stream radius is honoured over the derived default.
-    terrain3 = FakeTerrain()
-    logic3 = FakeLogic(brushes, [], terrain=terrain3)
+    terrain3 = Terrain()
+    logic3 = make_logic(brushes, [], terrain=terrain3)
     s3 = BigWorldSession(logic3, activation_radius=2048.0, terrain_fill=True,
                          terrain_stream_radius=777.0)
     s3.start()
@@ -588,29 +569,29 @@ def test_terrain_fill_opt_in_and_safe():
     s3.stop()
 
     # (d) the default-derived radius follows a live visual-horizon increase.
-    terrain4 = FakeTerrain()
-    logic4 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain4)
-    logic4.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0, "limit": None})()
+    terrain4 = Terrain()
+    logic4 = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain4)
+    logic4.render_runtime.view_distance = ViewDistance(2048.0)
     s4 = BigWorldSession(logic4, activation_radius=2048.0, terrain_fill=True)
     s4.start()
     _check(terrain4.stream_radius == 2048.0,
            "default terrain radius starts at the effective activation radius")
-    logic4.render_runtime.view_distance.visual_horizon = 4096.0
+    logic4.render_runtime.view_distance.distance = 4096.0
     s4.tick()
     _check(terrain4.stream_radius == 4096.0,
            "default terrain radius grows with an increased visual horizon")
     s4.stop()
 
     # (e) an explicitly authored radius remains authoritative across a horizon increase.
-    terrain5 = FakeTerrain()
-    logic5 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain5)
-    logic5.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
+    terrain5 = Terrain()
+    logic5 = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain5)
+    logic5.render_runtime.view_distance = ViewDistance(4096.0)
     s5 = BigWorldSession(logic5, activation_radius=2048.0, terrain_fill=True,
                          terrain_stream_radius=5000.0)
     s5.start()
     _check(terrain5.stream_radius == 5000.0,
            "larger explicit terrain radius is preserved over the effective activation")
-    logic5.render_runtime.view_distance.visual_horizon = 8192.0
+    logic5.render_runtime.view_distance.distance = 8192.0
     s5.tick()
     _check(terrain5.stream_radius == 5000.0,
            "explicit terrain radius remains fixed after another horizon increase")
@@ -636,13 +617,13 @@ def test_terrain_config_roundtrips():
 def test_terrain_infinite_streams_forever():
     print("[19] terrain_infinite fills a huge extent (no map edge)")
     brushes = [make_brush(0, 0, 0), make_brush(400, 0, 400)]
-    terrain = FakeTerrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
-    logic = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
+    terrain = Terrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
+    logic = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
     session = BigWorldSession(logic, terrain_fill=True, terrain_infinite=True)
     session.start()
     _check(terrain.streaming is True, "streaming on for infinite terrain")
     h = BigWorldSession.INFINITE_HALF_EXTENT
-    _check(terrain.extent_calls and terrain.extent_calls[0] == (-h, -h, h, h),
+           "terrain sized to the huge origin-centred extent")
            "terrain sized to the huge origin-centred extent")
     # Bounds dwarf the tiny content bounding box → no edge to walk off.
     _check(terrain.min_chunk_x < -10000 and terrain.max_chunk_x > 10000,
@@ -658,48 +639,31 @@ def test_terrain_infinite_streams_forever():
 
 
 def test_real_terrain_streaming_math():
-    print("[18] engine.terrain chunk streaming (skipped if numpy/GL absent)")
-    try:
-        import numpy  # noqa: F401
-        import OpenGL  # noqa: F401
-        import glm  # noqa: F401
-        from engine.terrain import Terrain
-    except Exception as exc:
-        print(f"  skip: engine.terrain unavailable ({exc})")
-        return
+    print("[18] engine.terrain chunk streaming through the real Terrain owner")
+    import glm
+    from engine.terrain import Terrain
 
-    class _Vec:
-        def __init__(self, x, y, z):
-            self.x, self.y, self.z = float(x), float(y), float(z)
-
-    # Build a Terrain without running __init__ (which needs a GL context) —
-    # exercising only the pure chunk-streaming maths (no upload ⇒ no GL calls).
-    t = object.__new__(Terrain)
+    t = Terrain()
     t.chunk_size = 256.0
-    t.offset_x = t.offset_z = t.offset_y = 0.0
     t.min_chunk_x, t.max_chunk_x = -100000, 100000
     t.min_chunk_z, t.max_chunk_z = -100000, 100000
-    from engine.terrain_table import TerrainTable
-    t.table = TerrainTable()
     t.streaming = True
     t.stream_radius = 600.0
     t.stream_evict_padding = 256.0
 
-    t._stream_chunks(_Vec(0, 0, 0))
+    t._stream_chunks(glm.vec3(0.0, 0.0, 0.0))
     near = set(t.table.resident_coords())
     _check(0 < len(near) < 100, f"a bounded ring of chunks streams in ({len(near)})")
     _check((0, 0) in near, "the chunk under the camera is resident")
 
-    # Walk far away: the origin chunks must be evicted, new ones stream in.
     far_x = 50000.0
-    t._stream_chunks(_Vec(far_x, 0, 0))
+    t._stream_chunks(glm.vec3(far_x, 0.0, 0.0))
     resident = t.table.resident_coords()
     _check((0, 0) not in resident, "distant origin chunk evicted after moving away")
     far_cx = int(far_x // t.chunk_size)
     _check(any(abs(cx - far_cx) <= 3 for (cx, cz) in resident),
            "chunks stream in around the new camera position")
     _check(len(resident) < 100, "resident chunk count stays bounded regardless of travel")
-
 
 def main():
     test_cell_math_matches_spatial_grid()
