@@ -56,6 +56,7 @@ class PropSession:
         self._cells = CellIndex()
         self._filed = {}
         self._max_reach = self.DEFAULT_CARRY_REACH
+        self.drop_interceptor = None
         self._falling = {}
 
     @staticmethod
@@ -310,7 +311,7 @@ class PropSession:
         )
 
     def _collect_walk_over(self):
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return False
 
@@ -419,7 +420,7 @@ class PropSession:
 
         self._fire(prop, "OnCollected")
 
-        emit = getattr(self.logic, "_plugin_emit", None)
+        emit = self.logic._plugin_emit
         if emit is not None:
             emit(
                 "prop_collected",
@@ -574,7 +575,7 @@ class PropSession:
                 prop.pos = [prop.pos[0], float(floor_y) + half_height, prop.pos[2]]
                 self.moved(prop)
                 finished.append(pid)
-                io = getattr(self.logic, "io_manager", None)
+                io = self.logic.io_manager
                 if io is not None:
                     io.fire_output(prop, "OnRest")
                 continue
@@ -600,10 +601,10 @@ class PropSession:
         self.moved(prop)
 
         if not (use_pressed or p.pop("_drop_requested", False)):
-            self.logic.current_hud_message = "[E] Carry / Drop"
+            self.logic.interaction_runtime.current_hud_message = "[E] Carry / Drop"
             return
 
-        interceptor = getattr(self.logic, "_prop_drop_interceptor", None)
+        interceptor = self.drop_interceptor
         if interceptor is not None:
             try:
                 if interceptor(prop):

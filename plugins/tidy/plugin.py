@@ -264,7 +264,7 @@ class TidyPlugin(FioPlugin):
         session.start()
         logic._tidy = session
 
-        previous = getattr(logic, "_prop_drop_interceptor", None)
+        previous = logic.prop_runtime.drop_interceptor
 
         def intercept(prop):
             if self.enabled and session.consume_drop(prop):
@@ -278,7 +278,7 @@ class TidyPlugin(FioPlugin):
 
         session._drop_interceptor = intercept
         session._previous_drop_interceptor = previous
-        logic._prop_drop_interceptor = intercept
+        logic.prop_runtime.drop_interceptor = intercept
 
     def on_play_stop(self, logic):
         session = getattr(logic, "_tidy", None)
@@ -286,10 +286,8 @@ class TidyPlugin(FioPlugin):
             session.stop()
 
             interceptor = getattr(session, "_drop_interceptor", None)
-            if getattr(logic, "_prop_drop_interceptor", None) is interceptor:
-                logic._prop_drop_interceptor = getattr(
-                    session, "_previous_drop_interceptor", None
-                )
+            if logic.prop_runtime.drop_interceptor is interceptor:
+                logic.prop_runtime.drop_interceptor = session._previous_drop_interceptor
 
         logic._tidy = None
 

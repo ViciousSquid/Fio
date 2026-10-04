@@ -103,7 +103,7 @@ def test_non_physics_prop_still_falls_to_ground_on_drop():
         session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=None),
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
-        current_hud_message='',
+        interaction_runtime=SimpleNamespace(current_hud_message=''),
     )
     session = PropSession(logic)
     session.start()

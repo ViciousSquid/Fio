@@ -151,7 +151,7 @@ def test_core_prop_carry_and_tidy_place():
 
     tidy = TidySession(logic)
     tidy.start()
-    logic._prop_drop_interceptor = tidy.consume_drop
+    logic.prop_runtime.drop_interceptor = tidy.consume_drop
 
     core.tick(0.016, use_pressed=True)
     _check(core.held is prop, "core PropSession carried the tidyable Prop")

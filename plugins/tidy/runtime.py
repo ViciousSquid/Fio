@@ -81,7 +81,7 @@ class TidySession:
         )
 
     def _fire(self, entity, output: str, value: Optional[str] = None):
-        io = getattr(self.logic, "io_manager", None)
+        io = self.logic.io_manager
         if io is not None:
             io.fire_output(entity, output, value)
 
@@ -119,7 +119,7 @@ class TidySession:
         self._tidied_ids.clear()
 
     def _receptacle_in_view(self, category):
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return None
 
