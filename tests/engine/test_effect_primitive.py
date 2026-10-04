@@ -443,7 +443,9 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
 
     def set_type(entity, value, _logic):
         send("SetType", value)
-        table.begin_frame([effect], epoch=1, effect_runtime=True)
+        table.begin_frame(
+            [effect], epoch=1, effect_runtime=True, effect_store=send.effect_store
+        )
 
     logic = None
 
