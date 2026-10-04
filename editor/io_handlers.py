@@ -195,7 +195,7 @@ def register_all_input_handlers(io_manager: IOManager):
         if effect_type == "ORB":
             entity.properties["width"] = 32.0
             entity.properties["height"] = 32.0
-        logic.effect_store.set_type(entity, effect_type)
+        logic.session_runtime.effect_store.set_type(entity, effect_type)
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
         )
@@ -235,7 +235,7 @@ def register_all_input_handlers(io_manager: IOManager):
         now = time.perf_counter()
         entity.properties["effect_type"] = "EXPLOSION"
         entity.properties["preview"] = False
-        logic.effect_store.trigger_explosion(entity, now)
+        logic.session_runtime.effect_store.trigger_explosion(entity, now)
 
         game_state = logic.game_state
         if not bool(entity.properties.get('silent', False)):
