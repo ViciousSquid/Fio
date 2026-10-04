@@ -85,5 +85,5 @@ def test_levelchanger_first_matching_row_wins_after_vectorised_filter():
     logic.interaction_runtime.handle(True)
 
     assert logic.interaction_runtime.current_hud_message == "[E] Complete Level"
-    assert logic.level_complete_ui["target_map"] == "NextMap"
+    assert logic.interaction_runtime.level_complete_ui["target_map"] == "NextMap"
     assert fired == [("First", "OnUse")]
