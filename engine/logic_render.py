@@ -534,7 +534,6 @@ class LogicRender:
 
         things = logic.editor_state.things
         etable = write_state.entity_table
-        logic._entity_table = etable
         peer_etable = (
             peer.entity_table if peer is not write_state else None
         )
