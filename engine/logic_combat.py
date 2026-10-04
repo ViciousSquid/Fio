@@ -223,7 +223,7 @@ class LogicCombat:
         current_time = time.perf_counter()
         self.bullet_marks = [
             m for m in self.bullet_marks 
-            if (current_time - m['time']) < logic.BULLET_FADE_TIME
+            if (current_time - m['time']) < self.BULLET_FADE_TIME
         ]
 
     # =========================================================================
