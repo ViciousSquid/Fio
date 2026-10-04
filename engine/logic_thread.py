@@ -365,7 +365,7 @@ class LogicThread(threading.Thread):
     def _validate_runtime_contracts(self):
         """Validate the construction-level seam between LogicThread and runtimes."""
         for runtime_name in self._RUNTIME_HOSTS:
-            runtime = getattr(self, runtime_name, None)
+            runtime = getattr(self, runtime_name)
             assert runtime is not None, (
                 f"{runtime_name} was not constructed before runtime validation"
             )
@@ -489,7 +489,7 @@ class LogicThread(threading.Thread):
                     # Qt/editor teardown must not run on this worker thread.
                     # Stop gameplay immediately, then let the GUI thread run
                     # the normal QtGameView play-mode teardown path.
-                    callback = getattr(self, "_gui_fault_teardown", None)
+                    callback = self._gui_fault_teardown
                     if callback is not None and not self._gui_fault_teardown_requested:
                         self._gui_fault_teardown_requested = True
                         try:
