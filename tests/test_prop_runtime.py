@@ -221,17 +221,9 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others(real_logic):
     assert spawned.properties['_prop_home_pos'] == [100.0, 0.0, 0.0]
 
 
-def test_a_rebuild_releases_a_prop_that_left_the_world():
+def test_a_rebuild_releases_a_prop_that_left_the_world(real_logic):
     prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
-    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, other]))
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    logic.player_runtime = SimpleNamespace(
-        player=SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
-    )
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop, other])
     session.held = other
 
     logic.editor_state.things.remove(other)
