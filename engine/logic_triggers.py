@@ -618,7 +618,7 @@ class LogicTriggers:
                 self._poll_triggers(trigger_ids=due_ids)
 
     def _apply_player_damage(self, damage):
-        with self.logic.player_runtime.damage_lock
+        with self.logic.player_runtime.damage_lock:
             if self.logic.player_runtime.god_mode:
                 return
             was_alive = self.logic.player_runtime.player_health > 0
