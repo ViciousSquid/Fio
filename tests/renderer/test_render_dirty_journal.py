@@ -10,18 +10,10 @@ from collections import deque
 
 
 def _state():
-    """Build the minimum EditorState instance needed for journal tests."""
+    """Use the real EditorState constructor and its production journal storage."""
     pytest.importorskip("PyQt5")
     from editor.editor_state import EditorState
-    state = EditorState.__new__(EditorState)
-    state.world_epoch = 0
-    state._render_dirty_objects = set()
-    state._render_dirty_epoch_by_id = {}
-    state._render_dirty_all = False
-    state._render_dirty_all_epoch = -1
-    state._render_dirty_lock = threading.RLock()
-    state._render_dirty_history = deque(maxlen=32)
-    return state
+    return EditorState()
 
 
 def test_snapshot_preserves_later_object_edit():
