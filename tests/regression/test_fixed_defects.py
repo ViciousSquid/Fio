@@ -99,7 +99,6 @@ def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
     try:
         for _ in range(10):
             ai.update(1.0 / 30.0)
-        assert all(math.isfinite(value) for value in monster.pos),
         assert all(math.isfinite(value) for value in monster.pos), (
             "the monster position became non-finite: %s" % (monster.pos,))
     finally:
