@@ -105,7 +105,7 @@ def test_the_asset_browser_places_a_model_as_a_prop():
         root_dir=ROOT,
         save_state=lambda: None,
         state=types.SimpleNamespace(things=placed),
-        set_selected_object=lambda obj: None,
+        set_selected_objects=lambda objs: None,
         show_toast=lambda text: None,
     )
     MainWindow.add_model_to_scene(host, os.path.join(ROOT, DRUM),
