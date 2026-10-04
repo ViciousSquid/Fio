@@ -49,8 +49,8 @@ def test_core_prop_carry_drop_rest_without_plugins():
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=io,
         session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=physics),
-        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-                               camera_height=40.0),
+        player_runtime=SimpleNamespace(player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+                               camera_height=40.0)),
         interaction_runtime=SimpleNamespace(current_hud_message=''),
         player_runtime=SimpleNamespace(collected_keys=set()),
         combat_runtime=SimpleNamespace(player_ammo=0, active_weapon=None, gun2_obtained=False),
@@ -133,10 +133,10 @@ def test_respawn_fades_in_over_two_seconds():
     })
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop], brushes=[]), io_manager=IO(),
-        player=SimpleNamespace(
+        player_runtime=SimpleNamespace(player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
-        ),
+        )),
         _plugin_emit=lambda *args, **kwargs: None,
     )
     logic.session_runtime = LogicSession(logic)

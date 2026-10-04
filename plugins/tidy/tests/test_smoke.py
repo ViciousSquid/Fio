@@ -8,6 +8,7 @@ engine PropSession.
 
 import os
 import sys
+from types import SimpleNamespace
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _ROOT not in sys.path:
@@ -43,7 +44,7 @@ class FakeLogic:
         self.things = things
         self.io_manager = FakeIO()
         self.interaction_runtime = SimpleNamespace(current_hud_message="", current_hud_key_name=None)
-        self.player = FakePlayer([0, 40, 0])
+        self.player_runtime = SimpleNamespace(player=FakePlayer([0, 40, 0]))
         self.prop_runtime = None
         self.session_runtime = SimpleNamespace(physics_world=None, spatial_grid=None)
 
@@ -143,7 +144,7 @@ def test_core_prop_carry_and_tidy_place():
     goal = TidyGoal(properties={"name": "goal", "target": "all"})
 
     logic = FakeLogic([prop, recept, goal])
-    logic.player.angle = 0.0
+    logic.player_runtime.player.angle = 0.0
 
     core = PropSession(logic)
     logic.prop_runtime = core
