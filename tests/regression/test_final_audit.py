@@ -511,26 +511,32 @@ def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
         logic.stop()
 
 
-def test_console_delete_during_play_removes_the_entity_from_the_session():
+def test_console_delete_during_play_removes_the_entity_from_the_session(main_window):
     from editor.console_commands import ConsoleCommandHandler
 
     grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
     wall = box_brush("wall", (200, 64, 0), (32, 128, 256))
     ground = box_brush("ground", (0, -16, 0), (4096, 32, 4096))
-    state, logic = _playing([grunt], [ground, wall])
+    main_window.state.brushes = [ground, wall]
+    main_window.state.things = [grunt]
+
+    logic = LogicThread(ThreadedGameState(), main_window.state)
+    main_window.view_3d.logic_thread = logic
+    main_window.view_3d.play_mode = True
+    logic.player_runtime.player = Player(0.0, 0.0)
+    logic.session_runtime.apply_play_mode(True)
+    logic.session_runtime.stop_monster_ai()
+    console = ConsoleCommandHandler(main_window)
     try:
-        window = SimpleNamespace(state=state,
-                                 view_3d=SimpleNamespace(logic_thread=logic,
-                                                         play_mode=True),
-                                 update_all_ui=lambda: None)
-        console = ConsoleCommandHandler(window)
         console.cmd_delete("grunt")
         assert grunt not in logic.world_runtime.monster_things
         assert logic.world_runtime.find_entity_by_name("grunt") is None
 
         console.cmd_delete("wall")
-        logic._tick(logic.TICK_DURATION)          # collision rebuilds at tick end
-        assert all(b is not wall for b in logic.collision_runtime._collision_brushes_cache)
+        logic._tick(logic.TICK_DURATION)
+        assert all(
+            b is not wall for b in logic.collision_runtime._collision_brushes_cache
+        )
     finally:
         logic.stop()
 
