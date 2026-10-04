@@ -807,15 +807,15 @@ class RuntimeAPI:
         the stale index. Outside play there is no index to rebuild.
         """
         logic = self.logic
-        build = getattr(logic, "_build_entity_caches", None)
-        if build is None or not getattr(logic, "play_mode", False):
+        runtime = getattr(logic, "world_runtime", None)
+        if runtime is None or not getattr(logic, "play_mode", False):
             return
         lock = getattr(logic, "_tick_lock", None)
         if lock is None:
-            build()
+            runtime.build_entity_caches()
         else:
             with lock:
-                build()
+                runtime.build_entity_caches()
 
     # -- global store -------------------------------------------------------
     @property
