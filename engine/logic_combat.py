@@ -130,7 +130,7 @@ class LogicCombat:
         closest_monster = None
         closest_monster_dist = float('inf')
         
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             for thing in logic.editor_state.things:
                 if not isinstance(thing, MonsterThing):
                     continue
@@ -232,7 +232,7 @@ class LogicCombat:
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
         """Add one projectile directly to the dense numeric store."""
         logic = self.logic
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             return self._monster_projectiles.add(
                 pos, vel, owner_id, damage, lifetime
             )
@@ -356,7 +356,7 @@ class LogicCombat:
         storage.
         """
         logic = self.logic
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             projectiles = self._monster_projectiles
             count = len(projectiles)
             if count:
@@ -372,7 +372,7 @@ class LogicCombat:
         """Use a scalar path for small swarms and the dense path for large ones."""
         logic = self.logic
 
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             projectiles = self._monster_projectiles
             if not projectiles:
                 self.projectile_positions = NO_PROJECTILES
