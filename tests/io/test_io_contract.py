@@ -152,14 +152,10 @@ def probe_parameter(entity_type: str, io_def) -> str:
     return PROBE_BY_PARAM_TYPE.get(io_def.param_type, "")
 
 
-@pytest.fixture(scope="module")
-def manager():
-    """An ``IOManager`` with every handler on it — core and plugin alike."""
-    mgr = IOManager()
-    register_all_input_handlers(mgr)
-    get_manager().attach_runtime(HostStub(mgr))
-    return mgr
-
+@pytest.fixture
+def manager(logic_thread):
+    """The IOManager owned by a real LogicThread."""
+    return logic_thread.io_manager
 
 @pytest.fixture(scope="module")
 def registration_counts():
@@ -181,7 +177,6 @@ def registration_counts():
     try:
         mgr = IOManager()
         register_all_input_handlers(mgr)
-        get_manager().attach_runtime(HostStub(mgr))
     finally:
         IOManager.register_input_handler = real
     return counts
@@ -329,28 +324,19 @@ def _probe_all_inputs(manager, host):
     return raised, unreached, unbuildable
 
 
-def test_every_declared_input_reaches_an_implementation_when_invoked():
-    """The static audit proves a handler is *registered*; this proves the
-    dispatcher actually arrives at one for every declared input."""
-    mgr = IOManager()
-    register_all_input_handlers(mgr)
-    get_manager().attach_runtime(HostStub(mgr))
-    _raised, unreached, _unbuildable = _probe_all_inputs(mgr)
+def test_every_declared_input_reaches_an_implementation_when_invoked(logic_thread):
+    """Drive every declared input through the real LogicThread dispatcher."""
+    mgr = logic_thread.io_manager
+    _raised, unreached, _unbuildable = _probe_all_inputs(mgr, logic_thread)
     assert unreached == [], (
         "these inputs dispatched to nothing: %s" % (unreached,))
 
-
-def test_no_declared_input_raises_when_invoked():
-    """A handler that throws on a default instance is not an implementation —
-    ``_execute_input`` swallows the exception, so the input silently does
-    nothing in exactly the way an unimplemented one does."""
-    mgr = IOManager()
-    register_all_input_handlers(mgr)
-    get_manager().attach_runtime(HostStub(mgr))
-    raised, _unreached, _unbuildable = _probe_all_inputs(mgr)
+def test_no_declared_input_raises_when_invoked(logic_thread):
+    """A registered handler must execute without being swallowed as a failure."""
+    mgr = logic_thread.io_manager
+    raised, _unreached, _unbuildable = _probe_all_inputs(mgr, logic_thread)
     assert raised == [], "\n".join(
         "%s.%s raised: %s" % entry for entry in raised)
-
 
 def test_every_registered_type_has_an_instance_the_probe_can_build():
     """A type the probe cannot instantiate is a type it silently skips."""
