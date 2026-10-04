@@ -902,12 +902,16 @@ def test_whether_the_map_has_portals_is_published(logic):
         with_portal.session_runtime.apply_play_mode(False)
 
 
+@pytest.mark.gl
 def test_the_renderer_does_not_reuse_texture_ids_across_an_adopt():
     """Its per-table cache resolved a prefix of the old name list."""
     from engine import render_table as rt
-    from engine.renderer_F import Renderer_F
+    from tests.helpers import gl as glh
 
-    renderer = Renderer_F.__new__(Renderer_F)
+    glh.reset_texture_cache()
+    with glh.GLTestContext(64, 64):
+        renderer = glh.make_renderer()
+        try:
     renderer._gl_tex_by_table = {}
     renderer.texture_manager = {}
     renderer._tex_cache_path = lambda name: name
@@ -922,5 +926,8 @@ def test_the_renderer_does_not_reuse_texture_ids_across_an_adopt():
     peer.intern_texture('b.png')              # same id, different name
     table.adopt(peer)
 
-    after = renderer._gl_texture_ids(table).tolist()
-    assert before[-1] == 11 and after[-1] == 22
+            after = renderer._gl_texture_ids(table).tolist()
+            assert before[-1] == 11 and after[-1] == 22
+        finally:
+            renderer.cleanup()
+            glh.reset_texture_cache()
