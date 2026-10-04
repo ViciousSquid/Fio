@@ -38,7 +38,7 @@ def _io_for(effect, events=None):
         logic = SimpleNamespace(
             io_manager=io,
             game_state=game_state,
-            effect_store=effect_store,
+            session_runtime=SimpleNamespace(effect_store=effect_store),
         )
     else:
         logic = SimpleNamespace(
@@ -47,7 +47,7 @@ def _io_for(effect, events=None):
                 get_game_state=lambda: game_state,
             ),
             game_state=game_state,
-            effect_store=effect_store,
+            session_runtime=SimpleNamespace(effect_store=effect_store),
         )
     io.set_logic_thread(logic)
 
@@ -116,7 +116,7 @@ def test_explosion_trigger_queues_centered_sound():
     logic = SimpleNamespace(
         game_state=game_state,
         io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
-        effect_store=effect_store,
+        session_runtime=SimpleNamespace(effect_store=effect_store),
     )
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
