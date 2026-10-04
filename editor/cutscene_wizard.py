@@ -1040,7 +1040,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_summary()
 
     def _actor_selection_changed(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid) if aid else None
         if actor is not None:
@@ -1055,7 +1055,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_waypoints()
 
     def _focus_selected_actor(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         actor = self.actor_objects.get(self._current_actor_id())
         if actor is None:
             return
@@ -1138,7 +1138,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         )
 
     def _add_waypoint(self, from_current=True):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid)
         if not aid or actor is None:
@@ -1626,7 +1626,7 @@ class CutsceneWizard(QtWidgets.QDialog):
                 self.actor_objects[aid] = actor
 
     def _actor_definition(self, aid):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         actor = self.actor_objects.get(aid)
         if actor is None:
             return None
