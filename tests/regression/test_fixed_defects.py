@@ -120,6 +120,7 @@ def test_a_monster_parked_on_its_only_patrol_node_announces_it_once():
     pytest.importorskip("PyQt5")
     from editor.things import Monster, PathNode
     from engine.monster_ai import MonsterAI
+    from engine.logic_world import LogicWorld
     from tests.helpers.fakes import (FakeLogicThread, FakePlayer,
                                      RecordingIOManager)
     from tests.helpers.worlds import make_thing
@@ -132,8 +133,14 @@ def test_a_monster_parked_on_its_only_patrol_node_announces_it_once():
     logic = FakeLogicThread(brushes=ground, things=[monster, node],
                             player=FakePlayer((100000.0, 0.0, 0.0)),
                             io_manager=io_manager)
-    logic._monster_things = [monster]
+    logic.world_runtime = LogicWorld(
+        logic,
+        monster_type=Monster,
+        path_node_type=PathNode,
+    )
     ai = MonsterAI(logic)
+    logic.monster_ai = ai
+    logic.world_runtime.build_entity_caches()
     ai.set_spatial_grid(logic.build_spatial_grid())
 
     for _ in range(60):                         # two seconds of ticks
