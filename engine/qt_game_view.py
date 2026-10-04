@@ -1715,7 +1715,7 @@ class QtGameView(QOpenGLWidget):
                 clear=False, brush_slots=_main_brush_slots,
             )
 
-            if render_state and hasattr(render_state, 'bullet_marks'):
+            if render_state:
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, self.view_matrix)
             if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, _split_proj, self.view_matrix)
@@ -1753,7 +1753,7 @@ class QtGameView(QOpenGLWidget):
                 clear=False, brush_slots=_p2_brush_slots
             )
 
-            if render_state and hasattr(render_state, 'bullet_marks'):
+            if render_state:
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, _p2_view)
             if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, _split_proj, _p2_view)
@@ -1803,7 +1803,7 @@ class QtGameView(QOpenGLWidget):
                         self.renderer.draw_collision_visualization(
                             self.projection_matrix, self.view_matrix, filtered
                         )
-            if render_state and hasattr(render_state, 'bullet_marks'):
+            if render_state:
                 self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
             if render_state is not None and len(render_state.projectiles):
                 self._render_projectiles(render_state.projectiles, self.projection_matrix, self.view_matrix)
@@ -2388,7 +2388,7 @@ class QtGameView(QOpenGLWidget):
         options = [(RENDER_MODE_LIT, "[1] Lit"), (RENDER_MODE_UNLIT, "[2] Unlit"), (RENDER_MODE_WIREFRAME, "[3] Wire"), (RENDER_MODE_VERTEX, "[4] Vert")]
         cy = y + 55
         for mid, txt in options:
-            if getattr(self, 'current_render_mode', 0) == mid:
+            if self.current_render_mode == mid:
                 painter.setPen(QColor(100, 255, 100))
                 painter.drawText(x + 20, cy, "> " + txt)
             else:
