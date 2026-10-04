@@ -87,7 +87,6 @@ class FakeMonsterAI:
 class FakeLogic:
     def __init__(self, things, brushes, player_pos):
         self.editor_state = FakeEditorState(things, brushes)
-        self.terrain = None
         self.player = FakePlayer(player_pos)
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
         self._tick_lock = threading.RLock()

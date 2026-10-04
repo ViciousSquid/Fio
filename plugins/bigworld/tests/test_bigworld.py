@@ -73,7 +73,7 @@ class FakeLogic:
     def __init__(self, brushes, things, player_pos=(0, 0, 0), terrain=None):
         self.editor_state = SimpleNamespace(brushes=brushes, things=things)
         self.player_runtime = SimpleNamespace(player=FakePlayer(player_pos))
-        self.terrain = terrain
+        self.world_runtime = SimpleNamespace(terrain=terrain)
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
 
 

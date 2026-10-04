@@ -698,7 +698,7 @@ class MainWindow(QMainWindow):
 
         # Notify the 3D view's logic thread (if any) that terrain is gone
         if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-            self.view_3d.logic_thread.terrain = None
+            self.view_3d.logic_thread.world_runtime.terrain = None
 
         # Close the terrain editor panel if it is open in the Properties dock
         if self.terrain_editor_window is not None:
@@ -973,7 +973,7 @@ class MainWindow(QMainWindow):
                 
                 # Wire up terrain to logic thread for collision
                 if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                    self.view_3d.logic_thread.terrain = self.terrain
+                    self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             finally:
                 # Always close the progress dialog
                 progress.close()
@@ -1398,7 +1398,7 @@ class MainWindow(QMainWindow):
             if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
             if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                self.view_3d.logic_thread.terrain = self.terrain
+                self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             if hasattr(self.state, 'terrain_data'):
                 self.state.terrain_data = self.terrain.to_dict()
             if hasattr(self, 'scene_hierarchy'):
@@ -2566,7 +2566,7 @@ class MainWindow(QMainWindow):
         if getattr(self.view_3d, 'renderer', None):
             self.view_3d.renderer.setup_terrain_shader(terrain)
         if getattr(self.view_3d, 'logic_thread', None):
-            self.view_3d.logic_thread.terrain = terrain
+            self.view_3d.logic_thread.world_runtime.terrain = terrain
 
     def _rebind_face_targets(self):
         """Re-point the face-texturing targets at the live scene.
@@ -4189,7 +4189,7 @@ class MainWindow(QMainWindow):
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
 
             if getattr(self.view_3d, 'logic_thread', None):
-                self.view_3d.logic_thread.terrain = self.terrain
+                self.view_3d.logic_thread.world_runtime.terrain = self.terrain
 
     def load_level_file(self, filePath):
         """Loads a level from disk. Used for both normal loading and LevelChanger."""

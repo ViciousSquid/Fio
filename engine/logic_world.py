@@ -23,6 +23,7 @@ class LogicWorld:
         path_node_type=None,
     ):
         self.logic = logic
+        self.terrain = None
         self.visibility_changes = 0
         self.levelchanger_type = levelchanger_type
         self.monster_type = monster_type

@@ -74,7 +74,7 @@ class LogicPlayer:
             logic.collision_runtime._collision_brushes_cache,
             logic.mover_runtime._mover_brush_list,
             logic.mover_runtime._door_brush_list,
-            logic.terrain,
+            logic.world_runtime.terrain,
             spatial_grid=logic.session_runtime.spatial_grid,
         )
 
@@ -100,7 +100,7 @@ class LogicPlayer:
             logic.collision_runtime._collision_brushes_cache,
             logic.mover_runtime._mover_brush_list,
             logic.mover_runtime._door_brush_list,
-            logic.terrain,
+            logic.world_runtime.terrain,
             spatial_grid=logic.session_runtime.spatial_grid,
         )
 

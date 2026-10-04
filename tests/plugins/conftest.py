@@ -104,7 +104,6 @@ class FakeLogic:
         self.player = None
         self.io_manager = None
         self.game_state = None
-        self.terrain = None
         self.monster_ai = None
 
 

@@ -45,6 +45,7 @@ class OverheadLogic:
         self.editor_state = type('State', (), {'things': things, 'brushes': []})()
         self.player_runtime = SimpleNamespace(player=FakePlayer(*at))
         self.render_runtime = type('RenderRuntimeFixture', (), {'view_distance': ViewDistance()})()
+        self.world_runtime = SimpleNamespace(terrain=None)
         self.footprint = footprint
         self.camera = _CameraFixture(self)
 
@@ -160,15 +161,15 @@ def test_filled_terrain_keeps_streaming_at_the_fitted_radius():
             pass
 
     logic = OverheadLogic(grid_world(), footprint=(900.0, 500.0))
-    logic.terrain = Terrain()
+    logic.world_runtime.terrain = Terrain()
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, terrain_fill=True)
     session.start()
     session.tick()            # fit is applied before the terrain is set up
-    assert logic.terrain.streaming is True
-    assert logic.terrain.stream_radius == session.manager.activation_radius < 2048.0
+    assert logic.world_runtime.terrain.streaming is True
+    assert logic.world_runtime.terrain.stream_radius == session.manager.activation_radius < 2048.0
     session.stop()
-    assert logic.terrain.streaming is False
+    assert logic.world_runtime.terrain.streaming is False
 
 
 def test_leaving_the_overhead_camera_restores_the_authored_radii():

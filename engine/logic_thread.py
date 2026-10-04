@@ -246,7 +246,6 @@ class LogicThread(threading.Thread):
         self.editor_state = editor_state
         self.visibility_system = visibility_system
         self.running = False
-        self.terrain = None
         
         # Camera state and camera math live in LogicCamera; LogicThread keeps
         # the camera runtime as an owned subsystem and schedules its updates.

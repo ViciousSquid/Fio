@@ -82,7 +82,6 @@ class HostStub:
         self.editor_state.brushes = []
         self.editor_state.things = []
         self.player_runtime = LogicPlayer(self)
-        self.terrain = None
 
         self._monster_lock = __import__("threading").RLock()
         self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()

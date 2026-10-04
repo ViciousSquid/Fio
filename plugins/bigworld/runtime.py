@@ -631,7 +631,7 @@ class BigWorldSession:
         """
         if not self.terrain_fill:
             return
-        terrain = self.logic.terrain
+        terrain = self.logic.world_runtime.terrain
         if terrain is None:
             return
         self._terrain = terrain
