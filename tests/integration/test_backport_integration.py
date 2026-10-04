@@ -214,12 +214,12 @@ def test_property_spec_positional_order_unchanged():
 
 def test_ungrouped_specs_render_no_section_header():
     """A schema with no groups must produce the pre-existing flat layout."""
-    src = _read("plugins/integration.py")
+    src = _read("editor/property_editor.py")
     # The header is emitted only when a non-empty group is present.
     assert 'group = getattr(spec, "group", "") or ""' in src
     assert "if group and group != current_group:" in src
     # The trailing "Other" header only appears if a group was already emitted.
-    assert "if _uncovered and current_group is not None:" in src
+    assert "if uncovered and current_group is not None:" in src
 
 
 def test_manager_registries_start_empty():
