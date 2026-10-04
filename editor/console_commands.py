@@ -516,7 +516,7 @@ class ConsoleCommandHandler:
         if parts[1].lower() == 'clear':
             if isinstance(entity, dict):
                 entity.pop('tint', None)
-            elif hasattr(entity, 'properties'):
+            else:
                 entity.properties.pop('tint', None)
             touch(entity)
             debug_log("Info", f"Cleared tint on '{name}'")
@@ -535,7 +535,7 @@ class ConsoleCommandHandler:
 
         if isinstance(entity, dict):
             entity['tint'] = [r, g, b]
-        elif hasattr(entity, 'properties'):
+        else:
             entity.properties['tint'] = [r, g, b]
         touch(entity)
         debug_log("Info", f"Set tint on '{name}' to ({r}, {g}, {b})")
@@ -586,9 +586,8 @@ class ConsoleCommandHandler:
         else:
             # Use camera position or player start
             pos = [0, 128, 0]
-            if hasattr(self.main_window, 'view_3d'):
-                cam = self.main_window.view_3d.camera
-                pos = [cam.pos.x, cam.pos.y, cam.pos.z]
+            cam = self.main_window.view_3d.camera
+            pos = [cam.pos.x, cam.pos.y, cam.pos.z]
 
         # Checkpoint before the change: undo restores the state before it.
         self.editor_state.save_state()
@@ -732,14 +731,7 @@ class ConsoleCommandHandler:
         
         Works in both Editor mode and Play mode.
         """
-        view_3d = getattr(self.main_window, 'view_3d', None)
-        if not view_3d:
-            debug_log("Error", "3D view not available")
-            return
-        
-        # Initialize state if not present
-        if not hasattr(view_3d, '_collision_vis_mode'):
-            view_3d._collision_vis_mode = 'off'
+        view_3d = self.main_window.view_3d
         
         arg = args.strip().lower() if args else 'toggle'
         
@@ -814,9 +806,7 @@ class ConsoleCommandHandler:
     # ===================================================================
 
     def _hud_config(self):
-        config = getattr(self.main_window, "config", None)
-        if config is None:
-            return None
+        config = self.main_window.config
         if not config.has_section("Display"):
             config.add_section("Display")
         return config
@@ -824,16 +814,14 @@ class ConsoleCommandHandler:
     def _save_hud_config(self):
         if self._command_from_map:
             return
-        save_config = getattr(self.main_window, "save_config", None)
-        if callable(save_config):
-            save_config()
+        self.main_window.save_config()
 
     def cmd_hudstyle(self, args):
         """hudstyle 0|1|2|3|4 [font] — select or hide the HUD."""
         parts = (args or "").strip().split(maxsplit=1)
-        view = getattr(self.main_window, "view_3d", None)
+        view = self.main_window.view_3d
         if not parts:
-            style = getattr(view, "_hud_style", 1) if view is not None else 1
+            style = view._hud_style
             debug_log("Info", f"HUD style: {style}")
             return
 
@@ -847,9 +835,6 @@ class ConsoleCommandHandler:
             return
 
         font_name = parts[1].strip().strip('"').strip("'") if len(parts) > 1 else None
-        if view is None or not hasattr(view, "set_hud_style"):
-            debug_log("Error", "HUD controls are unavailable.")
-            return
         if not view.set_hud_style(style, font_name):
             debug_log("Error", f"HUD font/style {style} could not be loaded.")
             return
@@ -867,9 +852,9 @@ class ConsoleCommandHandler:
     def cmd_hudopacity(self, args):
         """hudopacity 0..100 — set the HUD opacity."""
         text = (args or "").strip()
-        view = getattr(self.main_window, "view_3d", None)
+        view = self.main_window.view_3d
         if not text:
-            value = getattr(view, "_hud_opacity", 100.0) if view is not None else 100.0
+            value = view._hud_opacity
             debug_log("Info", f"HUD opacity: {value:g}%")
             return
 
@@ -878,7 +863,7 @@ class ConsoleCommandHandler:
         except ValueError:
             debug_log("Error", "Usage: hudopacity 0..100")
             return
-        if view is None or not hasattr(view, "set_hud_opacity") or not view.set_hud_opacity(opacity):
+        if not view.set_hud_opacity(opacity):
             debug_log("Error", "HUD opacity must be a number between 0 and 100.")
             return
 
@@ -891,18 +876,14 @@ class ConsoleCommandHandler:
     def cmd_hudfade(self, args):
         """hudfade 0|1 — enable/disable damage-driven health HUD fading."""
         text = (args or "").strip()
-        view = getattr(self.main_window, "view_3d", None)
+        view = self.main_window.view_3d
         if not text:
-            enabled = bool(getattr(view, "_hud_fade_enabled", True)) if view is not None else True
+            enabled = bool(view._hud_fade_enabled)
             debug_log("Info", f"HUD damage fade: {1 if enabled else 0}")
             return
         if text not in ("0", "1"):
             debug_log("Error", "Usage: hudfade 0|1")
             return
-        if view is None or not hasattr(view, "set_hud_fade_enabled"):
-            debug_log("Error", "HUD controls are unavailable.")
-            return
-
         enabled = text == "1"
         view.set_hud_fade_enabled(enabled)
         config = self._hud_config()
@@ -920,8 +901,8 @@ class ConsoleCommandHandler:
             debug_log("Error", f'Usage: message{line} "text"')
             return
 
-        view_3d = getattr(self.main_window, 'view_3d', None)
-        if view_3d is None or not getattr(view_3d, 'play_mode', False):
+        view_3d = self.main_window.view_3d
+        if not view_3d.play_mode:
             debug_log("Error", f"message{line} is only available in Play Mode.")
             return
 
