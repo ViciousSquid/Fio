@@ -86,7 +86,7 @@ class LogicCollision:
         """
         logic = self.logic
         count = 0
-        for brush in logic.brushes:
+        for brush in logic.editor_state.brushes:
             if not brush_has_geometry(brush):
                 continue
             if not self.angled_brush_is_solid(brush):
@@ -122,7 +122,7 @@ class LogicCollision:
     def clear_angled_brush_collision(self):
         logic = self.logic
         """Remove play-time mesh-collision data from all angled brushes."""
-        for brush in logic.brushes:
+        for brush in logic.editor_state.brushes:
             if brush_has_geometry(brush):
                 self.clear_brush_collision(brush)
 
@@ -138,7 +138,7 @@ class LogicCollision:
         model_collision_enabled = bool(getattr(logic, 'model_collision_enabled', True))
         brushes = []
 
-        for thing in logic.things:
+        for thing in logic.editor_state.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
@@ -483,13 +483,13 @@ class LogicCollision:
                 if b.get('_physics_body')
             ]
             if logic.play_mode and hasattr(logic, '_spatial_grid') and logic._spatial_grid:
-                logic._spatial_grid.populate(logic.brushes + logic._model_collision_brushes)
+                logic._spatial_grid.populate(logic.editor_state.brushes + logic._model_collision_brushes)
                 if getattr(logic, '_physics_world', None) is not None:
                     logic._physics_world.rebuild(logic._physics_body_brushes)
         else:
             logic._model_collision_brushes = []
             if logic.play_mode and hasattr(logic, '_spatial_grid') and logic._spatial_grid:
-                logic._spatial_grid.populate(logic.brushes)
+                logic._spatial_grid.populate(logic.editor_state.brushes)
                 if getattr(logic, '_physics_world', None) is not None:
                     logic._physics_world.rebuild(logic._physics_body_brushes)
         self.refresh_collision_brushes_cache()
@@ -500,14 +500,14 @@ class LogicCollision:
     def refresh_collision_brushes_cache(self):
         """Recompute the combined static+model collision brush list.
 
-        PERF: `logic.brushes + logic._model_collision_brushes` was previously
+        PERF: `logic.editor_state.brushes + logic._model_collision_brushes` was previously
         rebuilt (a full list concatenation) every single tick — and, worse,
         once per active projectile per tick. Both collections only change
         here (model-collision toggle, play-mode enter/exit), so cache the
         concatenation and reuse it from the hot paths instead.
         """
         logic = self.logic
-        logic._collision_brushes_cache = logic.brushes + logic._model_collision_brushes
+        logic._collision_brushes_cache = logic.editor_state.brushes + logic._model_collision_brushes
 
     # -- visibility invalidation ------------------------------------------
     #
