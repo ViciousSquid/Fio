@@ -209,7 +209,7 @@ def test_projectiles_are_published_on_a_frame_that_runs_no_tick():
     tick, so the render loop's zero-tick frames published none: flicker."""
     _state, game_state, logic = _play()
     for i in range(3):
-        logic._monster_projectiles.add(
+        logic.combat_runtime._monster_projectiles.add(
             (0.0, 50.0, 100.0 + i), (0.0, 0.0, 10.0), 0, 1, 50.0)
     try:
         counts = []
