@@ -368,10 +368,10 @@ def test_the_precomputed_monster_list_is_used_rather_than_a_type_scan(logic):
     thread = logic(brushes=room(), things=monsters)
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert len(thread._monster_things) == 5, (
+        assert len(thread.world_runtime.monster_things) == 5, (
             "the monster cache holds %d of 5 monsters"
-            % len(thread._monster_things))
-        assert all(m in thread._monster_things for m in monsters)
+            % len(thread.world_runtime.monster_things))
+        assert all(m in thread.world_runtime.monster_things for m in monsters)
     finally:
         thread.session_runtime.apply_play_mode(False)
 
