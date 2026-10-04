@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from engine.spatial import (TIER_DORMANT, TIER_NEAR, cell_of_point,  # noqa: E402
                             tier_of)
+from engine.view_distance import ViewDistance                         # noqa: E402
 from plugins.bigworld.manager import BigWorldManager                 # noqa: E402
 from plugins.bigworld.runtime import BigWorldSession                 # noqa: E402
 
@@ -47,6 +48,7 @@ class Logic:
             brushes=list(brushes), things=list(things)
         )
         self.player = player or Player()
+        self.view_distance = ViewDistance()
 
 
 def brush(x, z, uuid, size=64.0):
