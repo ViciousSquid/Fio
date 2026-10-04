@@ -572,7 +572,8 @@ class IOManager:
             touch(target)
             if (was_hidden is not None
                     and authored_flag(target, 'hidden') != was_hidden):
-                self._logic_thread.collision_runtime.mark_dirty()
+                if self._logic_thread is not None:
+                    self._logic_thread.collision_runtime.mark_dirty()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
     
