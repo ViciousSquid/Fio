@@ -9,6 +9,7 @@ owner of carry, collect, drop and physics behaviour.
 from __future__ import annotations
 
 import os
+import weakref
 
 from plugins.api import FioPlugin, TickContext, io_def, prop
 
@@ -22,6 +23,7 @@ class TidyPlugin(FioPlugin):
     description = "Put core Props away into categorized receptacles and goals."
     category = "Tidy"
     enabled = False
+    _sessions = weakref.WeakKeyDictionary()
 
     def _load_demo_map(self, main_window):
         if not main_window.check_unsaved_changes():
@@ -228,7 +230,7 @@ class TidyPlugin(FioPlugin):
 
     def register_runtime(self, api):
         def _session(logic):
-            return getattr(logic, "_tidy", None)
+            return self._sessions.get(logic)
 
         def prop_reset(entity, param, logic):
             session = _session(logic)
@@ -262,7 +264,7 @@ class TidyPlugin(FioPlugin):
     def on_play_start(self, logic):
         session = TidySession(logic)
         session.start()
-        logic._tidy = session
+        self._sessions[logic] = session
 
         previous = logic.prop_runtime.drop_interceptor
 
@@ -281,7 +283,7 @@ class TidyPlugin(FioPlugin):
         logic.prop_runtime.drop_interceptor = intercept
 
     def on_play_stop(self, logic):
-        session = getattr(logic, "_tidy", None)
+        session = self._sessions.get(logic)
         if session is not None:
             session.stop()
 
@@ -289,7 +291,7 @@ class TidyPlugin(FioPlugin):
             if logic.prop_runtime.drop_interceptor is interceptor:
                 logic.prop_runtime.drop_interceptor = session._previous_drop_interceptor
 
-        logic._tidy = None
+        self._sessions.pop(logic, None)
 
     def on_tick(self, logic, ctx: TickContext):
         session = getattr(logic, "_tidy", None)
