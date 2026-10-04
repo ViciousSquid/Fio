@@ -14,23 +14,12 @@ from editor.things import LevelChanger                   # noqa: E402
 pytestmark = pytest.mark.qt
 
 
-class _Signal:
-    def __init__(self):
-        self.emitted = []
-
-    def emit(self, path):
-        self.emitted.append(path)
-
-
-class _Window:
-    def __init__(self):
-        self.load_level_signal = _Signal()
-
-
-def _changer():
+def _changer(main_window):
     changer = LevelChanger(pos=[0, 0, 0])
-    changer._main_window = _Window()
-    return changer
+    emitted = []
+    main_window.load_level_signal.connect(emitted.append)
+    changer._main_window = main_window
+    return changer, emitted
 
 
 @pytest.mark.parametrize("target, expected", [
@@ -39,15 +28,15 @@ def _changer():
     ("maps\\chapter2\\boss", "maps/chapter2/boss.json"),
     ("chapter2/../next", "maps/next.json"),
 ])
-def test_targets_inside_maps_are_loaded(target, expected):
-    changer = _changer()
+def test_targets_inside_maps_are_loaded(main_window, target, expected):
+    changer, emitted = _changer(main_window)
     assert changer.change_level(target) is True
-    assert changer._main_window.load_level_signal.emitted == [expected]
+    assert emitted == [expected]
 
 
 @pytest.mark.parametrize("target", ["maps/../../victim", "../victim.json",
                                     "maps\\..\\..\\victim"])
-def test_targets_climbing_out_of_maps_are_refused(target):
-    changer = _changer()
+def test_targets_climbing_out_of_maps_are_refused(main_window, target):
+    changer, emitted = _changer(main_window)
     assert changer.change_level(target) is False
-    assert changer._main_window.load_level_signal.emitted == []
+    assert emitted == []
