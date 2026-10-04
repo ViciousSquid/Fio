@@ -278,9 +278,9 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
     ground_center_x = (min_wx + max_wx) / 2
     ground_center_z = (min_wz + max_wz) / 2
 
-    ground_tex = {}
-    for f in ["north","south","east","west","top","down"]:
-        ground_tex[f] = floor_tex if f == "top" else "nodraw.jpg"
+    ground_tex = {f: floor_tex for f in ["north","south","east","west","top","down"]}
+    for f in ["north","south","east","west","down"]:
+        ground_tex[f] = "nodraw.jpg"
     brushes.append({
         "pos": [ground_center_x, GROUND_Y, ground_center_z],
         "size": [ground_width, FLOOR_THICK, ground_depth],
@@ -290,9 +290,9 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
         "id": "ground_plane"
     })
 
-    ceil_tex = {}
-    for f in ["north","south","east","west","top","down"]:
-        ceil_tex[f] = floor_tex if f == "down" else "nodraw.jpg"
+    ceil_tex = {f: floor_tex for f in ["north","south","east","west","top","down"]}
+    for f in ["north","south","east","west","top"]:
+        ceil_tex[f] = "nodraw.jpg"
     brushes.append({
         "pos": [ground_center_x, FLOOR_SURFACE + 600, ground_center_z],
         "size": [ground_width, 64, ground_depth],
@@ -320,7 +320,7 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                     nx, ny = x+dx, y+dy
                     if 0 <= nx < grid_map.w and 0 <= ny < grid_map.h:
                         if grid_map.solid[nx][ny]:
-                            tex = {f: "nodraw.jpg" for f in ["north","south","east","west","top","down"]}
+                            tex = {f: wall_tex for f in ["north","south","east","west","top","down"]}
                             if face == 'north':
                                 tex['south'] = wall_tex
                                 pos = [world_x, FLOOR_SURFACE + ceil_h/2, world_z + CELL_SIZE/2]
@@ -337,6 +337,9 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                                 tex['east'] = wall_tex
                                 pos = [world_x - CELL_SIZE/2, FLOOR_SURFACE + ceil_h/2, world_z]
                                 size = [64, ceil_h, CELL_SIZE]
+                            for hidden_face in ["north","south","east","west","top","down"]:
+                                if hidden_face != face:
+                                    tex[hidden_face] = "nodraw.jpg"
                             brushes.append({
                                 "pos": pos,
                                 "size": size,
@@ -346,7 +349,7 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                                 "id": f"wall_{x}_{y}_{face}"
                             })
                     else:
-                        tex = {f: "nodraw.jpg" for f in ["north","south","east","west","top","down"]}
+                        tex = {f: wall_tex for f in ["north","south","east","west","top","down"]}
                         if face == 'north':
                             tex['south'] = wall_tex
                             pos = [world_x, FLOOR_SURFACE + ceil_h/2, world_z + CELL_SIZE/2]
@@ -363,6 +366,9 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                             tex['east'] = wall_tex
                             pos = [world_x - CELL_SIZE/2, FLOOR_SURFACE + ceil_h/2, world_z]
                             size = [64, ceil_h, CELL_SIZE]
+                        for hidden_face in ["north","south","east","west","top","down"]:
+                            if hidden_face != face:
+                                tex[hidden_face] = "nodraw.jpg"
                         brushes.append({
                             "pos": pos,
                             "size": size,
@@ -431,7 +437,7 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                     heights.append(r.ceiling_height if r else WALL_DEFAULT_HEIGHT)
             h = max(heights) if heights else WALL_DEFAULT_HEIGHT
 
-            tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+            tex = {f: wall_tex for f in ["north", "south", "east", "west", "top", "down"]}
             if o_sw or o_nw:
                 tex['west'] = wall_tex
             if o_se or o_ne:
@@ -441,6 +447,18 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
             if o_nw or o_ne:
                 tex['north'] = wall_tex
 
+            visible_faces = set()
+            if o_sw or o_nw:
+                visible_faces.add("west")
+            if o_se or o_ne:
+                visible_faces.add("east")
+            if o_sw or o_se:
+                visible_faces.add("south")
+            if o_nw or o_ne:
+                visible_faces.add("north")
+            for hidden_face in ["north", "south", "east", "west", "top", "down"]:
+                if hidden_face not in visible_faces:
+                    tex[hidden_face] = "nodraw.jpg"
             brushes.append({
                 "pos":       [vx * CELL_SIZE, FLOOR_SURFACE + h / 2, vz * CELL_SIZE],
                 "size":      [64, h, 64],
@@ -488,7 +506,7 @@ def generate_step_brushes(start_u, v_center, run_axis, width, base_y, total_rise
         # faces. The bottom (sunk into the lower floor) and the inner edge —
         # the face pointing up the run, fully covered by the next taller step —
         # stay nodraw because they are never seen.
-        tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+        tex = {f: wall_tex for f in ["north", "south", "east", "west", "top", "down"]}
         tex["top"] = floor_tex
         if run_axis == 'x':
             pos = [u_center, center_y, v_center]
@@ -504,6 +522,14 @@ def generate_step_brushes(start_u, v_center, run_axis, width, base_y, total_rise
             tex["east"] = wall_tex          # exposed side of the staircase
             tex["west"] = wall_tex          # exposed side of the staircase
             # tex["north"] stays nodraw — inside edge buried by the next step
+        visible_faces = {"top"}
+        if run_axis == 'x':
+            visible_faces.update({"west", "north", "south"})
+        else:
+            visible_faces.update({"south", "east", "west"})
+        for hidden_face in ["north", "south", "east", "west", "top", "down"]:
+            if hidden_face not in visible_faces:
+                tex[hidden_face] = "nodraw.jpg"
         brushes.append({
             "pos": pos,
             "size": size,
@@ -557,9 +583,11 @@ def generate_mezzanine_for_room(room, floor_height, wall_tex, floor_tex, room_in
     plat_u_center = start_u + run_len + plat_len / 2.0
     plat_top = base_y + floor_height
     plat_center_y = plat_top - MEZZANINE_THICK / 2.0
-    tex = {f: "nodraw.jpg" for f in ["north", "south", "east", "west", "top", "down"]}
+    tex = {f: wall_tex for f in ["north", "south", "east", "west", "top", "down"]}
     tex["top"] = floor_tex          # walking surface of the upper floor
     tex["down"] = floor_tex         # underside seen from the lower floor
+    for hidden_face in ["north", "south", "east", "west"]:
+        tex[hidden_face] = "nodraw.jpg"
     if run_axis == 'x':
         pos = [plat_u_center, plat_center_y, v_center]
         size = [plat_len, MEZZANINE_THICK, width]
