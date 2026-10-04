@@ -2613,11 +2613,11 @@ class QtGameView(QOpenGLWidget):
                 self.player2 = Player(pos[0] + 32, pos[2], np.radians(90.0 - angle), physics_enabled=True)
                 self.player2.pos.y = pos[1]
                 if self.logic_thread:
-                    self.logic_thread.set_player2(self.player2)
+                    self.logic_thread.player2 = self.player2
             else:
                 self.player2 = None
                 if self.logic_thread:
-                    self.logic_thread.set_player2(None)
+                    self.logic_thread.player2 = None
             w, h = self.width(), self.height()
             if h > 0:
                 vp_w = (w // 2) if self.splitscreen_mode else w
