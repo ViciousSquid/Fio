@@ -981,7 +981,7 @@ def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
     if not view.play_mode:
         raise RuntimeError("Fio failed to enter Play Mode for monster benchmark")
 
-    logic = getattr(view, "logic_thread", None)
+    logic = view.logic_thread
     if logic is None:
         window._exit_play_mode()
         raise RuntimeError("Fio Play Mode has no LogicThread")
