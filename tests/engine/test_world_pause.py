@@ -55,7 +55,7 @@ def logic():
 def playing(logic):
     logic.set_play_mode(True)
     # The AI thread is not under test here; keep the tick single-threaded.
-    logic._stop_monster_ai()
+    logic.session_runtime.stop_monster_ai()
     return logic
 
 
@@ -204,7 +204,7 @@ def test_plugins_still_tick_over_a_paused_world(playing):
     assert plugins.ticks[1]["use_pressed"] is False
 
 
-@pytest.mark.parametrize("state", ["cinematic_state", "player_dead", "level_complete_ui"])
+@pytest.mark.parametrize("state", ["cutscene_runtime.state", "player_dead", "level_complete_ui"])
 def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playing, state):
     """A cinematic, a death or the level-complete screen returns before the
     plugin step either way; pausing on top of one does not start plugins."""
