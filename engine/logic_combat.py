@@ -55,6 +55,8 @@ class LogicCombat:
         self.gun2_obtained = False
         self.player_ammo = 0
         self._last_player_shot_time = float('-inf')
+        self.BULLET_FADE_TIME = 20.0
+        self.muzzle_flash_active = False
         self._gunfire_events = []
 
     def _handle_shooting(self):
@@ -82,7 +84,7 @@ class LogicCombat:
             self.player_ammo = ammo - 1
             self._last_player_shot_time = now
 
-        logic.muzzle_flash_active = True
+        self.muzzle_flash_active = True
         logic.game_state.queue_sound({
             "file": WEAPON_SHOOT_SOUND.get(
                 self.active_weapon, "shoot.wav"),

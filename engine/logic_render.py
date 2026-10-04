@@ -391,7 +391,7 @@ class LogicRender:
         write_state.hud_message = logic.interaction_runtime.current_hud_message
         write_state.hud_prompt_key = logic.interaction_runtime.current_hud_key_name
         write_state.active_weapon = logic.combat_runtime.active_weapon
-        write_state.muzzle_flash_active = logic.muzzle_flash_active
+        write_state.muzzle_flash_active = logic.combat_runtime.muzzle_flash_active
         if logic.combat_runtime.active_weapon == "gun1":
             write_state.shot_ready = True
         elif logic.combat_runtime.active_weapon == "gun2":
@@ -437,11 +437,11 @@ class LogicRender:
                 "alpha": max(
                     0.0,
                     1.0
-                    - (current_time - m["time"]) / logic.BULLET_FADE_TIME,
+                    - (current_time - m["time"]) / logic.combat_runtime.BULLET_FADE_TIME,
                 ),
             }
             for m in logic.combat_runtime.bullet_marks
-            if current_time - m["time"] < logic.BULLET_FADE_TIME
+            if current_time - m["time"] < logic.combat_runtime.BULLET_FADE_TIME
         ]
 
         far = (

@@ -354,10 +354,6 @@ class LogicThread(threading.Thread):
         # Interaction state is owned by interaction_runtime.
 
         # Visual FX
-        self.BULLET_FADE_TIME = 20.0
-        
-        # Muzzle flash
-        self.muzzle_flash_active = False
 
         # Monster AI (delegated to separate class + thread)
         self._monster_lock = threading.RLock()
@@ -397,8 +393,6 @@ class LogicThread(threading.Thread):
         #: Dense execution state for Effect primitives. Authoring Effects remain
         #: in editor_state.things; this store owns their runtime phase and origin.
         self.effect_store: EffectStore = EffectStore()
-        # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
-        self._gunfire_events: list = []
 
         # Performance Monitoring
         self.actual_tps = 0.0
@@ -518,7 +512,7 @@ class LogicThread(threading.Thread):
             return False
         if not self.game_state.request_swap():
             return False
-        self.muzzle_flash_active = False
+        self.combat_runtime.muzzle_flash_active = False
         return True
 
     def _step_frame(self, accumulator: float) -> float:

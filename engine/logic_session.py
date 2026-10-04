@@ -155,7 +155,7 @@ class LogicSession:
 
             # Reset visual FX.
             logic.combat_runtime.bullet_marks = []
-            logic.muzzle_flash_active = False
+            logic.combat_runtime.muzzle_flash_active = False
 
             # Reset P2 stats.
             logic.player2_health = 100
@@ -223,7 +223,7 @@ class LogicSession:
 
             logic.combat_runtime._monster_projectiles.clear()
             logic.combat_runtime.projectile_positions = _NO_PROJECTILES
-            logic._gunfire_events.clear()
+            logic.combat_runtime._gunfire_events.clear()
 
             # Spawn I/O is deliberately before timers and AI, matching the
             # original LogicThread ordering.
@@ -260,7 +260,7 @@ class LogicSession:
             logic.combat_runtime.active_weapon = None
             logic.combat_runtime.bullet_marks = []
             logic.player_dead = False
-            logic.muzzle_flash_active = False
+            logic.combat_runtime.muzzle_flash_active = False
 
             logic.prop_runtime.stop()
 
@@ -290,7 +290,7 @@ class LogicSession:
             logic.interaction_runtime.level_complete_ui = None
             logic.combat_runtime._monster_projectiles.clear()
             logic.combat_runtime.projectile_positions = _NO_PROJECTILES
-            logic._gunfire_events.clear()
+            logic.combat_runtime._gunfire_events.clear()
 
             self.reset_all_monsters(clear_dead=False)
             self.release_session_caches()

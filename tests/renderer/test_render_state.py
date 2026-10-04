@@ -759,7 +759,7 @@ def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
     thread = logic(brushes=[box_brush("floor", (0, -16, 0), (512, 32, 512))])
     thread.session_runtime.apply_play_mode(True)
     try:
-        thread.muzzle_flash_active = True
+        thread.combat_runtime.muzzle_flash_active = True
         busy = thread.game_state.get_render_state()     # renderer mid-paint
         thread._step_frame(0.0)
         assert thread._publish_frame() is False
@@ -769,7 +769,7 @@ def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
         assert thread._publish_frame() is True
         assert thread.game_state.published("muzzle_flash_active") is True, (
             "the shot's muzzle flash never reached the renderer")
-        assert thread.muzzle_flash_active is False
+        assert thread.combat_runtime.muzzle_flash_active is False
     finally:
         thread.session_runtime.apply_play_mode(False)
 
