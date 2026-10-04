@@ -209,7 +209,7 @@ class CutsceneRuntime:
                         properties=props,
                     )
                     self._set_cutscene_yaw(actor, self._cutscene_number(definition.get("yaw", 0.0)))
-                    self.logic.things.append(actor)
+                    self.logic.editor_state.things.append(actor)
                     spawned.append(actor)
                 except Exception as exc:
                     debug_log("IO", f"LogicCamera: failed to spawn cutscene actor '{aid}': {exc}")
@@ -330,7 +330,7 @@ class CutsceneRuntime:
     def _restore_json_fights(self, cs):
         for snapshots in (cs.get("active_fights") or {}).values():
             for actor, snapshot in snapshots:
-                if actor not in self.logic.things:
+                if actor not in self.logic.editor_state.things:
                     continue
                 if snapshot.get("had_disabled"):
                     actor.properties["disabled"] = snapshot["disabled"]
@@ -421,7 +421,7 @@ class CutsceneRuntime:
         self._restore_json_fights(cs)
         for aid, snapshot in (cs.get("actor_initial") or {}).items():
             actor = snapshot.get("entity")
-            if actor is None or actor not in self.logic.things:
+            if actor is None or actor not in self.logic.editor_state.things:
                 continue
             if cs.get("restore_actors", True):
                 actor.pos = list(snapshot.get("pos", actor.pos))
@@ -436,7 +436,7 @@ class CutsceneRuntime:
         spawned = list(cs.get("spawned_actors") or [])
         for actor in spawned:
             try:
-                self.logic.things.remove(actor)
+                self.logic.editor_state.things.remove(actor)
             except ValueError:
                 pass
         if spawned:
