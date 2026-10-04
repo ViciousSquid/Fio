@@ -17,6 +17,7 @@ import time
 
 import glm
 
+from editor.editor_state import EditorState
 from engine.logic_combat import LogicCombat
 from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
@@ -85,8 +86,9 @@ class FakeLogicThread:
     """
 
     def __init__(self, brushes=(), things=(), player=None, io_manager=None):
-        self.brushes = list(brushes)
-        self.things = list(things)
+        self.editor_state = EditorState()
+        self.editor_state.brushes = list(brushes)
+        self.editor_state.things = list(things)
         self.player = player
         self.player_dead = False
         self.play_mode = False
@@ -117,7 +119,7 @@ class FakeLogicThread:
     def build_spatial_grid(self):
         """Populate a real :class:`SpatialGrid` from this world's brushes."""
         grid = SpatialGrid()
-        grid.populate(self.brushes)
+        grid.populate(self.editor_state.brushes)
         return grid
 
 
