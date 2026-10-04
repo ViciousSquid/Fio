@@ -568,7 +568,7 @@ def test_a_teleport_across_a_portal_does_not_transit(route, tmp_path):
         elif route == "trigger_input":
             node = PathNode(pos=list(back), properties={"name": "behind"})
             state.things.append(node)
-            logic._build_entity_caches()
+            logic.world_runtime.build_entity_caches()
             from editor.io_handlers import register_all_input_handlers  # noqa: F401
             handler = logic.io_manager._input_handlers[("trigger", "teleport")]
             handler({"name": "tele", "target_node": "behind"}, "behind", logic)
