@@ -315,7 +315,7 @@ def test_resetting_monsters_for_play_journals_their_sprite_state(logic):
     monster.properties['dead'] = True
     thread = logic(things=[monster])
     table = EntityTable()
-    table.begin_frame(thread.things, 1)
+    table.begin_frame(thread.editor_state.things, 1)
     dead_sprite = table.sprite_recipes()[table.sprite_key_id[0]]
 
     thread.session_runtime.reset_all_monsters(clear_dead=True)
