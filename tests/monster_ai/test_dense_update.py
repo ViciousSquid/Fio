@@ -85,7 +85,7 @@ def _world(seed, dense, teams=False, count=None):
     logic = FakeLogicThread(brushes=brushes, things=things,
                             player=FakePlayer((0.0, 0.0, 0.0)))
     logic.player_health = 10 ** 9
-    logic._monster_things = [t for t in logic.things if isinstance(t, Monster)]
+    logic._monster_things = [t for t in logic.editor_state.things if isinstance(t, Monster)]
     ai = MonsterAI(logic)
     ai.DENSE_UPDATE = dense
     ai.set_spatial_grid(logic.build_spatial_grid())
