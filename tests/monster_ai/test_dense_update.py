@@ -17,10 +17,13 @@ import random
 
 import pytest
 
+from editor.editor_state import EditorState
 from editor.things import Monster
+from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI
 from engine.monster_constants import MONSTER_SHOOT_INTERVAL
-from tests.helpers.fakes import FakeLogicThread, FakePlayer
+from engine.physics import SpatialGrid
+from engine.threaded_game_state import ThreadedGameState
 from tests.helpers.worlds import box_brush, make_thing
 
 pytestmark = pytest.mark.qt
@@ -49,10 +52,6 @@ def _world(seed, dense, teams=False, count=None):
                 team="red" if i % 2 else "blue",
                 awake=True, wake_on_sight=True, health=60, damage=15))
     else:
-        # One team: nobody is anybody's enemy and crossfire never hits a
-        # teammate, so every monster hunts the player and nothing depends on
-        # which monster moved first this tick -- the one thing the two passes
-        # may order apart. (Crossfire itself is checked separately below.)
         for i in range(4):
             angle = i * math.pi / 2 + 0.3
             r = rng.uniform(500, 900)
@@ -68,7 +67,6 @@ def _world(seed, dense, teams=False, count=None):
                 (r * math.cos(angle), rng.uniform(60, 300), r * math.sin(angle)),
                 monster_type="flying", awake=rng.random() < 0.7, team="red",
                 wake_on_sight=True, health=100, damage=5))
-        # Over the ledge: falls onto it.
         things.append(make_thing(Monster, "faller", (900, 400, 30),
                                  monster_type="human", awake=False,
                                  wake_on_sight=True, damage=3, team="red"))
@@ -82,15 +80,22 @@ def _world(seed, dense, teams=False, count=None):
                                  monster_type="human", triggered=True, team="red"))
         things.append(make_thing(Monster, "sleeper", (2500, 96, 2500),
                                  monster_type="human", awake=False, team="red"))
-    logic = FakeLogicThread(brushes=brushes, things=things,
-                            player=FakePlayer((0.0, 0.0, 0.0)))
+    state = EditorState()
+    state.brushes = brushes
+    state.things = things
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player = __import__('engine.player', fromlist=['Player']).Player(0.0, 0.0)
+    logic.player_runtime.player.pos.y = 0.0
     logic.player_runtime.player_health = 10 ** 9
-    logic.world_runtime.monster_things = [t for t in logic.editor_state.things if isinstance(t, Monster)]
+    logic.player_runtime.player_max_health = 10 ** 9
+    logic.world_runtime.build_entity_caches()
     ai = MonsterAI(logic)
     ai.DENSE_UPDATE = dense
-    ai.set_spatial_grid(logic.build_spatial_grid())
+    logic.monster_ai = ai
+    grid = SpatialGrid()
+    grid.populate(state.brushes)
+    ai.set_spatial_grid(grid)
     return ai, logic
-
 
 def _snapshot(ai, logic):
     monsters = []
@@ -110,8 +115,8 @@ def _snapshot(ai, logic):
         (tuple(store.pos[i]), tuple(store.vel[i]), float(store.damage[i]))
         for i in range(len(store))
     ]
-    return (monsters, list(logic.damage_applied), projectiles)
-
+    player_damage = 10 ** 9 - logic.player_runtime.player_health
+    return (monsters, player_damage, projectiles)
 
 @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
 def test_dense_pass_matches_the_per_monster_path(seed):
@@ -125,10 +130,10 @@ def test_dense_pass_matches_the_per_monster_path(seed):
         if dense != ref:
             for i, (a, b) in enumerate(zip(dense[0], ref[0])):
                 assert a == b, (tick, dense_logic.world_runtime.monster_things[i].name, a, b)
-            assert dense[1] == ref[1], (tick, "player damage")
+            assert dense[1] == ref[1], (tick, "player health loss")
             assert dense[2] == ref[2], (tick, "projectiles")
     # The scenario is not vacuous: monsters moved, shot and fell.
-    assert dense_logic.damage_applied or dense_logic.combat_runtime._monster_projectiles
+    assert dense_logic.player_runtime.player_health < 10 ** 9 or len(dense_logic.combat_runtime._monster_projectiles)
     faller = next(m for m in dense_logic.world_runtime.monster_things if m.name == "faller")
     assert faller.pos[1] < 400
 
