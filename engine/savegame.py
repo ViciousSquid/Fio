@@ -351,7 +351,7 @@ def _restore_moving_brushes(logic, saved) -> None:
 
 
 def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
-    """Capture the live play session on *logic* (a ``LogicThread``) as a dict.
+    """Capture the live play session on *logic*, the active runtime host, as a dict.
 
     Call while a play session is active. The returned dict is JSON-serialisable
     and self-contained (it embeds the whole level), so it can be written to disk
@@ -872,7 +872,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
 def restore_snapshot(logic, data: dict) -> None:
     """Apply a full snapshot from :func:`build_snapshot` onto a live session.
 
-    *logic* must be an active (play-mode) ``LogicThread`` whose loaded map
+    *logic* must be the active play-mode runtime host whose loaded map
     matches the save. Restore is an overlay — the scene is not rebuilt — so
     object identities, caches and the spatial grid stay valid.
     """

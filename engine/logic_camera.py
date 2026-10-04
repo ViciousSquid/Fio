@@ -2,9 +2,7 @@
 
 LogicThread owns the simulation loop; this object owns the camera domain:
 editor camera state, play camera mode, overhead projection, frustum parameters,
-and first-person/overhead transitions. The thin forwarding methods left on
-LogicThread preserve its existing call surface while keeping the implementation
-out of the simulation orchestrator.
+and first-person/overhead transitions.
 """
 
 import math
