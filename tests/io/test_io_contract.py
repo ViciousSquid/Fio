@@ -104,7 +104,12 @@ class HostStub:
     #: ``editor_state`` points back at the stub so ``logic.editor_state.things``
     #: resolves; the real host holds a separate object there, so the name is a
     #: promise about ``LogicThread`` but the target is not.
-    LOCAL_ONLY = frozenset()
+    LOCAL_ONLY = frozenset({
+        '_nonplayer_trigger_contacts', '_trigger_contacts',
+        '_trigger_poll_elapsed', '_trigger_poll_elapsed_by_bid',
+        '_trigger_use_generation', '_trigger_use_prompt', '_trigger_use_seen',
+        '_use_trigger_entries', 'player_in_triggers',
+    })
 
 
 BRUSH_TYPES = {"trigger": "is_trigger", "door": "is_door", "mover": "is_mover",
