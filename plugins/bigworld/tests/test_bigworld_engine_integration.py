@@ -85,8 +85,8 @@ def test_a_map_with_no_bigworld_entity_never_starts_a_session():
         plugin = next(p for p in get_manager().plugins if p.name == 'bigworld')
 
         class Logic:
-            things = []
-            brushes = []
+            from types import SimpleNamespace
+            editor_state = SimpleNamespace(things=[], brushes=[])
             camera = SimpleNamespace(overhead_height_limit=None)
 
         logic = Logic()
@@ -164,7 +164,7 @@ def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
         player = None
 
     logic = Logic()
-    logic.brushes = [near, far]
+    logic.editor_state.brushes = [near, far]
     session = BigWorldSession(logic, activation_radius=1024.0,
                               deactivation_radius=1200.0)
     session.start(player_pos=(0.0, 0.0, 0.0))
