@@ -147,6 +147,14 @@ def test_a_deleted_entity_is_no_longer_findable(populated):
 # Selection
 # ---------------------------------------------------------------------------
 
+def test_the_deleted_singular_selection_api_is_not_exposed(populated):
+    """2.6 has one selection owner: EditorState.selected_objects."""
+    assert not hasattr(populated, "selected_object")
+    assert not hasattr(populated, "set_selected_object")
+    assert not hasattr(populated, "selected_type")
+    assert not hasattr(populated, "selected_index")
+
+
 def test_selecting_one_object_updates_the_authoritative_selection(populated):
     brush = populated.brushes[0]
     populated.selected_objects = [brush]
