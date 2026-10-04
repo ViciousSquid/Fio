@@ -1579,7 +1579,7 @@ class QtGameView(QOpenGLWidget):
             self._cached_active_weapon = render_state.active_weapon
             self._cached_hud_message = render_state.hud_message
             self._cached_collected_keys = render_state.collected_keys
-            if getattr(render_state, 'muzzle_flash_active', False):
+            if render_state.muzzle_flash_active:
                 self._muzzle_flash_counter = self._muzzle_flash_duration_frames
             self._cached_muzzle_flash = self._muzzle_flash_counter > 0
             self._cached_player_dead = render_state.player_dead
