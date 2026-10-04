@@ -37,7 +37,7 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.TRIGGER_POLL_EPSILON = LogicThread.TRIGGER_POLL_EPSILON
     logic.TICK_DURATION = LogicThread.TICK_DURATION
     brush = {
-        'id': 'trigger_1',
+        'id': 1,
         'pos': [0, 0, 0],
         'size': [20, 20, 20],
         'is_trigger': True,
@@ -168,7 +168,7 @@ def test_empty_trigger_prompt_does_not_clear_an_interaction_prompt():
 def test_keyed_door_prompt_exposes_key_separately_from_text(
         key_name, collected, expected_message):
     logic = _logic()
-    logic.doors = [
+    logic.mover_runtime.doors = [
         (
             0,
             {
@@ -195,7 +195,7 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(
 
 def _use_trigger(logic, label="Activate", radius=96.0, **brush_overrides):
     """Turn the helper's trigger into a use-activated one."""
-    _, brush = logic._trigger_brushes[0]
+    _, brush = logic.trigger_runtime._trigger_brushes[0]
     brush['trigger_activation'] = 'use'
     brush['use_radius'] = radius
     brush['use_label'] = label
