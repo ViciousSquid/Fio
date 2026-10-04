@@ -70,9 +70,14 @@ def test_every_extracted_logic_call_has_a_matching_logic_thread_wrapper():
             kwargs = {keyword.arg: object() for keyword in call.keywords if keyword.arg}
 
             try:
-                # LogicThread methods are inspected unbound, so account for
-                # the implicit self parameter when validating the call site.
-                signature.bind(object(), *args, **kwargs)
+                # Static/class methods have no implicit instance parameter when
+                # accessed through LogicThread. Only ordinary instance methods
+                # need the synthetic ``self`` during binding.
+                descriptor = inspect.getattr_static(LogicThread, name)
+                if isinstance(descriptor, (staticmethod, classmethod)):
+                    signature.bind(*args, **kwargs)
+                else:
+                    signature.bind(object(), *args, **kwargs)
             except TypeError as exc:
                 failures.append(
                     f"{module_name}:{line}: logic.{name}(...): {exc}; "
