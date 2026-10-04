@@ -12,8 +12,6 @@ def _host(brushes):
         brushes=brushes,
         movers=[],
         doors=[],
-        mover_states={},
-        door_states={},
         mover_path_states={},
         _mover_brush_list=[],
         _door_brush_list=[],
@@ -31,7 +29,7 @@ def test_logic_movers_initializes_repeatable_mover_state():
     runtime._init_movers()
 
     assert host.movers == [(0, mover)]
-    assert host.mover_states[0] == {"progress": 0.0, "forward": True}
+    assert runtime.mover_states[0] == {"progress": 0.0, "forward": True}
     assert mover["original_pos"] == [0, 10, 0]
 
 
@@ -48,7 +46,7 @@ def test_logic_movers_does_not_create_repeat_state_for_move_once():
     runtime._init_movers()
 
     assert host.movers == [(0, mover)]
-    assert host.mover_states == {}
+    assert runtime.mover_states == {}
 
 
 def test_logic_movers_initializes_door_direction_and_distance():
@@ -66,7 +64,7 @@ def test_logic_movers_initializes_door_direction_and_distance():
 
     runtime._init_doors()
 
-    state = host.door_states[0]
+    state = runtime.door_states[0]
     assert state["state"] == "closed"
     assert state["speed"] == pytest.approx(64.0)
     assert state["distance"] == pytest.approx(120.0)
@@ -80,7 +78,7 @@ def test_logic_movers_unknown_door_direction_defaults_up():
 
     runtime._init_doors()
 
-    assert host.door_states[0]["direction"] == [0, 1, 0]
+    assert runtime.door_states[0]["direction"] == [0, 1, 0]
 
 
 def test_logic_movers_reset_restores_original_mover_position():
@@ -94,7 +92,7 @@ def test_logic_movers_reset_restores_original_mover_position():
 
     assert mover["pos"] == [10, 20, 30]
     assert host.movers == []
-    assert host.mover_states == {}
+    assert runtime.mover_states == {}
 
 
 def test_logic_movers_reset_restores_original_door_position():
@@ -108,7 +106,7 @@ def test_logic_movers_reset_restores_original_door_position():
 
     assert door["pos"] == [1, 2, 3]
     assert host.doors == []
-    assert host.door_states == {}
+    assert runtime.door_states == {}
 
 
 def test_logic_movers_open_trigger_moves_closed_door_to_opening():
@@ -119,7 +117,7 @@ def test_logic_movers_open_trigger_moves_closed_door_to_opening():
 
     runtime._trigger_door_open(0, door)
 
-    assert host.door_states[0]["state"] == "opening"
+    assert runtime.door_states[0]["state"] == "opening"
 
 
 def test_logic_movers_open_trigger_does_not_restart_already_open_door():
@@ -127,8 +125,8 @@ def test_logic_movers_open_trigger_does_not_restart_already_open_door():
     host = _host([door])
     runtime = LogicMovers(host)
     runtime._init_doors()
-    host.door_states[0]["state"] = "open"
+    runtime.door_states[0]["state"] = "open"
 
     runtime._trigger_door_open(0, door)
 
-    assert host.door_states[0]["state"] == "open"
+    assert runtime.door_states[0]["state"] == "open"

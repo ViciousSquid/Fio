@@ -517,14 +517,16 @@ class _Side:
         }
         if not states:
             return moving
+        mover_states = logic.mover_states if self.reference else logic.mover_runtime.mover_states
+        door_states = logic.door_states if self.reference else logic.mover_runtime.door_states
         return dict(moving, **{
             # Sorted by index: the loop's dicts iterate in insertion order (a
             # popped-and-recreated state moves to the end), the views in row
             # order. Only a saved game's JSON key order could see that.
-            "movers": {i: _numbers_as_float(s) for i, s in sorted(logic.mover_states.items())},
-            "doors": {i: _numbers_as_float(s) for i, s in sorted(logic.door_states.items())},
-            "mover_keys": {i: list(s) for i, s in sorted(logic.mover_states.items())},
-            "door_keys": {i: list(s) for i, s in sorted(logic.door_states.items())},
+            "movers": {i: _numbers_as_float(s) for i, s in sorted(mover_states.items())},
+            "doors": {i: _numbers_as_float(s) for i, s in sorted(door_states.items())},
+            "mover_keys": {i: list(s) for i, s in sorted(mover_states.items())},
+            "door_keys": {i: list(s) for i, s in sorted(door_states.items())},
             "paths": copy.deepcopy(logic.mover_path_states),
         })
 
@@ -631,10 +633,20 @@ def test_saved_state_restored_mid_run_matches():
             return
         for side in (ref, new):
             logic = side.logic
-            doors = {i: _public_state(s) for i, s in logic.door_states.items()}
-            movers = {i: _public_state(s) for i, s in logic.mover_states.items()}
-            logic.door_states = copy.deepcopy(doors)
-            logic.mover_states = copy.deepcopy(movers)
+            if side.reference:
+                door_states = logic.door_states
+                mover_states = logic.mover_states
+            else:
+                door_states = logic.mover_runtime.door_states
+                mover_states = logic.mover_runtime.mover_states
+            doors = {i: _public_state(s) for i, s in door_states.items()}
+            movers = {i: _public_state(s) for i, s in mover_states.items()}
+            if side.reference:
+                logic.door_states = copy.deepcopy(doors)
+                logic.mover_states = copy.deepcopy(movers)
+            else:
+                logic.mover_runtime.door_states = copy.deepcopy(doors)
+                logic.mover_runtime.mover_states = copy.deepcopy(movers)
     _run(101, ticks=600, script=restore)
 
 
@@ -643,31 +655,31 @@ def test_a_door_opened_outside_play_keeps_its_plain_state():
     brushes, things = _world(5)
     new = _Side(False, brushes, things, None)
     stray = {"progress": 0.0, "state": "closed", "open_timer": 0.0}
-    new.logic.door_states[10_000] = stray
-    assert new.logic.door_states[10_000] is stray
-    assert 10_000 in new.logic.door_states
-    del new.logic.door_states[10_000]
-    assert 10_000 not in new.logic.door_states
+    new.logic.mover_runtime.door_states[10_000] = stray
+    assert new.logic.mover_runtime.door_states[10_000] is stray
+    assert 10_000 in new.logic.mover_runtime.door_states
+    del new.logic.mover_runtime.door_states[10_000]
+    assert 10_000 not in new.logic.mover_runtime.door_states
 
 
 def test_state_views_read_and_write_like_dicts():
     brushes, things = _world(6)
     new = _Side(False, brushes, things, None)
-    index = next(i for i in new.logic.door_states)
-    state = new.logic.door_states[index]
+    index = next(i for i in new.logic.mover_runtime.door_states)
+    state = new.logic.mover_runtime.door_states[index]
     assert list(state) == ["progress", "state", "open_timer", "speed",
                            "distance", "direction", "_direction_np"]
     state["state"] = "opening"
-    assert new.logic.door_states[index]["state"] == "opening"
+    assert new.logic.mover_runtime.door_states[index]["state"] == "opening"
     state["state"] = "wobbling"                       # kept as given
-    assert new.logic.door_states[index]["state"] == "wobbling"
+    assert new.logic.mover_runtime.door_states[index]["state"] == "wobbling"
     state["custom"] = [1, 2]
     assert state["custom"] == [1, 2] and "custom" in dict(state)
     del state["speed"]
     assert "speed" not in state and state.get("speed", 128.0) == 128.0
     import json
-    json.dumps({str(i): _public_state(s) for i, s in new.logic.door_states.items()})
-    json.dumps({str(i): _public_state(s) for i, s in new.logic.mover_states.items()})
+    json.dumps({str(i): _public_state(s) for i, s in new.logic.mover_runtime.door_states.items()})
+    json.dumps({str(i): _public_state(s) for i, s in new.logic.mover_runtime.mover_states.items()})
 
 
 def test_positions_are_plain_floats():

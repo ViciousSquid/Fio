@@ -581,7 +581,7 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
             logic._tick(logic.TICK_DURATION)
         assert door["pos"] == pytest.approx(saved_door)
         assert lift["pos"] == pytest.approx(saved_lift)
-        assert logic.door_states[door_idx]["state"] == "closed"
+        assert logic.mover_runtime.door_states[door_idx]["state"] == "closed"
         assert lift["start_on"] is False
     finally:
         logic.stop()
@@ -635,7 +635,7 @@ def test_deleting_a_brush_in_play_keeps_io_aimed_at_the_right_door():
     try:
         for _ in range(20):
             logic._tick(logic.TICK_DURATION)
-        lift_progress = logic.mover_states[state.brushes.index(lift)]["progress"]
+        lift_progress = logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
         assert lift_progress > 0
 
         state.save_state()
@@ -650,7 +650,7 @@ def test_deleting_a_brush_in_play_keeps_io_aimed_at_the_right_door():
         assert door_a["pos"] == closed_a, "the wrong door opened"
         assert door_b["pos"][1] > 64.0 + 100.0, "the aimed door did not open"
         # The mover carried its progress across the re-index.
-        assert logic.mover_states[state.brushes.index(lift)]["progress"] >= lift_progress
+        assert logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"] >= lift_progress
     finally:
         logic.stop()
 
