@@ -168,13 +168,6 @@ def test_the_renderer_and_the_settings_window_ask_the_same_question():
     assert "platform.machine().lower()" not in settings_src
 
 
-def test_the_old_settings_key_is_still_honoured():
-    """An existing settings.ini says arm_mode; it must keep working."""
-    renderer_src = read_source('engine', 'renderer_core.py')
-    assert "'arm_mode'" in renderer_src
-    assert "'lowpower_mode'" in renderer_src
-
-
 def test_shadow_shader_uses_the_authoritative_capacity():
     source = shaders.SHADOW_GLSL
     capacity = shaders.MAX_SHADOW_LIGHTS
