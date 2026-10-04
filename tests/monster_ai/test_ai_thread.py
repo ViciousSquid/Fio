@@ -1,15 +1,8 @@
-"""``MonsterAIThread``: the background thread MonsterAI runs on.
+"""MonsterAIThread lifecycle against the real MonsterAI machinery.
 
-This is the one place in the MonsterAI area that deliberately uses real threads
-and real time, because thread lifetime is what is under test.  Everything is
-bounded by an explicit deadline and polls for a *condition* rather than sleeping
-a fixed amount, so the tests do not become slower or flakier on a loaded
-machine.
-
-The hazards being guarded are the ones that are invisible in play: a thread
-that keeps ticking after ``stop()``, a second thread started without the first
-being stopped, and an exception on the AI thread taking the thread down while
-the game carries on with monsters that have quietly stopped moving.
+The thread tests observe a production MonsterAI rather than substituting a
+fake AI. The observer records tick timing and can inject one controlled
+failure, but every non-fault tick executes MonsterAI.update() itself.
 """
 
 import threading
@@ -19,17 +12,14 @@ import pytest
 
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
-from engine.monster_ai import MonsterAI, MonsterAIThread
+from engine.monster_ai import MonsterAIThread
 from engine.threaded_game_state import ThreadedGameState
 
 pytestmark = [pytest.mark.qt, pytest.mark.slow]
-
-#: Nothing here may hang the suite.  Every wait is bounded by this.
 DEADLINE = 5.0
 
 
 def _wait_for(predicate, timeout=DEADLINE, what="condition"):
-    """Poll until ``predicate()`` is true, or fail with what was still false."""
     end = time.perf_counter() + timeout
     while time.perf_counter() < end:
         if predicate():
@@ -38,97 +28,87 @@ def _wait_for(predicate, timeout=DEADLINE, what="condition"):
     pytest.fail("timed out after %.1fs waiting for %s" % (timeout, what))
 
 
-class CountingAI:
-    """Stands in for MonsterAI so a tick is observable and instant."""
-
-    def __init__(self):
-        self.ticks = 0
-        self.deltas = []
-        self.raise_on_tick = None
-        self.block = None          # an Event the tick waits on, if set
-
-    def update(self, delta):
-        if self.block is not None:
-            self.block.wait(DEADLINE)
-        self.ticks += 1
-        self.deltas.append(delta)
-        if self.raise_on_tick is not None and self.ticks == self.raise_on_tick:
-            raise RuntimeError("deliberate failure on tick %d" % self.ticks)
-
-
 @pytest.fixture
 def ai_thread():
-    """Starts real MonsterAI threads against a real LogicThread owner."""
-    started = []
-    logic = LogicThread(ThreadedGameState(), EditorState())
-    lock = logic.session_runtime.monster_lock
+    """Start real MonsterAIThread instances around real LogicThread owners."""
+    sessions = []
 
-    def _start(ai=None, tick_rate=120):
-        thread = MonsterAIThread(logic, ai or CountingAI(), lock,
-                                 tick_rate=tick_rate)
-        started.append(thread)
+    def start(tick_rate=120, lock=None):
+        logic = LogicThread(ThreadedGameState(), EditorState())
+        ai = logic.monster_ai
+        state = {
+            "ticks": 0,
+            "deltas": [],
+            "raise_on_tick": None,
+            "block": None,
+            "before_update": None,
+        }
+        real_update = ai.update
+
+        def observed_update(delta):
+            tick_no = state["ticks"] + 1
+            block = state["block"]
+            if block is not None:
+                block.wait(DEADLINE)
+            callback = state["before_update"]
+            if callback is not None:
+                callback()
+            state["ticks"] = tick_no
+            state["deltas"].append(delta)
+            if state["raise_on_tick"] == tick_no:
+                raise RuntimeError("deliberate failure on tick %d" % tick_no)
+            return real_update(delta)
+
+        ai.update = observed_update
+        thread = MonsterAIThread(
+            logic, ai, lock or logic.session_runtime.monster_lock,
+            tick_rate=tick_rate)
+        sessions.append((thread, logic, state, ai))
         thread.start()
-        return thread
+        return thread, logic, state, ai
 
-    yield _start
+    yield start
 
-    for thread in started:
+    for thread, logic, _state, _ai in sessions:
         thread.stop()
         thread.join(timeout=DEADLINE)
-    logic.stop()
+        logic.stop()
 
-# ---------------------------------------------------------------------------
-# Start / stop
-# ---------------------------------------------------------------------------
 
 def test_a_started_thread_ticks(ai_thread):
-    ai = CountingAI()
-    thread = ai_thread(ai)
-    _wait_for(lambda: ai.ticks > 0, what="the AI thread's first tick")
+    thread, _logic, state, _ai = ai_thread()
+    _wait_for(lambda: state["ticks"] > 0, what="the AI thread's first tick")
     assert thread.running is True
 
 
 def test_the_tick_delta_is_the_configured_fixed_step(ai_thread):
-    """A fixed timestep is what makes the AI reproducible frame to frame."""
-    ai = CountingAI()
-    ai_thread(ai, tick_rate=50)
-    _wait_for(lambda: len(ai.deltas) >= 3, what="three ticks")
-    assert set(ai.deltas[:3]) == {1.0 / 50}, (
-        "ticks were delivered with deltas %s; a 50 Hz thread must always pass "
-        "1/50" % (sorted(set(ai.deltas[:3])),))
+    """A fixed timestep is what makes the production AI reproducible."""
+    _thread, _logic, state, _ai = ai_thread(tick_rate=50)
+    _wait_for(lambda: len(state["deltas"]) >= 3, what="three ticks")
+    assert set(state["deltas"][:3]) == {1.0 / 50}
 
 
 def test_stop_ends_the_thread(ai_thread):
-    ai = CountingAI()
-    thread = ai_thread(ai)
-    _wait_for(lambda: ai.ticks > 0, what="the first tick")
-
+    thread, _logic, state, _ai = ai_thread()
+    _wait_for(lambda: state["ticks"] > 0, what="the first tick")
     thread.stop()
     thread.join(timeout=DEADLINE)
-
-    assert thread.is_alive() is False, (
-        "the AI thread was still alive %.1fs after stop()" % DEADLINE)
+    assert thread.is_alive() is False
     assert thread.running is False
 
 
 def test_no_ticks_happen_after_the_thread_has_joined(ai_thread):
-    ai = CountingAI()
-    thread = ai_thread(ai)
-    _wait_for(lambda: ai.ticks > 0, what="the first tick")
-
+    thread, _logic, state, _ai = ai_thread()
+    _wait_for(lambda: state["ticks"] > 0, what="the first tick")
     thread.stop()
     thread.join(timeout=DEADLINE)
-    settled = ai.ticks
+    settled = state["ticks"]
     time.sleep(0.1)
-
-    assert ai.ticks == settled, (
-        "the AI ticked %d more times after the thread was joined - it is "
-        "still mutating the world behind the editor's back"
-        % (ai.ticks - settled))
+    assert state["ticks"] == settled
 
 
 def test_stopping_twice_is_harmless(ai_thread):
-    thread = ai_thread()
+    thread, _logic, _state, _ai = ai_thread()
     thread.stop()
     thread.stop()
     thread.join(timeout=DEADLINE)
@@ -138,133 +118,74 @@ def test_stopping_twice_is_harmless(ai_thread):
 def test_stopping_a_thread_that_never_started_is_harmless():
     logic = LogicThread(ThreadedGameState(), EditorState())
     try:
-        thread = MonsterAIThread(logic, CountingAI(), threading.RLock())
+        thread = MonsterAIThread(logic, logic.monster_ai, threading.RLock())
         thread.stop()
         assert thread.running is False
         assert thread.is_alive() is False
     finally:
         logic.stop()
 
+
 def test_a_restarted_ai_runs_on_a_fresh_thread(ai_thread):
-    first_ai, second_ai = CountingAI(), CountingAI()
-    first = ai_thread(first_ai)
-    _wait_for(lambda: first_ai.ticks > 0, what="the first thread's tick")
+    first, _logic1, state1, _ai1 = ai_thread()
+    _wait_for(lambda: state1["ticks"] > 0, what="the first thread's tick")
     first.stop()
     first.join(timeout=DEADLINE)
-    quiesced = first_ai.ticks
+    quiesced = state1["ticks"]
 
-    second = ai_thread(second_ai)
-    _wait_for(lambda: second_ai.ticks > 0, what="the restarted thread's tick")
+    second, _logic2, state2, _ai2 = ai_thread()
+    _wait_for(lambda: state2["ticks"] > 0, what="the restarted thread's tick")
 
     assert second is not first
-    assert first_ai.ticks == quiesced, \
-        "the stopped thread resumed ticking after a restart"
+    assert state1["ticks"] == quiesced
 
 
-def test_the_thread_is_a_daemon_so_it_cannot_hold_the_process_open():
-    logic = LogicThread(ThreadedGameState(), EditorState())
-    try:
-        thread = MonsterAIThread(logic, CountingAI(), threading.RLock())
-        assert thread.daemon is True, (
-            "a non-daemon AI thread would keep Fio alive after the window closed"
-        )
-        assert thread.name == "MonsterAIThread", (
-            "the thread should be identifiable in a stack dump; it is named %r"
-            % thread.name
-        )
-    finally:
-        logic.stop()
+def test_the_thread_is_a_daemon_so_it_cannot_hold_the_process_open(ai_thread):
+    thread, _logic, _state, _ai = ai_thread()
+    assert thread.daemon is True
+    assert thread.name == "MonsterAIThread"
 
-# ---------------------------------------------------------------------------
-# The lock
-# ---------------------------------------------------------------------------
 
 def test_every_tick_is_taken_under_the_shared_lock(ai_thread):
-    """The logic thread holds the same lock while it rebuilds the world."""
-    class LockRecorder:
-        def __init__(self):
-            self.real = threading.RLock()
-            self.held_during_tick = []
-            self.depth = 0
-
-        def __enter__(self):
-            self.real.acquire()
-            self.depth += 1
-            return self
-
-        def __exit__(self, *exc):
-            self.depth -= 1
-            self.real.release()
-            return False
-
-    lock = LockRecorder()
-
-    class Watcher(CountingAI):
-        def update(self, delta):
-            lock.held_during_tick.append(lock.depth)
-            super().update(delta)
-
-    ai = Watcher()
-    ai_thread(ai, lock=lock)
-    _wait_for(lambda: ai.ticks > 0, what="a tick")
-    assert all(d >= 1 for d in lock.held_during_tick), (
-        "MonsterAI.update ran outside the shared lock (depths seen: %s)"
-        % (lock.held_during_tick[:5],))
+    lock = threading.RLock()
+    thread, _logic, state, _ai = ai_thread(lock=lock)
+    depths = []
+    state["before_update"] = lambda: depths.append(1 if lock._is_owned() else 0)
+    _wait_for(lambda: state["ticks"] > 0, what="a tick")
+    assert all(depth >= 1 for depth in depths)
+    thread.stop()
+    thread.join(timeout=DEADLINE)
 
 
 def test_holding_the_lock_keeps_the_ai_out(ai_thread):
-    """What the editor relies on when it swaps the world under the AI."""
     lock = threading.RLock()
-    ai = CountingAI()
-    ai_thread(ai, lock=lock)
-    _wait_for(lambda: ai.ticks > 0, what="a tick")
-
+    thread, _logic, state, _ai = ai_thread(lock=lock)
+    _wait_for(lambda: state["ticks"] > 0, what="a tick")
     with lock:
-        settled = ai.ticks
+        settled = state["ticks"]
         time.sleep(0.1)
-        blocked = ai.ticks
+        blocked = state["ticks"]
+    thread.stop()
+    thread.join(timeout=DEADLINE)
+    assert blocked == settled
 
-    assert blocked == settled, (
-        "the AI ticked %d times while another thread held the lock"
-        % (blocked - settled))
 
-
-# ---------------------------------------------------------------------------
-# Failure
-# ---------------------------------------------------------------------------
-
-def test_an_exception_on_the_ai_thread_is_logged_and_the_ai_carries_on(
-        ai_thread, monkeypatch):
-    """One bad update must not freeze every monster for the rest of the session.
-
-    ``MonsterAIThread.run`` used not to guard the tick, so the first exception
-    ended the thread and monsters silently stopped moving while the game
-    carried on.  It now follows ``LogicThread.run``'s policy: log the full
-    traceback, keep ticking.
-    """
+def test_an_exception_on_the_ai_thread_is_logged_and_the_ai_carries_on(ai_thread, monkeypatch):
+    """One injected failure must not stop the real AI thread."""
     import engine.monster_ai as monster_ai_module
 
     logged = []
     monkeypatch.setattr(monster_ai_module, "debug_log",
                         lambda category, message: logged.append((category, message)))
-    ai = CountingAI()
-    ai.raise_on_tick = 3
-    thread = ai_thread(ai)
-
-    _wait_for(lambda: ai.ticks >= 6, what="ticks after the failing one")
-
+    thread, _logic, state, _ai = ai_thread()
+    state["raise_on_tick"] = 3
+    _wait_for(lambda: state["ticks"] >= 6, what="ticks after the failing one")
     assert thread.is_alive()
     assert any("deliberate failure on tick 3" in message
                for _category, message in logged), logged
 
 
 def test_a_stop_straight_after_start_is_not_lost(ai_thread, monkeypatch):
-    """``running`` used to be set inside ``run()``.
-
-    A ``stop()`` issued before the new thread got that far was overwritten, and
-    the thread ran on with nobody holding a reference to stop it again.  The
-    window is normally tiny, so ``run`` is held back here to open it wide.
-    """
     real_run = MonsterAIThread.run
 
     def late_run(self):
@@ -272,18 +193,14 @@ def test_a_stop_straight_after_start_is_not_lost(ai_thread, monkeypatch):
         real_run(self)
 
     monkeypatch.setattr(MonsterAIThread, "run", late_run)
-    thread = ai_thread()
+    thread, _logic, _state, _ai = ai_thread()
     thread.stop()
     thread.join(timeout=1.0)
-    alive = thread.is_alive()
-    thread.stop()            # whatever happened, do not leak a live thread
-    assert not alive, "a stop issued right after start was lost"
+    assert not thread.is_alive()
 
 
 def test_stop_wakes_a_sleeping_thread_promptly(ai_thread):
-    """At 1 Hz the thread sleeps ~0.9 s between ticks; stop must not wait it out."""
-    ai = CountingAI()
-    thread = ai_thread(ai, tick_rate=1)
+    thread, _logic, state, _ai = ai_thread(tick_rate=1)
     time.sleep(0.05)
     started = time.perf_counter()
     thread.stop()
