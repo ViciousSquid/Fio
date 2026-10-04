@@ -372,21 +372,19 @@ def test_a_trigger_saves_nothing_by_default():
 
 def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
     """The Activation combo writes the canonical trigger activation field."""
-    from editor.property_editor import PropertyEditor
-
     editor = MainWindow(ROOT)
-    panel = PropertyEditor(editor)
+    brush = box_brush("trig", is_trigger=True, trigger_type="Once")
+    editor.state.brushes = [brush]
     try:
-        brush = box_brush("trig", is_trigger=True, trigger_type="Once")
-        panel.current_object = brush
-        panel.populate_for_brush(brush)
+        editor.set_selected_objects([brush])
+        panel = editor.property_editor
+        assert panel.current_object is brush
         panel._widgets["trigger_activation_combo"].setCurrentText("use")
         panel._widgets["trigger_save_combo"].setCurrentText("quicksave")
         assert brush["trigger_activation"] == "use"
         assert "trigger_collect_activation" not in brush
         assert brush["trigger_save"] == "quicksave"
     finally:
-        panel.deleteLater()
         editor.unsaved_changes = False
         editor.close()
         editor.deleteLater()
