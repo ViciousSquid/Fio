@@ -1271,9 +1271,7 @@ class QtGameView(QOpenGLWidget):
         commands = self.game_state.consume_console_commands()
         if not commands:
             return
-        handler = getattr(self.editor, 'console_handler', None)
-        if handler is None:
-            return
+        handler = self.editor.console_handler
         for cmd in commands:
             try:
                 handler.handle_command(cmd, from_map=True)
@@ -2897,13 +2895,11 @@ class QtGameView(QOpenGLWidget):
             )
             if not added:
                 self.editor.state.discard_last_checkpoint()
-                if hasattr(self.editor, 'show_toast'):
-                    self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
+                self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
                 return
 
             self.editor.state.terrain_data = terrain.to_dict()
-            if hasattr(self.editor, 'show_toast'):
-                self.editor.show_toast(f"Painted {os.path.basename(texture_path)}")
+            self.editor.show_toast(f"Painted {os.path.basename(texture_path)}")
             # The viewport already renders on its regular 60 Hz update loop.
             # Do not force a second repaint for every stamp click; the extra
             # update request makes the terrain change appear as a visual flash.
@@ -3728,9 +3724,7 @@ class QtGameView(QOpenGLWidget):
         return True
 
     def _open_inspector_for(self, actor):
-        show = getattr(self.editor, 'show_entity_inspector', None)
-        if show is not None:
-            show(actor)
+        self.editor.show_entity_inspector(actor)
 
     def _draw_actor_pick_hint(self, painter, viewport_width):
         hovered = self.actor_pick_hover
