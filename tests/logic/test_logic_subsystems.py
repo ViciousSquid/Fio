@@ -316,7 +316,6 @@ def test_logic_world_constructs_and_packs_levelchanger_rows():
         editor_state=SimpleNamespace(brushes=[], things=[first, second]),
     )
     host.trigger_runtime = LogicTriggers(host)
-    host._monster_lock = threading.RLock()
     host.monster_ai = SimpleNamespace(monster_states={})
     host.portal_runtime = LogicPortals(host)
     from engine.prop_runtime import PropSession
