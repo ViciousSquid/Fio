@@ -1387,7 +1387,7 @@ class QtGameView(QOpenGLWidget):
 
     def _render_player_glasses(self, positions, proj_matrix, view_matrix):
         """Draw one or more player bodies as glasses billboards."""
-        if not getattr(self, 'show_glasses', True):
+        if not self.show_glasses:
             return
         if not positions or not self.renderer:
             return
@@ -1645,7 +1645,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["selected_object"] = self.selected_object
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
-        self._render_config["show_glasses"] = bool(getattr(self, 'show_glasses', True))
+        self._render_config["show_glasses"] = bool(self.show_glasses)
         _glass_positions = []
         _glass_sprites = []
         if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
@@ -1653,7 +1653,7 @@ class QtGameView(QOpenGLWidget):
                 _p = render_state.player_pos
                 _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
                 _glass_sprites.append(glasses_sprite_key(
-                    getattr(self, 'player1_glasses', DEFAULT_GLASSES)))
+                    self.player1_glasses))
             if (getattr(render_state, 'splitscreen_active', False)
                     and not render_state.player2_dead):
                 _p2 = render_state.player2_pos
@@ -1661,7 +1661,7 @@ class QtGameView(QOpenGLWidget):
                 _glass_sprites.append(DEFAULT_SPRITE_KEY)
         self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
-        self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
+        self._render_config["grid_visible"] = self.grid_visible and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         # Both editor and play rendering consume the same canonical dense
         # projection published by LogicRender. There is no editor-side table.
@@ -1676,7 +1676,7 @@ class QtGameView(QOpenGLWidget):
 
         _splitscreen = (
             self.play_mode
-            and getattr(self, 'splitscreen_mode', False)
+            and self.splitscreen_mode
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
@@ -1722,7 +1722,7 @@ class QtGameView(QOpenGLWidget):
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, self.view_matrix)
-            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+            if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, self.view_matrix)
             if self.show_glasses and render_state is not None:
                 self._render_player_glasses(
@@ -1760,7 +1760,7 @@ class QtGameView(QOpenGLWidget):
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, _p2_view)
-            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+            if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, _p2_view)
             if self.show_glasses and render_state is not None:
                 self._render_player_glasses(
@@ -1810,9 +1810,9 @@ class QtGameView(QOpenGLWidget):
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 self.projection_matrix, self.view_matrix)
-            if self.play_mode and getattr(self, 'show_spatial_grid', False):
+            if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(self.projection_matrix, self.view_matrix)
-        if not self.play_mode and getattr(self.editor, 'show_logic_links', False):
+        if not self.play_mode and self.editor.show_logic_links:
             _scene_ver = (len(self.editor.state.brushes), len(self.editor.state.things))
             if self._io_conn_cache is None or self._io_conn_scene_ver != _scene_ver:
                 self._io_conn_cache     = self._gather_io_connections()
@@ -1886,7 +1886,7 @@ class QtGameView(QOpenGLWidget):
         )
         if self.play_mode and self._hud_style != 0 and _hud_visible:
             _ss_hud = (
-                getattr(self, 'splitscreen_mode', False)
+                self.splitscreen_mode
                 and render_state is not None
                 and getattr(render_state, 'splitscreen_active', False)
             )
@@ -1956,7 +1956,7 @@ class QtGameView(QOpenGLWidget):
         if not p1_under and not p2_under:
             return
         splitscreen = (
-            getattr(self, 'splitscreen_mode', False)
+            self.splitscreen_mode
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
@@ -3845,7 +3845,7 @@ class QtGameView(QOpenGLWidget):
         if self.console_overlay_active:
             return
         if check_key('key_show_connections', 'F1'):
-            current_state = getattr(self.editor, 'show_logic_links', False)
+            current_state = self.editor.show_logic_links
             if hasattr(self.editor, 'set_connection_links_enabled'):
                 self.editor.set_connection_links_enabled(not current_state)
             else:
