@@ -381,7 +381,7 @@ def _play(state, ticks=240):
             game_state.set_use_key_pressed()
         with logic._tick_lock:
             logic._tick(logic.TICK_DURATION)
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             logic.monster_ai.update(logic.TICK_DURATION)
         logic.render_runtime.prepare_render_state()
         game_state.request_swap()
