@@ -563,7 +563,7 @@ class RenderTable:
                     brush.get('water_tint', [0.0, 0.4, 0.6]))
                 self.water_params[slot] = (
                     _num(brush.get('water_opacity'), 0.5),
-                    _num(brush.get('water_fresnel', brush.get('water_reflectivity', 0.75)), 0.75),
+                    _num(brush.get('water_fresnel', brush.get('water_reflectivity', 0.65)), 0.65),
                     _num(brush.get('water_wave_height'), 0.5),
                     1.0 if brush.get('water_wave_enabled', True) else 0.0,
                     _num(brush.get('water_distortion'), 0.5),
