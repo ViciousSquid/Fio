@@ -101,7 +101,7 @@ class LogicWorld:
             and logic._moving_rows is not None
             and logic._indexed_brushes != logic._moving_rows
         ):
-            logic._reindex_moving_brushes()
+            logic.mover_runtime._reindex_moving_brushes()
             logic.mark_collision_dirty()
 
         logic.portal_runtime.rebuild_links()

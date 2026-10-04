@@ -1142,12 +1142,6 @@ class LogicThread(threading.Thread):
     _rows_epoch = None
     _rows_watch = 0
 
-    def _watch_world_rows(self):
-        return self._world_runtime().watch_world_rows()
-
-    def _reindex_moving_brushes(self):
-        return self._mover_runtime()._reindex_moving_brushes()
-
     # =========================================================================
     # WORLD PAUSE
     # =========================================================================
@@ -1212,7 +1206,7 @@ class LogicThread(threading.Thread):
     def _tick_play_mode(self, delta):
         if not self.player:
             return
-        self._watch_world_rows()
+        self.world_runtime.watch_world_rows()
 
         if self._world_pause_owners:
             self._tick_paused_world(delta)

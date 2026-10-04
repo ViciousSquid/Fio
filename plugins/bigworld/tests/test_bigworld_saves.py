@@ -13,10 +13,14 @@ import copy
 import os
 import sys
 import tempfile
+import threading
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
-from engine import savegame                       # noqa: E402
+from engine import savegame
+from engine.logic_portals import LogicPortals
+from engine.logic_triggers import LogicTriggers
+from engine.logic_world import LogicWorld                       # noqa: E402
 from plugins.bigworld import persistence          # noqa: E402
 from plugins.bigworld.runtime import BigWorldSession  # noqa: E402
 
@@ -96,6 +100,18 @@ class FakeLogic:
         self.door_states = {}
         self.mover_states = {}
         self.monster_ai = FakeMonsterAI()
+        self._monster_lock = threading.RLock()
+        self._moving_rows = None
+        self._indexed_things = ()
+        self._indexed_brushes = ()
+        self._timer_things = []
+        self._portal_cooldowns = {}
+        self._portal_prev_player_pos = None
+        self._portal_things = []
+        self._portal_target_things = []
+        self.portal_runtime = LogicPortals(self)
+        self.trigger_runtime = LogicTriggers(self)
+        self.world_runtime = LogicWorld(self)
         self._monster_things = [t for t in things if t.properties.get("type") == "monster"]
         self._bigworld = None
 
