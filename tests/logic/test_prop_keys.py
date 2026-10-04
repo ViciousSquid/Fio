@@ -1,6 +1,7 @@
 """Colored key collection: sprite identity, inventory, doors, and Prop I/O."""
 
 import pytest
+from types import SimpleNamespace
 
 pytest.importorskip("PyQt5", reason="logic tests require editor Thing definitions")
 
@@ -15,7 +16,7 @@ pytestmark = pytest.mark.qt
 
 class Logic:
     def __init__(self, things):
-        self.things = list(things)
+        self.editor_state = SimpleNamespace(things=list(things), brushes=[])
         self.io_manager = None
         self.collected_keys = set()
         self.current_hud_message = ""
