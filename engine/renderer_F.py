@@ -921,7 +921,7 @@ class Renderer_F(BaseRenderer):
         return tuple(others)
 
     def render_scene(self, projection, view, camera_pos,
-                     selected_object, config, clear=True, brush_slots=None):
+                     primary_selection, config, clear=True, brush_slots=None):
         """Draw one view.
 
         *brush_slots* is the visibility result as integer slots into the dense
@@ -1325,29 +1325,29 @@ class Renderer_F(BaseRenderer):
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        if selected_object:
-            if isinstance(selected_object, dict):
+        if primary_selection:
+            if isinstance(primary_selection, dict):
                 self.draw_selected_brush_outline(
-                    projection, view, selected_object, table=_tbl)
-                if selected_object.get('is_trigger', False) and selected_object.get('show_aabb_bounds', False):
-                    self.draw_aabb_bounds(projection, view, selected_object)
-                pos = selected_object.get('pos')
-                if pos is not None and not selected_object.get('lock', False):
+                    projection, view, primary_selection, table=_tbl)
+                if primary_selection.get('is_trigger', False) and primary_selection.get('show_aabb_bounds', False):
+                    self.draw_aabb_bounds(projection, view, primary_selection)
+                pos = primary_selection.get('pos')
+                if pos is not None and not primary_selection.get('lock', False):
                     self.render_gizmo(projection, view, pos)
-            elif isinstance(selected_object, Thing):
-                if (isinstance(selected_object, Effect)
-                        and selected_object.properties.get('preview', False)):
+            elif isinstance(primary_selection, Thing):
+                if (isinstance(primary_selection, Effect)
+                        and primary_selection.properties.get('preview', False)):
                     self.draw_effect_billboard_aabb(
                         projection,
                         view,
-                        selected_object,
+                        primary_selection,
                         explosion=(
-                            str(selected_object.properties.get(
+                            str(primary_selection.properties.get(
                                 'effect_type', 'FIRE'
                             )).upper() == 'EXPLOSION'
                         ),
                     )
-                self.render_gizmo(projection, view, selected_object.pos)
+                self.render_gizmo(projection, view, primary_selection.pos)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
