@@ -234,7 +234,8 @@ def _terrain_host(instrument):
     # Exercise the production heightfield construction and TerrainTable.store
     # path. The test intentionally avoids fabricated height arrays.
     for slot in slots[:2]:
-        terrain._upload_chunk(int(slot), 48)
+        heights = terrain._chunk_heights(int(slot), 48)
+        terrain.table.store(int(slot), 48, 0, heights)
 
     instrument.main_window.terrain = terrain
     return terrain
