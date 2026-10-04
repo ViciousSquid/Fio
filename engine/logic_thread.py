@@ -239,7 +239,6 @@ class LogicThread(threading.Thread):
         self.player2_dead = False
         self.play_mode = False
         self.terrain = None
-        self._first_tick = False
         
         # Camera state and camera math live in LogicCamera; LogicThread keeps
         # the camera runtime as an owned subsystem and schedules its updates.
