@@ -8,9 +8,10 @@ moves.  They go through here instead, which is anchored to the repository root.
 """
 
 import os
+from pathlib import Path
 
 #: Absolute path of the repository root (the directory holding ``main.py``).
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def repo_path(*parts):
