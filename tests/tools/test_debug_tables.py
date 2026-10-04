@@ -374,7 +374,7 @@ def test_debug_tables_is_an_oracle_for_a_real_authored_world(real_world_window):
         light.pos.tolist()
     )
     assert bool(instrument.entities.light_casts_shadows[light_slot])
-    assert instrument.entities.light_intensity[light_slot] == pytest.approx(2.0)
+    assert instrument.entities.light_params[light_slot, 0] == pytest.approx(2.0)\n    assert instrument.entities.light_params[light_slot, 1] == pytest.approx(1000.0)
 
     sprite = state.things[1]
     sprite_slot = instrument.entities.slot_of_id[sprite.properties["id"]]
@@ -390,7 +390,7 @@ def test_debug_tables_tracks_a_real_light_move_in_the_dense_entity_row(
     instrument.refresh()
     ident = state.things[0].properties["id"]
     before = instrument.entities.slot_of_id[ident]
-    old = instrument.entities.light_pos[before].copy()
+    old = instrument.entities.pos[before].copy()
 
     state.things[0].pos = [320.0, 256.0, 192.0]
     state.mark_world_changed([state.things[0]])
