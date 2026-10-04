@@ -174,7 +174,7 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
         "player_angle": playing.player.angle,
         "movers": copy.deepcopy(playing.mover_runtime.mover_states),
         "doors": copy.deepcopy(playing.mover_runtime.door_states),
-        "timers": copy.deepcopy(playing.timer_states),
+        "timers": copy.deepcopy(playing.timing_runtime.timer_states),
         "fades": copy.deepcopy(playing.light_fade_states),
         "projectiles": playing._projectile_positions.copy(),
         "noise": copy.deepcopy(playing.combat_runtime._gunfire_events),
