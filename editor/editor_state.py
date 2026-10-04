@@ -239,7 +239,7 @@ class EditorState:
         # (the Surface Inspector) calls this per edit, so it is the signal that
         # catches what save_state alone would miss.
         if objects is None:
-            objects = getattr(self, "selected_objects", ())
+            objects = self.selected_objects
         self.mark_world_changed(objects)
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
@@ -718,7 +718,7 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
-        selected = tuple(getattr(self, "selected_objects", ()))
+        selected = tuple(self.selected_objects)
         self.mark_world_changed(selected)
         # A checkpoint is taken *before* the operation changes anything, so a
         # render frame prepared in between consumes the journal entry while the
@@ -827,13 +827,7 @@ class EditorState:
         self.things = new_things
         self._invalidate_entity_caches()
 
-        if 'selection' in state:
-            self._restore_selection(state['selection'])
-        else:
-            # A checkpoint written before the whole selection was recorded.
-            kind = state.get('selected_type')
-            index = state.get('selected_index', -1)
-            self._restore_selection([[kind, index, '']] if kind else [])
+        self._restore_selection(state['selection'])
 
         # Terrain CSG and baked texture paint are the terrain fields included
         # in lightweight editor history. Heightmaps remain outside checkpoints
