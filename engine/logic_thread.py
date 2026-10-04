@@ -354,7 +354,7 @@ class LogicThread(threading.Thread):
         # the entity caches; the per-tick interaction path only consumes these
         # float32 columns and scalar-dispatches the selected row.
         # Authored health per monster UUID, captured on play-mode enter so the
-        # Respawn input has a value to restore (see _reset_all_monsters).
+        # Respawn input has a value to restore (see LogicSession.reset_all_monsters).
 
         # Portal slots use the same enumerate(editor_state.things) address space
         # as EntityTable. Links are resolved once when topology changes.
