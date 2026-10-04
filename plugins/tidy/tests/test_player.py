@@ -150,7 +150,7 @@ def test_player_host_runs_core_prop_and_tidy():
     _check(host.bridge.prop_runtime.held is not None, "core PropSession picked the object")
 
     host.tick(0.016, cam, -90.0, 0.0, use_pressed=True)
-    _check(host.bridge._props.held is None, "core PropSession released the object")
+    _check(host.bridge.prop_runtime.held is None, "core PropSession released the object")
     _check(session.tidied == 1, "Tidy progress advanced")
     _check("Tidied" in (host.hud_message or ""), "HUD shows Tidy progress")
 
