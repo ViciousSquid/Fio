@@ -56,7 +56,7 @@ def ai_world():
     def _build(brushes=(), things=(), player_pos=(0.0, 0.0, 0.0)):
         logic = FakeLogicThread(brushes=brushes, things=things,
                                 player=FakePlayer(player_pos))
-        logic._monster_things = [t for t in logic.things if isinstance(t, Monster)]
+        logic._monster_things = [t for t in logic.editor_state.things if isinstance(t, Monster)]
         ai = MonsterAI(logic)
         ai.set_spatial_grid(logic.build_spatial_grid())
         return ai, logic
