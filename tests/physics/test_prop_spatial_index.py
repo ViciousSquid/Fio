@@ -26,9 +26,13 @@ from engine.spatial import CELL_SIZE, cell_of_point, cells_of_points  # noqa: E4
 
 
 def make_session(props=(), physics=None):
-    logic = SimpleNamespace(things=list(props), player=None,
-                            current_hud_message="", io_manager=None,
-                            _physics_world=physics)
+    logic = SimpleNamespace(
+        editor_state=SimpleNamespace(things=list(props)),
+        player=None,
+        current_hud_message="",
+        io_manager=None,
+        _physics_world=physics,
+    )
     session = PropSession(logic)
     session.start()
     return session
@@ -112,8 +116,13 @@ def test_the_query_examines_local_props_not_every_prop():
 
 def test_adopting_and_releasing_file_and_unfile():
     prop = prop_at(0, 0, 60)
-    logic = SimpleNamespace(things=[prop], player=None, current_hud_message="",
-                            io_manager=None, _physics_world=None)
+    logic = SimpleNamespace(
+        editor_state=SimpleNamespace(things=[prop]),
+        player=None,
+        current_hud_message="",
+        io_manager=None,
+        _physics_world=None,
+    )
     session = PropSession(logic)
     session.start()
     assert session.props_within(0.0, 0.0, 200.0) == [prop]
