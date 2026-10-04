@@ -906,20 +906,14 @@ class QtGameView(QOpenGLWidget):
         during a cinematic, or when disabled.
         """
         _lt = getattr(self, "logic_thread", None)
-        _lt_overhead = False
-        _is_overhead = getattr(_lt, "is_overhead", None)
-        if callable(_is_overhead):
-            try:
-                _lt_overhead = bool(_is_overhead())
-            except Exception:
-                _lt_overhead = False
+        _lt_overhead = bool(_lt.camera.is_overhead()) if _lt is not None else False
         if not (self.play_mode and self.overhead_sprite_enabled
                 and (self._is_overhead() or _lt_overhead)):
             return
         if render_state is None:
             return
         lt = getattr(self, "logic_thread", None)
-        if lt is not None and getattr(lt, "cinematic_state", None):
+        if lt is not None and lt.cutscene_runtime.state:
             return
         # Suppress the ground sprite mid-tween so it doesn't pop in/out while the
         # camera swoops between first-person and overhead.
@@ -1962,9 +1956,8 @@ class QtGameView(QOpenGLWidget):
             self._draw_level_complete_overlay(painter)
         if self.play_mode:
             logic_thread = getattr(self, "logic_thread", None)
-            consume_messages = getattr(logic_thread, "consume_cinematic_messages", None)
-            if callable(consume_messages):
-                for line, text in consume_messages():
+            if logic_thread is not None:
+                for line, text in logic_thread.cutscene_runtime.consume_cinematic_messages():
                     if line == "message2":
                         self.show_view_message2(text)
                     elif line == "message3":

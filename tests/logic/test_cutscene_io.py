@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 
 from engine.cutscene_runtime import CutsceneRuntime
-from engine.logic_thread import LogicThread
+from engine.logic_world import LogicWorld
+from editor.things import ENTITY_TYPES
 
 
 class RecordingIO:
@@ -12,15 +13,20 @@ class RecordingIO:
     def fire_output(self, entity, output, value=None):
         self.calls.append((entity, output, value))
         if output == "StopCutscene":
-            self.owner.cinematic_state = None
+            self.owner.runtime.state = None
 
 
 class CutsceneWorld:
     def __init__(self):
         self.source = SimpleNamespace(properties={"id": "source-1", "name": "Door"})
+        self.things = [self.source]
+        self.brushes = []
+        self.play_mode = False
         self.io_manager = RecordingIO(self)
         self.runtime = CutsceneRuntime(self)
-        self.cinematic_state = {
+        self.world_runtime = LogicWorld(self)
+
+        self.runtime.state = {
             "active": True,
             "elapsed": 0.0,
             "io_events": [
@@ -29,54 +35,36 @@ class CutsceneWorld:
             ],
             "next_io_event": 0,
         }
-        self.runtime.state = self.cinematic_state
-
-    def _cutscene_runtime(self):
-        return self.runtime
-
-    @property
-    def cinematic_state(self):
-        return self.runtime.state
-
-    @cinematic_state.setter
-    def cinematic_state(self, value):
-        self.runtime.state = value
-
-    def _find_entity_by_id(self, entity_id):
-        return self.source if entity_id == "source-1" else None
-
-    def _find_entity_by_name(self, name):
-        return self.source if name == "Door" else None
 
 
 def test_cutscene_io_events_fire_at_authored_times_and_only_once():
     world = CutsceneWorld()
 
-    assert LogicThread._fire_cinematic_io_events(world) is True
+    assert world.runtime._fire_cinematic_io_events() is True
     assert [(name, value) for _, name, value in world.io_manager.calls] == [("Open", None)]
 
-    world.cinematic_state["elapsed"] = 1.0
-    assert LogicThread._fire_cinematic_io_events(world) is True
+    world.runtime.state["elapsed"] = 1.0
+    assert world.runtime._fire_cinematic_io_events() is True
     assert [(name, value) for _, name, value in world.io_manager.calls] == [
         ("Open", None),
         ("SetValue", "42"),
     ]
 
-    assert LogicThread._fire_cinematic_io_events(world) is True
+    assert world.runtime._fire_cinematic_io_events() is True
     assert len(world.io_manager.calls) == 2
 
 
 def test_cutscene_io_output_can_stop_the_active_camera():
     world = CutsceneWorld()
-    world.cinematic_state["io_events"] = [{
+    world.runtime.state["io_events"] = [{
         "time": 0.0,
         "source_id": "source-1",
         "source_name": "Door",
         "output": "StopCutscene",
     }]
 
-    assert LogicThread._fire_cinematic_io_events(world) is False
-    assert world.cinematic_state is None
+    assert world.runtime._fire_cinematic_io_events() is False
+    assert world.runtime.state is None
 
 
 def test_cutscene_camera_teleport_holds_previous_shot_until_destination_time():
@@ -85,13 +73,13 @@ def test_cutscene_camera_teleport_holds_previous_shot_until_destination_time():
         {"time": 3.0, "pos": [1200, 80, -900], "yaw": 180.0, "pitch": 15.0, "fov": 70.0, "teleport": True},
     ]
 
-    before_cut = LogicThread._cutscene_sample(rows, 2.5)
+    before_cut = CutsceneRuntime._cutscene_sample(rows, 2.5)
     assert before_cut["pos"] == [0.0, 0.0, 0.0]
     assert before_cut["yaw"] == 0.0
     assert before_cut["pitch"] == 0.0
     assert before_cut["fov"] == 90.0
 
-    at_cut = LogicThread._cutscene_sample(rows, 3.0)
+    at_cut = CutsceneRuntime._cutscene_sample(rows, 3.0)
     assert at_cut["pos"] == [1200.0, 80.0, -900.0]
     assert at_cut["yaw"] == 180.0
     assert at_cut["pitch"] == 15.0
@@ -104,6 +92,6 @@ def test_cutscene_camera_keyframes_still_interpolate_without_teleport():
         {"time": 2.0, "pos": [100, 20, 40], "yaw": 1.0},
     ]
 
-    sample = LogicThread._cutscene_sample(rows, 1.0)
+    sample = CutsceneRuntime._cutscene_sample(rows, 1.0)
     assert sample["pos"] == [50.0, 10.0, 20.0]
     assert sample["yaw"] == 0.5

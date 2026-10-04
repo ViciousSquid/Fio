@@ -1178,19 +1178,17 @@ def register_all_input_handlers(io_manager: IOManager):
         """Begin a LogicCamera cutscene or its legacy PathNode sequence."""
         # Starting any camera must cleanly replace an active JSON cutscene.
         # Otherwise its temporary actors and restored runtime state would leak.
-        previous = getattr(logic, 'cinematic_state', None)
+        previous = logic.cutscene_runtime.state
         if previous is not None and previous.get('json_cutscene'):
-            if hasattr(logic, '_finish_json_cutscene'):
-                logic._finish_json_cutscene(previous, fire_finished=False)
+            logic.cutscene_runtime._finish_json_cutscene(previous, fire_finished=False)
         cutscene_file = str(entity.properties.get('cutscene_file', '') or '').strip()
-        if cutscene_file and hasattr(logic, '_load_cutscene_file') and hasattr(logic, '_start_json_cutscene'):
-            data = logic._load_cutscene_file(cutscene_file)
-            if data is None or not logic._start_json_cutscene(entity, cutscene_file, data):
+        if cutscene_file:
+            data = logic.cutscene_runtime._load_cutscene_file(cutscene_file)
+            if data is None or not logic.cutscene_runtime._start_json_cutscene(entity, cutscene_file, data):
                 return
             if logic.io_manager:
                 logic.io_manager.fire_output(entity, 'OnStart')
-            if hasattr(logic, '_fire_cinematic_io_events'):
-                logic._fire_cinematic_io_events()
+            logic.cutscene_runtime._fire_cinematic_io_events()
             return
 
         target = entity.properties.get('path_target', '')
@@ -1245,7 +1243,7 @@ def register_all_input_handlers(io_manager: IOManager):
             io_events.append(io_event)
         io_events.sort(key=lambda event: event['time'])
 
-        logic.cinematic_state = {
+        logic.cutscene_runtime.state = {
             'active':       True,
             'paused':       False,
             'entity':       entity,
@@ -1261,32 +1259,31 @@ def register_all_input_handlers(io_manager: IOManager):
         }
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnStart')
-        if hasattr(logic, '_fire_cinematic_io_events'):
-            logic._fire_cinematic_io_events()
+        logic.cutscene_runtime._fire_cinematic_io_events()
 
     def camera_stop(entity, param, logic):
         """Abort and return camera to the player."""
-        cs = getattr(logic, 'cinematic_state', None)
-        if cs and cs.get('json_cutscene') and hasattr(logic, '_finish_json_cutscene'):
-            logic._finish_json_cutscene(cs, fire_finished=False)
+        cs = logic.cutscene_runtime.state
+        if cs and cs.get('json_cutscene'):
+            logic.cutscene_runtime._finish_json_cutscene(cs, fire_finished=False)
         else:
-            logic.cinematic_state = None
+            logic.cutscene_runtime.state = None
 
     def camera_pause(entity, param, logic):
         """Freeze camera at current chain position."""
-        if logic.cinematic_state:
-            logic.cinematic_state['paused'] = True
+        if logic.cutscene_runtime.state:
+            logic.cutscene_runtime.state['paused'] = True
 
     def camera_resume(entity, param, logic):
         """Continue a paused sequence."""
-        if logic.cinematic_state:
-            logic.cinematic_state['paused'] = False
+        if logic.cutscene_runtime.state:
+            logic.cutscene_runtime.state['paused'] = False
 
     def camera_set_speed(entity, param, logic):
         """Override travel speed."""
-        if logic.cinematic_state:
+        if logic.cutscene_runtime.state:
             try:
-                logic.cinematic_state['speed'] = max(1.0, _finite(param))
+                logic.cutscene_runtime.state['speed'] = max(1.0, _finite(param))
             except (TypeError, ValueError):
                 pass
 
@@ -1309,7 +1306,7 @@ def register_all_input_handlers(io_manager: IOManager):
         normal path-facing target resumes. Zero keeps the explicit focus
         indefinitely.
         """
-        cs = logic.cinematic_state
+        cs = logic.cutscene_runtime.state
         if not cs or cs.get('entity') is not entity:
             debug_log(
                 "IO",
@@ -1322,10 +1319,8 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log("IO", f"LogicCamera '{entity.name}': LookAt requires a target name or UUID.")
             return
 
-        target = None
-        if hasattr(logic, '_find_entity_by_id'):
-            target = logic.world_runtime.find_entity_by_id(target_ref)
-        if target is None and hasattr(logic, '_find_entity_by_name'):
+        target = logic.world_runtime.find_entity_by_id(target_ref)
+        if target is None:
             target = logic.world_runtime.find_entity_by_name(target_ref)
 
         target_pos = _camera_target_position(target)
@@ -1467,8 +1462,7 @@ def register_all_input_handlers(io_manager: IOManager):
         entity.properties['_spawn_count'] = spawn_count + 1
 
         # ---- rebuild caches so the new entity can be found by name/id ----
-        if hasattr(logic, '_build_entity_caches'):
-            logic.world_runtime.build_entity_caches()
+        logic.world_runtime.build_entity_caches()
 
         # ---- fire outputs ----
         if logic.io_manager:
