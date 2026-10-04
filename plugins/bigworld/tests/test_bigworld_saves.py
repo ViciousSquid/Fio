@@ -112,7 +112,6 @@ class FakeLogic:
         self.combat_runtime = LogicCombat(self)
         self.timing_runtime = LogicTiming(self)
         self.monster_ai = FakeMonsterAI()
-        self._monster_lock = threading.RLock()
         self._portal_cooldowns = {}
         self._portal_prev_player_pos = None
         self._portal_things = []
