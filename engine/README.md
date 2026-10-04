@@ -241,3 +241,29 @@ The OpenGL dependency version is the Python binding version; the renderer itself
 ## Observability
 
 Debug Tables exposes the live dense projections, packed render keys/ranges and related counters. This is the primary execution-boundary instrumentation: it inspects the production numerical path rather than maintaining a diagnostic renderer or duplicate world representation.
+
+## Security boundaries
+
+### Plugins are trusted in-process code
+
+Fio's plugin system is an **extension mechanism, not a sandbox**. Python packages placed in the project's `plugins/` directory are discovered and imported into the Fio process at startup. A plugin therefore runs with the same process and OS privileges as Fio.
+
+Treat the `plugins/` directory as part of the trusted application boundary. Do not place untrusted or downloaded Python packages there. The plugin API does not provide privilege separation, process isolation or a security boundary.
+
+`.fiopak` packages do not install arbitrary plugin code. Package metadata may declare dependencies on plugins that are already installed and trusted by the host.
+
+### `.fiopak` resource limits
+
+`.fiopak` archives are ZIP containers and must be treated as untrusted input. Asset reads are bounded before decompression:
+
+- individual asset entries are limited to 128 MiB of declared uncompressed data;
+- total asset data admitted to the package's in-memory asset cache is limited to 512 MiB;
+- the limits are checked from ZIP entry metadata before `_zf.read()` inflates the entry.
+
+These limits protect the editor/player process against memory-exhaustion archives. They are resource limits, not a substitute for trusting the package's map/content semantics.
+
+### Container boundary
+
+The Docker image runs Fio as the unprivileged `fio` user. The Docker Compose configuration is **not an isolation boundary**: the graphical configuration deliberately exposes host facilities such as the X11 socket, host networking and `/dev/dri`. Do not use this container configuration as a sandbox for untrusted Fio plugins, packages or Python code.
+
+`Docker` is therefore a packaging/runtime convenience, not a security boundary.
