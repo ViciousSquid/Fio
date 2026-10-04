@@ -38,7 +38,7 @@ def window(qt_app):
     host.view_3d = SimpleNamespace(
         logic_thread=logic,
         renderer=None, paint_ms=4.0)
-    host.state = SimpleNamespace(selected_object=None, selected_objects=[])
+    host.state = SimpleNamespace(selected_objects=[])
     instrument = DebugTablesWindow(host)
     instrument.timer.stop()
     yield instrument, game_state
@@ -182,7 +182,7 @@ def test_follow_selection_names_the_render_row_key_and_run(window):
     instrument, game_state = window
     brush = game_state._read_state.render_table.brushes[0]
     instrument.main_window.state = SimpleNamespace(
-        selected_object=brush, selected_objects=[brush])
+        selected_objects=[brush])
     instrument.refresh()
     status = instrument.status.text()
     assert "FOLLOW id=%s" % brush["id"] in status
