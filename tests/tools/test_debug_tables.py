@@ -23,8 +23,11 @@ pytestmark = pytest.mark.qt
 def window(qt_app):
     from PyQt5.QtWidgets import QMainWindow
     from tools.debug_tables import DebugTablesWindow
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
 
     game_state = ThreadedGameState()
+    logic = LogicThread(game_state, EditorState())
     write = game_state.get_write_state()
     write.render_table.sync([box_brush("wall")], 1)
     write.visible_brush_slots = np.array([0], dtype=np.int32)
@@ -33,7 +36,7 @@ def window(qt_app):
 
     host = QMainWindow()
     host.view_3d = SimpleNamespace(
-        logic_thread=SimpleNamespace(game_state=game_state),
+        logic_thread=logic,
         renderer=None, paint_ms=4.0)
     host.state = SimpleNamespace(selected_object=None, selected_objects=[])
     instrument = DebugTablesWindow(host)
