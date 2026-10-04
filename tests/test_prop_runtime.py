@@ -168,20 +168,9 @@ def test_respawn_fades_in_over_two_seconds(real_logic):
     assert id(prop) not in session.respawn_fades
 
 
-def test_respawn_fade_state_resets_when_session_restarts():
+def test_respawn_fade_state_resets_when_session_restarts(real_logic):
     prop = Prop(pos=[0.0, 0.0, 0.0])
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        player_runtime=SimpleNamespace(player=SimpleNamespace(
-            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-            camera_height=40.0,
-        )),
-    )
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop])
 
     prop._respawn_fade_alpha = 0.0
     session.stop()
