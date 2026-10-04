@@ -219,7 +219,7 @@ class LogicWorld:
         logic = self.logic
         row_watch_ticks = 30
 
-        epoch = getattr(logic.editor_state, "world_epoch", None)
+        epoch = logic.editor_state.world_epoch
         if epoch != self._rows_epoch:
             self._rows_epoch = epoch
             self._rows_watch = row_watch_ticks
