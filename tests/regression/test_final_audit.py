@@ -431,7 +431,7 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
         # which the render projection rightly shows.
         exclude = [state, state.brushes, state.things]
         if not restore:
-            exclude += [game_state, logic._render_table, logic._entity_table]
+            exclude += [game_state, game_state.get_write_state().render_table, game_state.get_write_state().entity_table]
         leaks = paths_to(roots, session, exclude)
         assert leaks == [], "after Stop:\n  " + "\n  ".join(leaks[:20])
 
