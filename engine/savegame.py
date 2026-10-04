@@ -418,7 +418,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "map": map_name or "",
         "level": level,
-        "player": _capture_player(logic.player),
+        "player": _capture_player(logic.player_runtime.player),
         "player2": _capture_player(logic.player_runtime.player2),
         "runtime": runtime,
     }
@@ -737,7 +737,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     runtime = data.get("runtime", {}) or {}
 
     # Player(s)
-    _apply_player(logic.player, data.get("player"))
+    _apply_player(logic.player_runtime.player, data.get("player"))
     _apply_player(logic.player_runtime.player2, data.get("player2"))
     # The player was put back, not walked back: no portal crossing.
     if data.get("player"):
