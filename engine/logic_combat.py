@@ -125,7 +125,7 @@ class LogicCombat:
         closest_monster_dist = float('inf')
         
         with logic._monster_lock:
-            for thing in logic.things:
+            for thing in logic.editor_state.things:
                 if not isinstance(thing, MonsterThing):
                     continue
                 if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
