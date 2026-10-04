@@ -677,7 +677,7 @@ def test_a_monster_removed_from_the_world_leaves_its_state_behind_harmlessly(
     ai, logic = ai_world(brushes=flat_ground, things=[a, b])
     ai.update(TICK)
 
-    logic.things.remove(b)
+    logic.editor_state.things.remove(b)
     logic._monster_things = [a]
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
