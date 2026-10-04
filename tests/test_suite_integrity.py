@@ -178,7 +178,7 @@ def test_machinery_tests_do_not_use_namespace_production_owners():
     owner_names = {
         "logic", "host", "renderer", "physics", "ai", "main_window",
         "window", "view", "view_3d", "logic_thread", "game_state",
-        "editor", "state",
+        "plugins", "editor", "state",
     }
     offenders = []
     for root_name in MACHINERY_TEST_ROOTS:
