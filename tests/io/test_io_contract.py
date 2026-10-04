@@ -48,7 +48,6 @@ from engine.logic_session import LogicSession                     # noqa: E402
 from engine.logic_player import LogicPlayer                         # noqa: E402
 from engine.logic_combat import LogicCombat                       # noqa: E402
 from engine.logic_collision import LogicCollision                 # noqa: E402
-from engine.effect_table import EffectStore                      # noqa: E402
 from engine.prop_runtime import PropSession                       # noqa: E402
 from engine.threaded_game_state import ThreadedGameState           # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
@@ -83,7 +82,6 @@ class HostStub:
         self.editor_state.things = []
         self.player_runtime = LogicPlayer(self)
 
-        self._monster_lock = __import__("threading").RLock()
         self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
 
         self.session_runtime = LogicSession(self)
@@ -95,7 +93,6 @@ class HostStub:
         self.collision_runtime = LogicCollision(self)
         self.combat_runtime = LogicCombat(self)
         self.prop_runtime = PropSession(self)
-        self.effect_store = EffectStore()
         self.trigger_runtime = LogicTriggers(self)
         self.trigger_runtime._reset_trigger_state()
 
