@@ -687,7 +687,7 @@ class RuntimeAPI:
 
     # -- scene queries ------------------------------------------------------
     def _things(self):
-        return getattr(self.logic, "things", None) or []
+        return self.logic.editor_state.things
 
     def entities_of_type(self, type_name: str) -> List:
         """All scene entities whose ``type`` matches *type_name*."""
@@ -761,8 +761,8 @@ class RuntimeAPI:
     def spawn(self, cls, pos=None, properties: Optional[dict] = None):
         """Instantiate *cls* and add it to the live scene; returns the entity.
 
-        The new entity is appended to ``logic.things`` so gameplay queries and
-        (once the host draws dynamic entities) rendering pick it up. Returns
+        The new entity is appended to ``logic.editor_state.things`` so gameplay queries
+        and rendering consume the same authoritative world. Returns
         ``None`` if construction fails.
         """
         try:
@@ -771,14 +771,8 @@ class RuntimeAPI:
         except Exception:
             self._manager._log(f"spawn() failed for '{self._plugin.name}'")
             return None
-        things = getattr(self.logic, "things", None)
-        if things is not None:
-            try:
-                things.append(ent)
-            except Exception:
-                pass
-            else:
-                self._entities_changed()
+        self.logic.editor_state.things.append(ent)
+        self._entities_changed()
         try:
             self._manager.emit("entity_spawned", logic=self.logic, entity=ent,
                                by=self._plugin.name)
@@ -788,11 +782,8 @@ class RuntimeAPI:
 
     def despawn(self, entity) -> bool:
         """Remove *entity* from the live scene. Returns True if it was present."""
-        things = getattr(self.logic, "things", None)
-        if things is None:
-            return False
         try:
-            things.remove(entity)
+            self.logic.editor_state.things.remove(entity)
         except ValueError:
             return False
         self._entities_changed()
