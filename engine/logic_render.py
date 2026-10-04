@@ -183,7 +183,7 @@ class LogicRender:
                 logic._hud_health_alpha = 0.5
                 return logic._hud_health_alpha
 
-            if out_elapsed >= logic._hud_health_fade_out_duration:
+            if out_elapsed + 1e-12 >= logic._hud_health_fade_out_duration:
                 logic._hud_health_alpha = 0.5
                 logic._hud_health_fade_started = None
                 logic._hud_health_fade_phase = "idle"
