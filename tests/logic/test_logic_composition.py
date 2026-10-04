@@ -444,8 +444,9 @@ def test_the_logic_thread_has_no_state_evaluation_pass():
 def test_the_state_store_is_not_walked_per_frame():
     """A tick that touched every store would be a global gameplay runtime."""
     source = _read("engine/logic_thread.py")
-    tick = source[source.index("def _tick_play_mode"):
-                  source.index("def _update_water_sounds")]
+    tick_start = source.index("def _tick_play_mode")
+    tick_end = source.index("# Gameplay", tick_start)
+    tick = source[tick_start:tick_end]
     for name in ("LogicState", "logic_state", "_persistent_registry"):
         assert name not in tick, (
             "the play-mode tick touches %r — state must be event-driven" % name)

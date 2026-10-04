@@ -1374,8 +1374,9 @@ class LogicThread(threading.Thread):
 
         # Player movement/physics live in LogicPlayer; this method retains
         # authoritative tick ordering and the existing consumed-input surface.
-        self._player_runtime().update_primary(delta, keys, mouse_dx, mouse_dy)
-        self._update_water_sounds(delta)
+        player_runtime = self._player_runtime()
+        player_runtime.update_primary(delta, keys, mouse_dx, mouse_dy)
+        player_runtime.update_water_sounds(delta)
 
         # Gameplay
         self._handle_interactions(use_key)
