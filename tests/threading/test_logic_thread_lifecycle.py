@@ -36,8 +36,9 @@ TICK = 1.0 / 60.0
 class _FaultBridge(QObject):
     fault = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, thread):
         super().__init__()
+        self.thread = thread
         self.calls = []
         self.thread_ids = []
         self.fault.connect(self._on_fault)
@@ -46,6 +47,7 @@ class _FaultBridge(QObject):
     def _on_fault(self, message):
         self.calls.append(message)
         self.thread_ids.append(threading.get_ident())
+        self.thread.session_runtime.apply_play_mode(False)
 
 
 def test_player_health_state_belongs_to_logic_player(logic):
@@ -465,19 +467,15 @@ def test_a_fatal_tick_marshals_play_teardown_to_gui(logic):
     """Fatal tick handling must never tear down the play session on the worker."""
     app = QCoreApplication.instance() or QCoreApplication([])
     thread = logic(brushes=room())
-    thread.play_mode = True
-    bridge = _FaultBridge()
+    thread.session_runtime.play_mode = True
+    bridge = _FaultBridge(thread)
     runner_ident = []
 
     def _explode(delta):
         raise RuntimeError("deliberate fatal tick failure")
 
-    def _forbidden_teardown(enabled):
-        raise AssertionError("play teardown ran on the logic worker")
-
     thread._tick = _explode
     thread.set_gui_fault_teardown(bridge.fault.emit)
-    thread.session_runtime.apply_play_mode = _forbidden_teardown
 
     def run_one_frame():
         runner_ident.append(threading.get_ident())
@@ -488,11 +486,16 @@ def test_a_fatal_tick_marshals_play_teardown_to_gui(logic):
     runner.join(timeout=DEADLINE)
 
     assert not runner.is_alive(), "fatal tick frame did not finish"
-    assert thread.play_mode is False, "fatal tick did not fail closed to editor state"
+    assert thread.session_runtime.play_mode is True, (
+        "fatal tick teardown ran on the logic worker instead of waiting for the GUI"
+    )
     assert bridge.calls == [], "GUI teardown ran before Qt processed the queued signal"
 
     app.processEvents()
     assert len(bridge.calls) == 1, "fatal tick did not reach the GUI thread"
+    assert thread.session_runtime.play_mode is False, (
+        "GUI fault teardown did not close the play session through LogicSession"
+    )
     assert bridge.thread_ids[0] != runner_ident[0], (
         "fatal tick teardown callback ran on the logic worker instead of the GUI thread"
     )
