@@ -87,15 +87,14 @@ class FakeMonsterAI:
 class FakeLogic:
     def __init__(self, things, brushes, player_pos):
         self.editor_state = FakeEditorState(things, brushes)
-        self.player = FakePlayer(player_pos)
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
         self._tick_lock = threading.RLock()
         self.io_manager = None
         self.plugins = SimpleNamespace(services={})
         self.player_runtime = LogicPlayer(self)
+        self.player_runtime.player = FakePlayer(player_pos)
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
-        self.player2 = None
         self.camera = LogicCamera(self)
         self.collision_runtime = LogicCollision(self)
         self.camera.camera_mode = "First Person"
