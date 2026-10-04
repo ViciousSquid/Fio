@@ -885,11 +885,6 @@ def test_cloning_a_named_brush_gives_the_copy_its_own_name(editor):
 
 def test_cloning_an_unnamed_brush_does_not_invent_a_name(editor):
     host, _ = editor
-    host.clone_selected_object = types.MethodType(
-        MainWindow.clone_selected_object, host)
-    host.right_tabs = _StubTabs(host.view_top)
-    host.grid_size_spinbox = _StubSpin(16)
-
     brush = make_box()
     host.state.brushes.append(brush)
     host.set_selected_objects([brush])
