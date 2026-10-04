@@ -205,7 +205,6 @@ class LogicThread(threading.Thread):
         ),
         "triggers": (
             "player",
-            "_trigger_brushes",
         ),
         "portals": (
             "player",
@@ -430,8 +429,6 @@ class LogicThread(threading.Thread):
         self.collision_runtime = LogicCollision(self)
 
         # Entity lookup caches — built on play-mode enter
-        self._trigger_brushes = []
-        self._trigger_brush_by_bid = {}
         # The Prop registry (engine.prop_runtime.PropSession).  Created on
         # play-mode enter and None in the editor, where nothing simulates.
         self._props = None

@@ -11,8 +11,6 @@ from engine.logic_triggers import LogicTriggers
 def _runtime():
     host = SimpleNamespace(
         player=SimpleNamespace(pos=np.array([0.0, 0.0, 0.0])),
-        _trigger_brushes=[],
-        _trigger_brush_by_bid={},
         _trigger_use_prompt="",
         current_hud_message="",
         current_hud_key_name=None,

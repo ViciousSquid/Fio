@@ -61,13 +61,7 @@ class LogicWorld:
             if entity_id:
                 self.id_cache[entity_id] = thing
 
-        logic._trigger_brushes = [
-            (brush.get("id") or index, brush)
-            for index, brush in enumerate(logic.editor_state.brushes)
-            if brush.get("is_trigger")
-        ]
-        logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
-        logic.trigger_runtime._refresh_use_triggers()
+        logic.trigger_runtime.rebuild_trigger_index(logic.editor_state.brushes)
 
         if logic._props is not None:
             logic._props.rebuild(logic.editor_state.things)
@@ -253,9 +247,7 @@ class LogicWorld:
         self.levelchanger_radii = np.empty(0, dtype=np.float32)
         self.levelchanger_eligible = np.empty(0, dtype=bool)
 
-        logic._trigger_brushes = []
-        logic._trigger_brush_by_bid = {}
-        logic._use_trigger_entries = []
+        logic.trigger_runtime.clear_trigger_index()
 
         logic._portal_things = []
         logic._portal_target_things = []

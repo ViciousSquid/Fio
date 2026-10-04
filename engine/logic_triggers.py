@@ -71,6 +71,24 @@ class LogicTriggers:
         self._trigger_use_generation = 0
         self._trigger_use_seen = {}
         self._trigger_use_prompt = ""
+        self._trigger_brushes = []
+        self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
+
+    def rebuild_trigger_index(self, brushes):
+        """Build the live trigger index from the authoritative brush list."""
+        self._trigger_brushes = [
+            (brush.get("id") or index, brush)
+            for index, brush in enumerate(brushes)
+            if brush.get("is_trigger")
+        ]
+        self._trigger_brush_by_bid = dict(self._trigger_brushes)
+        self._refresh_use_triggers()
+
+    def clear_trigger_index(self):
+        """Release the trigger index for the finished play session."""
+        self._trigger_brushes = []
+        self._trigger_brush_by_bid = {}
         self._use_trigger_entries = []
 
     @staticmethod
@@ -168,7 +186,7 @@ class LogicTriggers:
         # runs during construction, ahead of the first cache build.
         self._use_trigger_entries = [
             (bid, brush)
-            for bid, brush in getattr(self.logic, '_trigger_brushes', ())
+            for bid, brush in self._trigger_brushes
             if _trigger_activation(brush) == 'use'
         ]
 
@@ -262,7 +280,7 @@ class LogicTriggers:
 
         if trigger_ids is None:
             trigger_ids = {
-                bid for bid, _ in self.logic._trigger_brushes
+                bid for bid, _ in self._trigger_brushes
             }
         else:
             trigger_ids = set(trigger_ids)
@@ -278,7 +296,7 @@ class LogicTriggers:
         # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
         polled_ids = set()
-        for bid, brush in self.logic._trigger_brushes:
+        for bid, brush in self._trigger_brushes:
             if bid not in trigger_ids:
                 continue
 
@@ -414,7 +432,7 @@ class LogicTriggers:
             exited = old - new
 
             if entered:
-                brush = self.logic._trigger_brush_by_bid.get(bid)
+                brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
                     for activator_type, entity_id in entered:
                         if activator_type == 'player':
@@ -439,7 +457,7 @@ class LogicTriggers:
                                 )
 
             if exited:
-                brush = self.logic._trigger_brush_by_bid.get(bid)
+                brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
                     for activator_type, entity_id in exited:
                         if activator_type == 'player':
@@ -536,7 +554,7 @@ class LogicTriggers:
         for bid in polled_ids:
             if bid not in self.player_in_triggers:
                 continue
-            brush = self.logic._trigger_brush_by_bid.get(bid)
+            brush = self._trigger_brush_by_bid.get(bid)
             if (
                 brush
                 and brush.get('trigger_action') == 'hurt'
@@ -584,7 +602,7 @@ class LogicTriggers:
             self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
-            for bid, brush in self.logic._trigger_brushes:
+            for bid, brush in self._trigger_brushes:
                 elapsed = (
                     self._trigger_poll_elapsed_by_bid.get(bid, 0.0)
                     + scheduler_tick
