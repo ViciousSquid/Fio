@@ -8,7 +8,6 @@ first-person camera, every monster runs every tick exactly as before.
 """
 
 import math
-import types
 
 import glm
 import numpy as np
@@ -25,17 +24,17 @@ TICK = 1.0 / 30.0
 
 
 class _Camera(LogicCamera):
-    """Small LogicCamera configured for focused footprint tests."""
+    """Production LogicCamera with a production LogicThread host."""
 
     def __init__(self, aspect=16 / 9, height=800.0, tilt=0.0, overhead=True,
                  orientation="north", fov=90.0):
-        host = types.SimpleNamespace(
-            player_runtime=types.SimpleNamespace(player=types.SimpleNamespace(
-                pos=glm.vec3(100.0, 50.0, -40.0),
-                angle=0.0,
-            ))
-        )
-        super().__init__(host)
+        from editor.editor_state import EditorState
+        from engine.threaded_game_state import ThreadedGameState
+        logic = LogicThread(ThreadedGameState(), EditorState())
+        logic.player_runtime.player.pos = glm.vec3(100.0, 50.0, -40.0)
+        logic.player_runtime.player.angle = 0.0
+        super().__init__(logic)
+        self._test_logic = logic
         self.frustum_aspect = aspect
         self.frustum_fov = fov
         self.overhead_height = height
@@ -46,8 +45,6 @@ class _Camera(LogicCamera):
 
     def is_overhead(self):
         return self._overhead
-
-
 def test_a_straight_down_camera_shows_height_by_aspect():
     hx, hz, reach = _Camera(aspect=16 / 9).overhead_ground_footprint()
     # A 90 degree vertical field of view: half-height equals the camera height.
@@ -99,31 +96,36 @@ PLAYER = (0.0, 0.0, 0.0)
 
 
 def _thing(x=0.0, z=0.0, tier=None):
+    from editor.things import Monster
+    from tests.helpers.worlds import make_thing
     props = {} if tier is None else {SIM_TIER_KEY: tier}
-    return types.SimpleNamespace(properties=props, pos=[x, 0.0, z])
+    return make_thing(Monster, "monster-%s-%s" % (x, z),
+                      (x, 0.0, z), **props)
 
 
 def _ai(bigworld, overhead):
-    """An AI whose host has (or has not) a Big World session, fitted (or not)
-    to an overhead camera."""
-    ai = MonsterAI.__new__(MonsterAI)
-    session = types.SimpleNamespace(
-        tiers=types.SimpleNamespace(
-            near_rect=RECT if (bigworld and overhead) else None
-        )
-    )
-    ai.lt = types.SimpleNamespace(
-        plugins=types.SimpleNamespace(
-            services={"bigworld": session} if bigworld else {}
-        )
-    )
-    ai._tick_monsters = None
-    ai._offscreen_accum = 0.0
-    ai._owed = {}
-    return ai
+    """A real MonsterAI attached to a real LogicThread and Big World session."""
+    from editor.editor_state import EditorState
+    from engine.threaded_game_state import ThreadedGameState
+    from plugins.manager import get_manager, load_plugins
+    from plugins.bigworld.runtime import BigWorldSession
 
-
-def _run(ai, monsters, ticks, dt=TICK, move=None):
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    logic.player_runtime.player.pos = glm.vec3(*PLAYER)
+    load_plugins()
+    if logic.plugins is None:
+        logic.plugins = get_manager()
+    services = logic.plugins.services
+    services.pop("bigworld", None)
+    session = None
+    if bigworld:
+        session = BigWorldSession(logic, activation_radius=2048.0,
+                                  deactivation_radius=2304.0)
+        if overhead:
+            session.tiers.set_near_rect(RECT)
+        services["bigworld"] = session
+    ai = logic.monster_ai
+    return ai, logicdef _run(ai, monsters, ticks, dt=TICK, move=None):
     """Drive the throttle; return each monster's [delta, ...] runs."""
     runs = [[] for _ in monsters]
     for tick in range(ticks):
