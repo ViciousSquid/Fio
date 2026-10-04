@@ -13,6 +13,7 @@ from engine.effect_entity import (
     EFFECT_ORB_TEXTURES,
 )
 from engine.entity_table import ENT_EFFECT, EntityTable
+from engine.effect_table import EffectStore
 from editor.io_system import IOManager, get_input_names, get_output_names
 from editor.io_handlers import register_all_input_handlers
 from types import SimpleNamespace
@@ -184,13 +185,15 @@ def test_both_buffers_agree_after_an_explode():
 def test_explosion_origin_is_shared_across_render_buffers():
     """Triggered one-shot Effects keep one timestamp in both dense tables."""
     effect = Effect(properties={"effect_type": "EXPLOSION"})
-    effect.trigger_explosion(123.456)
+    store = EffectStore()
+    store.begin_session([effect])
+    store.trigger_explosion(effect, 123.456)
 
     first = EntityTable()
     second = EntityTable()
 
-    first.begin_frame([effect], epoch=1, effect_runtime=True)
-    second.begin_frame([effect], epoch=1, effect_runtime=True)
+    first.begin_frame([effect], epoch=1, effect_runtime=True, effect_store=store)
+    second.begin_frame([effect], epoch=1, effect_runtime=True, effect_store=store)
 
     assert float(first.effect_spawn_time[0]) == 123.456
     assert float(second.effect_spawn_time[0]) == 123.456
