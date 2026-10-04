@@ -23,6 +23,7 @@ class LogicRender:
 
     def __init__(self, logic):
         self.logic = logic
+        self._last_edited = {}
 
     def extract_frustum_planes(self, proj_view: glm.mat4):
         m = proj_view
@@ -480,12 +481,12 @@ class LogicRender:
         edited_ids = {id(obj): obj for obj in edited}
         left = [
             obj
-            for oid, obj in getattr(logic, "_last_edited", {}).items()
+            for oid, obj in self._last_edited.items()
             if oid not in edited_ids
         ]
         if left:
             JOURNAL.record_many(left, STATE)
-        logic._last_edited = edited_ids
+        self._last_edited = edited_ids
         peer = logic.game_state.peer_state()
         peer_table = (
             peer.render_table if peer is not write_state else None

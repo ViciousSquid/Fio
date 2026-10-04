@@ -177,7 +177,6 @@ class LogicThread(threading.Thread):
             "editor_state",
             "player",
             "player_health",
-            "_last_edited",
         ),
         "session": (
             "editor_state",
@@ -274,10 +273,6 @@ class LogicThread(threading.Thread):
         self._hud_health_fade_from = 0.5
         self._hud_health_fade_phase = "idle"
         self.hud_fade_enabled = True
-
-        #: ``id -> object`` of the editor selection the last frame re-read as
-        #: edited; see _prepare_render_state.
-        self._last_edited = {}
 
         self._editor_mouselook_active = False
         # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
