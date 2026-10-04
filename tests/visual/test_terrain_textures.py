@@ -58,7 +58,7 @@ def render(context, t, eye, target, up=(0.0, 1.0, 0.0), fov=70.0):
     for _ in range(2):
         context.bind()
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        renderer.render_scene(projection, view, eye_v, [], [], None, config,
+        renderer.render_scene(projection, view, eye_v, None, config,
                               brush_slots=config["all_brush_slots"])
         gl.glFinish()
     image = context.read_pixels()[:, :, :3].astype(float)
