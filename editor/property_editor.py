@@ -2831,7 +2831,7 @@ class PropertyEditor(QWidget):
                     if hasattr(self.editor, 'select_object'):
                         self.editor.select_object(t)
                     else:
-                        self.editor.state.selected_object = t
+                        self.editor.set_selected_objects([t])
                         self.editor.update_all_ui()
                     break
 
