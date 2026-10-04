@@ -177,7 +177,7 @@ def test_respawn_fade_state_resets_when_session_restarts():
 def test_carried_billboard_keeps_its_facing_when_player_turns():
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True})
     logic = SimpleNamespace(
-        things=[prop], io_manager=IO(),
+        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
         _spatial_grid=None, _physics_world=None,
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
