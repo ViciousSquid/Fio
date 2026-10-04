@@ -562,7 +562,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_duration = self._preview_end_time()
 
     def _preview_apply(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         for aid, frames in self.actor_tracks.items():
             actor = self.actor_objects.get(aid)
             pose = self._preview_pose(frames, self._preview_time)
@@ -656,7 +656,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_apply()
 
     def _preview_stop_and_restore(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         self._preview_timer.stop()
         self._preview_rate = 0.0
         self.play_button.setText("▶ Play")
@@ -976,7 +976,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._select_actor_id(str(selected[0].properties.get("id", "")))
 
     def _remove_selected_actors(self):
-        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
+        self._refresh_actor_objects_from_state()
         item = self.actor_list.currentItem()
         if item is None:
             return
