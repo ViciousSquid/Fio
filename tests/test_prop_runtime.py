@@ -1,24 +1,62 @@
 """Generic Prop gameplay must not depend on the Tidy plugin."""
 from pathlib import Path
-from types import SimpleNamespace
 
-from engine.physics import PhysicsWorld, SpatialGrid
-from engine.prop_runtime import PropSession
-from engine.prop_entity import Prop
-from engine.logic_combat import LogicCombat
-from engine.logic_interaction import LogicInteraction
-from engine.logic_session import LogicSession
+import glm
+import pytest
+
+pytest.importorskip("PyQt5", reason="Prop runtime tests exercise the real LogicThread")
+
+from editor.editor_state import EditorState                    # noqa: E402
+from editor.things import Light                                 # noqa: E402
+from engine.logic_thread import LogicThread                     # noqa: E402
+from engine.physics import PhysicsWorld, SpatialGrid            # noqa: E402
+from engine.player import Player                                 # noqa: E402
+from engine.prop_entity import Prop                              # noqa: E402
+from engine.prop_runtime import PropSession                      # noqa: E402
+from engine.threaded_game_state import ThreadedGameState          # noqa: E402
+
+pytestmark = pytest.mark.qt
 
 
-class IO:
-    def __init__(self):
-        self.events = []
+@pytest.fixture
+def real_logic():
+    logics = []
 
-    def fire_output(self, entity, name):
-        self.events.append((entity, name))
+    def make(things=(), brushes=(), grid=None, physics=None):
+        state = EditorState()
+        state.things = list(things)
+        state.brushes = list(brushes)
 
-    def names(self):
-        return [name for _, name in self.events]
+        logic = LogicThread(ThreadedGameState(), state)
+        logics.append(logic)
+
+        player = Player(0.0, 0.0, angle=0.0)
+        player.pos = glm.vec3(0.0, 0.0, 0.0)
+        player.pitch = 0.0
+        logic.player_runtime.player = player
+        logic.session_runtime.spatial_grid = grid
+        logic.session_runtime.physics_world = physics
+
+        events = []
+        io = logic.io_manager
+        fire = io.fire_output
+
+        def recording_fire(source, output, value=None, activator_entity=None):
+            events.append((source, output))
+            return fire(source, output, value=value, activator_entity=activator_entity)
+
+        io.fire_output = recording_fire
+        session = logic.prop_runtime
+        session.start()
+        return logic, session, events
+
+    yield make
+
+    for logic in reversed(logics):
+        try:
+            logic.prop_runtime.stop()
+        finally:
+            logic.stop()
 
 
 def _floor_grid():
