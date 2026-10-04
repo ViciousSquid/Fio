@@ -80,7 +80,6 @@ class EditorState:
         self._render_dirty_history = deque(maxlen=32)
         self.brushes = []
         self.things = []
-        self.selected_object = None
         # The multi-selection lives here rather than being bolted on by the
         # main window, so undo/redo and scene loads can keep it pointing at
         # objects that are actually in the scene.
@@ -318,11 +317,6 @@ class EditorState:
     # SCENE MANAGEMENT
     # =========================================================================
 
-    def set_selected_object(self, obj):
-        """Sets the currently selected object."""
-        self.selected_object = obj
-        self.selected_objects = [] if obj is None else [obj]
-
     def edited_objects(self) -> tuple:
         """The objects an editor tool may be writing in place right now.
 
@@ -331,11 +325,7 @@ class EditorState:
         render projection re-reads these rows every frame instead of every
         row. Safe to call from the logic thread: the lists are copied.
         """
-        selected = tuple(self.selected_objects)
-        primary = self.selected_object
-        if primary is not None and primary not in selected:
-            selected += (primary,)
-        return selected
+        return tuple(self.selected_objects)
 
     def _invalidate_entity_caches(self):
         """Tell anything caching per-object data that the objects are changing.
@@ -369,7 +359,6 @@ class EditorState:
         self.brushes.clear()
         self.things.clear()
         self._invalidate_entity_caches()
-        self.selected_object = None
         self.selected_objects = []
         self.terrain_data = None
         self.undo_stack.clear()
@@ -592,7 +581,6 @@ class EditorState:
         # ===== NEW: Reset class counters based on loaded entity names =====
         update_all_counters_from_entities(self.brushes + self.things)
 
-        self.selected_object = None
         self.selected_objects = []
         self.undo_stack.clear()
         self.redo_stack.clear()
@@ -617,7 +605,7 @@ class EditorState:
     def _selection_identifiers(self):
         """Stable identifiers for the whole selection, for state restoration.
 
-        Every selected object is recorded, not just ``selected_object``: the
+        Every selected object is recorded in ``selected_objects``:
         editor acts on ``selected_objects`` (component picking, the clip tool,
         the Surface Inspector's "whole brush" scope, group transforms, delete),
         so a restore that put back only the primary would leave the rest of the
@@ -653,8 +641,6 @@ class EditorState:
     def _selection_list(self):
         """The current selection, primary object first, with no duplicates."""
         selection = []
-        if self.selected_object is not None:
-            selection.append(self.selected_object)
         for obj in getattr(self, 'selected_objects', None) or ():
             if not any(obj is existing for existing in selection):
                 selection.append(obj)
@@ -671,8 +657,7 @@ class EditorState:
         """
         if not identifiers:
             self.selected_objects = []
-            self.selected_object = None
-            return
+                return
         # Same reasoning as _selection_identifiers: one pass to build the id
         # lookups instead of scanning the scene once per selected object.
         by_id = {'brush': {}, 'thing': {}}
@@ -697,7 +682,6 @@ class EditorState:
                 seen.add(id(match))
                 restored.append(match)
         self.selected_objects = restored
-        self.selected_object = restored[0] if restored else None
 
     def snapshot(self):
         """The scene as it stands right now, as a JSON checkpoint string."""
