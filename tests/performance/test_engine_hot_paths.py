@@ -416,7 +416,8 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
                       properties={'name': 'P%d' % i}) for i in range(3)]
     filler = [make_thing(Light, "L%d" % i) for i in range(50)]
     thread = logic(brushes=room(), things=filler + portals)
-    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.player = Player(0.0, 0.0, 0.0)
+    thread.camera.player = thread.player
     thread.session_runtime.apply_play_mode(True)
     try:
         assert thread._portal_things == portals
