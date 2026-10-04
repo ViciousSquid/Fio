@@ -295,16 +295,16 @@ def register_all_input_handlers(io_manager: IOManager):
         if idx < 0:
             return
         
-        if idx not in logic.door_states:
+        if idx not in logic.mover_runtime.door_states:
             if 'original_pos' not in entity:
                 entity['original_pos'] = list(entity['pos'])
-            logic.door_states[idx] = {
+            logic.mover_runtime.door_states[idx] = {
                 'progress': 0.0,
                 'state': 'closed',
                 'open_timer': 0.0
             }
         
-        state = logic.door_states[idx]
+        state = logic.mover_runtime.door_states[idx]
         # A door that is closing or has been stopped part-way is not open, and
         # Open should send it back up rather than do nothing — the old check
         # accepted only 'closed', so a door caught mid-close ignored the input
@@ -316,10 +316,10 @@ def register_all_input_handlers(io_manager: IOManager):
     def door_close(entity, param, logic):
         """Close a door brush."""
         idx = _get_brush_index(entity, logic)
-        if idx < 0 or idx not in logic.door_states:
+        if idx < 0 or idx not in logic.mover_runtime.door_states:
             return
         
-        state = logic.door_states[idx]
+        state = logic.mover_runtime.door_states[idx]
         if state['state'] in ('open', 'opening', 'stopped'):
             state['state'] = 'closing'
             logic.io_manager.fire_output(entity, 'OnClose')
@@ -332,9 +332,9 @@ def register_all_input_handlers(io_manager: IOManager):
         sends it on its way again.  A door that is not moving is left alone.
         """
         idx = _get_brush_index(entity, logic)
-        if idx < 0 or idx not in logic.door_states:
+        if idx < 0 or idx not in logic.mover_runtime.door_states:
             return
-        state = logic.door_states[idx]
+        state = logic.mover_runtime.door_states[idx]
         if state['state'] in ('opening', 'closing'):
             state['state'] = 'stopped'
 
@@ -346,9 +346,9 @@ def register_all_input_handlers(io_manager: IOManager):
         for a door halted in the middle.
         """
         idx = _get_brush_index(entity, logic)
-        if idx < 0 or idx not in logic.door_states:
+        if idx < 0 or idx not in logic.mover_runtime.door_states:
             return
-        state = logic.door_states[idx]
+        state = logic.mover_runtime.door_states[idx]
         current = state['state']
         if current == 'opening':
             door_close(entity, param, logic)
@@ -368,8 +368,8 @@ def register_all_input_handlers(io_manager: IOManager):
         if idx < 0:
             return
         
-        if idx in logic.door_states:
-            state = logic.door_states[idx]
+        if idx in logic.mover_runtime.door_states:
+            state = logic.mover_runtime.door_states[idx]
             if state['state'] == 'closed':
                 door_open(entity, param, logic)
             elif state['state'] == 'open':
@@ -405,14 +405,14 @@ def register_all_input_handlers(io_manager: IOManager):
     def mover_open(entity, param, logic):
         entity['start_on'] = True
         idx = _get_brush_index(entity, logic)
-        if idx >= 0 and idx in logic.mover_states:
-            logic.mover_states[idx]['forward'] = True
+        if idx >= 0 and idx in logic.mover_runtime.mover_states:
+            logic.mover_runtime.mover_states[idx]['forward'] = True
     
     def mover_close(entity, param, logic):
         entity['start_on'] = True
         idx = _get_brush_index(entity, logic)
-        if idx >= 0 and idx in logic.mover_states:
-            logic.mover_states[idx]['forward'] = False
+        if idx >= 0 and idx in logic.mover_runtime.mover_states:
+            logic.mover_runtime.mover_states[idx]['forward'] = False
     
     def mover_toggle(entity, param, logic):
         entity['start_on'] = not entity.get('start_on', False)
@@ -423,8 +423,8 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         try:
             value = max(0.0, min(1.0, _finite(param)))
-            if idx in logic.mover_states:
-                logic.mover_states[idx]['progress'] = value
+            if idx in logic.mover_runtime.mover_states:
+                logic.mover_runtime.mover_states[idx]['progress'] = value
         except (TypeError, ValueError):
             pass
     
@@ -452,8 +452,8 @@ def register_all_input_handlers(io_manager: IOManager):
         it retraces from there.
         """
         idx = _get_brush_index(entity, logic)
-        if idx >= 0 and idx in logic.mover_states:
-            state = logic.mover_states[idx]
+        if idx >= 0 and idx in logic.mover_runtime.mover_states:
+            state = logic.mover_runtime.mover_states[idx]
             state['forward'] = not state.get('forward', True)
 
     io_manager.register_input_handler('mover', 'open', mover_open)
@@ -493,7 +493,7 @@ def register_all_input_handlers(io_manager: IOManager):
                 'waiting':      False,
                 'wait_remaining': 0.0,
             }
-        logic.mover_states.pop(idx, None)
+        logic.mover_runtime.mover_states.pop(idx, None)
 
     def mover_stop_path(entity, param, logic):
         """Stop PathNode following and hold position."""

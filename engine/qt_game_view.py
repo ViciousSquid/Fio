@@ -2612,8 +2612,7 @@ class QtGameView(QOpenGLWidget):
             self._hud_runtime_visible = None
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
-                if hasattr(self.logic_thread, "set_hud_fade_enabled"):
-                    self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
+                self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
                 self.logic_thread.set_play_mode(True)
 
             if self.splitscreen_mode:
