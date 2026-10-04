@@ -76,16 +76,16 @@ class LogicCollision:
         for brush in logic.brushes:
             if not brush_has_geometry(brush):
                 continue
-            if not logic._angled_brush_is_solid(brush):
+            if not self.angled_brush_is_solid(brush):
                 # Ensure a previously-solid brush that became non-solid loses
                 # its stale mesh flag.
-                logic._clear_brush_collision(brush)
+                self.clear_brush_collision(brush)
                 continue
             if build_collision_mesh(brush):
                 count += 1
             else:
                 # Degenerate geometry — fall back to AABB rather than break.
-                logic._clear_brush_collision(brush)
+                self.clear_brush_collision(brush)
         if count:
             debug_log("Collision", f"Prepared mesh collision for {count} angled brush(es)")
         return count
@@ -111,7 +111,7 @@ class LogicCollision:
         """Remove play-time mesh-collision data from all angled brushes."""
         for brush in logic.brushes:
             if brush_has_geometry(brush):
-                logic._clear_brush_collision(brush)
+                self.clear_brush_collision(brush)
 
 
     def build_model_collision_brushes(self):
@@ -194,7 +194,7 @@ class LogicCollision:
             # scaled bounds. This is useful for barrels, bricks and other props
             # where a stable box is preferable to triangle-level collision.
             if collision_shape == 'aabb':
-                bounds = logic._compute_model_bounds(model_path)
+                bounds = self.compute_model_bounds(model_path)
                 if bounds:
                     min_v, max_v = bounds
                     size = [
@@ -233,7 +233,7 @@ class LogicCollision:
             # Automatic uses mesh collision where supported. Explicit Mesh
             # behaves the same today and falls back to AABB if the model cannot
             # provide mesh collision.
-            mesh_tris = logic._compute_model_collision_mesh(
+            mesh_tris = self.compute_model_collision_mesh(
                 model_path, pos, scale, rot
             )
             if mesh_tris and collision_shape in ('auto', 'mesh'):
@@ -251,13 +251,13 @@ class LogicCollision:
                     '_physics_body': is_physics_body,
                     '_collision_mode': 'mesh',
                     '_mesh_triangles': mesh_tris,
-                    '_mesh_bounds': logic._compute_mesh_bounds(mesh_tris),
+                    '_mesh_bounds': self.compute_mesh_bounds(mesh_tris),
                 })
                 continue
 
             # Fallback for Automatic/Mesh when the model has no CPU collision
             # mesh (for example OBJ today).
-            bounds = logic._compute_model_bounds(model_path)
+            bounds = self.compute_model_bounds(model_path)
             if bounds:
                 min_v, max_v = bounds
                 size = [
@@ -464,7 +464,7 @@ class LogicCollision:
         # Rebuild collision brushes in both play mode and editor mode
         # (editor mode uses them for visualization via showcollision command)
         if logic.model_collision_enabled:
-            logic._model_collision_brushes = logic._build_model_collision_brushes()
+            logic._model_collision_brushes = self.build_model_collision_brushes()
             logic._physics_body_brushes = [
                 b for b in logic._model_collision_brushes
                 if b.get('_physics_body')
@@ -479,7 +479,7 @@ class LogicCollision:
                 logic._spatial_grid.populate(logic.brushes)
                 if getattr(logic, '_physics_world', None) is not None:
                     logic._physics_world.rebuild(logic._physics_body_brushes)
-        logic._refresh_collision_brushes_cache()
+        self.refresh_collision_brushes_cache()
 
         return logic.model_collision_enabled
 

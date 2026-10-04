@@ -1010,52 +1010,9 @@ class LogicThread(threading.Thread):
         self._mover_runtime().door_states = states
 
 
-    # COLLISION RUNTIME
-    # =========================================================================
-
-    def _collision_runtime(self):
-        """Return the extracted collision runtime, creating it for lightweight test doubles."""
-        runtime = getattr(self, "collision_runtime", None)
-        if runtime is None:
-            runtime = LogicCollision(self)
-            self.collision_runtime = runtime
-        return runtime
-
-    def _angled_brush_is_solid(self, brush):
-        return LogicThread._collision_runtime(self).angled_brush_is_solid(brush)
-
-    @classmethod
-    def _clear_brush_collision(cls, brush):
-        return LogicCollision.clear_brush_collision(brush)
-
-    def _prepare_angled_brush_collision(self):
-        return LogicThread._collision_runtime(self).prepare_angled_brush_collision()
-
-    def _clear_angled_brush_collision(self):
-        return LogicThread._collision_runtime(self).clear_angled_brush_collision()
-
-    def _build_model_collision_brushes(self):
-        return LogicThread._collision_runtime(self).build_model_collision_brushes()
-
-    def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
-        return LogicThread._collision_runtime(self).compute_model_collision_mesh(
-            model_path, world_pos, scale, rotation
-        )
-
-    def _compute_mesh_bounds(self, mesh_tris):
-        return LogicThread._collision_runtime(self).compute_mesh_bounds(mesh_tris)
-
-    def _compute_model_bounds(self, model_path):
-        return LogicThread._collision_runtime(self).compute_model_bounds(model_path)
-
-    def _toggle_model_collision(self, enabled: bool = None):
-        return LogicThread._collision_runtime(self).toggle_model_collision(enabled)
-
-    def _refresh_collision_brushes_cache(self):
-        return LogicThread._collision_runtime(self).refresh_collision_brushes_cache()
-
     # MAIN LOOP
     # =========================================================================
+
             
     def start(self):
         # Set before the thread exists, not in run(): a stop() that arrives

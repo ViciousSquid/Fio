@@ -74,17 +74,17 @@ class LogicSession:
             # Bake swept-mesh collision for angled (clipped/convex) brushes so
             # they collide as real slopes/wedges. Must run before the spatial
             # grid is populated below so the grid indexes them by true bounds.
-            logic._prepare_angled_brush_collision()
+            logic.collision_runtime.prepare_angled_brush_collision()
 
             logic._model_collision_brushes = (
-                logic._build_model_collision_brushes()
+                logic.collision_runtime.build_model_collision_brushes()
             )
             logic._physics_body_brushes = [
                 b
                 for b in logic._model_collision_brushes
                 if b.get("_physics_body")
             ]
-            logic._refresh_collision_brushes_cache()
+            logic.collision_runtime.refresh_collision_brushes_cache()
 
             # Runtime effect state belongs to this play session, not authoring.
             logic.effect_store.begin_session(logic.things)
@@ -226,7 +226,7 @@ class LogicSession:
             logic.mover_runtime._reset_doors()
             logic._reset_parented_lights()
             logic._reset_parented_portals()
-            logic._clear_angled_brush_collision()
+            logic.collision_runtime.clear_angled_brush_collision()
             logic.current_hud_message = ""
             logic.current_hud_key_name = None
             logic.gate_inputs = {}
