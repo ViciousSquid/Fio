@@ -61,9 +61,7 @@ def available_renderers():
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
-from engine.entity_table import EntityTable
 from engine.renderer_core import restore_default_pixel_store
-from engine.render_table import RenderTable
 from engine.view_distance import ViewDistance
 from engine.glasses import (
     DEFAULT_GLASSES, DEFAULT_SPRITE_KEY, GLASSES_STYLES, GLASSES_SUBFOLDER,
@@ -109,12 +107,6 @@ class QtGameView(QOpenGLWidget):
         self.setFormat(fmt)
 
         self.editor = editor
-        # Non-threaded editor views use the same dense entity projection as the
-        # threaded renderer. There is no Portal-object rendering fallback.
-        self._editor_entity_table = EntityTable()
-        self._editor_entity_refs = np.empty(0, dtype=object)
-        self._editor_render_table = RenderTable()
-
         self.brush_display_mode = "Solid Lit"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
         # set from the editor's "Camera" dropdown.
@@ -1493,8 +1485,10 @@ class QtGameView(QOpenGLWidget):
             return
         started = time.perf_counter()
         render_state: Optional[RenderState] = None
-        if self.use_threading and self.logic_thread:
+        if self.logic_thread:
             render_state = self.game_state.get_render_state()
+        if render_state is None:
+            return
         try:
             self._paint_frame(render_state)
         finally:
@@ -1558,7 +1552,9 @@ class QtGameView(QOpenGLWidget):
             baseline += 26
 
     def _paint_frame(self, render_state):
-        """Draw one frame from *render_state* (None when not threaded)."""
+        """Draw one frame from the canonical published render state."""
+        if render_state is None:
+            return
         # Keep all direct OpenGL rendering inside Qt's native-painting boundary.
         # QPainter owns the GL state again before any HUD/overlay drawing.
         painter = QPainter(self)
@@ -1587,26 +1583,20 @@ class QtGameView(QOpenGLWidget):
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
-        if self.use_threading and self.logic_thread:
-            self.view_matrix = render_state.camera_view_matrix
-            if render_state.is_play_mode:
-                camera_pos = render_state.player_pos
-            else:
-                camera_pos = render_state.editor_camera_pos
-            if not self.play_mode:
-                self.camera.pos = glm.vec3(render_state.editor_camera_pos)
-                self.camera.yaw = render_state.editor_camera_yaw
-                self.camera.pitch = render_state.editor_camera_pitch
-                self.camera.fov = render_state.editor_camera_fov
-            else:
-                self.camera.pos = glm.vec3(render_state.player_pos)
-                self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
-                self.camera.pitch = math.degrees(render_state.player_pitch)
+        self.view_matrix = render_state.camera_view_matrix
+        if render_state.is_play_mode:
+            camera_pos = render_state.player_pos
         else:
-            self.view_matrix = self.camera.get_view_matrix()
-            camera_pos = self.camera.pos
-            brushes_to_render = self.editor.state.brushes
-            things_to_render = self.editor.state.things
+            camera_pos = render_state.editor_camera_pos
+        if not self.play_mode:
+            self.camera.pos = glm.vec3(render_state.editor_camera_pos)
+            self.camera.yaw = render_state.editor_camera_yaw
+            self.camera.pitch = render_state.editor_camera_pitch
+            self.camera.fov = render_state.editor_camera_fov
+        else:
+            self.camera.pos = glm.vec3(render_state.player_pos)
+            self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
+            self.camera.pitch = math.degrees(render_state.player_pitch)
         # In overhead play mode the camera is lifted far above the scene, so a
         # 0.1 near plane wastes almost all depth precision at ground level and
         # coplanar surfaces z-fight ("flicker"). Nothing sits within a fraction
@@ -1662,60 +1652,16 @@ class QtGameView(QOpenGLWidget):
         self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
-        if not (render_state and self.use_threading and self.logic_thread):
-            etable = self._editor_entity_table
-            generation = etable.generation
-            hidden = etable.begin_frame(
-                things_to_render,
-                getattr(self.editor.state, 'world_epoch', None),
-                effect_runtime=self.play_mode,
-            )
-            if etable.generation != generation:
-                self._editor_entity_refs = np.empty(
-                    etable.count, dtype=object)
-                for _i, _thing in enumerate(things_to_render):
-                    self._editor_entity_refs[_i] = _thing
-            self._render_config["entity_table"] = etable
-            self._render_config["entity_refs"] = self._editor_entity_refs
-            self._render_config["visible_thing_slots"] = np.arange(
-                etable.count, dtype=np.int32)
-            self._render_config["thing_hidden"] = hidden
-            self._editor_render_table.sync(
-                brushes_to_render,
-                epoch=getattr(self.editor.state, 'world_epoch', None),
-            )
-
-        # The dense render projection and the per-slot render references. With
-        # these the main pass classifies, depth-orders and batches brushes from
-        # the projection's columns instead of walking the published object list
-        # to rediscover what it already knows.
-        self._render_config["render_table"] = (
-            getattr(render_state, "render_table", None)
-            if render_state is not None else self._editor_render_table
-        )
-        self._render_config["render_refs"] = (
-            getattr(render_state, "render_refs", None)
-            if render_state is not None else self._editor_render_table.refs
-        )
-        self._render_config["all_brush_slots"] = (
-            getattr(render_state, "all_brush_slots", None)
-            if render_state is not None else self._editor_render_table.all_slots
-        )
-        _main_brush_slots = (
-            getattr(render_state, "visible_brush_slots", None)
-            if render_state is not None else self._editor_render_table.all_slots
-        )
-        # The entity half of the same projection: with it, the main pass splits
-        # entities into the model and sprite passes from their class column
-        # rather than asking each one what it is.
-        for _key, _field in (("entity_table", "entity_table"),
-                             ("entity_refs", "entity_refs"),
-                             ("visible_thing_slots", "visible_thing_slots"),
-                             ("thing_hidden", "thing_hidden")):
-            self._render_config[_key] = (
-                getattr(render_state, _field, None)
-                if render_state is not None else None
-            )
+        # Both editor and play rendering consume the same canonical dense
+        # projection published by LogicRender. There is no editor-side table.
+        self._render_config["render_table"] = render_state.render_table
+        self._render_config["render_refs"] = render_state.render_refs
+        self._render_config["all_brush_slots"] = render_state.all_brush_slots
+        _main_brush_slots = render_state.visible_brush_slots
+        self._render_config["entity_table"] = render_state.entity_table
+        self._render_config["entity_refs"] = render_state.entity_refs
+        self._render_config["visible_thing_slots"] = render_state.visible_thing_slots
+        self._render_config["thing_hidden"] = render_state.thing_hidden
 
         _splitscreen = (
             self.play_mode
