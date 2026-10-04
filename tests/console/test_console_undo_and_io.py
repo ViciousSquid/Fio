@@ -22,25 +22,6 @@ from editor.things import Light, Portal  # noqa: E402
 pytestmark = pytest.mark.qt
 
 
-class _View3D:
-    play_mode = False
-    logic_thread = None
-    renderer = None
-
-    def update(self):
-        pass
-
-
-class _MainWindow:
-    def __init__(self):
-        from editor.editor_state import EditorState
-        self.state = EditorState()
-        self.view_3d = _View3D()
-
-    def update_all_ui(self):
-        pass
-
-
 def _light(state, name, **props):
     light = Light(pos=[0.0, 100.0, 0.0])
     light.properties['name'] = name
@@ -50,9 +31,10 @@ def _light(state, name, **props):
 
 
 @pytest.fixture
-def console():
-    handler = ConsoleCommandHandler(_MainWindow())
+def console(main_window):
+    handler = ConsoleCommandHandler(main_window)
     return handler, handler.main_window.state
+
 
 
 def _find(state, name):
