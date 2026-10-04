@@ -863,10 +863,8 @@ class LogicThread(threading.Thread):
             self._tick_play_mode(delta)
             self.collision_runtime.rebuild_if_dirty()
         else:
-            self._tick_editor_mode(delta)
+            self.editor_runtime.tick(delta)
 
-    def _tick_editor_mode(self, delta: float):
-        return self.editor_runtime.tick(delta)
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
     _indexed_things = ()
