@@ -194,7 +194,6 @@ class LogicThread(threading.Thread):
             "game_state",
         ),
         "triggers": (
-            "player",
             "player_runtime",
             "game_state",
             "interaction_runtime",
