@@ -13,7 +13,7 @@ import glm
 import os
 import time
 
-from engine.effect_entity import EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES
+from engine.effect_entity import EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES, EFFECT_TYPES
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -186,11 +186,14 @@ def register_all_input_handlers(io_manager: IOManager):
     def effect_set_type(entity, param, logic):
         """Set the Effect TYPE by name and notify connected outputs."""
         effect_type = str(param or "").strip().upper()
-        if not entity.set_effect_type(effect_type):
+        if effect_type not in EFFECT_TYPES:
             return
-        effect_store = getattr(logic, "effect_store", None)
-        if effect_store is not None:
-            effect_store.set_type(entity, effect_type)
+        entity.properties["effect_type"] = effect_type
+        entity.properties["preview"] = False
+        if effect_type == "ORB":
+            entity.properties["width"] = 32.0
+            entity.properties["height"] = 32.0
+        logic.effect_store.set_type(entity, effect_type)
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
         )
