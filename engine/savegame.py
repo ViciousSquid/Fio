@@ -203,22 +203,20 @@ def _capture_pending_events(logic) -> list:
     Timers are not captured here; a timer's countdown is its own state (see
     ``logic.timing_runtime.timer_states``) and this is only the queue.
     """
-    manager = getattr(logic, "io_manager", None)
-    if manager is None:
-        return []
-    now = float(getattr(manager, "current_time", 0.0))
+    manager = logic.io_manager
+    now = float(manager.current_time)
     events = []
     for event in getattr(manager, "pending_events", []) or []:
         try:
             events.append({
                 "remaining": max(0.0, float(event.fire_time) - now),
                 "target_name": event.target_name,
-                "target_id": getattr(event, "target_id", "") or "",
+                "target_id": event.target_id or "",
                 "input": event.input_name,
                 "parameter": event.parameter,
                 "source_name": event.source_name,
-                "source_id": getattr(event, "source_id", "") or "",
-                "activator_id": getattr(event, "activator_id", "") or "",
+                "source_id": event.source_id or "",
+                "activator_id": event.activator_id or "",
             })
         except Exception:
             continue
@@ -227,14 +225,14 @@ def _capture_pending_events(logic) -> list:
 
 def _restore_pending_events(logic, events) -> None:
     """Put a saved I/O queue back, rebasing every delay on the live clock."""
-    manager = getattr(logic, "io_manager", None)
-    if manager is None or not events:
+    manager = logic.io_manager
+    if not events:
         return
     try:
         from editor.io_system import PendingEvent
     except Exception:       # pragma: no cover - editor-less player builds
         return
-    now = float(getattr(manager, "current_time", 0.0))
+    now = float(manager.current_time)
     restored = []
     for data in events:
         try:
@@ -365,7 +363,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
 
     monster_states: Dict[str, Any] = {}
     try:
-        raw = getattr(logic.monster_ai, "monster_states", {}) or {}
+        raw = logic.monster_ai.monster_states or {}
         by_obj_id = {id(t): t for t in logic.world_runtime.monster_things}
         for obj_id, state in raw.items():
             mon = by_obj_id.get(obj_id)
@@ -381,9 +379,9 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         monster_states = {}
 
     runtime = {
-        "god_mode": bool(getattr(logic, "god_mode", False)),
-        "buddha_mode": bool(getattr(logic, "buddha_mode", False)),
-        "notarget": bool(getattr(logic, "notarget", False)),
+        "god_mode": bool(logic.god_mode),
+        "buddha_mode": bool(logic.buddha_mode),
+        "notarget": bool(logic.notarget),
         "camera_mode": getattr(logic.camera, "camera_mode", "First Person"),
         "overhead_height": float(getattr(logic.camera, "overhead_height", 800.0)),
         "overhead_tilt": float(getattr(logic.camera, "overhead_tilt", 0.0)),
@@ -392,12 +390,12 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "gun2_obtained": bool(logic.combat_runtime.gun2_obtained),
         "player_ammo": max(0, int(logic.combat_runtime.player_ammo)),
         "current_hud_message": logic.interaction_runtime.current_hud_message,
-        "player_health": getattr(logic, "player_health", 100),
-        "player_max_health": getattr(logic, "player_max_health", 100),
-        "player_dead": bool(getattr(logic, "player_dead", False)),
-        "player2_health": getattr(logic, "player2_health", 100),
-        "player2_max_health": getattr(logic, "player2_max_health", 100),
-        "player2_dead": bool(getattr(logic, "player2_dead", False)),
+        "player_health": logic.player_health,
+        "player_max_health": logic.player_max_health,
+        "player_dead": bool(logic.player_dead),
+        "player2_health": logic.player2_health,
+        "player2_max_health": logic.player2_max_health,
+        "player2_dead": bool(logic.player2_dead),
         "collected_keys": sorted(str(k) for k in logic.player_runtime.collected_keys),
         "door_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.door_states.items()},
         "mover_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.mover_states.items()},
@@ -418,8 +416,8 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "map": map_name or "",
         "level": level,
-        "player": _capture_player(getattr(logic, "player", None)),
-        "player2": _capture_player(getattr(logic, "player2", None)),
+        "player": _capture_player(logic.player),
+        "player2": _capture_player(logic.player2),
         "runtime": runtime,
     }
 
@@ -737,8 +735,8 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     runtime = data.get("runtime", {}) or {}
 
     # Player(s)
-    _apply_player(getattr(logic, "player", None), data.get("player"))
-    _apply_player(getattr(logic, "player2", None), data.get("player2"))
+    _apply_player(logic.player, data.get("player"))
+    _apply_player(logic.player2, data.get("player2"))
     # The player was put back, not walked back: no portal crossing.
     if data.get("player"):
         logic.portal_runtime.note_player_teleported()
