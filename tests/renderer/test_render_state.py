@@ -210,6 +210,12 @@ def test_qt_game_view_has_no_editor_side_render_projection():
     assert "entity_table.begin_frame(" not in source
     assert ".render_table.sync(" not in source
 
+    paint_start = source.index("    def paintGL")
+    paint_end = source.index("    def show_pos_window", paint_start)
+    paint_gl = source[paint_start:paint_end]
+    assert "get_render_state()" in paint_gl
+    assert "if self.use_threading and self.logic_thread:" not in paint_gl
+
 
 
 
