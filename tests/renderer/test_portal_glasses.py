@@ -24,12 +24,14 @@ OTHER_EYE = (300.0, 154.0, -500.0)
 
 @pytest.fixture
 def renderer():
+    glh.reset_texture_cache()
     with glh.GLTestContext(64, 64):
         renderer = glh.make_renderer()
         try:
             yield renderer
         finally:
             renderer.cleanup()
+            glh.reset_texture_cache()
 
 
 def _portals(glasses=True):
