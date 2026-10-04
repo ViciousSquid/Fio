@@ -355,7 +355,7 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
     print("[10b] moved entities are refiled before a simultaneous residency shrink")
     mover = FakeThing(3000.0, 0.0, 0.0, ttype="monster")
     logic = FakeLogic([], [mover], player_pos=(0.0, 0.0, 0.0))
-    logic.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
+    logic.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
     session = BigWorldSession(
         logic,
         activation_radius=1024.0,
@@ -590,7 +590,7 @@ def test_terrain_fill_opt_in_and_safe():
     # (d) the default-derived radius follows a live visual-horizon increase.
     terrain4 = FakeTerrain()
     logic4 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain4)
-    logic4.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0})()
+    logic4.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0, "limit": None})()
     s4 = BigWorldSession(logic4, activation_radius=2048.0, terrain_fill=True)
     s4.start()
     _check(terrain4.stream_radius == 2048.0,
@@ -604,7 +604,7 @@ def test_terrain_fill_opt_in_and_safe():
     # (e) an explicitly authored radius remains authoritative across a horizon increase.
     terrain5 = FakeTerrain()
     logic5 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain5)
-    logic5.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
+    logic5.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
     s5 = BigWorldSession(logic5, activation_radius=2048.0, terrain_fill=True,
                          terrain_stream_radius=5000.0)
     s5.start()
