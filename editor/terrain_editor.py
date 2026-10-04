@@ -837,8 +837,8 @@ class TerrainEditorPanel(QWidget):
         self.hm_strength_spin = QDoubleSpinBox()
         self.hm_strength_spin.setRange(1, 2000)
         self.hm_strength_spin.setSingleStep(10)
-        self.grass_checkbox.setChecked(getattr(self.terrain, 'grass_enabled', False))
-        self.grass_density_slider.setValue(int(round(getattr(self.terrain, 'grass_density', 0.02) / 0.06 * 100.0)))
+        self.grass_checkbox.setChecked(self.terrain.grass_enabled)
+        self.grass_density_slider.setValue(int(round(self.terrain.grass_density / 0.06 * 100.0)))
         self.grass_density_value.setText(f"{self.grass_density_slider.value()}%")
         self._update_grass_color_preview()
 
@@ -1370,7 +1370,7 @@ class TerrainEditorPanel(QWidget):
         """Load current terrain values into UI."""
         self._building_ui = True
         self.textures_checkbox.setChecked(
-            getattr(self.terrain, 'use_textures', DEFAULT_USE_TEXTURES))
+            self.terrain.use_textures)
         
         # Find biome index
         biome_index = 0
@@ -1606,7 +1606,7 @@ class TerrainEditorPanel(QWidget):
         palette.setColor(QPalette.Window, QColor.fromRgbF(r, g, b))
         self.grass_color_preview.setAutoFillBackground(True)
         self.grass_color_preview.setPalette(palette)
-        matching = not getattr(self.terrain, 'grass_color_custom', False)
+        matching = not self.terrain.grass_color_custom
         if hasattr(self, 'grass_ground_label'):
             self.grass_color_preview.setVisible(not matching)
             self.grass_ground_label.setVisible(matching)
@@ -1617,7 +1617,7 @@ class TerrainEditorPanel(QWidget):
                              QColor.fromRgbF(*self.terrain.grass_tip_colour()))
             self.grass_tip_preview.setAutoFillBackground(True)
             self.grass_tip_preview.setPalette(palette)
-            auto = getattr(self.terrain, 'grass_tip_color', None) is None
+            auto = self.terrain.grass_tip_color is None
             self.grass_tip_auto_btn.setEnabled(not auto)
             # An automatic tip derives from each blade's own colour; with
             # ground-coloured blades there is no single colour to show.
