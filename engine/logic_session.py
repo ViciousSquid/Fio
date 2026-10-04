@@ -126,9 +126,10 @@ class LogicSession:
             logic.timing_runtime.timer_states.clear()
 
             # Reset active weapon / ammunition.
-            logic.active_weapon = None
-            logic.player_ammo = 0
-            logic.gun2_obtained = False
+            logic.combat_runtime.active_weapon = None
+            logic.combat_runtime.player_ammo = 0
+            logic.combat_runtime.gun2_obtained = False
+            logic.combat_runtime._last_player_shot_time = float('-inf')
             logic._last_player_shot_time = float("-inf")
 
             # Reset visual FX.
@@ -236,7 +237,7 @@ class LogicSession:
             logic.gate_inputs = {}
             logic.timing_runtime.timer_states.clear()
             logic.timing_runtime.light_fade_states.clear()
-            logic.active_weapon = None
+            logic.combat_runtime.active_weapon = None
             logic.combat_runtime.bullet_marks = []
             logic.player_dead = False
             logic.muzzle_flash_active = False
@@ -300,18 +301,24 @@ class LogicSession:
         """Capture the player's carried weapons for a level change."""
         logic = self.logic
         with logic._tick_lock:
+            combat = logic.combat_runtime
             return {
-                name: getattr(logic, name)
-                for name in self.LOADOUT_FIELDS
+                "active_weapon": combat.active_weapon,
+                "gun2_obtained": combat.gun2_obtained,
+                "player_ammo": combat.player_ammo,
             }
 
     def restore_loadout(self, loadout: dict) -> None:
         """Restore a carried weapon loadout after a new session starts."""
         logic = self.logic
         with logic._tick_lock:
-            for name in self.LOADOUT_FIELDS:
-                if name in loadout:
-                    setattr(logic, name, loadout[name])
+            combat = logic.combat_runtime
+            if "active_weapon" in loadout:
+                combat.active_weapon = loadout["active_weapon"]
+            if "gun2_obtained" in loadout:
+                combat.gun2_obtained = bool(loadout["gun2_obtained"])
+            if "player_ammo" in loadout:
+                combat.player_ammo = int(loadout["player_ammo"])
 
     def save_session(
         self,

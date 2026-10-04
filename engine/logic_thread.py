@@ -209,7 +209,6 @@ class LogicThread(threading.Thread):
         ),
         "combat": (
             "player",
-            "active_weapon",
             "io_manager",
         ),
         "timing": (
@@ -385,12 +384,6 @@ class LogicThread(threading.Thread):
         # Visual FX
         self.BULLET_FADE_TIME = 20.0
         
-        # Active weapon / ammunition
-        self.active_weapon = None
-        self.player_ammo = 0
-        self.gun2_obtained = False
-        self._last_player_shot_time = float("-inf")
-
         # Muzzle flash
         self.muzzle_flash_active = False
 

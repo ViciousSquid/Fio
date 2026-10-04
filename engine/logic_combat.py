@@ -51,41 +51,44 @@ class LogicCombat:
         self._monster_projectiles = ProjectileStore()
         self.bullet_marks = []
         self.projectile_positions = NO_PROJECTILES
+        self.active_weapon = None
+        self.gun2_obtained = False
+        self.player_ammo = 0
+        self._last_player_shot_time = float('-inf')
         self._gunfire_events = []
 
     def _handle_shooting(self):
         logic = self.logic
-        if not logic.player or not logic.active_weapon:
+        if not logic.player or not self.active_weapon:
             return
         # Non-firing weapons (e.g. cig) never fire: no muzzle flash, no
         # hitscan/projectile, no damage, and no gunfire noise event.
-        if logic.active_weapon in NON_FIRING_WEAPONS:
+        if self.active_weapon in NON_FIRING_WEAPONS:
             return
 
         # Gun2 is a deliberately slow, finite-ammo weapon. Keep this check
         # authoritative on the logic thread so a burst of UI clicks can never
         # bypass the one-shot-per-second limit or spend ammo twice.
-        if logic.active_weapon == "gun2":
+        if self.active_weapon == "gun2":
             now = time.perf_counter()
-            if now - float(getattr(
-                    self, "_last_player_shot_time", float("-inf"))) < 1.0:
+            if now - self._last_player_shot_time < 1.0:
                 return
             try:
-                ammo = int(getattr(logic, "player_ammo", 0))
+                ammo = int(self.player_ammo)
             except (TypeError, ValueError):
                 ammo = 0
             if ammo <= 0:
                 return
-            logic.player_ammo = ammo - 1
-            logic._last_player_shot_time = now
+            self.player_ammo = ammo - 1
+            self._last_player_shot_time = now
 
         logic.muzzle_flash_active = True
         logic.game_state.queue_sound({
             "file": WEAPON_SHOOT_SOUND.get(
-                logic.active_weapon, "shoot.wav"),
+                self.active_weapon, "shoot.wav"),
             "volume": 1.0,
         })
-        logic._plugin_emit("player_shoot", weapon=logic.active_weapon)
+        logic._plugin_emit("player_shoot", weapon=self.active_weapon)
         yaw_rad = logic.player.angle
         if logic.camera.is_overhead():
             # Top-down aiming is planar: the player rotates to face a target and
@@ -151,7 +154,7 @@ class LogicCombat:
                             closest_monster = thing
 
             if closest_monster is not None:
-                damage = WEAPON_DAMAGE.get(logic.active_weapon, 25)
+                damage = WEAPON_DAMAGE.get(self.active_weapon, 25)
                 health_raw = closest_monster.properties.get('health', 100)
                 try:
                     health = int(health_raw)
@@ -159,7 +162,7 @@ class LogicCombat:
                     health = 100
                 new_health = health - damage
                 closest_monster.properties['health'] = new_health
-                debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={logic.active_weapon}, dmg={damage})")
+                debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
                 logic.game_state.queue_sound({
                     'file': 'hit.wav',
                     'volume': 1.0,

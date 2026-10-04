@@ -373,10 +373,7 @@ class LogicRender:
         write_state.player_health = logic.player_health
         write_state.player_max_health = logic.player_max_health
         write_state.player_dead = logic.player_dead
-        write_state.player_ammo = max(
-            0,
-            int(getattr(logic, "player_ammo", 0)),
-        )
+        write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
         if logic.play_mode and logic.player and not logic.cutscene_runtime.state:
             write_state.player_underwater = bool(
                 getattr(logic.player, "eye_underwater", False)
@@ -389,11 +386,11 @@ class LogicRender:
         write_state.collected_keys = set(logic.collected_keys)
         write_state.hud_message = logic.current_hud_message
         write_state.hud_prompt_key = logic.current_hud_key_name
-        write_state.active_weapon = logic.active_weapon
+        write_state.active_weapon = logic.combat_runtime.active_weapon
         write_state.muzzle_flash_active = logic.muzzle_flash_active
-        if logic.active_weapon == "gun1":
+        if logic.combat_runtime.active_weapon == "gun1":
             write_state.shot_ready = True
-        elif logic.active_weapon == "gun2":
+        elif logic.combat_runtime.active_weapon == "gun2":
             now = time.perf_counter()
             try:
                 ammo = max(0, int(getattr(logic, "player_ammo", 0)))

@@ -388,9 +388,9 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "overhead_height": float(getattr(logic.camera, "overhead_height", 800.0)),
         "overhead_tilt": float(getattr(logic.camera, "overhead_tilt", 0.0)),
         "overhead_orientation": getattr(logic.camera, "overhead_orientation", "north"),
-        "active_weapon": getattr(logic, "active_weapon", None),
-        "gun2_obtained": bool(getattr(logic, "gun2_obtained", False)),
-        "player_ammo": max(0, int(getattr(logic, "player_ammo", 0))),
+        "active_weapon": logic.combat_runtime.active_weapon,
+        "gun2_obtained": bool(logic.combat_runtime.gun2_obtained),
+        "player_ammo": max(0, int(logic.combat_runtime.player_ammo)),
         "current_hud_message": getattr(logic, "current_hud_message", ""),
         "player_health": getattr(logic, "player_health", 100),
         "player_max_health": getattr(logic, "player_max_health", 100),
@@ -746,12 +746,20 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Player stats / cheat flags
     for attr in (
         "god_mode", "buddha_mode", "notarget",
-        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
+        "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
         if attr in runtime:
             setattr(logic, attr, runtime[attr])
+
+    combat = logic.combat_runtime
+    if "active_weapon" in runtime:
+        combat.active_weapon = runtime["active_weapon"]
+    if "gun2_obtained" in runtime:
+        combat.gun2_obtained = bool(runtime["gun2_obtained"])
+    if "player_ammo" in runtime:
+        combat.player_ammo = int(runtime["player_ammo"])
 
     # Camera state belongs to LogicCamera.
     if "camera_mode" in runtime:
