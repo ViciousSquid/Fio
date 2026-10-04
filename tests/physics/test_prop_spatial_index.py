@@ -353,16 +353,8 @@ def test_tidy_reset_refiles_the_prop_it_moves():
     logic = session.logic
     logic.prop_runtime = session
 
-    tidy = TidySession.__new__(TidySession)
-    tidy.logic = logic
-    tidy.objects = [prop]
-    tidy.tidied = 0
-    tidy._tidied_by_cat = {}
-    tidy._tidied_ids = set()
-    tidy._fill = {}
-    tidy._full_fired = set()
-    tidy._check_goals = lambda: None
-    tidy._category = lambda obj: "books"
+    tidy = TidySession(logic)
+    tidy.start()
 
     # Somebody put it on a shelf a long way from home; Reset brings it back.
     prop.pos = [CELL_SIZE * 9, 0.0, CELL_SIZE * 9]
