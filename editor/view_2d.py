@@ -509,13 +509,13 @@ class View2D(QWidget):
         drag tool (clip/rotate) is overriding it."""
         if self._clip_active() or self._rotate_active():
             return False
-        return getattr(self.main_window, 'tool_mode', 'select') == 'select'
+        return self.main_window.tool_mode == 'select'
 
     def _brush_tool_active(self):
         """True when the Brush/Block (draw geometry) base tool is active."""
         if self._clip_active() or self._rotate_active():
             return False
-        return getattr(self.main_window, 'tool_mode', 'select') == 'brush'
+        return self.main_window.tool_mode == 'brush'
 
     def reset_marquee(self):
         """Cancel any in-progress rubber-band selection."""
