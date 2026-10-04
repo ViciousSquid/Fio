@@ -28,7 +28,6 @@ GENERIC_MODULES = [
     "editor/things.py",
     "plugins/manager.py",
     "plugins/api.py",
-    "plugins/integration.py",
 ]
 
 RPG_TERMS = [
