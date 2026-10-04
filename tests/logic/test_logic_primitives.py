@@ -38,7 +38,9 @@ class World:
         self.timing_runtime = LogicTiming(self)
         self.door_states = {}
         self.mover_states = {}
-        self._timer_things = []
+        self.world_runtime = __import__('engine.logic_world', fromlist=['LogicWorld']).LogicWorld(
+            self, timer_type=LogicTimer
+        )
         self.log = []
 
         self.manager.set_entity_finder(self._by_name)
@@ -335,7 +337,7 @@ def test_a_timer_fires_when_its_interval_elapses(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
 
     LogicTiming(world).update_logic_timers(0.5)
@@ -349,7 +351,7 @@ def test_a_timer_repeats(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Start")
 
     for _ in range(3):
@@ -362,7 +364,7 @@ def test_a_one_shot_timer_stops_itself(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0], properties={
         "name": "timer", "interval": 1.0, "one_shot": True}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
 
     for _ in range(4):
@@ -376,7 +378,7 @@ def test_a_one_shot_timer_announces_that_it_finished(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0], properties={
         "name": "timer", "interval": 1.0, "one_shot": True}))
     world.connect(timer, "OnFinished", world.sink, "Fire")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
     LogicTiming(world).update_logic_timers( 1.0)
     assert world.hits == 1
@@ -387,7 +389,7 @@ def test_a_stopped_timer_does_not_fire(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
     world.send(timer, "Stop")
     LogicTiming(world).update_logic_timers( 5.0)
@@ -407,7 +409,7 @@ def test_resettimer_puts_the_countdown_back(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 1.0}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "Enable")
     LogicTiming(world).update_logic_timers( 0.9)
     world.send(timer, "ResetTimer")
@@ -420,7 +422,7 @@ def test_settime_changes_the_interval(world):
     timer = world.add(LogicTimer(pos=[0, 0, 0],
                                  properties={"name": "timer", "interval": 10.0}))
     world.to_sink(timer, "OnTimer")
-    world._timer_things = [timer]
+    world.world_runtime.timer_things = [timer]
     world.send(timer, "SetTime", "0.5")
     world.send(timer, "Enable")
     LogicTiming(world).update_logic_timers( 0.6)
@@ -440,7 +442,7 @@ def test_a_level_of_disabled_timers_does_no_work(world):
     from engine.logic_timing import LogicTiming
     timers = [world.add(LogicTimer(pos=[0, 0, 0], properties={"name": "t%d" % i}))
               for i in range(50)]
-    world._timer_things = timers
+    world.world_runtime.timer_things = timers
     LogicTiming(world).update_logic_timers( 1.0)
     assert world.timing_runtime.timer_states == {}, (
         "a switched-off timer created countdown state it never needed")
