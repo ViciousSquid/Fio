@@ -70,13 +70,6 @@ def _tidy(mgr):
             return plugin
     raise AssertionError("tidy plugin not loaded")
 
-
-def _check(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
-    print(f"  ok: {msg}")
-
-
 def test_handlers_attach_regardless_of_enabled(monkeypatch):
     print("[1] input handlers attach for a plugin disabled at attach time")
     from plugins.tidy.entities import TidyGoal
