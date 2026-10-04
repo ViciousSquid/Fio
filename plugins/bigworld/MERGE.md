@@ -205,12 +205,13 @@ and is now in `persistence.RUNTIME_KEYS` alongside `bw_active`.
 `engine/streaming_debug.py` are **deleted**. Fio's `plugins/bigworld/` and
 `engine/spatial.py` are vendored verbatim — one implementation, one owner.
 
-Consumption is direct, not wrapped. `LogicThread._start_world_streaming` calls
-`plugins.bigworld.PLUGIN.on_play_start(self)` — the same lifecycle code Fio
-runs, not a reimplementation of it — and `self.streaming` is the session the
-plugin built. `engine/savegame.py` reads `logic._bigworld`, the plugin's own
-name. `engine/physics.py`, `engine/monster_ai.py` and `game/runtime.py` read the
-tier vocabulary from `engine.spatial`.
+Consumption is direct through the plugin runtime service. The plugin manager
+invokes `plugins.bigworld.PLUGIN.on_play_start(logic)` through the normal play
+lifecycle, and the plugin publishes its live `BigWorldSession` as the
+`bigworld` service. Consumers use that service rather than a private
+`LogicThread` field; `engine/monster_ai.py` reads it through
+`logic.plugins.services`. `engine/physics.py` and the Big World runtime read
+the tier vocabulary from `engine.spatial`.
 
 `engine/world_index.py` **stays**, and stays MiniWind's. Its NumPy actor arrays,
 team/faction interning, corpse flags and `team_relation_table` are combat and
