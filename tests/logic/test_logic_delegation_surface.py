@@ -33,39 +33,25 @@ def _signature_without_self(method):
 
 
 def test_every_extracted_logic_call_has_a_matching_logic_thread_wrapper():
-    missing = []
-    mismatched = []
+    """Verify existence and Python-call compatibility of every delegation site."""
+    failures = []
 
     for name, locations in sorted(_logic_calls().items()):
         wrapper = getattr(LogicThread, name, None)
         if wrapper is None or not callable(wrapper):
-            missing.append((name, locations))
+            failures.append(f"{name}: missing LogicThread wrapper")
             continue
 
-        # Compare the callable's public Python signature. This catches wrapper
-        # argument drift while allowing annotations/defaults to evolve.
-        signature = _signature_without_self(wrapper)
-        source_methods = []
-        for module_name, line in locations:
-            source_methods.append((module_name, line))
-
-        # The AST audit establishes existence. Signature compatibility is
-        # checked conservatively: a wrapper must accept at least the number of
-        # positional arguments used by every call site, while *args is naturally
-        # accepted.
-        params = list(signature.parameters.values())
-        positional = [
-            p for p in params
-            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-        ]
-        variadic = any(p.kind == p.VAR_POSITIONAL for p in params)
+        signature = inspect.signature(wrapper)
 
         for module_name, line in locations:
             source = ast.parse(
                 (ENGINE / module_name).read_text(encoding="utf-8"),
                 filename=str(ENGINE / module_name),
             )
-            for node in ast.walk(source):
+            call = next(
+                node
+                for node in ast.walk(source)
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
@@ -77,24 +63,22 @@ def test_every_extracted_logic_call_has_a_matching_logic_thread_wrapper():
                         and node.func.value.attr == "logic"
                     )
                     and node.lineno == line
-                ):
-                    positional_args = len(node.args)
-                    if not variadic and positional_args > len(positional):
-                        mismatched.append(
-                            (
-                                name,
-                                module_name,
-                                line,
-                                positional_args,
-                                str(signature),
-                            )
-                        )
+                )
+            )
 
-    assert not missing, "Missing LogicThread wrappers:\n" + "\n".join(
-        f"  {name}: {locations}" for name, locations in missing
-    )
-    assert not mismatched, "LogicThread wrapper signature mismatch:\n" + "\n".join(
-        f"  {name} at {module}:{line}: call has {argc} positional args; "
-        f"wrapper is {signature}"
-        for name, module, line, argc, signature in mismatched
+            args = [object()] * len(call.args)
+            kwargs = {keyword.arg: object() for keyword in call.keywords if keyword.arg}
+
+            try:
+                # LogicThread methods are inspected unbound, so account for
+                # the implicit self parameter when validating the call site.
+                signature.bind(object(), *args, **kwargs)
+            except TypeError as exc:
+                failures.append(
+                    f"{module_name}:{line}: logic.{name}(...): {exc}; "
+                    f"wrapper signature is {signature}"
+                )
+
+    assert not failures, "LogicThread delegation contract failures:\n" + "\n".join(
+        f"  {failure}" for failure in failures
     )
