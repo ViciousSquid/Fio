@@ -5963,5 +5963,5 @@ layout (location = 10) in float iInstanceAlpha;
     # Abstract method (must be overridden by Forward/Deferred)
     # --------------------------------------------------------------------------
     def render_scene(self, projection, view, camera_pos,
-                     selected_object, config, clear=True, brush_slots=None):
+                     primary_selection, config, clear=True, brush_slots=None):
         raise NotImplementedError("Derived renderer must implement render_scene()")
