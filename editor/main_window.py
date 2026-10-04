@@ -152,6 +152,7 @@ class MainWindow(QMainWindow):
         self.unsaved_changes = False
         #: The world as Play started, when Stop is set to restore it.
         self._pre_play_world = None
+        self._previous_tab_index = None
         self.file_path = None
         self.recent_files = []
         self.load_level_signal.connect(self.load_level_file)
@@ -2164,6 +2165,8 @@ class MainWindow(QMainWindow):
         in. Plugins arm it from their own commands.
         """
         view = self.view_3d
+        if view is None:
+            return False
         return bool(view.begin_actor_pick(on_pick))
 
     def sync_surface_inspector(self):
