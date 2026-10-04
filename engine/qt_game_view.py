@@ -2012,8 +2012,7 @@ class QtGameView(QOpenGLWidget):
             return
         # A LogicCamera owns the player's view completely: no HUD is shown
         # while the cinematic is running.
-        if render_state is not None and render_state.cinematic_camera_active
-        ):
+        if render_state is not None and render_state.cinematic_camera_active:
             return
         if viewport_width is None:
             viewport_width = self.width()
