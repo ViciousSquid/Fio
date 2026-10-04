@@ -598,9 +598,9 @@ def _override_scene():
     return brushes, [light]
 
 
-@pytest.mark.parametrize('selected_index', [None, 2, 3])
+@pytest.mark.parametrize('selection_index', [None, 2, 3])
 def test_the_colour_overrides_keep_their_priority(renderer, context,
-                                                  selected_index):
+                                                  selection_index):
     """trigger over selection over subtract over the brush's own colour.
 
     The per-brush chain was an if/elif; the instanced path writes masks over a
@@ -612,7 +612,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
     import OpenGL.GL as gl
 
     brushes, things = _override_scene()
-    selected = None if selected_index is None else brushes[selected_index]
+    primary_selection = None if selection_index is None else brushes[selection_index]
 
     def draw():
         table, refs, slots = _projection_for(brushes)
@@ -624,7 +624,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
                                    show_triggers_as_solid=True)
         context.bind()
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-        renderer.render_scene(projection, view, eye, selected,
+        renderer.render_scene(projection, view, eye, primary_selection,
                               config, brush_slots=slots)
         gl.glFinish()
         return context.read_pixels().astype(np.int16)
@@ -637,7 +637,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
         renderer.shaders['lit_brush_instanced'] = saved
 
     _assert_same_picture(instanced, fallback,
-                         'selection=%s' % (selected_index,))
+                         'selection=%s' % (selection_index,))
 
 
 # ---------------------------------------------------------------------------
