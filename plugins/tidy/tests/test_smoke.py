@@ -159,7 +159,7 @@ def test_core_prop_carry_and_tidy_place():
     _check(("book1", "OnCarried", None) in logic.io_manager.fired,
            "core OnCarried fired")
 
-    logic.player.angle = 3.141592653589793
+    logic.player_runtime.player.angle = 3.141592653589793
     core.tick(0.016, use_pressed=True)
 
     _check(core.held is None, "core PropSession released the held Prop")
