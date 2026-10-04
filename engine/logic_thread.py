@@ -245,10 +245,6 @@ class LogicThread(threading.Thread):
             "monster_ai",
             "_monster_lock",
             "_timer_things",
-            "_name_cache",
-            "_id_cache",
-            "_indexed_things",
-            "_indexed_brushes",
             "_moving_rows",
         ),
     }
@@ -466,8 +462,6 @@ class LogicThread(threading.Thread):
         self.collision_runtime = LogicCollision(self)
 
         # Entity lookup caches — built on play-mode enter
-        self._name_cache = {}
-        self._id_cache = {}
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
         # The Prop registry (engine.prop_runtime.PropSession).  Created on
@@ -734,8 +728,6 @@ class LogicThread(threading.Thread):
 
 
     #: Ticks to keep comparing the world's row sets after an editor edit.
-    _indexed_things = ()
-    _indexed_brushes = ()
     _moving_rows = None
     _rows_epoch = None
     _rows_watch = 0
