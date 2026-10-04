@@ -10,7 +10,6 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the plugins menu is editor-tier")
 
-from PyQt5.QtWidgets import QMainWindow                 # noqa: E402
 
 from editor.ui import (_build_plugins_menu, _toggle_plugin) # noqa: E402
 from plugins.manager import get_manager, load_plugins   # noqa: E402
@@ -36,11 +35,8 @@ def plugin_action_items(window, plugin_name):
 
 
 @pytest.fixture
-def window(qt_app):
-    win = QMainWindow()
-    yield win
-    win.close()
-    win.deleteLater()
+def window(main_window):
+    return main_window
 
 
 def _tidy():
@@ -127,16 +123,13 @@ def test_a_persisted_disable_really_stops_the_plugin(window, monkeypatch):
     dispatched to kept ticking with its menu toggle showing it off.
     """
     import configparser
-    import types
-
     mgr, tidy = _tidy()
     if not mgr._overrides(tidy, "on_tick"):
         pytest.skip("Tidy no longer ticks; pick another plugin")
     ticks = []
     monkeypatch.setattr(tidy, "on_tick", lambda logic, ctx: ticks.append(1))
     was = mgr.is_enabled(tidy)
-    logic = types.SimpleNamespace(things=[], brushes=[], player=None,
-                                  current_hud_message="")
+    logic = window.view_3d.logic_thread
     try:
         mgr.set_enabled(tidy, True)
         mgr.tick(logic)
