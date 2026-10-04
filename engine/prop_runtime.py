@@ -294,7 +294,7 @@ class PropSession:
             # position still follows the player's view, but the sprite itself
             # no longer rotates with the camera.
             try:
-                best._carry_sprite_yaw = float(self.logic.player.angle)
+                best._carry_sprite_yaw = float(self.logic.player_runtime.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
             self._falling.pop(id(best), None)
@@ -311,7 +311,7 @@ class PropSession:
         )
 
     def _collect_walk_over(self):
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None:
             return False
 
@@ -381,7 +381,7 @@ class PropSession:
             value_num = 25
 
         if collect_type == "health":
-            player_runtime = self.logic.player_runtime
+            player_runtime = self.logic.player_runtime.player_runtime
             player_runtime.player_health = min(
                 player_runtime.player_max_health,
                 player_runtime.player_health + value_num,
@@ -389,7 +389,7 @@ class PropSession:
         elif collect_type == "key":
             key_name = p.get("collect_key_name", "")
             if key_name:
-                self.logic.player_runtime.collected_keys.add(key_name)
+                self.logic.player_runtime.player_runtime.collected_keys.add(key_name)
                 self.logic.interaction_runtime.current_hud_key_name = key_name
         elif collect_type == "ammo":
             try:

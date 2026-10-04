@@ -90,7 +90,7 @@ class LogicCombat:
             "volume": 1.0,
         })
         logic._plugin_emit("player_shoot", weapon=self.active_weapon)
-        yaw_rad = logic.player.angle
+        yaw_rad = logic.player_runtime.player.angle
         if logic.camera.is_overhead():
             # Top-down aiming is planar: the player rotates to face a target and
             # fires along that ground heading. The overhead camera and sprite
@@ -102,13 +102,13 @@ class LogicCombat:
             dir_y = 0.0
             dir_z = math.cos(yaw_rad)
         else:
-            pitch_rad = logic.player.pitch
+            pitch_rad = logic.player_runtime.player.pitch
             dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
             dir_y = math.sin(pitch_rad)
             dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
-        ray_origin = glm.vec3(logic.player.pos.x,
-                              logic.player.pos.y + logic.player.camera_height,
-                              logic.player.pos.z)
+        ray_origin = glm.vec3(logic.player_runtime.player.pos.x,
+                              logic.player_runtime.player.pos.y + logic.player_runtime.player.camera_height,
+                              logic.player_runtime.player.pos.z)
         ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
         closest_brush_hit = None
         closest_brush_dist = float('inf')
@@ -393,10 +393,10 @@ class LogicCombat:
         collision_brushes = logic.collision_runtime._collision_brushes_cache
         survivors = []
 
-        player = logic.player
+        player = logic.player_runtime.player
         player_can_be_hit = (
             player is not None
-            and not logic.player_runtime.god_mode
+            and not logic.player_runtime.player_runtime.god_mode
             and not logic.player_runtime.player_dead
         )
         if player is not None:
@@ -568,8 +568,8 @@ class LogicCombat:
 
         # The player's hit sphere, in the float32 glm.distance used previously.
         player_hit = np.zeros(count, dtype=bool)
-        if logic.player is not None:
-            pp = logic.player.pos
+        if logic.player_runtime.player is not None:
+            pp = logic.player_runtime.player.pos
             player32 = np.array((pp[0], pp[1], pp[2]), dtype=np.float32)
             d = pos32 - player32
             player_hit = (
@@ -608,8 +608,8 @@ class LogicCombat:
         for i in live_rows.tolist():
             if (
                 player_hit[i]
-                and logic.player
-                and not logic.player_runtime.god_mode
+                and logic.player_runtime.player
+                and not logic.player_runtime.player_runtime.god_mode
                 and not logic.player_runtime.player_dead
             ):
                 damage = float(projectiles.damage[i])

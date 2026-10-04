@@ -126,9 +126,9 @@ class LogicPortals:
                 del self._portal_cooldowns[pid]
 
         cur = (
-            float(logic.player.pos.x),
-            float(logic.player.pos.y),
-            float(logic.player.pos.z),
+            float(logic.player_runtime.player.pos.x),
+            float(logic.player_runtime.player.pos.y),
+            float(logic.player_runtime.player.pos.z),
         )
         prev = self._portal_prev_player_pos
         if prev is None:
@@ -175,9 +175,9 @@ class LogicPortals:
             break
 
         self._portal_prev_player_pos = (
-            float(logic.player.pos.x),
-            float(logic.player.pos.y),
-            float(logic.player.pos.z),
+            float(logic.player_runtime.player.pos.x),
+            float(logic.player_runtime.player.pos.y),
+            float(logic.player_runtime.player.pos.z),
         )
 
     @staticmethod
@@ -215,7 +215,7 @@ class LogicPortals:
     def _execute_player_transit(self, portal_a, portal_b):
         """Teleport the player through a portal pair."""
         logic = self.logic
-        player = logic.player
+        player = logic.player_runtime.player
         if player is None:
             return
 
