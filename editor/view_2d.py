@@ -1081,7 +1081,7 @@ class View2D(QWidget):
         # F1 Synchronization ---
         if event.key() == Qt.Key_F1:
             # Keep the View-menu action and the 2D/3D shortcut in sync.
-            current_state = getattr(self.editor, 'show_logic_links', False)
+            current_state = self.editor.show_logic_links
             if hasattr(self.main_window, 'set_connection_links_enabled'):
                 self.main_window.set_connection_links_enabled(not current_state)
             else:
@@ -1695,7 +1695,7 @@ class View2D(QWidget):
         # Don't draw grid if hidden or in play mode
         if not self.grid_visible:
             return
-        if hasattr(self.editor, 'view_3d') and self.editor.view_3d.play_mode:
+        if self.editor.view_3d.play_mode:
             return
             
         config = self.main_window.config
