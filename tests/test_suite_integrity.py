@@ -141,7 +141,9 @@ MACHINERY_TEST_ROOTS = (
     "tests/monster_ai",
     "tests/logic",
     "tests/regression",
+    "tests",
     "plugins/bigworld/tests",
+    "plugins/tidy/tests",
 )
 
 #: These names have appeared as substitutes for production owners in behavioural
@@ -150,6 +152,7 @@ MACHINERY_OWNER_DOUBLES = {
     "FakeHost", "FakeEditorWindow", "_MainWindow", "InspectorHost",
     "HostStub", "SaveStub", "PlayStub", "FakePhysics", "FakeGL",
     "FakeRenderer", "_FakeRenderer", "FakeLogicThread",
+    "FakeLogic", "_FakeLogic", "FakeIO", "_FakeIO",
 }
 
 
