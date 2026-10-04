@@ -41,6 +41,7 @@ from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
 from .effect_table import EffectStore
+from .projectile_table import ProjectileStore
 
 
 
