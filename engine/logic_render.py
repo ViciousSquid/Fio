@@ -551,7 +551,7 @@ class LogicRender:
             world_epoch,
             dirty_objects=render_dirty,
             effect_runtime=logic.session_runtime.play_mode,
-            effect_store=logic.effect_store,
+            effect_store=logic.session_runtime.effect_store,
             peer=peer_etable,
             peer_dirty=self.peer_render_dirty(
                 render_dirty,
