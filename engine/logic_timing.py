@@ -1,8 +1,6 @@
 """Time-driven entity runtime delegated from LogicThread.
 
-Owns logic_timer countdowns and light FadeIn/FadeOut transitions. The
-authoritative timer/fade state remains on LogicThread for compatibility with
-existing I/O handlers, tests, save/load, and tools.
+Owns logic_timer countdowns and light FadeIn/FadeOut transitions.
 """
 
 from __future__ import annotations
@@ -15,11 +13,46 @@ class LogicTiming:
 
     def __init__(self, logic):
         self.logic = logic
+        self.timer_states = {}
+        self.light_fade_states = {}
 
     @staticmethod
     def timer_key(thing):
         """Return the stable identity used by a logic_timer countdown."""
         return thing.properties.get("id") or thing.properties.get("name", "")
+
+    def arm_timer(self, thing):
+        """Start or restart one authored timer from its full interval."""
+        try:
+            interval = max(0.01, float(thing.properties.get('interval', 1.0)))
+        except (TypeError, ValueError):
+            interval = 1.0
+        self.timer_states[self.timer_key(thing)] = {
+            'remaining': interval,
+            'interval': interval,
+        }
+
+    def start_light_fade(self, entity, target, duration, end_off):
+        """Start one light fade, or apply it immediately when duration is zero."""
+        try:
+            duration = max(0.0, float(duration))
+        except (ValueError, TypeError):
+            duration = 1.0
+        start = float(entity.properties.get('intensity', 0.0))
+        key = id(entity)
+        if duration <= 0.0:
+            entity.properties['intensity'] = target
+            entity.properties['state'] = 'off' if end_off else 'on'
+            self.light_fade_states.pop(key, None)
+            return
+        self.light_fade_states[key] = {
+            'entity': entity,
+            'from': start,
+            'to': target,
+            'elapsed': 0.0,
+            'duration': duration,
+            'end_off': end_off,
+        }
 
     def init_logic_timers(self):
         """Arm every authored timer whose start_on property is enabled."""
@@ -40,7 +73,7 @@ class LogicTiming:
                 interval = 1.0
 
             thing.properties["timer_enabled"] = True
-            logic.timer_states[self.timer_key(thing)] = {
+            self.timer_states[self.timer_key(thing)] = {
                 "remaining": interval,
                 "interval": interval,
             }
@@ -89,7 +122,7 @@ class LogicTiming:
     def update_light_fades(self, delta: float):
         """Advance active light fade transitions."""
         logic = self.logic
-        if not logic.light_fade_states:
+        if not self.light_fade_states:
             return
 
         finished = []
