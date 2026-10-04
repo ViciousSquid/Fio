@@ -1414,7 +1414,7 @@ class LogicThread(threading.Thread):
         
         # Player shooting
         if self.game_state.consume_shot():
-            self._handle_shooting()
+            self.combat_runtime._handle_shooting()
             
         combat_runtime = self.combat_runtime
         combat_runtime._update_bullet_marks()
@@ -1629,43 +1629,6 @@ class LogicThread(threading.Thread):
     # PLAYER SHOOTING
     # =========================================================================
 
-    def _combat_runtime(self):
-        """Return the combat runtime subsystem."""
-        runtime = getattr(self, "combat_runtime", None)
-        if runtime is None:
-            runtime = LogicCombat(self)
-            try:
-                self.combat_runtime = runtime
-            except Exception:
-                pass
-        return runtime
-
-    def _handle_shooting(self):
-        """Compatibility wrapper for player hitscan shooting."""
-        return LogicThread._combat_runtime(self)._handle_shooting()
-
-    def intersect_ray_aabb(self, origin, direction, box_min, box_max):
-        """Compatibility wrapper for the ray/AABB intersection helper."""
-        return LogicThread._combat_runtime(self).intersect_ray_aabb(
-            origin, direction, box_min, box_max
-        )
-
-
-    def _emit_noise_event(self, pos, source: str, loudness: float = 1.0):
-        """Compatibility wrapper for player noise emission."""
-        return LogicThread._combat_runtime(self)._emit_noise_event(
-            pos, source, loudness
-        )
-
-    def get_recent_noise_events(self, max_age: float = 3.0) -> list:
-        """Compatibility wrapper for monster-hearing noise queries."""
-        return LogicThread._combat_runtime(self).get_recent_noise_events(max_age)
-
-    def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
-        """Compatibility wrapper for the legacy gunfire event query."""
-        return LogicThread._combat_runtime(self).get_recent_gunfire_events(max_age)
-
-    # =========================================================================
     # FRUSTUM CULLING
     # =========================================================================
 

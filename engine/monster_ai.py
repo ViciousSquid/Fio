@@ -385,7 +385,7 @@ all accumulated time when it runs, so simulation time is not lost.
                             monsters[row], props[row].get('team', ''),
                             player_pos, MONSTER_SIGHT_RANGE) is not None
             listening = ~woke & t.can_hear[:n][watching]
-            if listening.any() and self.lt.get_recent_noise_events(max_age=2.0):
+            if listening.any() and self.lt.combat_runtime.get_recent_noise_events(max_age=2.0):
                 for i in np.flatnonzero(listening):
                     woke[i] = self._hears_noise(monsters[int(watching[i])]) is not None
             scalar[watching[woke]] = True
@@ -1569,7 +1569,7 @@ the scalar fallback for callers that do not have the dense table.
         _investigate_sounds once the monster is awake."""
         if not monster.properties.get('can_hear', False):
             return None
-        events = self.lt.get_recent_noise_events(max_age=2.0)
+        events = self.lt.combat_runtime.get_recent_noise_events(max_age=2.0)
         if not events:
             return None
         hearing_range = float(monster.properties.get('sight', MONSTER_SIGHT_RANGE))
@@ -1581,7 +1581,7 @@ the scalar fallback for callers that do not have the dense table.
             return False
 
         # Check for recent player-noise events (gunfire, water splashes, …)
-        noise_events = self.lt.get_recent_noise_events(max_age=3.0)
+        noise_events = self.lt.combat_runtime.get_recent_noise_events(max_age=3.0)
         if not noise_events:
             # Clear any expired investigation
             if state.get('investigating_sound') is not None:
@@ -2033,7 +2033,7 @@ the scalar fallback for callers that do not have the dense table.
             size = glm.vec3(brush['size'])
             b_min = pos - size * 0.5
             b_max = pos + size * 0.5
-            hit, dist = self.lt.intersect_ray_aabb(start, ray_dir, b_min, b_max)
+            hit, dist = self.lt.combat_runtime.intersect_ray_aabb(start, ray_dir, b_min, b_max)
             if hit and dist < ray_len - 0.1:
                 return False
         return True

@@ -707,7 +707,7 @@ class LogicCombat:
 
     def get_recent_gunfire_events(self, max_age: float = 3.0) -> list:
         logic = self.logic
-        return logic.get_recent_noise_events(max_age)
+        return self.get_recent_noise_events(max_age)
 
     # =========================================================================
     # FRUSTUM CULLING
