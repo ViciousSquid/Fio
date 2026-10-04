@@ -242,7 +242,7 @@ class LogicWorld:
         logic._id_cache = {}
         logic._indexed_things = ()
         logic._indexed_brushes = ()
-        logic._moving_rows = None
+        logic.mover_runtime._moving_rows = None
 
         self.monster_by_id = {}
         self.monster_things = []
