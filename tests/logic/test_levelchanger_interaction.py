@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import glm
 
 pytest.importorskip("PyQt5", reason="LevelChanger entities require the Qt-backed editor things")
 
@@ -34,7 +35,7 @@ def _levelchanger(name="LevelChanger_1", pos=(0.0, 0.0, 0.0), radius=128.0, **pr
 def _prepare(logic, things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
     logic.editor_state.things = list(things)
     logic.editor_state.brushes = []
-    logic.player_runtime.player.pos = np.asarray(player_pos, dtype=np.float32)
+    logic.player_runtime.player.pos = glm.vec3(*player_pos)
     logic.player_runtime.player.angle = float(angle)
     logic.world_runtime.build_entity_caches()
 
