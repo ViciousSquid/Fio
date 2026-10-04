@@ -1882,7 +1882,7 @@ class QtGameView(QOpenGLWidget):
                         self.projection_matrix, self.view_matrix,
                         _components.overlay(_targets), _components.version)
         if render_state:
-            visible = len(render_state.visible_brushes)
+            visible = len(getattr(render_state, 'visible_brush_slots', ()))
             actual_total = len(self.editor.state.brushes)
             total = actual_total if actual_total > 0 else render_state.total_brushes
             culled = max(0, total - visible)
