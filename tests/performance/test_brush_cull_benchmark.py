@@ -18,15 +18,15 @@ file.
 """
 
 import time
-from types import SimpleNamespace
-
 import glm
 import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
-from engine.logic_render import LogicRender                  # noqa: E402
+from engine.editor_state import EditorState
+from engine.logic_thread import LogicThread                    # noqa: E402
+from engine.threaded_game_state import ThreadedGameState        # noqa: E402
 from engine.render_table import RenderTable              # noqa: E402
 from tests.helpers.worlds import box_brush               # noqa: E402
 
@@ -82,10 +82,12 @@ def test_report_the_brush_cull_cost():
     table = RenderTable()
     table.begin_frame(_rooms(), 1)
     keep, _ = table.shown()
-    render = LogicRender(SimpleNamespace())
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    render = logic.render_runtime
     projection = glm.perspective(glm.radians(75.0), 16.0 / 9.0, 1.0, 10000.0)
 
-    print("\n  %d rows, median of %d\n" % (table.count, REPEATS))
+    try:
+        print("\n  %d rows, median of %d\n" % (table.count, REPEATS))
     print("  %-24s %8s %9s" % ("pose", "visible", "cull ms"))
     for name, (eye, look) in POSES.items():
         eye = glm.vec3(*eye)
@@ -96,4 +98,6 @@ def test_report_the_brush_cull_cost():
             return np.flatnonzero(keep & render.aabb_in_frustum_bounds(
                 planes, table.bounds[:table.count]))
 
-        print("  %-24s %8d %9.3f" % (name, len(cull()), _best_ms(cull)))
+            print("  %-24s %8d %9.3f" % (name, len(cull()), _best_ms(cull)))
+    finally:
+        logic.stop()
