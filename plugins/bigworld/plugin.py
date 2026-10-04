@@ -178,26 +178,16 @@ class BigWorldPlugin(FioPlugin):
         session._show_debug = cfg["show_cell_debug"]
         self._sessions[logic] = session
         # Expose the live session as a service (renderer/other plugins/tools).
-        try:
-            host = getattr(self, "_host", None)
-            if host is not None:
-                host.provide("bigworld", session)
-                host.provide("savegame.restore", restore_handler)
-        except Exception:
-            pass
+        self._host.provide("bigworld", session)
+        self._host.provide("savegame.restore", restore_handler)
 
     def on_play_stop(self, logic):
         session = self._sessions.get(logic)
         if session is not None:
             session.stop()
             self._sessions.pop(logic, None)
-        try:
-            host = getattr(self, "_host", None)
-            if host is not None:
-                host.provide("bigworld", None)
-                host.provide("savegame.restore", None)
-        except Exception:
-            pass
+        self._host.provide("bigworld", None)
+        self._host.provide("savegame.restore", None)
 
     def on_tick(self, logic, ctx: TickContext):
         session = self._sessions.get(logic)
@@ -213,8 +203,8 @@ class BigWorldPlugin(FioPlugin):
         """
         if not ev.get("play_mode"):
             return
-        host = getattr(self, "_host", None)
-        logic = host.logic if host is not None else None
+        host = self._host
+        logic = host.logic
         session = self._sessions.get(logic)
         if session is None or not getattr(session, "_show_debug", True):
             return
