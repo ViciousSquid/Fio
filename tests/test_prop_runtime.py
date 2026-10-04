@@ -18,6 +18,10 @@ from engine.threaded_game_state import ThreadedGameState          # noqa: E402
 pytestmark = pytest.mark.qt
 
 
+def _event_names(events):
+    return [name for _, name in events]
+
+
 @pytest.fixture
 def real_logic():
     logics = []
@@ -73,7 +77,6 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
         'no_collision': False,
         'drop_angular_velocity': [spin, 0.0, 0.0],
     })
-    io = IO()
     grid = _floor_grid()
     physics = PhysicsWorld(grid)
     # Origin at the prop's base; 32-unit box centred half a height above it.
@@ -90,7 +93,7 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
     session.tick(1 / 60, use_pressed=True)
     assert session.held is prop
     assert physics.get_body(prop).kinematic
-    assert io.names()[-1] == 'OnCarried'
+    assert _event_names(events)[-1] == 'OnCarried'
 
     # Carry: the prop follows the view; physics must not move it.
     session.tick(1 / 60, use_pressed=False)
@@ -127,7 +130,6 @@ def test_non_physics_prop_still_falls_to_ground_on_drop(real_logic):
         'carry_enabled': True,
         'carry_offset': [0.0, 70.0, 0.0],
     })
-    io = IO()
     grid = _floor_grid()
     logic, session, events = real_logic([prop], grid=grid)
 
@@ -247,8 +249,8 @@ def test_an_empty_registry_is_a_valid_state(real_logic):
 def test_is_prop_is_the_one_type_contract():
     """Every tier decides what a Prop is the same way: the serialised type."""
     assert PropSession.is_prop(Prop(pos=[0, 0, 0])) is True
-    assert PropSession.is_prop(SimpleNamespace(properties={'type': 'monster'})) is False
-    assert PropSession.is_prop(SimpleNamespace()) is False
+    assert PropSession.is_prop(Light(pos=[0, 0, 0])) is False
+    assert PropSession.is_prop(object()) is False
 
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():
