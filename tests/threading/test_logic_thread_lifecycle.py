@@ -90,9 +90,7 @@ def test_the_logic_thread_reads_the_editor_state_live(logic):
     """Fio's whole premise: one world, no serialisation between the two."""
     state_brushes = [box_brush("wall")]
     thread = logic(brushes=state_brushes)
-    assert thread.editor_state.brushes is thread.editor_state.brushes, (
-        "the logic thread copied the brush list; an edit in the editor would "
-        "not reach the running game")
+    assert not hasattr(thread, "brushes"), "LogicThread still owns a brush alias"
 
     thread.editor_state.brushes.append(box_brush("added_later"))
     assert [b["name"] for b in thread.editor_state.brushes] == ["wall", "added_later"], (
@@ -102,7 +100,7 @@ def test_the_logic_thread_reads_the_editor_state_live(logic):
 
 def test_things_are_shared_the_same_way(logic):
     thread = logic(things=[make_thing(Light, "lamp")])
-    assert thread.editor_state.things is thread.editor_state.things
+    assert not hasattr(thread, "things"), "LogicThread still owns a thing alias"
     thread.editor_state.things.append(make_thing(Light, "lamp2"))
     assert [t.name for t in thread.editor_state.things] == ["lamp", "lamp2"]
 
