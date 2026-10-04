@@ -1,7 +1,5 @@
 """Portal glasses projection through a real Renderer_F and EntityTable."""
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -11,6 +9,7 @@ pytest.importorskip("OpenGL")
 from editor.things import Portal
 from tests.helpers.worlds import make_thing
 from engine.entity_table import EntityTable
+from engine.renderer_core import RenderView
 from tests.helpers import gl as glh
 from engine.portal_transform import map_point, mirror_point
 
@@ -53,7 +52,10 @@ def _cfg(*positions, glasses=True, sprites=None):
 
 
 def _view(depth=1, aperture=0, clip=1):
-    return SimpleNamespace(
+    return RenderView(
+        projection=None,
+        view=None,
+        camera_pos=None,
         aperture_slot=aperture,
         clip_slot=clip,
         recursion_depth=depth,
