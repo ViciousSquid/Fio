@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from engine import savegame
 from engine.logic_camera import LogicCamera
+from engine.logic_collision import LogicCollision
 from engine.logic_movers import LogicMovers
 from engine.logic_portals import LogicPortals
 from engine.logic_triggers import LogicTriggers
@@ -72,6 +73,7 @@ class FakeLogic:
         self.buddha_mode = False
         self.notarget = False
         self.camera = LogicCamera(self)
+        self.collision_runtime = LogicCollision(self)
         self.camera.camera_mode = "First Person"
         self.camera.overhead_height = 800.0
         self.camera.overhead_height_limit = None
