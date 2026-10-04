@@ -163,10 +163,10 @@ def test_respawn_fade_state_resets_when_session_restarts():
     prop = Prop(pos=[0.0, 0.0, 0.0])
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        player=SimpleNamespace(
+        player_runtime=SimpleNamespace(player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
-        ),
+        )),
     )
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
@@ -185,8 +185,10 @@ def test_carried_billboard_keeps_its_facing_when_player_turns():
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True})
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-                               camera_height=40.0),
+        player_runtime=SimpleNamespace(player=SimpleNamespace(
+            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+            camera_height=40.0,
+        )),
     )
     logic.session_runtime = LogicSession(logic)
     logic.interaction_runtime = LogicInteraction(logic)
