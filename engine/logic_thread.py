@@ -620,25 +620,6 @@ class LogicThread(threading.Thread):
     # PLAYER & MODE MANAGEMENT
     # =========================================================================
 
-    def set_player(self, player: Optional[Player]):
-        self.player = player
-        self.camera.player = player
-
-    def set_player2(self, player2: Optional[Player]) -> None:
-        """Set or clear Player 2 for split-screen mode."""
-        self.player2 = player2
-        if player2 is None:
-            self.player2_health = 100
-            self.player2_max_health = 100
-            self.player2_dead = False
-        
-    def set_terrain(self, terrain):
-        self.terrain = terrain
-    
-    def set_view_distance(self, view_distance):
-        """Adopt the viewport's shared view-distance settings."""
-        self.view_distance = view_distance
-
     def start(self):
         # Set before the thread exists, not in run(): a stop() that arrives
         # before run() gets going must not be overwritten.
