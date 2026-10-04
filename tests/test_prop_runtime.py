@@ -5,6 +5,9 @@ from types import SimpleNamespace
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.prop_runtime import PropSession
 from engine.prop_entity import Prop
+from engine.logic_combat import LogicCombat
+from engine.logic_interaction import LogicInteraction
+from engine.logic_session import LogicSession
 
 
 class IO:
@@ -129,14 +132,15 @@ def test_respawn_fades_in_over_two_seconds():
         'collect_respawns': True,
     })
     logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
+        editor_state=SimpleNamespace(things=[prop], brushes=[]), io_manager=IO(),
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
         ),
-        current_hud_message='',
     )
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
     session = PropSession(logic)
     session.start()
 
@@ -159,13 +163,14 @@ def test_respawn_fade_state_resets_when_session_restarts():
     prop = Prop(pos=[0.0, 0.0, 0.0])
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,
         ),
-        current_hud_message='',
     )
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
     session = PropSession(logic)
     session.start()
 
@@ -180,11 +185,12 @@ def test_carried_billboard_keeps_its_facing_when_player_turns():
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True})
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        _spatial_grid=None, _physics_world=None,
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
-        current_hud_message='',
     )
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
     session = PropSession(logic)
     session.start()
 
@@ -201,6 +207,10 @@ def test_the_registry_is_derived_from_the_authoritative_thing_list():
     """PropSession is the Prop registry; the thing list is still the world."""
     prop, light = Prop(pos=[0, 0, 0]), SimpleNamespace(properties={'type': 'light'})
     logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, light]))
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
+    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
 
@@ -213,6 +223,10 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
     """A spawn elsewhere in the map must not reset a Prop already registered."""
     settled = Prop(pos=[0, 0, 0])
     logic = SimpleNamespace(editor_state=SimpleNamespace(things=[settled]))
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
+    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
 
@@ -232,6 +246,10 @@ def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
 def test_a_rebuild_releases_a_prop_that_left_the_world():
     prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
     logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, other]))
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
+    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
     session.held = other
@@ -249,6 +267,10 @@ def test_a_rebuild_releases_a_prop_that_left_the_world():
 def test_an_empty_registry_is_a_valid_state():
     """A map with no Props still has a session; it just has nothing in it."""
     logic = SimpleNamespace(editor_state=SimpleNamespace(things=[SimpleNamespace(properties={'type': 'light'})]))
+    logic.session_runtime = LogicSession(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
+    logic.combat_runtime = LogicCombat(logic)
+    logic.player = SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
     session = PropSession(logic)
     session.start()
     assert session.props == []
