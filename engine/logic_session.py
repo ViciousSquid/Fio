@@ -123,7 +123,7 @@ class LogicSession:
             logic._waterwalk_timer = 0.0
 
             logic.gate_inputs = {}
-            logic.timer_states = {}
+            logic.timing_runtime.timer_states.clear()
 
             # Reset active weapon / ammunition.
             logic.active_weapon = None
@@ -192,7 +192,7 @@ class LogicSession:
             logic.level_complete_ui = None
 
             # Reset light fade transitions for a clean play session.
-            logic.light_fade_states.clear()
+            logic.timing_runtime.light_fade_states.clear()
             if Light is not None:
                 for thing in logic.editor_state.things:
                     if isinstance(thing, Light) and hasattr(
