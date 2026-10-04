@@ -75,7 +75,7 @@ def test_near_is_the_screen_rectangle_and_the_rest_resident_is_active():
     logic, session = fitted_session(grid_world(cells_each_way=8), footprint=(1400.0, 500.0))
     rx, rz = session.tiers.near_rect
     assert rx > rz
-    near = [t for t in logic.things if tier_of(t) == TIER_NEAR]
+    near = [t for t in logic.editor_state.things if tier_of(t) == TIER_NEAR]
     active = [t for t in logic.things if tier_of(t) == TIER_ACTIVE]
     assert near and active
     cell = session.manager.cell_size
