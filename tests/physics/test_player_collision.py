@@ -218,6 +218,85 @@ def test_a_waterjump_ignores_a_ledge_that_is_not_solid(props):
 
 
 # ---------------------------------------------------------------------------
+# Quake-style movement feel
+# ---------------------------------------------------------------------------
+
+def _movement_fixture():
+    floor = floor_brush()
+    player = player_at(0.0, 0.0, 0.0)
+    run(player, [floor], steps=60)
+    assert player.on_ground
+    return player, [floor]
+
+
+def test_ground_movement_accelerates_instead_of_snapping_to_speed():
+    player, world = _movement_fixture()
+
+    run(player, world, steps=1, move=(0.0, 1.0))
+    first_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+
+    run(player, world, steps=1, move=(0.0, 1.0))
+    second_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+
+    assert 0.0 < first_speed < second_speed < player.speed
+
+
+def test_ground_friction_brings_the_player_to_rest():
+    player, world = _movement_fixture()
+
+    run(player, world, steps=60, move=(0.0, 1.0))
+    moving_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert moving_speed > player.speed * 0.9
+
+    run(player, world, steps=30)
+    stopped_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert stopped_speed < 1.0
+
+
+def test_air_movement_preserves_forward_momentum_while_strafing():
+    player, world = _movement_fixture()
+
+    run(player, world, steps=60, move=(0.0, 1.0))
+    forward_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert forward_speed > player.speed * 0.9
+
+    run(player, world, steps=1, move=(0.0, 1.0), jump=True)
+    assert not player.on_ground
+
+    # The old controller overwrote horizontal velocity with the new wish
+    # direction. Quake-style air acceleration instead keeps existing momentum
+    # and adds a lateral component.
+    run(player, world, steps=6, move=(1.0, 0.0))
+    assert player.velocity.x > 0.0
+    assert player.velocity.z > forward_speed * 0.8
+
+
+def test_holding_jump_does_not_auto_bunny_hop_on_landing():
+    player, world = _movement_fixture()
+    import glm
+
+    dt = 1.0 / 60.0
+    player.update(dt, glm.vec3(0.0, 0.0, 0.0), True, False, world)
+    assert not player.on_ground
+
+    for _ in range(120):
+        player.update(dt, glm.vec3(0.0, 0.0, 0.0), True, False, world)
+
+    assert player.on_ground
+    assert abs(float(player.velocity.y)) < 0.001
+
+    # Still holding jump must leave the player grounded.
+    player.update(dt, glm.vec3(0.0, 0.0, 0.0), True, False, world)
+    assert player.on_ground
+    assert abs(float(player.velocity.y)) < 0.001
+
+    # Release then press: a new jump is allowed.
+    player.update(dt, glm.vec3(0.0, 0.0, 0.0), False, False, world)
+    player.update(dt, glm.vec3(0.0, 0.0, 0.0), True, False, world)
+    assert not player.on_ground
+
+
+# ---------------------------------------------------------------------------
 # Work per frame
 # ---------------------------------------------------------------------------
 
