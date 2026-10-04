@@ -1272,8 +1272,6 @@ class MainWindow(QMainWindow):
         self.components.invalidate()
         self.state.selected_objects = list(objects or [])
         primary = self.primary_selection()
-        if self.config.getboolean('Display', 'sync_selection', fallback=True):
-        else:
         self.update_all_ui()
 
     def update_all_ui(self):
