@@ -79,17 +79,13 @@ def test_loading_plugins_does_not_import_the_bigworld_runtime():
 def test_a_map_with_no_bigworld_entity_never_starts_a_session():
     out = run_isolated("""
         import sys
-        from types import SimpleNamespace
         from plugins.manager import load_plugins, get_manager
+        from editor.editor_state import EditorState
+        from engine.logic_thread import LogicThread
+        from engine.threaded_game_state import ThreadedGameState
         load_plugins()
         plugin = next(p for p in get_manager().plugins if p.name == 'bigworld')
-
-        class Logic:
-            from types import SimpleNamespace
-            editor_state = SimpleNamespace(things=[], brushes=[])
-            camera = SimpleNamespace(overhead_height_limit=None)
-
-        logic = Logic()
+        logic = LogicThread(ThreadedGameState(), EditorState())
         manager = get_manager()
         manager.bind_host(logic)
         plugin.on_play_start(logic)
@@ -125,28 +121,21 @@ def test_the_opt_in_test_itself_costs_no_import():
 def test_a_map_with_a_bigworld_entity_activates_streaming():
     out = run_isolated("""
         import sys
-        from types import SimpleNamespace
         from plugins.manager import load_plugins, get_manager
+        from plugins.bigworld.entities import BigWorldSettings
+        from editor.editor_state import EditorState
+        from engine.logic_thread import LogicThread
+        from engine.threaded_game_state import ThreadedGameState
         load_plugins()
         manager = get_manager()
         plugin = next(p for p in manager.plugins if p.name == 'bigworld')
-
-        from plugins.bigworld.entities import BigWorldSettings
-        from engine.view_distance import ViewDistance
-        settings = BigWorldSettings(pos=[0, 0, 0])
-
-        class Logic:
-            editor_state = SimpleNamespace(
-                things=[settings],
-                brushes=[{'id': 'a', 'pos': [0, 0, 0], 'size': [64, 64, 64]},
-                         {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]}],
-            )
-            camera = SimpleNamespace(overhead_height_limit=None)
-            player_runtime = SimpleNamespace(player=None)
-            render_runtime = SimpleNamespace(view_distance=ViewDistance())
-
-        logic = Logic()
-        manager = get_manager()
+        state = EditorState()
+        state.things = [BigWorldSettings(pos=[0, 0, 0])]
+        state.brushes = [
+            {'id': 'a', 'pos': [0, 0, 0], 'size': [64, 64, 64]},
+            {'id': 'b', 'pos': [20000, 0, 0], 'size': [64, 64, 64]},
+        ]
+        logic = LogicThread(ThreadedGameState(), state)
         manager.bind_host(logic)
         plugin.on_play_start(logic)
         session = plugin._sessions.get(logic)
@@ -162,20 +151,18 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
 
 
 def test_stopping_a_session_leaves_the_world_exactly_as_it_was():
-    from types import SimpleNamespace
+    from editor.editor_state import EditorState
+    from engine.logic_thread import LogicThread
+    from engine.threaded_game_state import ThreadedGameState
     from plugins.bigworld.runtime import BigWorldSession
-    from engine.view_distance import ViewDistance
 
     far = {'id': 'far', 'pos': [30000, 0, 0], 'size': [64, 64, 64]}
     near = {'id': 'near', 'pos': [0, 0, 0], 'size': [64, 64, 64], 'hidden': True}
 
-    class Logic:
-        editor_state = SimpleNamespace(things=[], brushes=[])
-        player = None
-        render_runtime = SimpleNamespace(view_distance=ViewDistance())
-
-    logic = Logic()
-    logic.editor_state.brushes = [near, far]
+    state = EditorState()
+    state.brushes = [near, far]
+    state.things = []
+    logic = LogicThread(ThreadedGameState(), state)
     session = BigWorldSession(logic, activation_radius=1024.0,
                               deactivation_radius=1200.0)
     session.start(player_pos=(0.0, 0.0, 0.0))
