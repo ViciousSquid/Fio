@@ -1842,8 +1842,7 @@ class QtGameView(QOpenGLWidget):
                     if not collision_brushes:
                         self.logic_thread.model_collision_enabled = True
                         self.logic_thread._model_collision_brushes = self.logic_thread.collision_runtime.build_model_collision_brushes()
-                        if hasattr(self.logic_thread, '_refresh_collision_brushes_cache'):
-                            self.logic_thread.collision_runtime.refresh_collision_brushes_cache()
+                        self.logic_thread.collision_runtime.refresh_collision_brushes_cache()
                         collision_brushes = self.logic_thread._model_collision_brushes
                 if collision_brushes:
                     mode = self._collision_vis_mode
@@ -3728,7 +3727,7 @@ class QtGameView(QOpenGLWidget):
         self._actor_pick = {'on_pick': on_pick}
         self.actor_pick_hover = None
         logic = self.logic_thread
-        if logic is not None and hasattr(logic, 'set_world_paused'):
+        if logic is not None:
             logic.set_world_paused(self.ACTOR_PICK_PAUSE, True)
         if not self.console_overlay_active:
             self._show_pick_cursor()
@@ -3745,7 +3744,7 @@ class QtGameView(QOpenGLWidget):
         self._actor_pick = None
         self.actor_pick_hover = None
         logic = self.logic_thread
-        if logic is not None and hasattr(logic, 'set_world_paused'):
+        if logic is not None:
             logic.set_world_paused(self.ACTOR_PICK_PAUSE, False)
         if self.play_mode and not self.console_overlay_active:
             self._capture_play_cursor()
