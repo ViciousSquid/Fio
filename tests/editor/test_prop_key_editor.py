@@ -1,29 +1,29 @@
 """Key collection data is directly editable in the Prop property editor."""
 
-import types
+import os
 
 import pytest
 
 pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
+from editor.main_window import MainWindow
 from editor.property_editor import PropertyEditor
 from editor.things import Prop
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 pytestmark = pytest.mark.qt
 
 
 @pytest.fixture
 def panel(qt_app):
-    from PyQt5.QtWidgets import QWidget
-
-    editor = types.SimpleNamespace(
-        state=types.SimpleNamespace(things=[], brushes=[]),
-        view_3d=QWidget(),
-        mark_as_modified=lambda: None,
-    )
+    editor = MainWindow(ROOT)
     widget = PropertyEditor(editor)
     yield widget
     widget.deleteLater()
+    editor.close()
+    editor.deleteLater()
+    qt_app.processEvents()
 
 
 def collect_key_combo(panel, prop):
