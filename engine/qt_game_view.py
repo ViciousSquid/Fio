@@ -130,7 +130,6 @@ class QtGameView(QOpenGLWidget):
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
         self.culling_enabled = True
-        self.selected_object = None
         self.show_sprites_in_play_mode = False
         # Cache keys for per-frame expensive rebuilds
         self._io_conn_cache       = None   # last _gather_io_connections result
@@ -1642,7 +1641,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
         self._render_config["render_mode"] = self.current_render_mode
         self._render_config["play_mode"] = self.play_mode
-        self._render_config["selected_object"] = self.selected_object
+        self._render_config["selected_object"] = self.editor.primary_selection()
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
@@ -1711,7 +1710,7 @@ class QtGameView(QOpenGLWidget):
 
             self.renderer.render_scene(
                 _split_proj, self.view_matrix, camera_pos,
-                self.selected_object, self._render_config,
+                self.editor.primary_selection(), self._render_config,
                 clear=False, brush_slots=_main_brush_slots,
             )
 
@@ -1749,7 +1748,7 @@ class QtGameView(QOpenGLWidget):
             _p2_brush_slots = self._render_config.get("all_brush_slots")
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
-                self.selected_object, self._render_config,
+                self.editor.primary_selection(), self._render_config,
                 clear=False, brush_slots=_p2_brush_slots
             )
 
@@ -1775,7 +1774,7 @@ class QtGameView(QOpenGLWidget):
         else:
             self.renderer.render_scene(
                 self.projection_matrix, self.view_matrix, camera_pos,
-                self.selected_object, self._render_config,
+                self.editor.primary_selection(), self._render_config,
                 brush_slots=_main_brush_slots,
             )
             # Native overhead player sprite (top-down mode), depth-tested so
@@ -2711,11 +2710,11 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def get_selected_object_pos(self):
-        if not self.editor.state.selected_object:
+        if not self.editor.primary_selection():
             return None
-        if isinstance(self.editor.state.selected_object, dict):
-            return glm.vec3(self.editor.state.selected_object.get('pos', [0, 0, 0]))
-        return glm.vec3(self.editor.state.selected_object.pos)
+        if isinstance(self.editor.primary_selection(), dict):
+            return glm.vec3(self.editor.primary_selection().get('pos', [0, 0, 0]))
+        return glm.vec3(self.editor.primary_selection().pos)
 
     def set_selected_object_pos(self, new_pos_vec):
         """Move the whole selection so the grabbed object lands on ``new_pos_vec``.
@@ -2727,7 +2726,7 @@ class QtGameView(QOpenGLWidget):
         brush's plane set comes along instead of being left behind by a bare
         write to ``pos``.
         """
-        primary = self.editor.state.selected_object
+        primary = self.editor.primary_selection()
         if not primary:
             return
         grid = self.editor.grid_size_spinbox.value()
@@ -3002,7 +3001,7 @@ class QtGameView(QOpenGLWidget):
             hits.sort(key=lambda h: h[0])
             candidates = [obj for _, obj in hits]
             return component_edit.cycle_pick(candidates,
-                                             self.editor.state.selected_object)
+                                             self.editor.primary_selection())
         return best_obj
 
     def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
@@ -3361,10 +3360,10 @@ class QtGameView(QOpenGLWidget):
             obj = self.get_object_at_3d(event.x(), event.y(), cycle=cycle)
             if obj:
                 self.editor.save_state()
-                self.editor.set_selected_object(obj)
+                self.editor.set_selected_objects([obj])
                 self.update()
             return
-        if event.button() == Qt.LeftButton and self.editor.state.selected_object and not self.play_mode:
+        if event.button() == Qt.LeftButton and self.editor.primary_selection() and not self.play_mode:
             obj_pos = self.get_selected_object_pos()
             if obj_pos:
                 ray_o, ray_d = self.get_ray_from_mouse(event.x(), event.y())
@@ -3510,9 +3509,9 @@ class QtGameView(QOpenGLWidget):
             self.editor.update_views()
 
     def get_face_at(self, mouse_pos):
-        if not isinstance(self.editor.state.selected_object, dict):
+        if not isinstance(self.editor.primary_selection(), dict):
             return None
-        brush = self.editor.state.selected_object
+        brush = self.editor.primary_selection()
         ray_o, ray_d = self.get_ray_from_mouse(mouse_pos.x(), mouse_pos.y())
         pos = glm.vec3(brush.get('pos', [0, 0, 0]))
         size = glm.vec3(brush.get('size', [64, 64, 64]))
