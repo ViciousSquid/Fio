@@ -74,14 +74,16 @@ def test_a_dead_monster_row_interns_a_distinct_dead_sprite_recipe():
 def renderer():
     pytest.importorskip("PyQt5", reason="renderer construction requires Qt")
     pytest.importorskip("OpenGL", reason="sprite cache test requires OpenGL")
-    from tests.helpers.gl import GLTestContext, make_renderer
+    from tests.helpers.gl import GLTestContext, make_renderer, reset_texture_cache
 
+    reset_texture_cache()
     with GLTestContext(64, 64):
         value = make_renderer()
         try:
             yield value
         finally:
             value.cleanup()
+            reset_texture_cache()
 
 @pytest.mark.gl
 def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth(renderer):
