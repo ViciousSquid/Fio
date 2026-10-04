@@ -471,9 +471,9 @@ class ConsoleCommandHandler:
         """
         set_authored_flag(entity, 'hidden', hidden)
         if isinstance(entity, dict):
-            mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
-            if mark is not None:
-                mark()
+            logic = self._logic_thread()
+            if logic is not None:
+                logic.collision_runtime.mark_dirty()
 
     def cmd_hide(self, args):
         """hide <name> — Set hidden flag on a brush or entity."""
@@ -1980,9 +1980,7 @@ entity to drive them from the I/O system.</i><br>
             if logic is not None:
                 self._rebuild_logic_entity_caches()
                 if deleted_brush:
-                    mark = getattr(logic, 'mark_collision_dirty', None)
-                    if mark is not None:
-                        mark()
+                    logic.collision_runtime.mark_dirty()
 
         self.main_window.update_all_ui()
         return len(entities)

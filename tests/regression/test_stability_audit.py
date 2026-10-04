@@ -425,7 +425,7 @@ def test_console_hide_and_show_go_through_the_authored_writer():
     state = EditorState()
     state.brushes = [wall]
     marked = []
-    logic = types.SimpleNamespace(mark_collision_dirty=lambda: marked.append(1))
+    logic = types.SimpleNamespace(collision_runtime=types.SimpleNamespace(mark_dirty=lambda: marked.append(1)))
     handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
     handler.editor_state = state
     handler._logic_thread = lambda: logic
