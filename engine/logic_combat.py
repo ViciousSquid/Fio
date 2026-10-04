@@ -383,7 +383,7 @@ class LogicCombat:
         logic = self.logic
 
         count = len(projectiles)
-        has_portals = bool(getattr(logic, '_portal_things', ()))
+        has_portals = bool(logic.portal_runtime.portal_things)
         collision_brushes = logic._collision_brushes_cache
         survivors = []
 
