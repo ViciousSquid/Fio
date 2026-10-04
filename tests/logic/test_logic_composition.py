@@ -23,6 +23,8 @@ from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
 from editor.things import (LogicGate, LogicRelay, LogicState,  # noqa: E402
                            LogicTimer, Thing)
+from engine.logic_timing import LogicTiming                      # noqa: E402
+from engine.logic_world import LogicWorld                        # noqa: E402
 from tests.helpers.worlds import box_brush                # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -37,13 +39,12 @@ class Level:
         self.manager = IOManager()
         self.manager.set_logic_thread(self)
         self.io_manager = self.manager
-        self.brushes = []
-        self.things = []
+        self.editor_state = type("EditorStateStub", (), {})()
+        self.editor_state.brushes = []
+        self.editor_state.things = []
         self.gate_inputs = {}
-        self.timer_states = {}
-        self.door_states = {}
-        self.mover_states = {}
-        self._timer_things = []
+        self.timing_runtime = LogicTiming(self)
+        self.world_runtime = LogicWorld(self, timer_type=LogicTimer)
         self.opened = []
         self.spawned = []
 
@@ -64,18 +65,18 @@ class Level:
 
     def brush(self, name, **props):
         b = box_brush(name, **props)
-        self.brushes.append(b)
+        self.editor_state.brushes.append(b)
         return b
 
     def thing(self, thing):
-        self.things.append(thing)
+        self.editor_state.things.append(thing)
         return thing
 
     def _by_name(self, name):
-        for b in self.brushes:
+        for b in self.editor_state.brushes:
             if b.get("name") == name:
                 return b
-        for t in self.things:
+        for t in self.editor_state.things:
             if t.properties.get("name") == name:
                 return t
         return None
@@ -291,19 +292,19 @@ def test_a_trigger_starts_a_timer_that_drives_a_spawner(level):
                                    properties={"name": "timer", "interval": 2.0}))
     spawner = level.thing(Thing(pos=[0, 0, 0], properties={
         "name": "spawner", "type": "logic_spawner"}))
-    level._timer_things = [timer]
+    level.world_runtime.timer_things = [timer]
 
     level.wire(trigger, "OnTrigger", relay, "Trigger")
     level.wire(relay, "OnTrigger", timer, "Enable")
     level.wire(timer, "OnTimer", spawner, "Spawn")
 
-    LogicTiming(level).update_logic_timers( 5.0)
+    level.timing_runtime.update_logic_timers(5.0)
     assert level.spawned == [], "the timer ran before anything started it"
 
     level.fire(trigger, "OnTrigger")
-    LogicTiming(level).update_logic_timers( 1.0)
+    level.timing_runtime.update_logic_timers(1.0)
     assert level.spawned == []
-    LogicTiming(level).update_logic_timers( 1.5)
+    level.timing_runtime.update_logic_timers(1.5)
     assert level.spawned == ["spawner"]
 
 
