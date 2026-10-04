@@ -7,6 +7,7 @@ instrument's prepare/tick/AI timings on large maps and long sessions.
 """
 
 import json
+import os
 
 import pytest
 
