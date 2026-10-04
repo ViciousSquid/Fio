@@ -2891,16 +2891,14 @@ class QtGameView(QOpenGLWidget):
             # One paint click is one undo step. The compact terrain snapshot
             # already carries the baked terrain material data.
             self.editor.state.terrain_data = terrain.to_dict()
-                self.editor.save_state()
+            self.editor.save_state()
 
             added = terrain.paint_texture_at(
                 wx, wz, radius, texture_name,
                 feather=self.terrain_sculpt_feather,
             )
             if not added:
-                if hasattr(self.editor, 'state') and hasattr(
-                        self.editor.state, 'discard_last_checkpoint'):
-                    self.editor.state.discard_last_checkpoint()
+                self.editor.state.discard_last_checkpoint()
                 if hasattr(self.editor, 'show_toast'):
                     self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
                 return
