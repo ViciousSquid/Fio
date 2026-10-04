@@ -76,13 +76,12 @@ class _BridgeLogic:
     def __init__(self, things, plugin_manager=None):
         self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
-        self.player = _CamPlayer()
-        self.player2 = None
         self.play_mode = True
         self.io_manager = _NullIO()
         self._tick_lock = threading.RLock()
         self._plugin_manager = plugin_manager
         self.player_runtime = LogicPlayer(self)
+        self.player_runtime.player = _CamPlayer()
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
         self.combat_runtime = LogicCombat(self)
@@ -247,7 +246,7 @@ class PlayerPluginHost:
         if not self._playing or self.bridge is None or self.manager is None:
             return
 
-        self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
+        self.bridge.player_runtime.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
         self.bridge.interaction_runtime.current_hud_message = ""
         self.bridge.interaction_runtime.current_hud_key_name = None
 
@@ -288,9 +287,9 @@ class PlayerPluginHost:
         if has is not None and not has("camera.player_view"):
             return default
         try:
-            self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
+            self.bridge.player_runtime.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
             ev = emit("camera.player_view", logic=self.bridge,
-                      player=self.bridge.player, pos=tuple(cam_pos),
+                      player=self.bridge.player_runtime.player, pos=tuple(cam_pos),
                       yaw=float(cam_yaw_deg), pitch=float(cam_pitch_deg))
             if ev is None:
                 return default
