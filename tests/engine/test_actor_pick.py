@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import QApplication, QWidget    # noqa: E402
 from editor.things import Light, Monster             # noqa: E402
 from engine.actor_pick import NO_SLOT, nearest_wall, pick_actor  # noqa: E402
 from engine.entity_table import EntityTable          # noqa: E402
+from engine.logic_session import LogicSession          # noqa: E402
 from engine.qt_game_view import QtGameView           # noqa: E402
 from engine.render_table import RenderTable          # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing  # noqa: E402
