@@ -285,16 +285,16 @@ def test_leaving_play_releases_the_sessions_monsters():
         thread.world_runtime.build_entity_caches()
         ai = thread.monster_ai
         ai.update(1.0 / 30.0)                 # no player: nothing gathered yet
-        ai.table.gather(thread._monster_things)
-        ai._enemy_monsters = tuple(thread._monster_things)
-        ai.monster_states = {id(m): {} for m in thread._monster_things}
+        ai.table.gather(thread.world_runtime.monster_things)
+        ai._enemy_monsters = tuple(thread.world_runtime.monster_things)
+        ai.monster_states = {id(m): {} for m in thread.world_runtime.monster_things}
         refs = [weakref.ref(m) for m in state.things]
 
         thread.session_runtime.apply_play_mode(False)                     # Stop
         assert ai.table.count == 0 and ai.table.monsters == []
         assert ai.monster_states == {} and ai._enemy_monsters == ()
 
-        thread._monster_things = []
+        thread.world_runtime.monster_things = []
         state.things = []
         gc.collect()
         assert all(ref() is None for ref in refs)
@@ -481,12 +481,12 @@ def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
         logic.monster_ai.monster_states[id(grunt)] = {"shoot_timer": 0.0}
 
         assert api.despawn(grunt) is True
-        assert grunt not in logic._monster_things
+        assert grunt not in logic.world_runtime.monster_things
         assert logic.world_runtime.find_entity_by_name("grunt") is None
         assert id(grunt) not in logic.monster_ai.monster_states
 
         spawned = api.spawn(Monster, (100.0, 64.0, 0.0), {"name": "fresh"})
-        assert spawned in logic._monster_things
+        assert spawned in logic.world_runtime.monster_things
         assert logic.world_runtime.find_entity_by_name("fresh") is spawned
     finally:
         logic.stop()
@@ -506,12 +506,12 @@ def test_console_delete_during_play_removes_the_entity_from_the_session():
                                  update_all_ui=lambda: None)
         console = ConsoleCommandHandler(window)
         console.cmd_delete("grunt")
-        assert grunt not in logic._monster_things
+        assert grunt not in logic.world_runtime.monster_things
         assert logic.world_runtime.find_entity_by_name("grunt") is None
 
         console.cmd_delete("wall")
         logic._tick(logic.TICK_DURATION)          # collision rebuilds at tick end
-        assert all(b is not wall for b in logic._collision_brushes_cache)
+        assert all(b is not wall for b in logic.collision_runtime._collision_brushes_cache)
     finally:
         logic.stop()
 
@@ -530,14 +530,14 @@ def test_objects_added_or_removed_in_the_editor_during_play_join_the_session():
         state.things.append(added)
         state.brushes.append(wall)
         logic._tick(logic.TICK_DURATION)
-        assert added in logic._monster_things
+        assert added in logic.world_runtime.monster_things
         assert logic.world_runtime.find_entity_by_name("added") is added
-        assert any(b is wall for b in logic._collision_brushes_cache)
+        assert any(b is wall for b in logic.collision_runtime._collision_brushes_cache)
 
         state.save_state()
         state.things.remove(grunt)
         logic._tick(logic.TICK_DURATION)
-        assert grunt not in logic._monster_things
+        assert grunt not in logic.world_runtime.monster_things
     finally:
         logic.stop()
 
