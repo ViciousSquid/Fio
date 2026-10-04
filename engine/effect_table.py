@@ -150,11 +150,12 @@ class EffectStore:
         # move to a later row after an insertion/reorder, so the old runtime
         # columns must not alias the buffers being rewritten.
         if reset_runtime:
-            old_phase = old_spawn = old_active = None
+            old_phase = old_spawn = old_active = old_family = None
         else:
             old_phase = self.phase[:old_count].copy()
             old_spawn = self.spawn_time[:old_count].copy()
             old_active = self.active[:old_count].copy()
+            old_family = self.family_id[:old_count].copy()
 
         self._count = 0
         self.ids = []
@@ -172,11 +173,11 @@ class EffectStore:
             self.ids.append(props.get("id"))
             self.pos[i] = self._position(thing)
             self.lifetime[i] = self._lifetime(thing)
-            self.family_id[i] = effect_family(
+            authored_family = effect_family(
                 props.get("effect_type", EFFECT_FIRE)
             )
-
             if not reset_runtime and old is not None and old < old_count:
+                self.family_id[i] = old_family[old]
                 self.phase[i] = old_phase[old]
                 self.spawn_time[i] = old_spawn[old]
                 self.active[i] = old_active[old]
@@ -184,6 +185,8 @@ class EffectStore:
                 self.phase[i] = random.random()
                 self.spawn_time[i] = 0.0
                 self.active[i] = self.family_id[i] != FAMILY_EXPLOSION
+            if reset_runtime or old is None or old >= old_count:
+                self.family_id[i] = authored_family
             self._count = i + 1
 
     def begin_session(self, things):
