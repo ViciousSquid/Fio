@@ -275,7 +275,7 @@ def test_the_render_projection_survives_the_play_mode_round_trip(logic):
     thread = logic(brushes=brushes)
     thread.session_runtime.apply_play_mode(True)
     thread.render_runtime.prepare_render_state()
-    table = thread._render_table
+    table = thread.game_state.get_write_state().render_table
     assert table.count == len(brushes)
 
     thread.session_runtime.apply_play_mode(False)
