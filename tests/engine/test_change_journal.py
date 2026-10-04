@@ -272,7 +272,7 @@ def _edit_entity(thing, rng):
         thing._respawn_fade_alpha = rng.random()
         thing._carry_sprite_yaw = rng.choice([None, rng.uniform(-3, 3)])
     elif kind == 5 and isinstance(thing, Effect):
-        thing.trigger_explosion(123.0)
+        thing.properties["effect_type"] = "EXPLOSION"
         touch(thing)
 
 
