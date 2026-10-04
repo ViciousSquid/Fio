@@ -208,7 +208,7 @@ def test_machinery_tests_do_not_construct_production_owners_by_bypassing_init():
                 if not isinstance(node, ast.Call):
                     continue
                 func_name = _dotted_name(node.func)
-                if func_name not in {"object.__new__", "__new__"}:
+                if not (func_name == "__new__" or func_name.endswith(".__new__")):
                     continue
                 if not node.args:
                     continue
