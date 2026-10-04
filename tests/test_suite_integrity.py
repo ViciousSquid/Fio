@@ -275,6 +275,44 @@ def test_machinery_tests_do_not_patch_production_owner_classes():
     )
 
 
+def test_machinery_tests_do_not_import_owner_fakes():
+    """Owner doubles must not leak back into behavioural machinery suites.
+
+    Small instrumentation helpers such as OrderRecordingDict are legitimate;
+    substitutes for LogicThread, MainWindow, Renderer_F, AI, or IO ownership
+    are not. This catches accidental reintroduction even when the fake class
+    lives in tests/helpers and therefore evades the local-class check above.
+    """
+    forbidden = {
+        "FakeLogicThread", "FakeLogic", "FakeGameState", "FakePlayer",
+        "FakeIO", "FakeRenderer", "FakePhysics", "FakeHost",
+    }
+    allowed = {"tests/threading/test_publication_order.py"}
+    offenders = []
+    for root_name in MACHINERY_TEST_ROOTS:
+        base = ROOT / root_name
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            rel = _rel(path)
+            if rel in allowed:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+            for node in ast.walk(tree):
+                names = []
+                if isinstance(node, ast.ImportFrom):
+                    names = [alias.asname or alias.name for alias in node.names]
+                elif isinstance(node, ast.Import):
+                    names = [alias.asname or alias.name.split(".")[0] for alias in node.names]
+                for name in names:
+                    if name in forbidden or name.startswith("FakeLogic"):
+                        offenders.append("%s:%d (%s)" % (rel, node.lineno, name))
+    assert not offenders, (
+        "machinery tests import production-owner fakes; exercise the real owner "
+        "instead:\\n  " + "\\n  ".join(offenders)
+    )
+
+
 def test_machinery_tests_do_not_replace_production_owners():
     """Behavioural machinery tests must call the real subsystem owners."""
     offenders = []
