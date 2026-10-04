@@ -729,10 +729,10 @@ class DebugTablesWindow(QMainWindow):
         age shows on the dashboard.
         """
         logic, ai = self._monster_ai()
-        table = getattr(ai, "table", None)
-        lock = getattr(logic, "_monster_lock", None)
-        if table is None or lock is None:
+        if logic is None or ai is None:
             return
+        table = ai.table
+        lock = logic._monster_lock
         if not lock.acquire(blocking=False):
             return
         try:
