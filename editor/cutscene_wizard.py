@@ -454,7 +454,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_actor_lists()
         self._update_waypoint_controls()
         self._refresh_summary()
-        self._load_first_cutscene()
+        self._load_current_map_cutscene()
         if self._saved_signature is None:
             self._saved_signature = self._cutscene_signature()
 
@@ -1713,13 +1713,41 @@ class CutsceneWizard(QtWidgets.QDialog):
                 return obj
         return None
 
-    def _load_first_cutscene(self):
-        cutscene_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
-        try:
-            candidates = sorted(path for path in cutscene_dir.glob("*.json") if path.is_file())
-        except OSError:
-            candidates = []
+    def _current_map_cutscene_files(self):
+        """Return cutscene files referenced by LogicCamera entities in the loaded map."""
+        root_dir = Path(getattr(self.main_window, "root_dir", "."))
+        seen = set()
+        candidates = []
+
+        for obj in getattr(self.main_window.state, "things", []) or []:
+            if obj.__class__.__name__ != "LogicCamera":
+                continue
+            reference = str(
+                getattr(obj, "properties", {}).get("cutscene_file", "") or ""
+            ).replace("\\", "/").strip()
+            if not reference:
+                continue
+
+            path = root_dir / reference
+            try:
+                key = str(path.resolve()).casefold()
+            except OSError:
+                key = str(path).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.is_file():
+                candidates.append(path)
+
+        return candidates
+
+    def _load_current_map_cutscene(self):
+        """Load a cutscene already attached to the currently loaded map, if any."""
+        candidates = self._current_map_cutscene_files()
         if candidates:
+            # The wizard edits one cutscene at a time. Map order supplies a
+            # deterministic active cutscene; the Load button can switch to
+            # another LogicCamera-referenced cutscene explicitly.
             self._load_cutscene(str(candidates[0]))
 
     def _load_cutscene(self, filename=None):
