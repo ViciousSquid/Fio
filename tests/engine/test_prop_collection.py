@@ -48,7 +48,7 @@ def test_collect_ammo_awards_eight():
         "collect_type": "ammo",
     })
     logic = _logic_for(prop)
-    logic.player_ammo = 2
+    logic.combat_runtime.player_ammo = 2
     session = PropSession(logic)
     session.start()
 
@@ -68,9 +68,9 @@ def test_first_gun2_collection_gives_eight_ammo():
     session.start()
 
     assert session.collect_prop(prop) is True
-    assert logic.active_weapon == "gun2"
+    assert logic.combat_runtime.active_weapon == "gun2"
     assert logic.player_ammo == 8
-    assert logic.gun2_obtained is True
+    assert logic.combat_runtime.gun2_obtained is True
 
 
 def test_later_gun2_collection_does_not_reset_existing_ammo():
@@ -98,14 +98,21 @@ def _logic_for(prop):
             "editor_state": type("EditorState", (), {"things": [prop], "brushes": []})(),
             "player_health": 100,
             "player_max_health": 100,
-            "player_ammo": 0,
-            "active_weapon": "gun1",
-            "gun2_obtained": False,
-            "collected_keys": set(),
-            "current_hud_message": "",
-            "current_hud_key_name": None,
+            "combat_runtime": type("CombatRuntime", (), {
+                "player_ammo": 0,
+                "active_weapon": "gun1",
+                "gun2_obtained": False,
+            })(),
+            "player_runtime": type("PlayerRuntime", (), {"collected_keys": set()})(),
+            "interaction_runtime": type("InteractionRuntime", (), {
+                "current_hud_message": "",
+                "current_hud_key_name": None,
+            })(),
             "io_manager": None,
-            "_physics_world": None,
+            "session_runtime": type("SessionRuntime", (), {
+                "physics_world": None,
+                "spatial_grid": None,
+            })(),
             "_plugin_emit": lambda self, *args, **kwargs: None,
         },
     )()

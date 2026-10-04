@@ -64,7 +64,7 @@ class PropSession:
 
     @property
     def physics(self):
-        return getattr(self.logic, "_physics_world", None)
+        return self.logic.session_runtime.physics_world
 
     # -- registry ---------------------------------------------------------
 
@@ -219,7 +219,7 @@ class PropSession:
     # -- I/O --------------------------------------------------------------
 
     def _fire(self, prop, output):
-        io = getattr(self.logic, "io_manager", None)
+        io = self.logic.io_manager
         if io is not None:
             io.fire_output(prop, output)
 
@@ -229,7 +229,7 @@ class PropSession:
     # -- interaction ------------------------------------------------------
 
     def tick(self, delta, use_pressed):
-        player = getattr(self.logic, "player", None)
+        player = self.logic.player
         if player is None:
             return
 
@@ -293,7 +293,7 @@ class PropSession:
             # position still follows the player's view, but the sprite itself
             # no longer rotates with the camera.
             try:
-                best._carry_sprite_yaw = float(getattr(getattr(self.logic, "player", None), "angle", 0.0))
+                best._carry_sprite_yaw = float(self.logic.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
             self._falling.pop(id(best), None)
@@ -365,7 +365,7 @@ class PropSession:
         collect_label = str(
             best.properties.get("collect_type", "health")
         ).replace("_", " ").title()
-        self.logic.current_hud_message = f"[E] Collect {collect_label}"
+        self.logic.interaction_runtime.current_hud_message = f"[E] Collect {collect_label}"
         self._collect(best)
         return True
 
@@ -390,28 +390,27 @@ class PropSession:
         elif collect_type == "key":
             key_name = p.get("collect_key_name", "")
             if key_name:
-                self.logic.collected_keys.add(key_name)
-                self.logic.current_hud_key_name = key_name
+                self.logic.player_runtime.collected_keys.add(key_name)
+                self.logic.interaction_runtime.current_hud_key_name = key_name
         elif collect_type == "ammo":
             try:
                 current_ammo = max(0, int(
-                    getattr(self.logic, "player_ammo", 0)))
+                    self.logic.combat_runtime.player_ammo))
             except (AttributeError, TypeError, ValueError):
                 current_ammo = 0
-            self.logic.player_ammo = current_ammo + max(0, value_num)
+            self.logic.combat_runtime.player_ammo = current_ammo + max(0, value_num)
         elif collect_type == "weapon":
             weapon = p.get("collect_weapon", "gun1")
-            self.logic.active_weapon = weapon
-            if weapon == "gun2" and not getattr(
-                    self.logic, "gun2_obtained", False):
+            self.logic.combat_runtime.active_weapon = weapon
+            if weapon == "gun2" and not self.logic.combat_runtime.gun2_obtained:
                 self.logic.gun2_obtained = True
                 try:
                     current_ammo = max(
-                        0, int(getattr(self.logic, "player_ammo", 0)))
+                        0, int(self.logic.combat_runtime.player_ammo))
                 except (AttributeError, TypeError, ValueError):
                     current_ammo = 0
-                self.logic.player_ammo = max(current_ammo, 8)
-            self.logic.current_hud_message = f"Collected {str(weapon).upper()}"
+                self.logic.combat_runtime.player_ammo = max(current_ammo, 8)
+            self.logic.interaction_runtime.current_hud_message = f"Collected {str(weapon).upper()}"
 
         p["collect_collected"] = True
         self.collected_ids.add(id(prop))
@@ -529,7 +528,7 @@ class PropSession:
 
         physics = self.physics
         raycast_down = getattr(
-            getattr(self.logic, "_spatial_grid", None),
+            self.logic.session_runtime.spatial_grid,
             "raycast_down",
             None,
         )

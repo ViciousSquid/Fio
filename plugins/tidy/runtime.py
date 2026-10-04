@@ -196,7 +196,7 @@ class TidySession:
         )
         obj.properties["carry_enabled"] = False
 
-        physics = getattr(self.logic, "_physics_world", None)
+        physics = self.logic.session_runtime.physics_world
         if physics is not None:
             physics.set_kinematic(obj, True)
 

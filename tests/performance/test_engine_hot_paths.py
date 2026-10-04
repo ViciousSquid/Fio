@@ -336,7 +336,7 @@ def test_the_ai_routes_its_queries_through_the_grid_not_the_brush_list(logic):
     try:
         from engine.player import Player
         thread.player = Player(0.0, 0.0)
-        grid = thread._spatial_grid
+        grid = thread.session_runtime.spatial_grid
         calls = {"wall": 0, "ground": 0}
         real_wall, real_ground = grid.overlaps_wall, grid.raycast_down
 

@@ -173,7 +173,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
         "the hidden brush was still submitted to the renderer")
 
     thread.session_runtime.apply_play_mode(False)
-    assert thread._spatial_grid is None
+    assert thread.session_runtime.spatial_grid is None
     assert thread.monster_ai_thread is None
 
 
@@ -217,7 +217,7 @@ def test_monsters_run_against_the_live_world_during_a_play_session(session):
     assert monster.pos[0] < start_x, (
         "the monster did not close on the player over a second of AI ticks "
         "(x %.1f -> %.1f)" % (start_x, monster.pos[0]))
-    assert thread.monster_ai._grid is thread._spatial_grid, (
+    assert thread.monster_ai._grid is thread.session_runtime.spatial_grid, (
         "the AI is querying a grid other than the session's")
 
 
@@ -248,7 +248,7 @@ def test_the_same_world_objects_serve_the_editor_and_the_runtime(session):
 
     thread.session_runtime.apply_play_mode(True)
     thread.player = Player(0.0, 0.0)
-    grid_brushes = {id(b) for bucket in thread._spatial_grid.cells.values()
+    grid_brushes = {id(b) for bucket in thread.session_runtime.spatial_grid.cells.values()
                     for b in bucket}
     assert grid_brushes <= {id(b) for b in state.brushes}, (
         "the collision grid holds objects that are not in the editor's scene")

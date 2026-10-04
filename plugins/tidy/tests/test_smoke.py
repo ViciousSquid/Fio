@@ -42,10 +42,10 @@ class FakeLogic:
         self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
         self.io_manager = FakeIO()
-        self.current_hud_message = ""
+        self.interaction_runtime = SimpleNamespace(current_hud_message="", current_hud_key_name=None)
         self.player = FakePlayer([0, 40, 0])
-        self._props = None
-        self._physics_world = None
+        self.prop_runtime = None
+        self.session_runtime = SimpleNamespace(physics_world=None, spatial_grid=None)
 
 
 def test_plugin_loads_and_registers():
@@ -146,7 +146,7 @@ def test_core_prop_carry_and_tidy_place():
     logic.player.angle = 0.0
 
     core = PropSession(logic)
-    logic._props = core
+    logic.prop_runtime = core
     core.start()
 
     tidy = TidySession(logic)

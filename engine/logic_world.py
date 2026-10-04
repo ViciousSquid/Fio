@@ -208,7 +208,7 @@ class LogicWorld:
         logic = self.logic
         self.notify_visibility_changed()
         logic.collision_runtime.refresh_collision_brushes_cache()
-        grid = getattr(logic, "_spatial_grid", None)
+        grid = logic.session_runtime.spatial_grid
         if grid is not None:
             grid.populate(logic._collision_brushes_cache)
 

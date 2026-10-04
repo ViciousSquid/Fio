@@ -2199,7 +2199,7 @@ entity to drive them from the I/O system.</i><br>
         """Return the live PhysicsWorld, or None when play mode is unavailable."""
         try:
             view_3d = self.main_window.view_3d
-            world = getattr(getattr(view_3d, 'logic_thread', None), '_physics_world', None)
+            world = view_3d.logic_thread.session_runtime.physics_world
             if world is None:
                 debug_log("Error", "Physics world is not active. Enter play mode first.")
             return world

@@ -36,6 +36,8 @@ class LogicSession:
     def __init__(self, logic):
         self.logic = logic
         self._world_pause_owners = frozenset()
+        self.physics_world = None
+        self.spatial_grid = None
         self._world_pause_lock = threading.Lock()
 
     def set_world_paused(self, owner, paused: bool = True) -> None:
@@ -179,13 +181,13 @@ class LogicSession:
 
             from .physics import PhysicsWorld, SpatialGrid
 
-            logic._spatial_grid = SpatialGrid(cell_size=512.0)
-            logic._spatial_grid.populate(
+            self.spatial_grid = SpatialGrid(cell_size=512.0)
+            self.spatial_grid.populate(
                 logic.editor_state.brushes + logic.collision_runtime._model_collision_brushes
             )
-            logic._physics_world = PhysicsWorld(logic._spatial_grid)
-            logic._physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
-            logic.monster_ai.set_spatial_grid(logic._spatial_grid)
+            self.physics_world = PhysicsWorld(self.spatial_grid)
+            self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
+            logic.monster_ai.set_spatial_grid(self.spatial_grid)
 
             # PropSession is the registry for the Prop runtime domain.
             logic.prop_runtime.start()
@@ -262,16 +264,14 @@ class LogicSession:
 
             logic.prop_runtime.stop()
 
-            physics_world = getattr(logic, "_physics_world", None)
-            if physics_world is not None:
-                physics_world.clear()
-            logic._physics_world = None
+            if self.physics_world is not None:
+                self.physics_world.clear()
+            self.physics_world = None
 
             logic.monster_ai.set_spatial_grid(None)
-            grid = getattr(logic, "_spatial_grid", None)
-            if grid is not None:
-                grid.clear()
-            logic._spatial_grid = None
+            if self.spatial_grid is not None:
+                self.spatial_grid.clear()
+            self.spatial_grid = None
 
             logic.mover_runtime.mover_path_states = {}
             logic.cutscene_runtime.state = None

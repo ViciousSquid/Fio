@@ -63,7 +63,7 @@ class LogicPlayer:
             logic.mover_runtime._mover_brush_list,
             logic.mover_runtime._door_brush_list,
             logic.terrain,
-            spatial_grid=getattr(logic, '_spatial_grid', None),
+            spatial_grid=logic.session_runtime.spatial_grid,
         )
 
     def update_player2(self, delta):

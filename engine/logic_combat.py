@@ -319,7 +319,7 @@ class LogicCombat:
         each is solid is asked live, of the few that contain a point.
         """
         logic = self.logic
-        grid = getattr(logic, '_spatial_grid', None)
+        grid = logic.session_runtime.spatial_grid
         rows = grid._cell_rows
         rows.refresh_movers()
         cs = grid.cell_size

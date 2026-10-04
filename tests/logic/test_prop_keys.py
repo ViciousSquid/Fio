@@ -19,11 +19,13 @@ class Logic:
         self.editor_state = SimpleNamespace(things=list(things), brushes=[])
         self.io_manager = None
         self.player_runtime = type("PlayerRuntime", (), {"collected_keys": set()})()
-        self.current_hud_message = ""
-        self.current_hud_key_name = None
+        self.interaction_runtime = SimpleNamespace(
+            current_hud_message="",
+            current_hud_key_name=None,
+        )
         self.player_health = 100
         self.player_max_health = 100
-        self._physics_world = None
+        self.session_runtime = SimpleNamespace(physics_world=None, spatial_grid=None)
         self._plugin_emit = lambda *args, **kwargs: None
 
 

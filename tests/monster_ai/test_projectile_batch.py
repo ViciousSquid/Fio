@@ -37,7 +37,6 @@ class _Host:
             self.combat_runtime._monster_projectiles.add(
                 position, (0.0, 0.0, 0.0), id(owner), 5, 5.0)
         self._collision_brushes_cache = []
-        self._spatial_grid = None
         self._monster_lock = threading.RLock()
         self.player = None
         self.god_mode = True

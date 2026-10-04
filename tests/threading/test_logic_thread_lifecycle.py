@@ -115,22 +115,22 @@ def test_entering_play_mode_builds_the_spatial_grid_from_the_live_world(logic):
 
     thread.session_runtime.apply_play_mode(True)
 
-    assert thread._spatial_grid is not None, "no spatial grid was built"
-    filed = {id(b) for bucket in thread._spatial_grid.cells.values() for b in bucket}
+    assert thread.session_runtime.spatial_grid is not None, "no spatial grid was built"
+    filed = {id(b) for bucket in thread.session_runtime.spatial_grid.cells.values() for b in bucket}
     missing = [b["name"] for b in brushes if id(b) not in filed]
     assert not missing, "brushes missing from the play-mode grid: %s" % (missing,)
-    assert thread.monster_ai._grid is thread._spatial_grid, (
+    assert thread.monster_ai._grid is thread.session_runtime.spatial_grid, (
         "MonsterAI was not handed the grid the logic thread built")
 
 
 def test_leaving_play_mode_releases_the_spatial_grid(logic):
     thread = logic(brushes=room())
     thread.session_runtime.apply_play_mode(True)
-    grid = thread._spatial_grid
+    grid = thread.session_runtime.spatial_grid
 
     thread.session_runtime.apply_play_mode(False)
 
-    assert thread._spatial_grid is None, "the grid outlived the play session"
+    assert thread.session_runtime.spatial_grid is None, "the grid outlived the play session"
     assert grid.cells == {}, "the released grid still holds brush references"
     assert thread.monster_ai._grid is None, (
         "MonsterAI still holds the grid from the finished session")

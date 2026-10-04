@@ -45,10 +45,12 @@ def test_core_prop_carry_drop_rest_without_plugins():
     }])
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=io,
-        _spatial_grid=grid, _physics_world=physics,
+        session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=physics),
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
-        current_hud_message='',
+        interaction_runtime=SimpleNamespace(current_hud_message=''),
+        player_runtime=SimpleNamespace(collected_keys=set()),
+        combat_runtime=SimpleNamespace(player_ammo=0, active_weapon=None, gun2_obtained=False),
     )
     session = PropSession(logic)
     session.start()
@@ -64,7 +66,7 @@ def test_core_prop_carry_drop_rest_without_plugins():
     physics.step(1 / 60)
     carried = list(prop.pos)
     assert carried[2] > 30.0
-    assert logic.current_hud_message == '[E] Carry / Drop'
+    assert logic.interaction_runtime.current_hud_message == '[E] Carry / Drop'
 
     # Drop: physics takes over from the carried position, not the home one.
     session.tick(1 / 60, use_pressed=True)
@@ -98,7 +100,7 @@ def test_non_physics_prop_still_falls_to_ground_on_drop():
     grid = _floor_grid()
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=io,
-        _spatial_grid=grid, _physics_world=None,
+        session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=None),
         player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
                                camera_height=40.0),
         current_hud_message='',
@@ -128,7 +130,7 @@ def test_respawn_fades_in_over_two_seconds():
     })
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
-        _spatial_grid=None, _physics_world=None,
+        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
             camera_height=40.0,

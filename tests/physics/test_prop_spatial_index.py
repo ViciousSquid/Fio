@@ -29,9 +29,9 @@ def make_session(props=(), physics=None):
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=list(props)),
         player=None,
-        current_hud_message="",
+        interaction_runtime=SimpleNamespace(current_hud_message=""),
         io_manager=None,
-        _physics_world=physics,
+        session_runtime=SimpleNamespace(physics_world=physics, spatial_grid=None),
     )
     session = PropSession(logic)
     session.start()
@@ -119,9 +119,9 @@ def test_adopting_and_releasing_file_and_unfile():
     logic = SimpleNamespace(
         editor_state=SimpleNamespace(things=[prop]),
         player=None,
-        current_hud_message="",
+        interaction_runtime=SimpleNamespace(current_hud_message=""),
         io_manager=None,
-        _physics_world=None,
+        session_runtime=SimpleNamespace(physics_world=None, spatial_grid=None),
     )
     session = PropSession(logic)
     session.start()

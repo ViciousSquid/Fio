@@ -150,12 +150,12 @@ def test_setprop_hidden_on_a_brush_in_play_updates_its_collision():
         console.cmd_set_property("wall hidden true")
         logic._tick(logic.TICK_DURATION)
         assert wall["hidden"] is True
-        assert all(b is not wall for b in logic._spatial_grid._all_solid), (
+        assert all(b is not wall for b in logic.session_runtime.spatial_grid._all_solid), (
             "a wall hidden with setprop is still solid")
 
         console.cmd_set_property("wall hidden false")
         logic._tick(logic.TICK_DURATION)
-        assert any(b is wall for b in logic._spatial_grid._all_solid)
+        assert any(b is wall for b in logic.session_runtime.spatial_grid._all_solid)
     finally:
         logic.stop()
 

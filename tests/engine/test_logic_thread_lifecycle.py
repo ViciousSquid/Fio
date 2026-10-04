@@ -55,7 +55,7 @@ def _frame_from_inside(logic, monkeypatch, hook_owner, hook_name):
     monkeypatch.setattr(logic.render_runtime, "prepare_render_state", lambda: None)
     monkeypatch.setattr(
         logic, "_tick_play_mode",
-        lambda delta: seen.append((logic._spatial_grid is not None,
+        lambda delta: seen.append((logic.session_runtime.spatial_grid is not None,
                                    logic.prop_runtime is not None)))
     real_hook = getattr(hook_owner, hook_name)
 
@@ -97,7 +97,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
         entered.set()
         release.wait(DEADLINE)
         events.append(("tick", logic.prop_runtime is not None,
-                       logic._spatial_grid is not None))
+                       logic.session_runtime.spatial_grid is not None))
 
     real_reset_doors = logic.mover_runtime._reset_doors
 

@@ -349,7 +349,6 @@ class LogicThread(threading.Thread):
         
         # Mover and door animation state are owned by mover_runtime.
         # Model collision pseudo-brushes for things with model_path
-        self._physics_world = None
         # Bumped every time the set of drawable objects changes, so a consumer
         # that caches across frames can tell whether its cache still describes
         # this world.  See notify_visibility_changed().
@@ -724,7 +723,7 @@ class LogicThread(threading.Thread):
         # Gameplay
         self.interaction_runtime.handle(use_key)
         self.prop_runtime.tick(delta, use_key)
-        physics_world = getattr(self, '_physics_world', None)
+        physics_world = self.session_runtime.physics_world
         if physics_world is not None:
             physics_world.step(delta, self.player)
             # Physics owned those positions for the duration of the step; the

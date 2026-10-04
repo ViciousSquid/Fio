@@ -1456,7 +1456,7 @@ class QtGameView(QOpenGLWidget):
     def _render_spatial_grid(self, proj_matrix, view_matrix):
         if not self.debug_shader or not self.logic_thread:
             return
-        grid = getattr(self.logic_thread, '_spatial_grid', None)
+        grid = self.logic_thread.session_runtime.spatial_grid
         if grid is None:
             return
         gl.glUseProgram(self.debug_shader)
