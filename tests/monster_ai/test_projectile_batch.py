@@ -33,9 +33,9 @@ class _Host:
             thing for thing in things if isinstance(thing, Monster)
         ]
         self._monster_by_id = {id(thing): thing for thing in self._monster_things}
-        self._monster_projectiles = ProjectileStore()
+        self.combat_runtime = LogicCombat(self)
         for position, owner in projectiles:
-            self._monster_projectiles.add(
+            self.combat_runtime._monster_projectiles.add(
                 position, (0.0, 0.0, 0.0), id(owner), 5, 5.0)
         self._collision_brushes_cache = []
         self._spatial_grid = None
@@ -49,8 +49,6 @@ class _Host:
             monster_debug_active=False,
             _apply_monster_damage=lambda m, dmg, attacker=None:
                 host.hits.append(m.properties['name']))
-        self.combat_runtime = LogicCombat(self)
-
     def _transit_projectile_through_portals(self, projectiles, index, prev):
         return None
 
@@ -83,10 +81,10 @@ def test_published_projectile_snapshot_does_not_alias_simulation_store():
     snapshot = host.combat_runtime._publish_projectile_render_snapshot()
     assert snapshot.shape == (1, 3)
     assert snapshot.dtype == np.float32
-    assert not np.shares_memory(snapshot, host._monster_projectiles.pos)
+    assert not np.shares_memory(snapshot, host.combat_runtime._monster_projectiles.pos)
 
     expected = snapshot.copy()
-    host._monster_projectiles.pos[0] = (100.0, 200.0, 300.0)
+    host.combat_runtime._monster_projectiles.pos[0] = (100.0, 200.0, 300.0)
 
     np.testing.assert_array_equal(snapshot, expected)
 
@@ -116,7 +114,7 @@ def test_small_projectile_set_uses_scalar_path_but_matches_dense():
     scalar.combat_runtime._update_monster_projectiles(0.0)
 
     assert dense.hits == scalar.hits == ["target"]
-    assert len(dense._monster_projectiles) == len(scalar._monster_projectiles) == 0
+    assert len(dense.combat_runtime._monster_projectiles) == len(scalar.combat_runtime._monster_projectiles) == 0
 
 
 def test_the_first_eligible_monster_in_order_is_hit():
@@ -134,7 +132,7 @@ def test_the_first_eligible_monster_in_order_is_hit():
     host = _Host(things, [((0, 64, 0), owner)])
     host.combat_runtime._update_monster_projectiles(0.0)
     assert host.hits == ["target"]
-    assert len(host._monster_projectiles) == 0
+    assert len(host.combat_runtime._monster_projectiles) == 0
 
 
 def test_batch_matches_the_walk_over_random_crowds():
