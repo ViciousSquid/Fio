@@ -508,7 +508,7 @@ class BenchmarkRunner:
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
-        logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        logic = self.main_window.view_3d.logic_thread
         if logic is not None:
             logic.player_runtime.notarget = self._original_notarget
         if self._original_level_data is not None:
@@ -525,7 +525,7 @@ class BenchmarkRunner:
             camera.yaw = yaw
             camera.pitch = pitch
             camera.fov = fov
-        logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        logic = self.main_window.view_3d.logic_thread
         if logic is not None:
             logic.player_runtime.notarget = self._original_notarget
         self.main_window.unsaved_changes = self._original_unsaved_changes
@@ -575,7 +575,7 @@ class BenchmarkRunner:
         view._io_conn_cache = None
         view._io_conn_scene_ver = None
 
-        logic = getattr(view, "logic_thread", None)
+        logic = view.logic_thread
         if logic is not None:
             logic.world_runtime.notify_visibility_changed()
             logic.collision_runtime._model_collision_brushes = []
@@ -928,7 +928,7 @@ class BenchmarkRunner:
     
         try:
             if label == "monster_chaos_witness":
-                logic = getattr(self.main_window.view_3d, "logic_thread", None)
+                logic = self.main_window.view_3d.logic_thread
                 if logic is not None:
                     logic.player_runtime.notarget = self._original_notarget
             if self.main_window.view_3d.play_mode:
@@ -1041,7 +1041,7 @@ class BenchmarkRunner:
                 "dead_monsters": max(0, len(monsters) - alive),
             })
 
-            logic = getattr(view, "logic_thread", None)
+            logic = view.logic_thread
             self._restore_monster_chaos_ai_counter(logic)
             if logic is not None:
                 logic.player_runtime.notarget = self._original_notarget
@@ -1276,7 +1276,7 @@ class BenchmarkRunner:
                 self.main_window.state.get_level_data()
             )
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
-            logic = getattr(self.main_window.view_3d, "logic_thread", None)
+            logic = self.main_window.view_3d.logic_thread
             self._original_notarget = bool(
                 logic.player_runtime.notarget
             ) if logic is not None else False
@@ -1389,7 +1389,7 @@ class BenchmarkRunner:
         if original is None:
             return
         if logic is None:
-            logic = getattr(self.main_window.view_3d, "logic_thread", None)
+            logic = self.main_window.view_3d.logic_thread
         monster_ai = getattr(logic, "monster_ai", None) if logic is not None else None
         if monster_ai is not None:
             monster_ai.update = original
@@ -1403,7 +1403,7 @@ class BenchmarkRunner:
         """Run the staged live population ramp, then measure 40 monsters for 5 seconds."""
         phase = getattr(self, "_monster_chaos_phase", "")
         rng = getattr(self, "_monster_chaos_rng", None)
-        logic = getattr(view, "logic_thread", None)
+        logic = view.logic_thread
         if rng is None or logic is None:
             raise RuntimeError("Monster chaos witness lost its live state")
 
