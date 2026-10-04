@@ -157,7 +157,7 @@ def test_a_quiet_noise_carries_less_far_than_a_loud_one(monster_factory, ai_worl
         "a loudness-0.25 noise reaches 250 units; the monster is %.0f away"
         % distance)
 
-    logic._noise_events.clear()
+    logic.combat_runtime._gunfire_events.clear()
     logic.emit_noise((0, 96, 0), source="gunfire", loudness=1.0)   # reach 1000
     ai.update(TICK)
     assert quiet.properties["awake"] is True
@@ -530,12 +530,12 @@ def test_a_distant_flying_monster_spawns_a_projectile(monster_factory, ai_world)
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
 
-    assert len(logic._monster_projectiles) == 1, (
+    assert len(logic.combat_runtime._monster_projectiles) == 1, (
         "a flying monster %.0f units away should fire a projectile, not a "
         "hitscan; projectiles=%d damage=%s"
         % (_distance(monster.pos, logic.player.pos),
-           len(logic._monster_projectiles), logic.damage_applied))
-    projectile = logic._monster_projectiles
+           len(logic.combat_runtime._monster_projectiles), logic.damage_applied))
+    projectile = logic.combat_runtime._monster_projectiles
     assert projectile.damage[0] == 9
     assert projectile.owner_id[0] == id(monster)
     # It must be aimed at the player, i.e. travelling in -X.
@@ -553,7 +553,7 @@ def test_a_flying_monster_in_biting_range_bites_instead(monster_factory, ai_worl
     for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
         ai.update(TICK)
 
-    assert len(logic._monster_projectiles) == 0, \
+    assert len(logic.combat_runtime._monster_projectiles) == 0, \
         "a biting flier should not also spawn a projectile"
     assert logic.damage_applied == [int(10 * MONSTER_BITE_DAMAGE_MULT)], (
         "a bite does %sx damage; expected %d, got %s"
