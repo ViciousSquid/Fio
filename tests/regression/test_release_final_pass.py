@@ -336,7 +336,7 @@ def test_rebuilding_recent_files_does_not_accumulate_actions(qt_app, tmp_path):
 # Debug -> Validate Connections
 # ---------------------------------------------------------------------------
 
-def test_validate_connections_names_the_connection_it_reports(monkeypatch):
+def test_validate_connections_names_the_connection_it_reports(main_window, monkeypatch):
     """The report listed an I/O problem as just "targets 'ghost', which is not
     in this map" -- nothing said which entity or output held the connection.
     A merge replaced the report body and left the previous one (which named
