@@ -1952,6 +1952,37 @@ class PropertyEditor(QWidget):
                 self._defer_io_tab(lambda t=thing: self._create_io_tab_for_thing(t))
 
         layout.addWidget(self.tab_widget)
+
+        entity_type = thing.properties.get('type')
+        if entity_type:
+            from plugins.manager import get_manager
+            plugin_tabs = get_manager().property_tabs_for(entity_type)
+            if plugin_tabs:
+                pending = {}
+                for label, factory in plugin_tabs:
+                    placeholder = QWidget()
+                    placeholder_layout = QVBoxLayout(placeholder)
+                    placeholder_layout.setContentsMargins(0, 0, 0, 0)
+                    index = self.tab_widget.addTab(placeholder, label)
+                    pending[index] = (placeholder, factory)
+                self.tab_widget._fio_pending_tabs = pending
+
+                def build_plugin_tab(index, widget=self.tab_widget, entity=thing):
+                    pending_tabs = getattr(widget, '_fio_pending_tabs', None)
+                    if not pending_tabs or index not in pending_tabs:
+                        return
+                    placeholder, factory = pending_tabs.pop(index)
+                    try:
+                        inner = factory(entity)
+                    except Exception as exc:
+                        debug_log("Plugins", f"custom tab build failed ({exc})")
+                        return
+                    if inner is not None:
+                        placeholder.layout().addWidget(inner)
+
+                self.tab_widget.currentChanged.connect(build_plugin_tab)
+                build_plugin_tab(self.tab_widget.currentIndex())
+
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
