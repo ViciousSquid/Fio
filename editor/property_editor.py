@@ -1215,13 +1215,9 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_type_combo'] = type_combo
 
         # Activation mode: touch fires on entry; use requires E press.
-        # `trigger_activation` is the key the engine and the maps use; older
-        # builds of this tab wrote `trigger_collect_activation`, which nothing
-        # read, so it is only a fallback for showing what was chosen.
         collect_activation_combo = _make_combo(
             ['touch', 'use'],
-            brush.get('trigger_activation',
-                      brush.get('trigger_collect_activation', 'touch')),
+            brush.get('trigger_activation', 'touch'),
             tooltip=(
                 "touch — fires when player walks inside\n"
                 "use — fires when player presses E while inside"
@@ -1269,7 +1265,7 @@ class PropertyEditor(QWidget):
 
         is_use_mode = brush.get(
             'trigger_activation',
-            brush.get('trigger_collect_activation', 'touch')) == 'use'
+            brush.get('trigger_activation', 'touch')) == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
 
