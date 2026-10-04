@@ -450,7 +450,7 @@ def test_a_bigworld_map_activates_cells_around_the_player_and_restores_on_stop(
     finally:
         thread.session_runtime.apply_play_mode(False)
 
-    assert thread._bigworld is None, \
+    assert thread.plugins.services.get("bigworld") is None, \
         "the streaming session outlived play mode"
 
     # No object may still carry the session's activation marker.
