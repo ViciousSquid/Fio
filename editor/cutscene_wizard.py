@@ -1045,7 +1045,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         actor = self.actor_objects.get(aid) if aid else None
         if actor is not None:
             try:
-                self.main_window.set_selected_object(actor)
+                self.main_window.set_selected_objects([actor])
             except Exception:
                 pass
             name = self.actor_meta.get(aid, {}).get("name", aid)
@@ -1866,7 +1866,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             camera.pos = [float(v) for v in pos]
             camera.properties.update(props)
         self._delete_temporary_actors()
-        self.main_window.set_selected_object(camera)
+        self.main_window.set_selected_objects([camera])
         self.main_window.update_all_ui()
         self._saved = True
         self.main_window.show_toast(f"Applied cutscene {Path(filename).name} to current map")
