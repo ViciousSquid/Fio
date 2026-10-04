@@ -201,7 +201,7 @@ class MonsterAI:
             if self.lt.io_manager:
                 try:
                     from editor.things import PlayerStart
-                    for thing in self.lt.things:
+                    for thing in self.lt.editor_state.things:
                         if isinstance(thing, PlayerStart):
                             self.lt.io_manager.fire_output(thing, 'OnPlayerDeath')
                             break
@@ -2024,7 +2024,7 @@ the scalar fallback for callers that do not have the dense table.
             return True
         ray_dir = ray_dir / ray_len
 
-        for brush in self.lt.brushes:
+        for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
             pos = glm.vec3(brush['pos'])
