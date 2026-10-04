@@ -45,8 +45,8 @@ def logic():
     state.brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048))]
     state.things = [make_thing(PlayerStart, "spawn", (0, 64, 0))]
     thread = LogicThread(ThreadedGameState(), state)
-    thread.player_runtime.player = Player(0.0, 0.0)
-    thread.player_runtime.player.pos.y = 40.0
+    thread.player = Player(0.0, 0.0)
+    thread.player.pos.y = 40.0
     yield thread
     thread.session_runtime.apply_play_mode(False)
     thread.stop()
