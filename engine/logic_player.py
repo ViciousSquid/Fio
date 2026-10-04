@@ -10,12 +10,12 @@ import math
 import glm
 
 # Qt key values used by the engine's input state.
-_KEY_W = 0x57
-_KEY_S = 0x53
-_KEY_A = 0x41
-_KEY_D = 0x44
-_KEY_SPACE = 0x20
-_KEY_C = 0x43
+KEY_W = 0x57
+KEY_S = 0x53
+KEY_A = 0x41
+KEY_D = 0x44
+KEY_SPACE = 0x20
+KEY_C = 0x43
 
 _WATER_LOUDNESS = 0.7
 
@@ -39,17 +39,17 @@ class LogicPlayer:
         player.pitch = max(-1.5, min(1.5, player.pitch))
 
         move_dir = glm.vec3(0)
-        if _KEY_W in keys:
+        if KEY_W in keys:
             move_dir.z += 1
-        if _KEY_S in keys:
+        if KEY_S in keys:
             move_dir.z -= 1
-        if _KEY_A in keys:
+        if KEY_A in keys:
             move_dir.x += 1
-        if _KEY_D in keys:
+        if KEY_D in keys:
             move_dir.x -= 1
 
-        jump = _KEY_SPACE in keys
-        crouch = _KEY_C in keys
+        jump = KEY_SPACE in keys
+        crouch = KEY_C in keys
 
         player.update(
             delta,
