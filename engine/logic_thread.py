@@ -185,7 +185,6 @@ class LogicThread(threading.Thread):
             "player_runtime",
         ),
         "interaction": (
-            "player",
             "player_runtime",
             "io_manager",
             "mover_runtime",
