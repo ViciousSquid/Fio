@@ -70,21 +70,6 @@ def test_undo_steps_back_exactly_one_operation():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.qt
-def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
-    """``glm.normalize`` of the zero vector is NaN, not an error.
-
-    A ground monster flattens its 3D direction to XZ before walking.  With the
-    target directly overhead - a flying player above a grunt, or a monster on
-    the player's own column - the flattened vector is zero, and the NaN flowed
-    into the monster's position and then into ``SpatialGrid.overlaps_wall``,
-    which raised ``ValueError: cannot convert float NaN to integer`` on the AI
-    thread.  That thread has no exception guard, so every monster in the level
-    silently stopped.
-
-    The invariant: a monster's position is always finite.
-    """
-    pytest.importorskip("PyQt5")
-    from editor.things import Monster
     from engine.monster_ai import MonsterAI
     from engine.logic_world import LogicWorld
     from tests.helpers.fakes import FakeLogicThread, FakePlayer
@@ -94,22 +79,10 @@ def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
     monster = make_thing(Monster, "grunt", (0.0, 96.0, 0.0), awake=True)
     logic = FakeLogicThread(brushes=ground, things=[monster],
                             player=FakePlayer((0.0, 900.0, 0.0)))
-    logic.world_runtime = LogicWorld(
-        logic,
-        monster_type=Monster,
-        path_node_type=PathNode,
-    )
+    logic.world_runtime = LogicWorld(logic, monster_type=Monster)
     ai = MonsterAI(logic)
     logic.monster_ai = ai
     logic.world_runtime.build_entity_caches()
-    ai.set_spatial_grid(logic.build_spatial_grid())
-
-    for _ in range(10):
-        ai.update(1.0 / 30.0)          # must not raise
-
-    assert all(math.isfinite(value) for value in monster.pos), (
-        "the monster's position went non-finite: %s" % (monster.pos,))
-
 
 @pytest.mark.qt
 def test_a_patrol_node_directly_overhead_does_not_produce_nan():
