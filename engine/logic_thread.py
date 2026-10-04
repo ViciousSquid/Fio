@@ -164,11 +164,6 @@ class LogicThread(threading.Thread):
         "camera": (),
         "movers": (
             "editor_state",
-            "movers",
-            "doors",
-            "mover_path_states",
-            "_mover_brush_list",
-            "_door_brush_list",
         ),
         "parenting": (
             "editor_state",
@@ -391,11 +386,8 @@ class LogicThread(threading.Thread):
         self.active_speakers: set = set()
         
         # Mover/Door Lists
-        self.movers = []
         self.doors = []
         # PERF: cached brush-only views of self.movers/self.doors (see _init_movers/_init_doors)
-        self._mover_brush_list = []
-        self._door_brush_list = []
         
         # Mover and door animation state are owned by mover_runtime.
         # Parented lights
