@@ -1026,7 +1026,7 @@ class MainWindow(QMainWindow):
         immediate click still leaves the copy beside the original instead of
         exactly on top of it, and clipboard copy/paste is untouched.
         """
-        sources = list(getattr(self.state, 'selected_objects', []) or [])
+        sources = list(self.state.selected_objects or [])
         if self.state.selected_object is not None and \
                 self.state.selected_object not in sources:
             sources.append(self.state.selected_object)
