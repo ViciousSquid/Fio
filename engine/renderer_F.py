@@ -778,7 +778,7 @@ class Renderer_F(BaseRenderer):
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
-    def _get_active_lights(self, things, config):
+    def _get_active_lights(self, config):
         """Return active lights directly from the dense EntityTable."""
         table = config.get('entity_table')
         if table is None or not hasattr(table, 'light_color'):
@@ -920,7 +920,7 @@ class Renderer_F(BaseRenderer):
                 positions[self_index]), sprites[self_index]))
         return tuple(others)
 
-    def render_scene(self, projection, view, camera_pos, brushes, things,
+    def render_scene(self, projection, view, camera_pos,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
 
@@ -947,7 +947,7 @@ class Renderer_F(BaseRenderer):
         # the unlit passes (sprites) and the terrain are not handed a camera.
         self._frame_camera_pos = self._camera_xyz(camera_pos)
         self.render_stats.reset()
-        self.render_stats.total_brushes = len(brushes)
+        self.render_stats.total_brushes = len(config.get('all_brush_slots', ()))
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
@@ -1056,7 +1056,7 @@ class Renderer_F(BaseRenderer):
                 etable, effect_slots, cx, cz, self.view_distance.distance_sq)
 
         _tbl = table
-        lights = self._get_active_lights(things, config)
+        lights = self._get_active_lights(config)
         self._frame_lights = lights
 
         # --- Depth cube-map shadow pass -------------------------------------
