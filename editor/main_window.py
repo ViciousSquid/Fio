@@ -1359,8 +1359,7 @@ class MainWindow(QMainWindow):
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
-            if hasattr(self.state, 'terrain_data'):
-                self.state.terrain_data = self.terrain.to_dict()
+            self.state.terrain_data = self.terrain.to_dict()
             if hasattr(self, 'scene_hierarchy'):
                 try:
                     self.scene_hierarchy.refresh_list()
@@ -2158,7 +2157,7 @@ class MainWindow(QMainWindow):
             return view.logic_thread
 
         def _alive(e=entity):
-            return any(t is e for t in getattr(self.state, 'things', ()))
+            return any(t is e for t in self.state.things)
 
         panel = EntityInspector(entity, logic=_logic, alive=_alive, parent=self)
         key = id(entity)
