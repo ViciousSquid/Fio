@@ -177,7 +177,6 @@ class LogicThread(threading.Thread):
         "render": (
             "game_state",
             "editor_state",
-            "player",
             "player_runtime",
         ),
         "session": (
