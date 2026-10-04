@@ -157,10 +157,6 @@ class OBJLoader:
                         mtl['texture'] = texture
                         mtl['mtl_dir'] = mtl_dir
 
-        print(
-            f"[OBJLoader] Loaded MTL: {mtl_path} "
-            f"({loaded_materials} material{'s' if loaded_materials != 1 else ''})"
-        )
 
     @staticmethod
     def _parse_texture_map(parts: List[str]) -> Optional[str]:
@@ -255,7 +251,6 @@ class OBJLoader:
         else:
             self.materials['default'] = material
 
-        print(f"[OBJLoader] Using discovered base-color texture: {texture_path}")
 
 
 class OBJ:
@@ -287,32 +282,7 @@ class OBJ:
         self.materials = loader.materials
         self._build_gl_buffers(loader)
 
-        if self.source_bounds is not None:
-            source_min, source_max = self.source_bounds
-            print(
-                f"[OBJ] Source bounds: min={source_min.tolist()} "
-                f"max={source_max.tolist()}"
-            )
-        if self.centered_for_import:
-            print(
-                f"[OBJ] Recentered mesh by offset="
-                f"{self.origin_offset.tolist()}"
-            )
-
-        if self.cpu_vertices is not None and len(self.cpu_vertices):
-            mins = self.cpu_vertices.min(axis=0)
-            maxs = self.cpu_vertices.max(axis=0)
-            centre = (mins + maxs) * 0.5
-            size = maxs - mins
-            print(
-                f"[OBJ] Bounds: min={mins.tolist()} "
-                f"max={maxs.tolist()} "
-                f"size={size.tolist()} "
-                f"centre={centre.tolist()}"
-            )
-
         self.is_loaded = True
-        print(f"[OBJ] Loaded {self.vertex_count} vertices from {filepath}")
     
     def _repair_import_origin(self, loader: OBJLoader):
         """Repair obviously broken imported pivots while preserving normal pivots.
