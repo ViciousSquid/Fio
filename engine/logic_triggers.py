@@ -612,7 +612,7 @@ class LogicTriggers:
                     + scheduler_tick
                 )
                 interval = self._trigger_poll_interval(brush)
-                if elapsed + self.logic.TRIGGER_POLL_EPSILON >= interval:
+                if elapsed + self.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
                 self._trigger_poll_elapsed_by_bid[bid] = elapsed
