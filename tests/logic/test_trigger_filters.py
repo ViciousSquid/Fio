@@ -17,10 +17,9 @@ from engine.prop_runtime import PropSession
 def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
            poll_interval=None):
     logic = SimpleNamespace()
-    logic.player_runtime.player_runtime = SimpleNamespace(collected_keys=set())
-    logic.player_runtime.player = SimpleNamespace(
+    logic.player_runtime = SimpleNamespace(collected_keys=set(), player=SimpleNamespace(
         pos=glm.vec3(*player_pos), angle=0.0, velocity=glm.vec3(0.0)
-    )
+    ))
     logic.editor_state = SimpleNamespace(things=list(props) + list(monsters), brushes=[])
     logic.session_runtime = LogicSession(logic)
     logic.world_runtime = LogicWorld(logic)
@@ -182,7 +181,7 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(
         )
     ]
     logic.mover_runtime.door_states = {0: {"state": "closed"}}
-    logic.player_runtime.player_runtime.collected_keys = {key_name} if collected else set()
+    logic.player_runtime.collected_keys = {key_name} if collected else set()
     logic.world_runtime.levelchanger_things = []
     logic.interaction_runtime.current_hud_message = ""
     logic.interaction_runtime.current_hud_key_name = None
