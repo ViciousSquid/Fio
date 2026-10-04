@@ -93,7 +93,7 @@ def test_a_map_with_no_bigworld_entity_never_starts_a_session():
         plugin.on_play_start(logic)
         plugin.on_tick(logic, None)
         plugin.on_play_stop(logic)
-        report(repr(getattr(logic, '_bigworld', 'missing')),
+        report(repr(plugin._sessions.get(logic)),
                sorted(m for m in sys.modules if m.startswith('plugins.bigworld')))
     """)
     session_repr, loaded = out.split(' ', 1)
@@ -143,7 +143,7 @@ def test_a_map_with_a_bigworld_entity_activates_streaming():
 
         logic = Logic()
         plugin.on_play_start(logic)
-        session = logic._bigworld
+        session = plugin._sessions.get(logic)
         report(session is not None,
                session.manager.stats()['total_brushes'],
                'plugins.bigworld.runtime' in sys.modules)
