@@ -143,7 +143,7 @@ def test_restoring_a_hidden_brush_takes_it_out_of_collision(session):
     snapshot = savegame.build_snapshot(thread, map_name=MAP)
 
     wall["hidden"] = False
-    thread._spatial_grid.populate(thread.brushes)   # as a Show would
+    thread._spatial_grid.populate(thread.editor_state.brushes)   # as a Show would
     assert _in_grid(thread, wall)
 
     savegame.restore_auto(thread, snapshot, current_map_name=MAP)
