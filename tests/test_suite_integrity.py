@@ -183,6 +183,8 @@ PRODUCTION_OWNER_NAMES = {
     "PhysicsWorld",
     "PropSession",
     "PluginHost",
+    "DiskStreamingSession",
+    "TidySession",
 }
 
 
