@@ -1,6 +1,6 @@
-"""The editor patches plugins install, asserted rather than assumed.
+"""The plugin editor extensions are installed by their owning editor classes.
 
-``plugins.integration`` extends the editor by wrapping methods on its classes.
+Plugin editor features are now called directly from EditorState, View2D, Ui_MainWindow, and PropertyEditor.
 Every one of those wraps is installed by a ``_patch_*`` function that ends with
 an assignment back onto the class, and nothing downstream fails loudly when an
 assignment does not happen — a plugin schema that never renders just looks like
