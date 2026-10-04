@@ -177,7 +177,7 @@ def test_load_map_enter_play_dispatch_io_update_world_stop(session):
 
     thread.session_runtime.apply_play_mode(False)
     assert thread.session_runtime.spatial_grid is None
-    assert thread.monster_ai_thread is None
+    assert thread.session_runtime.monster_ai_thread is None
 
 
 def test_a_delayed_connection_fires_on_the_logic_threads_own_clock(session):
