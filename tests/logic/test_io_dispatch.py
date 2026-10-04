@@ -179,7 +179,8 @@ def test_the_stable_id_is_preferred_over_the_name(net):
     impostor = box_brush("door", is_door=True)
     impostor["id"] = "some-other-id"
     net.entities["door_impostor"] = impostor
-    net.entities["door"] = real
+    net.logic.editor_state.brushes.append(impostor)
+    net._rebuild_world_index()
 
     net.connect("button", "OnTrigger", "door", by_id=True)
     net.handler("door")
