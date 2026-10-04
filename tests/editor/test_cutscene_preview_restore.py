@@ -85,6 +85,12 @@ def _fake_wizard():
             update_all_ui=lambda: None,
         ),
     )
+    wizard._find_map_actor = types.MethodType(
+        CutsceneWizard._find_map_actor, wizard
+    )
+    wizard._refresh_actor_objects_from_state = types.MethodType(
+        CutsceneWizard._refresh_actor_objects_from_state, wizard
+    )
     wizard._preview_stop_and_restore = types.MethodType(
         CutsceneWizard._preview_stop_and_restore, wizard
     )
