@@ -12,7 +12,7 @@ pytest.importorskip("PyQt5", reason="the plugins menu is editor-tier")
 
 from PyQt5.QtWidgets import QMainWindow                 # noqa: E402
 
-import plugins.integration as integration               # noqa: E402
+from editor.ui import _build_plugins_menu                 # noqa: E402
 from plugins.manager import get_manager, load_plugins   # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -57,7 +57,7 @@ def test_a_disabled_plugins_actions_are_hidden(window):
     was = mgr.is_enabled(tidy)
     try:
         mgr.set_enabled(tidy, False)
-        integration._build_plugins_menu(window)
+        _build_plugins_menu(window)
         items = plugin_action_items(window, tidy.name)
         assert items, "Tidy registered no menu actions; this test is looking in the wrong place"
         for label, visible, _enabled in items:

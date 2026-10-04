@@ -20,7 +20,6 @@ import pytest
 pytest.importorskip("PyQt5", reason="the editor patches are Qt-side")
 
 from editor.property_editor import PropertyEditor      # noqa: E402
-import plugins.integration as integration              # noqa: E402
 
 pytestmark = pytest.mark.qt
 
