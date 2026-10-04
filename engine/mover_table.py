@@ -339,7 +339,7 @@ class _Group:
                                float(new[2]) - cur[2])
 
     def _ride(self, logic):
-        player = logic.player_runtime.player
+        player = logic.player
         if not player:
             return None
         ground = getattr(player, 'ground_object', None)
