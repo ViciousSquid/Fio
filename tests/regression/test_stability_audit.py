@@ -368,8 +368,7 @@ def test_a_trigger_saves_nothing_by_default():
 
 
 def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
-    """The Activation combo wrote ``trigger_collect_activation``, which nothing
-    read: a trigger set to 'use' in the editor still fired on touch."""
+    """The Activation combo writes the canonical trigger activation field."""
     import types
     from PyQt5.QtWidgets import QWidget
     from editor.property_editor import PropertyEditor
