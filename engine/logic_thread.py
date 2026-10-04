@@ -141,10 +141,11 @@ class LogicThread(threading.Thread):
     # These are deliberately the shared attributes a runtime may assume exist
     # after LogicThread.__init__ has completed. Session-specific contents are
     # reset by LogicSession, but the host containers themselves are created here.
-    # player_runtime stays lazy for lightweight test doubles; the other extracted
-    # runtimes are constructed during LogicThread initialization.
+    # Every extracted runtime listed below is constructed during LogicThread
+    # initialization and participates in the host validation seam.
     _RUNTIME_HOSTS = (
         "camera",
+        "player_runtime",
         "mover_runtime",
         "render_runtime",
         "session_runtime",
@@ -164,12 +165,12 @@ class LogicThread(threading.Thread):
         "camera": (),
         "movers": (
             "editor_state",
+            "player",
+            "io_manager",
+            "world_runtime",
         ),
         "parenting": (
             "editor_state",
-        ),
-        "player": (
-            "game_state",
         ),
         "render": (
             "game_state",
@@ -180,24 +181,48 @@ class LogicThread(threading.Thread):
         "session": (
             "editor_state",
             "io_manager",
+            "player",
             "player_runtime",
         ),
         "interaction": (
+            "player",
             "player_runtime",
             "io_manager",
+            "mover_runtime",
+            "world_runtime",
         ),
         "editor": (
             "game_state",
         ),
         "triggers": (
+            "player",
             "player_runtime",
+            "game_state",
+            "interaction_runtime",
+            "io_manager",
+            "portal_runtime",
+            "prop_runtime",
+            "session_runtime",
+            "world_runtime",
+            "_player_damage_lock",
         ),
         "portals": (
             "player",
         ),
         "combat": (
+            "player",
             "player_runtime",
             "io_manager",
+            "camera",
+            "collision_runtime",
+            "editor_state",
+            "game_state",
+            "monster_ai",
+            "portal_runtime",
+            "session_runtime",
+            "trigger_runtime",
+            "world_runtime",
+            "_monster_lock",
         ),
         "timing": (
             "io_manager",
