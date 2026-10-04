@@ -462,7 +462,7 @@ class SceneHierarchy(QWidget):
 
     def _has_terrain(self):
         """Check if terrain data exists in the current scene."""
-        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        terrain_data = self.main_window.state.terrain_data
         return terrain_data is not None
 
     def refresh_list(self):
