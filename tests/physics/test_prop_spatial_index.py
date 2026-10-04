@@ -15,7 +15,6 @@ player walks up to a Prop and cannot carry it.
 
 import math
 import random
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -324,20 +323,20 @@ def test_a_savegame_restore_refiles_the_props_it_teleports():
 
 def test_a_streaming_delta_refiles_the_props_it_places():
     """Big World overlays a saved delta when a cell comes back."""
-    from plugins.bigworld.streaming import DiskStreamingSession, _THING
+    from plugins.bigworld.streaming import DiskStreamingSession, MemoryCellSource, _THING
 
     prop = prop_at(0, 0, 60, id="prop-1")
     session = make_session([prop])
     logic = session.logic
     logic.prop_runtime = session
 
-    host = DiskStreamingSession.__new__(DiskStreamingSession)
-    host.logic = logic
+    source = MemoryCellSource.from_logic(logic)
+    host = DiskStreamingSession(logic, source)
     host._live_by_id = {"prop-1": prop}
     destination = [CELL_SIZE * 7, 0.0, CELL_SIZE * 7]
     host._delta_by_uuid = {"prop-1": (None, {"pos": list(destination)})}
 
-    host._apply_saved_delta(SimpleNamespace(objs=[(_THING, "prop-1")]))
+    host._apply_saved_delta([(_THING, "prop-1")])
 
     assert list(prop.pos) == destination
     assert session._filed[id(prop)] == cell_of_point(destination[0], destination[2]), (
