@@ -104,14 +104,12 @@ class FakeLogicThread:
         self.buddha_mode = False
         self.trigger_runtime = LogicTriggers(self)
         self._noise_events = self._gunfire_events
-        self._name_cache = {}
         self._monster_things = None
         self._id_cache = {}
         self.world_runtime = LogicWorld(self)
         self.hurt_trigger_timers = {}
         self.HURT_INTERVAL = 0.5
         self.damage_applied = []
-        self.rebuild_name_cache()
 
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
         return self._monster_projectiles.add(
@@ -121,66 +119,6 @@ class FakeLogicThread:
         if event == "player_damage":
             self.damage_applied.append(payload["damage"])
         elif event == "player_death":
-            self.player_dead = True
-
-    # -- entity lookup ----------------------------------------------------
-    def rebuild_name_cache(self):
-        """Mirror ``LogicThread._build_entity_caches``' name index."""
-        self._name_cache = {}
-        for thing in self.things:
-            name = thing.properties.get("name")
-            if name:
-                self._name_cache[name] = thing
-        for brush in self.brushes:
-            name = brush.get("name")
-            if name:
-                self._name_cache.setdefault(name, brush)
-        return self._name_cache
-
-    def _find_entity_by_name(self, name):
-        return self._name_cache.get(name)
-
-    # -- geometry ---------------------------------------------------------
-    @staticmethod
-    def intersect_ray_aabb(origin, direction, box_min, box_max):
-        t_min = 0.0
-        t_max = 10000.0
-        for i in range(3):
-            if abs(direction[i]) < 1e-6:
-                if origin[i] < box_min[i] or origin[i] > box_max[i]:
-                    return False, 0
-            else:
-                inv_d = 1.0 / direction[i]
-                t1 = (box_min[i] - origin[i]) * inv_d
-                t2 = (box_max[i] - origin[i]) * inv_d
-                t_near = min(t1, t2)
-                t_far = max(t1, t2)
-                t_min = max(t_min, t_near)
-                t_max = min(t_max, t_far)
-                if t_min > t_max:
-                    return False, 0
-        return True, t_min
-
-    # -- noise ------------------------------------------------------------
-    def emit_noise(self, pos, source="test", loudness=1.0, when=0.0):
-        self._gunfire_events.append({
-            "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
-            "time": time.perf_counter(),
-            "source": source,
-            "loudness": float(loudness),
-        })
-
-    def get_recent_noise_events(self, max_age=3.0):
-        return list(self._noise_events)
-
-    def get_recent_gunfire_events(self, max_age=3.0):
-        return self.get_recent_noise_events(max_age)
-
-    # -- damage -----------------------------------------------------------
-    def _apply_player_damage(self, damage):
-        self.damage_applied.append(damage)
-        self.player_health -= damage
-        if self.player_health <= 0:
             self.player_dead = True
 
     # -- convenience ------------------------------------------------------
