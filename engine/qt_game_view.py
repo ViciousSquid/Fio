@@ -3709,11 +3709,11 @@ class QtGameView(QOpenGLWidget):
         from engine.actor_pick import NO_SLOT, pick_actor
         render_state = self.game_state.get_render_state() if self.logic_thread else None
         try:
-            table = getattr(render_state, 'entity_table', None)
+            table = render_state.entity_table
             if table is None:
                 return None
             slot = pick_actor(ray[0], ray[1], table,
-                              getattr(render_state, 'render_table', None))
+                              render_state.render_table)
             if slot == NO_SLOT or slot >= len(table.things):
                 return None
             return table.things[slot]
