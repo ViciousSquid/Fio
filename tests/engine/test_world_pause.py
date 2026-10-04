@@ -176,7 +176,7 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
         "timers": copy.deepcopy(playing.timer_states),
         "fades": copy.deepcopy(playing.light_fade_states),
         "projectiles": playing._projectile_positions.copy(),
-        "noise": copy.deepcopy(playing._gunfire_events),
+        "noise": copy.deepcopy(playing.combat_runtime._gunfire_events),
     }
 
     playing.set_world_paused("menu", True)
@@ -189,7 +189,7 @@ def test_a_paused_tick_leaves_world_runtime_state_unchanged(playing):
     assert playing.timer_states == before["timers"]
     assert playing.light_fade_states == before["fades"]
     assert np.array_equal(playing._projectile_positions, before["projectiles"])
-    assert playing._gunfire_events == before["noise"]
+    assert playing.combat_runtime._gunfire_events == before["noise"]
 
 
 def test_plugins_still_tick_over_a_paused_world(playing):
