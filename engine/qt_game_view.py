@@ -1788,14 +1788,12 @@ class QtGameView(QOpenGLWidget):
                 # Get collision brushes from logic thread
                 collision_brushes = []
                 if hasattr(self, 'logic_thread') and self.logic_thread:
-                    collision_brushes = getattr(self.logic_thread, '_model_collision_brushes', [])
+                    collision_brushes = self.logic_thread.collision_runtime._model_collision_brushes
                     # Build collision brushes on demand if not already built
                     # (needed for editor mode where they aren't auto-built on play start)
                     if not collision_brushes:
-                        self.logic_thread.model_collision_enabled = True
-                        self.logic_thread._model_collision_brushes = self.logic_thread.collision_runtime.build_model_collision_brushes()
-                        self.logic_thread.collision_runtime.refresh_collision_brushes_cache()
-                        collision_brushes = self.logic_thread._model_collision_brushes
+                        self.logic_thread.collision_runtime.toggle_model_collision(True)
+                        collision_brushes = self.logic_thread.collision_runtime._model_collision_brushes
                 if collision_brushes:
                     mode = self._collision_vis_mode
                     filtered = []
