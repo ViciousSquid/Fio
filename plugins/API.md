@@ -929,7 +929,7 @@ def connect(self, host):
 
 def on_tick(self, logic, ctx):
     if ctx.key_down("f"):
-        ok, msg = self._host.logic.save_session("saves/plugin_quick.fiosave")
+        ok, msg = self._host.logic.session_runtime.save_session("saves/plugin_quick.fiosave")
         ctx.toast(msg)
 ```
 
