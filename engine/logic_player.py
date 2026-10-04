@@ -27,6 +27,7 @@ class LogicPlayer:
         self.logic = logic
         self._player_was_in_water = False
         self._waterwalk_timer = 0.0
+        self.collected_keys = set()
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""

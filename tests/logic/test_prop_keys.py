@@ -18,7 +18,7 @@ class Logic:
     def __init__(self, things):
         self.editor_state = SimpleNamespace(things=list(things), brushes=[])
         self.io_manager = None
-        self.collected_keys = set()
+        self.player_runtime = type("PlayerRuntime", (), {"collected_keys": set()})()
         self.current_hud_message = ""
         self.current_hud_key_name = None
         self.player_health = 100
@@ -98,7 +98,7 @@ def test_colored_key_collects_the_key_and_fires_on_collected_to_a_door(key_name)
     session.start()
     assert session.collect_prop(prop) is True
 
-    assert key_name in logic.collected_keys
+    assert key_name in logic.player_runtime.collected_keys
     assert prop.properties["collect_collected"] is True
     assert id(prop) in session.collected_ids
     assert door["door_locked"] is False

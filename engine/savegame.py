@@ -398,7 +398,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "player2_health": getattr(logic, "player2_health", 100),
         "player2_max_health": getattr(logic, "player2_max_health", 100),
         "player2_dead": bool(getattr(logic, "player2_dead", False)),
-        "collected_keys": sorted(str(k) for k in getattr(logic, "collected_keys", set())),
+        "collected_keys": sorted(str(k) for k in logic.player_runtime.collected_keys),
         "door_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.door_states.items()},
         "mover_states": {str(i): _public_state(s) for i, s in logic.mover_runtime.mover_states.items()},
         "monster_states": monster_states,
@@ -774,7 +774,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
 
     # Collected keys — rebuild the set from the saved list.
     try:
-        logic.collected_keys = set(runtime.get("collected_keys", []) or [])
+        logic.player_runtime.collected_keys = set(runtime.get("collected_keys", []) or [])
     except Exception:
         pass
 

@@ -74,7 +74,7 @@ class LogicInteraction:
                             )
                         door_consumed_use = use_key_pressed
                     elif needs_key:
-                        has_key = key_name in logic.collected_keys
+                        has_key = key_name in logic.player_runtime.collected_keys
                         if has_key:
                             self.current_hud_message = "[E] Use"
                             self.current_hud_key_name = key_name or None

@@ -123,7 +123,7 @@ class LogicSession:
 
             # Reset collection state.
             logic.trigger_runtime._reset_trigger_state()
-            logic.collected_keys.clear()
+            logic.player_runtime.collected_keys.clear()
             for thing in logic.editor_state.things:
                 if PropThing and isinstance(thing, PropThing):
                     # Restores what the author set; forcing carry here made every
@@ -242,7 +242,7 @@ class LogicSession:
             self.stop_monster_ai()
             logic.trigger_runtime._reset_trigger_state()
             logic.trigger_runtime.fired_once_triggers.clear()
-            logic.collected_keys.clear()
+            logic.player_runtime.collected_keys.clear()
             logic.active_speakers.clear()
             logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.mover_runtime._reset_movers()

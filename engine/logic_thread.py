@@ -189,7 +189,6 @@ class LogicThread(threading.Thread):
         ),
         "interaction": (
             "player",
-            "collected_keys",
             "io_manager",
         ),
         "editor": (
@@ -342,7 +341,6 @@ class LogicThread(threading.Thread):
         self.HURT_INTERVAL = 0.5
         
         # Collection state
-        self.collected_keys: set = set()
         
         
         # Speaker state
