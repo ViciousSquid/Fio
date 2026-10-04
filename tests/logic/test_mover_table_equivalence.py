@@ -468,6 +468,7 @@ class _Side:
         io.fire_output = recording_fire
         ground = self.brushes[ride_index] if ride_index is not None else None
         player = SimpleNamespace(pos=glm.vec3(1.0, 2.0, 3.0), ground_object=ground)
+        self.reference = reference
         if reference:
             logic = ReferenceLogic(self.brushes, self.things, io, player)
         else:
@@ -484,12 +485,20 @@ class _Side:
         io.set_logic_thread(logic)
         self.io = io
         self.logic = logic
-        logic.mover_runtime._init_movers()
-        logic.mover_runtime._init_doors()
+        if reference:
+            logic._init_movers()
+            logic._init_doors()
+        else:
+            logic.mover_runtime._init_movers()
+            logic.mover_runtime._init_doors()
 
     def tick(self, delta):
-        self.logic.mover_runtime._update_movers(delta)
-        self.logic.mover_runtime._update_doors(delta)
+        if self.reference:
+            self.logic._update_movers(delta)
+            self.logic._update_doors(delta)
+        else:
+            self.logic.mover_runtime._update_movers(delta)
+            self.logic.mover_runtime._update_doors(delta)
         self.io.update(delta)
 
     def poke(self, index, input_name, param):

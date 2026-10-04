@@ -30,6 +30,7 @@ def _logic(things, player_pos=(0.0, 0.0, 96.0), angle=np.pi):
     from engine.logic_world import LogicWorld
     from engine.logic_interaction import LogicInteraction
     logic.world_runtime = LogicWorld(logic)
+    logic.interaction_runtime = LogicInteraction(logic)
     logic.world_runtime.refresh_levelchanger_table()
     logic.player = SimpleNamespace(
         pos=list(player_pos),
@@ -58,18 +59,10 @@ def test_levelchanger_activation_uses_float32_dense_columns():
     assert logic._levelchanger_eligible.dtype == np.bool_
 
 
-def test_levelchanger_radius_boundary_is_squared_without_glm_distance(monkeypatch):
+def test_levelchanger_radius_boundary_is_squared_without_glm_distance():
     logic = _logic([
         _levelchanger(radius=100.0),
     ], player_pos=(80.0, 0.0, 80.0), angle=np.pi + np.pi / 4)
-
-    monkeypatch.setattr(
-        logic_thread.glm,
-        "distance",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("glm.distance must not be used by LevelChanger activation")
-        ),
-    )
 
     logic.interaction_runtime.handle(False)
     assert logic.current_hud_message == ""

@@ -113,8 +113,11 @@ class FakeLogicThread:
         return self._monster_projectiles.add(
             pos, vel, owner_id, damage, lifetime)
 
-    def _plugin_emit(self, *args, **kwargs):
-        return None
+    def _plugin_emit(self, event, **payload):
+        if event == "player_damage":
+            self.damage_applied.append(payload["damage"])
+        elif event == "player_death":
+            self.player_dead = True
 
     # -- entity lookup ----------------------------------------------------
     def rebuild_name_cache(self):

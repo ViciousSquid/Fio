@@ -332,8 +332,8 @@ def test_a_once_trigger_as_the_editor_authors_it_fires_once():
     fired = []
     logic.io_manager.fire_output = lambda *a, **k: fired.append(a[1])
     try:
-        logic._on_trigger_enter(brush, brush["id"])
-        logic._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert fired == ["OnStartTouch", "OnTrigger"]
     finally:
         logic.set_play_mode(False)
@@ -343,7 +343,7 @@ def test_hurt_trigger_uses_the_editors_damage_amount():
     brush, _game_state, logic = _trigger(trigger_type="Multiple", hurt_amount=37)
     brush["trigger_action"] = "hurt"
     try:
-        logic._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert logic.player_health == 100 - 37
     finally:
         logic.set_play_mode(False)
@@ -361,8 +361,8 @@ def test_trigger_activation_falls_back_to_the_key_older_editors_wrote():
 def test_a_trigger_can_quicksave_or_quickload(save):
     brush, game_state, logic = _trigger(trigger_type="Once", trigger_save=save)
     try:
-        logic._on_trigger_enter(brush, brush["id"])
-        logic._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert list(game_state.consume_console_commands()) == [save]
     finally:
         logic.set_play_mode(False)
@@ -371,7 +371,7 @@ def test_a_trigger_can_quicksave_or_quickload(save):
 def test_a_trigger_saves_nothing_by_default():
     brush, game_state, logic = _trigger(trigger_type="Multiple")
     try:
-        logic._on_trigger_enter(brush, brush["id"])
+        logic.trigger_runtime._on_trigger_enter(brush, brush["id"])
         assert not game_state.consume_console_commands()
     finally:
         logic.set_play_mode(False)
