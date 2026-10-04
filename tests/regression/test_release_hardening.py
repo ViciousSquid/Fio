@@ -319,7 +319,7 @@ def test_resetting_monsters_for_play_journals_their_sprite_state(logic):
     dead_sprite = table.sprite_recipes()[table.sprite_key_id[0]]
 
     thread.session_runtime.reset_all_monsters(clear_dead=True)
-    table.begin_frame(thread.things, 1)
+    table.begin_frame(thread.editor_state.things, 1)
     sprite = table.sprite_recipes()[table.sprite_key_id[0]]
     assert sprite != dead_sprite
     assert any(c[1] == 'idle.png' for c in sprite), sprite
