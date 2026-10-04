@@ -192,18 +192,11 @@ def test_carried_billboard_keeps_its_facing_when_player_turns(real_logic):
     assert prop._carry_sprite_yaw == 0.0
 
 
-def test_the_registry_is_derived_from_the_authoritative_thing_list():
+def test_the_registry_is_derived_from_the_authoritative_thing_list(real_logic):
     """PropSession is the Prop registry; the thing list is still the world."""
-    prop, light = Prop(pos=[0, 0, 0]), SimpleNamespace(properties={'type': 'light'})
-    logic = SimpleNamespace(editor_state=SimpleNamespace(things=[prop, light]))
-    logic.session_runtime = LogicSession(logic)
-    logic.interaction_runtime = LogicInteraction(logic)
-    logic.combat_runtime = LogicCombat(logic)
-    logic.player_runtime = SimpleNamespace(
-        player=SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0, camera_height=40.0)
-    )
-    session = PropSession(logic)
-    session.start()
+    prop = Prop(pos=[0, 0, 0])
+    light = Light(pos=[0, 0, 0])
+    logic, session, events = real_logic([prop, light])
 
     assert session.props == [prop]
     assert session.by_id(id(prop)) is prop
