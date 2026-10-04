@@ -246,6 +246,8 @@ def test_property_edit_marks_the_dense_render_row_dirty(panel):
         shader='Glass',
     )
     host.state.brushes.append(brush)
+    baseline = host.state.render_dirty_snapshot()
+    host.state.clear_render_dirty(baseline)
 
     editor.set_object(brush)
     before_epoch = host.state.world_epoch
