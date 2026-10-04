@@ -100,4 +100,4 @@ def io_manager():
 def flat_ground():
     """A large floor brush so ground monsters have something to stand on."""
     from tests.helpers.worlds import box_brush
-    return [box_brush("ground", (0, -16, 0), (8192, 32, 8192))
+    return [box_brush("ground", (0, -16, 0), (8192, 32, 8192))]
