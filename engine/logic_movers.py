@@ -37,6 +37,7 @@ class LogicMovers:
     def __init__(self, logic):
         self.logic = logic
         self._mover_table = MoverTable()
+        self._moving_rows = None
 
     def _movers(self):
         """Return the dense mover table owned by this runtime."""
@@ -134,7 +135,7 @@ class LogicMovers:
 
         self.door_states = states
         logic._door_brush_list = [b for _, b in logic.doors]
-        logic._moving_rows = tuple(logic.editor_state.brushes)
+        self._moving_rows = tuple(logic.editor_state.brushes)
 
     def _reset_doors(self):
         logic = self.logic
