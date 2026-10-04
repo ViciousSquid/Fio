@@ -1278,6 +1278,7 @@ class MainWindow(QMainWindow):
             self.view_3d.selected_object = primary
         else:
             self.view_3d.selected_object = None
+        self.update_all_ui()
 
     def update_all_ui(self):
         self.property_editor.set_object(self.primary_selection())
