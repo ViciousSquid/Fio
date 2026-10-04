@@ -38,6 +38,11 @@ class LogicMovers:
         self.logic = logic
         self._mover_table = MoverTable()
         self._moving_rows = None
+        self.movers = []
+        self.doors = []
+        self.mover_path_states = {}
+        self._mover_brush_list = []
+        self._door_brush_list = []
 
     def _movers(self):
         """Return the dense mover table owned by this runtime."""
@@ -50,7 +55,7 @@ class LogicMovers:
 
     @mover_states.setter
     def mover_states(self, states):
-        self._movers().movers.replace_states(self.logic.movers, states)
+        self._movers().movers.replace_states(self.self.movers, states)
 
     @property
     def door_states(self):
@@ -59,11 +64,11 @@ class LogicMovers:
 
     @door_states.setter
     def door_states(self, states):
-        self._movers().doors.replace_states(self.logic.doors, states)
+        self._movers().doors.replace_states(self.self.doors, states)
 
     def _init_movers(self):
         logic = self.logic
-        logic.mover_path_states = {}
+        self.mover_path_states = {}
         logic.movers = []
         states = {}
         for i, brush in enumerate(logic.editor_state.brushes):
@@ -88,7 +93,7 @@ class LogicMovers:
                     states[i] = {"progress": 0.0, "forward": True}
 
         self.mover_states = states
-        logic._mover_brush_list = [b for _, b in logic.movers]
+        self._mover_brush_list = [b for _, b in logic.movers]
 
     def _reset_movers(self):
         logic = self.logic
@@ -134,7 +139,7 @@ class LogicMovers:
                 }
 
         self.door_states = states
-        logic._door_brush_list = [b for _, b in logic.doors]
+        self._door_brush_list = [b for _, b in logic.doors]
         self._moving_rows = tuple(logic.editor_state.brushes)
 
     def _reset_doors(self):
