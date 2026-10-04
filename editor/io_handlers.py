@@ -972,7 +972,7 @@ def register_all_input_handlers(io_manager: IOManager):
         """Revive a dead monster at its spawn health.
 
         The health to come back with is the value the map authored, recorded
-        once when play started (see LogicThread._reset_all_monsters) because
+        once when play started (see LogicSession.reset_all_monsters) because
         the live property is mutated by damage.  A parameter overrides it, and
         if neither is available the monster keeps whatever health it has —
         inventing a number here would be inventing behaviour.
