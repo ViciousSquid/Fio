@@ -7,8 +7,6 @@ rebuild and against values derived straight from the world's dicts.
 """
 
 import json
-from types import SimpleNamespace
-
 import pytest
 
 pytest.importorskip("PyQt5", reason="editor state and console are editor-tier")
@@ -422,14 +420,16 @@ def test_the_big_world_map_is_big_and_playable():
 # Cross-thread: the property panel reads a dict the logic thread writes to
 # ---------------------------------------------------------------------------
 
-def test_property_signature_survives_a_key_added_while_it_reads():
+def test_property_signature_survives_a_key_added_while_it_reads(qt_app):
     """Seen once in the real editor: Redo -> update_all_ui -> the property
     panel's signature iterated the selected brush while the logic thread,
     projecting that freshly restored brush for the first time, added its
     geometry cache keys: "dictionary changed size during iteration". The
     write is simulated at the one point the loop runs other code: a value's
     repr()."""
+    from editor.main_window import MainWindow
     from editor.property_editor import PropertyEditor
+    from tests.helpers.paths import REPO_ROOT
 
     brush = {"id": "b", "name": "wall", "pos": [0.0, 0.0, 0.0]}
 
@@ -439,13 +439,14 @@ def test_property_signature_survives_a_key_added_while_it_reads():
             return "Intruder"
 
     brush["note"] = Intruder()
-    panel = SimpleNamespace(_SIGNATURE_IGNORED=PropertyEditor._SIGNATURE_IGNORED,
-                            _hashable=PropertyEditor._hashable)
-    panel._connection_signature = (
-        lambda c: PropertyEditor._connection_signature(panel, c))
-
-    signature = PropertyEditor._object_signature(panel, brush)
-    assert signature[0] == "brush"
+    window = MainWindow(str(REPO_ROOT))
+    try:
+        panel = PropertyEditor(window)
+        signature = panel._object_signature(brush)
+        assert signature[0] == "brush"
+    finally:
+        window.close()
+        window.deleteLater()
 
 
 # ---------------------------------------------------------------------------
