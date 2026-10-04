@@ -669,10 +669,10 @@ def test_logic_camera_json_cutscene_interpolates_camera_and_actor():
     logic.cutscene_runtime._update_cinematic_camera(0.5)
 
     assert logic.cutscene_runtime.state is not None
-    assert logic.cinematic_state["cam_pos"] == pytest.approx([5.0, 10.0, 0.0])
-    assert logic.cinematic_state["cam_angle"] == pytest.approx(math.pi / 4.0)
-    assert logic.cinematic_state["cam_pitch"] == pytest.approx(math.pi / 12.0)
-    assert logic.cinematic_state["fov"] == pytest.approx(80.0)
+    assert logic.cutscene_runtime.state["cam_pos"] == pytest.approx([5.0, 10.0, 0.0])
+    assert logic.cutscene_runtime.state["cam_angle"] == pytest.approx(math.pi / 4.0)
+    assert logic.cutscene_runtime.state["cam_pitch"] == pytest.approx(math.pi / 12.0)
+    assert logic.cutscene_runtime.state["fov"] == pytest.approx(80.0)
     assert list(actor.pos) == pytest.approx([10.0, 0.0, 0.0])
 
 
@@ -710,7 +710,7 @@ def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
     assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
     LogicThread._update_cinematic_camera(logic, 1.0)
 
-    assert logic.cinematic_state is None
+    assert logic.cutscene_runtime.state is None
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
     assert "disabled" not in actor.properties
     assert [name for _, name, _ in recorder.calls] == ["OnFinished"]
@@ -813,13 +813,13 @@ def test_logic_camera_json_cutscene_spawns_and_removes_temporary_actor():
     assert len(logic.things) == 1
     assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
     assert len(logic.things) == 2
-    spawned = logic.cinematic_state["actors"]["spawned-1"]
+    spawned = logic.cutscene_runtime.state["actors"]["spawned-1"]
     assert spawned in logic.things
     assert spawned.properties["_cutscene_runtime"] is True
 
     LogicThread._update_cinematic_camera(logic, 1.0)
 
-    assert logic.cinematic_state is None
+    assert logic.cutscene_runtime.state is None
     assert spawned not in logic.things
 
 
@@ -901,8 +901,8 @@ def test_logic_camera_json_cutscene_look_at_tracks_actor_position():
     assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
     LogicThread._update_cinematic_camera(logic, 0.0)
 
-    assert logic.cinematic_state["cam_angle"] == pytest.approx(0.0)
-    assert logic.cinematic_state["cam_pitch"] == pytest.approx(0.0)
+    assert logic.cutscene_runtime.state["cam_angle"] == pytest.approx(0.0)
+    assert logic.cutscene_runtime.state["cam_pitch"] == pytest.approx(0.0)
 
 
 def test_logic_camera_json_cutscene_stop_restores_actor():
@@ -941,7 +941,7 @@ def test_logic_camera_json_cutscene_stop_restores_actor():
     handler = manager._input_handlers[("logic_camera", "stop")]
     handler(camera, "", logic)
 
-    assert logic.cinematic_state is None
+    assert logic.cutscene_runtime.state is None
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
 
 
@@ -1039,7 +1039,7 @@ def test_logic_camera_arrival_fires_the_individual_path_node_output():
     camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'look_ahead': True})
     recorder = _CameraOutputRecorder()
     logic = _camera_logic(camera, [a, b, c], recorder)
-    logic.cinematic_state = {
+    logic.cutscene_runtime.state = {
         'active': True, 'paused': False, 'entity': camera,
         'current_node': 'B', 'lerp_t': 0.0,
         'origin': list(a.pos), 'speed': 25.0,
@@ -1052,7 +1052,7 @@ def test_logic_camera_arrival_fires_the_individual_path_node_output():
 
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnCameraArrived'] == [(b, 'OnCameraArrived')]
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnReachNode'] == [(camera, 'OnReachNode')]
-    assert logic.cinematic_state['current_node'] == 'C'
+    assert logic.cutscene_runtime.state['current_node'] == 'C'
 
 
 def test_logic_camera_look_ahead_turn_is_smoothed():
@@ -1064,7 +1064,7 @@ def test_logic_camera_look_ahead_turn_is_smoothed():
     c = PathNode([10.0, 0.0, 10.0], {'name': 'C'})
     camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'look_ahead': True})
     logic = _camera_logic(camera, [a, b, c])
-    logic.cinematic_state = {
+    logic.cutscene_runtime.state = {
         'active': True, 'paused': False, 'entity': camera,
         'current_node': 'B', 'lerp_t': 0.0,
         'origin': list(a.pos), 'speed': 25.0,
@@ -1075,7 +1075,7 @@ def test_logic_camera_look_ahead_turn_is_smoothed():
 
     LogicThread._update_cinematic_camera(logic, 0.2)
 
-    assert 0.0 < logic.cinematic_state['cam_angle'] < (math.pi / 2.0)
+    assert 0.0 < logic.cutscene_runtime.state['cam_angle'] < (math.pi / 2.0)
 
 
 def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
@@ -1088,7 +1088,7 @@ def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
     manager = IOManager()
     register_all_input_handlers(manager)
     logic = SimpleNamespace(
-        cinematic_state={'active': True, 'entity': camera},
+        cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
         _find_entity_by_name=lambda name: target if name == 'Focus' else None,
         _find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
     )
@@ -1096,8 +1096,8 @@ def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
 
     handler(camera, target.properties['id'], logic)
 
-    assert logic.cinematic_state['lookat_target'] is target
-    assert logic.cinematic_state['lookat_return_remaining'] == pytest.approx(5.0)
+    assert logic.cutscene_runtime.state['lookat_target'] is target
+    assert logic.cutscene_runtime.state['lookat_return_remaining'] == pytest.approx(5.0)
 
 
 def test_logic_camera_lookat_zero_return_time_holds_focus():
@@ -1110,7 +1110,7 @@ def test_logic_camera_lookat_zero_return_time_holds_focus():
     manager = IOManager()
     register_all_input_handlers(manager)
     logic = SimpleNamespace(
-        cinematic_state={'active': True, 'entity': camera},
+        cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
         _find_entity_by_name=lambda name: target if name == 'Focus' else None,
         _find_entity_by_id=lambda entity_id: None,
     )
@@ -1118,8 +1118,8 @@ def test_logic_camera_lookat_zero_return_time_holds_focus():
 
     handler(camera, 'Focus', logic)
 
-    assert logic.cinematic_state['lookat_target'] is target
-    assert logic.cinematic_state['lookat_return_remaining'] is None
+    assert logic.cutscene_runtime.state['lookat_target'] is target
+    assert logic.cutscene_runtime.state['lookat_return_remaining'] is None
 
 
 def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
@@ -1136,7 +1136,7 @@ def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
         'lookat_return_time': 0.1,
     })
     logic = _camera_logic(camera, [a, b, c])
-    logic.cinematic_state = {
+    logic.cutscene_runtime.state = {
         'active': True, 'paused': False, 'entity': camera,
         'current_node': 'B', 'lerp_t': 0.0,
         'origin': list(a.pos), 'speed': 0.0,
@@ -1149,6 +1149,6 @@ def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
 
     LogicThread._update_cinematic_camera(logic, 0.2)
 
-    assert logic.cinematic_state['lookat_target'] is None
-    assert logic.cinematic_state['lookat_return_remaining'] is None
-    assert 0.0 < logic.cinematic_state['cam_angle'] < (math.pi / 2.0)
+    assert logic.cutscene_runtime.state['lookat_target'] is None
+    assert logic.cutscene_runtime.state['lookat_return_remaining'] is None
+    assert 0.0 < logic.cutscene_runtime.state['cam_angle'] < (math.pi / 2.0)
