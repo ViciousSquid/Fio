@@ -2089,7 +2089,7 @@ entity to drive them from the I/O system.</i><br>
             return
 
         lt = getattr(self.main_window.view_3d, 'logic_thread', None)
-        if lt is None or not hasattr(lt, 'start_camera_transition'):
+        if lt is None or not hasattr(lt, 'camera'):
             debug_log("Error", "Camera control unavailable (no active play session).")
             return
 
@@ -2112,7 +2112,7 @@ entity to drive them from the I/O system.</i><br>
                 debug_log("Warning", f"cam: ignoring unknown argument '{tok}'")
 
         duration = max(0.0, duration)
-        new_mode = lt.start_camera_transition(target_mode=target_mode, duration=duration)
+        new_mode = lt.camera.start_camera_transition(target_mode=target_mode, duration=duration)
 
         # Keep the view's cached camera_mode in step so its own _is_overhead()
         # (sprite/gameplay helpers) matches the target immediately.

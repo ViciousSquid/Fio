@@ -1025,7 +1025,7 @@ class QtGameView(QOpenGLWidget):
         self.logic_thread.set_gui_fault_teardown(self._logic_tick_fault_signal.emit)
         if hasattr(self.logic_thread, "set_hud_fade_enabled"):
             self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
-        self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
+        self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         if hasattr(self.logic_thread, "set_camera_mode"):
             self.logic_thread.camera.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
@@ -1616,9 +1616,7 @@ class QtGameView(QOpenGLWidget):
         _near = 0.1
         if self.play_mode and self._is_overhead():
             _lt = getattr(self, 'logic_thread', None)
-            _height = getattr(_lt, 'effective_overhead_height', None)
-            _oh = float((_height() if _height is not None
-                         else getattr(_lt, 'overhead_height', 800.0)) or 800.0)
+            _oh = float(_lt.camera.effective_overhead_height() or _lt.camera.overhead_height or 800.0)
             _near = max(1.0, _oh * 0.1)
         # The far plane IS the view distance -- that is what makes "nothing is
         # drawn past it" true of a fragment and not just of a whole object. The
@@ -1632,7 +1630,7 @@ class QtGameView(QOpenGLWidget):
         _bg = self.view_distance.fog_color
         gl.glClearColor(_bg[0], _bg[1], _bg[2], 1.0)
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, _far)
-        _set_fov = getattr(getattr(self, 'logic_thread', None), 'set_frustum_fov', None)
+        _set_fov = self.logic_thread.camera.set_frustum_fov if self.logic_thread is not None else None
         if self.play_mode and _set_fov is not None:
             # Culling and the overhead ground footprint must see the frustum
             # drawn here, not an assumed one.
@@ -3011,7 +3009,7 @@ class QtGameView(QOpenGLWidget):
         world = inv_view * eye
         ray_dir = glm.normalize(glm.vec3(world))
         if self.use_threading and self.logic_thread:
-            ec = self.logic_thread.get_editor_camera()
+            ec = self.logic_thread.camera.get_editor_camera()
             ray_origin = ec.pos
         else:
             ray_origin = self.camera.pos
@@ -3255,7 +3253,7 @@ class QtGameView(QOpenGLWidget):
 
     def _camera_position(self):
         if self.use_threading and self.logic_thread:
-            pos = self.logic_thread.get_editor_camera().pos
+            pos = self.logic_thread.camera.get_editor_camera().pos
         else:
             pos = self.camera.pos
         return np.array([float(pos.x), float(pos.y), float(pos.z)])
