@@ -715,19 +715,6 @@ class LogicThread(threading.Thread):
                 if name in loadout:
                     setattr(self, name, loadout[name])
 
-    def set_play_mode(self, enabled: bool):
-        """Enter or leave play mode.  Called from the UI thread.
-
-        Held under the tick lock: the flag and the session state it implies
-        (movers, doors, collision caches, spatial grid, Prop session, monster
-        thread) change together, never with a tick running in between.
-        """
-        with self._tick_lock:
-            self.session_runtime.apply_play_mode(enabled)
-
-    # Session lifecycle is owned by LogicSession. LogicThread keeps only the
-    # public play-mode entry point because it owns the tick-lock boundary.
-
     def set_terrain(self, terrain):
         self.terrain = terrain
     
