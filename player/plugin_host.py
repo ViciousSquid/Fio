@@ -68,6 +68,7 @@ class _BridgeLogic:
     """The ``logic`` object the plugin lifecycle/tick hooks receive."""
 
     def __init__(self, things):
+        self.editor_state = SimpleNamespace(things=things, brushes=[])
         self.things = things
         self.player = _CamPlayer()
         self.io_manager = _NullIO()
