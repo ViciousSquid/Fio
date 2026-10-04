@@ -130,7 +130,7 @@ class LogicSession:
             logic.combat_runtime.player_ammo = 0
             logic.combat_runtime.gun2_obtained = False
             logic.combat_runtime._last_player_shot_time = float('-inf')
-            logic._last_player_shot_time = float("-inf")
+            logic.combat_runtime._last_player_shot_time = float("-inf")
 
             # Reset visual FX.
             logic.combat_runtime.bullet_marks = []

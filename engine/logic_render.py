@@ -393,7 +393,7 @@ class LogicRender:
         elif logic.combat_runtime.active_weapon == "gun2":
             now = time.perf_counter()
             try:
-                ammo = max(0, int(getattr(logic, "player_ammo", 0)))
+                ammo = max(0, int(logic.combat_runtime.player_ammo))
             except (TypeError, ValueError):
                 ammo = 0
             write_state.shot_ready = (
