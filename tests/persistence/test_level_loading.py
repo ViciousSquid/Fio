@@ -36,8 +36,7 @@ class _Window:
         self.file_path = "maps/previous.json"
         self.unsaved_changes = False
         self.config = configparser.ConfigParser()
-        self.state = types.SimpleNamespace(
-            things=[], validate_level_data=EditorState.validate_level_data)
+        self.state = EditorState()
         self.view_3d = types.SimpleNamespace(
             play_mode=False, logic_thread=None, camera=types.SimpleNamespace())
         self.fail_apply = fail_apply
