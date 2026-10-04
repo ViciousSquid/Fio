@@ -32,6 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* 
 
+# Run the editor as an unprivileged account. The container is deliberately not
+# root-only: Fio executes Python plugins in-process, so container-root would
+# unnecessarily widen the impact of a plugin or other Python-level compromise.
+RUN groupadd --system fio \
+    && useradd --system --gid fio --create-home --shell /usr/sbin/nologin fio
+
 # Make python3 the default python 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
@@ -48,6 +54,8 @@ ENV PATH="/opt/fio-venv/bin:$PATH"
 
 # Copy the rest of the project.
 COPY . .
+RUN chown -R fio:fio /app
 
 # Default command: launch the editor.
+USER fio
 CMD ["python", "main.py"]
