@@ -88,7 +88,7 @@ class LogicWorld:
         self.monster_by_id = {id(thing): thing for thing in self.monster_things}
 
         live = self.monster_by_id
-        with logic._monster_lock:
+        with logic.session_runtime.monster_lock:
             states = logic.monster_ai.monster_states
             for key in [key for key in states if key not in live]:
                 del states[key]
