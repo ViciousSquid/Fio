@@ -912,7 +912,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "Actor", f"Could not create a Fio actor: {exc}")
             return
 
-        camera = getattr(getattr(self.main_window, "view_3d", None), "camera", None)
+        camera = self.main_window.view_3d.camera
         if camera is None:
             return
         try:
@@ -1673,7 +1673,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._delete_temporary_actors()
 
     def _current_map_name(self):
-        path = getattr(self.main_window, "file_path", "") or ""
+        path = self.main_window.file_path or ""
         return Path(path).name if path else ""
 
     def _find_map_actor(self, aid):
@@ -1687,7 +1687,7 @@ class CutsceneWizard(QtWidgets.QDialog):
 
     def _existing_logic_camera(self, cutscene_file):
         wanted = str(cutscene_file or "").replace("\\", "/")
-        for obj in getattr(self.main_window.state, "things", []) or []:
+        for obj in self.main_window.state.things:
             if obj.__class__.__name__ != "LogicCamera":
                 continue
             current = str(getattr(obj, "properties", {}).get("cutscene_file", "") or "").replace("\\", "/")
@@ -1697,11 +1697,11 @@ class CutsceneWizard(QtWidgets.QDialog):
 
     def _current_map_cutscene_files(self):
         """Return cutscene files referenced by LogicCamera entities in the loaded map."""
-        root_dir = Path(getattr(self.main_window, "root_dir", "."))
+        root_dir = Path(self.main_window.root_dir)
         seen = set()
         candidates = []
 
-        for obj in getattr(self.main_window.state, "things", []) or []:
+        for obj in self.main_window.state.things:
             if obj.__class__.__name__ != "LogicCamera":
                 continue
             reference = str(
@@ -1734,7 +1734,7 @@ class CutsceneWizard(QtWidgets.QDialog):
 
     def _load_cutscene(self, filename=None):
         if filename is None:
-            start_dir = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR
+            start_dir = Path(self.main_window.root_dir) / CUTSCENE_DIR
             filename, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self, "Load Cutscene", str(start_dir),
                 "Cutscene JSON (*.json);;All files (*)",
@@ -1916,7 +1916,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         return self._filename()
 
     def _write_cutscene(self, filename, prompt_overwrite=False):
-        path = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR / filename
+        path = Path(self.main_window.root_dir) / CUTSCENE_DIR / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         if prompt_overwrite and path.exists():
             result = QtWidgets.QMessageBox.question(
