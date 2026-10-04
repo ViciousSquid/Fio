@@ -45,8 +45,6 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.doors = []
     logic.mover_runtime = LogicMovers(logic)
     logic.interaction_runtime = LogicInteraction(logic)
-    logic.fired_once_triggers = set()
-    logic.hurt_trigger_timers = {}
     logic.io_manager = None
     logic.plugins = None
     logic.current_hud_message = ''
@@ -74,7 +72,7 @@ def test_default_filter_is_player_only_and_unchanged_contacts_are_silent():
     logic.trigger_runtime._poll_triggers()
 
     assert logic._events == [('enter', 'player')]
-    assert logic.player_in_triggers == {1}
+    assert logic.trigger_runtime.player_in_triggers == {1}
 
 
 def test_filters_select_props_and_monsters_without_player():
@@ -84,7 +82,7 @@ def test_filters_select_props_and_monsters_without_player():
     logic.trigger_runtime._poll_triggers()
 
     assert set(logic._events) == {('enter', 'props'), ('enter', 'monsters')}
-    assert logic.player_in_triggers == set()
+    assert logic.trigger_runtime.player_in_triggers == set()
 
 
 def test_enter_exit_reentry_is_tracked_per_entity():
@@ -116,19 +114,19 @@ def test_scheduler_polls_each_trigger_at_its_own_rate(interval, polls_per_second
         logic.trigger_runtime._handle_triggers(False, 1.0 / 60.0)
 
     assert len(calls) == polls_per_second
-    assert logic.player_in_triggers == {1}
+    assert logic.trigger_runtime.player_in_triggers == {1}
     assert logic._events == [('enter', 'player')]
 
 
 def test_reset_clears_occupancy_in_place():
     logic = _logic()
     logic.trigger_runtime._poll_triggers()
-    held = logic.player_in_triggers
+    held = logic.trigger_runtime.player_in_triggers
 
     logic.trigger_runtime._reset_trigger_state()
 
-    assert held is logic.player_in_triggers and held == set()
-    assert logic._trigger_contacts == {}
+    assert held is logic.trigger_runtime.player_in_triggers and held == set()
+    assert logic.trigger_runtime._trigger_contacts == {}
     logic.trigger_runtime._poll_triggers()  # re-entry after reset fires again
     assert logic._events == [('enter', 'player'), ('enter', 'player')]
 
@@ -284,7 +282,7 @@ def test_a_spent_once_use_trigger_stops_advertising_itself():
     logic.trigger_runtime._handle_triggers(False, 1.0 / 60.0)
     assert logic.current_hud_message == "[E] Activate"
 
-    logic.fired_once_triggers.add(1)
+    logic.trigger_runtime.fired_once_triggers.add(1)
     logic.current_hud_message = ''
     logic.trigger_runtime._handle_triggers(False, 1.0 / 60.0)
     assert logic.current_hud_message == ''
