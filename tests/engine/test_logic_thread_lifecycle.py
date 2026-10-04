@@ -156,7 +156,7 @@ def test_a_stop_straight_after_start_is_not_lost(logic, monkeypatch):
         time.sleep(0.05)
         real_run(self)
 
-    monkeypatch.setattr(LogicThread, "run", late_run)
+    monkeypatch.setattr(logic, "run", late_run.__get__(logic, LogicThread))
     logic.start()
     logic.stop()
     logic.join(timeout=1.0)
