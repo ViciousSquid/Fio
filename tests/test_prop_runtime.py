@@ -122,22 +122,14 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
     assert session.props == []
 
 
-def test_non_physics_prop_still_falls_to_ground_on_drop():
+def test_non_physics_prop_still_falls_to_ground_on_drop(real_logic):
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={
         'carry_enabled': True,
         'carry_offset': [0.0, 70.0, 0.0],
     })
     io = IO()
     grid = _floor_grid()
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[prop]), io_manager=io,
-        session_runtime=SimpleNamespace(spatial_grid=grid, physics_world=None),
-        player_runtime=SimpleNamespace(player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
-                               camera_height=40.0)),
-        interaction_runtime=SimpleNamespace(current_hud_message=''),
-    )
-    session = PropSession(logic)
-    session.start()
+    logic, session, events = real_logic([prop], grid=grid)
 
     # Pick the prop up, then release it. It has no authored physics at all.
     session.tick(1 / 60, use_pressed=True)
