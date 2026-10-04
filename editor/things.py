@@ -2007,15 +2007,6 @@ def _load_core_entity_types():
 
 
 def __getattr__(name):
-    if name == 'Model':
-        # There is no Model entity any more: a model is a Prop with
-        # render_mode='model'. Plugins written against the old base still
-        # import; they get the plain Thing base, which is what a non-Prop
-        # entity carrying a model_path always needed.
-        import warnings
-        warnings.warn("editor.things.Model is gone: subclass Thing (or use a "
-                      "Prop) and set model_path", DeprecationWarning,
-                      stacklevel=2)
         return Thing
     module_name = _CORE_ENTITY_MODULES.get(name)
     if module_name is None:
