@@ -624,13 +624,13 @@ class MainWindow(QMainWindow):
 
         camera = self.view_3d.camera
         try:
-                import glm
-                front = camera.get_front_vector()
-                distance = max(radius * 3.0, 128.0)
-                camera.pos = glm.vec3(centre[0], centre[1], centre[2]) - front * distance
-                self.view_3d.update()
-            except Exception:
-                pass
+            import glm
+            front = camera.get_front_vector()
+            distance = max(radius * 3.0, 128.0)
+            camera.pos = glm.vec3(centre[0], centre[1], centre[2]) - front * distance
+            self.view_3d.update()
+        except Exception:
+            pass
 
     def moveEvent(self, event):
         """Handle window move."""
