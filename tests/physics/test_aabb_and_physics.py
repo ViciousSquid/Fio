@@ -32,7 +32,7 @@ def _reference_bounds(brush):
 
 
 def _reference_intersect_ray_aabb(origin, direction, box_min, box_max):
-    """Copy of LogicThread.intersect_ray_aabb, for equivalence checking."""
+    """Copy of the previous ray/AABB slab implementation, for equivalence checking."""
     t_min = 0.0
     t_max = 10000.0
     for i in range(3):
