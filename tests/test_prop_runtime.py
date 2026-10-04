@@ -107,7 +107,7 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
     assert session.held is None
     body = physics.get_body(prop)
     assert not body.kinematic and body.awake
-    assert 'OnDropped' in io.names()
+    assert 'OnDropped' in _event_names(events)
 
     physics.step(1 / 60)
     assert abs(prop.properties['rotation'][0] - spin / 60) < 1e-3
@@ -116,7 +116,7 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
     for _ in range(60):
         physics.step(1 / 60)
     assert abs(prop.pos[1]) < 1e-4
-    assert 'OnRest' in io.names()
+    assert 'OnRest' in _event_names(events)
     assert not body.awake
 
     # Stop restores the authored home position and releases callbacks.
@@ -145,7 +145,7 @@ def test_non_physics_prop_still_falls_to_ground_on_drop(real_logic):
 
     assert abs(prop.pos[1] - 16.0) < 1e-3
     assert id(prop) not in session._falling
-    assert 'OnRest' in io.names()
+    assert 'OnRest' in _event_names(events)
 
 
 def test_respawn_fades_in_over_two_seconds(real_logic):
