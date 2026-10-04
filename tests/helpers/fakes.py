@@ -1,17 +1,11 @@
-"""Lightweight stand-ins for the live editor and logic thread.
+"""Small, intentionally narrow test doubles and instrumentation helpers.
 
-These are *not* mocks of whole subsystems.  Each one implements exactly the
-surface the code under test actually reads — the attributes MonsterAI touches
-on its parent thread, the two methods the property editor calls on its host —
-so a behavioural test can be written without a display, a GL context or a
-running thread, while the integration tiers still drive the real objects.
-
-Where a fake stands in for something with real behaviour (ray/AABB
-intersection, the entity name cache) it delegates to or reproduces the engine's
-own implementation rather than a simplified one, so a test cannot pass against
-a fake that is kinder than the real thing.
+These helpers do not stand in for production owners such as ``LogicThread``,
+``EditorState``, ``ThreadedGameState``, render tables, or the editor window.
+Machinery tests must construct those real owners. The doubles below are limited
+to deterministic clocks and recording sinks where replacing the downstream
+side effect is the thing being tested.
 """
-
 
 class ManualClock:
     """A clock that only moves when a test moves it.
