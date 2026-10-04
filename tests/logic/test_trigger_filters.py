@@ -9,7 +9,6 @@ from engine.logic_interaction import LogicInteraction
 from engine.logic_movers import LogicMovers
 from engine.logic_session import LogicSession
 from engine.logic_triggers import LogicTriggers, _trigger_activation
-from engine.logic_triggers import LogicTriggers
 from engine.logic_world import LogicWorld
 from engine.prop_runtime import PropSession
 
@@ -32,7 +31,7 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.interaction_runtime = LogicInteraction(logic)
     logic.io_manager = None
     logic.plugins = None
-        brush = {
+    brush = {
         'id': 1,
         'pos': [0, 0, 0],
         'size': [20, 20, 20],
