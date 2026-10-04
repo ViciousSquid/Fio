@@ -86,7 +86,7 @@ def _draw(renderer, context, brushes, things, eye, target, cull, **config):
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
     query = gl.glGenQueries(1)[0]
     gl.glBeginQuery(gl.GL_SAMPLES_PASSED, query)
-    renderer.render_scene(projection, view, eye_vec, brushes, things, None, cfg,
+    renderer.render_scene(projection, view, eye_vec, None, cfg,
                           brush_slots=cfg["all_brush_slots"])
     gl.glEndQuery(gl.GL_SAMPLES_PASSED)
     gl.glFinish()
