@@ -1,5 +1,6 @@
 # Fio Plugin API Reference
 
+> **Security / trust boundary:** the plugin API is an in-process Python extension API, **not a sandbox**. Code loaded from `plugins/<name>` runs with the same OS/process privileges as Fio and must therefore be treated as trusted software. Do not place untrusted Python packages in `plugins/`. `.fiopak` archives do not install plugin code; they can only declare dependencies on plugins already installed by the host.\n\n
 This is the complete reference for everything a Fio plugin can call. It documents
 the public surface exported from [`plugins/api.py`](api.py) and
 [`plugins/host.py`](host.py) — the classes, methods, helpers and lifecycle a
