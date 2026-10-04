@@ -76,7 +76,11 @@ def _fake_wizard():
         main_window=types.SimpleNamespace(
             view_3d=types.SimpleNamespace(
                 camera=camera,
-                logic_thread=None,
+                logic_thread=types.SimpleNamespace(
+                    camera=types.SimpleNamespace(
+                        set_editor_camera=lambda pos, yaw, pitch, fov: None,
+                    ),
+                ),
             ),
             update_all_ui=lambda: None,
         ),
