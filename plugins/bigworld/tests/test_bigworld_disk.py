@@ -71,7 +71,6 @@ class FakeMonsterAI:
 
 class FakeLogic:
     def __init__(self, player_pos):
-        self.play_mode = True
         self.editor_state = SimpleNamespace(things=[], brushes=[])
         self.player = FakePlayer(player_pos)
         self.render_runtime = SimpleNamespace(view_distance=ViewDistance())

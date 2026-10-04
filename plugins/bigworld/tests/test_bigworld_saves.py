@@ -86,7 +86,6 @@ class FakeMonsterAI:
 
 class FakeLogic:
     def __init__(self, things, brushes, player_pos):
-        self.play_mode = True
         self.editor_state = FakeEditorState(things, brushes)
         self.terrain = None
         self.player = FakePlayer(player_pos)
