@@ -75,9 +75,12 @@ def test_logic_camera_constructs_and_computes_overhead_footprint():
 
 def test_logic_collision_constructs_and_classifies_brushes():
     host = SimpleNamespace(
-        play_mode=False,
         editor_state=SimpleNamespace(brushes=[], things=[]),
-        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
+        session_runtime=SimpleNamespace(
+            play_mode=False,
+            spatial_grid=None,
+            physics_world=None,
+        ),
     )
     runtime = LogicCollision(host)
 
