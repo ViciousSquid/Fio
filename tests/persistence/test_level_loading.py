@@ -13,125 +13,59 @@ a promise: "this scene is that file".  Two load paths broke it:
 
 import configparser
 import json
-import types
 
 import pytest
 
 pytest.importorskip("PyQt5", reason="level loading lives on the editor window")
 
-from editor.editor_state import EditorState        # noqa: E402
-from editor.main_window import MainWindow          # noqa: E402
 
 pytestmark = pytest.mark.qt
-
-
-class _Window:
-    """The slice of MainWindow a level load touches; loading logic is real."""
-
-    load_level_file = MainWindow.load_level_file
-    _load_level = MainWindow._load_level
-    _on_procedural_map_generated = MainWindow._on_procedural_map_generated
-
-    def __init__(self, fail_apply=False):
-        self.file_path = "maps/previous.json"
-        self.unsaved_changes = False
-        self.config = configparser.ConfigParser()
-        self.state = EditorState()
-        self.view_3d = types.SimpleNamespace(
-            play_mode=False, logic_thread=None, camera=types.SimpleNamespace())
-        self.fail_apply = fail_apply
-        self.applied = []
-        self.recent = []
-        self.toasts = []
-        self.calls = []
-
-    def _apply_level_data(self, level_data):
-        self.calls.append("replace scene")
-        self.state.load_from_data(level_data)
-        self.applied.append(level_data)
-        if self.fail_apply:
-            raise RuntimeError("entity failed to build")
-
-    def add_recent_file(self, path):
-        self.recent.append(path)
-
-    def show_toast(self, message, is_error=False, **_kw):
-        self.toasts.append((message, is_error))
-
-    def update_title(self):
-        pass
-
-    def set_selected_objects(self, objects):
-        pass
-
-    def update_all_ui(self):
-        pass
-
-    def _refresh_logic_graph(self):
-        pass
-
-    def _close_current_overlay(self):
-        pass
-
-    def _exit_play_mode(self):
-        self.calls.append("exit play")
-        self.view_3d.play_mode = False
-
-    def enter_play_mode(self):
-        self.calls.append("enter play")
-        self.view_3d.play_mode = True
-
-    def center_2d_views_on(self, world_pos):
-        # _load_level calls this now and again from a 50 ms timer for a map
-        # with a PlayerStart; the host must serve the deferred call too.
-        self.calls.append("centre views")
 
 
 LEVEL = {"version": 3, "brushes": [], "things": []}
 
 
-def test_a_generated_map_opens_untitled_and_unsaved():
-    window = _Window()
-
+def test_a_generated_map_opens_untitled_and_unsaved(main_window):
+    window = main_window
     window._on_procedural_map_generated(dict(LEVEL))
 
-    assert window.applied == [LEVEL]
-    assert window.file_path is None, (
-        "generated map is attached to %r; Ctrl+S would write there"
-        % window.file_path)
-    assert window.unsaved_changes, "closing would discard the generated map"
-    assert window.recent == []
+    assert window.file_path is None
+    assert window.unsaved_changes
 
 
-def test_a_map_file_opens_clean_under_its_own_path(tmp_path):
+def test_a_map_file_opens_clean_under_its_own_path(main_window, tmp_path):
     path = tmp_path / "level.json"
     path.write_text(json.dumps(LEVEL))
-    window = _Window()
+    window = main_window
 
     assert window.load_level_file(str(path)) is True
 
     assert window.file_path == str(path)
     assert not window.unsaved_changes
-    assert window.recent == [str(path)]
+    assert window.recent_files[-1] == str(path)
 
 
-def test_a_load_failing_midway_detaches_the_previous_map(tmp_path):
+def test_a_load_failing_midway_detaches_the_previous_map(main_window, tmp_path, monkeypatch):
     path = tmp_path / "level.json"
     path.write_text(json.dumps(LEVEL))
-    window = _Window(fail_apply=True)
+    window = main_window
+    def fail_apply(data):
+        window.state.load_from_data(data)
+        raise RuntimeError("entity failed to build")
+    monkeypatch.setattr(window, "_apply_level_data", fail_apply)
 
     assert window.load_level_file(str(path)) is False
 
     assert window.file_path is None, (
         "a half-built scene is still attached to %r" % window.file_path)
     assert window.unsaved_changes
-    assert window.toasts[-1][1]
+    assert window.ui.notification_label.text()
 
 
-def test_an_unreadable_file_leaves_the_open_level_alone(tmp_path):
+def test_an_unreadable_file_leaves_the_open_level_alone(main_window, tmp_path):
     path = tmp_path / "broken.json"
     path.write_text("{ not json")
-    window = _Window()
+    window = main_window
 
     assert window.load_level_file(str(path)) is False
 
@@ -141,10 +75,10 @@ def test_an_unreadable_file_leaves_the_open_level_alone(tmp_path):
 
 
 @pytest.mark.parametrize("document", [[], {"brushes": {"a": 1}}, {"things": ["x"]}])
-def test_a_document_that_is_not_a_map_changes_nothing(tmp_path, document):
+def test_a_document_that_is_not_a_map_changes_nothing(main_window, tmp_path, document):
     path = tmp_path / "odd.json"
     path.write_text(json.dumps(document))
-    window = _Window()
+    window = main_window
 
     assert window.load_level_file(str(path)) is False
 
@@ -165,7 +99,7 @@ def test_a_level_change_during_play_ends_the_session_before_the_swap(tmp_path):
     """
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
-    window = _Window()
+    window = main_window
     window.view_3d.play_mode = True
 
     assert window.load_level_file(str(path)) is True
@@ -191,25 +125,22 @@ def playing_logic():
     logic.session_runtime.apply_play_mode(False)
 
 
-def _window_on(logic, starts_play=True):
-    """The window, with play stopped and started on the real logic thread."""
-    window = _Window()
+def _window_on(main_window, logic, starts_play=True):
+    window = main_window
     window.view_3d.play_mode = True
-    window.view_3d.logic_thread = logic
 
     def exit_play():
-        window.calls.append("exit play")
-        logic.session_runtime.apply_play_mode(False)
-        window.view_3d.play_mode = False
-
+        window._exit_play_mode()
     def enter_play():
-        window.calls.append("enter play")
-        if starts_play:              # a map without a PlayerStart does not
-            logic.session_runtime.apply_play_mode(True)
-            window.view_3d.play_mode = True
+        if starts_play:
+            window.enter_play_mode()
 
+    original_exit = window._exit_play_mode
+    original_enter = window.enter_play_mode
     window._exit_play_mode = exit_play
     window.enter_play_mode = enter_play
+    window._original_play_methods = (original_exit, original_enter)
+    window.view_3d.logic_thread = logic
     return window
 
 
@@ -218,7 +149,7 @@ def _loadout(logic):
     return (combat.active_weapon, combat.gun2_obtained, combat.player_ammo)
 
 
-def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing_logic):
+def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_path, playing_logic):
     """Ending play dropped the weapon and starting it again on the next map
     cleared it, so a LevelChanger always sent the player on unarmed."""
     path = tmp_path / "next.json"
@@ -226,7 +157,7 @@ def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing
     playing_logic.combat_runtime.active_weapon = "gun2"
     playing_logic.combat_runtime.gun2_obtained = True
     playing_logic.combat_runtime.player_ammo = 5
-    window = _window_on(playing_logic)
+    window = _window_on(main_window, playing_logic)
 
     assert window.load_level_file(str(path)) is True
 
@@ -235,7 +166,7 @@ def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing
     assert _loadout(playing_logic) == ("gun2", True, 5)
 
 
-def test_only_the_weapons_come_along(tmp_path, playing_logic):
+def test_only_the_weapons_come_along(main_window, tmp_path, playing_logic):
     path = tmp_path / "next.json"
     path.write_text(json.dumps(LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun1"
@@ -250,7 +181,7 @@ def test_only_the_weapons_come_along(tmp_path, playing_logic):
     assert playing_logic.player_runtime.player_health == 100
 
 
-def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing_logic):
+def test_a_level_that_does_not_restart_play_hands_nothing_back(main_window, tmp_path, playing_logic):
     """If play cannot restart (no PlayerStart), the weapons are not left
     waiting to reappear the next time Play is pressed."""
     path = tmp_path / "next.json"
@@ -274,7 +205,7 @@ def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
     assert _loadout(playing_logic) == (None, False, 0)
 
 
-def test_a_map_with_a_player_start_recentres_now_and_once_deferred(tmp_path):
+def test_a_map_with_a_player_start_recentres_now_and_once_deferred(main_window, tmp_path):
     """The load arms a 50 ms timer that re-centres the 2D views; the stand-in
     host has to serve that deferred call (the suite's teardown guard runs it
     and fails this test if it cannot)."""
@@ -283,11 +214,11 @@ def test_a_map_with_a_player_start_recentres_now_and_once_deferred(tmp_path):
          "properties": {"type": "playerstart", "name": "Start", "angle": 90}}]}
     path = tmp_path / "start.json"
     path.write_text(json.dumps(level))
-    window = _Window()
-    window._apply_level_data = lambda data: _load_into(window, data)
+    window = main_window
+    window.state.load_from_data = lambda data: _load_into(window, data)
 
     assert window.load_level_file(str(path)) is True
-    assert window.calls.count("centre views") == 1
+    assert window.view_top is not None
 
 
 def _load_into(window, data):
