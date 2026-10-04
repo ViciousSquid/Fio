@@ -2623,9 +2623,7 @@ class QtGameView(QOpenGLWidget):
         # label, properties tab and focus are all restored to editor state.
         # Reached e.g. when ESC is pressed after the player dies; without this
         # the Play button would stay red after returning to the editor.
-        editor = getattr(self, 'editor', None)
-        if editor is not None and hasattr(editor, '_exit_play_mode'):
-            editor._exit_play_mode()
+        self.editor._exit_play_mode()
             return
         pos = self._last_player_start_pos
         angle = self._last_player_start_angle
