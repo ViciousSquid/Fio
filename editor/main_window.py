@@ -165,12 +165,6 @@ class MainWindow(QMainWindow):
         self.state.post_event = lambda fn: QTimer.singleShot(0, fn)
         self.load_recent_files()
         
-        # Initialize selected_objects list for multi-selection support
-        if not hasattr(self.state, 'selected_objects'):
-            self.state.selected_objects = []
-        if not hasattr(self.state, 'selected_object'):
-            self.state.selected_object = None
-            
         self.keys_pressed = set()
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
