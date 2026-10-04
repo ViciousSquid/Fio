@@ -174,8 +174,7 @@ class LogicThread(threading.Thread):
             "player",
             "player2",
             "game_state",
-                        "_mover_brush_list",
-            "_player_was_in_water",
+                        "_player_was_in_water",
             "_waterwalk_timer",
         ),
         "render": (
@@ -191,8 +190,6 @@ class LogicThread(threading.Thread):
             "play_mode",
             "_world_pause_lock",
             "_world_pause_owners",
-            "_mover_brush_list",
-            "_door_brush_list",
             "_monster_spawn_health",
             "io_manager",
             "player",
@@ -385,9 +382,6 @@ class LogicThread(threading.Thread):
         # Speaker state
         self.active_speakers: set = set()
         
-        # Mover/Door Lists
-        self.doors = []
-        # PERF: cached brush-only views of self.movers/self.doors (see _init_movers/_init_doors)
         
         # Mover and door animation state are owned by mover_runtime.
         # Parented lights
@@ -433,8 +427,6 @@ class LogicThread(threading.Thread):
         self.monster_ai = MonsterAI(self)
         self.monster_ai_thread = None
 
-        # Mover PathNode waypoint state (used by io_handlers FollowPath)
-        self.mover_path_states = {}
 
         # CutsceneRuntime owns cinematic playback state. LogicThread remains
         # the simulation orchestrator and delegates the state machine here.

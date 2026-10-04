@@ -10,11 +10,6 @@ from engine.logic_movers import LogicMovers
 def _host(brushes):
     host = SimpleNamespace(
         editor_state=SimpleNamespace(brushes=brushes, things=[]),
-        movers=[],
-        doors=[],
-        mover_path_states={},
-        _mover_brush_list=[],
-        _door_brush_list=[],
         io_manager=None,
         _plugin_emit=lambda *args, **kwargs: None,
     )
@@ -28,7 +23,7 @@ def test_logic_movers_initializes_repeatable_mover_state():
 
     runtime._init_movers()
 
-    assert host.movers == [(0, mover)]
+    assert runtime.movers == [(0, mover)]
     assert runtime.mover_states[0] == {"progress": 0.0, "forward": True}
     assert mover["original_pos"] == [0, 10, 0]
 
@@ -45,7 +40,7 @@ def test_logic_movers_does_not_create_repeat_state_for_move_once():
 
     runtime._init_movers()
 
-    assert host.movers == [(0, mover)]
+    assert runtime.movers == [(0, mover)]
     assert runtime.mover_states == {}
 
 
@@ -91,7 +86,7 @@ def test_logic_movers_reset_restores_original_mover_position():
     runtime._reset_movers()
 
     assert mover["pos"] == [10, 20, 30]
-    assert host.movers == []
+    assert runtime.movers == []
     assert runtime.mover_states == {}
 
 
@@ -105,7 +100,7 @@ def test_logic_movers_reset_restores_original_door_position():
     runtime._reset_doors()
 
     assert door["pos"] == [1, 2, 3]
-    assert host.doors == []
+    assert runtime.doors == []
     assert runtime.door_states == {}
 
 

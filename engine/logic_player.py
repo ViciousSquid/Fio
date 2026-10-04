@@ -57,8 +57,8 @@ class LogicPlayer:
             jump,
             crouch,
             logic._collision_brushes_cache,
-            logic._mover_brush_list,
-            logic._door_brush_list,
+            logic.mover_runtime._mover_brush_list,
+            logic.mover_runtime._door_brush_list,
             logic.terrain,
             spatial_grid=getattr(logic, '_spatial_grid', None),
         )

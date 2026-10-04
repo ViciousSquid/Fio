@@ -399,8 +399,8 @@ class LogicSession:
         logic.collision_runtime._collision_brushes_cache = []
         logic.collision_runtime._model_collision_brushes = []
         logic.collision_runtime._physics_body_brushes = []
-        logic._mover_brush_list = []
-        logic._door_brush_list = []
+        logic.mover_runtime._mover_brush_list = []
+        logic.mover_runtime._door_brush_list = []
         logic._monster_spawn_health = {}
 
         if logic.io_manager is not None:
