@@ -317,13 +317,13 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
     rather than enumerate a list that has just grown.
     """
     thread = logic(things=[])
-    table_type = type(thread._entity_table)
+    table_type = type(thread.game_state.get_write_state().entity_table)
     original_begin_frame = table_type.begin_frame
     monster = make_thing(Monster, "late_monster", (0, 96, -300))
 
     def begin_frame_then_append(table, things, *args, **kwargs):
         hidden = original_begin_frame(table, things, *args, **kwargs)
-        if table is thread._entity_table:
+        if table is thread.game_state.get_write_state().entity_table:
             things.append(monster)
         return hidden
 
@@ -477,7 +477,7 @@ def test_the_projection_covers_every_brush_in_the_session(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        table = thread._render_table
+        table = thread.game_state.get_write_state().render_table
         assert table.count == len(brushes)
         for index, brush in enumerate(brushes):
             assert list(table.center[index]) == pytest.approx(brush["pos"])
@@ -494,7 +494,7 @@ def test_only_movers_and_doors_are_marked_dynamic(logic):
     thread.session_runtime.apply_play_mode(True)
     try:
         thread.render_runtime.prepare_render_state()
-        dynamic = sorted(int(i) for i in thread._render_table.dynamic_slots)
+        dynamic = sorted(int(i) for i in thread.game_state.get_write_state().render_table.dynamic_slots)
         assert dynamic == [1, 2], (
             "dynamic slots are %s; only the mover and the door move" % (dynamic,))
     finally:
@@ -511,7 +511,7 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
         state = thread.game_state.get_write_state()
         table = state.render_table
         slots = state.visible_brush_slots
-        assert table is thread._render_table
+        assert table is thread.game_state.get_write_state().render_table
         assert len(slots) == len(state.visible_brushes)
         # Every slot indexes the row of the brush it was published beside, so a
         # consumer can classify from the columns instead of the dicts.
@@ -883,7 +883,7 @@ def test_the_entity_projection_reaches_the_renderer(logic):
         thread.render_runtime.prepare_render_state()
         state = thread.game_state.get_write_state()
 
-        assert state.entity_table is thread._entity_table
+        assert state.entity_table is thread.game_state.get_write_state().entity_table
         assert state.entity_refs is not None
         assert state.visible_thing_slots is not None
         assert state.thing_hidden is not None
@@ -932,7 +932,7 @@ def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
     state = thread.game_state.get_write_state()
 
     assert list(state.all_lights) == [lamp]
-    assert list(thread._entity_table.light_slots) == [0]
+    assert list(thread.game_state.get_write_state().entity_table.light_slots) == [0]
 
 
 def test_whether_the_map_has_portals_is_published(logic):
