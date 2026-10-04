@@ -254,6 +254,7 @@ def test_logic_session_constructs_and_releases_session_cache_state():
         io_manager=SimpleNamespace(reset=lambda: reset.append(True)),
         player=player,
         player2=None,
+        player_runtime=SimpleNamespace(player2=None),
     )
     host._monster_lock = threading.RLock()
     host.monster_ai = SimpleNamespace(monster_states={})

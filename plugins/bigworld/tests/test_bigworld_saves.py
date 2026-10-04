@@ -97,7 +97,6 @@ class FakeLogic:
         self.session_runtime = LogicSession(self)
         self.interaction_runtime = LogicInteraction(self)
         self.player2 = None
-        self.player_runtime = LogicPlayer(self)
         self.camera = LogicCamera(self)
         self.collision_runtime = LogicCollision(self)
         self.camera.camera_mode = "First Person"
