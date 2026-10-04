@@ -37,95 +37,45 @@ from plugins.bigworld.runtime import BigWorldSession  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# fakes
+# Real Fio machinery
 # ---------------------------------------------------------------------------
 
-class FakeThing:
-    def __init__(self, tid, ttype, pos, props=None):
-        self.pos = list(pos)
-        self.properties = dict(props or {})
-        self.properties["id"] = tid
-        self.properties.setdefault("type", ttype)
+import pytest
+pytest.importorskip("PyQt5", reason="Big World save tests exercise the real LogicThread/editor state")
 
-    def to_dict(self):
-        props = {k: v for k, v in self.properties.items() if k != "_io_connections"}
-        return {"type": self.properties.get("type"), "pos": list(self.pos),
-                "properties": props, "io_connections": []}
+from editor.editor_state import EditorState
+from editor.things import Thing
+from engine.logic_thread import LogicThread
+from engine.threaded_game_state import ThreadedGameState
 
 
-class FakePlayer:
-    def __init__(self, pos):
-        self.pos = list(pos)
-        self.velocity = [0.0, 0.0, 0.0]
-        self.angle = 0.0
-        self.pitch = 0.0
-        self.camera_height = 40.0
-        self.physics_enabled = True
-        self.on_ground = True
-        self.in_water = False
-        self.swimming = False
+def make_thing(tid, ttype, pos, props=None):
+    properties = dict(props or {})
+    properties["id"] = tid
+    properties.setdefault("type", ttype)
+    return Thing(pos=list(pos), properties=properties)
 
 
-class FakeEditorState:
-    def __init__(self, things, brushes):
-        self.things = things
-        self.brushes = brushes
-
-    def get_level_data(self):
-        return {
-            "version": 3,
-            "brushes": [copy.deepcopy(b) for b in self.brushes],
-            "things": [t.to_dict() for t in self.things],
-        }
-
-
-class FakeMonsterAI:
-    def __init__(self):
-        self.monster_states = {}
+def make_logic(things, brushes, player_pos):
+    """Real play-mode owner used by the save/restore tests."""
+    state = EditorState()
+    state.things = list(things)
+    state.brushes = list(brushes)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player.pos = [float(player_pos[0]),
+                                      float(player_pos[1]),
+                                      float(player_pos[2])]
+    logic.world_runtime.build_entity_caches()
+    return logic
 
 
-class FakeLogic:
-    def __init__(self, things, brushes, player_pos):
-        self.editor_state = FakeEditorState(things, brushes)
-        self.render_runtime = SimpleNamespace(view_distance=ViewDistance())
-        self._tick_lock = threading.RLock()
-        self.io_manager = None
-        self.plugins = SimpleNamespace(services={})
-        self.player_runtime = LogicPlayer(self)
-        self.player_runtime.player = FakePlayer(player_pos)
-        self.session_runtime = LogicSession(self)
-        self.interaction_runtime = LogicInteraction(self)
-        self.camera = LogicCamera(self)
-        self.collision_runtime = LogicCollision(self)
-        self.camera.camera_mode = "First Person"
-        self.camera.overhead_height = 800.0
-        self.camera.overhead_height_limit = None
-        self.camera.overhead_tilt = 0.0
-        self.camera.overhead_orientation = "north"
-        self.active_weapon = None
-        self.current_hud_message = ""
-        self.collected_keys = set()
-        self.movers = []
-        self.doors = []
-        self.mover_runtime = LogicMovers(self)
-        self.prop_runtime = PropSession(self)
-        self.combat_runtime = LogicCombat(self)
-        self.timing_runtime = LogicTiming(self)
-        self.monster_ai = FakeMonsterAI()
-        self._portal_cooldowns = {}
-        self._portal_prev_player_pos = None
-        self._portal_things = []
-        self.visibility_changes = 0
-        self._portal_target_things = []
-        self.portal_runtime = LogicPortals(self)
-        self.trigger_runtime = LogicTriggers(self)
-        self.world_runtime = LogicWorld(self)
-        self._monster_things = [t for t in self.editor_state.things if t.properties.get("type") == "monster"]
-        self.visibility_changes = 0
-
-    def _build_entity_caches(self):
-        pass
-
+def new_session(logic):
+    s = BigWorldSession(logic, activation_radius=600.0, deactivation_radius=700.0)
+    if logic.plugins is None:
+        from plugins.manager import get_manager
+        logic.plugins = get_manager()
+    logic.plugins.services["bigworld"] = s
+    return s
 
 # Cell A around x=100 (cell 0,0); Cell B around x=6000 (cell 11,0). >2 cells and
 # far beyond the small activation radius used below, so moving A→B unloads A.
@@ -135,13 +85,13 @@ B_POS = (6000.0, 0.0, 100.0)
 
 def make_world():
     things = [
-        FakeThing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
-        FakeThing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
-        FakeThing("A-light", "light", [100.0, 60.0, 100.0], {"radius": 100.0}),
-        FakeThing("B-mon", "monster", [6010.0, 0.0, 110.0], {"health": 80}),
-        FakeThing("B-key", "prop", [6020.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "silver"}),
+        make_thing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
+        make_thing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
+        make_thing("A-light", "light", [100.0, 60.0, 100.0], {"radius": 100.0}),
+        make_thing("B-mon", "monster", [6010.0, 0.0, 110.0], {"health": 80}),
+        make_thing("B-key", "prop", [6020.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "silver"}),
         # The Big World opt-in entity (persistent global).
-        FakeThing("bw-settings", "bigworldsettings", [0.0, 0.0, 0.0],
+        make_thing("bw-settings", "bigworldsettings", [0.0, 0.0, 0.0],
                   {"enabled": True, "activation_radius": 600.0,
                    "deactivation_radius": 700.0}),
     ]
@@ -164,7 +114,7 @@ def new_session(logic):
 
 def test_unloaded_cell_change_survives_in_registry():
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
 
@@ -194,7 +144,7 @@ def test_light_change_committed_on_unload():
     """A light lives in the manager's separate cell.lights list; a change to it
     must still enter the registry when its cell unloads (not only at save)."""
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
 
@@ -213,7 +163,7 @@ def test_registry_populated_on_unload_without_save():
     """The invariant, isolated: after a cell unloads, its changes are in the
     persistent registry with no save/commit_all having been called."""
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
     things[0].properties["dead"] = True     # kill A-mon while in Cell A
@@ -227,7 +177,7 @@ def test_registry_populated_on_unload_without_save():
 
 def test_forced_delta_save_structure():
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
     things[0].properties["dead"] = True
@@ -253,7 +203,7 @@ def test_full_unload_save_load_reload_sequence():
     """The headline invariant: A modified, A unloaded, B modified, save, load,
     return to A — all of A's (and B's) changes are present."""
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
 
@@ -277,7 +227,7 @@ def test_full_unload_save_load_reload_sequence():
 
     # Fresh, pristine world + fresh session; player back near Cell A.
     things2, brushes2 = make_world()
-    logic2 = FakeLogic(things2, brushes2, A_POS)
+    logic2 = make_logic(things2, brushes2, A_POS)
     s2 = new_session(logic2)
     s2.start(player_pos=A_POS)
 
@@ -298,7 +248,7 @@ def test_full_unload_save_load_reload_sequence():
 
 def test_registry_converges_when_change_reverts():
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
 
@@ -315,7 +265,7 @@ def test_registry_converges_when_change_reverts():
 
 def test_unchanged_world_saves_empty_registry():
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
     s.commit_all()
@@ -331,7 +281,7 @@ def test_unchanged_world_saves_empty_registry():
 
 def test_wrong_world_fails_safely():
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
     things[0].properties["dead"] = True
@@ -344,10 +294,10 @@ def test_wrong_world_fails_safely():
 
     # A different world: different UUIDs and name.
     other_things = [
-        FakeThing("X-1", "monster", [0, 0, 0], {}),
-        FakeThing("X-2", "prop", [0, 0, 0], {"collect_enabled": True, "collect_type": "health"}),
+        make_thing("X-1", "monster", [0, 0, 0], {}),
+        make_thing("X-2", "prop", [0, 0, 0], {"collect_enabled": True, "collect_type": "health"}),
     ]
-    other = FakeLogic(other_things, [{"id": "X-b"}], A_POS)
+    other = make_logic(other_things, [{"id": "X-b"}], A_POS)
     new_session(other).start(player_pos=A_POS)
     try:
         savegame.restore_auto(other, snap, current_map_name="other.json")
@@ -360,7 +310,7 @@ def test_wrong_world_fails_safely():
 def test_streaming_state_not_mistaken_for_change():
     """A parked (unloaded) but unmodified cell must not appear in the registry."""
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)   # Cell B is parked (hidden/disabled markers set)
 
@@ -406,7 +356,7 @@ def _park_and_save(hide_ids=()):
     Returns the save, so a fresh world can be restored from it.
     """
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
 
@@ -435,7 +385,7 @@ def test_a_dormant_entitys_hidden_state_survives_being_restored():
     snap = _park_and_save(hide_ids=("A-mon",))
 
     things2, brushes2 = make_world()
-    logic2 = FakeLogic(things2, brushes2, B_POS)
+    logic2 = make_logic(things2, brushes2, B_POS)
     s2 = new_session(logic2)
     s2.start(player_pos=B_POS)                     # cell A parked from the start
 
@@ -463,7 +413,7 @@ def test_a_dormant_brushs_hidden_state_survives_being_restored():
     snap = _park_and_save()
 
     things2, brushes2 = make_world()
-    logic2 = FakeLogic(things2, brushes2, B_POS)
+    logic2 = make_logic(things2, brushes2, B_POS)
     s2 = new_session(logic2)
     s2.start(player_pos=B_POS)
 
@@ -486,7 +436,7 @@ def test_restoring_a_dormant_object_does_not_wake_it():
     snap = _park_and_save()
 
     things2, brushes2 = make_world()
-    logic2 = FakeLogic(things2, brushes2, B_POS)
+    logic2 = make_logic(things2, brushes2, B_POS)
     s2 = new_session(logic2)
     s2.start(player_pos=B_POS)
 
@@ -511,7 +461,7 @@ def test_play_stop_returns_a_restored_dormant_world_to_its_saved_state():
     snap = _park_and_save(hide_ids=("A-mon",))
 
     things2, brushes2 = make_world()
-    logic2 = FakeLogic(things2, brushes2, B_POS)
+    logic2 = make_logic(things2, brushes2, B_POS)
     s2 = new_session(logic2)
     s2.start(player_pos=B_POS)
     savegame.restore_auto(logic2, snap, current_map_name="world.json")
@@ -530,7 +480,7 @@ def test_committing_one_cell_diffs_only_that_cells_base_records():
     world (O(world) per cell, ~5 ms a crossing on a 2300-brush world). The
     base subset it now uses must give exactly the whole-world answer."""
     things, brushes = make_world()
-    logic = FakeLogic(things, brushes, A_POS)
+    logic = make_logic(things, brushes, A_POS)
     s = new_session(logic)
     s.start(player_pos=A_POS)
     things[0].properties["dead"] = True
