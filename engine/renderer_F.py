@@ -77,9 +77,6 @@ class Renderer_F(BaseRenderer):
         # that table interns a new name.
         self._gl_tex_by_table = {}
         self._tex_size_by_table = {}
-        # Compatibility/debug views of the most recently resolved table.
-        self._gl_tex_by_name_id = np.zeros(0, dtype=np.int32)
-        self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
 
 
@@ -298,7 +295,6 @@ class Renderer_F(BaseRenderer):
         else:
             cached = entry[2]
         if len(cached) == len(names):
-            self._gl_tex_by_name_id = cached
             return cached
         grown = np.zeros(len(names), dtype=np.int32)
         if len(cached):
@@ -309,7 +305,6 @@ class Renderer_F(BaseRenderer):
                 self.texture_manager.get(self._tex_cache_path(name))
                 or self.load_texture_callback(name, 'textures') or 0)
         self._gl_tex_by_table[key] = (table, names, grown)
-        self._gl_tex_by_name_id = grown
         return grown
 
     def _texture_sizes_by_name_id(self, table):
@@ -322,7 +317,6 @@ class Renderer_F(BaseRenderer):
         else:
             cached = entry[2]
         if len(cached) == len(names):
-            self._tex_size_by_name_id = cached
             return cached
         grown = np.full((len(names), 2), 128.0, dtype=np.float32)
         if len(cached):
@@ -332,7 +326,6 @@ class Renderer_F(BaseRenderer):
             w, h = dims.get(self._tex_cache_path(names[name_id]), (128, 128))
             grown[name_id] = (w, h)
         self._tex_size_by_table[key] = (table, names, grown)
-        self._tex_size_by_name_id = grown
         return grown
     @staticmethod
     def lit_instance_payload(table, row_slots, selected_slot=-1):
