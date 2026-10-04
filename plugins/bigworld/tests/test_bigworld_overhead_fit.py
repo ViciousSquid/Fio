@@ -21,6 +21,22 @@ from plugins.bigworld.tiers import TierClassifier
 from .test_bigworld_tiers import FakePlayer, grid_world
 
 
+class _CameraFixture:
+    def __init__(self, footprint):
+        self.overhead_height = 800.0
+        self.overhead_height_limit = None
+        self._footprint = footprint
+
+    def overhead_ground_footprint(self):
+        return self._footprint
+
+    def effective_overhead_height(self):
+        height = float(self.overhead_height)
+        if self.overhead_height_limit is not None:
+            height = min(height, float(self.overhead_height_limit))
+        return height
+
+
 class OverheadLogic:
     """A streaming host whose overhead camera shows +/- (hx, hz) of ground."""
 
@@ -30,10 +46,8 @@ class OverheadLogic:
         self.player = FakePlayer(*at)
         self.view_distance = ViewDistance()
         self.footprint = footprint
-        self.overhead_height = 800.0
+        self.camera = _CameraFixture(self.footprint)
 
-    def overhead_ground_footprint(self):
-        return self.footprint
 
 
 def fitted_session(things, **kw):
@@ -216,9 +230,9 @@ def test_the_published_radii_do_not_depend_on_when_the_fit_arrived():
 
 def test_the_overhead_camera_is_held_under_the_activation_radius():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
-    assert logic.overhead_height_limit == 2048.0
+    assert logic.camera.overhead_height_limit == 2048.0
     session.stop()
-    assert logic.overhead_height_limit is None
+    assert logic.camera.overhead_height_limit is None
 
 
 def test_a_camera_at_the_ceiling_still_sees_the_player():
@@ -226,7 +240,7 @@ def test_a_camera_at_the_ceiling_still_sees_the_player():
     residency edge at the player's ground -- past the camera's own height, so
     the player is never beyond the far plane."""
     logic, session = fitted_session(grid_world(), footprint=(4000.0, 2048.0, 4500.0))
-    logic.overhead_height = 2048.0
+    logic.camera.overhead_height = 2048.0
     logic.footprint = (4100.0, 2048.0, 4600.0)      # re-fit at the new height
     session.tick()
     assert session.manager.activation_radius == 2048.0

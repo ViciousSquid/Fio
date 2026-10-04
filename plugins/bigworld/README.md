@@ -288,8 +288,8 @@ fitted to that screen:
   residency, and the camera sees down to its edge at the player's ground; fog
   hides the rest.
 - **The overhead camera never floats higher than the activation radius.** The
-  session publishes `logic.overhead_height_limit` and the camera uses
-  `min(overhead_height, limit)` (`logic.effective_overhead_height()`). The
+  session publishes `logic.camera.overhead_height_limit` and the camera uses
+  `min(overhead_height, limit)` (`logic.camera.effective_overhead_height()`). The
   game's own `overhead_height` is left as set, saved as set, and applies again
   once the session stops; any change of Play Mode drops the ceiling.
 - **NEAR** is the screen's box (with a margin), not the near circle; everything

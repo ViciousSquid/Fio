@@ -32,6 +32,22 @@ class FakeThing:
         self.properties.update(props)
 
 
+class FakeCamera:
+    def __init__(self):
+        self.overhead_height = 800.0
+        self.overhead_height_limit = None
+        self._footprint = None
+
+    def overhead_ground_footprint(self):
+        return self._footprint
+
+    def effective_overhead_height(self):
+        height = float(self.overhead_height)
+        if self.overhead_height_limit is not None:
+            height = min(height, float(self.overhead_height_limit))
+        return height
+
+
 class FakeLogic:
     """Stand-in for the streaming host (see ``runtime.StreamingHost``)."""
 
@@ -40,6 +56,7 @@ class FakeLogic:
         self.things = things or []
         self.player = player
         self.view_distance = view_distance
+        self.camera = FakeCamera()
 
 
 class FakePlayer:
@@ -384,7 +401,7 @@ def test_camera_mode_cannot_move_the_resident_set_or_the_tiers():
 
     # Everything a camera mode can change, changed -- except the player.
     session.logic.camera_mode = "Overhead"
-    session.logic.overhead_height = 800.0
+    session.logic.camera.overhead_height = 800.0
     session.logic.editor_camera = FakePlayer(9000.0, 9000.0)
     session.tick()
     session.logic.camera_mode = "First Person"
