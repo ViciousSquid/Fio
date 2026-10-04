@@ -668,12 +668,8 @@ class _Side:
             logic = LogicThread.__new__(LogicThread)
             logic.editor_state = SimpleNamespace(brushes=self.brushes,
                                                  things=self.things)
-            logic._name_cache = {}
             logic.io_manager = io
             logic.player = player
-            logic.mover_runtime.movers = []
-            logic.mover_runtime.doors = []
-            logic.mover_path_states = {}
             logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
             logic.mover_runtime = LogicMovers(logic)
         io.set_logic_thread(logic)
@@ -721,7 +717,10 @@ class _Side:
             "doors": {i: _numbers_as_float(s) for i, s in sorted(door_states.items())},
             "mover_keys": {i: list(s) for i, s in sorted(mover_states.items())},
             "door_keys": {i: list(s) for i, s in sorted(door_states.items())},
-            "paths": copy.deepcopy(logic.mover_path_states),
+            "paths": copy.deepcopy(
+                logic.mover_path_states
+                if self.reference else logic.mover_runtime.mover_path_states
+            ),
         })
 
 
