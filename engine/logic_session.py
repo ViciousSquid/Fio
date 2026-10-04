@@ -68,8 +68,8 @@ class LogicSession:
 
             logic.mover_runtime._init_movers()
             logic.mover_runtime._init_doors()
-            logic._init_parented_lights()
-            logic._init_parented_portals()
+            logic.parenting_runtime._init_parented_lights()
+            logic.parenting_runtime._init_parented_portals()
 
             # Bake swept-mesh collision for angled (clipped/convex) brushes so
             # they collide as real slopes/wedges. Must run before the spatial
@@ -224,8 +224,8 @@ class LogicSession:
             logic.hurt_trigger_timers.clear()
             logic.mover_runtime._reset_movers()
             logic.mover_runtime._reset_doors()
-            logic._reset_parented_lights()
-            logic._reset_parented_portals()
+            logic.parenting_runtime._reset_parented_lights()
+            logic.parenting_runtime._reset_parented_portals()
             logic.collision_runtime.clear_angled_brush_collision()
             logic.current_hud_message = ""
             logic.current_hud_key_name = None

@@ -1268,8 +1268,8 @@ class LogicThread(threading.Thread):
         # Update movers & doors first (for platform carrying)
         self.mover_runtime._update_movers(delta)
         self.mover_runtime._update_doors(delta)
-        self._update_parented_lights()
-        self._update_parented_portals()
+        self.parenting_runtime._update_parented_lights()
+        self.parenting_runtime._update_parented_portals()
         
         # Update I/O system (delayed events)
         if self.io_manager:
@@ -1511,35 +1511,6 @@ class LogicThread(threading.Thread):
 
     # =========================================================================
     # PARENTED ENTITY RUNTIME
-    # =========================================================================
-
-    def _parenting_runtime(self):
-        """Return the parented light/portal runtime for this LogicThread."""
-        runtime = getattr(self, "parenting_runtime", None)
-        if runtime is None:
-            runtime = LogicParenting(self, light_type=Light, portal_type=Portal)
-            self.parenting_runtime = runtime
-        return runtime
-
-    def _init_parented_lights(self):
-        return self._parenting_runtime()._init_parented_lights()
-
-    def _reset_parented_lights(self):
-        return self._parenting_runtime()._reset_parented_lights()
-
-    def _update_parented_lights(self):
-        return self._parenting_runtime()._update_parented_lights()
-
-    def _init_parented_portals(self):
-        return self._parenting_runtime()._init_parented_portals()
-
-    def _reset_parented_portals(self):
-        return self._parenting_runtime()._reset_parented_portals()
-
-    def _update_parented_portals(self):
-        return self._parenting_runtime()._update_parented_portals()
-
-    # PLAYER SHOOTING
     # =========================================================================
 
     # FRUSTUM CULLING
