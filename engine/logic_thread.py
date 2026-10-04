@@ -7,11 +7,9 @@ play-session state belongs to the extracted Logic* runtimes constructed here.
 
 import threading
 import time
-import math
 import os
 
 from .threaded_game_state import ThreadedGameState
-from .change_journal import touch
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_player import LogicPlayer
