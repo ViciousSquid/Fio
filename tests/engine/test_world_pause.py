@@ -214,7 +214,7 @@ def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playi
     if state == "cutscene_runtime.state":
         playing.cutscene_runtime.state = {"active": True}
     elif state == "player_dead":
-        playing.player_runtime.player_runtime.player_dead = True
+        playing.player_runtime.player_dead = True
     else:
         playing.interaction_runtime.level_complete_ui = {"active": True}
     playing.session_runtime.set_world_paused("menu", True)
