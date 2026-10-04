@@ -14,7 +14,6 @@ the view-distance horizon stand exactly as before.
 import math
 
 from engine.spatial import TIER_ACTIVE, TIER_NEAR, tier_of
-from engine.view_distance import ViewDistance
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld.tiers import TierClassifier
 
@@ -51,7 +50,10 @@ def fitted_session(things, **kw):
     session = BigWorldSession(logic, activation_radius=2048.0,
                               deactivation_radius=2304.0, sim_near_radius=1024.0)
     session.start()
-    return logic, sessiondef test_residency_is_sized_from_the_screen_not_the_authored_radius():
+    return logic, session
+
+
+def test_residency_is_sized_from_the_screen_not_the_authored_radius():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
     corner = (900.0 ** 2 + 500.0 ** 2) ** 0.5
     act = session.manager.activation_radius
