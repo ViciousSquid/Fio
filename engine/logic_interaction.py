@@ -1,7 +1,7 @@
 """Player-to-world interaction handling delegated from LogicThread.
 
 Owns the per-tick door/LevelChanger interaction query and prompt generation.
-LogicThread retains the compatibility wrapper and authoritative tick ordering.
+LogicThread remains the authoritative tick-order orchestrator.
 """
 
 from __future__ import annotations
