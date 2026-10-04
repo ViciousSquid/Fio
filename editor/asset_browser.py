@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QMainWindow, QPushButton, QTreeView,
                              QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem)
-from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer
+from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer, QFileSystemWatcher
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon
 from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
@@ -259,7 +259,14 @@ class AssetBrowserTab(QWidget):
         self.parent_browser = parent_browser
         self.selected_item = None
         self.items = []
-        
+
+        # Filesystem events drive asset refreshes.  There is deliberately no
+        # polling timer: adding/removing an asset emits directoryChanged and
+        # the browser reloads the visible folder immediately.
+        self.asset_watcher = QFileSystemWatcher(self)
+        self.asset_watcher.directoryChanged.connect(self._on_asset_directory_changed)
+        self._watched_asset_dirs = set()
+
         # For debounced resizing and column tracking
         self.current_cols = 0
         self.resize_timer = QTimer()
@@ -519,8 +526,29 @@ class AssetBrowserTab(QWidget):
         path = self.dir_model.filePath(index)
         self.load_directory(path)
 
+    def _watch_asset_directory(self, path):
+        """Watch *path* for real filesystem changes; never poll it."""
+        path = os.path.abspath(path)
+        if not os.path.isdir(path):
+            return
+        if path not in self._watched_asset_dirs:
+            if self.asset_watcher.addPath(path):
+                self._watched_asset_dirs.add(path)
+
+    def _on_asset_directory_changed(self, path):
+        """Refresh the visible folder after an OS filesystem event."""
+        path = os.path.abspath(path)
+        # QFileSystemWatcher removes a watched directory when it disappears.
+        self._watched_asset_dirs.discard(path)
+        self._watch_asset_directory(path)
+
+        if os.path.abspath(self.current_asset_folder) == path:
+            self.load_directory(path)
+
     def load_directory(self, path):
         self.current_asset_folder = path
+        self._watch_asset_directory(self.root_path)
+        self._watch_asset_directory(path)
         # Clear existing items
         for i in reversed(range(self.grid_layout.count())): 
             self.grid_layout.itemAt(i).widget().setParent(None)
