@@ -1089,6 +1089,10 @@ def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
     register_all_input_handlers(manager)
     logic = SimpleNamespace(
         cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
+        world_runtime=SimpleNamespace(
+            find_entity_by_name=lambda name: target if name == 'Focus' else None,
+            find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
+        ),
         _find_entity_by_name=lambda name: target if name == 'Focus' else None,
         _find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
     )
@@ -1111,6 +1115,10 @@ def test_logic_camera_lookat_zero_return_time_holds_focus():
     register_all_input_handlers(manager)
     logic = SimpleNamespace(
         cutscene_runtime=SimpleNamespace(state={'active': True, 'entity': camera}),
+        world_runtime=SimpleNamespace(
+            find_entity_by_name=lambda name: target if name == 'Focus' else None,
+            find_entity_by_id=lambda entity_id: None,
+        ),
         _find_entity_by_name=lambda name: target if name == 'Focus' else None,
         _find_entity_by_id=lambda entity_id: None,
     )
