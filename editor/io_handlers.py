@@ -1837,18 +1837,13 @@ def _get_brush_index(brush: dict, logic) -> int:
     40k brushes). The table's answer is used only if the list confirms it.
     """
     brushes = logic.editor_state.brushes
-    mover_runtime = getattr(logic, 'mover_runtime', None)
-    if mover_runtime is not None:
-        try:
-            table = mover_runtime._movers()
-            for group in (table.movers, table.doors):
-                row = group.row_of_obj.get(id(brush))
-                if row is not None:
-                    index = group.index[row]
-                    if 0 <= index < len(brushes) and brushes[index] is brush:
-                        return index
-        except Exception:
-            pass
+    table = logic.mover_runtime._movers()
+    for group in (table.movers, table.doors):
+        row = group.row_of_obj.get(id(brush))
+        if row is not None:
+            index = group.index[row]
+            if 0 <= index < len(brushes) and brushes[index] is brush:
+                return index
     try:
         return brushes.index(brush)
     except ValueError:
