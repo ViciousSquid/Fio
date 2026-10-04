@@ -91,7 +91,6 @@ class HostStub:
         self.terrain = None
         self._timer_things = []
         self._monster_spawn_health = {}
-        self._moving_rows = None
         self._props = None
         self._monster_things = []
         self._monster_by_id = {}
