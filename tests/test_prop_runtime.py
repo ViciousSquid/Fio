@@ -156,7 +156,7 @@ def test_respawn_fades_in_over_two_seconds():
 def test_respawn_fade_state_resets_when_session_restarts():
     prop = Prop(pos=[0.0, 0.0, 0.0])
     logic = SimpleNamespace(
-        things=[prop], io_manager=IO(),
+        editor_state=SimpleNamespace(things=[prop]), io_manager=IO(),
         _spatial_grid=None, _physics_world=None,
         player=SimpleNamespace(
             pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
