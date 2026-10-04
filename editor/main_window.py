@@ -1334,7 +1334,7 @@ class MainWindow(QMainWindow):
 
     def _find_bigworld_settings(self):
         """The map's BigWorldSettings entity, or None."""
-        for thing in getattr(self.state, 'things', None) or []:
+        for thing in self.state.things:
             props = getattr(thing, 'properties', None) or {}
             if getattr(thing, 'TYPE', None) == 'bigworldsettings' \
                     or props.get('type') == 'bigworldsettings':
@@ -1908,7 +1908,7 @@ class MainWindow(QMainWindow):
 
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
-        sources = list(getattr(self.state, 'selected_objects', []) or [])
+        sources = list(self.state.selected_objects or [])
         if self.state.selected_object is not None and self.state.selected_object not in sources:
             sources.append(self.state.selected_object)
 
@@ -3440,7 +3440,7 @@ class MainWindow(QMainWindow):
         # Ctrl+C: Copy the current selection.  The clipboard stores a
         # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            sources = list(getattr(self.state, 'selected_objects', []) or [])
+            sources = list(self.state.selected_objects or [])
             if self.state.selected_object is not None and self.state.selected_object not in sources:
                 sources.append(self.state.selected_object)
 
@@ -3808,7 +3808,7 @@ class MainWindow(QMainWindow):
 
     def _selected_brushes(self):
         """Every brush in the current selection (things filtered out)."""
-        objs = list(getattr(self.state, 'selected_objects', []) or [])
+        objs = list(self.state.selected_objects or [])
         if self.state.selected_object is not None and \
                 self.state.selected_object not in objs:
             objs.append(self.state.selected_object)
@@ -4005,7 +4005,7 @@ class MainWindow(QMainWindow):
 
     def selected_objects_list(self):
         """The current selection as a plain list (brushes and entities)."""
-        selected = list(getattr(self.state, 'selected_objects', []) or [])
+        selected = list(self.state.selected_objects or [])
         if self.state.selected_object is not None and \
                 self.state.selected_object not in selected:
             selected.append(self.state.selected_object)
