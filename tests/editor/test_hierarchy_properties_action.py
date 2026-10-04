@@ -9,7 +9,6 @@ otherwise still be showing whatever was selected before the right-click.
 """
 
 import re
-import types
 
 import pytest
 
@@ -25,36 +24,19 @@ pytestmark = pytest.mark.qt
 
 
 @pytest.fixture
-def hierarchy(qt_app):
-    """A hierarchy wired to the real dock/tab shape the editor builds."""
-    prop_editor, console = QWidget(), QWidget()
-    tabs = QTabWidget()
-    tabs.addTab(prop_editor, "Properties")
-    tabs.addTab(console, "Debug Console")
-    dock = QDockWidget()
-    dock.setWidget(tabs)
-    dock.setVisible(False)
-    tabs.setCurrentIndex(tabs.indexOf(console))    # start on the wrong tab
-
+def hierarchy(main_window):
+    window = main_window
     thing = Prop(pos=[0, 0, 0])
     brush = {"name": "wall", "pos": [0, 0, 0], "size": [64, 64, 64]}
-    selected = []
+    window.state.things[:] = [thing]
+    window.state.brushes[:] = [brush]
+    window.set_selected_objects([])
+    window.properties_dock.setVisible(False)
+    debug_index = window.properties_tab_widget.indexOf(window.debug_console)
+    if debug_index >= 0:
+        window.properties_tab_widget.setCurrentIndex(debug_index)
+    yield window.scene_hierarchy, window, thing, brush
 
-    window = types.SimpleNamespace(
-        state=types.SimpleNamespace(things=[thing], brushes=[brush]),
-        property_editor=prop_editor,
-        properties_tab_widget=tabs,
-        properties_dock=dock,
-        debug_console=console,
-        set_selected_objects=lambda objs: selected.append(list(objs)),
-    )
-    window.show_properties_panel = types.MethodType(
-        MainWindow.show_properties_panel, window)
-
-    panel = SceneHierarchy.__new__(SceneHierarchy)
-    panel.main_window = window
-    yield panel, window, selected, thing, brush
-    dock.deleteLater()
 
 
 def current_tab(window):
@@ -63,7 +45,7 @@ def current_tab(window):
 
 
 def test_it_switches_to_the_properties_tab(hierarchy):
-    panel, window, _selected, thing, _brush = hierarchy
+    panel, window, thing, _brush = hierarchy
     assert current_tab(window) == "Debug Console"
 
     panel.show_properties_for(thing)
@@ -72,7 +54,7 @@ def test_it_switches_to_the_properties_tab(hierarchy):
 
 
 def test_it_reveals_a_closed_properties_dock(hierarchy):
-    panel, window, _selected, thing, _brush = hierarchy
+    panel, window, thing, _brush = hierarchy
     assert not window.properties_dock.isVisible()
 
     panel.show_properties_for(thing)
@@ -83,29 +65,29 @@ def test_it_reveals_a_closed_properties_dock(hierarchy):
 
 def test_it_selects_the_item_the_menu_was_opened_on(hierarchy):
     """The panel shows a selection, so the selection has to be made."""
-    panel, _window, selected, thing, _brush = hierarchy
+    panel, window, thing, _brush = hierarchy
 
     panel.show_properties_for(thing)
 
-    assert selected and selected[-1] == [thing], (
+    assert window.state.selected_objects == [thing], (
         "the panel would show whatever was selected before the right-click")
 
 
 def test_it_works_for_a_brush_too(hierarchy):
-    panel, window, selected, _thing, brush = hierarchy
+    panel, window, _thing, brush = hierarchy
 
     panel.show_properties_for(brush)
 
-    assert selected[-1] == [brush]
+    assert window.state.selected_objects == [brush]
     assert current_tab(window) == "Properties"
 
 
 def test_nothing_happens_without_an_object(hierarchy):
-    panel, window, selected, _thing, _brush = hierarchy
+    panel, window, _thing, _brush = hierarchy
 
     panel.show_properties_for(None)
 
-    assert selected == []
+    assert window.state.selected_objects == []
     assert not window.properties_dock.isVisible()
 
 
