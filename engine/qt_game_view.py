@@ -541,7 +541,7 @@ class QtGameView(QOpenGLWidget):
         self._hud_runtime_visible = None
 
         self._refresh_hud_status_font()
-        logic_thread = getattr(self, "logic_thread", None)
+        logic_thread = self.logic_thread
         if logic_thread is not None:
             logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
 
@@ -582,7 +582,7 @@ class QtGameView(QOpenGLWidget):
     def set_hud_fade_enabled(self, enabled):
         """Enable/disable the damage-driven health HUD fade immediately."""
         self._hud_fade_enabled = bool(enabled)
-        logic_thread = getattr(self, "logic_thread", None)
+        logic_thread = self.logic_thread
         if logic_thread is not None:
             logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
         self.update()
@@ -875,7 +875,7 @@ class QtGameView(QOpenGLWidget):
         immediately in play mode; otherwise it applies on the next play session.
         """
         self.camera_mode = str(mode)
-        lt = getattr(self, "logic_thread", None)
+        lt = self.logic_thread
         if lt is not None:
             lt.camera.set_camera_mode(self.camera_mode)
         self.update()
@@ -898,14 +898,14 @@ class QtGameView(QOpenGLWidget):
         missing sprite never breaks the frame. No-op outside overhead play mode,
         during a cinematic, or when disabled.
         """
-        _lt = getattr(self, "logic_thread", None)
+        _lt = self.logic_thread
         _lt_overhead = bool(_lt.camera.is_overhead()) if _lt is not None else False
         if not (self.play_mode and self.overhead_sprite_enabled
                 and (self._is_overhead() or _lt_overhead)):
             return
         if render_state is None:
             return
-        lt = getattr(self, "logic_thread", None)
+        lt = self.logic_thread
         if lt is not None and lt.cutscene_runtime.state:
             return
         # Suppress the ground sprite mid-tween so it doesn't pop in/out while the
@@ -1628,7 +1628,7 @@ class QtGameView(QOpenGLWidget):
         # restore precision. First-person keeps the stock 0.1 near plane.
         _near = 0.1
         if self.play_mode and self._is_overhead():
-            _lt = getattr(self, 'logic_thread', None)
+            _lt = self.logic_thread
             _oh = float(_lt.camera.effective_overhead_height() or _lt.camera.overhead_height or 800.0)
             _near = max(1.0, _oh * 0.1)
         # The far plane IS the view distance -- that is what makes "nothing is
@@ -1697,7 +1697,7 @@ class QtGameView(QOpenGLWidget):
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
         _pmgr = getattr(self.logic_thread, 'plugins', None) \
-            if getattr(self, 'logic_thread', None) is not None else None
+            if self.logic_thread is not None else None
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
@@ -1798,7 +1798,7 @@ class QtGameView(QOpenGLWidget):
             if getattr(self, '_collision_vis_mode', 'off') != 'off':
                 # Get collision brushes from logic thread
                 collision_brushes = []
-                if hasattr(self, 'logic_thread') and self.logic_thread:
+                if self.logic_thread is not None:
                     collision_brushes = self.logic_thread.collision_runtime._model_collision_brushes
                     # Build collision brushes on demand if not already built
                     # (needed for editor mode where they aren't auto-built on play start)
@@ -1912,7 +1912,7 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
         if self.play_mode:
-            logic_thread = getattr(self, "logic_thread", None)
+            logic_thread = self.logic_thread
             if logic_thread is not None:
                 for line, text in logic_thread.cutscene_runtime.consume_cinematic_messages():
                     if line == "message2":
