@@ -910,7 +910,7 @@ class QtGameView(QOpenGLWidget):
             return
         # Suppress the ground sprite mid-tween so it doesn't pop in/out while the
         # camera swoops between first-person and overhead.
-        if getattr(render_state, "camera_transition_active", False):
+        if render_state.camera_transition_active:
             return
         try:
             from engine.overhead_sprite import SpriteController, OverheadSpriteRenderer
@@ -923,16 +923,16 @@ class QtGameView(QOpenGLWidget):
                 size=float(self.overhead_sprite_size),
                 facing_offset_deg=float(self.overhead_sprite_facing_offset))
 
-        pos = getattr(render_state, "player_pos", None)
+        pos = render_state.player_pos
         if pos is None:
             return
         try:
             gpos = (float(pos.x), float(pos.y), float(pos.z))
         except AttributeError:
             gpos = (float(pos[0]), float(pos[1]), float(pos[2]))
-        angle = float(getattr(render_state, "player_angle", 0.0))
-        armed = bool(getattr(render_state, "active_weapon", None))
-        shooting = bool(getattr(render_state, "muzzle_flash_active", False))
+        angle = float(render_state.player_angle)
+        armed = bool(render_state.active_weapon)
+        shooting = bool(render_state.muzzle_flash_active)
         self._overhead_sprite_ctrl.update(gpos, angle, time.perf_counter(),
                                           armed=armed, shooting=shooting)
         self._overhead_sprite_renderer.draw(
@@ -1640,7 +1640,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["culling_enabled"] = self.culling_enabled
         self._render_config["brush_display_mode"] = self.brush_display_mode
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
-        self._render_config["render_mode"] = getattr(self, 'current_render_mode', 0)
+        self._render_config["render_mode"] = self.current_render_mode
         self._render_config["play_mode"] = self.play_mode
         self._render_config["selected_object"] = self.selected_object
         self._render_config["time"] = time.perf_counter() - self.start_time
