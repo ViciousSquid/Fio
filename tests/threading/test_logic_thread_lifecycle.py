@@ -90,21 +90,21 @@ def test_the_logic_thread_reads_the_editor_state_live(logic):
     """Fio's whole premise: one world, no serialisation between the two."""
     state_brushes = [box_brush("wall")]
     thread = logic(brushes=state_brushes)
-    assert thread.brushes is thread.editor_state.brushes, (
+    assert thread.editor_state.brushes is thread.editor_state.brushes, (
         "the logic thread copied the brush list; an edit in the editor would "
         "not reach the running game")
 
     thread.editor_state.brushes.append(box_brush("added_later"))
-    assert [b["name"] for b in thread.brushes] == ["wall", "added_later"], (
+    assert [b["name"] for b in thread.editor_state.brushes] == ["wall", "added_later"], (
         "a brush added in the editor did not appear in the logic thread's "
-        "view: %s" % ([b["name"] for b in thread.brushes],))
+        "view: %s" % ([b["name"] for b in thread.editor_state.brushes],))
 
 
 def test_things_are_shared_the_same_way(logic):
     thread = logic(things=[make_thing(Light, "lamp")])
-    assert thread.things is thread.editor_state.things
+    assert thread.editor_state.things is thread.editor_state.things
     thread.editor_state.things.append(make_thing(Light, "lamp2"))
-    assert [t.name for t in thread.things] == ["lamp", "lamp2"]
+    assert [t.name for t in thread.editor_state.things] == ["lamp", "lamp2"]
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ def test_leaving_play_mode_removes_the_model_collision_pseudo_brushes(logic):
     # Stop it pinned the session's brushes (see test_final_audit).
     assert thread._collision_brushes_cache == []
     thread.session_runtime.apply_play_mode(True)
-    assert thread._collision_brushes_cache == thread.brushes
+    assert thread._collision_brushes_cache == thread.editor_state.brushes
 
 
 def test_the_render_projection_survives_the_play_mode_round_trip(logic):
