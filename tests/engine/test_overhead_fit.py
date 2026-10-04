@@ -29,7 +29,13 @@ class _Camera(LogicCamera):
 
     def __init__(self, aspect=16 / 9, height=800.0, tilt=0.0, overhead=True,
                  orientation="north", fov=90.0):
-        super().__init__()
+        host = types.SimpleNamespace(
+            player=types.SimpleNamespace(
+                pos=glm.vec3(100.0, 50.0, -40.0),
+                angle=0.0,
+            )
+        )
+        super().__init__(host)
         self.frustum_aspect = aspect
         self.frustum_fov = fov
         self.overhead_height = height
