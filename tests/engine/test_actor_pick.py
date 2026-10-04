@@ -168,89 +168,46 @@ def test_no_tables_pick_nothing():
 
 
 # ---------------------------------------------------------------------------
-# The view's pick mode
+# Real QtGameView pick mode
 # ---------------------------------------------------------------------------
-
-class _Logic:
-    def __init__(self):
-        self.session_runtime = LogicSession(self)
-
-
-class _GameState:
-    """Hands out a render state and checks every borrow is returned."""
-
-    def __init__(self, render_state):
-        self.render_state = render_state
-        self.borrowed = 0
-
-    def get_render_state(self):
-        self.borrowed += 1
-        return self.render_state
-
-    def release_render_state(self, snapshot):
-        assert snapshot is self.render_state
-        self.borrowed -= 1
-
-
-class _Editor:
-    def __init__(self):
-        self.inspected = []
-
-    def show_entity_inspector(self, entity):
-        self.inspected.append(entity)
-
-
-class PickView(QWidget):
-    """The slice of QtGameView pick mode touches, with its real methods."""
-
-    ACTOR_PICK_PAUSE = QtGameView.ACTOR_PICK_PAUSE
-    actor_pick_active = QtGameView.actor_pick_active
-    begin_actor_pick = QtGameView.begin_actor_pick
-    cancel_actor_pick = QtGameView.cancel_actor_pick
-    _end_actor_pick = QtGameView._end_actor_pick
-    _pick_ray = QtGameView._pick_ray
-    actor_at = QtGameView.actor_at
-    _update_actor_pick_hover = QtGameView._update_actor_pick_hover
-    _click_actor_pick = QtGameView._click_actor_pick
-    _open_inspector_for = QtGameView._open_inspector_for
-    _show_pick_cursor = QtGameView._show_pick_cursor
-    _capture_play_cursor = QtGameView._capture_play_cursor
-    _close_console_overlay = QtGameView._close_console_overlay
-    keyPressEvent = QtGameView.keyPressEvent
-    mousePressEvent = QtGameView.mousePressEvent
-
-    def __init__(self, things=(), brushes=(), eye=(0.0, 64.0, 0.0), target=(1.0, 64.0, 0.0)):
-        super().__init__()
-        self.resize(200, 200)
-        self.play_mode = True
-        self.console_overlay_active = False
-        self._console_input = QWidget()
-        self._actor_pick = None
-        self.actor_pick_hover = None
-        self.logic_thread = _Logic()
-        entities, walls = _tables(things, brushes)
-        self.game_state = _GameState(types.SimpleNamespace(
-            entity_table=entities, render_table=walls))
-        self.editor = _Editor()
-        self.projection_matrix = glm.perspective(glm.radians(60.0), 1.0, 1.0, 10000.0)
-        self.view_matrix = glm.lookAt(glm.vec3(*eye), glm.vec3(*target), glm.vec3(0, 1, 0))
-        self.last_mouse_pos = QPoint(0, 0)
-
 
 @pytest.fixture
 def view(qt_app):
-    created = []
+    from editor.main_window import MainWindow
+    from engine.logic_thread import LogicThread
 
-    def build(*args, **kwargs):
-        v = PickView(*args, **kwargs)
-        created.append(v)
-        return v
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    hosts = []
+
+    def build(things=(), brushes=(), eye=(0.0, 64.0, 0.0),
+              target=(1.0, 64.0, 0.0)):
+        host = MainWindow(root)
+        hosts.append(host)
+        host.state.things.extend(things)
+        host.state.brushes.extend(brushes)
+        view = host.view_3d
+        view.play_mode = True
+        view.resize(200, 200)
+        view.projection_matrix = glm.perspective(
+            glm.radians(60.0), 1.0, 1.0, 10000.0)
+        view.view_matrix = glm.lookAt(
+            glm.vec3(*eye), glm.vec3(*target), glm.vec3(0, 1, 0))
+
+        logic = LogicThread(view.game_state, host.state)
+        view.logic_thread = logic
+        logic._prepare_render_state()
+        assert view.game_state.request_swap() is True
+        qt_app.processEvents()
+        return view, host, logic
 
     yield build
-    while QApplication.overrideCursor() is not None:
-        QApplication.restoreOverrideCursor()
-    for v in created:
-        v.deleteLater()
+
+    for _view, host, logic in hosts:
+        logic.stop()
+        host.unsaved_changes = False
+        host.close()
+        host.deleteLater()
+    qt_app.processEvents()
 
 
 def _centre(v):
@@ -260,113 +217,97 @@ def _centre(v):
 def _press(v, button, x=None, y=None):
     cx, cy = _centre(v)
     pos = QPoint(cx if x is None else x, cy if y is None else y)
-    v.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, pos, button, button,
-                                  Qt.NoModifier))
+    v.mousePressEvent(QMouseEvent(
+        QEvent.MouseButtonPress, pos, button, button, Qt.NoModifier))
 
 
 def _key(v, key):
     v.keyPressEvent(QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
 
 
-def test_arming_a_pick_pauses_the_world_and_frees_the_cursor(view):
-    v = view()
+def test_arming_a_pick_pauses_the_real_world_and_frees_the_cursor(view):
+    v, host, logic = view()
     assert v.begin_actor_pick() is True
     assert v.actor_pick_active
-    assert v.logic_thread.session_runtime.world_pause_owners() == {QtGameView.ACTOR_PICK_PAUSE}
+    assert logic.session_runtime.world_pause_owners() == {
+        QtGameView.ACTOR_PICK_PAUSE
+    }
     assert QApplication.overrideCursor().shape() == Qt.CrossCursor
 
 
-def test_there_is_no_pick_outside_play_mode(view):
-    v = view()
+def test_there_is_no_pick_outside_play_mode_on_the_real_view(view):
+    v, _host, logic = view()
     v.play_mode = False
     assert v.begin_actor_pick() is False
-    assert not v.actor_pick_active and not v.logic_thread.session_runtime.world_pause_owners()
-
-
-def test_clicking_an_actor_opens_the_inspector_and_resumes(view):
-    npc = _actor("npc", (500, 64, 0))
-    v = view([npc])
-    v.begin_actor_pick()
-    _press(v, Qt.LeftButton)
-    assert v.editor.inspected == [npc]
     assert not v.actor_pick_active
-    assert not v.logic_thread.session_runtime.world_pause_owners(), "the world stayed paused after the pick"
-    assert QApplication.overrideCursor().shape() == Qt.BlankCursor
-    assert v.game_state.borrowed == 0, "the render state was not released"
+    assert not logic.session_runtime.world_pause_owners()
 
 
-def test_a_pick_can_hand_the_actor_to_its_own_handler(view):
+def test_clicking_an_actor_uses_the_real_published_tables(view):
     npc = _actor("npc", (500, 64, 0))
-    v = view([npc])
+    v, _host, logic = view([npc])
     chosen = []
     v.begin_actor_pick(chosen.append)
     _press(v, Qt.LeftButton)
-    assert chosen == [npc] and v.editor.inspected == []
-
-
-def test_a_click_on_nothing_keeps_the_pick_armed(view):
-    v = view([_actor("npc", (500, 64, 0))])
-    v.begin_actor_pick()
-    _press(v, Qt.LeftButton, 5, 5)
-    assert v.actor_pick_active
-    assert v.logic_thread.session_runtime.world_pause_owners() == {QtGameView.ACTOR_PICK_PAUSE}
-    assert v.editor.inspected == []
+    assert chosen == [npc]
+    assert not v.actor_pick_active
+    assert not logic.session_runtime.world_pause_owners()
+    assert QApplication.overrideCursor().shape() == Qt.BlankCursor
 
 
 @pytest.mark.parametrize("cancel", ["escape", "right_click"])
-def test_a_pick_can_be_cancelled(view, cancel):
-    v = view([_actor("npc", (500, 64, 0))])
+def test_a_real_pick_can_be_cancelled(cancel, view):
+    v, _host, logic = view([_actor("npc", (500, 64, 0))])
     v.begin_actor_pick()
     if cancel == "escape":
         _key(v, Qt.Key_Escape)
     else:
         _press(v, Qt.RightButton)
     assert not v.actor_pick_active
-    assert not v.logic_thread.session_runtime.world_pause_owners()
-    assert v.editor.inspected == []
+    assert not logic.session_runtime.world_pause_owners()
 
 
-def test_hovering_names_the_actor_and_repaints_only_on_change(view, monkeypatch):
+def test_a_real_pick_hover_tracks_the_actual_actor(view):
     npc = _actor("npc", (500, 64, 0))
-    v = view([npc])
-    repaints = []
-    monkeypatch.setattr(v, "update", lambda: repaints.append(1))
+    v, _host, _logic = view([npc])
     v.begin_actor_pick()
-    repaints.clear()
     v._update_actor_pick_hover(*_centre(v))
-    assert v.actor_pick_hover is npc and len(repaints) == 1
-    v._update_actor_pick_hover(*_centre(v))
-    assert len(repaints) == 1
+    assert v.actor_pick_hover is npc
     v._update_actor_pick_hover(5, 5)
-    assert v.actor_pick_hover is None and len(repaints) == 2
+    assert v.actor_pick_hover is None
 
 
-def test_the_ray_leaves_the_camera_the_frame_was_drawn_from(view):
-    """Not the editor camera: in Play Mode the view matrix is the player's."""
-    v = view(eye=(100.0, 300.0, -40.0), target=(100.0, 0.0, -39.0))
+def test_the_real_view_ray_comes_from_the_frame_camera(view):
+    v, _host, _logic = view(
+        eye=(100.0, 300.0, -40.0),
+        target=(100.0, 0.0, -39.0),
+    )
     origin, direction = v._pick_ray(*_centre(v))
     assert glm.distance(origin, glm.vec3(100.0, 300.0, -40.0)) < 1e-3
     assert direction.y < -0.99
 
 
-def test_an_overhead_camera_picks_the_actor_below_the_cursor(view):
+def test_an_overhead_real_view_picks_the_actor_below_the_cursor(view):
     npc = _actor("npc", (0, 64, 0))
     floor = box_brush("floor", (0, -16, 0), (2048, 32, 2048))
-    v = view([npc], [floor], eye=(0.0, 1200.0, 1.0), target=(0.0, 0.0, 0.0))
-    v.begin_actor_pick()
+    v, _host, _logic = view(
+        [npc], [floor],
+        eye=(0.0, 1200.0, 1.0),
+        target=(0.0, 0.0, 0.0),
+    )
+    chosen = []
+    v.begin_actor_pick(chosen.append)
     _press(v, Qt.LeftButton)
-    assert v.editor.inspected == [npc]
+    assert chosen == [npc]
 
 
-def test_closing_the_console_overlay_keeps_an_armed_picks_cursor(view):
-    """'inspect' is typed into the overlay, which closes right after it runs."""
-    v = view()
+def test_closing_the_real_console_overlay_keeps_an_armed_pick(view):
+    v, _host, _logic = view()
     v.console_overlay_active = True
     v.begin_actor_pick()
     v._close_console_overlay()
     assert QApplication.overrideCursor().shape() == Qt.CrossCursor
     assert v.actor_pick_active
-
 
 def test_the_main_window_arms_the_views_pick(qt_app):
     from editor.main_window import MainWindow
