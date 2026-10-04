@@ -802,7 +802,7 @@ class MainWindow(QMainWindow):
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
                 # Only nudge if we have a selected object and not in play mode
                 selected = self.primary_selection()
-                if selected and not getattr(self.view_3d, 'play_mode', False):
+                if selected and not self.view_3d.play_mode:
                     # Determine which 2D view to use for nudging
                     current_view = self.right_tabs.currentWidget()
                     if isinstance(current_view, View2D):
@@ -957,7 +957,7 @@ class MainWindow(QMainWindow):
                     self.terrain.from_dict(self.state.terrain_data)
                 
                 # Setup shader in renderer
-                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+                if self.view_3d.renderer:
                     self.view_3d.renderer.setup_terrain_shader(self.terrain)
                 
                 # Wire up terrain to logic thread for collision
@@ -1355,7 +1355,7 @@ class MainWindow(QMainWindow):
             self.terrain = Terrain(seed=42)
             if self.state.terrain_data:
                 self.terrain.from_dict(self.state.terrain_data)
-            if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
+            if self.view_3d.renderer:
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
@@ -1990,7 +1990,7 @@ class MainWindow(QMainWindow):
         if self.components.is_component_mode():
             self.set_component_mode(MODE_OBJECT)
             return True
-        if getattr(self.view_3d, 'face_mode_active', False):
+        if self.view_3d.face_mode_active:
             self.toggle_face_mode(False)
             return True
         if self.primary_selection():
@@ -2088,7 +2088,7 @@ class MainWindow(QMainWindow):
         delta = 90.0 if steps >= 0 else -90.0
 
         # --- Face mode: rotate only the highlighted / last-textured face ---
-        if getattr(self.view_3d, 'face_mode_active', False):
+        if self.view_3d.face_mode_active:
             target = getattr(self.view_3d, 'hovered_face_info', None) \
                 or getattr(self, 'face_texture_target', None)
             if not target:
@@ -2208,7 +2208,7 @@ class MainWindow(QMainWindow):
         such as Ctrl+Z reach this toggle, even if Qt delivers the QAction while
         another shortcut is being processed.
         """
-        if getattr(self.view_3d, 'play_mode', False):
+        if self.view_3d.play_mode:
             return
 
         modifiers = QApplication.keyboardModifiers()
@@ -2233,7 +2233,7 @@ class MainWindow(QMainWindow):
     def enter_play_mode(self):
         """Toggle play mode on/off. Called by the Play/Stop button."""
         # If already in play mode, exit instead
-        if getattr(self.view_3d, 'play_mode', False):
+        if self.view_3d.play_mode:
             self._exit_play_mode()
             return
 
@@ -2316,7 +2316,7 @@ class MainWindow(QMainWindow):
 
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
-        if hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
+        if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
             self.view_3d.play_mode = False  # Force state change before UI update
             self._restore_pre_play_world()
@@ -2522,7 +2522,7 @@ class MainWindow(QMainWindow):
             return
 
         terrain.from_dict(terrain_data)
-        if getattr(self.view_3d, 'renderer', None):
+        if self.view_3d.renderer:
             self.view_3d.renderer.setup_terrain_shader(terrain)
         if self.view_3d is not None and self.view_3d.logic_thread:
             self.view_3d.logic_thread.world_runtime.terrain = terrain
@@ -3324,7 +3324,7 @@ class MainWindow(QMainWindow):
                 return
 
             elif event.key() == Qt.Key_F1:
-                self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
+                self.view_3d.show_connections_in_play_mode = not self.view_3d.show_connections_in_play_mode
                 self.update_all_ui()
                 return
 
@@ -3336,7 +3336,7 @@ class MainWindow(QMainWindow):
                 return
 
             elif event.key() == Qt.Key_E:
-                if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
+                if self.view_3d.game_state:
                     self.view_3d.game_state.set_use_key_pressed()
                 self.keys_pressed.add(event.key())
                 return
@@ -3624,7 +3624,7 @@ class MainWindow(QMainWindow):
         """Toggle grid visibility in 3D view only."""
         self.grid_visible = visible
         # Update the 3D view grid
-        if hasattr(self.view_3d, 'grid_visible'):
+        if self.view_3d.grid_visible:
             self.view_3d.grid_visible = visible
             self.view_3d.update()
 
@@ -4140,7 +4140,7 @@ class MainWindow(QMainWindow):
                 self.terrain = Terrain()
             self.terrain.from_dict(self.state.terrain_data)
 
-            if getattr(self.view_3d, 'renderer', None):
+            if self.view_3d.renderer:
                 self.view_3d.renderer.setup_terrain_shader(self.terrain)
 
             if self.view_3d is not None and self.view_3d.logic_thread:
@@ -4257,7 +4257,7 @@ class MainWindow(QMainWindow):
                 print("[MainWindow] Restarting Play Mode with new level...")
                 self.enter_play_mode()
                 if (loadout is not None
-                        and getattr(self.view_3d, 'play_mode', False)):
+                        and self.view_3d.play_mode):
                     logic.session_runtime.restore_loadout(loadout)
 
             name = os.path.basename(file_path) if file_path else "generated level"
