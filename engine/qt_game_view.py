@@ -2442,10 +2442,7 @@ class QtGameView(QOpenGLWidget):
             return
         target_map = ui.get('target_map', '')
         if target_map:
-            if self.editor.load_level_signal:
-                self.editor.load_level_signal.emit(target_map)
-            else:
-                self.editor.load_level(target_map)
+            self.editor.load_level_signal.emit(target_map)
         self._cached_level_complete_ui = None
         self._level_complete_btn_rect = None
         if self.logic_thread:
@@ -2871,8 +2868,7 @@ class QtGameView(QOpenGLWidget):
             browser = self.editor.asset_browser
             texture_path = browser.get_selected_filepath() if browser is not None else None
             if not texture_path:
-                if self.editor.show_toast:
-                    self.editor.show_toast("Select a texture in the Asset Browser first", is_error=True)
+                self.editor.show_toast("Select a texture in the Asset Browser first", is_error=True)
                 return
 
             abs_texture = os.path.abspath(texture_path)
@@ -3853,8 +3849,7 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 new_state = self.logic_thread.collision_runtime.toggle_model_collision()
                 status = "ON" if new_state else "OFF"
-                if self.editor.show_toast:
-                    self.editor.show_toast(f"Model Collision: {status}")
+                self.editor.show_toast(f"Model Collision: {status}")
             self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F9:
