@@ -11,19 +11,19 @@ import pytest
 pytest.importorskip("PyQt5", reason="the plugins menu is editor-tier")
 
 
-from editor.ui import (_build_plugins_menu, _toggle_plugin) # noqa: E402
+from editor.ui import (_build_plugins_menu, _plugin_menu_name, _toggle_plugin) # noqa: E402
 from plugins.manager import get_manager, load_plugins   # noqa: E402
 
 pytestmark = pytest.mark.qt
 
 
-def plugin_action_items(window, plugin_name):
+def plugin_action_items(window, plugin):
     """The (label, visible, enabled) triples for one plugin's own actions."""
     for action in window.menuBar().actions():
         if action.text().replace("&", "") != "Plugins":
             continue
         for sub in action.menu().actions():
-            if sub.text() != plugin_name or sub.menu() is None:
+            if sub.text() != _plugin_menu_name(plugin) or sub.menu() is None:
                 continue
             items = []
             for entry in sub.menu().actions():
@@ -46,6 +46,26 @@ def _tidy():
     if tidy is None:
         pytest.skip("the Tidy plugin is not present in this build")
     return mgr, tidy
+
+
+def test_plugin_names_in_plugins_menu_start_with_a_capital(window):
+    """The Plugins menu uses human-readable plugin labels, not raw module names."""
+    load_plugins()
+    _build_plugins_menu(window)
+
+    for action in window.menuBar().actions():
+        if action.text().replace("&", "") != "Plugins":
+            continue
+        labels = [
+            sub.text()
+            for sub in action.menu().actions()
+            if sub.menu() is not None
+        ]
+        assert labels, "the Plugins menu contains no plugin submenus"
+        assert all(label[:1].isupper() for label in labels), labels
+        return
+
+    pytest.fail("the Plugins menu was not created")
 
 
 def test_a_disabled_plugins_actions_are_hidden(window):
@@ -91,7 +111,7 @@ def test_toggling_the_plugin_flips_its_actions_without_a_rebuild(window):
         assert all(v for _l, v, _e in before)
 
         _toggle_plugin(window, tidy, False,
-                                   _live_actions(window, tidy.name))
+                                   _live_actions(window, tidy))
         after = plugin_action_items(window, tidy.name)
         assert not any(v for _l, v, _e in after), (
             "toggling Tidy off left its actions on screen: %r" % (after,))
@@ -99,12 +119,12 @@ def test_toggling_the_plugin_flips_its_actions_without_a_rebuild(window):
         mgr.set_enabled(tidy, was)
 
 
-def _live_actions(window, plugin_name):
+def _live_actions(window, plugin):
     for action in window.menuBar().actions():
         if action.text().replace("&", "") != "Plugins":
             continue
         for sub in action.menu().actions():
-            if sub.text() == plugin_name and sub.menu() is not None:
+            if sub.text() == _plugin_menu_name(plugin) and sub.menu() is not None:
                 out = []
                 for entry in sub.menu().actions():
                     if entry.text() == "Enabled":
@@ -146,12 +166,12 @@ def test_a_persisted_disable_really_stops_the_plugin(window, monkeypatch):
         mgr.set_enabled(tidy, was)
 
 
-def _enabled_toggle(window, plugin_name):
+def _enabled_toggle(window, plugin):
     for action in window.menuBar().actions():
         if action.text().replace("&", "") != "Plugins":
             continue
         for sub in action.menu().actions():
-            if sub.text() == plugin_name and sub.menu() is not None:
+            if sub.text() == _plugin_menu_name(plugin) and sub.menu() is not None:
                 for entry in sub.menu().actions():
                     if entry.text() == "Enabled":
                         return action.menu(), entry
@@ -171,7 +191,7 @@ def test_the_toggle_shows_a_plugin_a_level_auto_enabled(window):
     try:
         mgr.set_enabled(bigworld, False)
         _build_plugins_menu(window)
-        menu, toggle = _enabled_toggle(window, bigworld.name)
+        menu, toggle = _enabled_toggle(window, bigworld)
         assert toggle is not None and not toggle.isChecked()
 
         mgr.auto_enable_for_map(
