@@ -62,10 +62,10 @@ class World:
         return thing
 
     def _by_name(self, name):
-        for b in self.brushes:
+        for b in self.editor_state.brushes:
             if b.get("name") == name:
                 return b
-        for t in self.things:
+        for t in self.editor_state.things:
             if t.properties.get("name") == name:
                 return t
         return None
@@ -320,9 +320,9 @@ def test_unnamed_signals_from_different_sources_are_different_signals(world):
         world.connect(switch, "OnTrigger", gate, "Trigger")
     world.to_sink(gate)
 
-    world.manager.fire_output(world.brushes[1], "OnTrigger")
+    world.manager.fire_output(world.editor_state.brushes[1], "OnTrigger")
     assert world.hits == 0
-    world.manager.fire_output(world.brushes[2], "OnTrigger")
+    world.manager.fire_output(world.editor_state.brushes[2], "OnTrigger")
     assert world.hits == 1
 
 
@@ -442,5 +442,5 @@ def test_a_level_of_disabled_timers_does_no_work(world):
               for i in range(50)]
     world._timer_things = timers
     LogicTiming(world).update_logic_timers( 1.0)
-    assert world.timer_states == {}, (
+    assert world.timing_runtime.timer_states == {}, (
         "a switched-off timer created countdown state it never needed")
