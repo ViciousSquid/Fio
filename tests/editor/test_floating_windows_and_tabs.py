@@ -252,7 +252,7 @@ def test_no_rpg_inspector_window_was_ported():
 # ---------------------------------------------------------------------------
 
 def test_lazy_tab_factories_run_only_when_the_tab_is_shown(app):
-    """Reproduces the lazy-tab mechanism from plugins.integration."""
+    """Reproduces the lazy-tab mechanism owned by PropertyEditor."""
     built = []
 
     def factory(thing):
@@ -300,9 +300,9 @@ def test_lazy_tab_factories_run_only_when_the_tab_is_shown(app):
     assert len(built) == 2
 
 
-def test_integration_uses_a_namespaced_pending_attribute():
+def test_property_editor_uses_a_namespaced_pending_attribute():
     here = os.path.dirname(__file__)
-    src = open(os.path.join(here, "..", "..", "plugins", "integration.py"),
+    src = open(os.path.join(here, "..", "..", "editor", "property_editor.py"),
                encoding="utf-8").read()
     assert "_fio_pending_tabs" in src
     assert "_mw_pending_tabs" not in src, "MiniWind-namespaced attribute leaked in"
