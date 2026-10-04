@@ -267,6 +267,31 @@ def _restore_plugin_state(snapshot):
 # Qt
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture
+def main_window(qt_app, tmp_path, monkeypatch):
+    """Construct the real editor host for tests that exercise editor machinery.
+
+    The window uses the repository root for assets/plugins while its mutable
+    settings live in a per-test temporary working directory. This is an actual
+    editor.main_window.MainWindow rather than a sliced/fake host, so tests
+    cross the same ownership boundaries as the editor itself.
+    """
+    from editor.main_window import MainWindow
+
+    monkeypatch.chdir(tmp_path)
+    window = MainWindow(_ROOT)
+    window.show()
+    qt_app.processEvents()
+    try:
+        yield window
+    finally:
+        window.unsaved_changes = False
+        window.close()
+        window.deleteLater()
+        qt_app.processEvents()
+
+
 @pytest.fixture(scope="session")
 def qt_app():
     """The one ``QApplication`` for the whole session.
