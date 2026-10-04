@@ -7,31 +7,30 @@ than a Prop set to 'model' with an empty ``model_path`` and nothing on screen.
 """
 
 import os
-import types
 
 import pytest
 
 pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
+from editor.main_window import MainWindow               # noqa: E402
 from editor.property_editor import PropertyEditor      # noqa: E402
 from engine.prop_entity import PROP_DEFAULTS, Prop     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
 
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
 @pytest.fixture
 def panel(qt_app):
-    from PyQt5.QtWidgets import QWidget
-
-    # update_object_prop repaints the viewports after a write, so view_3d has
-    # to be something with update(); the rest it probes with hasattr.
-    editor = types.SimpleNamespace(
-        state=types.SimpleNamespace(things=[], brushes=[]),
-        view_3d=QWidget(),
-        mark_as_modified=lambda: None)
+    editor = MainWindow(ROOT)
     widget = PropertyEditor(editor)
     yield widget
     widget.deleteLater()
+    editor.close()
+    editor.deleteLater()
+    qt_app.processEvents()
 
 
 def representation_combo(panel, thing):
