@@ -53,7 +53,7 @@ def test_collect_ammo_awards_eight():
     session.start()
 
     assert session.collect_prop(prop) is True
-    assert logic.player_ammo == 10
+    assert logic.combat_runtime.player_ammo == 10
 
 
 def test_first_gun2_collection_gives_eight_ammo():
@@ -63,13 +63,13 @@ def test_first_gun2_collection_gives_eight_ammo():
         "collect_weapon": "gun2",
     })
     logic = _logic_for(prop)
-    logic.player_ammo = 0
+    logic.combat_runtime.player_ammo = 0
     session = PropSession(logic)
     session.start()
 
     assert session.collect_prop(prop) is True
     assert logic.combat_runtime.active_weapon == "gun2"
-    assert logic.player_ammo == 8
+    assert logic.combat_runtime.player_ammo == 8
     assert logic.combat_runtime.gun2_obtained is True
 
 
@@ -80,14 +80,14 @@ def test_later_gun2_collection_does_not_reset_existing_ammo():
         "collect_weapon": "gun2",
     })
     logic = _logic_for(prop)
-    logic.player_ammo = 3
-    logic.gun2_obtained = True
+    logic.combat_runtime.player_ammo = 3
+    logic.combat_runtime.gun2_obtained = True
     session = PropSession(logic)
     session.start()
 
     assert session.collect_prop(prop) is True
-    assert logic.active_weapon == "gun2"
-    assert logic.player_ammo == 3
+    assert logic.combat_runtime.active_weapon == "gun2"
+    assert logic.combat_runtime.player_ammo == 3
 
 
 def _logic_for(prop):
@@ -129,7 +129,7 @@ def test_collect_prop_equips_explicit_weapon():
     session.start()
 
     assert session.collect_prop(prop) is True
-    assert logic.active_weapon == "gun2"
+    assert logic.combat_runtime.active_weapon == "gun2"
     assert prop.properties["collect_collected"] is True
     assert id(prop) in session.collected_ids
 
@@ -145,7 +145,7 @@ def test_collect_prop_equips_cig_weapon():
     session.start()
 
     session.collect_prop(prop)
-    assert logic.active_weapon == "cig"
+    assert logic.combat_runtime.active_weapon == "cig"
 
 
 def test_cigarette_is_a_non_firing_weapon():
