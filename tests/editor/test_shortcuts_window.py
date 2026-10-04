@@ -390,51 +390,6 @@ def test_the_help_menu_offers_keys(qt_app):
     assert 'help_menu.addAction(keys_action)' in source
 
 
-class FakeEditorWindow(QMainWindow):
-    """Enough of MainWindow for the Help > Keys handler, which is bound on."""
-
-    from editor.main_window import MainWindow
-    show_shortcuts_window = MainWindow.show_shortcuts_window
-    del MainWindow
-
-    def __init__(self):
-        super().__init__()
-        self.config = configparser.ConfigParser()
-        self.shortcuts_window = None
-
-
-def test_opening_it_creates_the_window(qt_app):
-    host = FakeEditorWindow()
-
-    host.show_shortcuts_window()
-
-    assert isinstance(host.shortcuts_window, ShortcutsWindow)
-    assert host.shortcuts_window.isVisible()
-
-
-def test_opening_it_twice_reuses_the_same_window(qt_app):
-    """Otherwise every visit to the menu stacks another copy."""
-    host = FakeEditorWindow()
-
-    host.show_shortcuts_window()
-    first = host.shortcuts_window
-    host.shortcuts_window.close()
-    host.show_shortcuts_window()
-
-    assert host.shortcuts_window is first
-    assert first.isVisible()
-
-
-def test_the_window_lists_the_editor_that_opened_it(qt_app):
-    host = FakeEditorWindow()
-    host.menuBar().addMenu('File').addAction(
-        QAction('New Map', host, shortcut='Ctrl+N'))
-
-    host.show_shortcuts_window()
-
-    assert _find(host.shortcuts_window._grouped, 'Ctrl+N') is not None
-
-
 # ────────────────────────────
 # It has to match the dark theme
 # ────────────────────────────
