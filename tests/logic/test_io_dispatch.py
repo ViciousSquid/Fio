@@ -20,8 +20,11 @@ import pytest
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
 
 from editor import io_system as io                     # noqa: E402
+from editor.editor_state import EditorState             # noqa: E402
 from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.things import LogicRelay                   # noqa: E402
+from engine.logic_thread import LogicThread              # noqa: E402
+from engine.threaded_game_state import ThreadedGameState # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing  # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -36,29 +39,43 @@ class Network:
     """
 
     def __init__(self):
-        self.manager = IOManager()
+        self.logic = LogicThread(ThreadedGameState(), EditorState())
+        self.manager = self.logic.io_manager
         self.entities = {}
         self.log = []                 # [(entity name, input name, parameter), ...]
-        self.manager.set_entity_finder(self._by_name)
-        self.manager.set_entity_finder_by_id(self._by_id)
+
+    def close(self):
+        self.logic.stop()
 
     # -- world ------------------------------------------------------------
+    def _rebuild_world_index(self):
+        self.logic.world_runtime.build_entity_caches()
+
     def add(self, name, **props):
         brush = box_brush(name, **props)
         self.entities[name] = brush
+        self.logic.editor_state.brushes.append(brush)
+        self._rebuild_world_index()
         return brush
 
     def remove(self, name):
-        self.entities.pop(name, None)
+        brush = self.entities.pop(name, None)
+        if brush is None:
+            return
+        self.logic.editor_state.brushes[:] = [
+            value for value in self.logic.editor_state.brushes
+            if value is not brush
+        ]
+        self._rebuild_world_index()
 
-    def _by_name(self, name):
-        return self.entities.get(name)
-
-    def _by_id(self, entity_id):
-        for brush in self.entities.values():
-            if brush.get("id") == entity_id:
-                return brush
-        return None
+    def replace(self, name, brush):
+        old = self.entities.get(name)
+        self.entities[name] = brush
+        self.logic.editor_state.brushes[:] = [
+            brush if value is old else value
+            for value in self.logic.editor_state.brushes
+        ]
+        self._rebuild_world_index()
 
     # -- wiring -----------------------------------------------------------
     def connect(self, source, output, target, input_name="Fire", by_id=True, **kw):
@@ -93,7 +110,11 @@ class Network:
 
 @pytest.fixture
 def net():
-    return Network()
+    value = Network()
+    try:
+        yield value
+    finally:
+        value.close()
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +262,7 @@ def test_a_target_replaced_between_firings_receives_the_input(net):
 
     replacement = box_brush("door", is_door=True)
     replacement["id"] = original["id"]        # same identity, new dict
-    net.entities["door"] = replacement
+    net.replace("door", replacement)
 
     net.fire("button", "OnTrigger")
 
