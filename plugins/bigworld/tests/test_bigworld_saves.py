@@ -66,8 +66,8 @@ class FakeEditorState:
     def get_level_data(self):
         return {
             "version": 3,
-            "brushes": [copy.deepcopy(b) for b in self.logic.brushes],
-            "things": [t.to_dict() for t in self.logic.things],
+            "brushes": [copy.deepcopy(b) for b in self.logic.editor_state.brushes],
+            "things": [t.to_dict() for t in self.logic.editor_state.things],
         }
 
 
@@ -79,8 +79,7 @@ class FakeMonsterAI:
 class FakeLogic:
     def __init__(self, things, brushes, player_pos):
         self.play_mode = True
-        self.things = things
-        self.brushes = brushes
+        self.editor_state = SimpleNamespace(things=things, brushes=brushes)
         self.terrain = None
         self.editor_state = FakeEditorState(self)
         self.player = FakePlayer(player_pos)
@@ -126,7 +125,7 @@ class FakeLogic:
         self.portal_runtime = LogicPortals(self)
         self.trigger_runtime = LogicTriggers(self)
         self.world_runtime = LogicWorld(self)
-        self._monster_things = [t for t in things if t.properties.get("type") == "monster"]
+        self._monster_things = [t for t in self.editor_state.things if t.properties.get("type") == "monster"]
         self._bigworld = None
         self.visibility_changes = 0
 
