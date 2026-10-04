@@ -2562,7 +2562,6 @@ class QtGameView(QOpenGLWidget):
             self._hud_runtime_visible = None
             if self.logic_thread:
                 self.logic_thread.player = self.player
-                self.logic_thread.camera.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
                 self.logic_thread.session_runtime.apply_play_mode(True)
 
@@ -2599,7 +2598,6 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.session_runtime.apply_play_mode(False)
                 self.logic_thread.player = None
-                self.logic_thread.camera.player = None
             self.player = None
             self.player2 = None
             if self.logic_thread:
