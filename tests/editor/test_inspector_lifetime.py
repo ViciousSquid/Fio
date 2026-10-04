@@ -75,7 +75,6 @@ def host(qt_app):
     brush = {'name': 'wall', 'pos': [0, 0, 0], 'size': [256, 256, 256]}
     editor.state.brushes.append(brush)
     editor.state.selected_objects = [brush]
-    editor.state.selected_object = brush
     editor.state.save_state()
     return editor
 
