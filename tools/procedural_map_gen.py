@@ -54,6 +54,8 @@ def run_cli(args):
         'world_height': world_height,
         'spawn_health': args.spawn_health,
         'health_count': args.health_count,
+        'spawn_ammo': args.spawn_ammo,
+        'ammo_count': args.ammo_count,
     }
 
     # Use provided seed or generate a random one
@@ -101,6 +103,12 @@ def main():
                         help="Disable health pickups")
     parser.add_argument("--health-count", type=int, default=6,
                         help="Number of health pickups to spawn")
+    parser.add_argument("--spawn-ammo", action="store_true", default=True,
+                        help="Spawn ammo pickups (default: True)")
+    parser.add_argument("--no-spawn-ammo", dest="spawn_ammo", action="store_false",
+                        help="Disable ammo pickups")
+    parser.add_argument("--ammo-count", type=int, default=4,
+                        help="Number of ammo pickups to spawn")
     parser.add_argument("--seed", type=int, help="Random seed (optional)")
 
     args = parser.parse_args()
