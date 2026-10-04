@@ -83,14 +83,14 @@ def test_bigworld_settings_exposes_schema_fields_to_the_property_editor():
 
 def test_marker_and_io_plumbing_is_not_shown_in_the_property_panel(qt_app):
     from PyQt5.QtWidgets import QFormLayout, QLabel
-    from plugins.integration import _render_schema_rows
+    from editor.property_editor import _render_plugin_schema_rows
 
     class _Editor:
         def update_object_prop(self, *args):
             pass
 
     form = QFormLayout()
-    _render_schema_rows(_Editor(), form, BigWorldSettings(),
+    _render_plugin_schema_rows(_Editor(), form, BigWorldSettings(),
                         _registered_schema())
     labels = [form.itemAt(row, QFormLayout.LabelRole).widget().text()
               for row in range(form.rowCount())
