@@ -495,8 +495,13 @@ def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
     grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
     state, logic = _playing([grunt])
     try:
-        api = RuntimeAPI(SimpleNamespace(emit=lambda *a, **k: None, _log=print),
-                         logic, SimpleNamespace(name="test"))
+        from plugins.manager import get_manager, load_plugins
+        load_plugins()
+        manager = get_manager()
+        plugin = manager.find_plugin("tidy")
+        if plugin is None:
+            pytest.skip("Tidy plugin is not present in this build")
+        api = RuntimeAPI(manager, logic, plugin)
         logic.monster_ai.monster_states[id(grunt)] = {"shoot_timer": 0.0}
 
         assert api.despawn(grunt) is True
