@@ -70,6 +70,7 @@ except ImportError:
     LogicTimer = None
     PlayerStart = None
     Portal = None
+    LevelChanger = None
     ENTITY_TYPES = {}
 
 # Import I/O system
