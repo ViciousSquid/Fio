@@ -28,19 +28,7 @@ from typing import Callable, List, Optional, Sequence
 
 from engine.view_distance import DEFAULT_VIEW_DISTANCE
 
-#: Default outer limit (world units) on the XZ plane, measured from the camera
-#: centre. A *ceiling*, not the working radius: :func:`visible_xz_bounds`
-#: derives the actual relevant region from the live camera, which for a
-#: steeply-angled or top-down view is several times tighter. The ceiling still
-#: matters -- it is what bounds a first-person view whose frustum runs all the
-#: way to the far plane.
-#:
-#: Aliased from :mod:`engine.view_distance` so the default draw distance is
-#: written down once; a running camera's actual radius is read from its
-#: ViewDistance, not from here.
-CAMERA_RENDER_CULL_DISTANCE = DEFAULT_VIEW_DISTANCE
-#: Precomputed squared radius -- the value the per-object test actually compares.
-CAMERA_RENDER_CULL_DISTANCE_SQ = CAMERA_RENDER_CULL_DISTANCE * CAMERA_RENDER_CULL_DISTANCE
+#: World-slab margin used to keep tall/floating entities inside the broad phase.
 
 #: How far above and below the world's geometry the visible slab is extended, so
 #: a tall billboard, a floating light or a jumping actor at the very top or
@@ -171,7 +159,7 @@ def camera_xz(camera_pos):
 
 
 def cull_by_distance(objects: Sequence, cx: float, cz: float,
-                     limit_sq: float = CAMERA_RENDER_CULL_DISTANCE_SQ,
+                     limit_sq: float = DEFAULT_VIEW_DISTANCE * DEFAULT_VIEW_DISTANCE,
                      out: Optional[List] = None,
                      keep: Optional[Callable[[object], bool]] = None,
                      positions=None, positions_out=None) -> List:
