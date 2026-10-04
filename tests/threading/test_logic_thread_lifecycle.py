@@ -407,7 +407,7 @@ def test_further_health_changes_restart_the_fast_fade_from_current_opacity(logic
 def test_an_editor_tick_moves_the_editor_camera_and_nothing_else(logic):
     from PyQt5.QtCore import Qt
     thread = logic(brushes=room())
-    before = list(thread.editor_camera.pos)
+    before = list(thread.camera.editor_camera.pos)
     thread.game_state.set_keys({int(Qt.Key_W)})
 
     thread._tick(TICK)
