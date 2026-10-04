@@ -203,7 +203,7 @@ class LogicSession:
             # Spawn I/O is deliberately before timers and AI, matching the
             # original LogicThread ordering.
             self.fire_player_spawn_outputs()
-            logic._init_logic_timers()
+            logic.timing_runtime.init_logic_timers()
             self.start_monster_ai()
 
         else:
