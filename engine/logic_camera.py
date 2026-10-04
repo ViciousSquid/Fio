@@ -46,6 +46,11 @@ class LogicCamera:
         self.editor_camera = Camera()
         self.editor_camera.pos = glm.vec3(0, 150, 400)
 
+    @property
+    def player(self):
+        """Resolve the current host player without retaining a stale reference."""
+        return getattr(self._host, "player", None)
+
     # ------------------------------------------------------------------
     # Editor/frustum configuration
     # ------------------------------------------------------------------
@@ -137,7 +142,7 @@ class LogicCamera:
         player pose, so streaming/culling consumers see exactly the ground the
         view can reach rather than an independent approximation.
         """
-        player = self._host.player
+        player = self.player
         if not self.is_overhead() or player is None:
             return None
 
