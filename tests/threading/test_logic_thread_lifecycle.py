@@ -276,12 +276,12 @@ def test_the_render_projection_survives_the_play_mode_round_trip(logic):
     brushes = room()
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
     table = thread._render_table
     assert table.count == len(brushes)
 
     thread.set_play_mode(False)
-    thread._prepare_render_state()
+    thread.render_runtime.prepare_render_state()
 
     assert table.count == len(brushes)
     for index, brush in enumerate(brushes):
@@ -460,7 +460,7 @@ def test_a_fatal_tick_marshals_play_teardown_to_gui(logic):
 
     thread._tick = _explode
     thread.set_gui_fault_teardown(bridge.fault.emit)
-    thread._apply_play_mode = _forbidden_teardown
+    thread.session_runtime.apply_play_mode = _forbidden_teardown
 
     def run_one_frame():
         runner_ident.append(threading.get_ident())
