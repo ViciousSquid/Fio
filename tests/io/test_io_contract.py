@@ -41,6 +41,7 @@ from editor.things import ENTITY_TYPES, PathNode, Thing           # noqa: E402
 from engine.cutscene_runtime import CutsceneRuntime              # noqa: E402
 from engine.logic_movers import LogicMovers                       # noqa: E402
 from engine.logic_triggers import LogicTriggers                   # noqa: E402
+from engine.logic_timing import LogicTiming                        # noqa: E402
 from engine.logic_portals import LogicPortals                     # noqa: E402
 from engine.logic_world import LogicWorld                         # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
@@ -71,18 +72,18 @@ class HostStub:
 
     def __init__(self, io_manager):
         self.io_manager = io_manager
-        self.brushes = []
-        self.things = []
+        self.editor_state = type("EditorStateStub", (), {})()
+        self.editor_state.brushes = []
+        self.editor_state.things = []
         self.play_mode = False
         self.gate_inputs = {}
-        self.timer_states = {}
         self.mover_path_states = {}
-        self.light_fade_states = {}
         self.active_speakers = set()
         self.movers = []
         self.doors = []
         self._name_cache = {}
         self.mover_runtime = LogicMovers(self)
+        self.timing_runtime = LogicTiming(self)
         self.world_runtime = LogicWorld(self, path_node_type=PathNode)
         self.cutscene_runtime = CutsceneRuntime(self)
         self.portal_runtime = LogicPortals(self)
@@ -358,8 +359,8 @@ def _probe_all_inputs(manager):
             name = (entity.get("name") if isinstance(entity, dict)
                     else entity.properties.get("name"))
             entities[entity_id] = entity
-            host.brushes = [entity] if isinstance(entity, dict) else []
-            host.things = [] if isinstance(entity, dict) else [entity]
+            host.editor_state.brushes = [entity] if isinstance(entity, dict) else []
+            host.editor_state.things = [] if isinstance(entity, dict) else [entity]
             current["type"] = entity_type
 
             for io_def in IO_REGISTRY[entity_type]["inputs"]:
