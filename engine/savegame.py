@@ -419,7 +419,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "map": map_name or "",
         "level": level,
         "player": _capture_player(logic.player),
-        "player2": _capture_player(logic.player2),
+        "player2": _capture_player(logic.player_runtime.player2),
         "runtime": runtime,
     }
 
@@ -738,7 +738,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
 
     # Player(s)
     _apply_player(logic.player, data.get("player"))
-    _apply_player(logic.player2, data.get("player2"))
+    _apply_player(logic.player_runtime.player2, data.get("player2"))
     # The player was put back, not walked back: no portal crossing.
     if data.get("player"):
         logic.portal_runtime.note_player_teleported()
