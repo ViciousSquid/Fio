@@ -457,7 +457,7 @@ class LogicRender:
         proj_view = projection * view_matrix
         frustum_planes = self.extract_frustum_planes(proj_view)
 
-        brushes = logic.brushes
+        brushes = logic.editor_state.brushes
 
         table = write_state.render_table
         etable = write_state.entity_table
@@ -534,7 +534,7 @@ class LogicRender:
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
 
-        things = logic.things
+        things = logic.editor_state.things
         etable = write_state.entity_table
         logic._entity_table = etable
         peer_etable = (
