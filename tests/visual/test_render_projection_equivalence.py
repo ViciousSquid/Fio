@@ -620,7 +620,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
         config = glh.render_config(all_brushes=brushes, all_things=things,
                                    render_table=table, render_refs=refs,
                                    all_brush_slots=slots,
-                                   selected_object=selected,
+                                   selected_object=primary_selection,
                                    show_triggers_as_solid=True)
         context.bind()
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
