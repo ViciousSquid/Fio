@@ -622,7 +622,12 @@ def test_without_io_every_transition_takes_the_vectorised_path(seed):
     def open_doors(tick, ref, new, rng):
         if tick % 40 == 0:            # no I/O to open them, so open them here
             for side in (ref, new):
-                for state in side.logic.mover_runtime.door_states.values():
+                door_states = (
+                    side.logic.door_states
+                    if side.reference
+                    else side.logic.mover_runtime.door_states
+                )
+                for state in door_states.values():
                     if state["state"] == "closed":
                         state["state"] = "opening"
     _run(seed, ticks=500, script=open_doors, io=False)
@@ -636,7 +641,7 @@ def test_saved_state_restored_mid_run_matches():
         for side in (ref, new):
             logic = side.logic
             if side.reference:
-                door_states = logic.mover_runtime.door_states
+                door_states = logic.door_states
                 mover_states = logic.mover_states
             else:
                 door_states = logic.mover_runtime.door_states
