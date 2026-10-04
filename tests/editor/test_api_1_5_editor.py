@@ -25,7 +25,6 @@ pytest.importorskip("PyQt5", reason="the property editor is Qt")
 
 from PyQt5.QtWidgets import QProgressBar, QPushButton, QWidget  # noqa: E402
 
-from editor.editor_state import EditorState  # noqa: E402
 from editor.entity_inspector import (EntityInspector, generic_document,  # noqa: E402
                                      inspect, normalise_document)
 from editor.property_editor import CollapsibleSection, PropertyEditor  # noqa: E402
@@ -34,35 +33,6 @@ from plugins.api import EditorAPI, FioPlugin  # noqa: E402
 from plugins.manager import get_manager  # noqa: E402
 
 pytestmark = pytest.mark.qt
-
-
-class _FakeView:
-    def update(self):
-        pass
-
-
-class FakeHost(QWidget):
-    """The slice of MainWindow the property editor talks to."""
-
-    def __init__(self):
-        super().__init__()
-        self.state = EditorState()
-        self.state.selected_objects = []
-        self.config = configparser.ConfigParser()
-        self.grid_size = 16
-        self.view_3d = _FakeView()
-
-    def save_state(self):
-        pass
-
-    def update_views(self):
-        pass
-
-    def update_all_ui(self):
-        pass
-
-    def mark_as_modified(self):
-        pass
 
 
 @pytest.fixture
@@ -76,9 +46,8 @@ def api(monkeypatch):
 
 
 @pytest.fixture
-def panel(qt_app):
-    host = FakeHost()
-    return host, PropertyEditor(host)
+def panel(main_window):
+    return main_window, main_window.property_editor
 
 
 @pytest.fixture(autouse=True)
@@ -377,23 +346,8 @@ def test_the_panel_does_not_keep_a_deleted_entity_alive(api, qt_app):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def inspector_host(qt_app):
-    from editor.main_window import MainWindow
-
-    class InspectorHost(QWidget):
-        show_entity_inspector = MainWindow.show_entity_inspector
-
-        def __init__(self):
-            super().__init__()
-            self.state = EditorState()
-            self._entity_inspectors = {}
-            self.view_3d = None
-
-    host = InspectorHost()
-    yield host
-    for panel in list(host._entity_inspectors.values()):
-        panel.close()
-    host.deleteLater()
+def inspector_host(main_window):
+    return main_window
 
 
 def test_one_inspector_per_entity(api, inspector_host):
@@ -435,12 +389,20 @@ def test_the_inspector_hands_providers_logic_only_in_play_mode(api, inspector_ho
     seen = []
     api.register_entity_inspector(lambda e, logic: seen.append(logic) or {"title": "x"})
 
-    view = types.SimpleNamespace(play_mode=play_mode, logic_thread=object())
-    inspector_host.view_3d = view
+    if play_mode:
+        from editor.things import PlayerStart
+        start = PlayerStart(pos=[0, 0, 0])
+        inspector_host.state.things.append(start)
+        inspector_host.enter_play_mode()
+        assert inspector_host.view_3d.play_mode
+    else:
+        inspector_host.view_3d.play_mode = False
     a = Thing(pos=[0, 0, 0], properties={"type": "t"})
     inspector_host.state.things.append(a)
     inspector_host.show_entity_inspector(a)
-    assert seen[-1] is (view.logic_thread if play_mode else None)
+    assert seen[-1] is (inspector_host.view_3d.logic_thread if play_mode else None)
+    if play_mode:
+        inspector_host._exit_play_mode()
 
 
 def test_no_entity_opens_nothing(inspector_host):
