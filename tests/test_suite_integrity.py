@@ -140,6 +140,7 @@ MACHINERY_TEST_ROOTS = (
     "tests/monster_ai",
     "tests/logic",
     "tests/regression",
+    "plugins/bigworld/tests",
 )
 
 #: These names have appeared as substitutes for production owners in behavioural
