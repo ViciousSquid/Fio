@@ -437,18 +437,21 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
         thread.portal_runtime.update(1.0 / 60.0)
         assert all(p._fade_alpha > 0.0 for p in thread._portal_things)
 
-        # And the per-frame path must not walk the level to find them.
-        scanned = []
-        original = type(thread).things
-        try:
-            type(thread).things = property(
-                lambda self: (scanned.append(1), original.fget(self))[1])
-            thread.portal_runtime.update(1.0 / 60.0)
-        finally:
-            type(thread).things = original
-        assert scanned == [], (
-            "_update_portals read the full thing list %d times in one frame"
-            % len(scanned))
+        # Instrument the authoritative collection itself.  This verifies
+        # the production portal cache is used without recreating the removed
+        # LogicThread.things compatibility property.
+        class TrackingThings(list):
+            def __iter__(self):
+                self.iterations += 1
+                return super().__iter__()
+
+        tracked = TrackingThings(thread.editor_state.things)
+        tracked.iterations = 0
+        thread.editor_state.things = tracked
+        thread.portal_runtime.update(1.0 / 60.0)
+        assert tracked.iterations == 0, (
+            "_update_portals iterated the authoritative thing list %d times "
+            "in one frame" % tracked.iterations)
     finally:
         thread.session_runtime.apply_play_mode(False)
 
