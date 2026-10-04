@@ -568,7 +568,6 @@ def register_all_input_handlers(io_manager: IOManager):
 
         entity.properties['state'] = 'on'
         speaker_id = id(entity)
-        logic.active_speakers.add(speaker_id)
 
         if not sound_file:
             debug_log('Error', f"No sound file configured for speaker '{entity_name}'!")
@@ -612,7 +611,6 @@ def register_all_input_handlers(io_manager: IOManager):
     def speaker_stop(entity, param, logic):
         entity.properties['state'] = 'off'
         speaker_id = id(entity)
-        logic.active_speakers.discard(speaker_id)
         # Actually silence the channel on the audio thread -- a looping sound
         # would otherwise play forever (StopSound could not reach the mixer).
         logic.game_state.queue_sound({'action': 'stop', 'entity_id': speaker_id})

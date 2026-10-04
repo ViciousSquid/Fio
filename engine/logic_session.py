@@ -134,7 +134,6 @@ class LogicSession:
             logic.prop_runtime.start()
 
             # Reset speaker/interaction state.
-            logic.active_speakers.clear()
             logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.interaction_runtime.current_hud_message = ""
             logic.interaction_runtime.current_hud_key_name = None
@@ -244,7 +243,6 @@ class LogicSession:
             logic.trigger_runtime._reset_trigger_state()
             logic.trigger_runtime.fired_once_triggers.clear()
             logic.player_runtime.collected_keys.clear()
-            logic.active_speakers.clear()
             logic.trigger_runtime.hurt_trigger_timers.clear()
             logic.mover_runtime._reset_movers()
             logic.mover_runtime._reset_doors()

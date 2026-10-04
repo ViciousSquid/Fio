@@ -318,10 +318,6 @@ class LogicThread(threading.Thread):
         # Collection state
         
         
-        # Speaker state
-        self.active_speakers: set = set()
-        
-        
         # Mover and door animation state are owned by mover_runtime.
         # Model collision pseudo-brushes for things with model_path
 
