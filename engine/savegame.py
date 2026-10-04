@@ -1075,7 +1075,9 @@ def _restore_bigworld(logic, data: dict, current_map_name: str = "") -> dict:
         if logic.plugins is not None
         else None
     )
-    if session is not None and session.is_disk_streaming:
+    from plugins.bigworld.streaming import DiskStreamingSession
+
+    if isinstance(session, DiskStreamingSession):
         return session.restore_saved(data, current_map_name=current_map_name)
 
     try:
