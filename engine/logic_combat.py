@@ -34,7 +34,10 @@ except ImportError:
         print(f"[{category}] {message}")
 
 
-# Gunfire sound loudness multiplier used by monster hearing.\n_GUNFIRE_LOUDNESS = 1.0\n\n#: Shared, read-only "no projectiles" array for the published frame.
+# Gunfire sound loudness multiplier used by monster hearing.
+_GUNFIRE_LOUDNESS = 1.0
+
+#: Shared, read-only "no projectiles" array for the published frame.
 NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
 NO_PROJECTILES.flags.writeable = False
 
