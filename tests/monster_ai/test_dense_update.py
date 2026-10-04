@@ -94,7 +94,7 @@ def _world(seed, dense, teams=False, count=None):
 
 def _snapshot(ai, logic):
     monsters = []
-    for m in logic._monster_things:
+    for m in logic.world_runtime.monster_things:
         p = m.properties
         state = ai.monster_states.get(id(m))
         monsters.append((
@@ -124,12 +124,12 @@ def test_dense_pass_matches_the_per_monster_path(seed):
         ref = _snapshot(ref_ai, ref_logic)
         if dense != ref:
             for i, (a, b) in enumerate(zip(dense[0], ref[0])):
-                assert a == b, (tick, dense_logic._monster_things[i].name, a, b)
+                assert a == b, (tick, dense_logic.world_runtime.monster_things[i].name, a, b)
             assert dense[1] == ref[1], (tick, "player damage")
             assert dense[2] == ref[2], (tick, "projectiles")
     # The scenario is not vacuous: monsters moved, shot and fell.
     assert dense_logic.damage_applied or dense_logic.combat_runtime._monster_projectiles
-    faller = next(m for m in dense_logic._monster_things if m.name == "faller")
+    faller = next(m for m in dense_logic.world_runtime.monster_things if m.name == "faller")
     assert faller.pos[1] < 400
 
 
@@ -146,7 +146,7 @@ def test_dense_pass_casts_rays_only_for_due_shots():
     ticks = int(3 * MONSTER_SHOOT_INTERVAL / TICK)
     for _ in range(ticks):
         ai.update(TICK)
-    awake = sum(1 for m in logic._monster_things if m.properties.get('awake'))
+    awake = sum(1 for m in logic.world_runtime.monster_things if m.properties.get('awake'))
     # The per-monster path cast one ray per awake monster per tick.
     assert 0 < len(rays) < awake * ticks / 10
 
@@ -156,24 +156,24 @@ def test_a_two_team_fight_keeps_its_invariants():
     ref_ai, ref_logic = _world(11, dense=False, teams=True)
     for _ in range(int(8 * MONSTER_SHOOT_INTERVAL / TICK)):
         before = {id(m): (m.properties.get('dead'), tuple(m.pos))
-                  for m in logic._monster_things}
+                  for m in logic.world_runtime.monster_things}
         ai.update(TICK)
         ref_ai.update(TICK)
-        for m in logic._monster_things:
+        for m in logic.world_runtime.monster_things:
             was_dead, was_pos = before[id(m)]
             if was_dead:
                 # A dead monster settles onto the ground under it (up or down,
                 # to ground + half its height) and does nothing else.
                 assert (m.pos[0], m.pos[2]) == (was_pos[0], was_pos[2])
                 assert not m.properties.get('is_shooting')
-    dead = sum(1 for m in logic._monster_things if m.properties.get('dead'))
-    ref_dead = sum(1 for m in ref_logic._monster_things if m.properties.get('dead'))
+    dead = sum(1 for m in logic.world_runtime.monster_things if m.properties.get('dead'))
+    ref_dead = sum(1 for m in ref_logic.world_runtime.monster_things if m.properties.get('dead'))
     # Infighting is explicitly order-dependent: the dense and scalar passes
     # can choose different victims as monsters die during the same tick. The
     # invariant is that both implementations actually fight rather than that
     # their kill counts match a particular ratio.
-    assert 0 < dead < len(logic._monster_things), (dead, ref_dead)
-    assert 0 < ref_dead < len(ref_logic._monster_things), (dead, ref_dead)
+    assert 0 < dead < len(logic.world_runtime.monster_things), (dead, ref_dead)
+    assert 0 < ref_dead < len(ref_logic.world_runtime.monster_things), (dead, ref_dead)
 
 
 def test_table_crossfire_finds_the_monster_the_walk_finds():
@@ -182,7 +182,7 @@ def test_table_crossfire_finds_the_monster_the_walk_finds():
     rng = random.Random(5)
     for trial in range(200):
         ai, logic = _world(trial, dense=True, teams=True, count=30)
-        monsters = logic._monster_things
+        monsters = logic.world_runtime.monster_things
         for m in monsters:
             if rng.random() < 0.15:
                 m.properties['dead'] = True
@@ -205,7 +205,7 @@ def test_crossfire_skips_a_monster_killed_earlier_in_the_tick():
     checked = 0
     for trial in range(200):
         ai, logic = _world(trial, dense=True, teams=True, count=30)
-        monsters = logic._monster_things
+        monsters = logic.world_runtime.monster_things
         ai.table.gather(monsters)
         shooter = rng.choice(monsters)
         start = glm.vec3(shooter.pos[0], shooter.pos[1] + 64.0, shooter.pos[2])
