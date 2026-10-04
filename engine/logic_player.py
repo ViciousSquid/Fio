@@ -39,6 +39,7 @@ class LogicPlayer:
         self.player_health = 100
         self.player_max_health = 100
         self.player_dead = False
+        self.damage_lock = threading.Lock()
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
