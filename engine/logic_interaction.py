@@ -93,23 +93,16 @@ class LogicInteraction:
                             )
                             door_consumed_use = True
 
-        if not door_consumed_use and logic._levelchanger_things:
+        world = logic.world_runtime
+        if not door_consumed_use and world.levelchanger_things:
             # Radius activation is squared, removing the old per-entry
             # distance sqrt. Facing is also tested without per-row
             # normalisation.
-            centres = getattr(logic, "_levelchanger_centres", None)
-            radii = getattr(logic, "_levelchanger_radii", None)
-            eligible = getattr(logic, "_levelchanger_eligible", None)
-            if (
-                centres is None
-                or radii is None
-                or eligible is None
-                or len(centres) != len(logic._levelchanger_things)
-            ):
-                logic.world_runtime.refresh_levelchanger_table()
-                centres = logic._levelchanger_centres
-                radii = logic._levelchanger_radii
-                eligible = logic._levelchanger_eligible
+            if len(world.levelchanger_centres) != len(world.levelchanger_things):
+                world.refresh_levelchanger_table()
+            centres = world.levelchanger_centres
+            radii = world.levelchanger_radii
+            eligible = world.levelchanger_eligible
 
             player_pos = np.asarray(
                 (px, py, pz),
@@ -137,7 +130,7 @@ class LogicInteraction:
                 if candidates.size:
                     # Preserve authored list order: first matching row wins.
                     row = int(candidates[0])
-                    thing = logic._levelchanger_things[row]
+                    thing = world.levelchanger_things[row]
                     logic.current_hud_message = "[E] Complete Level"
                     if use_key_pressed:
                         target_map = thing.properties.get(
