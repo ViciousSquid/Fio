@@ -26,7 +26,7 @@ class LogicInteraction:
         self.current_hud_key_name = None
 
         reach_distance = 80.0
-        px, py, pz = logic.player.pos
+        px, py, pz = logic.player_runtime.player.pos
 
         found_door_idx = -1
         found_door_brush = None

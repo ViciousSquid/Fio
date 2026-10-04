@@ -60,7 +60,7 @@ class LogicCombat:
 
     def _handle_shooting(self):
         logic = self.logic
-        if not logic.player or not self.active_weapon:
+        if not logic.player_runtime.player or not self.active_weapon:
             return
         # Non-firing weapons (e.g. cig) never fire: no muzzle flash, no
         # hitscan/projectile, no damage, and no gunfire noise event.

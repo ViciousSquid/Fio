@@ -22,7 +22,6 @@ import os
 import random
 
 from .threaded_game_state import ThreadedGameState
-from .player import Player
 from .camera import Camera
 from .change_journal import moved, touch
 from .cutscene_runtime import CutsceneRuntime
@@ -170,8 +169,6 @@ class LogicThread(threading.Thread):
             "editor_state",
         ),
         "player": (
-            "player",
-            "player2",
             "game_state",
         ),
         "render": (
@@ -183,25 +180,23 @@ class LogicThread(threading.Thread):
         "session": (
             "editor_state",
             "io_manager",
-            "player",
-            "player2",
             "player_runtime",
         ),
         "interaction": (
-            "player",
+            "player_runtime",
             "io_manager",
         ),
         "editor": (
             "game_state",
         ),
         "triggers": (
-            "player",
+            "player_runtime",
         ),
         "portals": (
             "player",
         ),
         "combat": (
-            "player",
+            "player_runtime",
             "io_manager",
         ),
         "timing": (
@@ -232,8 +227,6 @@ class LogicThread(threading.Thread):
         self.visibility_system = visibility_system
         
         self.running = False
-        self.player: Optional[Player] = None
-        self.player2: Optional[Player] = None
         self.terrain = None
         
         # Camera state and camera math live in LogicCamera; LogicThread keeps
@@ -605,7 +598,7 @@ class LogicThread(threading.Thread):
             )
 
     def _tick_play_mode(self, delta):
-        if not self.player:
+        if not self.player_runtime.player:
             return
         self.world_runtime.watch_world_rows()
 
@@ -672,7 +665,7 @@ class LogicThread(threading.Thread):
         self.prop_runtime.tick(delta, use_key)
         physics_world = self.session_runtime.physics_world
         if physics_world is not None:
-            physics_world.step(delta, self.player)
+            physics_world.step(delta, self.player_runtime.player)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
             self.prop_runtime.sync_physics_positions()

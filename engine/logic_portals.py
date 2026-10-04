@@ -112,7 +112,7 @@ class LogicPortals:
         logic = self.logic
         Portal = self.portal_type
 
-        if Portal is None or not logic.player:
+        if Portal is None or not logic.player_runtime.player:
             return
         if not len(self.portal_things):
             return

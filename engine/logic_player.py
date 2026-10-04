@@ -25,6 +25,8 @@ class LogicPlayer:
 
     def __init__(self, logic):
         self.logic = logic
+        self.player = None
+        self.player2 = None
         self._player_was_in_water = False
         self._waterwalk_timer = 0.0
         self.collected_keys = set()
@@ -42,7 +44,7 @@ class LogicPlayer:
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""
         logic = self.logic
-        player = logic.player
+        player = self.player
         if not player:
             return
 
@@ -79,18 +81,18 @@ class LogicPlayer:
     def update_player2(self, delta):
         """Apply split-screen Player 2 input, look and physics for one tick."""
         logic = self.logic
-        if not logic.player2 or self.player2_dead:
+        if not self.player2 or self.player2_dead:
             return
 
         p2 = logic.game_state.get_p2_input()
         p2_dir = glm.vec3(float(p2['move_x']), 0.0, float(p2['move_z']))
 
         turn_input = float(p2['look_dx'])
-        logic.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
-        logic.player2.pitch -= float(p2['look_dy']) * 0.002
+        self.player2.angle -= turn_input * self.p2_turn_sensitivity * delta
+        self.player2.pitch -= float(p2['look_dy']) * 0.002
         logic.player2.pitch = max(-1.5, min(1.5, logic.player2.pitch))
 
-        logic.player2.update(
+        self.player2.update(
             delta,
             p2_dir,
             bool(p2['jump']),

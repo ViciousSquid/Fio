@@ -2561,7 +2561,7 @@ class QtGameView(QOpenGLWidget):
             self._reload_hud_settings()
             self._hud_runtime_visible = None
             if self.logic_thread:
-                self.logic_thread.player = self.player
+                self.logic_thread.player_runtime.player = self.player
                 self.logic_thread.camera.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
                 self.logic_thread.session_runtime.apply_play_mode(True)
@@ -2574,7 +2574,7 @@ class QtGameView(QOpenGLWidget):
                 )
                 self.player2.pos.y = player_start_pos[1]
                 if self.logic_thread:
-                    self.logic_thread.player2 = self.player2
+                    self.logic_thread.player_runtime.player2 = self.player2
                 if self.height() > 0:
                     self._cached_aspect_ratio = (self.width() // 2) / self.height()
                     if self.logic_thread:

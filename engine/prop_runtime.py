@@ -230,7 +230,7 @@ class PropSession:
     # -- interaction ------------------------------------------------------
 
     def tick(self, delta, use_pressed):
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None:
             return
 

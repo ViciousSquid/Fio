@@ -261,7 +261,7 @@ class LogicMovers:
             move_delta = new_pos - np.array(brush["pos"])
             brush["pos"] = new_pos.tolist()
 
-            if logic.player and logic.player.ground_object == brush:
+            if logic.player_runtime.player and logic.player.ground_object == brush:
                 logic.player.pos += glm.vec3(
                     float(move_delta[0]),
                     float(move_delta[1]),

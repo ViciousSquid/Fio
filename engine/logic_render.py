@@ -145,7 +145,7 @@ class LogicRender:
             self._hud_health_fade_started = None
             self._hud_health_fade_from = self._hud_health_alpha
             self._hud_health_fade_phase = "idle"
-            self._hud_health_last_value = logic.player_runtime.player_health
+            self._hud_health_last_value = logic.player_runtime.player_runtime.player_health
 
     def update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
@@ -588,7 +588,7 @@ class LogicRender:
         write_state.thing_hidden = thing_hidden
         write_state.timestamp = time.perf_counter()
 
-        if logic.session_runtime.play_mode and logic.player2:
+        if logic.session_runtime.play_mode and logic.player_runtime.player2:
             p2_pos = glm.vec3(logic.player2.pos)
             p2_cam = p2_pos + glm.vec3(
                 0,

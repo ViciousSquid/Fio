@@ -505,7 +505,7 @@ def register_all_input_handlers(io_manager: IOManager):
         set_authored_flag(entity, 'disabled', not authored_flag(entity, 'disabled'))
     
     def trigger_touch_test(entity, param, logic):
-        if not logic.player:
+        if not logic.player_runtime.player:
             return
         
         pos = glm.vec3(entity['pos'])

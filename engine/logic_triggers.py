@@ -219,7 +219,7 @@ class LogicTriggers:
         moment the player moves or turns instead of up to a poll interval
         later. The arithmetic is one batched pass over that subset.
         """
-        player = self.logic.player
+        player = self.logic.player_runtime.player
         if player is None or not self._use_trigger_entries:
             return ""
 
