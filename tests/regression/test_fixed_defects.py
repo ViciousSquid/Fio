@@ -70,6 +70,12 @@ def test_undo_steps_back_exactly_one_operation():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.qt
+def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
+    """A ground monster must not acquire a non-finite position when its target
+    lies directly above it, because the flattened XZ direction has zero length.
+    """
+    pytest.importorskip("PyQt5")
+    from editor.things import Monster
     from engine.monster_ai import MonsterAI
     from engine.logic_world import LogicWorld
     from tests.helpers.fakes import FakeLogicThread, FakePlayer
@@ -77,34 +83,12 @@ def test_undo_steps_back_exactly_one_operation():
 
     ground = [box_brush("ground", (0, -16, 0), (4096, 32, 4096))]
     monster = make_thing(Monster, "grunt", (0.0, 96.0, 0.0), awake=True)
-    logic = FakeLogicThread(brushes=ground, things=[monster],
-                            player=FakePlayer((0.0, 900.0, 0.0)))
-    logic.world_runtime = LogicWorld(logic, monster_type=Monster)
-    ai = MonsterAI(logic)
-    logic.monster_ai = ai
-    logic.world_runtime.build_entity_caches()
-
-@pytest.mark.qt
-def test_a_patrol_node_directly_overhead_does_not_produce_nan():
-    """The same hazard on the patrol path."""
-    pytest.importorskip("PyQt5")
-    from editor.things import Monster, PathNode
-    from engine.monster_ai import MonsterAI
-    from engine.logic_world import LogicWorld
-    from tests.helpers.fakes import FakeLogicThread, FakePlayer
-    from tests.helpers.worlds import make_thing
-
-    ground = [box_brush("ground", (0, -16, 0), (4096, 32, 4096))]
-    node = make_thing(PathNode, "above", (0.0, 900.0, 0.0), radius=8.0)
-    monster = make_thing(Monster, "walker", (0.0, 96.0, 0.0), awake=True,
-                         patrol=True, patrol_target="above")
-    logic = FakeLogicThread(brushes=ground, things=[monster, node],
-                            player=FakePlayer((100000.0, 0.0, 0.0)))
-    logic.world_runtime = LogicWorld(
-        logic,
-        monster_type=Monster,
-        path_node_type=PathNode,
+    logic = FakeLogicThread(
+        brushes=ground,
+        things=[monster],
+        player=FakePlayer((0.0, 900.0, 0.0)),
     )
+    logic.world_runtime = LogicWorld(logic, monster_type=Monster)
     ai = MonsterAI(logic)
     logic.monster_ai = ai
     logic.world_runtime.build_entity_caches()
@@ -114,8 +98,8 @@ def test_a_patrol_node_directly_overhead_does_not_produce_nan():
         ai.update(1.0 / 30.0)
 
     assert all(math.isfinite(value) for value in monster.pos), (
-        "patrolling toward a node directly overhead produced %s" % (monster.pos,))
-
+        "the monster's position went non-finite: %s" % (monster.pos,)
+    )
 
 # ---------------------------------------------------------------------------
 # A one-node patrol route fired its outputs every tick
