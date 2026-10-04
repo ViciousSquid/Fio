@@ -103,15 +103,14 @@ class FakeLogicThread:
             player2_health=100,
             player2_max_health=100,
             player2_dead=False,
+            damage_lock=threading.Lock(),
         )
         self.play_mode = False
         self.io_manager = io_manager
         self.game_state = FakeGameState()
         self.plugins = SimpleNamespace(services={})
-        self._monster_lock = threading.RLock()
         self.combat_runtime = LogicCombat(self)
         self.session_runtime = LogicSession(self)
-        self._player_damage_lock = threading.Lock()
         self.trigger_runtime = LogicTriggers(self)
         self._id_cache = {}
         self.portal_runtime = LogicPortals(self)
