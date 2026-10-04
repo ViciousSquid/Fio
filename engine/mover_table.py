@@ -506,7 +506,7 @@ class LinearMovers(_Group):
         that could have changed another row (I/O, or a path step)."""
         brush = self.brushes[row]
         i = self.index[row]
-        if i in logic.mover_path_states:
+        if i in logic.mover_runtime.mover_path_states:
             logic.mover_runtime._update_mover_path(i, brush, delta)
             self.resync(row)
             self._store(np.array([row]), self.pos[[row]])
