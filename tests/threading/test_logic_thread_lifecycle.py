@@ -88,7 +88,7 @@ def logic():
         thread.stop()
         if thread.is_alive():
             thread.join(timeout=DEADLINE)
-        ai_thread = thread.monster_ai_thread
+        ai_thread = thread.session_runtime.monster_ai_thread
         if ai_thread is not None:
             ai_thread.stop()
             ai_thread.join(timeout=DEADLINE)
@@ -162,8 +162,8 @@ def test_entering_play_mode_starts_the_monster_ai_thread(logic):
 
     thread.session_runtime.apply_play_mode(True)
     try:
-        assert thread.monster_ai_thread is not None
-        assert thread.monster_ai_thread.is_alive(), "the AI thread did not start"
+        assert thread.session_runtime.monster_ai_thread is not None
+        assert thread.session_runtime.monster_ai_thread.is_alive(), "the AI thread did not start"
     finally:
         thread.session_runtime.apply_play_mode(False)
 
@@ -171,11 +171,11 @@ def test_entering_play_mode_starts_the_monster_ai_thread(logic):
 def test_leaving_play_mode_stops_the_monster_ai_thread(logic):
     thread = logic(brushes=room(), things=[make_thing(Monster, "grunt", (0, 96, 0))])
     thread.session_runtime.apply_play_mode(True)
-    ai_thread = thread.monster_ai_thread
+    ai_thread = thread.session_runtime.monster_ai_thread
 
     thread.session_runtime.apply_play_mode(False)
 
-    assert thread.monster_ai_thread is None, (
+    assert thread.session_runtime.monster_ai_thread is None, (
         "the logic thread still holds a reference to the finished AI thread")
     _wait_for(lambda: not ai_thread.is_alive(),
               what="the monster AI thread to exit after leaving play mode")
@@ -184,10 +184,10 @@ def test_leaving_play_mode_stops_the_monster_ai_thread(logic):
 def test_restarting_play_mode_does_not_leave_the_old_ai_thread_running(logic):
     thread = logic(brushes=room(), things=[make_thing(Monster, "grunt", (0, 96, 0))])
     thread.session_runtime.apply_play_mode(True)
-    first = thread.monster_ai_thread
+    first = thread.session_runtime.monster_ai_thread
     thread.session_runtime.apply_play_mode(False)
     thread.session_runtime.apply_play_mode(True)
-    second = thread.monster_ai_thread
+    second = thread.session_runtime.monster_ai_thread
     try:
         assert second is not first, "play mode reused the previous AI thread"
         _wait_for(lambda: not first.is_alive(),
@@ -200,7 +200,7 @@ def test_restarting_play_mode_does_not_leave_the_old_ai_thread_running(logic):
 def test_stop_ends_the_monster_ai_thread_as_well(logic):
     thread = logic(brushes=room(), things=[make_thing(Monster, "grunt", (0, 96, 0))])
     thread.session_runtime.apply_play_mode(True)
-    ai_thread = thread.monster_ai_thread
+    ai_thread = thread.session_runtime.monster_ai_thread
 
     thread.stop()
 
@@ -545,7 +545,7 @@ def test_stopping_a_running_thread_leaves_nothing_alive(logic):
     thread.start()
     _wait_for(thread.game_state.peek_has_new_frame, what="the first frame")
     thread.session_runtime.apply_play_mode(True)
-    ai_thread = thread.monster_ai_thread
+    ai_thread = thread.session_runtime.monster_ai_thread
 
     thread.stop()
     thread.join(timeout=DEADLINE)
