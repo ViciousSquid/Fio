@@ -81,7 +81,7 @@ def test_console_delete_of_a_brush_in_play_keeps_io_aimed_at_the_right_door():
 
         _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
                                            progress)
-        assert all(b is not crate for b in logic._collision_brushes_cache)
+        assert all(b is not crate for b in logic.collision_runtime._collision_brushes_cache)
     finally:
         logic.stop()
 
@@ -105,7 +105,7 @@ def test_editor_delete_then_a_console_command_before_the_next_tick():
 
         _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
                                            progress)
-        assert all(b is not crate for b in logic._collision_brushes_cache), (
+        assert all(b is not crate for b in logic.collision_runtime._collision_brushes_cache), (
             "the deleted crate is still in the collision set")
     finally:
         logic.stop()
