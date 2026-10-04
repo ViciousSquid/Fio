@@ -204,9 +204,7 @@ class LogicThread(threading.Thread):
             "world_runtime",
             "_player_damage_lock",
         ),
-        "portals": (
-            "player",
-        ),
+        "portals": (),
         "combat": (
             "player",
             "player_runtime",
