@@ -149,6 +149,7 @@ def make_source():
 def new_session(logic, source):
     s = DiskStreamingSession(logic, source, load_radius=600.0, evict_radius=700.0)
     logic.plugins.services["bigworld"] = s
+    logic.plugins.services["savegame.restore"] = s.restore_saved
     return s
 
 
