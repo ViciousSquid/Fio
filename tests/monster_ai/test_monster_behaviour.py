@@ -208,7 +208,7 @@ def test_a_named_target_override_takes_priority_over_the_player(
     monster = monster_factory("seeker", (0, 96, 0), target_name="waypoint")
     ai, logic = ai_world(brushes=flat_ground, things=[monster, marker],
                          player_pos=(-400.0, 0.0, 0.0))
-    logic.rebuild_name_cache()
+    logic.world_runtime.build_entity_caches()
 
     start_x = monster.pos[0]
     for _ in range(10):
