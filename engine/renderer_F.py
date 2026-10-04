@@ -101,7 +101,7 @@ class Renderer_F(BaseRenderer):
         One dictionary lookup per pass, so the per-brush ``brush is selected``
         identity compare becomes an integer compare.
         """
-        selected = config.get('selected_object')
+        selected = config.get('primary_selection')
         if table is None or not isinstance(selected, dict):
             return -1
         slot = table.slot_of_id.get(selected.get('id'))
@@ -132,7 +132,7 @@ class Renderer_F(BaseRenderer):
         gl.glBindVertexArray(self.vaos['cube'])
         display_mode        = config.get('brush_display_mode', 'Textured')
         show_triggers_solid = config.get('show_triggers_as_solid', False)
-        selected            = config.get('selected_object')
+        selected            = config.get('primary_selection')
         model_loc      = uniforms['model']
         color_loc      = uniforms['object_color']
         alpha_loc      = uniforms['alpha']
