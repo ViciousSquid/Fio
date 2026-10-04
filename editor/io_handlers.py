@@ -179,7 +179,7 @@ def register_all_input_handlers(io_manager: IOManager):
         return textures[int(value) - 1]
 
     # Effect inputs update authored state on the Effect. SetType and Explode
-    # also update the LogicThread-owned EffectStore execution state. No render
+    # also update the EffectStore execution state. No render
     # table is written directly, so both render buffers consume the same
     # execution state.
 

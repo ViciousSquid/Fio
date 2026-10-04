@@ -3,7 +3,7 @@ Player runtime for LogicThread.
 
 Owns primary-player and split-screen Player 2 movement/input mechanics plus
 the player's water-state sound feedback. LogicThread remains the tick-order
-orchestrator and compatibility surface.
+orchestrator.
 """
 
 import math
