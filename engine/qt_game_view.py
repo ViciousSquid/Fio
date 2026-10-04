@@ -1014,6 +1014,13 @@ class QtGameView(QOpenGLWidget):
         if self._thread_started:
             return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
+        self.logic_thread.player_runtime.p2_turn_sensitivity = float(
+            self.editor.config.get(
+                "Controls",
+                "p2_turn_sensitivity",
+                fallback=10.0,
+            )
+        )
         initial_view_distance = self.view_distance
         render_view_distance = self.logic_thread.render_runtime.view_distance
         render_view_distance.distance = initial_view_distance.distance
