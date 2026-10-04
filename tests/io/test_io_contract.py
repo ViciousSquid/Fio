@@ -44,6 +44,12 @@ from engine.logic_triggers import LogicTriggers                   # noqa: E402
 from engine.logic_timing import LogicTiming                        # noqa: E402
 from engine.logic_portals import LogicPortals                     # noqa: E402
 from engine.logic_world import LogicWorld                         # noqa: E402
+from engine.logic_session import LogicSession                     # noqa: E402
+from engine.logic_combat import LogicCombat                       # noqa: E402
+from engine.logic_collision import LogicCollision                 # noqa: E402
+from engine.effect_table import EffectStore                      # noqa: E402
+from engine.prop_runtime import PropSession                       # noqa: E402
+from engine.threaded_game_state import ThreadedGameState           # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -60,56 +66,48 @@ SOURCE_DIRS = ("editor", "engine", "plugins", "player")
 # ---------------------------------------------------------------------------
 
 class HostStub:
-    """The subset of ``LogicThread`` that input handlers reach for.
+    """The current runtime ownership surface reached by input handlers.
 
-    Deliberately *not* permissive: it does not invent attributes on demand,
-    because a stub that answers anything would let a handler reach for something
-    the real logic thread has never had and still pass. Every name here is
-    checked against the real class by
-    :func:`test_the_host_stub_only_promises_what_the_logic_thread_has`, so the
-    probe below cannot quietly drift into testing a fiction.
+    This is deliberately a narrow test host, but every subsystem it exposes is
+    a real 2.6 runtime object or an authoritative editor/game-state container.
+    It does not recreate the pre-2.6 world fields that were removed from
+    LogicThread.
     """
 
     def __init__(self, io_manager):
         self.io_manager = io_manager
+        self.game_state = ThreadedGameState()
         self.editor_state = type("EditorStateStub", (), {})()
         self.editor_state.brushes = []
         self.editor_state.things = []
         self.play_mode = False
         self.gate_inputs = {}
-        self.mover_path_states = {}
         self.active_speakers = set()
-        self.movers = []
-        self.doors = []
-        self._name_cache = {}
+        self.player = None
+        self.terrain = None
+
+        self._monster_lock = __import__("threading").RLock()
+        self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
+
+        self.session_runtime = LogicSession(self)
         self.mover_runtime = LogicMovers(self)
         self.timing_runtime = LogicTiming(self)
         self.world_runtime = LogicWorld(self, path_node_type=PathNode)
         self.cutscene_runtime = CutsceneRuntime(self)
         self.portal_runtime = LogicPortals(self)
-        self.collected_keys = set()
-        self.player = None
-        self.terrain = None
-        self._timer_things = []
-        self.world_runtime.monster_spawn_health = {}
-        self._props = None
-        self._monster_lock = __import__("threading").RLock()
-        self.monster_ai = type("MonsterAIStub", (), {"monster_states": {}})()
-        self.collision_runtime = type("CollisionRuntimeStub", (), {"mark_dirty": lambda self: None})()
+        self.collision_runtime = LogicCollision(self)
+        self.combat_runtime = LogicCombat(self)
+        self.prop_runtime = PropSession(self)
+        self.effect_store = EffectStore()
         self.trigger_runtime = LogicTriggers(self)
         self.trigger_runtime._reset_trigger_state()
-        self.editor_state = self
 
-    #: ``editor_state`` points back at the stub so ``logic.editor_state.things``
-    #: resolves; the real host holds a separate object there, so the name is a
-    #: promise about ``LogicThread`` but the target is not.
     LOCAL_ONLY = frozenset({
         '_nonplayer_trigger_contacts', '_trigger_contacts',
         '_trigger_poll_elapsed', '_trigger_poll_elapsed_by_bid',
         '_trigger_use_generation', '_trigger_use_prompt', '_trigger_use_seen',
         '_use_trigger_entries', 'player_in_triggers',
     })
-
 
 BRUSH_TYPES = {"trigger": "is_trigger", "door": "is_door", "mover": "is_mover",
                "water": "is_water", "fog": "is_fog", "brush": None}
