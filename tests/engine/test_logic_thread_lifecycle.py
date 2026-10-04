@@ -138,7 +138,7 @@ def test_teardown_waits_for_the_tick_in_progress(logic, monkeypatch):
 
 def test_leaving_play_waits_for_the_monster_thread(logic):
     logic.session_runtime.apply_play_mode(True)
-    ai_thread = logic.monster_ai_thread
+    ai_thread = logic.session_runtime.monster_ai_thread
     assert ai_thread is not None and ai_thread.is_alive()
 
     logic.session_runtime.apply_play_mode(False)
