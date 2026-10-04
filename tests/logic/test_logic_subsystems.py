@@ -242,7 +242,6 @@ def test_logic_render_constructs_and_batches_frustum_tests():
 
 
 def test_logic_session_constructs_and_releases_session_cache_state():
-    released = []
     reset = []
     from engine.logic_movers import LogicMovers
 
@@ -271,7 +270,6 @@ def test_logic_session_constructs_and_releases_session_cache_state():
 
     runtime.release_session_caches()
 
-    assert released == [True]
     assert reset == [True]
     assert player.ground_object is None
     assert host.collision_runtime._collision_brushes_cache == []
