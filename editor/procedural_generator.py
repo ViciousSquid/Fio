@@ -846,6 +846,79 @@ def create_map_data(params, yield_hook=None):
                 if not placed:
                     print(f"Warning: Could not place collectible Prop #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
+    # ------------------- AMMO COLLECTIBLE SPAWNING -------------------
+    if params.get('spawn_ammo', False):
+        ammo_count = params.get('ammo_count', 4)
+        # Keep ammo out of monster rooms when possible, matching health pickup
+        # placement so the generated combat spaces remain intentional.
+        allowed_rooms = [
+            room for idx, room in enumerate(grid.rooms)
+            if idx not in monster_rooms
+        ]
+        if not allowed_rooms:
+            allowed_rooms = [
+                room for room in grid.rooms
+                if room != start_room
+                and grid.rooms.index(room) not in monster_rooms
+            ]
+
+        if allowed_rooms:
+            MIN_DIST_TO_MONSTER = 128.0
+            MIN_DIST_BETWEEN_AMMO = 64.0
+            MAX_ATTEMPTS = 50
+
+            ammo_positions = []
+            for i in range(ammo_count):
+                placed = False
+                for _ in range(MAX_ATTEMPTS):
+                    room = random.choice(allowed_rooms)
+                    wx, wz = random_point_in_room(room, min_dist_from_wall=32)
+
+                    too_close = False
+                    for mx, mz in monster_positions:
+                        if math.hypot(wx - mx, wz - mz) < MIN_DIST_TO_MONSTER:
+                            too_close = True
+                            break
+                    if not too_close:
+                        for ax, az in ammo_positions:
+                            if math.hypot(wx - ax, wz - az) < MIN_DIST_BETWEEN_AMMO:
+                                too_close = True
+                                break
+                    if too_close:
+                        continue
+
+                    wy = FLOOR_SURFACE + ENTITY_Y_OFFSET
+                    things.append({
+                        "type": "prop",
+                        "pos": [wx, wy, wz],
+                        "properties": {
+                            "type": "prop",
+                            "name": f"AmmoProp_{i}",
+                            "collect_enabled": True,
+                            "carry_enabled": False,
+                            "collect_type": "ammo",
+                            "collect_value": 8,
+                            "collect_activation": "walk_over",
+                            "collect_respawns": False,
+                            "collect_respawn_time": 20.0,
+                            "collect_collected": False,
+                            "collect_key_name": "",
+                            "collect_custom_sprite": "",
+                            "sprite_path": "assets/sprites/ammo.png",
+                            "id": f"ammo_prop_{i}"
+                        },
+                        "io_connections": []
+                    })
+                    ammo_positions.append((wx, wz))
+                    placed = True
+                    break
+
+                if not placed:
+                    print(
+                        f"Warning: Could not place ammo pickup #{i} "
+                        f"after {MAX_ATTEMPTS} attempts. Skipping."
+                    )
+
     # ------------------- UPPER FLOOR REWARDS -------------------
     # Reward the climb: drop a collectible Prop on top of each generated upper floor.
     if params.get('spawn_health', False):
@@ -999,6 +1072,14 @@ class ProceduralMapWidget(QWidget):
         self.health_amount.setValue(6)
         form.addRow(self.spawn_health, self.health_amount)
 
+        # Ammo pickups
+        self.spawn_ammo = QCheckBox("Spawn Ammo")
+        self.spawn_ammo.setChecked(True)
+        self.ammo_amount = QSpinBox()
+        self.ammo_amount.setRange(1, 64)
+        self.ammo_amount.setValue(4)
+        form.addRow(self.spawn_ammo, self.ammo_amount)
+
         # Upper floors (steps + raised platforms)
         self.enable_floors = QCheckBox("Steps")
         self.enable_floors.setChecked(True)
@@ -1056,9 +1137,11 @@ class ProceduralMapWidget(QWidget):
             'monster_count': self.monster_amount.value(),
             'world_width': world_width,
             'world_height': world_height,
-            # --- NEW ---
+            # --- Collectibles ---
             'spawn_health': self.spawn_health.isChecked(),
             'health_count': self.health_amount.value(),
+            'spawn_ammo': self.spawn_ammo.isChecked(),
+            'ammo_count': self.ammo_amount.value(),
             # --- Upper / lower floors ---
             'enable_floors': self.enable_floors.isChecked(),
             'floor_room_count': self.floor_amount.value(),
