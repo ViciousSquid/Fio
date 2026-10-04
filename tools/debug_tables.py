@@ -423,7 +423,7 @@ class DebugTablesWindow(QMainWindow):
             return None
         ids = t.tex_name_id[slots]
         drawn = (ids >= 0) & (ids != rt.TEX_ID_SKIP)
-        if getattr(self.snapshot, "is_play_mode", False):
+        if self.snapshot.is_play_mode:
             drawn &= ids != rt.TEX_ID_NODRAW
         row, face = np.nonzero(drawn)
         if not len(row):
@@ -807,7 +807,7 @@ class DebugTablesWindow(QMainWindow):
 
     def _frame_age_ms(self):
         """How old the published frame is; its timestamp is ``perf_counter``."""
-        stamp = float(getattr(self.snapshot, "timestamp", 0.0))
+        stamp = float(self.snapshot.timestamp)
         return max(0.0, (time.perf_counter() - stamp) * 1000.0) if stamp else 0.0
 
     def _timings(self):
@@ -836,13 +836,13 @@ class DebugTablesWindow(QMainWindow):
             "ai": float(getattr(ai, "update_ms", 0.0)) if ai is not None else 0.0,
             "ai_lock_wait": (float(getattr(ai, "lock_wait_ms", 0.0))
                              if ai is not None else 0.0),
-            "prepare": float(getattr(self.snapshot, "prepare_ms", 0.0)),
+            "prepare": float(self.snapshot.prepare_ms),
             "paint": float(getattr(view, "paint_ms", 0.0)),
             "passes": dict(getattr(stats, "pass_ms", {}) or {}),
             "published_per_s": rates[0],
             "declined_per_s": rates[1],
-            "render_rows_read": int(getattr(self.render, "rows_read", 0)),
-            "entity_rows_read": int(getattr(self.entities, "rows_read", 0)),
+            "render_rows_read": int(self.render.rows_read),
+            "entity_rows_read": int(self.entities.rows_read),
         }
 
     def _update_dashboard(self, started):
