@@ -767,10 +767,7 @@ class ConsoleCommandHandler:
         if view_3d._collision_vis_mode != 'off' and view_3d.logic_thread:
             lt = view_3d.logic_thread
             if not getattr(lt, '_model_collision_brushes', []):
-                lt.model_collision_enabled = True
-                lt._model_collision_brushes = lt._build_model_collision_brushes()
-                if hasattr(lt, '_refresh_collision_brushes_cache'):
-                    lt._refresh_collision_brushes_cache()
+                lt.collision_runtime.toggle_model_collision(True)
                 debug_log("Info", f"Built {len(lt._model_collision_brushes)} collision brushes for visualization")
         
         debug_log("Info", f"Collision visualization: {view_3d._collision_vis_mode}")
