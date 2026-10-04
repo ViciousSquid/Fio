@@ -19,6 +19,7 @@ import pytest
 
 from editor.editor_state import EditorState
 from editor.things import Monster
+from engine.player import Player
 from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI
 from engine.monster_constants import MONSTER_SHOOT_INTERVAL
@@ -84,7 +85,7 @@ def _world(seed, dense, teams=False, count=None):
     state.brushes = brushes
     state.things = things
     logic = LogicThread(ThreadedGameState(), state)
-    logic.player_runtime.player = __import__('engine.player', fromlist=['Player']).Player(0.0, 0.0)
+    logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos.y = 0.0
     logic.player_runtime.player_health = 10 ** 9
     logic.player_runtime.player_max_health = 10 ** 9
