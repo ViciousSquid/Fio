@@ -670,7 +670,7 @@ def register_all_input_handlers(io_manager: IOManager):
         set_authored_flag(entity, 'disabled', True)
 
     def prop_collect(entity, param, logic):
-        session = getattr(logic, '_props', None)
+        session = logic.prop_runtime
         if session is not None:
             session.collect_prop(entity)
 

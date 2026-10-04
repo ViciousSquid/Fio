@@ -556,7 +556,7 @@ class LogicRender:
 
         visible_thing_slots = etable.all_slots
         collected = (
-            logic._props.collected_ids
+            logic.prop_runtime.collected_ids
             if logic._props is not None
             else set()
         )

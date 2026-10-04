@@ -13,7 +13,6 @@ import time
 from .change_journal import JOURNAL, STATE
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
 from .monster_ai import MonsterAIThread
-from .prop_runtime import PropSession
 
 try:
     from editor.things import (
@@ -109,8 +108,7 @@ class LogicSession:
                     # Restores what the author set; forcing carry here made every
                     # Prop -- scenery models included -- carryable.
                     thing.reset_collection()
-            if logic._props is not None:
-                logic._props.start()
+            logic.prop_runtime.start()
 
             # Reset speaker/interaction state.
             logic.active_speakers.clear()
@@ -169,8 +167,7 @@ class LogicSession:
             logic.monster_ai.set_spatial_grid(logic._spatial_grid)
 
             # PropSession is the registry for the Prop runtime domain.
-            logic._props = PropSession(logic)
-            logic._props.start()
+            logic.prop_runtime.start()
 
             # Reset cinematic state.
             logic.cutscene_runtime.state = None
@@ -242,10 +239,7 @@ class LogicSession:
             logic.player_dead = False
             logic.muzzle_flash_active = False
 
-            props = getattr(logic, "_props", None)
-            if props is not None:
-                props.stop()
-            logic._props = None
+            logic.prop_runtime.stop()
 
             physics_world = getattr(logic, "_physics_world", None)
             if physics_world is not None:

@@ -41,6 +41,7 @@ from .logic_session import LogicSession
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
 from .effect_table import EffectStore
+from .prop_runtime import PropSession
 
 
 
@@ -157,6 +158,7 @@ class LogicThread(threading.Thread):
         "timing_runtime",
         "collision_runtime",
         "world_runtime",
+        "prop_runtime",
     )
 
     _RUNTIME_HOST_CONTRACTS = {
@@ -284,6 +286,7 @@ class LogicThread(threading.Thread):
             timer_type=LogicTimer,
             path_node_type=PathNode,
         )
+        self.prop_runtime = PropSession(self)
         
         # Player stats
         self.player_health = 100
@@ -776,15 +779,13 @@ class LogicThread(threading.Thread):
 
         # Gameplay
         self.interaction_runtime.handle(use_key)
-        if self._props is not None:
-            self._props.tick(delta, use_key)
+        self.prop_runtime.tick(delta, use_key)
         physics_world = getattr(self, '_physics_world', None)
         if physics_world is not None:
             physics_world.step(delta, self.player)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
-            if self._props is not None:
-                self._props.sync_physics_positions()
+            self.prop_runtime.sync_physics_positions()
 
         self.trigger_runtime._handle_triggers(use_key, delta)
 

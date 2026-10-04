@@ -676,7 +676,7 @@ def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
     # A restore teleports entities, so the Prop domain's spatial index has to
     # be told about the Props among them.  Collected and handed over as a batch
     # rather than one call per Thing: a save restores the whole level at once.
-    prop_session = getattr(logic, "_props", None)
+    prop_session = logic.prop_runtime
     restored_props = []
     for t_data in level.get("things", []):
         props = t_data.get("properties", {}) or {}
