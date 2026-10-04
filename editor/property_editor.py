@@ -2821,11 +2821,8 @@ class PropertyEditor(QWidget):
             tname = thing.properties.get('portal_target', '')
             for t in self.editor.state.things:
                 if isinstance(t, Portal) and t.properties.get('name') == tname:
-                    if hasattr(self.editor, 'select_object'):
-                        self.editor.select_object(t)
-                    else:
-                        self.editor.set_selected_objects([t])
-                        self.editor.update_all_ui()
+                    self.editor.set_selected_objects([t])
+                    self.editor.update_all_ui()
                     break
 
         sel_btn.clicked.connect(on_select)
@@ -4705,8 +4702,7 @@ class PropertyEditor(QWidget):
         self._update_io_tab_presence()
 
         # Trigger state changes the render classification and face textures.
-        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
-            self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object])
 
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
