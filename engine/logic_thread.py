@@ -431,8 +431,8 @@ class LogicThread(threading.Thread):
         self._model_collision_brushes: list = []
         self._physics_body_brushes: list = []
         self._physics_world = None
-        # PERF: cached self.brushes + self._model_collision_brushes (see
-        # _refresh_collision_brushes_cache)
+        # PERF: cached editor_state.brushes + model collision geometry (see
+        # collision_runtime.refresh_collision_brushes_cache)
         self._collision_brushes_cache: list = []
         # Bumped every time the set of drawable objects changes, so a consumer
         # that caches across frames can tell whether its cache still describes
@@ -517,11 +517,11 @@ class LogicThread(threading.Thread):
         # pierces the aperture (anti-tunnelling), not just the post-move point.
         self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
-        # the things list changes.  Avoids an O(n) rebuild every physics tick.
+        # editor_state.things changes. Avoids an O(n) rebuild every physics tick.
         self._portal_things: List = []
         self._portal_target_things: List = []
-        # Portal slots use the same enumerate(self.things) address space as
-        # EntityTable.  Links are resolved once when the topology cache changes.
+        # Portal slots use the same enumerate(editor_state.things) address space
+        # as EntityTable. Links are resolved once when topology changes.
         self._portal_slots = np.empty(0, dtype=np.int32)
         self._portal_target_slots = np.empty(0, dtype=np.int32)
 
