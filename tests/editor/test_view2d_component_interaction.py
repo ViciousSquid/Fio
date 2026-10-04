@@ -114,6 +114,7 @@ class FakeEditorWindow(QWidget):
     select_inside = MainWindow.select_inside
     select_partial_tall = MainWindow.select_partial_tall
     select_complete_tall = MainWindow.select_complete_tall
+    set_selected_objects = MainWindow.set_selected_objects
     set_component_mode = MainWindow.set_component_mode
     cycle_component_mode = MainWindow.cycle_component_mode
     _sync_component_buttons = MainWindow._sync_component_buttons
@@ -172,12 +173,6 @@ class FakeEditorWindow(QWidget):
 
     def update_views(self):
         pass
-
-    def set_selected_objects(self, objects):
-        self.components.clear()
-        self.components.invalidate()
-        self.state.selected_objects = list(objects or [])
-        self.update_all_ui()
 
     def _active_2d_view(self):
         return self.view_top
