@@ -73,7 +73,12 @@ def test_logic_camera_constructs_and_computes_overhead_footprint():
 
 
 def test_logic_collision_constructs_and_classifies_brushes():
-    runtime = LogicCollision(SimpleNamespace())
+    host = SimpleNamespace(
+        play_mode=False,
+        editor_state=SimpleNamespace(brushes=[], things=[]),
+        session_runtime=SimpleNamespace(spatial_grid=None, physics_world=None),
+    )
+    runtime = LogicCollision(host)
 
     assert runtime.angled_brush_is_solid({"geometry": {}}) is True
     assert runtime.angled_brush_is_solid({"hidden": True}) is False
@@ -121,14 +126,14 @@ def test_logic_interaction_constructs_and_opens_a_nearby_door():
     }
     host = SimpleNamespace(
         player=SimpleNamespace(pos=glm.vec3(0, 0, 0)),
-        doors=[(0, door)],
-        collected_keys=set(),
+        editor_state=SimpleNamespace(brushes=[], things=[]),
         io_manager=None,
-        _levelchanger_things=[],
         _plugin_emit=lambda *args, **kwargs: opened.append((args, kwargs)),
     )
     host.mover_runtime = LogicMovers(host)
+    host.mover_runtime.doors = [(0, door)]
     host.mover_runtime.door_states = {0: {"state": "closed"}}
+    host.world_runtime = LogicWorld(host)
     runtime = LogicInteraction(host)
 
     runtime.handle(True)
@@ -153,7 +158,7 @@ def test_logic_movers_constructs_and_indexes_mover_brushes():
 
     runtime._init_movers()
 
-    assert host.movers == [(0, mover)]
+    assert runtime.movers == [(0, mover)]
     assert runtime.mover_states[0]["progress"] == pytest.approx(0.0)
     assert mover["original_pos"] == [0, 0, 0]
 
@@ -238,22 +243,24 @@ def test_logic_render_constructs_and_batches_frustum_tests():
 def test_logic_session_constructs_and_releases_session_cache_state():
     released = []
     reset = []
-    world = SimpleNamespace(release_session_indexes=lambda: released.append(True))
-    io_manager = SimpleNamespace(reset=lambda: reset.append(True))
-    player = SimpleNamespace(ground_object=object())
+    from engine.logic_movers import LogicMovers
 
+    player = SimpleNamespace(ground_object=object())
     host = SimpleNamespace(
-        world_runtime=world,
-        _collision_brushes_cache=[1],
-        _model_collision_brushes=[2],
-        _physics_body_brushes=[3],
-        _mover_brush_list=[4],
-        _door_brush_list=[5],
-        _monster_spawn_health={"monster": 100},
-        io_manager=io_manager,
+        editor_state=SimpleNamespace(brushes=[], things=[]),
+        io_manager=SimpleNamespace(reset=lambda: reset.append(True)),
         player=player,
         player2=None,
     )
+    host.world_runtime = LogicWorld(host)
+    host.collision_runtime = LogicCollision(host)
+    host.mover_runtime = LogicMovers(host)
+    host.collision_runtime._collision_brushes_cache = [1]
+    host.collision_runtime._model_collision_brushes = [2]
+    host.collision_runtime._physics_body_brushes = [3]
+    host.mover_runtime._mover_brush_list = [4]
+    host.mover_runtime._door_brush_list = [5]
+    host.world_runtime.monster_spawn_health = {"monster": 100}
     runtime = LogicSession(host)
 
     runtime.release_session_caches()
@@ -261,8 +268,8 @@ def test_logic_session_constructs_and_releases_session_cache_state():
     assert released == [True]
     assert reset == [True]
     assert player.ground_object is None
-    assert host._collision_brushes_cache == []
-    assert host._monster_spawn_health == {}
+    assert host.collision_runtime._collision_brushes_cache == []
+    assert host.world_runtime.monster_spawn_health == {}
 
 
 def test_logic_timing_constructs_and_updates_light_fade():
@@ -303,24 +310,27 @@ def test_logic_world_constructs_and_packs_levelchanger_rows():
     second = _Thing((4, 5, 6), name="second", radius=64, disabled=True)
     host = SimpleNamespace(
         editor_state=SimpleNamespace(brushes=[], things=[first, second]),
-        _levelchanger_things=[first, second],
     )
-    runtime = LogicWorld(host)
+    host.trigger_runtime = LogicTriggers(host)
+    from engine.prop_runtime import PropSession
+    host.session_runtime = SimpleNamespace(physics_world=None)
+    host.prop_runtime = PropSession(host)
+    runtime = LogicWorld(host, levelchanger_type=_Thing)
 
     runtime.refresh_levelchanger_table()
     runtime.build_entity_caches()
     assert runtime.name_cache["first"] is first
 
-    assert host._levelchanger_centres.dtype == np.float32
+    assert runtime.levelchanger_centres.dtype == np.float32
     assert np.array_equal(
-        host._levelchanger_centres,
+        runtime.levelchanger_centres,
         np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32),
     )
     assert np.array_equal(
-        host._levelchanger_radii,
+        runtime.levelchanger_radii,
         np.array([32, 64], dtype=np.float32),
     )
-    assert np.array_equal(host._levelchanger_eligible, np.array([True, False]))
+    assert np.array_equal(runtime.levelchanger_eligible, np.array([True, False]))
 
 
 def _contract_host():
