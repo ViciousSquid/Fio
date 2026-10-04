@@ -88,7 +88,7 @@ def test_report_the_brush_cull_cost():
 
     try:
         print("\n  %d rows, median of %d\n" % (table.count, REPEATS))
-    print("  %-24s %8s %9s" % ("pose", "visible", "cull ms"))
+        print("  %-24s %8s %9s" % ("pose", "visible", "cull ms"))
     for name, (eye, look) in POSES.items():
         eye = glm.vec3(*eye)
         planes = render.extract_frustum_planes(projection * glm.lookAt(
@@ -98,6 +98,6 @@ def test_report_the_brush_cull_cost():
             return np.flatnonzero(keep & render.aabb_in_frustum_bounds(
                 planes, table.bounds[:table.count]))
 
-            print("  %-24s %8d %9.3f" % (name, len(cull()), _best_ms(cull)))
+        print("  %-24s %8d %9.3f" % (name, len(cull()), _best_ms(cull)))
     finally:
         logic.stop()
