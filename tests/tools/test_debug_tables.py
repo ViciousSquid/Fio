@@ -223,11 +223,8 @@ def _terrain_host(instrument):
     # Exercise the production residency calculation rather than manufacturing
     # table rows. The Debug Tables instrument is observing the same dense table
     # used by terrain streaming.
-    class Camera:
-        x = 128.0
-        z = 128.0
-
-    terrain._stream_chunks(Camera())
+    import glm
+    terrain._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
     slots = terrain.table.live_slots()
     assert len(slots) >= 2
 
