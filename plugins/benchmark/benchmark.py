@@ -579,6 +579,7 @@ class BenchmarkRunner:
         if logic is not None:
             logic.world_runtime.notify_visibility_changed()
             logic.collision_runtime._model_collision_brushes = []
+            logic.collision_runtime._physics_body_brushes = []
             logic.collision_runtime.refresh_collision_brushes_cache()
 
         # Clear the currently displayed render snapshot.  The LogicThread's
