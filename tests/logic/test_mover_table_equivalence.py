@@ -481,6 +481,7 @@ class _Side:
             logic.movers = []
             logic.doors = []
             logic.mover_path_states = {}
+            logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
             logic.mover_runtime = LogicMovers(logic)
         io.set_logic_thread(logic)
         self.io = io
@@ -518,7 +519,7 @@ class _Side:
         if not states:
             return moving
         mover_states = logic.mover_states if self.reference else logic.mover_runtime.mover_states
-        door_states = logic.door_states if self.reference else logic.mover_runtime.door_states
+        door_states = logic.mover_runtime.door_states if self.reference else logic.mover_runtime.door_states
         return dict(moving, **{
             # Sorted by index: the loop's dicts iterate in insertion order (a
             # popped-and-recreated state moves to the end), the views in row
@@ -620,7 +621,7 @@ def test_without_io_every_transition_takes_the_vectorised_path(seed):
     def open_doors(tick, ref, new, rng):
         if tick % 40 == 0:            # no I/O to open them, so open them here
             for side in (ref, new):
-                for state in side.logic.door_states.values():
+                for state in side.logic.mover_runtime.door_states.values():
                     if state["state"] == "closed":
                         state["state"] = "opening"
     _run(seed, ticks=500, script=open_doors, io=False)
@@ -634,7 +635,7 @@ def test_saved_state_restored_mid_run_matches():
         for side in (ref, new):
             logic = side.logic
             if side.reference:
-                door_states = logic.door_states
+                door_states = logic.mover_runtime.door_states
                 mover_states = logic.mover_states
             else:
                 door_states = logic.mover_runtime.door_states
@@ -642,7 +643,7 @@ def test_saved_state_restored_mid_run_matches():
             doors = {i: _public_state(s) for i, s in door_states.items()}
             movers = {i: _public_state(s) for i, s in mover_states.items()}
             if side.reference:
-                logic.door_states = copy.deepcopy(doors)
+                logic.mover_runtime.door_states = copy.deepcopy(doors)
                 logic.mover_states = copy.deepcopy(movers)
             else:
                 logic.mover_runtime.door_states = copy.deepcopy(doors)
