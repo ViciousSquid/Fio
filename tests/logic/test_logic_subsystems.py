@@ -336,10 +336,13 @@ def _contract_host():
 
     # The mover state properties are descriptors: their setters reach the mover
     # table and therefore require the backing lists to exist first.
+    # mover_states/door_states are properties over the dense MoverTable;
+    # seed the backing table rather than assigning the old dict interface.
+    from engine.mover_table import MoverTable
+    host._mover_table = MoverTable()
+
     host.movers = []
     host.doors = []
-    host.mover_states = {}
-    host.door_states = {}
 
     special = {"movers", "doors", "mover_states", "door_states"}
     for attribute in {
