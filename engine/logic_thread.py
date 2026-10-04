@@ -224,10 +224,6 @@ class LogicThread(threading.Thread):
             "player",
             "_portal_cooldowns",
             "_portal_prev_player_pos",
-            "_portal_things",
-            "_portal_target_things",
-            "_portal_slots",
-            "_portal_target_slots",
         ),
         "combat": (
             "player",
@@ -496,12 +492,8 @@ class LogicThread(threading.Thread):
         self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # editor_state.things changes. Avoids an O(n) rebuild every physics tick.
-        self._portal_things: List = []
-        self._portal_target_things: List = []
         # Portal slots use the same enumerate(editor_state.things) address space
         # as EntityTable. Links are resolved once when topology changes.
-        self._portal_slots = np.empty(0, dtype=np.int32)
-        self._portal_target_slots = np.empty(0, dtype=np.int32)
 
         self.level_complete_ui = None
 
