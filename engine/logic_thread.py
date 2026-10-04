@@ -196,7 +196,6 @@ class LogicThread(threading.Thread):
             "play_mode",
             "_world_pause_lock",
             "_world_pause_owners",
-            "_collision_brushes_cache",
             "_model_collision_brushes",
             "_physics_body_brushes",
             "_mover_brush_list",
