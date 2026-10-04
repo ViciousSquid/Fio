@@ -182,10 +182,13 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
     was probed on disk and logged each time (1194 lines in a short soak)."""
     pytest.importorskip("OpenGL")
     from engine import renderer_core
-    from engine.renderer_core import BaseRenderer
+    from tests.helpers.gl import GLTestContext, make_renderer, reset_texture_cache
 
-    renderer = BaseRenderer.__new__(BaseRenderer)
-    renderer.loaded_models = {}
+    reset_texture_cache()
+    with GLTestContext(64, 64):
+        renderer = make_renderer()
+        try:
+            renderer.loaded_models = {}
     probes = []
     real_exists = renderer_core.os.path.exists
     monkeypatch.setattr(renderer_core.os.path, "exists",
@@ -195,11 +198,14 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
     assert len(probes) <= 3, "%d filesystem probes for 50 frames" % len(probes)
     assert capsys.readouterr().out.count("Failed to load model") == 1
 
-    # ...but it is retried later, so a model added mid-session appears.
-    monkeypatch.setattr(renderer_core, "_MODEL_RETRY_S", 0.0)
-    probes.clear()
-    renderer.load_model("no_such_model.glb")
-    assert probes, "a failed model must be retried after the back-off"
+            # ...but it is retried later, so a model added mid-session appears.
+            monkeypatch.setattr(renderer_core, "_MODEL_RETRY_S", 0.0)
+            probes.clear()
+            renderer.load_model("no_such_model.glb")
+            assert probes, "a failed model must be retried after the back-off"
+        finally:
+            renderer.cleanup()
+            reset_texture_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -249,18 +255,18 @@ def test_a_visibility_only_change_reaches_both_tables_without_a_cold_resolve(mon
 # I/O across threads
 # ---------------------------------------------------------------------------
 
-def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick():
+def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick(logic):
     """The monster AI thread fires OnDeath/OnSeePlayer/OnAttack while the
     logic thread runs IOManager.update(), which rebuilds pending_events: a
     delayed event appended meanwhile was lost, and the source/activator
     context was shared between two chains. They are now delivered, in order,
     on the tick's thread at its next update()."""
     import threading
-    from types import SimpleNamespace
     from tests.logic.test_io_dispatch import Network
 
     net = Network()
-    net.manager.set_logic_thread(SimpleNamespace(session_runtime=SimpleNamespace(play_mode=True)))
+    logic.session_runtime.play_mode = True
+    net.manager.set_logic_thread(logic)
     net.add("monster")
     net.add("now")
     net.add("later")
@@ -284,13 +290,14 @@ def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick():
     assert set(ran_on) == {threading.get_ident()}
 
 
-def test_outputs_fired_in_the_editor_still_run_immediately():
+def test_outputs_fired_in_the_editor_still_run_immediately(logic):
     import threading
     from types import SimpleNamespace
     from tests.logic.test_io_dispatch import Network
 
     net = Network()
-    net.manager.set_logic_thread(SimpleNamespace(session_runtime=SimpleNamespace(play_mode=False)))
+    logic.session_runtime.play_mode = False
+    net.manager.set_logic_thread(logic)
     net.add("a")
     net.add("b")
     net.handler()
