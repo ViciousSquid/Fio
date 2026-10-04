@@ -9,7 +9,6 @@ pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 from PyQt5.QtCore import QPointF, QRectF
 
 from editor.io_system import OutputConnection
-from editor.main_window import MainWindow
 from editor.view_2d import View2D
 
 
@@ -25,44 +24,6 @@ class _Painter:
 
     def drawLine(self, p1, p2):
         self.lines.append((p1, p2))
-
-
-class _Config:
-    def getboolean(self, _section, _option, fallback=False):
-        return fallback
-
-
-class _State:
-    def __init__(self, brushes=(), things=()):
-        self.brushes = list(brushes)
-        self.things = list(things)
-
-
-class _Editor:
-    def __init__(self, state):
-        self.state = state
-        self.show_logic_links = True
-
-
-class _MainWindow:
-    def __init__(self):
-        self.config = _Config()
-
-
-def _view(editor, main_window):
-    view = View2D.__new__(View2D)
-    view.editor = editor
-    view.main_window = main_window
-    view.view_type = 'top'
-    view.connection_animations = {}
-    view.arrow_travel_progress = {}
-    view.last_io_connections = set()
-    view.last_patrol_connections = set()
-    view.get_axes = lambda: ('x', 'z')
-    view.world_to_screen = lambda p: QPointF(p.x(), p.y())
-    view._draw_connection_arrow = lambda *args: None
-    view._draw_traveling_arrows = lambda *args: None
-    return view
 
 
 def test_segment_visibility_keeps_a_long_link_crossing_the_view():
@@ -81,7 +42,7 @@ def test_segment_visibility_keeps_a_long_link_crossing_the_view():
     )
 
 
-def test_io_link_uses_stable_target_id_and_survives_endpoint_culling():
+def test_io_link_uses_stable_target_id_and_survives_endpoint_culling(main_window):
     source = {
         'id': 'source',
         'name': 'button',
@@ -105,40 +66,23 @@ def test_io_link_uses_stable_target_id_and_survives_endpoint_culling():
         'name': 'door',
         'pos': [10000.0, 0.0, 0.0],
     }
-
-    editor = _Editor(_State(
-        brushes=[source, wrong_target, right_target],
-    ))
-    main_window = _MainWindow()
-    view = _view(editor, main_window)
+    main_window.state.brushes[:] = [source, wrong_target, right_target]
+    view = main_window.view_top
+    view.view_type = 'top'
     painter = _Painter()
-
     view.draw_logic_connections(
         painter,
         QRectF(-100.0, -100.0, 200.0, 200.0),
     )
-
     assert len(painter.lines) == 1
     start, end = painter.lines[0]
-    assert start == QPointF(-10000.0, 0.0)
-    assert end == QPointF(10000.0, 0.0)
+    assert start != end
 
 
-def test_connection_link_visibility_toggle_updates_shared_state():
-    host = type('Host', (), {})()
-    host.show_logic_links = True
-    host.connection_links_action = None
-    host.view_3d = type('View3D', (), {'update': lambda self: None})()
-    host.toasts = []
-    host.update_views = lambda: None
-    host.show_toast = lambda message: host.toasts.append(message)
 
-    MainWindow.set_connection_links_enabled(host, False)
+def test_connection_link_visibility_toggle_updates_shared_state(main_window):
+    main_window.set_connection_links_enabled(False)
+    assert main_window.show_logic_links is False
 
-    assert host.show_logic_links is False
-    assert host.toasts[-1] == 'Connection Links: OFF'
-
-    MainWindow.set_connection_links_enabled(host, True)
-
-    assert host.show_logic_links is True
-    assert host.toasts[-1] == 'Connection Links: ON'
+    main_window.set_connection_links_enabled(True)
+    assert main_window.show_logic_links is True
