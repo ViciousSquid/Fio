@@ -586,7 +586,7 @@ def register_reference_input_handlers(io_manager):
             return
         entity["path_target"] = target
         entity["start_on"] = True
-        if idx not in logic.mover_path_states:
+        if idx not in logic.mover_runtime.mover_path_states:
             logic.mover_path_states[idx] = {
                 "current_node": target,
                 "lerp_t": 0.0,
@@ -671,8 +671,8 @@ class _Side:
             logic._name_cache = {}
             logic.io_manager = io
             logic.player = player
-            logic.movers = []
-            logic.doors = []
+            logic.mover_runtime.movers = []
+            logic.mover_runtime.doors = []
             logic.mover_path_states = {}
             logic.world_runtime = LogicWorld(logic, path_node_type=PathNode)
             logic.mover_runtime = LogicMovers(logic)
