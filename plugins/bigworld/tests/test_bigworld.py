@@ -590,12 +590,12 @@ def test_terrain_fill_opt_in_and_safe():
     # (d) the default-derived radius follows a live visual-horizon increase.
     terrain4 = FakeTerrain()
     logic4 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain4)
-    logic4.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0, "limit": None})()
+    logic4.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0, "limit": None})()
     s4 = BigWorldSession(logic4, activation_radius=2048.0, terrain_fill=True)
     s4.start()
     _check(terrain4.stream_radius == 2048.0,
            "default terrain radius starts at the effective activation radius")
-    logic4.view_distance.visual_horizon = 4096.0
+    logic4.render_runtime.view_distance.visual_horizon = 4096.0
     s4.tick()
     _check(terrain4.stream_radius == 4096.0,
            "default terrain radius grows with an increased visual horizon")
@@ -604,13 +604,13 @@ def test_terrain_fill_opt_in_and_safe():
     # (e) an explicitly authored radius remains authoritative across a horizon increase.
     terrain5 = FakeTerrain()
     logic5 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain5)
-    logic5.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
+    logic5.render_runtime.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0, "limit": None})()
     s5 = BigWorldSession(logic5, activation_radius=2048.0, terrain_fill=True,
                          terrain_stream_radius=5000.0)
     s5.start()
     _check(terrain5.stream_radius == 5000.0,
            "larger explicit terrain radius is preserved over the effective activation")
-    logic5.view_distance.visual_horizon = 8192.0
+    logic5.render_runtime.view_distance.visual_horizon = 8192.0
     s5.tick()
     _check(terrain5.stream_radius == 5000.0,
            "explicit terrain radius remains fixed after another horizon increase")
