@@ -586,7 +586,7 @@ def register_reference_input_handlers(io_manager):
             return
         entity["path_target"] = target
         entity["start_on"] = True
-        if idx not in logic.mover_runtime.mover_path_states:
+        if idx not in logic.mover_path_states:
             logic.mover_path_states[idx] = {
                 "current_node": target,
                 "lerp_t": 0.0,
