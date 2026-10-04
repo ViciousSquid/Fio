@@ -584,16 +584,6 @@ class LogicThread(threading.Thread):
                 + ", ".join(missing)
             )
 
-    @property
-    def brushes(self):
-        """Dynamically get current brushes from editor state."""
-        return self.editor_state.brushes
-    
-    @property
-    def things(self):
-        """Dynamically get current things from editor state."""
-        return self.editor_state.things
-
     # =========================================================================
     # PLUGIN EVENTS
     # =========================================================================
