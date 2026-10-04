@@ -238,6 +238,9 @@ def test_cutscene_open_discovers_the_current_maps_logic_camera(tmp_path):
     )
     loaded = []
     wizard._load_cutscene = loaded.append
+    wizard._current_map_cutscene_files = CutsceneWizard._current_map_cutscene_files.__get__(
+        wizard, type(wizard)
+    )
 
     CutsceneWizard._load_current_map_cutscene(wizard)
 
