@@ -12,6 +12,7 @@ the view-distance horizon stand exactly as before.
 """
 
 import math
+from types import SimpleNamespace
 
 from engine.spatial import TIER_ACTIVE, TIER_NEAR, tier_of
 from engine.view_distance import ViewDistance
@@ -42,7 +43,7 @@ class OverheadLogic:
 
     def __init__(self, things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
         self.editor_state = type('State', (), {'things': things, 'brushes': []})()
-        self.player = FakePlayer(*at)
+        self.player_runtime = SimpleNamespace(player=FakePlayer(*at))
         self.render_runtime = type('RenderRuntimeFixture', (), {'view_distance': ViewDistance()})()
         self.footprint = footprint
         self.camera = _CameraFixture(self)
@@ -88,7 +89,7 @@ def test_tiers_follow_the_player_between_cell_crossings():
     logic, session = fitted_session(grid_world(cells_each_way=8), footprint=(600.0, 400.0))
     before = session._tier_pos
     # Inside the same 512 cell, but past the re-tier step.
-    logic.player.pos[0] += session.FIT_RETIER + 10.0
+    logic.player_runtime.player.pos[0] += session.FIT_RETIER + 10.0
     session.tick()
     assert session._tier_pos != before
 
@@ -104,7 +105,7 @@ def _authored(session, logic):
 def test_a_first_person_camera_keeps_the_authored_radii():
     logic, session = fitted_session(grid_world(), footprint=None)
     _authored(session, logic)
-    logic.player.pos[0] += 300.0
+    logic.player_runtime.player.pos[0] += 300.0
     session.tick()
     _authored(session, logic)
 
