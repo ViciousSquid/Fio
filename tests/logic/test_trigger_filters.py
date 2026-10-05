@@ -11,6 +11,8 @@ from engine.logic_triggers import LogicTriggers, _trigger_activation
 from engine.logic_world import LogicWorld
 from engine.prop_runtime import PropSession
 
+pytestmark = pytest.mark.qt
+
 
 def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
            poll_interval=None):
