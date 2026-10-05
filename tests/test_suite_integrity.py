@@ -349,7 +349,7 @@ def test_machinery_tests_do_not_construct_production_owners_by_bypassing_init():
                 if not isinstance(node, ast.Call):
                     continue
                 func_name = _dotted_name(node.func)
-                if not (func_name == "__new__" or func_name.endswith(".__new__")):
+                if not (func_name == "__new__" or (func_name is not None and func_name.endswith(".__new__"))):
                     continue
                 if not node.args:
                     continue
@@ -377,7 +377,7 @@ def test_machinery_tests_do_not_patch_production_owner_classes():
                 if not isinstance(node, ast.Call) or not node.args:
                     continue
                 func_name = _dotted_name(node.func)
-                if func_name not in patch_names and not func_name.endswith(".patch.object"):
+                if func_name not in patch_names and not (func_name is not None and func_name.endswith(".patch.object")):
                     continue
                 target = _dotted_name(node.args[0])
                 if target in PRODUCTION_OWNER_NAMES:
