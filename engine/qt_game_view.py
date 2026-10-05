@@ -2048,7 +2048,10 @@ class QtGameView(QOpenGLWidget):
         if active_weapon and not overhead:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
-                target_h = int(200 * viewport_height / 600.0)
+                # Wine is a left-hand HUD item rather than a conventional
+                # right-aligned weapon, and is intentionally a little larger.
+                target_h = int((220 if active_weapon == 'wine' else 200) *
+                               viewport_height / 600.0)
                 cache_key = (active_weapon, target_h)
                 scaled = self._cached_gun_hud.get(cache_key)
                 if scaled is None or scaled.isNull():
@@ -2062,6 +2065,9 @@ class QtGameView(QOpenGLWidget):
                     self._cached_gun_hud[cache_key] = scaled
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
+                    y = viewport_height - scaled.height()
+                elif active_weapon == 'wine':
+                    x = 20
                     y = viewport_height - scaled.height()
                 else:
                     x = viewport_width - scaled.width() - 20
