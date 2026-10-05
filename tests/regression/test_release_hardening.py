@@ -190,14 +190,19 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
         renderer = make_renderer()
         try:
             renderer.loaded_models = {}
-    probes = []
-    real_exists = renderer_core.os.path.exists
-    monkeypatch.setattr(renderer_core.os.path, "exists",
-                        lambda p: probes.append(p) or real_exists(p))
-    for _ in range(50):
-        assert renderer.load_model("no_such_model.glb") is None
-    assert len(probes) <= 3, "%d filesystem probes for 50 frames" % len(probes)
-    assert capsys.readouterr().out.count("Failed to load model") == 1
+            probes = []
+            real_exists = renderer_core.os.path.exists
+            monkeypatch.setattr(
+                renderer_core.os.path,
+                "exists",
+                lambda p: probes.append(p) or real_exists(p),
+            )
+            for _ in range(50):
+                assert renderer.load_model("no_such_model.glb") is None
+            assert len(probes) <= 3, (
+                "%d filesystem probes for 50 frames" % len(probes)
+            )
+            assert capsys.readouterr().out.count("Failed to load model") == 1
 
             # ...but it is retried later, so a model added mid-session appears.
             monkeypatch.setattr(renderer_core, "_MODEL_RETRY_S", 0.0)
