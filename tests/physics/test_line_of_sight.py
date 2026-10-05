@@ -36,6 +36,8 @@ import glm                                                   # noqa: E402
 from engine.physics import SpatialGrid                       # noqa: E402
 from tests.helpers.worlds import box_brush                   # noqa: E402
 
+pytestmark = pytest.mark.qt
+
 
 def _world(brushes):
     grid = SpatialGrid()
