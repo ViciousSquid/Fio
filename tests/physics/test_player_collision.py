@@ -47,7 +47,8 @@ def run(player, brushes, steps=1, move=(0.0, 0.0), dt=1.0 / 60.0,
         spatial.populate(brushes)
     move_dir = glm.vec3(move[0], 0.0, move[1])
     for _ in range(steps):
-        player.update(dt, move_dir, jump, False, brushes, spatial_grid=spatial)
+        player.update(dt, move_dir, jump, False, brushes,
+                      spatial_grid=spatial, sprint=sprint)
     return player
 
 
@@ -227,6 +228,24 @@ def _movement_fixture():
     run(player, [floor], steps=60)
     assert player.on_ground
     return player, [floor]
+
+
+def test_held_sprint_raises_ground_speed_and_releases_cleanly():
+    player, world = _movement_fixture()
+
+    run(player, world, steps=60, move=(0.0, 1.0))
+    normal_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert normal_speed > player.speed * 0.9
+
+    run(player, world, steps=60, move=(0.0, 1.0), sprint=True)
+    sprint_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert sprint_speed > normal_speed * 1.4
+    assert sprint_speed <= player.speed * 1.5 + 1.0
+
+    run(player, world, steps=60, move=(0.0, 1.0), sprint=False)
+    released_speed = math.hypot(float(player.velocity.x), float(player.velocity.z))
+    assert released_speed < sprint_speed
+    assert released_speed > player.speed * 0.9
 
 
 def test_ground_movement_accelerates_instead_of_snapping_to_speed():
