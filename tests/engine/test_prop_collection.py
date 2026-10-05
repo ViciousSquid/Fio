@@ -154,7 +154,7 @@ def test_collect_prop_equips_custom1_weapon():
     assert logic.combat_runtime.active_weapon == "custom1"
 
 
-def test_custom1arette_is_a_non_firing_weapon():
+def test_custom_weapons_are_non_firing():
     from engine.monster_constants import NON_FIRING_WEAPONS
 
     assert "custom1" in NON_FIRING_WEAPONS
