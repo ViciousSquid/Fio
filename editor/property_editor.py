@@ -2896,6 +2896,7 @@ class PropertyEditor(QWidget):
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
             'cig': 'Cigarette',
+            'wine': 'Wine',
         }
         weapon_combo = _make_combo(
             [weapon_labels.get(v, v.title()) for v in weapon_values],
