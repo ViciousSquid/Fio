@@ -26,11 +26,11 @@ RENDER_MODE_WIREFRAME = 2  # Wireframe lines
 RENDER_MODE_VERTEX = 3     # Points
 
 # --- Physics Constants ---
-GRAVITY = -500.0
-JUMP_STRENGTH = 180.0
-TERMINAL_VELOCITY = -500.0
+GRAVITY = -800.0
+JUMP_STRENGTH = 355.0
+TERMINAL_VELOCITY = -800.0
 
-# Quake III-style player movement. These values are kept in Fio's world-unit
+# Quake-style player movement. These values are kept in Fio's world-unit
 # scale; the important part is the projected acceleration/friction model.
 PM_STOPSPEED = 100.0
 PM_ACCELERATE = 10.0
