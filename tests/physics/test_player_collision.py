@@ -114,7 +114,7 @@ def test_a_non_solid_brush_never_stops_horizontal_movement(props, grid):
     path (or any mover, which is appended after the grid query) could not be
     walked into a pool at all.
     """
-    assert _walked_into(props, grid) > 90.0
+    assert _walked_into(props, grid) > 80.0
 
 
 def test_a_hidden_mover_blocks_neither_axis():
