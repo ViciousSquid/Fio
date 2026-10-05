@@ -2469,7 +2469,7 @@ class QtGameView(QOpenGLWidget):
             'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'cig']:
+        for weapon in ['gun1', 'gun2', 'cig', 'wine']
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
@@ -3322,7 +3322,7 @@ class QtGameView(QOpenGLWidget):
             active_weapon = published('active_weapon')
             if active_weapon:
                 from engine.monster_constants import NON_FIRING_WEAPONS
-                # Non-firing weapons (e.g. cig) are display-only. For firing
+                # Non-firing weapons (e.g. cig, wine) are display-only. For firing
                 # weapons, the published shot_ready flag prevents clicks from
                 # piling up while gun2 is cooling down or out of ammo.
                 if (
