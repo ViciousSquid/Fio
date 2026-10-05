@@ -2048,7 +2048,7 @@ class QtGameView(QOpenGLWidget):
         if active_weapon and not overhead:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
-                # Wine is a left-hand HUD item rather than a conventional
+                # Custom 2 is a left-hand HUD item rather than a conventional
                 # right-aligned weapon, and is intentionally a little larger.
                 target_h = int((220 if active_weapon == 'custom2' else 200) *
                                viewport_height / 600.0)
