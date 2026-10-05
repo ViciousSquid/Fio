@@ -3127,7 +3127,7 @@ class PropertyEditor(QWidget):
         weapon_label = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'custom1': 'Cigarette',
+            'custom1': 'Custom 1',
         }.get(weapon, 'Gun 1')
         self._prop_weapon_combo.blockSignals(True)
         self._prop_weapon_combo.setCurrentText(weapon_label)
