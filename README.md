@@ -19,10 +19,10 @@ Designed on low-power ARM hardware with an efficiency-first philosophy.
 * **The world is executable** — entities, state, spatial relationships and gameplay logic are part of the live world.
 * **Classic brush/CSG editing** with arbitrary convex polyhedra.
 * **Entity I/O gameplay** inspired by Source, providing a composable alternative to traditional scripting.
-* **LogicState** — persistent, typed state attached directly to world objects.
+* **LogicState**: persistent, typed state attached directly to world objects.
 * **Large-world simulation** with spatial residency and distance-aware simulation
 * **Dense numerical processing** using NumPy for bulk spatial, transformation and simulation operations.
-* **Native world portals** — non-Euclidean connections between arbitrary locations without BSP/VIS preprocessing.
+* **Native world portals**: non-Euclidean connections between arbitrary locations without BSP/VIS preprocessing.
 * **Procedural world generation** and experimental map-generation tools.
 * **Continuous camera system** with first-person and top-down modes.
 * **Physics, movers, triggers, timers, logic gates and pathfinding** as native world systems.
