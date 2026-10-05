@@ -25,16 +25,23 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
-      - name: Install display and software-GL runtime
+      - name: Verify CPython 3.14+ GIL-enabled baseline
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
-      - name: Install dependencies
+          python - <<'PY'
+          import sys
+          import sysconfig
+
+          assert sys.implementation.name == "cpython"
+          assert sys.version_info[:2] >= (3, 14)
+          assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
+          assert sys._is_gil_enabled()
+          print(sys.version)
+          PY
+      - name: Install headless runtime baseline
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
-          python -m pip install -r requirements.txt
-      - name: Verify pinned dependency baseline
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8"
+      - name: Verify headless dependency versions
         run: |
           python - <<'PY'
           import numpy
@@ -47,9 +54,8 @@ jobs:
           PY
       - name: Run fast core tests that do not need Qt or a GPU
         env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+          FIO_HEADLESS_TIER: '1'
+        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
 
   slow_no_gpu:
     name: Qt / no-GPU suite (manual)
