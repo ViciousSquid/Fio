@@ -528,7 +528,15 @@ def test_terrain_fill_expands_and_restores():
     zs = [c[1] for c in mgr.cells]
     exp = (min(xs) * mgr.cell_size, min(zs) * mgr.cell_size,
            (max(xs) + 1) * mgr.cell_size, (max(zs) + 1) * mgr.cell_size)
-    _check((terrain.min_chunk_x * mgr.cell_size, terrain.min_chunk_z * mgr.cell_size,
+    _check(
+        (
+            terrain.min_chunk_x * mgr.cell_size,
+            terrain.min_chunk_z * mgr.cell_size,
+            (terrain.max_chunk_x + 1) * mgr.cell_size,
+            (terrain.max_chunk_z + 1) * mgr.cell_size,
+        ) == exp,
+        "terrain bounds enclose the streamed brush field",
+    )
     _check(terrain._pending_prune is True,
            "bounds prune deferred to the render thread (no GL off-thread)")
     _check(terrain.stream_radius == 2048.0,
