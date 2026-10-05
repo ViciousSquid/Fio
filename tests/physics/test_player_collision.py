@@ -38,7 +38,7 @@ def player_at(x=0.0, y=0.0, z=0.0):
 
 
 def run(player, brushes, steps=1, move=(0.0, 0.0), dt=1.0 / 60.0,
-        jump=False, grid=False):
+        jump=False, grid=False, sprint=False):
     """Drive real ``Player.update`` frames, with or without a spatial grid."""
     import glm
     spatial = None
