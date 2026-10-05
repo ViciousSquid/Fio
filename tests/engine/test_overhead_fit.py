@@ -125,7 +125,10 @@ def _ai(bigworld, overhead):
             session.tiers.set_near_rect(RECT)
         services["bigworld"] = session
     ai = logic.monster_ai
-    return ai, logicdef _run(ai, monsters, ticks, dt=TICK, move=None):
+    return ai, logic
+
+
+def _run(ai, monsters, ticks, dt=TICK, move=None):
     """Drive the throttle; return each monster's [delta, ...] runs."""
     runs = [[] for _ in monsters]
     for tick in range(ticks):
