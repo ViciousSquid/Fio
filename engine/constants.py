@@ -37,6 +37,7 @@ PM_ACCELERATE = 10.0
 PM_AIRACCELERATE = 1.0
 PM_FRICTION = 6.0
 PM_CROUCH_SCALE = 0.25
+PM_SPRINT_SCALE = 1.5
 
 # --- Water Physics Constants ---
 WATER_SWIM_SPEED_MULT = 0.55    # Horizontal swim speed as a fraction of run speed
