@@ -2469,7 +2469,7 @@ class QtGameView(QOpenGLWidget):
             'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'cig', 'wine']
+        for weapon in ['gun1', 'gun2', 'cig', 'wine']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
