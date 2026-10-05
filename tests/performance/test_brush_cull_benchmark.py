@@ -24,7 +24,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
-from engine.editor_state import EditorState
+from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread                    # noqa: E402
 from engine.threaded_game_state import ThreadedGameState        # noqa: E402
 from engine.render_table import RenderTable              # noqa: E402
