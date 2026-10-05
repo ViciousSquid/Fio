@@ -16,7 +16,7 @@ concurrency:
 # Each tier is independent so a graphical failure cannot hide a core failure.
 jobs:
   no_gpu:
-    name: No-GPU fast suite (Qt offscreen)
+    name: No-GPU fast suite (Qt + software GL)
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -25,6 +25,10 @@ jobs:
         with:
           python-version: '3.14'
           cache: pip
+      - name: Install display and software-GL runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -43,9 +47,9 @@ jobs:
           PY
       - name: Run all fast tests that do not need a GPU
         env:
-          QT_QPA_PLATFORM: offscreen
           LIBGL_ALWAYS_SOFTWARE: '1'
-        run: python -m pytest -m "not gl and not benchmark and not slow" -q
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a python -m pytest -m "not gl and not benchmark and not slow" -q
 
   slow_no_gpu:
     name: No-GPU slow suite (manual)
@@ -65,9 +69,9 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run all slow tests that do not need a GPU
         env:
-          QT_QPA_PLATFORM: offscreen
           LIBGL_ALWAYS_SOFTWARE: '1'
-        run: python -m pytest -m "not gl and not benchmark and slow" -q
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a python -m pytest -m "not gl and not benchmark and slow" -q
 
   opengl:
     name: Renderer (OpenGL, software rasteriser)
