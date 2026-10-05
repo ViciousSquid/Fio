@@ -278,7 +278,10 @@ class Player:
         if swimming:
             self._apply_swim_physics(delta, move_input, right_vec, jump, crouch)
         else:
-            target_speed = self.speed * (PM_CROUCH_SCALE if crouch else 1.0)
+            speed_scale = PM_CROUCH_SCALE if crouch else (
+                PM_SPRINT_SCALE if sprint else 1.0
+            )
+            target_speed = self.speed * speed_scale
             if self.in_water:
                 target_speed *= WATER_WADE_SPEED_MULT
 
