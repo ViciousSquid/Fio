@@ -63,7 +63,6 @@ def _draw(renderer, context, brushes, things):
         eye,
         None,
         None,
-        None,
         config,
         clear=False,
         brush_slots=config["all_brush_slots"],
