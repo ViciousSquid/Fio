@@ -2891,12 +2891,12 @@ class PropertyEditor(QWidget):
         type_row = form.rowCount()
         form.addRow("Collect as:", type_combo)
 
-        weapon_values = tuple(Prop.GUN_NAMES)
+        weapon_values = ('gun1', 'gun2', 'custom1', 'custom2')
         weapon_labels = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'cig': 'Cigarette',
-            'wine': 'Wine',
+            'custom1': 'Custom 1',
+            'custom2': 'Custom 2',
         }
         weapon_combo = _make_combo(
             [weapon_labels.get(v, v.title()) for v in weapon_values],
@@ -3127,7 +3127,7 @@ class PropertyEditor(QWidget):
         weapon_label = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'cig': 'Cigarette',
+            'custom1': 'Cigarette',
         }.get(weapon, 'Gun 1')
         self._prop_weapon_combo.blockSignals(True)
         self._prop_weapon_combo.setCurrentText(weapon_label)
