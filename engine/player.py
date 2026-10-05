@@ -3,6 +3,7 @@ import glm
 from .constants import (
     TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY,
     PM_STOPSPEED, PM_ACCELERATE, PM_AIRACCELERATE, PM_FRICTION, PM_CROUCH_SCALE,
+    PM_SPRINT_SCALE,
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
@@ -198,7 +199,8 @@ class Player:
         )
         return glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
 
-    def update(self, delta, move_input, jump, crouch, brushes, movers=None, doors=None, terrain=None, spatial_grid=None):
+    def update(self, delta, move_input, jump, crouch, brushes, movers=None, doors=None, terrain=None,
+           spatial_grid=None, sprint=False):
         """
         Update player physics.
 
@@ -262,7 +264,10 @@ class Player:
         # Preserve the existing kinematic/no-physics path.
         if not self.physics_enabled:
             self._jump_held = bool(jump)
-            target_speed = self.speed * (PM_CROUCH_SCALE if crouch else 1.0)
+            speed_scale = PM_CROUCH_SCALE if crouch else (
+                PM_SPRINT_SCALE if sprint else 1.0
+            )
+            target_speed = self.speed * speed_scale
             if self.in_water:
                 target_speed *= WATER_WADE_SPEED_MULT
             self.velocity.x = wish_dir.x * target_speed
