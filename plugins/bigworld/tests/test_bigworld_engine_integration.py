@@ -26,6 +26,8 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+pytestmark = pytest.mark.qt
+
 # NB: this module deliberately does *not* set QT_QPA_PLATFORM for the whole
 # session - that would pick the platform plugin for every other test too,
 # and the offscreen plugin cannot create an OpenGL context, which silently
