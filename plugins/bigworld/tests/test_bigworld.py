@@ -639,8 +639,10 @@ def test_terrain_infinite_streams_forever():
     session.start()
     _check(terrain.streaming is True, "streaming on for infinite terrain")
     h = BigWorldSession.INFINITE_HALF_EXTENT
-           "terrain sized to the huge origin-centred extent")
-           "terrain sized to the huge origin-centred extent")
+    _check(
+        terrain.extent_calls and terrain.extent_calls[0] == (-h, -h, h, h),
+        "terrain sized to the huge origin-centred extent",
+    )
     # Bounds dwarf the tiny content bounding box → no edge to walk off.
     _check(terrain.min_chunk_x < -10000 and terrain.max_chunk_x > 10000,
            "chunk bounds span far beyond the content")
