@@ -17,6 +17,8 @@ Plain Python throughout, like the rest of the plugin's bookkeeping.
 
 import os
 import sys
+
+import pytest
 pytest.importorskip("PyQt5", reason="Big World membership tests exercise the real LogicThread owner")
 
 from editor.editor_state import EditorState
