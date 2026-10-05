@@ -1834,11 +1834,11 @@ entity to drive them from the I/O system.</i><br>
 
         if spawn_type == "prop":
             if len(parts) < 2:
-                debug_log("Error", "Usage: spawn prop <health|ammo|gun1|key> [value]")
+                debug_log("Error", "Usage: spawn prop <health|ammo|gun1|gun2|custom1|custom2|key> [value]")
                 return
             item = parts[1]
             value = parts[2] if len(parts) > 2 else "25"
-            collect_type = "weapon" if item in ("gun1", "gun2", "cig", "wine") else item
+            collect_type = "weapon" if item in ("gun1", "gun2", "custom1", "custom2") else item
 
             new_prop = Prop(pos=[0, 0, 0])
             new_prop.properties['carry_enabled'] = False
