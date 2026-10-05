@@ -57,6 +57,7 @@ def test_an_absolute_path_is_refused(main_window, project, tmp_path):
     assert window.file_path == old
 
 
+@pytest.mark.slow
 def test_a_saved_game_names_its_map_by_basename_in_maps_only(main_window, project, tmp_path):
     """The save's ``map`` field is data from a shareable file, not a path."""
     import json
