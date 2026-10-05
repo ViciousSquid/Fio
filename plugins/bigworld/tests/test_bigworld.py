@@ -561,7 +561,11 @@ def test_terrain_fill_opt_in_and_safe():
     logic = make_logic(brushes, [], terrain=terrain)
     s = BigWorldSession(logic, terrain_fill=False)
     s.start()
-    _check(terrain.streaming is False and (terrain.min_chunk_x, terrain.max_chunk_x,
+    _check(
+        terrain.streaming is False
+        and (terrain.min_chunk_x, terrain.max_chunk_x) == (-2, 2),
+        "terrain_fill=False leaves terrain bounds and streaming untouched",
+    )
     s.stop()
 
     # (b) terrain_fill on but no terrain present ⇒ no crash, no-op.
