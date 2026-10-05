@@ -2050,7 +2050,7 @@ class QtGameView(QOpenGLWidget):
             if hud_pixmap and not hud_pixmap.isNull():
                 # Wine is a left-hand HUD item rather than a conventional
                 # right-aligned weapon, and is intentionally a little larger.
-                target_h = int((220 if active_weapon == 'wine' else 200) *
+                target_h = int((220 if active_weapon == 'custom2' else 200) *
                                viewport_height / 600.0)
                 cache_key = (active_weapon, target_h)
                 scaled = self._cached_gun_hud.get(cache_key)
@@ -2066,7 +2066,7 @@ class QtGameView(QOpenGLWidget):
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
                     y = viewport_height - scaled.height()
-                elif active_weapon == 'wine':
+                elif active_weapon == 'custom2':
                     x = 20
                     y = viewport_height - scaled.height()
                 else:
@@ -2475,7 +2475,7 @@ class QtGameView(QOpenGLWidget):
             'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'cig', 'wine']:
+        for weapon in ['gun1', 'gun2', 'custom1', 'custom2']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
@@ -3328,7 +3328,7 @@ class QtGameView(QOpenGLWidget):
             active_weapon = published('active_weapon')
             if active_weapon:
                 from engine.monster_constants import NON_FIRING_WEAPONS
-                # Non-firing weapons (e.g. cig, wine) are display-only. For firing
+                # Non-firing weapons (e.g. custom1, custom2) are display-only. For firing
                 # weapons, the published shot_ready flag prevents clicks from
                 # piling up while gun2 is cooling down or out of ammo.
                 if (
