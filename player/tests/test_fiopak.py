@@ -29,7 +29,7 @@ def _archive_with_declared_sizes(sizes):
     raw = bytearray(buf.getvalue())
     pos = 0
     while True:
-        pos = raw.find(b"PK\\x01\\x02", pos)
+        pos = raw.find(b"PK\x01\x02", pos)
         if pos < 0:
             break
         filename_len, extra_len, comment_len = struct.unpack_from(
