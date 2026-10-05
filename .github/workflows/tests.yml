@@ -7,6 +7,12 @@ on:
   workflow_dispatch:
   workflow_call:
 
+# Keep CI focused on the latest commit for a branch. Rapid hardening/release
+# work should not leave a queue of obsolete test runs behind it.
+concurrency:
+  group: fio-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 # Each tier is independent so a graphical failure cannot hide a core failure.
 jobs:
   headless:
