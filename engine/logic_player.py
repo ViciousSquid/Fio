@@ -17,6 +17,8 @@ KEY_A = 0x41
 KEY_D = 0x44
 KEY_SPACE = 0x20
 KEY_C = 0x43
+# Qt::Key_Shift; kept numeric so the engine remains Qt-free.
+KEY_SHIFT = 0x01000020
 
 _WATER_LOUDNESS = 0.7
 
@@ -69,6 +71,7 @@ class LogicPlayer:
 
         jump = KEY_SPACE in keys
         crouch = KEY_C in keys
+        sprint = KEY_SHIFT in keys
 
         player.update(
             delta,
@@ -80,6 +83,7 @@ class LogicPlayer:
             logic.mover_runtime._door_brush_list,
             logic.world_runtime.terrain,
             spatial_grid=logic.session_runtime.spatial_grid,
+            sprint=sprint,
         )
 
     def update_player2(self, delta):
