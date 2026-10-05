@@ -13,6 +13,8 @@ the view-distance horizon stand exactly as before.
 
 import math
 
+import pytest
+
 from engine.spatial import TIER_ACTIVE, TIER_NEAR, tier_of
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld.tiers import TierClassifier
