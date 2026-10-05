@@ -35,10 +35,10 @@ DEFAULT_KEY_NAME = 'blue_key'
 GUN_SPRITES = {
     'gun1': 'assets/sprites/gun1.png',
     'gun2': 'assets/sprites/gun2.png',
-    'cig': 'assets/sprites/cig.png',
-    'wine': 'assets/sprites/wine.png',
+    'custom1': 'assets/sprites/custom1.png',
+    'custom2': 'assets/sprites/custom2.png',
 }
-GUN_NAMES = tuple(GUN_SPRITES)
+GUN_NAMES = ('gun1', 'gun2', 'custom1', 'custom2')
 
 COLLECT_TYPES = ('health', 'ammo', 'weapon', 'key')
 
