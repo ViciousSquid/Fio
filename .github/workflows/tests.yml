@@ -16,7 +16,7 @@ concurrency:
 # Each tier is independent so a graphical failure cannot hide a core failure.
 jobs:
   no_gpu:
-    name: No-GPU fast suite (Qt + software GL)
+    name: No-GPU fast core (no Qt)
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -45,14 +45,14 @@ jobs:
           print("NumPy:", numpy.__version__)
           print("pygame-ce:", pygame.version.ver)
           PY
-      - name: Run all fast tests that do not need a GPU
+      - name: Run fast core tests that do not need Qt or a GPU
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a python -m pytest -m "not gl and not benchmark and not slow" -q
+        run: xvfb-run -a python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
 
   slow_no_gpu:
-    name: No-GPU slow suite (manual)
+    name: Qt / no-GPU suite (manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -67,11 +67,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest
           python -m pip install -r requirements.txt
-      - name: Run all slow tests that do not need a GPU
+      - name: Run the complete Qt suite without a GPU
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a python -m pytest -m "not gl and not benchmark and slow" -q
+        run: xvfb-run -a python -m pytest -m "qt and not gl and not benchmark" -q
 
   opengl:
     name: Renderer (OpenGL, software rasteriser)
