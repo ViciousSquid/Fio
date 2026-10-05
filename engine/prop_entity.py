@@ -36,6 +36,7 @@ GUN_SPRITES = {
     'gun1': 'assets/sprites/gun1.png',
     'gun2': 'assets/sprites/gun2.png',
     'cig': 'assets/sprites/cig.png',
+    'wine': 'assets/sprites/wine.png',
 }
 GUN_NAMES = tuple(GUN_SPRITES)
 
