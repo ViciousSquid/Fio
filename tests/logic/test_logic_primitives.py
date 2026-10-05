@@ -19,7 +19,7 @@ from editor import io_system as io                       # noqa: E402
 from editor.editor_state import EditorState               # noqa: E402
 from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
-from editor.things import LogicGate, LogicRelay, LogicTimer  # noqa: E402
+from editor.things import LogicGate, LogicRelay, LogicState, LogicTimer  # noqa: E402
 from tests.helpers.worlds import box_brush                # noqa: E402
 from engine.logic_thread import LogicThread                 # noqa: E402
 from engine.threaded_game_state import ThreadedGameState   # noqa: E402
@@ -199,6 +199,49 @@ def test_a_relay_passes_its_parameter_through(world):
     world.to_sink(relay)
     world.send(relay, "Trigger", "payload")
     assert world.log == [("sink", "payload")]
+
+
+def test_ten_real_entities_forward_a_signal_to_the_end(world):
+    """Ten real Things form a production I/O chain and the last entity detects it.
+
+    There are no recording stubs in the chain: nine LogicRelay instances use
+    the shipped relay input/output handlers, and the tenth entity is a real
+    LogicState whose SetValue input records the payload. The initial Trigger is
+    dispatched through the real IOManager, so every intermediate hop is actual
+    entity logic.
+    """
+    LogicState._persistent_registry.pop("ten_entity_signal", None)
+
+    chain = [
+        world.add(LogicRelay(
+            pos=[float(i * 64), 0, 0],
+            properties={"name": "signal_relay_%d" % i},
+        ))
+        for i in range(9)
+    ]
+    detector = world.add(LogicState(
+        pos=[576, 0, 0],
+        properties={
+            "name": "signal_detector",
+            "store_name": "ten_entity_signal",
+        },
+    ))
+    chain.append(detector)
+
+    assert len(world.editor_state.things) == 10
+
+    for source, target in zip(chain, chain[1:]):
+        world.connect(
+            source,
+            "OnTrigger",
+            target,
+            "SetValue" if target is detector else "Trigger",
+        )
+
+    world.send(chain[0], "Trigger", "signal=arrived")
+
+    assert detector.get_value("signal") == "arrived"
+    LogicState._persistent_registry.pop("ten_entity_signal", None)
 
 
 def test_cancelpending_drops_a_relays_delayed_events(world):
