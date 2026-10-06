@@ -1005,9 +1005,14 @@ class QtGameView(QOpenGLWidget):
                     self.renderer.load_texture(os.path.join('terrain', f), 'textures')
 
     def _handle_logic_tick_fault(self, message):
-        """Run fatal-tick play teardown on QtGameView's GUI thread."""
+        """Run fatal-tick play teardown on QtGameView's GUI thread.
+
+        Through the editor's own Stop path, not just this view's toggle: Stop
+        also puts back the world captured at Play (when the editor is set to)
+        and returns the editor's mode label, tabs and Play button.
+        """
         if self.play_mode:
-            self.toggle_play_mode(None, None)
+            self.editor._exit_play_mode()
         if message:
             self._play_mode_hint = "Logic tick failed; Play Mode stopped"
 
