@@ -25,6 +25,11 @@ pytestmark = pytest.mark.qt
 
 
 LEVEL = {"version": 3, "brushes": [], "things": []}
+#: A level Play can restart on: it has a PlayerStart.
+PLAYABLE_LEVEL = {"version": 3, "brushes": [], "things": [
+    {"type": "playerstart", "pos": [0.0, 40.0, 0.0],
+     "properties": {"type": "playerstart", "name": "PlayerStart_1", "angle": 0.0}},
+]}
 
 
 def test_a_generated_map_opens_untitled_and_unsaved(main_window):
@@ -155,7 +160,7 @@ def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_
     """Ending play dropped the weapon and starting it again on the next map
     cleared it, so a LevelChanger always sent the player on unarmed."""
     path = tmp_path / "next.json"
-    path.write_text(json.dumps(LEVEL))
+    path.write_text(json.dumps(PLAYABLE_LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun2"
     playing_logic.combat_runtime.gun2_obtained = True
     playing_logic.combat_runtime.player_ammo = 5
@@ -169,7 +174,7 @@ def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_
 
 def test_only_the_weapons_come_along(main_window, tmp_path, playing_logic):
     path = tmp_path / "next.json"
-    path.write_text(json.dumps(LEVEL))
+    path.write_text(json.dumps(PLAYABLE_LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun1"
     playing_logic.player_runtime.collected_keys.add("blue_key")
     playing_logic.player_runtime.player_health = 40

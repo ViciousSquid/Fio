@@ -37,9 +37,31 @@ def make_box(pos=(0, 0, 0), size=(512, 128, 64)):
     }
 
 
+def _record_toasts(host):
+    """Keep the text of every toast the real window shows, on ``host.toasts``."""
+    host.toasts = []
+    real = host.show_toast
+
+    def show_toast(message, *args, **kwargs):
+        host.toasts.append(str(message))
+        return real(message, *args, **kwargs)
+
+    host.show_toast = show_toast
+    return host
+
+
+def _select_shipped_texture(host):
+    """Select a texture that ships in assets/textures; return its file name."""
+    tab = host.asset_browser.tab_textures
+    host.asset_browser.tabs.setCurrentWidget(tab)
+    item = next(i for i in tab.items if i.file_path.lower().endswith('.png'))
+    tab.select_item(item)
+    return os.path.basename(item.file_path)
+
+
 @pytest.fixture
 def inspector(main_window):
-    host = main_window
+    host = _record_toasts(main_window)
     brush = make_box()
     host.state.brushes.append(brush)
     host.set_selected_objects([brush])
@@ -302,17 +324,16 @@ def test_match_grid_snaps_the_rotation_to_its_own_step(inspector):
 
 def test_applying_the_browser_texture(inspector):
     host, panel, brush = inspector
-    tab = host.asset_browser.tab_textures
-    host.asset_browser.tabs.setCurrentWidget(tab)
-    item = next(i for i in tab.items if os.path.basename(i.file_path) == 'brick.png')
-    tab.select_item(item)
+    name = _select_shipped_texture(host)
     panel._apply_selected_texture()
-    assert ft.get_transform(brush, 'north')['texture'] == 'brick.png'
+    assert ft.get_transform(brush, 'north')['texture'] == name
 
 
 def test_applying_with_no_texture_selected_says_so(inspector):
     host, panel, brush = inspector
-    host.asset_browser.path = None
+    for tab in (host.asset_browser.tab_textures,):
+        tab.selected_item = None
+    host.asset_browser.tabs.setCurrentWidget(host.asset_browser.tab_textures)
     panel._apply_selected_texture()
     assert any('texture' in t.lower() for t in host.toasts)
     assert ft.get_transform(brush, 'north')['texture'] == 'tex_north.png'
@@ -613,7 +634,7 @@ def test_the_picker_follows_a_target_set_from_the_3d_view(inspector):
     assert panel.face_combo.currentData() == 'down'
 
 
-def test_the_picker_relists_when_the_brush_changes(qt_app):
+def test_the_picker_relists_when_the_brush_changes(main_window):
     """A clipped brush grows a cut face; the picker has to pick it up."""
     host = main_window
     host.show_surface_inspector()
@@ -722,11 +743,11 @@ def test_apply_is_short_and_green(inspector):
 def test_the_apply_button_still_applies(inspector):
     """Renaming it must not have cost it its job."""
     host, panel, brush = inspector
-    host.asset_browser.path = os.path.join('assets', 'textures', 'brick.png')
+    name = _select_shipped_texture(host)
 
     panel.apply_tex_btn.click()
 
-    assert ft.get_transform(brush, 'north')['texture'] == 'brick.png'
+    assert ft.get_transform(brush, 'north')['texture'] == name
 
 
 def test_the_panel_carries_no_shortcut_blurb(inspector):
@@ -947,7 +968,7 @@ def test_surface_inspector_shortcut_is_ignored_during_play_mode(main_window):
 
 def test_the_shortcut_opens_the_panel_with_nothing_selected(main_window):
     """It used to refuse with "Select a brush or a face first"."""
-    host = main_window
+    host = _record_toasts(main_window)
 
     host.toggle_surface_inspector()
 

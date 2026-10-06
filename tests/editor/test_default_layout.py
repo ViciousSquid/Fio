@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 from PyQt5.QtCore import QByteArray, Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QLabel  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from editor.ui import LAYOUT_VERSION  # noqa: E402
 

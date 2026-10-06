@@ -49,6 +49,7 @@ def test_the_inspector_follows_its_brush_through_an_undo(host):
     brush = host.state.brushes[0]
     host.show_surface_inspector(brush, 'top')
     panel = host.surface_inspector
+    host.face_texture_target = (brush, 'top')   # as texturing the face sets it
 
     brush['size'] = [512, 256, 256]
     host.state.save_state()

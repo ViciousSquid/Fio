@@ -21,9 +21,14 @@ pytestmark = pytest.mark.qt
 
 
 def _play_a_session(window):
+    from editor.things import PlayerStart
     wall = window.state.brushes[0]
     grunt = window.state.things[0]
-    window.play()
+    # Play refuses to start without somewhere to put the player.
+    if not any(isinstance(t, PlayerStart) for t in window.state.things):
+        window.state.things.append(PlayerStart(pos=[0.0, 64.0, -200.0]))
+    window.enter_play_mode()
+    assert window.view_3d.play_mode, "Play did not start"
     wall["hidden"] = wall["disabled"] = True          # I/O Kill
     grunt.properties["dead"] = True
     grunt.pos = [500.0, 64.0, 0.0]

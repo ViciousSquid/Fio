@@ -65,12 +65,12 @@ def test_the_checkbox_sits_at_the_top_beside_top_surface_only(main_window):
     ({'water_high_quality': 'false'}, False),    # hand-edited map
 ])
 def test_the_checkbox_shows_the_brush_setting(main_window, props, checked):
-    host, editor = _panel(qt_app, **props)
+    host, editor = _panel(main_window, **props)
     assert editor._widgets['water_quality_cb'].isChecked() == checked
 
 
 def test_ticking_it_sets_only_this_brush_and_never_the_renderer(main_window):
-    host, editor = _panel(qt_app)
+    host, editor = _panel(main_window)
     box = editor._widgets['water_quality_cb']
     box.setChecked(False)
     assert host.state.brushes[0]['water_high_quality'] is False

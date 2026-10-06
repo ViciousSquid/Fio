@@ -54,10 +54,14 @@ def _multi_map_package(path):
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("metadata.json", json.dumps({"title": "Demo",
                                                 "map_path": "maps/z_start.json"}))
-        z.writestr("maps/a_other.json", json.dumps({"version": 3, "name": "other",
-                                                    "brushes": [], "things": []}))
-        z.writestr("maps/z_start.json", json.dumps({"version": 3, "name": "start",
-                                                    "brushes": [], "things": []}))
+        # Each map is told apart by a marker brush: the editor keeps brushes,
+        # not a map's free-form top-level fields.
+        z.writestr("maps/a_other.json", json.dumps({"version": 3, "brushes": [
+            {"id": "other-marker", "pos": [0, 0, 0], "size": [64, 64, 64]}],
+            "things": []}))
+        z.writestr("maps/z_start.json", json.dumps({"version": 3, "brushes": [
+            {"id": "start-marker", "pos": [0, 0, 0], "size": [64, 64, 64]}],
+            "things": []}))
     return path
 
 
@@ -92,7 +96,7 @@ def test_the_manifest_start_map_is_the_one_loaded(tmp_path, main_window):
 
     window.play_package_from_path(pak)
 
-    assert window.state.get_level_data()["name"] == "start"
+    assert [b.get("id") for b in window.state.brushes] == ["start-marker"]
     window._discard_package_temp_dir()
 
 

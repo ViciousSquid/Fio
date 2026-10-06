@@ -56,6 +56,7 @@ def test_preview_end_restores_real_actor_and_camera_and_consumes_baseline(
 ):
     wizard = cutscene_wizard
     actor = _actor("Actor", "actor", (10.0, 20.0, 30.0))
+    actor.angle = 5.0   # the facing the preview must hand back
     main_window.state.things.append(actor)
 
     wizard.actor_objects = {"actor": actor}
@@ -111,6 +112,7 @@ def test_preview_play_pause_uses_the_real_qtimer_and_restores_state(
 ):
     wizard = cutscene_wizard
     actor = _actor("Actor", "actor", (10.0, 20.0, 30.0))
+    actor.angle = 5.0   # the facing the preview must hand back
     main_window.state.things.append(actor)
     wizard.actor_objects = {"actor": actor}
     wizard.actor_meta = {
