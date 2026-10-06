@@ -103,7 +103,7 @@ def test_explosion_trigger_queues_centered_sound():
     register_all_input_handlers(logic.io_manager)
     logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
-    assert logic.game_state.sound_queue == [{
+    assert list(logic.game_state.sound_queue) == [{
         "action": "play",
         "file": "assets/sounds/explode.mp3",
         "volume": 1.0,
@@ -122,7 +122,7 @@ def test_silent_explosion_does_not_queue_sound():
     register_all_input_handlers(logic.io_manager)
     logic.io_manager._input_handlers[("effect", "explode")](effect, "", logic)
 
-    assert logic.game_state.sound_queue == []
+    assert list(logic.game_state.sound_queue) == []
 
 def test_animation_origin_is_shared_across_render_buffers():
     """Alternating RenderState buffers must not reset an animated GIF's phase.

@@ -180,7 +180,6 @@ def view(qt_app):
     def build(things=(), brushes=(), eye=(0.0, 64.0, 0.0),
               target=(1.0, 64.0, 0.0)):
         host = MainWindow(root)
-        hosts.append(host)
         host.state.things.extend(things)
         host.state.brushes.extend(brushes)
         view = host.view_3d
@@ -193,7 +192,8 @@ def view(qt_app):
 
         logic = LogicThread(view.game_state, host.state)
         view.logic_thread = logic
-        logic._prepare_render_state()
+        hosts.append((view, host, logic))
+        logic.render_runtime.prepare_render_state()
         assert view.game_state.request_swap() is True
         qt_app.processEvents()
         return view, host, logic

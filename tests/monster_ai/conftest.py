@@ -101,6 +101,7 @@ def io_manager():
         return real_fire_output(entity, output_name, value)
 
     manager.fire_output = record_and_dispatch
+    manager.names = lambda: [name for _entity, name, _value in manager.fired]
     return manager
 
 

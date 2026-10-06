@@ -278,7 +278,10 @@ def test_falling_monsters_agree_tick_after_tick(ai_world, monster_factory):
     monsters = _teamed(monster_factory, specs)
     ai, logic = ai_world(brushes=room(2048, 512, 2048), things=monsters)
     logic.world_runtime.monster_things = list(monsters)
-    ai.set_spatial_grid(logic.build_spatial_grid())
+    from engine.physics import SpatialGrid
+    grid = SpatialGrid(cell_size=512.0)        # as play start builds it
+    grid.populate(logic.editor_state.brushes)
+    ai.set_spatial_grid(grid)
 
     for tick in range(40):
         _agree(ai, monsters, "falling, tick %d" % tick)

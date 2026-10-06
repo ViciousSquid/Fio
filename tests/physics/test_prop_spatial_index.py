@@ -336,7 +336,8 @@ def test_a_streaming_delta_refiles_the_props_it_places():
     destination = [CELL_SIZE * 7, 0.0, CELL_SIZE * 7]
     host._delta_by_uuid = {"prop-1": (None, {"pos": list(destination)})}
 
-    host._apply_saved_delta([(_THING, "prop-1")])
+    from types import SimpleNamespace
+    host._apply_saved_delta(SimpleNamespace(objs=[(_THING, "prop-1")]))  # a loaded cell
 
     assert list(prop.pos) == destination
     assert session._filed[id(prop)] == cell_of_point(destination[0], destination[2]), (

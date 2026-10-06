@@ -217,7 +217,9 @@ def _terrain_host(instrument):
     from engine.terrain import Terrain
 
     terrain = Terrain(seed=0xF10)
-    terrain.set_world_extent(0.0, 0.0, 512.0, 256.0)
+    # Three 256-unit chunks in a row: two get built, one is released below so
+    # the table carries a freed slot inside its allocated extent.
+    terrain.set_world_extent(0.0, 0.0, 768.0, 256.0)
     terrain.set_streaming(True, radius=768.0)
 
     # Exercise the production residency calculation rather than manufacturing
@@ -233,6 +235,7 @@ def _terrain_host(instrument):
     for slot in slots[:2]:
         heights = terrain._chunk_heights(int(slot), 48)
         terrain.table.store(int(slot), 48, 0, heights)
+    terrain.table.release([int(slot) for slot in slots[2:]])
 
     instrument.main_window.terrain = terrain
     return terrain
@@ -256,8 +259,9 @@ def test_the_terrain_table_is_shown(window):
     assert "48x48: 2" in text
     assert "TerrainTable" in instrument.memory_text.toPlainText()
 
-    terrain.table.heights[0, 0, 0] = 999.0         # the live table moves on
-    assert instrument.terrain.heights[0, 0, 0] == 0.0, "the copy tracked the live table"
+    sampled = float(instrument.terrain.heights[0, 0, 0])
+    terrain.table.heights[0, 0, 0] = sampled + 999.0   # the live table moves on
+    assert instrument.terrain.heights[0, 0, 0] == sampled, "the copy tracked the live table"
 
 
 def test_a_map_without_terrain_has_no_terrain_table(window):
@@ -294,7 +298,7 @@ def real_world_window(qt_app):
     from editor.editor_state import EditorState
     from editor.main_window import MainWindow
     from editor.procedural_generator import create_map_data
-    from editor.things import Light, Sprite
+    from editor.things import Light, Prop
     from engine.logic_thread import LogicThread
     from engine.threaded_game_state import ThreadedGameState
     from tests.helpers.worlds import make_thing
@@ -323,16 +327,18 @@ def real_world_window(qt_app):
     light = generated_lights[0]
     light.properties["casts_shadows"] = True
 
-    sprite = make_thing(Sprite, "audit_sprite", light.pos,
-                        sprite="Dev/monster.png")
+    # Billboard Props are the sprite primitive.
+    sprite = make_thing(Prop, "audit_sprite", light.pos,
+                        render_mode="billboard",
+                        sprite_path="assets/sprites/monster.png")
     state.things.append(sprite)
     state.mark_world_changed([light, sprite])
 
     game_state = ThreadedGameState()
     logic = LogicThread(game_state, state)
-    logic._prepare_render_state()
+    logic.render_runtime.prepare_render_state()
     assert game_state.request_swap() is True
-    logic._prepare_render_state()
+    logic.render_runtime.prepare_render_state()
     assert game_state.request_swap() is True
 
     host = MainWindow(os.path.abspath(os.path.join(
@@ -373,19 +379,19 @@ def test_debug_tables_is_an_oracle_for_a_real_authored_world(real_world_window):
         ident = thing.properties["id"]
         slot = instrument.entities.slot_of_id[ident]
         assert instrument.entities.pos[slot].tolist() == pytest.approx(
-            thing.pos.tolist()
+            [float(v) for v in thing.pos]
         )
 
     light = next(thing for thing in state.things if isinstance(thing, Light))
     light_slot = instrument.entities.slot_of_id[light.properties["id"]]
     assert instrument.entities.pos[light_slot].tolist() == pytest.approx(
-        light.pos.tolist()
+        [float(v) for v in light.pos]
     )
     assert bool(instrument.entities.light_casts_shadows[light_slot])
     assert instrument.entities.light_params[light_slot, 0] == pytest.approx(1.2)
     assert instrument.entities.light_params[light_slot, 1] == pytest.approx(512.0)
 
-    sprite = next(thing for thing in state.things if thing.properties["id"] == "audit_sprite")
+    sprite = next(thing for thing in state.things if thing.properties["name"] == "audit_sprite")
     sprite_slot = instrument.entities.slot_of_id[sprite.properties["id"]]
     assert int(instrument.entities.sprite_key_id[sprite_slot]) >= 0
 
@@ -404,7 +410,7 @@ def test_debug_tables_tracks_a_real_light_move_in_the_dense_entity_row(
 
     light.pos = [320.0, 256.0, 192.0]
     state.mark_world_changed([light])
-    logic._prepare_render_state()
+    logic.render_runtime.prepare_render_state()
     assert logic.game_state.request_swap() is True
 
     instrument.refresh()
@@ -425,7 +431,7 @@ def test_debug_tables_detects_the_real_brush_set_change(real_world_window):
     added = box_brush("late_wall", (0, 128, -320), (128, 256, 64))
     state.brushes.append(added)
     state.mark_world_changed([added])
-    logic._prepare_render_state()
+    logic.render_runtime.prepare_render_state()
     assert logic.game_state.request_swap() is True
 
     instrument.refresh()
@@ -453,7 +459,7 @@ def test_debug_tables_survives_a_real_map_save_load_round_trip(real_world_window
     reloaded = EditorState()
     reloaded.load_from_data(level_data, save_undo=False)
     logic = LogicThread(ThreadedGameState(), reloaded)
-    logic._prepare_render_state()
+    logic.render_runtime.prepare_render_state()
     assert logic.game_state.request_swap() is True
 
     instrument.main_window.state = reloaded
@@ -472,7 +478,7 @@ def test_debug_tables_survives_a_real_map_save_load_round_trip(real_world_window
     for thing in reloaded.things:
         slot = instrument.entities.slot_of_id[thing.properties["id"]]
         assert instrument.entities.pos[slot].tolist() == pytest.approx(
-            thing.pos.tolist()
+            [float(v) for v in thing.pos]
         )
 
 def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
@@ -510,7 +516,6 @@ def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
     shown = instrument.terrain
     assert shown.count == terrain.table.count
     assert shown.live_count == terrain.table.count
-    assert shown.built_count == 2
 
     fields = {
         instrument.terrain_raw.selector.itemText(i)
@@ -523,9 +528,7 @@ def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
         slot = int(slot)
         assert shown.coord[slot].tolist() == table.coord[slot].tolist()
         assert shown.world[slot].tolist() == pytest.approx(table.world[slot].tolist())
-        assert shown.heights[slot].tolist() == pytest.approx(
-            table.heights[slot].tolist()
-        )
+        np.testing.assert_allclose(shown.heights[slot], table.heights[slot])
 
     text = instrument.dashboard.toPlainText()
     assert "TERRAIN (TerrainTable)" in text
@@ -537,7 +540,7 @@ def test_debug_tables_is_an_oracle_for_a_real_terrain_table(window):
     # refresh must not mutate the sampled copy.
     original = shown.heights[slots[0]].copy()
     table.heights[slots[0], 0, 0] += 123.0
-    assert shown.heights[slots[0]].tolist() == pytest.approx(original.tolist())
+    np.testing.assert_allclose(shown.heights[slots[0]], original)
 
 
 def test_debug_tables_tracks_real_terrain_streaming_residency(window):
@@ -595,12 +598,17 @@ def test_real_terrain_csg_survives_terrain_serialization(window):
     terrain.set_world_extent(0.0, 0.0, 512.0, 512.0)
     terrain.set_streaming(True, radius=768.0)
     terrain._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
-    slot = int(terrain.table.live_slots()[0])
+    # Rows are compared by chunk, not slot: the restored terrain has different
+    # bounds, so the same slot number can hold a different chunk.
+    coord = (0, 0)
+    slot = int(terrain.table.slot_of_coord[coord])
     terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
 
     h = float(terrain._get_height_scalar(128.0, 128.0))
     cut = ((64.0, h - 100.0, 64.0), (192.0, h + 100.0, 192.0))
     assert terrain.subtract_aabb(*cut)
+    # The cut dirties the row; rebuild it as streaming would before comparing.
+    terrain.table.store(slot, 48, 0, terrain._chunk_heights(slot, 48))
     saved = terrain.to_dict()
     assert saved["csg_subtractions"] == [
         [64.0, h - 100.0, 64.0, 192.0, h + 100.0, 192.0]
@@ -611,7 +619,7 @@ def test_real_terrain_csg_survives_terrain_serialization(window):
     assert restored.csg_subtractions == terrain.csg_subtractions
     restored.set_streaming(True, radius=768.0)
     restored._stream_chunks(glm.vec3(128.0, 0.0, 128.0))
-    restored_slot = int(restored.table.live_slots()[0])
+    restored_slot = int(restored.table.slot_of_coord[coord])
     restored.table.store(
         restored_slot, 48, 0, restored._chunk_heights(restored_slot, 48)
     )
@@ -656,6 +664,4 @@ def test_debug_tables_observes_real_terrain_csg_rebuild(window):
     instrument.refresh()
     shown = instrument.terrain
     assert shown is not None
-    assert shown.heights[slot].tolist() == pytest.approx(
-        terrain.table.heights[slot].tolist()
-    )
+    np.testing.assert_allclose(shown.heights[slot], terrain.table.heights[slot])

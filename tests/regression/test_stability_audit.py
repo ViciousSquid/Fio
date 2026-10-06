@@ -354,7 +354,7 @@ def test_hurt_trigger_uses_the_editors_damage_amount():
 
 
 def test_trigger_activation_uses_canonical_key():
-    from engine.logic_thread import _trigger_activation
+    from engine.logic_triggers import _trigger_activation
     assert _trigger_activation({"trigger_activation": "use"}) == "use"
     assert _trigger_activation({"trigger_activation": "Touch",
                                 "trigger_collect_activation": "use"}) == "touch"

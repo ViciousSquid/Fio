@@ -16,6 +16,9 @@ pytestmark = pytest.mark.qt
 def logic(request):
     state = EditorState()
     runtime = LogicThread(ThreadedGameState(), state)
+    # The play-session player the camera follows; play start normally makes it.
+    from engine.player import Player
+    runtime.player_runtime.player = Player(0.0, 0.0)
     request.addfinalizer(runtime.stop)
     return runtime
 

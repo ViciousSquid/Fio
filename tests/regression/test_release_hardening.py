@@ -267,6 +267,7 @@ def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick(logic):
     delayed event appended meanwhile was lost, and the source/activator
     context was shared between two chains. They are now delivered, in order,
     on the tick's thread at its next update()."""
+    logic = logic()
     import threading
     from tests.logic.test_io_dispatch import Network
 
@@ -297,6 +298,7 @@ def test_outputs_fired_off_the_tick_thread_run_on_the_next_tick(logic):
 
 
 def test_outputs_fired_in_the_editor_still_run_immediately(logic):
+    logic = logic()
     import threading
     from types import SimpleNamespace
     from tests.logic.test_io_dispatch import Network
