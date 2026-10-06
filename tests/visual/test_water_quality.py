@@ -73,10 +73,10 @@ def render(context, quality, high_quality=None):
 
 
 def test_water_quality_setting_is_normalised():
-    from engine.renderer_core import BaseRenderer
-    assert BaseRenderer.normalize_water_quality('Cheap ') == 'cheap'
-    assert BaseRenderer.normalize_water_quality('EXPENSIVE') == 'expensive'
-    assert BaseRenderer.normalize_water_quality('ultra') == 'expensive'
+    from engine.renderer import Renderer
+    assert Renderer.normalize_water_quality('Cheap ') == 'cheap'
+    assert Renderer.normalize_water_quality('EXPENSIVE') == 'expensive'
+    assert Renderer.normalize_water_quality('ultra') == 'expensive'
 
 
 def test_both_water_tiers_draw_and_differ(context):

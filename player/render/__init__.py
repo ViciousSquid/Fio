@@ -2,7 +2,7 @@
 
 This layer bootstraps an ES 3.x pipeline (shader compilation, an offscreen
 render target for adaptive resolution) and is the seam where the desktop
-``engine/renderer_core.py`` geometry/light/portal code is bridged onto ES.
+``engine/renderer/`` geometry/light/portal code is bridged onto ES.
 
 Milestone 1 ships a minimal, self-checking renderer (clear + a reference
 triangle drawn through the translated ``simple`` shader) that proves the whole

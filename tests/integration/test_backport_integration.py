@@ -28,8 +28,8 @@ def _read(rel):
 # ---------------------------------------------------------------------------
 
 def _render_scene_source():
-    """The body of Renderer_F.render_scene, as source text."""
-    src = _read("engine/renderer_F.py")
+    """The body of Renderer.render_scene, as source text."""
+    src = _read("engine/renderer/core.py")
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -118,7 +118,7 @@ def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     import numpy as np
     from editor.things import Light, Monster, Portal, Thing
     from engine.entity_table import EntityTable
-    from engine.renderer_core import BaseRenderer
+    from engine.renderer import Renderer
 
     far = [50000.0, 0.0, 0.0]
     things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
@@ -126,7 +126,7 @@ def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     table = EntityTable()
     hidden = table.begin_frame(things, epoch=1)
     slots = np.arange(table.count, dtype=np.int32)
-    kept = BaseRenderer._distance_cull_thing_slots(
+    kept = Renderer._distance_cull_thing_slots(
         table, slots, 0.0, 0.0, 1000.0 * 1000.0)
     assert [int(i) for i in kept] == [1, 2, 4]
     assert not hidden[0]
@@ -145,7 +145,7 @@ def test_the_slot_cull_exempts_the_same_lights_and_portals():
     import numpy as np
     from editor.things import Light, Monster, Portal, Thing
     from engine import entity_table as et
-    from engine.renderer_core import BaseRenderer
+    from engine.renderer import Renderer
 
     far = [50000.0, 0.0, 0.0]
     things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
@@ -154,7 +154,7 @@ def test_the_slot_cull_exempts_the_same_lights_and_portals():
     table.begin_frame(things, epoch=1)
     slots = np.arange(table.count, dtype=np.int32)
 
-    kept = BaseRenderer._distance_cull_thing_slots(
+    kept = Renderer._distance_cull_thing_slots(
         table, slots, 0.0, 0.0, 1000.0 * 1000.0)
 
     assert [int(i) for i in kept] == [1, 2, 4], (
@@ -175,10 +175,10 @@ def test_shadow_lights_use_entity_slots_on_numeric_path():
 
 def test_legacy_per_object_sprite_renderer_is_gone():
     """Sprite rendering has one execution boundary: EntityTable -> instancing."""
-    core = _read("engine/renderer_core.py")
-    forward = _read("engine/renderer_F.py")
-    assert "def draw_sprites(" not in core
-    assert ".draw_sprites(" not in forward
+    renderer = "".join(
+        p.read_text(encoding="utf-8") for p in sorted((ROOT / "engine" / "renderer").glob("*.py")))
+    assert "def draw_sprites(" not in renderer
+    assert ".draw_sprites(" not in renderer
     assert "self.draw_sprites_instanced(" in _render_scene_source()
     assert "entity_projection.classify_slots(" in _render_scene_source()
 
@@ -495,7 +495,7 @@ def test_water_shader_controls_match_dense_projection():
 
 def test_special_brush_passes_do_not_materialise_dense_slots():
     """Water, glass and fog must stay in RenderTable through render submission."""
-    src = _read("engine/renderer_F.py")
+    src = _read("engine/renderer/core.py")
     assert "water_brushes = groups['water']" in src
     assert "glass_brushes = groups['glass']" in src
     assert "fog_volumes = groups['fog']" in src
@@ -503,9 +503,11 @@ def test_special_brush_passes_do_not_materialise_dense_slots():
     assert "glass_brushes = _objs('glass')" not in src
     assert "fog_volumes = _objs('fog')" not in src
 
-    core = _read("engine/renderer_core.py")
+    core = _read("engine/renderer/passes.py")
     assert "table.water_params[brushes]" in core
-    assert "water_reflections" not in core
+    renderer = "".join(
+        p.read_text(encoding="utf-8") for p in sorted((ROOT / "engine" / "renderer").glob("*.py")))
+    assert "water_reflections" not in renderer
     assert "table.glass_params[brushes]" in core
     assert "table.fog_params[brushes]" in core
     assert "brush.get('water_opacity'" not in core

@@ -108,15 +108,23 @@ Dense numerical render projection. Converts render-relevant brush state into par
 
 This is a derived execution representation, not a second source of truth. It exists so visibility, classification, batching and instance construction do not repeatedly traverse Python objects.
 
-### `renderer_core.py`
-`BaseRenderer`, the shared OpenGL rendering infrastructure used by renderer backends. Provides shader and texture management, VAOs/VBOs, terrain, models, sprites, water, glass, fog, portals, lighting, shadows, editor helpers, LOD support, statistics and cleanup.
+### `renderer/`
+`Renderer`, Fio's one forward OpenGL renderer, used by both the editor viewport and play mode. It is a single class assembled from one mixin per responsibility:
+
+| Module | Responsibility |
+| --- | --- |
+| `core.py` | `Renderer` itself: shared renderer state (`__init__`), frame orchestration (`render_scene`) and `cleanup` |
+| `tables.py` | RenderTable/EntityTable → GPU preparation: batched transforms, brush/sprite/effect/model instance buffers, render-key runs, per-table texture-id resolution |
+| `visibility.py` | Distance/frustum culling, brush pass classification and depth ordering, LOD bands, stencil portals and the portal virtual scene |
+| `lighting.py` | Active lights, the shared std140 light UBO and per-shader light caps, the fog/ambient block, point-light shadow cube maps (`render_shadow_maps`) |
+| `geometry.py` | Shared cube/water-surface/sprite VAOs, the angled-brush convex mesh cache, OBJ/GLB model loading |
+| `materials.py` | Shader loading and compilation, texture loading, animated effect frames, the sprite texture array, terrain shader/texture binding |
+| `passes.py` | Lit/textured/glow brush passes, terrain, models, sprites, glasses, effects, and the water/glass/fog passes |
+| `debug.py` | Per-pass timing (`timed_pass`, `RenderStats`) and editor overlays: grid, gizmo, selection outline, AABBs, face highlight, component handles, portal wireframes |
 
 Dynamic-light capacity comes from `engine.shaders`; shader light limits are clamped to the capacity actually declared by each shader.
 
 Shadow rendering is part of the dense execution boundary. `render_shadow_maps()` consumes dense light/table data and selects brush/model casters from projection slots rather than traversing authored Brush/Thing/Light collections.
-
-### `renderer_F.py`
-Fio's production forward renderer. Implements brush batching, lit/textured/glow paths, forward lighting, point-light shadow cube maps, portal virtual views, render-mode switching and instanced sprite/model submission.
 
 `draw_sprites_instanced` consumes EntityTable position, size, yaw and texture identity and submits one instanced draw per texture run.
 
@@ -204,15 +212,15 @@ fixed-timestep world update
 ## Rendering stack
 
 ```
-QtGameView
-    ↓
-Renderer_F
+EditorState → publication → LogicThread
     ↓
 render_table / entity_table / monster_table
     ↓
-render_cull / render_keys
+QtGameView → engine.renderer.Renderer.render_scene
     ↓
-BaseRenderer / OpenGL resources
+render_cull / render_keys (visibility, tables)
+    ↓
+passes / lighting → OpenGL resources (geometry, materials)
     ↓
 OpenGL 3.3 Core
     ↓

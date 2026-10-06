@@ -165,8 +165,7 @@ def normalize_color(rgb, default=None):
 
     Lives here rather than in the renderer because the dense render projection
     resolves brush colours at edit time and must not import a module that pulls
-    in OpenGL.  ``engine.renderer_core`` re-exports it, so every existing
-    caller is unaffected and there is still one definition.
+    in OpenGL.
     """
     if default is None:
         default = [0.8, 0.8, 0.8]

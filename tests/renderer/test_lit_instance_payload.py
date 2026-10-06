@@ -23,7 +23,8 @@ from engine import render_table as rt
 from engine.render_table import RenderTable
 pytestmark = pytest.mark.qt
 
-from engine.renderer_F import (Renderer_F, _TRIGGER_COLOR, _SELECTED_COLOR,
+from engine.renderer import Renderer
+from engine.renderer.tables import (_TRIGGER_COLOR, _SELECTED_COLOR,
                                _SUBTRACT_COLOR)
 
 
@@ -39,7 +40,7 @@ def _payload(brushes, selected=None):
     table.sync(brushes, 1)
     slots = np.arange(table.count, dtype=np.int32)
     chosen = -1 if selected is None else table.slot_of_id[selected]
-    return Renderer_F.lit_instance_payload(table, slots, chosen)
+    return Renderer.lit_instance_payload(table, slots, chosen)
 
 
 def test_a_plain_brush_uses_its_own_colour_at_full_alpha():
@@ -96,6 +97,6 @@ def test_an_unselected_scene_touches_no_colours_it_should_not():
 def test_an_empty_slot_array_yields_an_empty_payload():
     table = RenderTable()
     table.sync([_brush('a')], 1)
-    payload = Renderer_F.lit_instance_payload(
+    payload = Renderer.lit_instance_payload(
         table, np.empty(0, dtype=np.int32), -1)
     assert payload.shape == (0, 4)

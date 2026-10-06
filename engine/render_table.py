@@ -127,7 +127,7 @@ CLASS_NON_OPAQUE = (CLASS_WATER | CLASS_FOG | CLASS_GLASS |
                     CLASS_GLOW | CLASS_TRIGGER)
 
 #: Face order of the shared cube VAO -- index *i* is the face whose six vertices
-#: start at ``i * 6``.  Mirrors ``renderer_F._CUBE_FACE_KEYS``; the two must
+#: start at ``i * 6``.  Mirrors ``engine.renderer.tables._CUBE_FACE_KEYS``; the two must
 #: agree, because ``tex_name_id[:, i]`` is what selects that run's texture.
 CUBE_FACE_KEYS = ('south', 'north', 'west', 'east', 'down', 'top')
 
@@ -257,7 +257,7 @@ _COLUMNS = (
     ('water_params', (7,), np.float32, 0.0),
     ('water_plane', (), bool, False),
     #: The brush's "High quality" flag: depth-based colour, shoreline foam,
-    #: caustics and screen-space reflections (see BaseRenderer.WATER_QUALITIES).
+    #: caustics and screen-space reflections (see Renderer.WATER_QUALITIES).
     ('water_high_quality', (), bool, False),
     ('glass_color', (3,), np.float32, 0.0),
     #: opacity, distortion, refraction, roughness, fresnel

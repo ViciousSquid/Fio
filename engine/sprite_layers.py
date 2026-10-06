@@ -15,7 +15,7 @@ exact depth order.  In render-key terms: the texture no longer "cannot vary
 within one draw", so it leaves the key, and the key of the sprite pass is empty.
 
 What goes into a layer is the sprite's existing 2D texture, found exactly as
-before (:meth:`BaseRenderer._sprite_gl_ids` resolves recipes to GL ids, with
+before (:meth:`Renderer._sprite_gl_ids` resolves recipes to GL ids, with
 every override and fallback it had).  Layers are keyed by that GL id, so there
 is no second loader and no second naming scheme.
 

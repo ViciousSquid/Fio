@@ -1,6 +1,6 @@
 """The numeric path must draw exactly what the object path drew.
 
-``Renderer_F.render_scene`` feeds all brush passes from the dense render
+``Renderer.render_scene`` feeds all brush passes from the dense render
 projection. The portal virtual views also consume those slots, applying their
 own virtual frustum as a numeric mask; entity sprites come from EntityTable
 slots in the same pass.
@@ -72,7 +72,7 @@ def _patterned_texture(index):
 @pytest.fixture
 def renderer(context):
     """A renderer whose textures carry a pattern, unlike the shared harness."""
-    from engine.renderer_F import Renderer_F
+    from engine.renderer import Renderer
 
     made_textures = {}
 
@@ -83,7 +83,7 @@ def renderer(context):
             made_textures[name] = tex
         return tex
 
-    made = Renderer_F(loader, 64, 4096, None)
+    made = Renderer(loader, 64, 4096, None)
     made.update_grid_buffers(4096, 64)
     made.set_sprite_textures({})
     _ENTITY_TABLES.clear()
@@ -325,16 +325,16 @@ def test_portal_renderer_has_no_legacy_object_path():
     from pathlib import Path
 
     root = Path(__file__).parents[2]
-    forward = (root / 'engine' / 'renderer_F.py').read_text(encoding='utf-8')
-    core = (root / 'engine' / 'renderer_core.py').read_text(encoding='utf-8')
+    visibility = (root / 'engine' / 'renderer' / 'visibility.py').read_text(encoding='utf-8')
+    debug = (root / 'engine' / 'renderer' / 'debug.py').read_text(encoding='utf-8')
 
-    portal_scene = forward[
-        forward.index("def _portal_numeric_scene_inputs"):
-        forward.index("def render_scene", forward.index("def _portal_numeric_scene_inputs"))
+    portal_scene = visibility[
+        visibility.index("def _portal_numeric_scene_inputs"):
+        visibility.index("def _draw_portal_scene", visibility.index("def _portal_numeric_scene_inputs"))
     ]
-    portal_wire = core[
-        core.index("def draw_portal_wireframes"):
-        core.index("def draw_connection_lines", core.index("def draw_portal_wireframes"))
+    portal_wire = debug[
+        debug.index("def draw_portal_wireframes"):
+        debug.index("def draw_connection_lines", debug.index("def draw_portal_wireframes"))
     ]
 
     assert "Portal)" not in portal_scene
@@ -345,14 +345,14 @@ def test_portal_renderer_has_no_legacy_object_path():
 
 def test_sprite_renderer_has_no_legacy_object_path(renderer):
     """There is exactly one sprite renderer: dense EntityTable instancing."""
-    import engine.renderer_core as rc
-    assert not hasattr(rc.BaseRenderer, "draw_sprites")
+    from engine.renderer import Renderer
+    assert not hasattr(Renderer, "draw_sprites")
     assert not hasattr(renderer, "draw_sprites")
 
 
 def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
     """A populated EntityTable reaches GL through the instanced sprite pass."""
-    import engine.renderer_core as rc
+    import engine.renderer.passes as rc
 
     brushes, things = _entity_scene()
     published = list(things)

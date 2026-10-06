@@ -20,7 +20,15 @@ GENERIC_MODULES = [
     "engine/constants.py",
     "engine/physics.py",
     "engine/player.py",
-    "engine/renderer_F.py",
+    "engine/renderer/__init__.py",
+    "engine/renderer/core.py",
+    "engine/renderer/tables.py",
+    "engine/renderer/visibility.py",
+    "engine/renderer/lighting.py",
+    "engine/renderer/geometry.py",
+    "engine/renderer/materials.py",
+    "engine/renderer/passes.py",
+    "engine/renderer/debug.py",
     "engine/terrain.py",
     "engine/glb_loader.py",
     "editor/editor_state.py",
@@ -175,7 +183,7 @@ def test_angled_brush_geometry_helpers_survive():
 
 
 def test_cut_face_highlight_and_texturing_survive():
-    core = _read("engine/renderer_core.py")
+    core = _read("engine/renderer/debug.py")
     assert "_geo_face_highlight_verts" in core
     assert "_draw_face_highlight_verts" in core
     assert "def draw_face_highlight(" in core
@@ -217,7 +225,7 @@ def test_renderer_light_capacities_untouched():
     of its array. The budget is now the shader's own number, so the guard checks
     that relationship rather than a literal.
     """
-    src = _read("engine/renderer_core.py")
+    src = _read("engine/renderer/lighting.py")
     assert "MAX_LIGHTS = shaders.MAX_LIGHTS" in src
     assert "MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS" in src
 

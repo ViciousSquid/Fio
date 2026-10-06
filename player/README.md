@@ -24,7 +24,7 @@ See [Status](#status) for exactly what is implemented versus scaffolded.
 
 ## Why this shape
 
-The desktop renderer (`engine/renderer_core.py`) is coupled to a Qt
+The desktop renderer (`engine/renderer/`) is coupled to a Qt
 `QOpenGLWidget` context and to desktop GL. Rather than fork it, the player
 introduces a thin host + GL-ES layer and reuses the engine's *logic* and *shader
 sources* through well-defined seams. The two dialect differences that actually
@@ -204,7 +204,7 @@ Implemented and tested (off-device):
 
 Next milestones (seams are marked `TODO(port)` in the code):
 
-- [ ] **M3 — render maps**: port `engine/renderer_core.py` brush/mesh geometry
+- [ ] **M3 — render maps**: port `engine/renderer/` brush/mesh geometry
       upload and draw passes onto the ES context (`renderer.py:load_scene` /
       `render_scene`), using the already-translated shader programs.
 - [ ] **M4 — player movement**: drive `engine/player.py` + `engine/physics.py`

@@ -100,7 +100,7 @@ def _render(renderer, context, things, eye=glh.CAMERA_EYE,
 
 def _count_sprite_draws(renderer):
     """Wrap the sprite pass and count the instanced draws issued inside it."""
-    import engine.renderer_core as rc
+    import engine.renderer.passes as rc
 
     seen = {"draws": 0, "instances": 0}
     original_pass = renderer.draw_sprites_instanced
@@ -267,7 +267,7 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
     """Monster projectiles: an (N, 3) array, one instanced draw, visible."""
     import OpenGL.GL as gl
 
-    import engine.renderer_core as rc
+    import engine.renderer.passes as rc
 
     red = _solid((255, 0, 0))
     projection, view, _ = glh.camera_matrices(aspect=1.0)
@@ -303,7 +303,7 @@ def test_building_the_array_leaves_the_pixel_store_as_qt_expects(renderer, conte
     there, which sheared every small glyph of a ``message`` into stripes."""
     import OpenGL.GL as gl
 
-    from engine.renderer_core import restore_default_pixel_store
+    from engine.renderer import restore_default_pixel_store
 
     red, blue = _solid((255, 0, 0)), _solid((0, 0, 255))
     things = [_billboard(renderer, "a", (0.0, 60.0, 0.0), red),

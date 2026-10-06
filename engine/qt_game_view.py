@@ -18,7 +18,7 @@ from editor.things import (
 )
 from engine.player import Player
 
-from .renderer_F   import Renderer_F
+from engine.renderer import Renderer, restore_default_pixel_store
 _HUD_FONT_FILES = {
     1: "Rushfordclean-rgz89.otf",
     2: "O.K.Retro.otf",
@@ -32,7 +32,7 @@ _HUD_FONT_FALLBACKS = {
     4: "LCD AT&T Phone Time/Date",
 }
 _RENDERER_CLASSES = {
-    'Forward':  Renderer_F,
+    'Forward':  Renderer,
 }
 
 
@@ -61,7 +61,6 @@ def available_renderers():
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
-from engine.renderer_core import restore_default_pixel_store
 from engine.view_distance import ViewDistance
 from engine.glasses import (
     DEFAULT_GLASSES, DEFAULT_SPRITE_KEY, GLASSES_STYLES, GLASSES_SUBFOLDER,
@@ -945,7 +944,7 @@ class QtGameView(QOpenGLWidget):
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = self.editor.config
         self._renderer_mode = 'Forward'
-        self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
+        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
         self.set_cull_distance(self.cull_distance)
         self._preload_assets()
         self.load_all_sprite_textures()
@@ -2710,7 +2709,7 @@ class QtGameView(QOpenGLWidget):
             print(f"[QtGameView] switch_renderer FAILED: {exc}")
             try:
                 config = self.editor.config
-                self.renderer = Renderer_F(
+                self.renderer = Renderer(
                     self.load_texture, self.grid_size, self.world_size, config)
                 self._renderer_mode = 'Forward'
             except Exception as fe:

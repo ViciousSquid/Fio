@@ -264,7 +264,7 @@ def test_the_broad_phase_cull_follows_the_view_distance(renderer, context):
     import numpy as np
     from editor.things import Thing
     from engine.entity_table import EntityTable
-    from engine.renderer_core import BaseRenderer
+    from engine.renderer import Renderer
 
     inside = Thing(pos=[0.0, 0.0, 1500.0])
     outside = Thing(pos=[0.0, 0.0, 6000.0])
@@ -273,12 +273,12 @@ def test_the_broad_phase_cull_follows_the_view_distance(renderer, context):
     slots = np.asarray([0, 1], dtype=np.int32)
 
     renderer.view_distance = settings(8192.0)
-    kept = BaseRenderer._distance_cull_thing_slots(
+    kept = Renderer._distance_cull_thing_slots(
         table, slots, 0.0, 0.0, renderer.view_distance.distance ** 2)
     assert kept.tolist() == [0, 1]
 
     renderer.view_distance = settings(2048.0)
-    kept = BaseRenderer._distance_cull_thing_slots(
+    kept = Renderer._distance_cull_thing_slots(
         table, slots, 0.0, 0.0, renderer.view_distance.distance ** 2)
     assert kept.tolist() == [0]
 

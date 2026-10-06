@@ -132,7 +132,7 @@ MAX_SHADOW_LIGHTS = 8
 # ------------------------------------------------------------------------------
 # How many point lights a lighting shader can hold. This is the *only* place the
 # number is written down: the shader sources below are built from it and
-# `BaseRenderer.MAX_LIGHTS` reads it, because the renderer's budget and the
+# `Renderer.MAX_LIGHTS` reads it, because the renderer's budget and the
 # shader's array have to be the same number.
 #
 # They used not to be. The renderer uploaded up to 32 lights and set
@@ -152,7 +152,7 @@ MAX_LIGHTS_ARM = 16
 
 # Water and terrain light themselves from a handful of the nearest lights rather
 # than the whole set; their shaders are sized for that on purpose and the
-# renderer clamps `active_lights` to match (see BaseRenderer._shader_light_cap).
+# renderer clamps `active_lights` to match (see Renderer._shader_light_cap).
 MAX_LIGHTS_WATER = 8
 MAX_LIGHTS_TERRAIN = 8
 MAX_TERRAIN_STAMPS = 32
@@ -2125,7 +2125,7 @@ void main() {
 
 }
 
-# ----- Low-power shaders (used by BaseRenderer when lowpower_mode is True) ----
+# ----- Low-power shaders (used by Renderer when lowpower_mode is True) ----
 DEFAULT_SHADERS['lit_arm.vert'] = """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -2279,7 +2279,7 @@ void main() {
     FragColor = accumulatedColor;
 }"""
 
-# ----- Portal shaders (used by BaseRenderer for stencil portals) -----
+# ----- Portal shaders (used by Renderer for stencil portals) -----
 DEFAULT_SHADERS['portal_mask.vert'] = """#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 projection;

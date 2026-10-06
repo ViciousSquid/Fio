@@ -9,7 +9,7 @@ Two responsibilities:
    context, GLSL-ES translation, VBO/VAO, uniforms, blending, draw, present.
 
 2. **Engine bridge** (seam): :meth:`load_scene` and :meth:`render_scene` are the
-   hook points where ``engine/renderer_core.py`` — the brush/mesh/light/portal
+   hook points where ``engine/renderer/`` — the brush/mesh/light/portal
    renderer — is driven onto ES. The desktop renderer is coupled to a QOpenGL
    context; the port replaces that context with this one and reuses its geometry
    upload and draw logic. See ``player/README.md`` for the staged plan.
@@ -145,17 +145,17 @@ class GLESRenderer:
         (``engine/brush_geometry.py``), models (``engine/glb_loader.py`` /
         ``obj_loader.py``), terrain, lights and portals are built here and their
         GL buffers uploaded via :meth:`_upload_scene`. Left as a documented seam
-        until the ES port of ``renderer_core`` lands.
+        until the ES port of ``engine.renderer`` lands.
         """
         self._scene = {"map": map_data, "package": package}
         self._upload_scene()
 
     def _upload_scene(self) -> None:
-        # TODO(port): translate engine/renderer_core.py geometry upload to ES.
+        # TODO(port): translate engine/renderer/ geometry upload to ES.
         pass
 
     def render_scene(self, render_state) -> None:
-        # TODO(port): drive engine/renderer_core.py draw passes on this context.
+        # TODO(port): drive engine/renderer/ draw passes on this context.
         self._draw_reference_triangle()
 
 

@@ -43,9 +43,9 @@ from engine.constants import AABB_RUNTIME_KEYS
 from engine.level_validation import validate_level
 
 _RENDERER_PRIVATE_KEYS = frozenset({
-    '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
-    '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
-    '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer_F)
+    '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer)
+    '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer)
+    '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer)
 }) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS)
 
 # Import lightmap bake state

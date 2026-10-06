@@ -10,7 +10,7 @@ The radius itself is *not* here any more. It is a live camera setting the
 editor and the console can move mid-session, so it lives on
 :class:`engine.view_distance.ViewDistance` and the renderer reads it per frame;
 
-The logic lives here, apart from :mod:`engine.renderer_F`, for two reasons: it
+The logic lives here, apart from :mod:`engine.renderer`, for two reasons: it
 carries no OpenGL/glm/Qt dependency, so it is unit-testable headlessly; and it
 keeps the renderer's per-frame path a thin call over a persistent scratch buffer
 (no per-frame list allocation). The shadow and portal passes deliberately do not
