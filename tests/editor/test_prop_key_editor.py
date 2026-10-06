@@ -87,3 +87,29 @@ def test_enabling_collectible_defaults_to_weapon(panel):
     assert prop.properties["collect_weapon"] == "gun1"
     assert prop.properties["sprite_path"] == "assets/sprites/gun1.png"
     assert panel._prop_collect_type_combo.currentText() == "Weapon"
+
+
+@pytest.mark.parametrize("weapon, label", [
+    ("gun1", "Gun 1"), ("gun2", "Gun 2"),
+    ("custom1", "Custom 1"), ("custom2", "Custom 2"),
+])
+def test_choosing_a_weapon_keeps_it_selected(panel, weapon, label):
+    """Picking a weapon stores it and the combo keeps showing it.
+
+    The refresh after a change used its own label table, which lacked Custom 2:
+    choosing it stored ``custom2`` and then flipped the combo back to "Gun 1".
+    """
+    prop = Prop(
+        pos=[0, 0, 0],
+        properties={"collect_enabled": True, "collect_type": "weapon",
+                    "collect_weapon": "gun1" if weapon != "gun1" else "gun2"},
+    )
+    panel.current_object = prop
+    panel.populate_for_thing(prop)
+    combo = panel._prop_weapon_combo
+
+    combo.setCurrentText(label)
+
+    assert prop.properties["collect_weapon"] == weapon
+    assert prop.properties["sprite_path"] == f"assets/sprites/{weapon}.png"
+    assert combo.currentText() == label

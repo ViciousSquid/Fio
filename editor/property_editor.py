@@ -18,6 +18,15 @@ from engine.monster_constants import MONSTER_VARIANTS
 from engine.constants import water_high_quality
 from editor.tooltips import set_tooltips_enabled
 
+#: Display label for every collectable weapon id, shared by the Prop panel's
+#: builder and its refresh so the two cannot drift apart again.
+PROP_WEAPON_LABELS = {
+    'gun1': 'Gun 1',
+    'gun2': 'Gun 2',
+    'custom1': 'Custom 1',
+    'custom2': 'Custom 2',
+}
+
 
 def _plugin_to_float(text):
     try:
@@ -2891,13 +2900,8 @@ class PropertyEditor(QWidget):
         type_row = form.rowCount()
         form.addRow("Collect as:", type_combo)
 
-        weapon_values = ('gun1', 'gun2', 'custom1', 'custom2')
-        weapon_labels = {
-            'gun1': 'Gun 1',
-            'gun2': 'Gun 2',
-            'custom1': 'Custom 1',
-            'custom2': 'Custom 2',
-        }
+        weapon_values = tuple(Prop.GUN_NAMES)
+        weapon_labels = PROP_WEAPON_LABELS
         weapon_combo = _make_combo(
             [weapon_labels.get(v, v.title()) for v in weapon_values],
             weapon_labels.get(
@@ -3124,11 +3128,7 @@ class PropertyEditor(QWidget):
         self._prop_respawn_cb.blockSignals(False)
 
         weapon = thing.properties.get('collect_weapon', 'gun1')
-        weapon_label = {
-            'gun1': 'Gun 1',
-            'gun2': 'Gun 2',
-            'custom1': 'Custom 1',
-        }.get(weapon, 'Gun 1')
+        weapon_label = PROP_WEAPON_LABELS.get(weapon, PROP_WEAPON_LABELS['gun1'])
         self._prop_weapon_combo.blockSignals(True)
         self._prop_weapon_combo.setCurrentText(weapon_label)
         self._prop_weapon_combo.blockSignals(False)
