@@ -1042,7 +1042,8 @@ class QtGameView(QOpenGLWidget):
     def _stop_logic_thread(self):
         if self.logic_thread:
             self.logic_thread.stop()
-            self.logic_thread.join(timeout=1.0)
+            if self.logic_thread.is_alive():
+                self.logic_thread.join(timeout=1.0)
             self.logic_thread = None
             self._thread_started = False
 

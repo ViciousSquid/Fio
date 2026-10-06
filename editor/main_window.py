@@ -4906,8 +4906,12 @@ class MainWindow(QMainWindow):
                 print(f"save_layout failed: {e}")
 
             if self.view_3d is not None and self.view_3d.logic_thread:
-                self.view_3d.logic_thread.stop()
-                self.view_3d.logic_thread.join(timeout=1.0)
+                logic_thread = self.view_3d.logic_thread
+                logic_thread.stop()
+                # The thread starts in initializeGL; a window closed before
+                # (or after a failed) GL initialisation has nothing to join.
+                if logic_thread.is_alive():
+                    logic_thread.join(timeout=1.0)
 
             event.accept()
         except Exception as e:
