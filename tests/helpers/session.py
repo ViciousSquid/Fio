@@ -108,6 +108,12 @@ class FioTestSession:
             self.tick_index += 1
         return self
 
+    def publish(self):
+        """Project and publish the world as it is, without advancing time."""
+        self.logic._step_frame(0.0)
+        self.logic._publish_frame()
+        return self
+
     @contextlib.contextmanager
     def render_state(self):
         """Borrow the newest published frame, as the renderer does."""
