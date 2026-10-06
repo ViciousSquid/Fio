@@ -78,6 +78,7 @@ Xvfb (`LIBGL_ALWAYS_SOFTWARE=1`): real GL contexts and real shader compiles, but
 | F-12 | Low | Editor | `mode_label` never exists; all uses are behind `hasattr` (dead, guarded code) | Open | - |
 | F-13 | Low | Content | `door012.png` (Office_Corridor, Portal_Test) exists in no version | Pre-existing | - |
 | F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; one fix | `cea2bd2` |
+| F-15 | Low | HUD / combat | gun2 `shot_ready` reads the cooldown from `LogicThread`, which no longer holds it | Open | - |
 
 ### F-01 Block-terrain shader never compiled (High)
 
@@ -307,6 +308,99 @@ pattern of guarded legacy interface this audit is meant to remove.
 
 Reproduce: `LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a python tools/bench_compare.py
 --frames 400 maps/X.json` in each checkout.
+
+## Performance pass
+
+Goal: 3.0 at least as fast as 2.5.10 everywhere, by removing Fio-owned Python
+work from hot paths, within the 3.0 architecture. One entry per change:
+baseline, 2.5.10 comparison, change, tests, before/after, commit.
+
+### Method
+
+* **The benchmark now runs with the shipped app's PyOpenGL settings**
+  (`5eae5fe`). `main.py` sets `PYOPENGL_ERROR_CHECKING=0`; `bench_compare.py`
+  does not come through `main.py`, so every number in *Benchmarks* above
+  includes a Python `glGetError` check after each GL call (530-940 per frame)
+  that the app never runs. With the checks off, Showcase paint drops from ~40
+  to ~31 ms here. `FIO_GL_DEBUG=1` keeps the checks (then
+  `glCheckError`'s callers count GL calls per function, which is how the
+  shadow-sampler item below was found).
+* Timings: 3 interleaved rounds per version (3.0, 2.5.10, and a "before"
+  worktree for each change), 300 frames, medians; ranges in brackets.
+  Profiles: one round each, `--profile --dump`, compared per function.
+* **Wall clock cannot resolve paint changes below ~1-2 ms** on llvmpipe (the
+  driver's shading runs on the main thread too). Paint-side changes are
+  therefore measured by the profile's cumulative time for the changed
+  function, which is stable to a few percent; wall clock is reported
+  alongside, and logic (no GL) is measured by wall clock directly.
+* GL calls through ctypes are charged to their Python caller: a renderer
+  function's self time is its Python plus its GL calls. Items below say which
+  dominates.
+
+### Baseline (production settings, ms, medians of 3 rounds)
+
+| Map | Metric | 2.5.10 | 3.0 |
+| --- | --- | --- | --- |
+| _SHOWCASE | logic | 2.34 [2.29-2.61] | 2.45 [2.44-2.45] |
+| _SHOWCASE | paint (main-thread CPU) | 20.5 [20.3-24.6] | 22.0 [20.3-22.2] |
+| MonsterTest | logic / AI | 2.56 / 4.51 | 2.49 / 4.42 |
+| MonsterTest | paint (CPU) | 11.2 | 10.8 |
+| Terrain_Test_medium | logic / paint (CPU) | 1.66 / 12.6 | 1.55 / 12.1 |
+| Portal_Test | logic | 1.95 [1.87-1.99] | 2.04 [1.94-2.08] |
+| Portal_Test | paint (CPU) | 23.1 [22.3-23.8] | 24.7 [23.6-24.7] |
+| BigWorld_streaming_test | logic / AI | 2.92 / 1.04 | 2.94 / 1.04 |
+| BigWorld_streaming_test | paint (CPU) | 125.3 | 125.9 |
+
+Per function, 3.0's hot code is 2.5.10's moved into the split runtimes: self
+times match within noise except `_bind_shadow_maps` (P-01) and
+`EntityTable._advance_effects` (+0.13 ms, F-08). So parity is close, and the
+gains beyond it are in Python work both versions share.
+
+### Ranked hot paths (3.0, production settings)
+
+Profiled self time, ms/frame (the profiler inflates call-heavy Python ~2-3x;
+the order is what matters). "Shared" = same cost in 2.5.10.
+
+| # | Path | Evidence | Kind | Status |
+| --- | --- | --- | --- | --- |
+| 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | open |
+| 2 | `_bind_shadow_maps` re-sends sampler units | 136-145 us/call vs 80 in 2.5.10; 4-11 calls/frame; 3.0's 8-sampler shaders doubled its GL calls | GL calls + Python, **3.0 regression** | P-01, fixed |
+| 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | open |
+| 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB): ~10 ms per shot on BigWorld (3,604 brushes) | Python, shared; p95 spike | open |
+| 5 | Monster AI `_chase` | ~2.8 ms per AI update on MonsterTest; batched already, per-row state write-back and flag loops remain | NumPy + Python, shared | open |
+| 6 | Frustum (`extract_frustum_planes`, `aabb_in_frustum_bounds`) | 0.13-0.18 ms each, every frame | Python, shared | open |
+| 7 | `_advance_effects` five-column copy | 0.41 ms on Showcase (F-08) | NumPy, 3.0 | open |
+| 8 | Terrain `chunk_uniforms` (+ its lambda) | 68 + 342 calls/frame, ~2.6 ms on BigWorld | Python, shared | open |
+| 9 | Player collision helpers | `is_water_brush` 19-21, `brush_aabb_bounds` 20-56, `_has_headroom` 7-37 calls/frame | Python, shared | open |
+| 10 | `RenderTable.model_matrices` per pass | 1-5x per frame for the same rows (F-14) | NumPy, shared | open |
+| 11 | Brush-slot classification | `classify_slots` + `_classify_brush_slots` 1.7 ms on Portal (4.5 calls/frame, once per view) | NumPy + Python, shared | open |
+| - | BigWorld cell-debug overlay | `_paint_minimap` 9.4 ms + 293 `fillRect`/frame, only with the map's authored `show_cell_debug` on | Debug-only | not ranked |
+| - | `draw_heightfield_slots`, `draw_block_slots`, glass capture, `_point_brush_instances_at` | self time is GL driver work (llvmpipe vertex shading, ~190 raw attrib-pointer calls) | GL | not Python |
+
+### P-01 Shadow sampler units re-sent on every pass (3.0 regression)
+
+* **Baseline.** With `FIO_GL_DEBUG=1`, 3.0 makes more GL calls than 2.5.10 on
+  every map (Portal +170/frame), all from `_bind_shadow_maps` (266 vs 132 on
+  Portal). The function is byte-identical; 3.0 raised the shaders'
+  `MAX_SHADOW_LIGHTS` from 4 to 8 (the renderer already allocated 8 cube
+  maps, 2.5.10 sampled 4), so each lit pass now does 8 x (f-string, uniform
+  lookup, `glActiveTexture`, `glBindTexture`, `glUniform1i`).
+* **Change.** A sampler's unit is program state and holds until the program
+  is deleted; every compile makes a new `UniformCache`. The units are now
+  assigned on a program's first lit pass, and the live slots kept on its
+  `UniformCache`; later passes only bind the cube maps (texture units are
+  shared context state: terrain binds its own placeholder there).
+* **Tests.** `test_shadow_samplers_are_assigned_once_and_keep_their_units`
+  (`gl`): a later frame re-sends no shadow sampler unit, every program's
+  `shadowMaps[i]` reads unit base+i from GL itself, and the frame is
+  pixel-identical. Fails before (16 re-sends per frame). GL tier 162 passed.
+* **Result.** Per call 136-145 -> **80-82 us** (2.5.10: 79-83 us with half
+  the samplers). Per frame: Portal 1.44 -> 0.87 ms, Showcase 0.78 -> 0.46,
+  MonsterTest 0.58 -> 0.32 (profiled). Paint wall clock moved within noise.
+* **Noted, not changed.** `render_terrain` uploads lights through
+  `uniforms['terrain']` (a program the renderer compiles and never draws
+  with) while `terrain.shader_program` is bound; terrain then assigns its own
+  sampler units, so drawing is right. Same in 2.5.10.
 
 ## Stability
 

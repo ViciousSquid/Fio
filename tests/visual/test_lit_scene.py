@@ -229,6 +229,67 @@ def test_a_shadowed_region_differs_from_a_lit_one(renderer, context):
         "neither the cube nor its shadow is visible" % difference.max())
 
 
+def test_shadow_samplers_are_assigned_once_and_keep_their_units(
+        renderer, context, monkeypatch):
+    """A program's shadowMaps[i] samplers read units base+i on every frame.
+
+    Sampler units are program state, so they are assigned on a program's
+    first lit pass only; later passes bind the cube-maps and nothing else.
+    Checked against GL's own record of each program's uniforms, and against
+    the image, which must not change once the assignment stops being re-sent.
+    """
+    import ctypes
+    import OpenGL.GL as gl
+
+    brushes, things = glh.lit_cube_scene(shadows=True)
+    first = _render(renderer, context, brushes, things)
+    if not renderer._shadow_cubemaps:
+        pytest.skip("shadows are unavailable on this driver")
+
+    base = renderer.SHADOW_TEXTURE_UNIT_BASE
+    count = renderer.MAX_SHADOW_LIGHTS
+
+    def shadow_locations(program):
+        locations = {}
+        for i in range(count):
+            location = gl.glGetUniformLocation(program, "shadowMaps[%d]" % i)
+            if location != -1:
+                locations[location] = i
+        return locations
+
+    resent = []
+    real_uniform1i = gl.glUniform1i
+
+    def recording_uniform1i(location, value):
+        program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
+        if program and location in shadow_locations(program):
+            resent.append((program, location, value))
+        return real_uniform1i(location, value)
+
+    monkeypatch.setattr(gl, "glUniform1i", recording_uniform1i)
+    again = _render(renderer, context, brushes, things)
+    monkeypatch.undo()
+
+    assert not resent, (
+        "shadow sampler units were re-sent on a later frame: %s" % resent)
+    checked = 0
+    for name, uniforms in renderer.uniforms.items():
+        if uniforms.shadow_slots is None:
+            continue
+        locations = shadow_locations(uniforms.program)
+        assert sorted(locations.values()) == list(uniforms.shadow_slots), name
+        for location, index in locations.items():
+            unit = (ctypes.c_int * 1)()
+            gl.glGetUniformiv(uniforms.program, location, unit)
+            assert unit[0] == base + index, (
+                "%s: shadowMaps[%d] reads unit %d, not %d"
+                % (name, index, unit[0], base + index))
+            checked += 1
+    assert checked, "no lit pass assigned any shadow sampler"
+    assert np.array_equal(first, again), (
+        "the second frame of an unchanged scene differs from the first")
+
+
 # ---------------------------------------------------------------------------
 # Visual test 2 — a moving dynamic light
 # ---------------------------------------------------------------------------

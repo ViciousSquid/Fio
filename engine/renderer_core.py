@@ -85,10 +85,13 @@ class RenderView:
 
 # ---------- Utility classes ----------
 class UniformCache:
-    __slots__ = ('program', '_cache')
+    __slots__ = ('program', '_cache', 'shadow_slots')
     def __init__(self, shader_program):
         self.program = shader_program
         self._cache = {}
+        # The shadowMaps[i] slots this program samples, once their sampler
+        # units are assigned (see Renderer._bind_shadow_maps); None before.
+        self.shadow_slots = None
     def __getitem__(self, name):
         loc = self._cache.get(name)
         if loc is None:
@@ -3920,17 +3923,29 @@ layout (location = 10) in float iInstanceAlpha;
         different texture units at draw time, even when no shadowing light
         is active. Keep the cube samplers on their reserved units and bind
         texture 0 when shadow resources are unavailable.
+
+        A sampler's unit is program state: it holds from the first assignment
+        until the program is deleted, and a recompiled program gets a new
+        UniformCache. So the units are assigned on the program's first pass
+        only; every pass still binds the cube-maps, since the texture units
+        are shared context state (terrain binds its own there).
         """
         base = self.SHADOW_TEXTURE_UNIT_BASE
+        slots = uniforms.shadow_slots
+        if slots is None:
+            live = []
+            for i in range(self.MAX_SHADOW_LIGHTS):
+                loc = uniforms[f'shadowMaps[{i}]']
+                if loc != -1:
+                    gl.glUniform1i(loc, base + i)
+                    live.append(i)
+            slots = uniforms.shadow_slots = tuple(live)
         cubemaps = self._shadow_cubemaps
-        for i in range(self.MAX_SHADOW_LIGHTS):
-            loc = uniforms[f'shadowMaps[{i}]']
-            if loc == -1:
-                continue
+        count = len(cubemaps)
+        for i in slots:
             gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-            cm = cubemaps[i] if i < len(cubemaps) else 0
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-            gl.glUniform1i(loc, base + i)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP,
+                             cubemaps[i] if i < count else 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
     @staticmethod
