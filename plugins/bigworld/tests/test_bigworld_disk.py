@@ -58,6 +58,9 @@ def make_logic(player_pos):
     """A production LogicThread owns the live scene while DiskStreamingSession mutates it."""
     state = EditorState()
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = [float(player_pos[0]),
                                       float(player_pos[1]),
                                       float(player_pos[2])]

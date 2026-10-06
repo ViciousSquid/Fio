@@ -139,7 +139,11 @@ def test_core_prop_carry_and_tidy_place(logic, monkeypatch):
 
     logic.editor_state.things[:] = [prop, recept, goal]
     logic.editor_state.brushes[:] = []
-    logic.player_runtime.player.pos = glm.vec3(0, 40, 0)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
+    # The eye is camera_height (40) above the feet: level with the props.
+    logic.player_runtime.player.pos = glm.vec3(0, 0, 0)
     logic.player_runtime.player.angle = 0.0
     logic.player_runtime.player.pitch = 0.0
     logic.world_runtime.build_entity_caches()
@@ -164,7 +168,7 @@ def test_core_prop_carry_and_tidy_place(logic, monkeypatch):
     _check(core.held is prop, "core PropSession carried the tidyable Prop")
     _check(("book1", "OnCarried", None) in fired, "core OnCarried fired")
 
-    logic.player_runtime.player.angle = glm.pi
+    logic.player_runtime.player.angle = glm.pi()
     core.tick(0.016, use_pressed=True)
 
     _check(core.held is None, "core PropSession released the held Prop")

@@ -12,7 +12,10 @@ pytestmark = pytest.mark.qt
 
 
 def _real_handler(window):
-    window.config.remove_option("Display", "hudstyle")
+    # The fixture's window runs from an empty working directory, so its
+    # config may not have a Display section yet.
+    if window.config.has_section("Display"):
+        window.config.remove_option("Display", "hudstyle")
     return ConsoleCommandHandler(window)
 
 
@@ -42,7 +45,9 @@ def test_map_hudstyle_changes_the_real_view_without_persisting(main_window):
     )
 
     assert main_window.view_3d._hud_style == 4
-    assert main_window.view_3d._hud_font_override == "LCDAT&TPhoneTimeDate.ttf"
+    # The override holds the resolved font family, not the file it came from.
+    assert main_window.view_3d._hud_font_override == \
+        main_window.view_3d._hud_font_families[4]
     assert not main_window.config.has_option("Display", "hudstyle")
 
 
@@ -64,7 +69,7 @@ def test_hudfade_updates_the_real_view_logic_and_persists(main_window):
     handler.handle_command("hudfade 0")
 
     assert main_window.view_3d._hud_fade_enabled is False
-    assert main_window.view_3d.logic_thread._hud_fade_enabled is False
+    assert main_window.view_3d.logic_thread.render_runtime.hud_fade_enabled is False
     assert main_window.config.getboolean("Display", "hudfade") is False
 
 
@@ -88,6 +93,7 @@ def test_message_commands_reach_real_play_view_overlays(
         return _real(text)
 
     monkeypatch.setattr(view, method, observe)
+    view.play_mode = True   # message commands are Play Mode only
     ConsoleCommandHandler(main_window).handle_command(
         f'message{"" if method == "show_view_message" else method[-1]} "{expected}"'
     )
@@ -107,6 +113,8 @@ def test_hudstyle_is_not_shipped_in_settings_ini():
 def test_reload_hud_settings_ignores_legacy_hudstyle(main_window):
     view = main_window.view_3d
     config = main_window.config
+    if not config.has_section("Display"):
+        config.add_section("Display")
     config.set("Display", "hudstyle", "4")
     config.set("Display", "hudopacity", "80")
     config.set("Display", "hudfade", "False")

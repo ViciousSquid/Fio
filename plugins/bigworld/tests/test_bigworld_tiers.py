@@ -62,6 +62,9 @@ def started_session(things, brushes=None, activation=2048.0,
     state.brushes = list(brushes or [])
     state.things = list(things)
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
     if render_view_distance is not None:
         logic.render_runtime.view_distance = render_view_distance

@@ -90,7 +90,7 @@ def test_an_enabled_plugins_actions_are_shown(window):
     try:
         mgr.set_enabled(tidy, True)
         _build_plugins_menu(window)
-        items = plugin_action_items(window, tidy.name)
+        items = plugin_action_items(window, tidy)
         assert any(label.startswith("Load Demo map") for label, _v, _e in items), (
             "Tidy's demo-map action is missing entirely: %r" % (items,))
         for label, visible, enabled in items:
@@ -107,12 +107,12 @@ def test_toggling_the_plugin_flips_its_actions_without_a_rebuild(window):
     try:
         mgr.set_enabled(tidy, True)
         _build_plugins_menu(window)
-        before = plugin_action_items(window, tidy.name)
+        before = plugin_action_items(window, tidy)
         assert all(v for _l, v, _e in before)
 
         _toggle_plugin(window, tidy, False,
                                    _live_actions(window, tidy))
-        after = plugin_action_items(window, tidy.name)
+        after = plugin_action_items(window, tidy)
         assert not any(v for _l, v, _e in after), (
             "toggling Tidy off left its actions on screen: %r" % (after,))
     finally:

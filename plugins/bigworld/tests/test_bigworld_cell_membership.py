@@ -25,6 +25,11 @@ from editor.editor_state import EditorState
 from editor.things import Thing as FioThing
 from engine.logic_thread import LogicThread
 from engine.threaded_game_state import ThreadedGameState
+from engine.spatial import TIER_DORMANT, TIER_NEAR, cell_of_point, tier_of  # noqa: E402
+from plugins.bigworld.manager import BigWorldManager                 # noqa: E402
+from plugins.bigworld.runtime import BigWorldSession                 # noqa: E402
+
+CELL = 512.0
 
 
 def make_thing(x, z, uuid, type_name="monster", **props):
@@ -38,6 +43,9 @@ def make_logic(brushes=(), things=(), at=(0.0, 0.0)):
     state.brushes = list(brushes)
     state.things = list(things)
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
     logic.world_runtime.build_entity_caches()
     return logic

@@ -35,6 +35,9 @@ def _logic(things, footprint=(1400.0, 800.0), at=(0.0, 0.0)):
     state.things = list(things)
     state.brushes = []
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = [float(at[0]), 0.0, float(at[1])]
     logic.camera.overhead_height = 800.0
     logic.camera.overhead_height_limit = None
@@ -151,7 +154,7 @@ def test_filled_terrain_keeps_streaming_at_the_fitted_radius():
 def test_leaving_the_overhead_camera_restores_the_authored_radii():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
     assert session.manager.activation_radius < 2048.0
-    logic.footprint = None                    # switched to first person
+    logic._test_footprint = None                    # switched to first person
     session.tick()
     _authored(session, logic)
 
@@ -187,7 +190,7 @@ def test_turning_the_camera_retiers_but_leaves_residency_alone():
         forced.append(force)
         return original(pos, force=force)
     session.manager.update = update
-    logic.footprint = (700.0, 800.0, 1030.0)        # same reach, turned box
+    logic._test_footprint = (700.0, 800.0, 1030.0)        # same reach, turned box
     session.tick()
     assert (session.manager.activation_radius, logic.render_runtime.view_distance.limit) == residency
     assert True not in forced                       # no forced residency pass
@@ -198,7 +201,7 @@ def test_turning_the_camera_retiers_but_leaves_residency_alone():
 def test_the_published_radii_do_not_depend_on_when_the_fit_arrived():
     at_start, s1 = fitted_session(grid_world(), footprint=(1000.0, 500.0))
     later, s2 = fitted_session(grid_world(), footprint=None)
-    later.footprint = (1000.0, 500.0)
+    later._test_footprint = (1000.0, 500.0)
     s2.tick()
     assert (at_start.sim_near_radius, at_start.sim_active_radius) == \
         (later.sim_near_radius, later.sim_active_radius)
@@ -218,7 +221,7 @@ def test_a_camera_at_the_ceiling_still_sees_the_player():
     the player is never beyond the far plane."""
     logic, session = fitted_session(grid_world(), footprint=(4000.0, 2048.0, 4500.0))
     logic.camera.overhead_height = 2048.0
-    logic.footprint = (4100.0, 2048.0, 4600.0)      # re-fit at the new height
+    logic._test_footprint = (4100.0, 2048.0, 4600.0)      # re-fit at the new height
     session.tick()
     assert session.manager.activation_radius == 2048.0
     assert logic.render_runtime.view_distance.limit > 2048.0 * 1.4
