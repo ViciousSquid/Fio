@@ -28,9 +28,9 @@ def _thing(type_name, **props):
 # Version
 # ---------------------------------------------------------------------------
 
-def test_the_host_api_is_1_5_0():
-    assert API_VERSION == "1.5.0"
-    assert API_VERSION_INFO == version_tuple(API_VERSION) == (1, 5, 0)
+def test_the_host_api_is_1_6_0():
+    assert API_VERSION == "1.6.0"
+    assert API_VERSION_INFO == version_tuple(API_VERSION) == (1, 6, 0)
 
 
 def test_the_editor_api_offers_the_1_5_methods():
@@ -39,10 +39,10 @@ def test_the_editor_api_offers_the_1_5_methods():
         assert callable(getattr(EditorAPI, name, None)), name
 
 
-def test_a_1_4_plugin_loads_under_1_5_with_its_registrations_intact(plugin_manager):
+def test_a_1_4_plugin_loads_on_this_host_with_its_registrations_intact(plugin_manager):
     manager = plugin_manager("api_1_4_plugin")
     plugin = manager.find_plugin("api_1_4_plugin")
-    assert plugin is not None, "an API 1.4.0 plugin was refused by a 1.5.0 host"
+    assert plugin is not None, "an API 1.4.0 plugin was refused by a %s host" % API_VERSION
     assert [label for label, _f in manager.property_tabs_for("api14entity")] == ["Legacy Tab"]
     assert [label for _p, label, _cb, _tip in manager.tools_actions()] == ["Legacy Tool"]
     assert manager.dispatch_console_command("legacy", "go") == (True, "legacy:go")

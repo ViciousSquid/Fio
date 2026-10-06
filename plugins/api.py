@@ -66,8 +66,12 @@ from typing import Any, Callable, List, Optional, Tuple
 #: * 1.4.0 — optional editor Tools actions and console-command registration.
 #: * 1.5.0 — collapsible property sections, LogicState key suggestions and
 #:   entity inspectors.
-API_VERSION = "1.5.0"
-API_VERSION_INFO = (1, 5, 0)
+#: * 1.6.0 — renderer registration takes the :class:`engine.renderer.Renderer`
+#:   protocol: a factory is called as ``factory(config)``. Not compatible with
+#:   1.3–1.5 renderer factories (``cls(texture_loader, grid, world, config)``
+#:   and the old forward-renderer interface); there is no shim.
+API_VERSION = "1.6.0"
+API_VERSION_INFO = (1, 6, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -580,7 +584,7 @@ class EditorAPI:
         self._manager.register_entity_wizard(entity_type, factory)
 
     def register_renderer(self, name: str, cls) -> bool:
-        """Register a renderer under *name* in Fio's renderer registry.
+        """Register a renderer under *name* in Fio's renderer registry (API 1.6.0).
 
         *cls* is a factory called as ``cls(config)`` with the viewport's GL
         context current -- usually the renderer class itself. What it returns
@@ -591,6 +595,9 @@ class EditorAPI:
         G-buffer -- is entirely its own; it need not inherit anything from
         Fio, though :class:`engine.renderer.core.RendererCore` offers reusable
         infrastructure.
+
+        A plugin that registers a renderer declares ``api_version = "1.6.0"``:
+        1.3–1.5 hosts construct renderers differently.
 
         Returns True if registered (False in a headless/player context with no
         viewport). This is how a whole new renderer — e.g. a deferred one —

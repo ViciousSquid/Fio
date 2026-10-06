@@ -61,8 +61,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.5.0"` |
-| `API_VERSION_INFO` | `(1, 5, 0)` |
+| `API_VERSION` | `"1.6.0"` |
+| `API_VERSION_INFO` | `(1, 6, 0)` |
 
 History:
 
@@ -75,6 +75,12 @@ History:
 - **1.5.0** — [editor content extensions](#editor-content-extensions-api-150): collapsible
   property sections, LogicState preset keys and entity inspectors; [world pause and
   actor pick](#world-pause-and-actor-pick-api-150-play-mode). Additive: every 1.4.0
+  plugin loads and behaves unchanged.
+- **1.6.0** — renderer registration takes the `engine.renderer.Renderer` protocol
+  (see [`register_renderer`](#editor-ui-extensions-api-130)): a renderer factory is
+  called as `factory(config)`. **Not compatible** with renderer factories written for
+  1.3–1.5 (`cls(texture_loader, grid_size, world_size, config)` and the old
+  forward-renderer interface); there is no compatibility shim. Every other 1.5.0
   plugin loads and behaves unchanged.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
@@ -324,7 +330,8 @@ only while the plugin is enabled.
 def register_renderer(self, name: str, cls) -> bool
 ```
 Register a renderer under *name* in Fio's renderer registry (`"Forward"` is
-the built-in one). *cls* is a factory called as `cls(config)` with the
+the built-in one). This contract is API 1.6.0: a plugin that registers a
+renderer declares `api_version = "1.6.0"`. *cls* is a factory called as `cls(config)` with the
 viewport's GL context current — usually the renderer class itself — and what
 it returns must satisfy the `engine.renderer.Renderer` protocol:
 
