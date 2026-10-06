@@ -51,6 +51,9 @@ class RenderState:
         self.player2_dead = False
         self.player2_underwater = False
         self.splitscreen_active = False
+        #: The level-complete screen's settings while it is up, else None.
+        #: Read by every play paint, so it must exist before the first publish.
+        self.level_complete_ui = None
         
         # Scene Data
         # The entity half of the dense projection (engine.entity_table), with
@@ -148,6 +151,7 @@ class RenderState:
         self.player2_dead = False
         self.player2_underwater = False
         self.splitscreen_active = False
+        self.level_complete_ui = None
         # Keep the dense projection objects across buffer recycling.  Their
         # published slot vectors below are emptied, so an interstitial frame
         # cannot draw stale rows, while the next LogicThread publish reuses the
