@@ -911,3 +911,33 @@ def test_the_spin_matches_the_scalar_arithmetic_bit_for_bit():
     want = [(a + s * delta) % 360.0 for a, s in zip(angles, speeds)]
     for g, w in zip(got.tolist(), want):
         assert g == w and math.copysign(1, g) == math.copysign(1, w)
+
+
+@pytest.mark.perf
+def test_a_sequence_point_that_changes_no_later_row_does_not_replan_the_pass():
+    """Re-planning the rest of the pass after every sequence point cost ~0.3 ms
+    a tick on the showcase map without ever changing a plan. Mover 0 reaches
+    its end every tick (a sequence point) and its output only touches itself,
+    so the later movers' plan stands. The loop must still agree throughout."""
+    brushes = [{"id": "b%d" % k, "name": "b%d" % k, "pos": [k * 200.0, 0.0, 0.0],
+                "size": [64.0, 64.0, 64.0], "is_mover": True, "start_on": True,
+                "speed": 64.0, "distance": 128.0, "direction": [1, 0, 0]}
+               for k in range(3)]
+    brushes[0].update(speed=6000.0, distance=1.0)
+    brushes[0]["_io_connections"] = [OutputConnection(
+        output_name="OnFullyOpen", target_name="b0", input_name="SetSpeed",
+        parameter="6000", delay=0.0, target_id="b0")]
+    ref = _Side(True, brushes, [], None)
+    new = _Side(False, brushes, [], None)
+
+    group = new.logic.mover_runtime._mover_table.movers
+    plans = []
+    real_plan = group._plan
+    group._plan = lambda *a: (plans.append(a[1]), real_plan(*a))[1]
+    for tick in range(20):
+        ref.tick(1 / 60)
+        new.tick(1 / 60)
+        assert repr(ref.snapshot(True)) == repr(new.snapshot(True)), tick
+        assert repr(ref.events) == repr(new.events), tick
+    assert any(name == "b0" for name, *_ in new.events), "no sequence point ran"
+    assert plans and all(start == 0 for start in plans), plans

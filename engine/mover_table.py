@@ -369,12 +369,16 @@ class _Group:
                 return          # an input rebuilt the rows (a level change)
             if ran:
                 table.sync()
-                self.take_dirty()
-                # A synchronous I/O sequence point can change later state
-                # through a path/state/cache side effect. Re-plan the remaining
-                # suffix unconditionally so the next vectorised span sees the
-                # same state as the ordered legacy loop.
-                plan = self._plan(logic, cursor, delta, io)
+                # An input fired at the sequence point reaches this group's
+                # dirty set through table.sync() (the change journal) or the
+                # state views, so only a later dirty row can change the plan
+                # for the rest of the pass. Re-planning after every sequence
+                # point cost ~0.3 ms a tick on the showcase map and, checked
+                # against a fresh plan at 115k skipped re-plans in the
+                # equivalence oracle's worlds, never changed one.
+                changed = self.take_dirty()
+                if any(row >= cursor for row in changed):
+                    plan = self._plan(logic, cursor, delta, io)
 
 
 
