@@ -955,13 +955,14 @@ class EntityTable:
             family = effect_store.family_id[:count]
             active = effect_store.active[:count]
             lifetime = np.maximum(effect_store.lifetime[:count], 0.01)
+            # The animation's origin, as _resolve_row derives it: an Effect
+            # with no playback start runs on the shared clock origin.
             spawn = effect_store.spawn_time[:count]
+            spawn = np.where(spawn > 0.0, spawn, _CLOCK_ORIGIN)
             phase = np.clip(effect_store.phase[:count], 0.0, 1.0)
             self.effect_type[effect_ls] = family
             self.effect_lifetime[effect_ls] = lifetime
-            self.effect_spawn_time[effect_ls] = np.where(
-                spawn > 0.0, spawn, _CLOCK_ORIGIN
-            )
+            self.effect_spawn_time[effect_ls] = spawn
             self.effect_phase[effect_ls] = phase
             self.effect_active[effect_ls] = active
         else:

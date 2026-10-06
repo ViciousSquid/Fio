@@ -603,3 +603,26 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
     assert float(table.effect_elapsed[0]) < 0.1
+
+
+def test_a_looping_fire_in_play_runs_on_the_origin_it_publishes():
+    """A FIRE with no playback start animates on the shared clock origin, the
+    value its effect_spawn_time column carries -- not on perf_counter's own
+    epoch, which as a float32 elapsed loses precision with the machine's
+    uptime (and is far slower to take sin() of)."""
+    import time
+    from engine.entity_table import _CLOCK_ORIGIN
+
+    effect = Effect(properties={"effect_type": EFFECT_FIRE})
+    store = EffectStore()
+    store.begin_session([effect])
+    assert float(store.spawn_time[0]) == 0.0
+
+    table = EntityTable()
+    before = time.perf_counter()
+    table.begin_frame([effect], epoch=1, effect_runtime=True, effect_store=store)
+    after = time.perf_counter()
+
+    assert float(table.effect_spawn_time[0]) == _CLOCK_ORIGIN
+    elapsed = float(table.effect_elapsed[0])
+    assert before - _CLOCK_ORIGIN - 1e-3 <= elapsed <= after - _CLOCK_ORIGIN + 1e-3

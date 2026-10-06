@@ -78,7 +78,8 @@ Xvfb (`LIBGL_ALWAYS_SOFTWARE=1`): real GL contexts and real shader compiles, but
 | F-12 | Low | Editor | `mode_label` never exists; all uses are behind `hasattr` (dead, guarded code) | Open | - |
 | F-13 | Low | Content | `door012.png` (Office_Corridor, Portal_Test) exists in no version | Pre-existing | - |
 | F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; one fix | `cea2bd2` |
-| F-15 | Low | HUD / combat | gun2 `shot_ready` read the cooldown from `LogicThread`, which no longer holds it | Fixed | see below |
+| F-15 | Low | HUD / combat | gun2 `shot_ready` read the cooldown from `LogicThread`, which no longer holds it | Fixed | `f60b382` |
+| F-16 | Medium | Effects | A looping FIRE in Play animated on `perf_counter`'s epoch (the machine's uptime) as a float32 | Fixed | see below |
 
 ### F-01 Block-terrain shader never compiled (High)
 
@@ -271,6 +272,21 @@ click queue (the logic thread still refused the shot, so no extra shot ever
 fired). Reads `combat_runtime._last_player_shot_time` now.
 `test_gun2_is_published_as_not_ready_while_it_cools_down` (e2e; fails
 before).
+
+### F-16 Looping Effects in Play animated on the machine's uptime (Medium)
+
+Found while profiling `_advance_effects` (F-08's path). With an EffectStore
+(every Play session), 3.0 computed `elapsed = now - spawn_time` from the
+store's raw column, where a looping FIRE has no playback start (0.0), while
+the table's published origin substitutes the shared clock origin; 2.5.10
+measured from that origin. So a looping fire's `effect_elapsed` (the shader's
+animation clock and the light flicker's input) was `perf_counter()` itself:
+time since boot, held as float32. Its resolution degrades with uptime (~8 ms
+after a day, ~60 ms after a week), so the flame animation and flicker
+coarsen the longer the machine has been up. Now measured from the origin it
+publishes. `test_a_looping_fire_in_play_runs_on_the_origin_it_publishes`
+(fails before: elapsed 5903 s, this container's uptime). Not a measurable
+speed change (`_effect_flicker` 0.042 -> 0.040 ms/frame).
 
 ### F-14 NumPy 2.5.3 / CPython 3.14 (Info, measured)
 
