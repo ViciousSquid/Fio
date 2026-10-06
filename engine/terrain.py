@@ -926,13 +926,13 @@ class Terrain:
         World map's terrain without meshing the entire grid at once.
         """
         cs = self.chunk_size
-        self.set_bounds(
-            int(math.floor((min_wx - self.offset_x) / cs)),
-            int(math.floor((max_wx - self.offset_x) / cs)),
-            int(math.floor((min_wz - self.offset_z) / cs)),
-            int(math.floor((max_wz - self.offset_z) / cs)),
-            prune=prune,
-        )
+        # The rectangle's max edge is exclusive: a world that ends exactly on a
+        # chunk boundary must not gain a chunk row/column lying wholly past it.
+        min_cx = int(math.floor((min_wx - self.offset_x) / cs))
+        min_cz = int(math.floor((min_wz - self.offset_z) / cs))
+        max_cx = max(min_cx, int(math.ceil((max_wx - self.offset_x) / cs)) - 1)
+        max_cz = max(min_cz, int(math.ceil((max_wz - self.offset_z) / cs)) - 1)
+        self.set_bounds(min_cx, max_cx, min_cz, max_cz, prune=prune)
 
     def _chunk_bounds(self):
         return (self.min_chunk_x, self.max_chunk_x,

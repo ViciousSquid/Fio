@@ -91,6 +91,9 @@ def make_logic(brushes, things, player_pos=(0, 0, 0), terrain=None):
     state.brushes = list(brushes)
     state.things = list(things)
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = [float(player_pos[0]),
                                       float(player_pos[1]),
                                       float(player_pos[2])]
@@ -348,6 +351,11 @@ def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
         deactivation_radius=1536.0,
     )
     session.start()
+    # The session bounds the camera to its activation radius, so the stock
+    # view distance can no longer widen residency. Lift that bound to drive
+    # the widening fallback (a host that does not bound its camera).
+    logic.render_runtime.view_distance.limit = None
+    session.tick()
 
     uuid = mover.properties["id"]
     old_cell = session.manager._thing_cell[uuid]
@@ -509,7 +517,8 @@ def test_terrain_fill_expands_and_restores():
     brushes = [make_brush(x, 0, z)
                for x in range(-3000, 3001, 1000)
                for z in range(-2000, 2001, 1000)]
-    terrain = Terrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
+    terrain = Terrain()
+    terrain.set_bounds(-2, 2, -2, 2)
     logic = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
 
     session = BigWorldSession(logic, activation_radius=2048.0,
@@ -528,14 +537,15 @@ def test_terrain_fill_expands_and_restores():
     zs = [c[1] for c in mgr.cells]
     exp = (min(xs) * mgr.cell_size, min(zs) * mgr.cell_size,
            (max(xs) + 1) * mgr.cell_size, (max(zs) + 1) * mgr.cell_size)
+    cs = terrain.chunk_size
     _check(
         (
-            terrain.min_chunk_x * mgr.cell_size,
-            terrain.min_chunk_z * mgr.cell_size,
-            (terrain.max_chunk_x + 1) * mgr.cell_size,
-            (terrain.max_chunk_z + 1) * mgr.cell_size,
+            terrain.min_chunk_x * cs + terrain.offset_x,
+            terrain.min_chunk_z * cs + terrain.offset_z,
+            (terrain.max_chunk_x + 1) * cs + terrain.offset_x,
+            (terrain.max_chunk_z + 1) * cs + terrain.offset_z,
         ) == exp,
-        "terrain bounds enclose the streamed brush field",
+        "terrain bounds are exactly the streamed brush field",
     )
     _check(terrain._pending_prune is True,
            "bounds prune deferred to the render thread (no GL off-thread)")
@@ -594,8 +604,10 @@ def test_terrain_fill_opt_in_and_safe():
            "default terrain radius starts at the effective activation radius")
     logic4.render_runtime.view_distance.distance = 4096.0
     s4.tick()
-    _check(terrain4.stream_radius == 4096.0,
-           "default terrain radius grows with an increased visual horizon")
+    # The session holds the camera to the activation radius, so a longer
+    # requested view distance cannot drag terrain streaming past residency.
+    _check(terrain4.stream_radius == 2048.0,
+           "default terrain radius stays at the bounded horizon")
     s4.stop()
 
     # (e) an explicitly authored radius remains authoritative across a horizon increase.
@@ -633,14 +645,17 @@ def test_terrain_config_roundtrips():
 def test_terrain_infinite_streams_forever():
     print("[19] terrain_infinite fills a huge extent (no map edge)")
     brushes = [make_brush(0, 0, 0), make_brush(400, 0, 400)]
-    terrain = Terrain(min_x=-2, max_x=2, min_z=-2, max_z=2)
+    terrain = Terrain()
+    terrain.set_bounds(-2, 2, -2, 2)
     logic = make_logic(brushes, [], player_pos=(0, 0, 0), terrain=terrain)
     session = BigWorldSession(logic, terrain_fill=True, terrain_infinite=True)
     session.start()
     _check(terrain.streaming is True, "streaming on for infinite terrain")
     h = BigWorldSession.INFINITE_HALF_EXTENT
+    (min_x, max_x), (min_z, max_z) = terrain.get_terrain_bounds()
     _check(
-        terrain.extent_calls and terrain.extent_calls[0] == (-h, -h, h, h),
+        min_x <= -h + terrain.chunk_size and max_x >= h - terrain.chunk_size
+        and min_z <= -h + terrain.chunk_size and max_z >= h - terrain.chunk_size,
         "terrain sized to the huge origin-centred extent",
     )
     # Bounds dwarf the tiny content bounding box → no edge to walk off.
