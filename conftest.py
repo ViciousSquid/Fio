@@ -359,6 +359,34 @@ def _qt_callback_errors_fail_the_test():
         _QT_CALLBACK_ERRORS.clear()
         pytest.fail("exception escaped a Qt callback:\n" + errors[0],
                     pytrace=False)
+    _fail_on_a_held_modifier()
+
+
+def _fail_on_a_held_modifier():
+    """Fail a test that leaves Qt believing a modifier key is still down.
+
+    Qt keeps one keyboard state for the whole process. A synthetic Ctrl+Z sent
+    as ``QTest.keyClick(w, Qt.Key_Z, Qt.ControlModifier)`` never releases Ctrl,
+    and every later test then runs with Ctrl held: the editor's plain
+    shortcuts (the Surface Inspector's T, for one) ignore themselves. The
+    state is reset so the next test starts clean, and this test is failed.
+    """
+    qt_widgets = sys.modules.get("PyQt5.QtWidgets")
+    if qt_widgets is None or qt_widgets.QApplication.instance() is None:
+        return
+    held = int(qt_widgets.QApplication.keyboardModifiers())
+    if not held:
+        return
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QWidget
+    probe = QWidget()
+    for key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+        QTest.keyRelease(probe, key)
+    probe.deleteLater()
+    pytest.fail("the test left modifier keys held (Qt state %#x); send the "
+                "modifier's own press and release, as a keyboard does" % held,
+                pytrace=False)
 
 
 _SETTINGS_INI = os.path.join(_ROOT, "settings.ini")

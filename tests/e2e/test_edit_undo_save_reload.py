@@ -20,6 +20,17 @@ pytestmark = [pytest.mark.qt, pytest.mark.integration]
 MAP = "maps/_SHOWCASE.json"
 
 
+def _chord(window, key):
+    """Ctrl+*key* the way a keyboard types it: Ctrl goes down and comes up.
+
+    ``QTest.keyClick(..., Qt.ControlModifier)`` alone leaves Qt believing Ctrl
+    is still held, which every later test then sees.
+    """
+    QTest.keyPress(window, Qt.Key_Control)
+    QTest.keyClick(window, key, Qt.ControlModifier)
+    QTest.keyRelease(window, Qt.Key_Control)
+
+
 def _published_brushes(session):
     """``{id: (centre, half extents)}`` from the newest published frame."""
     session.step(2)
@@ -64,13 +75,13 @@ def test_delete_undo_redo_save_and_reload_round_trip(fio_session, tmp_path):
     _assert_published_matches_authored(session)
 
     # Undo brings it back, as a rebuilt object with the same id and bounds.
-    QTest.keyClick(window, Qt.Key_Z, Qt.ControlModifier)
+    _chord(window, Qt.Key_Z)
     assert len(session.state.brushes) == count
     _assert_published_matches_authored(session)
     assert _authored_brushes(session.state.brushes) == _authored_brushes(on_disk["brushes"])
 
     # Redo deletes it again.
-    QTest.keyClick(window, Qt.Key_Y, Qt.ControlModifier)
+    _chord(window, Qt.Key_Y)
     assert victim_id not in {b["id"] for b in session.state.brushes}
     _assert_published_matches_authored(session)
 
