@@ -290,6 +290,10 @@ class QtGameView(QOpenGLWidget):
         self.gizmo_object_start_pos = None
         self.drag_start_on_axis = None
         self.terrain_sculpt_active = False
+        # Where the sculpt cursor is; off-screen until the mouse moves over the
+        # view. Read by every paint while sculpting, which can begin before it.
+        self._terrain_brush_mouse_pos = QPoint(-1, -1)
+        self._terrain_brush_hit = None
         self.terrain_sculpt_painting = False
         self.terrain_sculpt_mode = 'raise'
         self.terrain_sculpt_radius = 50.0
