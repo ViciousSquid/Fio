@@ -941,3 +941,38 @@ def test_a_sequence_point_that_changes_no_later_row_does_not_replan_the_pass():
         assert repr(ref.events) == repr(new.events), tick
     assert any(name == "b0" for name, *_ in new.events), "no sequence point ran"
     assert plans and all(start == 0 for start in plans), plans
+
+
+@pytest.mark.parametrize("with_movers", [True, False])
+def test_a_group_with_no_rows_plans_nothing(with_movers):
+    """Most maps have no doors, or no movers at all; an empty group's pass
+    commits nothing, so it must not build a plan every tick. The movers that
+    do exist still agree with the reference loop."""
+    brushes = [{"id": "b%d" % k, "name": "b%d" % k, "pos": [k * 200.0, 0.0, 0.0],
+                "size": [64.0, 64.0, 64.0], "is_mover": with_movers,
+                "start_on": True, "speed": 64.0, "distance": 128.0,
+                "direction": [1, 0, 0]}
+               for k in range(2)]
+    ref = _Side(True, brushes, [], None)
+    new = _Side(False, brushes, [], None)
+
+    table = new.logic.mover_runtime._mover_table
+    plans = {"movers": 0, "doors": 0}
+    for name in plans:
+        group = getattr(table, name)
+        real_plan = group._plan
+
+        def counting(*args, _name=name, _real=real_plan):
+            plans[_name] += 1
+            return _real(*args)
+        group._plan = counting
+    for tick in range(10):
+        ref.tick(1 / 60)
+        new.tick(1 / 60)
+        assert repr(ref.snapshot(True)) == repr(new.snapshot(True)), tick
+    assert len(table.doors.index) == 0
+    assert plans["doors"] == 0, plans
+    if with_movers:
+        assert len(table.movers.index) == 2 and plans["movers"] == 10, plans
+    else:
+        assert len(table.movers.index) == 0 and plans["movers"] == 0, plans

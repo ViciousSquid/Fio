@@ -350,10 +350,15 @@ class _Group:
 
     def _walk(self, logic, delta, table):
         """One pass in list order: vectorised between sequence points."""
+        self.dirty.clear()
+        if not self.index:
+            # Most maps have no movers or no doors. With no rows the plan is
+            # empty and the pass below commits nothing, but building it cost
+            # some thirty NumPy calls per group per tick.
+            return
         io = logic.io_manager
         ride = self._ride(logic)
         version = self.version
-        self.dirty.clear()
         cursor = 0
         plan = self._plan(logic, cursor, delta, io)
         while True:

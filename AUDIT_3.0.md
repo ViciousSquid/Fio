@@ -363,7 +363,7 @@ the order is what matters). "Shared" = same cost in 2.5.10.
 
 | # | Path | Evidence | Kind | Status |
 | --- | --- | --- | --- | --- |
-| 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | open |
+| 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | P-02, fixed |
 | 2 | `_bind_shadow_maps` re-sends sampler units | 136-145 us/call vs 80 in 2.5.10; 4-11 calls/frame; 3.0's 8-sampler shaders doubled its GL calls | GL calls + Python, **3.0 regression** | P-01, fixed |
 | 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | open |
 | 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB): ~10 ms per shot on BigWorld (3,604 brushes) | Python, shared; p95 spike | open |
@@ -397,10 +397,41 @@ the order is what matters). "Shared" = same cost in 2.5.10.
 * **Result.** Per call 136-145 -> **80-82 us** (2.5.10: 79-83 us with half
   the samplers). Per frame: Portal 1.44 -> 0.87 ms, Showcase 0.78 -> 0.46,
   MonsterTest 0.58 -> 0.32 (profiled). Paint wall clock moved within noise.
+* **Commit.** `96de537`.
 * **Noted, not changed.** `render_terrain` uploads lights through
   `uniforms['terrain']` (a program the renderer compiles and never draws
   with) while `terrain.shader_program` is bound; terrain then assigns its own
   sampler units, so drawing is right. Same in 2.5.10.
+
+### P-02 Empty mover and door groups planned every tick
+
+* **Baseline.** `mover_table` self time 0.75-1.05 ms/frame (profiled) on every
+  map, with or without movers; Terrain_Test_medium has no brushes at all.
+  Same in 2.5.10. `MoverTable._walk` has no empty-group exit: each of the two
+  groups (linear movers, doors) built a full plan over zero rows every tick
+  (`arange`, masks, `_step`'s ~25 array ops, `concatenate`, `unique`,
+  `searchsorted`, a no-op `_commit`). Most maps have no doors; many have no
+  movers. (`publish` already returned early when both groups were empty.)
+* **Change.** `_walk` returns after clearing the dirty set when its group has
+  no rows; with none, the pass it skips commits nothing and fires nothing.
+* **Tests.** `test_a_group_with_no_rows_plans_nothing` (movers only, and
+  neither): the empty group never plans, the existing group plans once a tick
+  and still matches the reference mover loop every tick. Fails before (the
+  empty group planned 10 of 10 ticks). Mover equivalence suite: 22 passed.
+* **Result.** Logic tick median (ms; 3 interleaved rounds):
+
+  | Map | 2.5.10 | before | after |
+  | --- | --- | --- | --- |
+  | Terrain_Test_medium | 1.77 | 1.75 | **0.95** (-46%) |
+  | Portal_Test | 2.14 | 2.13 | **1.43** (-33%) |
+  | MonsterTest | 2.59 | 3.07 | **2.52** (-18%) |
+  | _SHOWCASE | 2.55 | 2.63 | **2.24** (-15%) |
+  | BigWorld_streaming_test | 3.03 | 3.11 | **2.77** (-11%) |
+
+  Python calls per logic tick -50 to -100; `mover_table` self time on maps
+  with neither group 0.83-0.85 -> 0.05 ms. The logic tick is now at or below
+  2.5.10's on every map. (BigWorld's p95, ~10.8 ms in both versions, is the
+  hitscan, ranked #4.)
 
 ## Stability
 
