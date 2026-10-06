@@ -518,6 +518,9 @@ def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
 
 def test_console_delete_during_play_removes_the_entity_from_the_session(main_window):
     from editor.console_commands import ConsoleCommandHandler
+    from engine.logic_thread import LogicThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
 
     grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
     wall = box_brush("wall", (200, 64, 0), (32, 128, 256))

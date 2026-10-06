@@ -47,6 +47,9 @@ def make_box(pos=(0, 0, 0), size=(64, 64, 64), **extra):
 @pytest.fixture
 def editor(main_window):
     host = main_window
+    # Direct side stretching and the marquee belong to the Select tool; a new
+    # window starts on the Brush tool.
+    host.set_tool_mode('select')
     view = host.view_top
     view.resize(800, 600)
     view.zoom_factor = 1.0
@@ -1359,6 +1362,8 @@ def test_the_host_serves_every_timer_callback_of_a_shown_view(editor):
         view._check_camera_changed()
         view._update_connection_animations()
         view._end_nudge_burst()
-        assert view._last_camera_pos == (0.0, 0.0, 0.0)
+        camera = host.view_3d.camera
+        assert view._last_camera_pos == (
+            float(camera.pos.x), float(camera.pos.y), float(camera.pos.z))
     finally:
         view.window().hide()

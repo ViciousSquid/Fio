@@ -27,6 +27,9 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     state.things = things
     state.brushes = []
     logic = LogicThread(ThreadedGameState(), state)
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = glm.vec3(*player_pos)
     logic.player_runtime.player.angle = 0.0
     logic.world_runtime.build_entity_caches()

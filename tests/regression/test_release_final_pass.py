@@ -513,6 +513,9 @@ def _portal_session():
 
 def _put(logic, where):
     import glm
+    if logic.player_runtime.player is None:
+        from engine.player import Player
+        logic.player_runtime.player = Player(0.0, 0.0)
     logic.player_runtime.player.pos = glm.vec3(*where)
     logic.player_runtime.player.velocity = glm.vec3(0.0, 0.0, 0.0)
 
