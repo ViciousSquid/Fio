@@ -100,11 +100,11 @@ def _render(renderer, context, things, eye=glh.CAMERA_EYE,
 
 def _count_sprite_draws(renderer):
     """Wrap the sprite pass and count the instanced draws issued inside it."""
-    import engine.renderer.passes as rc
+    import OpenGL.GL as gl
 
     seen = {"draws": 0, "instances": 0}
     original_pass = renderer.draw_sprites_instanced
-    real_draw = rc.gl.glDrawArraysInstanced
+    real_draw = gl.glDrawArraysInstanced
 
     def counting_draw(mode, first, count, instances, *a, **k):
         seen["draws"] += 1
@@ -112,11 +112,11 @@ def _count_sprite_draws(renderer):
         return real_draw(mode, first, count, instances, *a, **k)
 
     def wrapped(*args, **kwargs):
-        rc.gl.glDrawArraysInstanced = counting_draw
+        gl.glDrawArraysInstanced = counting_draw
         try:
             return original_pass(*args, **kwargs)
         finally:
-            rc.gl.glDrawArraysInstanced = real_draw
+            gl.glDrawArraysInstanced = real_draw
 
     renderer.draw_sprites_instanced = wrapped
     return seen
@@ -267,15 +267,13 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
     """Monster projectiles: an (N, 3) array, one instanced draw, visible."""
     import OpenGL.GL as gl
 
-    import engine.renderer.passes as rc
-
     red = _solid((255, 0, 0))
     projection, view, _ = glh.camera_matrices(aspect=1.0)
     positions = np.array([[-60.0, 60.0, 0.0], [0.0, 60.0, 0.0],
                           [60.0, 60.0, 0.0]], dtype=np.float32)
     draws = []
-    real = rc.gl.glDrawArraysInstanced
-    rc.gl.glDrawArraysInstanced = lambda mode, first, count, n, *a: (
+    real = gl.glDrawArraysInstanced
+    gl.glDrawArraysInstanced = lambda mode, first, count, n, *a: (
         draws.append(int(n)), real(mode, first, count, n, *a))[1]
     try:
         context.bind()
@@ -287,7 +285,7 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
         gl.glFinish()
         pixels = context.read_pixels()
     finally:
-        rc.gl.glDrawArraysInstanced = real
+        gl.glDrawArraysInstanced = real
 
     assert drawn == 3 and draws == [3]
     reddish = (pixels[..., 0] > 128) & (pixels[..., 1] < 64)

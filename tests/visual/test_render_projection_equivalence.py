@@ -352,24 +352,24 @@ def test_sprite_renderer_has_no_legacy_object_path(renderer):
 
 def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
     """A populated EntityTable reaches GL through the instanced sprite pass."""
-    import engine.renderer.passes as rc
+    import OpenGL.GL as gl
 
     brushes, things = _entity_scene()
     published = list(things)
     calls = {"draws": 0, "instances": 0}
-    real = rc.gl.glDrawArraysInstanced
+    real = gl.glDrawArraysInstanced
 
     def draw_instanced(mode, first, count, instances, *args, **kwargs):
         calls["draws"] += 1
         calls["instances"] += int(instances)
         return real(mode, first, count, instances, *args, **kwargs)
 
-    rc.gl.glDrawArraysInstanced = draw_instanced
+    gl.glDrawArraysInstanced = draw_instanced
     try:
         _render(renderer, context, brushes, published, numeric=True,
                 live_things=things)
     finally:
-        rc.gl.glDrawArraysInstanced = real
+        gl.glDrawArraysInstanced = real
 
     assert calls["draws"] >= 1
     assert calls["instances"] >= 3, (
