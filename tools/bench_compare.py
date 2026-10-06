@@ -15,14 +15,14 @@ Needs a display with OpenGL (``xvfb-run -a``; ``LIBGL_ALWAYS_SOFTWARE=1``
 selects llvmpipe).  Usage::
 
     xvfb-run -a python tools/bench_compare.py [--frames N] [--json out.json]
-        [--profile] [map.json ...]
+        [--profile] [--memory] [map.json ...]
 
 Runs with main.py's PyOpenGL settings (no per-call glGetError; FIO_GL_DEBUG=1
 keeps it).  Reported per map: load ms, enter-play ms, per-frame logic and paint ms
 (median / p95), the paint's main-thread CPU ms (submission without the
 software rasteriser's worker threads), Python function calls per frame for each phase (machine
-independent: a Python hot loop shows up here before it shows up as time), and
-traced Python/NumPy memory growth over the run.
+independent: a Python hot loop shows up here before it shows up as time), and,
+with ``--memory``, traced Python/NumPy memory growth over the run.
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ class Bench:
         assert not logic.is_alive(), "logic thread did not stop"
         return logic
 
-    def run_map(self, path, frames, profile=False):
+    def run_map(self, path, frames, profile=False, memory=False):
         from PyQt5.QtCore import Qt
         from OpenGL import GL
         window, view = self.window, self.view
@@ -175,12 +175,17 @@ class Bench:
         for index in range(warmup):
             frame(index, False)
         gc.collect()
-        tracemalloc.start()
-        mem_before = tracemalloc.get_traced_memory()[0]
+        # tracemalloc hooks every allocation, which slows NumPy-heavy code
+        # (the monster AI ~4x): trace memory only when asked to, and then
+        # read the timings of that run as inflated.
+        if memory:
+            tracemalloc.start()
+            mem_before = tracemalloc.get_traced_memory()[0]
         for index in range(warmup, warmup + frames):
             frame(index, True)
-        mem_after, mem_peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        if memory:
+            mem_after, mem_peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
 
         window.enter_play_mode()   # Stop
         self.app.processEvents()
@@ -199,14 +204,15 @@ class Bench:
             # the driver's worker threads, so this is what Fio's submission
             # costs, the part a hardware GPU would still leave on the CPU.
             "paint_cpu_ms_median": round(statistics.median(paint_cpu_ms), 3),
-            "traced_growth_kb": round((mem_after - mem_before) / 1024.0, 1),
-            "traced_peak_kb": round((mem_peak - mem_before) / 1024.0, 1),
             "pass_ms_mean": {name: round(total / frames, 3)
                              for name, total in sorted(pass_totals.items())},
             "threads": sorted(t.name for t in __import__("threading").enumerate()),
             "things": len(window.state.things),
             "brushes": len(window.state.brushes),
         }
+        if memory:
+            result["traced_growth_kb"] = round((mem_after - mem_before) / 1024.0, 1)
+            result["traced_peak_kb"] = round((mem_peak - mem_before) / 1024.0, 1)
         if profile:
             result["logic_calls_per_frame"] = round(_call_count(logic_prof) / frames)
             result["paint_calls_per_frame"] = round(_call_count(paint_prof) / frames)
@@ -225,6 +231,8 @@ def main(argv=None):
     parser.add_argument("--json")
     parser.add_argument("--profile", action="store_true",
                         help="count Python calls per frame (slower)")
+    parser.add_argument("--memory", action="store_true",
+                        help="trace Python/NumPy memory growth (slows timings)")
     parser.add_argument("--dump", help="directory to write .pstats files to")
     parser.add_argument("--top", type=int, default=0,
                         help="print the N hottest functions per phase")
@@ -256,7 +264,8 @@ def _run(args):
     bench = Bench(app)
     results = []
     for path in args.maps:
-        result = bench.run_map(path, args.frames, profile=args.profile)
+        result = bench.run_map(path, args.frames, profile=args.profile,
+                               memory=args.memory)
         for phase in ("logic", "paint"):
             prof = result.pop("_%s_profile" % phase, None)
             if prof is not None and args.dump:
