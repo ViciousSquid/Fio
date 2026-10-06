@@ -434,6 +434,26 @@ def main_window(qt_app, tmp_path, monkeypatch):
         _flush_deferred_deletes(qt_app)
 
 
+@pytest.fixture
+def fio_session(qt_app):
+    """Open real Fio sessions on maps: ``fio_session("maps/X.json")``.
+
+    See :class:`tests.helpers.session.FioTestSession`. Every session opened
+    through this is closed after the test, even if it fails.
+    """
+    from tests.helpers.session import FioTestSession
+    opened = []
+
+    def open_session(level, **kwargs):
+        session = FioTestSession(qt_app, level, **kwargs)
+        opened.append(session)
+        return session
+
+    yield open_session
+    for session in reversed(opened):
+        session.close()
+
+
 def _flush_deferred_deletes(qt_app):
     """Actually destroy widgets handed to ``deleteLater``.
 
