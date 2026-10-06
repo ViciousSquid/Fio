@@ -78,7 +78,7 @@ Xvfb (`LIBGL_ALWAYS_SOFTWARE=1`): real GL contexts and real shader compiles, but
 | F-12 | Low | Editor | `mode_label` never exists; all uses are behind `hasattr` (dead, guarded code) | Open | - |
 | F-13 | Low | Content | `door012.png` (Office_Corridor, Portal_Test) exists in no version | Pre-existing | - |
 | F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; one fix | `cea2bd2` |
-| F-15 | Low | HUD / combat | gun2 `shot_ready` reads the cooldown from `LogicThread`, which no longer holds it | Open | - |
+| F-15 | Low | HUD / combat | gun2 `shot_ready` read the cooldown from `LogicThread`, which no longer holds it | Fixed | see below |
 
 ### F-01 Block-terrain shader never compiled (High)
 
@@ -260,6 +260,17 @@ map); the Play button kept saying Stop. The handler now takes the Stop path.
 `MainWindow` never creates `mode_label`; `enter_play_mode`/`_exit_play_mode`
 style it behind `hasattr(self, 'mode_label')`. Harmless, but it is the
 pattern of guarded legacy interface this audit is meant to remove.
+
+### F-15 gun2 published as ready during its cooldown (Low)
+
+Found while profiling `prepare_render_state`. It computed `shot_ready` from
+`getattr(logic, "_last_player_shot_time", -inf)`; the split moved that field
+to the combat runtime, so the getattr always fell back and gun2 was published
+as ready all through its one-second cooldown. The published flag gates Qt's
+click queue (the logic thread still refused the shot, so no extra shot ever
+fired). Reads `combat_runtime._last_player_shot_time` now.
+`test_gun2_is_published_as_not_ready_while_it_cools_down` (e2e; fails
+before).
 
 ### F-14 NumPy 2.5.3 / CPython 3.14 (Info, measured)
 

@@ -414,17 +414,7 @@ class LogicRender:
                 ammo = 0
             write_state.shot_ready = (
                 ammo > 0
-                and (
-                    now
-                    - float(
-                        getattr(
-                            logic,
-                            "_last_player_shot_time",
-                            float("-inf"),
-                        )
-                    )
-                )
-                >= 1.0
+                and now - logic.combat_runtime._last_player_shot_time >= 1.0
             )
         else:
             write_state.shot_ready = False

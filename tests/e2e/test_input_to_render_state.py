@@ -102,3 +102,25 @@ def test_monster_ai_moves_reach_the_published_frame(fio_session):
               if glm.distance(glm.vec3(*now[ident]), spawn)
               < glm.distance(glm.vec3(*start[ident]), spawn) - 50.0]
     assert closer, "no monster approached the player: %r -> %r" % (start, now)
+
+
+def test_gun2_is_published_as_not_ready_while_it_cools_down(fio_session):
+    """The published shot_ready gates Qt's click queue and the HUD; it must
+    follow the combat runtime's own one-shot-per-second cooldown."""
+    session = fio_session(_arena()).start_play()
+    combat = session.logic.combat_runtime
+    combat.active_weapon = "gun2"
+    combat.player_ammo = 3
+    session.step(1)
+    with session.render_state() as frame:
+        assert frame.shot_ready
+
+    session.step(1, shoot=True)
+    assert combat.player_ammo == 2, "the shot did not fire"
+    with session.render_state() as frame:
+        assert not frame.shot_ready, "gun2 published as ready mid-cooldown"
+
+    combat._last_player_shot_time -= 1.0         # the second has passed
+    session.step(1)
+    with session.render_state() as frame:
+        assert frame.shot_ready
