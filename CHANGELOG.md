@@ -50,6 +50,18 @@ forward; see **Breaking changes** before upgrading.
 - The showcase map's cutscene now ships in every build, and its pickup and
   speaker reference files that exist.
 - Terrain sized to a world extent no longer gains a chunk past its edge.
+- Opening the terrain editor no longer raises in `paintGL` until the mouse
+  moves over the 3D view.
+- The standalone/Android player compiles the terrain shader on GLES (every
+  ES 3.00 sampler type now gets a default precision).
+
+### Hardening
+
+- Malformed maps are refused at load with a message naming the field,
+  instead of loading and then failing when Play starts.
+- Save games are validated on read the same way; a malformed `.fiosave` can
+  no longer leave the session unable to leave Play.
+- `.fiopak` extraction keeps to the player's asset size budget.
 
 ## 2.5.11
 
