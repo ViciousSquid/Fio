@@ -244,13 +244,18 @@ def _snapshot_plugin_state():
             # plugin-API tests do -- would otherwise have it replayed into
             # every later test by reapply_registrations(), which is a leak the
             # replay itself makes permanent.
-            list(getattr(manager, "_io_registrations", [])))
+            list(getattr(manager, "_io_registrations", [])),
+            # Services a plugin provides for one play session (Big World's
+            # "bigworld" and "savegame.restore") are process-wide too: a test
+            # that starts a session without stopping it would otherwise hand
+            # its stale session to every later save/restore.
+            dict(getattr(manager, "services", {})))
 
 
 def _restore_plugin_state(snapshot):
     if snapshot is None:
         return
-    manager, enabled, auto_enabled, io_registrations = snapshot
+    manager, enabled, auto_enabled, io_registrations, services = snapshot
     for plugin, was_enabled in enabled.items():
         plugin.enabled = was_enabled
     # Written directly, so the manager's caches keyed on the enabled set (the
@@ -261,11 +266,135 @@ def _restore_plugin_state(snapshot):
     manager._auto_enabled.update(auto_enabled)
     if hasattr(manager, "_io_registrations"):
         manager._io_registrations[:] = io_registrations
+    if hasattr(manager, "services"):
+        manager.services.clear()
+        manager.services.update(services)
 
 
 # ---------------------------------------------------------------------------
 # Qt
 # ---------------------------------------------------------------------------
+
+#: Tracebacks of exceptions that escaped a Qt callback during the current test.
+_QT_CALLBACK_ERRORS = []
+
+#: Modal dialogs the current test opened, as ``(kind, detail)`` pairs.
+_MODAL_DIALOGS = []
+
+
+def _qt_callback_excepthook(exc_type, exc, tb):
+    """Record an exception escaping a Qt slot or virtual instead of aborting.
+
+    With the default ``sys.excepthook`` PyQt5 calls ``qFatal`` for such an
+    exception, which kills the whole pytest process: one bug in one slot hid
+    every later result. The application installs its own hook in ``main.py``;
+    the suite needs the same protection, but must still fail the test.
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc, tb)
+        return
+    import traceback
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    _QT_CALLBACK_ERRORS.append(text)
+    sys.stderr.write(text)
+
+
+def _install_modal_guard():
+    """Make modal dialogs return at once rather than block the run forever.
+
+    A ``QMessageBox.warning`` or ``QDialog.exec_`` reached by a test opens a
+    nested event loop that nothing will ever close: under a display server
+    the suite hangs until the CI timeout. Each one is recorded and answered
+    with its "cancel" result; a test that cares about the answer monkeypatches
+    the dialog itself, which takes precedence over this.
+    """
+    try:
+        from PyQt5.QtWidgets import QDialog, QFileDialog, QInputDialog, QMessageBox
+    except Exception:  # headless tier: no Qt, nothing can block
+        return
+
+    def answer(kind, result):
+        def dialog(*args, **kwargs):
+            detail = args[2] if len(args) > 2 else kwargs.get("text", "")
+            _MODAL_DIALOGS.append((kind, str(detail)[:200]))
+            return result
+        return staticmethod(dialog)
+
+    QMessageBox.warning = answer("QMessageBox.warning", QMessageBox.Ok)
+    QMessageBox.information = answer("QMessageBox.information", QMessageBox.Ok)
+    QMessageBox.critical = answer("QMessageBox.critical", QMessageBox.Ok)
+    QMessageBox.question = answer("QMessageBox.question", QMessageBox.No)
+    QFileDialog.getOpenFileName = answer("QFileDialog.getOpenFileName", ("", ""))
+    QFileDialog.getOpenFileNames = answer("QFileDialog.getOpenFileNames", ([], ""))
+    QFileDialog.getSaveFileName = answer("QFileDialog.getSaveFileName", ("", ""))
+    QFileDialog.getExistingDirectory = answer("QFileDialog.getExistingDirectory", "")
+    QInputDialog.getText = answer("QInputDialog.getText", ("", False))
+    QInputDialog.getItem = answer("QInputDialog.getItem", ("", False))
+    QInputDialog.getInt = answer("QInputDialog.getInt", (0, False))
+    QInputDialog.getDouble = answer("QInputDialog.getDouble", (0.0, False))
+
+    def exec_(self, *args, **kwargs):
+        _MODAL_DIALOGS.append((type(self).__name__ + ".exec_", ""))
+        return QDialog.Rejected
+    QDialog.exec_ = exec_
+    QDialog.exec = exec_
+
+
+def pytest_configure(config):
+    sys.excepthook = _qt_callback_excepthook
+    _install_modal_guard()
+
+
+@pytest.fixture(autouse=True)
+def _qt_callback_errors_fail_the_test():
+    """Fail the test during which an exception escaped a Qt callback."""
+    _QT_CALLBACK_ERRORS.clear()
+    _MODAL_DIALOGS.clear()
+    yield
+    # A test that swaps the hook (to exercise install_excepthook) must not
+    # leave the suite running with the application's non-failing one.
+    sys.excepthook = _qt_callback_excepthook
+    if _QT_CALLBACK_ERRORS:
+        errors = list(_QT_CALLBACK_ERRORS)
+        _QT_CALLBACK_ERRORS.clear()
+        pytest.fail("exception escaped a Qt callback:\n" + errors[0],
+                    pytrace=False)
+
+
+_SETTINGS_INI = os.path.join(_ROOT, "settings.ini")
+
+
+@pytest.fixture(autouse=True)
+def _restore_repo_settings_ini():
+    """Put the tracked settings.ini back after a test that wrote to it.
+
+    MainWindow resolves ``settings.ini`` against the working directory, and
+    closing a window saves its dock layout there. A test that builds a window
+    from the repository root therefore rewrote the shipped default settings
+    and handed its layout to every later test.
+    """
+    try:
+        with open(_SETTINGS_INI, "rb") as fh:
+            before = fh.read()
+    except OSError:
+        before = None
+    yield
+    if before is None:
+        return
+    try:
+        with open(_SETTINGS_INI, "rb") as fh:
+            after = fh.read()
+        if after != before:
+            with open(_SETTINGS_INI, "wb") as fh:
+                fh.write(before)
+    except OSError:  # pragma: no cover - read-only checkout
+        pass
+
+
+@pytest.fixture
+def modal_dialogs():
+    """The modal dialogs the current test opened (auto-answered)."""
+    return _MODAL_DIALOGS
 
 
 @pytest.fixture
