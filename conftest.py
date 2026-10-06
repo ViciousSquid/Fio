@@ -391,6 +391,19 @@ def _restore_repo_settings_ini():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _qt_tests_get_an_application(request):
+    """Give every ``qt``-marked test the session ``QApplication``.
+
+    Building a QWidget with no QApplication is a hard abort in Qt, not an
+    exception, so a test that constructs a window without asking for
+    ``qt_app`` passed only when an earlier test had happened to create one,
+    and took the whole process down when run on its own.
+    """
+    if request.node.get_closest_marker("qt") is not None:
+        request.getfixturevalue("qt_app")
+
+
 @pytest.fixture
 def modal_dialogs():
     """The modal dialogs the current test opened (auto-answered)."""
@@ -418,7 +431,23 @@ def main_window(qt_app, tmp_path, monkeypatch):
         window.unsaved_changes = False
         window.close()
         window.deleteLater()
-        qt_app.processEvents()
+        _flush_deferred_deletes(qt_app)
+
+
+def _flush_deferred_deletes(qt_app):
+    """Actually destroy widgets handed to ``deleteLater``.
+
+    ``processEvents`` does not deliver ``DeferredDelete`` events posted
+    outside an event loop, so every closed MainWindow -- its GL context,
+    renderer, textures and threads -- stayed alive for the rest of the run:
+    about 120 MB per test, until the Qt tier was OOM-killed partway through.
+    """
+    import gc
+    from PyQt5.QtCore import QEvent
+    qt_app.processEvents()
+    qt_app.sendPostedEvents(None, QEvent.DeferredDelete)
+    gc.collect()
+    qt_app.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 @pytest.fixture(scope="session")
