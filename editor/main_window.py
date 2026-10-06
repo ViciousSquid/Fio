@@ -4137,12 +4137,11 @@ class MainWindow(QMainWindow):
         The one place a parsed map becomes the editor's scene: opening a file,
         a level change and playing a package all go through it.
         """
-        # Refuse a malformed document before the current scene is cleared.
-        self.state.validate_level_data(level_data)
-        # load_from_data parses the whole map before it replaces the scene
-        # (and does everything clear_scene did but mark lighting dirty), so a
-        # map that fails to parse leaves the open level as it was. Clearing
-        # first emptied the scene for any map that got past the shape check.
+        # load_from_data validates and parses the whole map before it replaces
+        # the scene (and does everything clear_scene did but mark lighting
+        # dirty), so a malformed map or one that fails to parse leaves the open
+        # level as it was. Clearing first emptied the scene for any map that
+        # got past the shape check.
         self.state.load_from_data(level_data)
         self.state.mark_lighting_dirty()
 

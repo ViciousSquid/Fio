@@ -228,3 +228,37 @@ def test_a_map_with_a_player_start_recentres_now_and_once_deferred(main_window, 
 def _load_into(window, data):
     from editor.things import Thing
     window.state.things = [Thing.from_dict(t) for t in data["things"]]
+
+
+@pytest.mark.perf
+def test_opening_a_map_validates_it_once_before_play_and_once_on_parse(
+        main_window, tmp_path, monkeypatch):
+    """Validation is as costly as parsing the JSON on a large map (~25 ms for
+    the 3,600-brush Big World test map), so it must not run a third time in
+    ``_apply_level_data``, which hands straight to ``load_from_data``."""
+    import editor.editor_state as editor_state
+    calls = []
+    real = editor_state.validate_level
+    monkeypatch.setattr(editor_state, "validate_level",
+                        lambda data, **kw: (calls.append(1), real(data, **kw)))
+    path = tmp_path / "level.json"
+    path.write_text(json.dumps(PLAYABLE_LEVEL))
+
+    assert main_window.load_level_file(str(path)) is True
+    assert len(calls) == 2
+
+
+def test_applying_a_malformed_map_leaves_the_open_scene_alone(main_window):
+    """``_apply_level_data`` (level changes, packages) refuses a bad map
+    before the current scene is replaced or its terrain dropped."""
+    window = main_window
+    window.state.load_from_data(PLAYABLE_LEVEL)
+    brushes, things = window.state.brushes, window.state.things
+    malformed = {"version": 3, "brushes": [{"pos": "not a vector"}], "things": []}
+
+    with pytest.raises(ValueError):
+        window._apply_level_data(malformed)
+
+    assert window.state.brushes is brushes
+    assert window.state.things is things
+    assert [t.properties["name"] for t in things] == ["PlayerStart_1"]
