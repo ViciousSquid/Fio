@@ -850,8 +850,7 @@ class MainWindow(QMainWindow):
         
         # Auto-clear timer
         final_duration = duration if duration is not None else (4000 if is_error else 2500)
-        if final_duration > 0:
-            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText(""))
+        self._schedule_notification_clear(final_duration)
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
         """Displays teal-styled tooltips in the same area."""
@@ -864,9 +863,39 @@ class MainWindow(QMainWindow):
             border-radius: 3px;
         """)
         self.ui.notification_label.setText(message.upper())
-        
-        if duration > 0:
-            QTimer.singleShot(duration, lambda: self.ui.notification_label.setText(""))
+        self._schedule_notification_clear(duration)
+
+    def _after(self, delay_ms, callback):
+        """Run *callback* once after *delay_ms*, but never after this window.
+
+        ``QTimer.singleShot`` with a bare lambda has no receiver, so a flash or
+        toast scheduled just before the window closed fired on its destroyed
+        widgets. A timer parented to the window is destroyed with it.
+        """
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(callback)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(int(delay_ms))
+        return timer
+
+    def _schedule_notification_clear(self, duration_ms):
+        """Clear the notification area *duration_ms* from now (<= 0: never).
+
+        One window-owned timer, restarted by every toast: a timer per toast let
+        an earlier, shorter toast blank a later one early, and a bare lambda
+        could fire on the label after the window was destroyed.
+        """
+        timer = getattr(self, '_notification_clear_timer', None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.ui.notification_label.clear)
+            self._notification_clear_timer = timer
+        if duration_ms and duration_ms > 0:
+            timer.start(int(duration_ms))
+        else:
+            timer.stop()
 
     def _show_startup_tooltip(self):
         """Show the camera movement tooltip on startup if not yet learned."""
@@ -1080,7 +1109,7 @@ class MainWindow(QMainWindow):
         for obj in clones:
             if isinstance(obj, dict):
                 obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
-                QTimer.singleShot(500, lambda o=obj: self._clear_flash(o))
+                self._after(500, lambda o=obj: self._clear_flash(o))
         self.update_all_ui()
 
     def _drop_singleton_copies(self, sources):
@@ -1957,7 +1986,7 @@ class MainWindow(QMainWindow):
         for pasted in pasted_objects:
             if isinstance(pasted, dict):
                 pasted['_flash_until'] = time.time() + 0.5
-                QTimer.singleShot(500, lambda o=pasted: self._clear_flash(o))
+                self._after(500, lambda o=pasted: self._clear_flash(o))
 
     def handle_escape(self):
         """Back out of whatever is in progress, innermost first.
@@ -3302,7 +3331,7 @@ class MainWindow(QMainWindow):
                     return
 
                 if not self.camera_movement_learned:
-                    QTimer.singleShot(500, lambda: self.show_tooltip(
+                    self._after(500, lambda: self.show_tooltip(
                         "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
                 return
 
@@ -3487,7 +3516,7 @@ class MainWindow(QMainWindow):
                 for pasted in pasted_objects:
                     if isinstance(pasted, dict):
                         pasted['_flash_until'] = time.time() + 0.5
-                        QTimer.singleShot(500, lambda o=pasted: self._clear_flash(o))
+                        self._after(500, lambda o=pasted: self._clear_flash(o))
             else:
                 self.show_toast("Nothing to paste", is_error=True)
             return
@@ -4214,7 +4243,7 @@ class MainWindow(QMainWindow):
                     # Center 2D views so the camera frustum is visible
                     self.center_2d_views_on(player_start_pos)
                      # Force a second update after event loop
-                    QTimer.singleShot(50, lambda: self.center_2d_views_on(player_start_pos))
+                    self._after(50, lambda: self.center_2d_views_on(player_start_pos))
                 else:
                     # Old behaviour: offset camera behind the spawn
                     self.view_3d.camera.pos = [
@@ -4427,7 +4456,7 @@ class MainWindow(QMainWindow):
                 self.config.remove_option('Layout', 'state')
                 # Deferred: this runs from __init__, before the window is up,
                 # and a toast shown then is never seen.
-                QTimer.singleShot(0, lambda: self.show_toast(
+                self._after(0, lambda: self.show_toast(
                     "Dock layout reset to the new default", duration=4000))
             return
 
@@ -4443,7 +4472,7 @@ class MainWindow(QMainWindow):
                 self.config.remove_option('Layout', 'state')
                 self.config['Layout']['version'] = str(LAYOUT_VERSION)
                 self.save_config()
-                QTimer.singleShot(0, lambda: self.show_toast(
+                self._after(0, lambda: self.show_toast(
                     "Saved dock layout was invalid; using the default.",
                     is_error=True))
                 self._restore_default_layout()
