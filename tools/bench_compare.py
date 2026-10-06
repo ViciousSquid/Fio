@@ -17,7 +17,8 @@ selects llvmpipe).  Usage::
     xvfb-run -a python tools/bench_compare.py [--frames N] [--json out.json]
         [--profile] [map.json ...]
 
-Reported per map: load ms, enter-play ms, per-frame logic and paint ms
+Runs with main.py's PyOpenGL settings (no per-call glGetError; FIO_GL_DEBUG=1
+keeps it).  Reported per map: load ms, enter-play ms, per-frame logic and paint ms
 (median / p95), the paint's main-thread CPU ms (submission without the
 software rasteriser's worker threads), Python function calls per frame for each phase (machine
 independent: a Python hot loop shows up here before it shows up as time), and
@@ -231,6 +232,13 @@ def main(argv=None):
 
     os.chdir(ROOT)
     sys.path.insert(0, ROOT)
+    # Run with main.py's interpreter and PyOpenGL settings, so the numbers are
+    # the shipped app's: without this PyOpenGL calls glGetError (in Python)
+    # after every GL call, several hundred per frame. FIO_GL_DEBUG=1 keeps
+    # the checks, as in main.py (each check then counts one GL call).
+    if os.environ.get("FIO_GL_DEBUG") != "1":
+        os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
+    sys.setswitchinterval(0.001)
     # The editor writes its layout and recent files back to settings.ini.
     settings_path = os.path.join(ROOT, "settings.ini")
     with open(settings_path, "rb") as handle:
