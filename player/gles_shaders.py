@@ -95,14 +95,28 @@ def _required_precision(body: str, stage: str) -> Iterable[str]:
     if stage == FRAGMENT and _uses_type(body, "int") and not _has_precision(body, "int"):
         yield "precision highp int;"
 
-    # sampler3D (volumetric fog noise) has no predeclared default in ES 3.00.
-    if _uses_type(body, "sampler3D") and not _has_precision(body, "sampler3D"):
-        yield "precision highp sampler3D;"
+    # GLSL ES 3.00 predeclares a default precision only for sampler2D and
+    # samplerCube; every other sampler type (sampler3D for the fog noise,
+    # sampler2DArray for terrain paint and sprite layers, the shadow and
+    # integer samplers) fails to compile without one.
+    for sampler in _SAMPLERS_WITHOUT_DEFAULT:
+        if _uses_type(body, sampler) and not _has_precision(body, sampler):
+            yield f"precision highp {sampler};"
 
     # samplerCube defaults to lowp in ES, but the shadow cube-maps store linear
     # depth and need highp to avoid catastrophic banding.
     if _uses_type(body, "samplerCube") and not _has_precision(body, "samplerCube"):
         yield "precision highp samplerCube;"
+
+
+#: GLSL ES 3.00 sampler types with no predeclared default precision (spec
+#: 4.5.4: only sampler2D and samplerCube have one).
+_SAMPLERS_WITHOUT_DEFAULT = (
+    "sampler3D", "sampler2DArray", "sampler2DShadow", "samplerCubeShadow",
+    "sampler2DArrayShadow",
+    "isampler2D", "isampler3D", "isamplerCube", "isampler2DArray",
+    "usampler2D", "usampler3D", "usamplerCube", "usampler2DArray",
+)
 
 
 # ----------------------------------------------------------------------

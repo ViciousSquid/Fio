@@ -131,6 +131,21 @@ class TestEngineIntegration(unittest.TestCase):
             self.skipTest("fog.frag not in set")
         self.assertIn("precision highp sampler3D;", fog)
 
+    def test_every_sampler_without_an_es_default_gets_a_precision(self):
+        """GLSL ES 3.00 predeclares precision only for sampler2D and
+        samplerCube. The terrain fragment shader's ``sampler2DArray`` paint
+        map had none, so terrain failed to compile on every GLES device."""
+        sampler = re.compile(
+            r"\buniform\s+(?:(lowp|mediump|highp)\s+)?((?:[iu])?sampler\w+)\s+\w+")
+        for name, src in self.shader_set.items():
+            for qualifier, gl_type in sampler.findall(src):
+                if gl_type in ("sampler2D", "samplerCube") or qualifier:
+                    continue
+                declared = re.search(
+                    rf"\bprecision\s+(?:lowp|mediump|highp)\s+{gl_type}\s*;", src)
+                self.assertTrue(
+                    declared, f"{name}: {gl_type} has no precision (fails ES compile)")
+
     def test_uniforms_shared_by_both_stages_have_one_precision(self):
         """GLSL ES links a program only if a uniform declared in both stages
         has the same precision. water.frag and glass.frag declared
