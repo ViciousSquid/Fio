@@ -36,6 +36,7 @@ jobs:
             --include-package-data=plugins `
             --include-data-dir=tools=tools `
             --include-data-dir=maps=maps `
+            --include-data-dir=cutscenes=cutscenes `
             --include-data-files=settings.ini=settings.ini `
             --include-data-files=editor/version.txt=editor/version.txt `
             --windows-icon-from-ico=assets/icon.ico `

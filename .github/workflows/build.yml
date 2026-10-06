@@ -360,6 +360,21 @@ jobs:
       - build-linux
 
     steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify editor/version.txt matches the release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH_VERSION="${GITHUB_REF_NAME%_Latest}"
+          FILE_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          if [[ "$FILE_VERSION" != "$BRANCH_VERSION" ]]; then
+            echo "ERROR: editor/version.txt says '$FILE_VERSION' but the branch is '$GITHUB_REF_NAME'."
+            echo "The binaries would report a different version from the release they ship in."
+            exit 1
+          fi
+          echo "Version $FILE_VERSION matches $GITHUB_REF_NAME"
+
       - name: Download Windows artifact
         uses: actions/download-artifact@v8
         with:
