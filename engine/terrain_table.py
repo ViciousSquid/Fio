@@ -210,13 +210,18 @@ class TerrainTable:
         Membership is one vectorised test; only chunks that are genuinely new
         cost any Python, and they are created in the order given -- the order
         the old nested loops inserted them into the dict.
+
+        The coordinates must be distinct (both callers pass a meshgrid), as the
+        live keys are (one slot per coordinate). That lets ``np.isin`` skip
+        uniquing both sides, which was most of its cost: this runs every frame.
         """
         cx = np.asarray(cx, dtype=np.int64)
         cz = np.asarray(cz, dtype=np.int64)
         if not len(cx):
             return _EMPTY
         live = self.live[:self._capacity]
-        present = np.isin(pack_keys(cx, cz), self.key[:self._capacity][live])
+        present = np.isin(pack_keys(cx, cz), self.key[:self._capacity][live],
+                          assume_unique=True)
         new = np.flatnonzero(~present)
         for i in new:
             self._allocate(int(cx[i]), int(cz[i]), chunk_size, offset_x, offset_z)
