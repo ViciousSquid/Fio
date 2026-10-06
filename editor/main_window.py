@@ -167,6 +167,9 @@ class MainWindow(QMainWindow):
         self.load_recent_files()
         
         self.keys_pressed = set()
+        #: ``(brush, face key)`` last textured, for the rotate-texture keys
+        #: when no face is hovered; rebound across history steps.
+        self.face_texture_target = None
         self._brush_clipboard = None  # For Ctrl+C / Ctrl+V brush copy-paste
         self.grid_visible = True
         self.clip_mode = False  # Radiant-style clip/slice tool (toggled with X)
@@ -2110,7 +2113,7 @@ class MainWindow(QMainWindow):
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if self.view_3d.face_mode_active:
             target = getattr(self.view_3d, 'hovered_face_info', None) \
-                or getattr(self, 'face_texture_target', None)
+                or self.face_texture_target
             if not target:
                 self.show_toast("Hover a face to rotate its texture", is_error=True)
                 return
@@ -2242,7 +2245,7 @@ class MainWindow(QMainWindow):
             return
 
         target = getattr(self.view_3d, 'hovered_face_info', None) \
-            or getattr(self, 'face_texture_target', None)
+            or self.face_texture_target
         if target is None:
             brushes = self._selected_brushes()
             keys = face_texture.face_keys(brushes[0]) if brushes else []
@@ -2567,7 +2570,7 @@ class MainWindow(QMainWindow):
             replacement = live.get(brush.get('id')) if isinstance(brush, dict) else None
             return (replacement, key) if replacement is not None else None
 
-        current = getattr(self, 'face_texture_target', None)
+        current = self.face_texture_target
         if current is not None:
             self.face_texture_target = _rebind(current)
 
