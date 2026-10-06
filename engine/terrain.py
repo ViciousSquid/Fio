@@ -509,6 +509,10 @@ class Terrain:
         self.sand_tex = 0
         self.snow_tex = 0
         self._placeholder_cubemap = 0
+        #: Vertex shaders whose program genuinely failed to compile. A compile
+        #: error is deterministic, so it is reported once and not retried on
+        #: every frame (which cost a full compile per frame and spammed the log).
+        self._failed_programs = set()
         if texture_manager:
             self.load_terrain_textures(texture_manager)
         self._init_shader()
@@ -522,6 +526,8 @@ class Terrain:
         """
         if gl is None or compileProgram is None or compileShader is None:
             return 0
+        if vertex_name in self._failed_programs:
+            return 0
         try:
             vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
             fragment_code = shaders.light_ubo_source(
@@ -531,6 +537,7 @@ class Terrain:
             program = compileProgram(vertex_shader, fragment_shader, validate=False)
             if not program:
                 print("ERROR: Failed to compile terrain shader program!")
+                self._failed_programs.add(vertex_name)
                 return 0
         except Exception as e:
             msg = str(e)
@@ -541,6 +548,7 @@ class Terrain:
                     or "context" in msg.lower()):
                 return 0
             print(f"ERROR: Exception during terrain shader compilation: {e}")
+            self._failed_programs.add(vertex_name)
             return 0
         block_index = gl.glGetUniformBlockIndex(program, 'FioLightBlock')
         invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)

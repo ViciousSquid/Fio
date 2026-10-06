@@ -113,6 +113,11 @@ void main() {}
 # ---------------------------------------------------------------------------
 
 GLSLANG = shutil.which('glslangValidator')
+#: CI sets this where it installs glslang-tools, so a missing compiler fails
+#: the run instead of skipping the only check that compiles every shader.
+REQUIRE_GLSLANG = os.environ.get('FIO_REQUIRE_GLSLANG') == '1'
+if REQUIRE_GLSLANG and GLSLANG is None:
+    raise RuntimeError("FIO_REQUIRE_GLSLANG=1 but glslangValidator is not installed")
 needs_glslang = pytest.mark.skipif(
     GLSLANG is None, reason="glslangValidator (Khronos reference compiler) not installed")
 

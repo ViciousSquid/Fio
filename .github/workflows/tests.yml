@@ -99,7 +99,7 @@ jobs:
       - name: Install Mesa and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 glslang-tools
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -123,6 +123,10 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a python -m pytest -m gl -q
+      - name: Compile every shader with the Khronos reference compiler
+        env:
+          FIO_REQUIRE_GLSLANG: '1'
+        run: python -m pytest tests/renderer/test_shader_portability.py -q
 
   benchmark:
     name: Renderer benchmark (reported, never fails on timing)

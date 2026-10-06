@@ -137,3 +137,59 @@ def test_grass_draws_in_both_detail_levels(context):
     t.GRASS_LOD_START, t.GRASS_LOD_DISTANCE = 1.0, 2.0
     far = _render(context, t, eye=eye, target=target)
     assert np.abs(far - bare).mean() > 2.0
+
+
+def test_block_terrain_draws_through_the_block_mesh_program(context):
+    """'blocks' terrace mode draws CPU-built block meshes, not the heightfield.
+
+    Regression: ``terrain_mesh.vert`` wrote ``PaintCoords`` without declaring
+    it, so the block program never linked. ``update_and_render`` then fell back
+    to the smooth heightfield (the look was silently wrong) and recompiled the
+    failing program on every frame (~3x the terrain pass's CPU time).
+    """
+    white = glh._white_texture()
+    blocks = _terrain(white)
+    blocks.apply_appearance_preset('voxel_blocks')
+    assert blocks.appearance.terrace_mode == 'blocks'
+    image = _render(context, blocks)
+
+    assert blocks.block_program, "terrain_mesh.vert + terrain.frag failed to link"
+    drawn = [int(s) for s in blocks.drawn_slots]
+    assert drawn, "no terrain chunk was drawn"
+    # Independent of the renderer's own counter: the triangles drawn are the
+    # vertex counts uploaded to the block VBOs, not a heightfield grid.
+    block_triangles = sum(int(blocks._block_count[s]) // 3 for s in drawn)
+    assert block_triangles > 0
+    assert blocks.total_triangles == block_triangles
+    assert _ground(image).mean() > 0.2
+
+    # The same ground drawn as a heightfield looks different: block walls.
+    smooth = _terrain(white)
+    smooth.apply_appearance_preset('voxel_blocks')
+    smooth.set_appearance(terrace_mode='sharp')
+    assert np.abs(_render(context, smooth) - image).mean() > 1.0
+
+
+def test_a_terrain_program_that_fails_to_compile_is_not_retried_every_frame(
+        context, monkeypatch):
+    """A genuine compile error is reported once, then the frame goes on."""
+    from engine import shaders
+    from engine import terrain as terrain_module
+
+    broken = shaders.DEFAULT_SHADERS['terrain_mesh.vert'].replace(
+        'void main() {', 'void main() { undeclared_identifier = 1.0;')
+    monkeypatch.setitem(shaders.DEFAULT_SHADERS, 'terrain_mesh.vert', broken)
+    compiles = []
+    real_compile = terrain_module.compileShader
+
+    def counting(source, kind):
+        compiles.append(source)
+        return real_compile(source, kind)
+
+    monkeypatch.setattr(terrain_module, 'compileShader', counting)
+    t = _terrain(glh._white_texture())
+    t.apply_appearance_preset('voxel_blocks')
+    _render(context, t, frames=5)
+    assert not t.block_program
+    # One compile attempt for the broken program, not one per frame.
+    assert compiles.count(broken) == 1

@@ -1581,6 +1581,7 @@ out vec3 FragPos;
 out mediump vec3 Normal;
 out mediump vec3 VertexColor;
 out vec2 TexCoords;
+out vec2 PaintCoords;
 out mediump vec3 SmoothNormal;
 
 uniform mat4 projection;
