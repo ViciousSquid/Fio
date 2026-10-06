@@ -607,7 +607,7 @@ def test_picking_a_face_rebinds_the_controls(inspector):
 def test_picking_a_face_makes_it_the_editor_s_current_one(inspector):
     """Page Up/Down and a reopened panel should follow the picker."""
     host, panel, brush = inspector
-    assert not hasattr(host, 'face_texture_target')
+    assert host.face_texture_target is None
 
     panel.face_combo.setCurrentIndex(panel.face_combo.findData('top'))
 
