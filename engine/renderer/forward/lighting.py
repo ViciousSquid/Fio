@@ -1,9 +1,7 @@
-"""Lights and shadows.
+"""ForwardRenderer's lighting model.
 
-Active-light selection from the EntityTable, the shared std140 light UBO and
-per-shader light caps, the distance-fog / ambient environment block, and
-point-light depth cube-map shadows: resources, caster selection from dense
-slots, and the shadow-map pass itself.
+The std140 light UBO and per-shader light caps, the fog/ambient uniform
+upload, and omnidirectional point-light shadows as depth cube-maps.
 """
 
 import glm
@@ -11,10 +9,9 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import render_table
-from engine import entity_table as entity_projection
 from engine import shaders
 from engine.render_keys import KeyLayout
-from .debug import timed_pass
+from ..core.diagnostics import timed_pass
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
@@ -27,7 +24,7 @@ _SHADER_LIGHT_CAPS = {
 
 
 class LightingMixin:
-    """Lights and shadows of :class:`engine.renderer.Renderer`."""
+    """ForwardRenderer's lights and shadows."""
 
     # The dynamic-light budget, taken from the shaders rather than written down
     # again here: the renderer must never tell a shader about more lights than
@@ -57,23 +54,6 @@ class LightingMixin:
     ENV_UNIFORMS = ('uFogEnabled', 'uFogColor', 'uFogStart', 'uFogEnd',
                     'uFogDensity', 'uFogCamPos', 'uAmbient')
 
-    def _get_active_lights(self, config):
-        """Return active lights directly from the dense EntityTable."""
-        table = config.get('entity_table')
-        if table is None or not hasattr(table, 'light_color'):
-            raise RuntimeError("dense EntityTable is required for light rendering")
-        slots = table.light_slots
-        if len(slots):
-            keep = table.light_enabled[slots]
-            hidden = config.get('thing_hidden')
-            if config.get('play_mode', False) and hidden is not None:
-                # A hidden light is out of the running world -- Big World
-                # parks out-of-range lights exactly this way, and they must
-                # not keep lighting (or take light and shadow slots).
-                keep = keep & ~np.asarray(hidden)[slots]
-            slots = slots[keep]
-        return (table, slots)
-
     def _shader_light_cap(self, shader_name):
         """How many lights ``shader_name``'s ``lights[]`` array actually holds.
 
@@ -89,26 +69,6 @@ class LightingMixin:
                                                   'lit_brush_instanced'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
-
-    def env_uniform_values(self):
-        """The fog/ambient block as a ``{uniform_name: value}`` dict.
-
-        For subsystems that own their GL program and uniform table rather than
-        going through :attr:`uniforms` — the terrain is the one that does.
-        Types are meaningful: ``int`` uploads as ``glUniform1i``, ``float`` as
-        ``glUniform1f``, a 3-sequence as ``glUniform3f``.
-        """
-        vd = self.view_distance
-        start, end = vd.resolve()
-        return {
-            'uFogEnabled': 1 if vd.fog_enabled else 0,
-            'uFogColor': tuple(vd.fog_color),
-            'uFogStart': float(start),
-            'uFogEnd': float(end),
-            'uFogDensity': float(vd.fog_density),
-            'uFogCamPos': tuple(self._frame_camera_pos),
-            'uAmbient': tuple(vd.ambient),
-        }
 
     def _upload_env_uniforms(self, shader_name):
         """Upload the distance-fog and global-ambient block to *shader_name*.
@@ -344,107 +304,6 @@ class LightingMixin:
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP,
                              cubemaps[i] if i < count else 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
-
-    @staticmethod
-    def _shadow_caster_slots(table, all_slots):
-        """The brushes eligible to cast a shadow, as slots.
-
-        This filter used to be a Python walk over every brush in the level --
-        five dict lookups and ``is_water_brush``'s six-string search each --
-        run every frame, before anything had checked whether a single cube-map
-        actually needed re-rendering.  The verdict changes only when a brush is
-        edited, so the projection resolved it at edit time; here it is one mask.
-        """
-        if not len(all_slots):
-            return all_slots
-        bits = table.class_bits[all_slots]
-        return all_slots[(bits & render_table.CLASS_SHADOW_CASTER) != 0]
-
-    @staticmethod
-    def _casters_in_reach(table, slots, lx, ly, lz, reach):
-        """Caster slots within *reach* of a light, and a signature of them.
-
-        Replaces rebuilding ``np.asarray([b['pos'] for b in brushes])`` and
-        ``[b['size'] ...]`` from the brush dicts every frame: the projection
-        already holds both, so the whole per-light test is
-        ``center[slots]`` and one comparison.
-
-        The signature is the caster geometry itself rather than a tuple
-        reconstructed per brush.  A light's cube-map is valid exactly while the
-        casters in reach of it have not moved or changed shape, which is what
-        these bytes say -- and comparing them is a memcmp over a few kilobytes
-        instead of building thousands of Python tuples.
-        """
-        if not len(slots):
-            return slots, ()
-        center = table.center[slots]
-        dx = center[:, 0] - lx
-        dy = center[:, 1] - ly
-        dz = center[:, 2] - lz
-        # A brush counts when the light reaches its bounding sphere, whose
-        # radius is the largest half-extent -- the same test as before.
-        limit = reach + table.half[slots].max(axis=1)
-        sel = slots[(dx * dx + dy * dy + dz * dz) <= limit * limit]
-        if not len(sel):
-            return sel, ()
-        geometry = np.concatenate((table.center[sel].ravel(),
-                                   table.half[sel].ravel(),
-                                   table.rot[sel].ravel().astype(np.float64)))
-        return sel, (sel.tobytes(), geometry.tobytes())
-
-    @staticmethod
-    def _dense_shadow_model_slots(table, hidden=None):
-        """Return model-entity slots eligible to cast shadows.
-
-        This is the entity-table equivalent of the old Thing model scan.
-        Model identity, representation and transforms have already been
-        resolved at the dense projection boundary; the shadow pass only needs
-        slot masks here.
-        """
-        if table is None or not table.count:
-            return np.empty(0, dtype=np.int32)
-        bits = table.class_bits[:table.count]
-        mask = (
-            ((bits & entity_projection.ENT_SKIP) == 0)
-            & ((bits & entity_projection.ENT_ALWAYS_SPRITE) == 0)
-            & ((bits & entity_projection.ENT_HAS_MODEL) != 0)
-            & ((bits & entity_projection.ENT_MODE_MODEL) != 0)
-        )
-        if hidden is not None:
-            mask &= ~np.asarray(hidden[:table.count], dtype=bool)
-        return np.flatnonzero(mask).astype(np.int32)
-
-    @staticmethod
-    def _collect_dense_shadow_models(table, model_slots, lx, ly, lz, reach):
-        """Return dense model caster slots in light range plus a cache key.
-
-        The key contains only numerical projection state: slots, model recipe
-        identity, translation and the precomputed rotation/scale matrix. No
-        Thing or authored property dictionary is touched.
-        """
-        if not len(model_slots):
-            return model_slots, ()
-        positions = table.pos[model_slots]
-        dx = positions[:, 0] - lx
-        dy = positions[:, 1] - ly
-        dz = positions[:, 2] - lz
-        # Preserve the existing model-caster broad phase: models were treated
-        # as having a radius of 2 * light reach.
-        visible = (dx * dx + dy * dy + dz * dz) <= (reach * reach * 4.0)
-        indices = np.flatnonzero(visible)
-        slots = model_slots[indices]
-        if not len(slots):
-            return slots, ()
-        recipe_ids = table.model_recipe_id[slots]
-        positions = table.pos[slots]
-        transforms = table.model_base_matrix[slots]
-        signature = (
-            slots.tobytes(),
-            recipe_ids.tobytes(),
-            positions.tobytes(),
-            transforms.tobytes(),
-        )
-        return slots, signature
 
     #: The shadow pass's render key. One field, because one thing cannot vary
     #: within a depth draw: which cube face is being rendered, since that is

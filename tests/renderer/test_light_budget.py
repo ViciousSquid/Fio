@@ -76,19 +76,19 @@ def test_the_low_power_shaders_keep_their_smaller_budget(name):
 
 
 def test_the_renderer_budget_is_the_shader_capacity():
-    from engine.renderer import Renderer
-    assert Renderer.MAX_LIGHTS == shaders.MAX_LIGHTS
+    from engine.renderer.forward import ForwardRenderer
+    assert ForwardRenderer.MAX_LIGHTS == shaders.MAX_LIGHTS
 
 
 def test_water_and_terrain_are_capped_to_what_they_declare():
-    from engine.renderer import lighting
+    from engine.renderer.forward import lighting
     caps = lighting._SHADER_LIGHT_CAPS
     assert caps['water'] == array_size(shaders.DEFAULT_SHADERS['water.frag'])
     assert caps['terrain'] == array_size(shaders.DEFAULT_SHADERS['terrain.frag'])
 
 
 def test_terrain_light_subset_uses_the_shader_constant():
-    source = read_source('engine', 'renderer', 'passes.py')
+    source = read_source('engine', 'renderer', 'forward', 'passes.py')
     assert 'max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN' in source
 
 
@@ -160,8 +160,8 @@ def test_the_environment_can_force_the_answer(monkeypatch, value, expected):
 def test_the_renderer_and_the_settings_window_ask_the_same_question():
     """They used to detect this separately and could disagree."""
     renderer_src = ''.join(
-        read_source('engine', 'renderer', name)
-        for name in ('core.py', 'materials.py'))
+        read_source('engine', 'renderer', 'forward', name)
+        for name in ('renderer.py', 'shaders.py'))
     settings_src = read_source('editor', 'SettingsWindow.py')
     assert 'shaders.detect_low_power_arm()' in renderer_src
     assert 'detect_low_power_arm' in settings_src
@@ -183,8 +183,8 @@ def test_shadow_shader_uses_the_authoritative_capacity():
 def test_light_ubo_cpu_layout_matches_std140_light_struct():
     """CPU record must byte-match the GLSL std140 `struct Light`."""
     import numpy as np
-    from engine.renderer import Renderer
-    dt = Renderer.LIGHT_UBO_DTYPE
+    from engine.renderer.forward import ForwardRenderer
+    dt = ForwardRenderer.LIGHT_UBO_DTYPE
     assert dt.itemsize == 64
     assert [dt.fields[n][1] for n in dt.names] == [0, 16, 32, 48]
 
@@ -200,4 +200,4 @@ def test_light_ubo_cpu_layout_matches_std140_light_struct():
     glsl_kinds = {'vec4': np.dtype('<f4'), 'ivec4': np.dtype('<i4')}
     assert [(name, glsl_kinds[kind]) for kind, name in fields] == [
         (name, dt[name].base) for name in dt.names]
-    assert Renderer.MAX_LIGHTS == shaders.MAX_LIGHTS
+    assert ForwardRenderer.MAX_LIGHTS == shaders.MAX_LIGHTS

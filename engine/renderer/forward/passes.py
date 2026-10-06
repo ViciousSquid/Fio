@@ -1,8 +1,7 @@
-"""Render passes.
+"""ForwardRenderer's draw passes.
 
-The per-frame draw passes :meth:`Renderer.render_scene` sequences: opaque
-lit/textured brushes, glow, terrain, models, sprites, glasses and billboards,
-effects, and the transparent/water/glass/fog volume passes.
+Opaque lit/textured/glow brushes, terrain, models, sprites, glasses,
+billboards, effects, and the transparent water/glass/fog passes.
 """
 
 import ctypes
@@ -15,18 +14,19 @@ import OpenGL.GL as gl
 from engine import render_table
 from engine import shaders
 from engine.render_keys import runs_in_order, sort_into_runs
-from .debug import timed_pass
-from .tables import BRUSH_RUN_KEY, _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR
+from ..api import WATER_QUALITIES
+from ..core.diagnostics import timed_pass
+from .instancing import BRUSH_RUN_KEY, _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR
 
 
 class PassesMixin:
-    """Draw passes of :class:`engine.renderer.Renderer`."""
+    """ForwardRenderer's draw passes."""
 
     #: Water rendering tiers. 'cheap': refraction, waves, sky reflection and
     #: foam at the brush edges - no extra copies. 'expensive': additionally
     #: copies the depth buffer once per water pass for depth-based colour,
     #: shoreline foam, caustics and screen-space reflections.
-    WATER_QUALITIES = ('cheap', 'expensive')
+    WATER_QUALITIES = WATER_QUALITIES
 
     @classmethod
     def normalize_water_quality(cls, value) -> str:
@@ -477,6 +477,55 @@ class PassesMixin:
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
+    def _debug_textured_brush_gl_state(self):
+        """Print the VAO/program state used by the textured-brush pass.
+
+        This is an opt-in diagnostic path only. It is intentionally called once
+        before the face submission loop rather than from the per-face hot path.
+        """
+        print(
+            '[Renderer] textured-brush GL state: '
+            f'program={int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))}, '
+            f'vao={int(gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING))}, '
+            f'array_buffer={int(gl.glGetIntegerv(gl.GL_ARRAY_BUFFER_BINDING))}, '
+            f'element_buffer={int(gl.glGetIntegerv(gl.GL_ELEMENT_ARRAY_BUFFER_BINDING))}, '
+            f'tf_active={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_ACTIVE)))}, '
+            f'tf_paused={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_PAUSED)))}, '
+            f'rasterizer_discard={bool(int(gl.glGetBooleanv(gl.GL_RASTERIZER_DISCARD)))}'
+        )
+
+        def _scalar(value):
+            return int(np.asarray(value).reshape(-1)[0])
+
+        for attrib in (0, 1, 2):
+            enabled = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED
+                )
+            )
+            buffer = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
+                )
+            )
+            stride = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_STRIDE
+                )
+            )
+            attr_type = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_TYPE
+                )
+            )
+            print(
+                f'[Renderer] attrib{attrib}: '
+                f'enabled={bool(enabled)}, '
+                f'buffer={buffer}, '
+                f'stride={stride}, '
+                f'type=0x{attr_type:x}'
+            )
+
     # --------------------------------------------------------------------------
     # Terrain
     # --------------------------------------------------------------------------
@@ -485,7 +534,10 @@ class PassesMixin:
         if terrain is None or not terrain.enabled:
             return
         self._ensure_terrain_textures(terrain)
-        if not terrain.shader_program:
+        # A Terrain compiles its own program when it is built with a context
+        # current; bind this renderer's program whenever the frame's terrain
+        # does not hold it (new, reloaded, or bound by a previous renderer).
+        if terrain.shader_program != self.shaders.get('terrain'):
             self.setup_terrain_shader(terrain)
         if not (isinstance(lights, tuple) and len(lights) == 2
                 and hasattr(lights[0], 'light_color')):
@@ -949,7 +1001,7 @@ class PassesMixin:
         gl.glBindVertexArray(0)
         return count
 
-    def draw_billboards_instanced(self, projection, view, positions, size, tex_id):
+    def draw_billboards(self, projection, view, positions, size, tex_id):
         """Camera-facing billboards sharing one texture and size: one draw.
 
         For the dense runtime populations that are not entities -- monster
@@ -1388,6 +1440,54 @@ class PassesMixin:
 
         gl.glBindVertexArray(0)
         return count
+
+    def _create_water_surface_vao(self, subdivisions=64):
+        """Tessellated unit-square grid on the cube's top face (y = +0.5).
+
+        The water vertex shader needs real geometry to displace with Gerstner
+        waves — the 2-triangle cube top gave it nothing to work with, which is
+        why water used to look like a solid slab. Same attribute layout as the
+        cube VAO (pos, normal, uv) so both bind to the water shader.
+        """
+        n = subdivisions
+        verts = np.zeros(((n + 1) * (n + 1), 8), dtype=np.float32)
+        idx = 0
+        for j in range(n + 1):
+            z = j / n - 0.5
+            for i in range(n + 1):
+                x = i / n - 0.5
+                verts[idx] = (x, 0.5, z, 0.0, 1.0, 0.0, i / n, j / n)
+                idx += 1
+
+        indices = np.zeros(n * n * 6, dtype=np.uint32)
+        k = 0
+        for j in range(n):
+            row = j * (n + 1)
+            for i in range(n):
+                a = row + i
+                c = a + (n + 1)
+                indices[k:k + 6] = (a, c, a + 1, a + 1, c, c + 1)
+                k += 6
+
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        vbo = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, verts.nbytes, verts, gl.GL_STATIC_DRAW)
+        ebo = gl.glGenBuffers(1)
+        gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, ebo)
+        gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, gl.GL_STATIC_DRAW)
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(0)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
+        gl.glEnableVertexAttribArray(1)
+        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
+        gl.glEnableVertexAttribArray(2)
+        gl.glBindVertexArray(0)
+        self._water_surface_vbo = vbo
+        self._water_surface_ebo = ebo
+        self._water_surface_index_count = len(indices)
+        return vao
 
     # --------------------------------------------------------------------------
     # Water / Glass / Fog

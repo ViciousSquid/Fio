@@ -1,6 +1,6 @@
 """The numeric path must draw exactly what the object path drew.
 
-``Renderer.render_scene`` feeds all brush passes from the dense render
+``ForwardRenderer.render_scene`` feeds all brush passes from the dense render
 projection. The portal virtual views also consume those slots, applying their
 own virtual frustum as a numeric mask; entity sprites come from EntityTable
 slots in the same pass.
@@ -72,7 +72,7 @@ def _patterned_texture(index):
 @pytest.fixture
 def renderer(context):
     """A renderer whose textures carry a pattern, unlike the shared harness."""
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     made_textures = {}
 
@@ -83,8 +83,8 @@ def renderer(context):
             made_textures[name] = tex
         return tex
 
-    made = Renderer(loader, 64, 4096, None)
-    made.update_grid_buffers(4096, 64)
+    made = ForwardRenderer(None, texture_loader=loader)
+    made.set_grid(4096, 64)
     made.set_sprite_textures({})
     _ENTITY_TABLES.clear()
     yield made
@@ -325,12 +325,12 @@ def test_portal_renderer_has_no_legacy_object_path():
     from pathlib import Path
 
     root = Path(__file__).parents[2]
-    visibility = (root / 'engine' / 'renderer' / 'visibility.py').read_text(encoding='utf-8')
-    debug = (root / 'engine' / 'renderer' / 'debug.py').read_text(encoding='utf-8')
+    visibility = (root / 'engine' / 'renderer' / 'core' / 'visibility.py').read_text(encoding='utf-8')
+    debug = (root / 'engine' / 'renderer' / 'core' / 'overlays.py').read_text(encoding='utf-8')
 
     portal_scene = visibility[
         visibility.index("def _portal_numeric_scene_inputs"):
-        visibility.index("def _draw_portal_scene", visibility.index("def _portal_numeric_scene_inputs"))
+        len(visibility)
     ]
     portal_wire = debug[
         debug.index("def draw_portal_wireframes"):
@@ -345,8 +345,8 @@ def test_portal_renderer_has_no_legacy_object_path():
 
 def test_sprite_renderer_has_no_legacy_object_path(renderer):
     """There is exactly one sprite renderer: dense EntityTable instancing."""
-    from engine.renderer import Renderer
-    assert not hasattr(Renderer, "draw_sprites")
+    from engine.renderer.forward import ForwardRenderer
+    assert not hasattr(ForwardRenderer, "draw_sprites")
     assert not hasattr(renderer, "draw_sprites")
 
 
@@ -610,9 +610,11 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
     0.3 alpha both reach the image.
     """
     import OpenGL.GL as gl
+    from editor.selection_overlay import describe_selection
 
     brushes, things = _override_scene()
-    primary_selection = None if selection_index is None else brushes[selection_index]
+    primary_selection = describe_selection(
+        None if selection_index is None else brushes[selection_index])
 
     def draw():
         table, refs, slots = _projection_for(brushes)
@@ -620,7 +622,7 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
         config = glh.render_config(all_brushes=brushes, all_things=things,
                                    render_table=table, render_refs=refs,
                                    all_brush_slots=slots,
-                                   selected_object=primary_selection,
+                                   primary_selection=primary_selection,
                                    show_triggers_as_solid=True)
         context.bind()
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)

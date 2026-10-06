@@ -261,21 +261,21 @@ def render_config(**overrides):
     return config
 
 def make_renderer(config=None):
-    """A :class:`engine.renderer.Renderer` on the current GL context.
+    """A :class:`engine.renderer.forward.ForwardRenderer` on the current GL context.
 
     The texture loader returns a 1x1 white texture for everything, so the tests
     do not depend on which files happen to be in ``assets/``; lighting and
     shadowing are what is under test, not texture content.
     """
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     white = _white_texture()
 
     def _loader(texture_name, subfolder):
         return white
 
-    renderer = Renderer(_loader, 64, 4096, config)
-    renderer.update_grid_buffers(4096, 64)
+    renderer = ForwardRenderer(config, texture_loader=_loader)
+    renderer.set_grid(4096, 64)
     renderer.set_sprite_textures({})
     return renderer
 

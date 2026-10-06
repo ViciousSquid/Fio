@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 glm = pytest.importorskip("glm")
 pytest.importorskip("OpenGL")
 
-from engine.renderer import Renderer  # noqa: E402
+from engine.renderer.forward import ForwardRenderer  # noqa: E402
 from engine.terrain import Terrain  # noqa: E402
 from tests.helpers.gl import GLTestContext  # noqa: E402
 
@@ -51,7 +51,7 @@ def configure(terrain, stream_radius=2048.0, streaming=True):
 def frustum(eye, target, far):
     projection = glm.perspective(glm.radians(70.0), 16 / 9, 1.0, far)
     view = glm.lookAt(glm.vec3(*eye), glm.vec3(*target), glm.vec3(0, 1, 0))
-    return Renderer._frustum_planes(projection * view)
+    return ForwardRenderer._frustum_planes(projection * view)
 
 
 def test_the_protected_zone_never_outgrows_the_stream_radius(terrain):

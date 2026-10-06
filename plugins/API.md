@@ -323,24 +323,33 @@ only while the plugin is enabled.
 ```python
 def register_renderer(self, name: str, cls) -> bool
 ```
-Register a swappable renderer class under *name*. Fio's viewport selects its
-renderer from a class registry; this drops *cls* in so it appears as a render
-mode. *cls* must implement the renderer interface (`render_scene`,
-`draw_models_instanced`, `render_shadow_maps`, `cleanup`, a `lod_manager`, …).
+Register a renderer under *name* in Fio's renderer registry (`"Forward"` is
+the built-in one). *cls* is a factory called as `cls(config)` with the
+viewport's GL context current — usually the renderer class itself — and what
+it returns must satisfy the `engine.renderer.Renderer` protocol:
 
-The production forward renderer's `render_shadow_maps` signature is:
+- **lifecycle:** `ready`, `cleanup()`
+- **the frame:** `render_scene(projection, view, camera_pos, primary_selection,
+  config, clear=True, brush_slots=None)`. `config` is the frame input
+  documented in `engine.renderer.FRAME_INPUT` (the dense `RenderTable` /
+  `EntityTable`, their slots, terrain and the view settings);
+  `primary_selection` is an `engine.renderer.SelectionOverlay` or `None`.
+- **settings:** `view_distance`, `shadows_enabled`, `water_quality`,
+  `set_grid(world_size, grid_size)`
+- **resources:** `load_texture`, `set_sprite_textures`, `get_loaded_model`
+- **diagnostics:** `render_stats` (an `engine.renderer.RenderStats`)
+- **post-scene drawing the viewport asks for:** `draw_billboards`,
+  `draw_player_glasses`, `draw_bullet_marks`, `draw_connection_lines`,
+  `draw_face_highlight`, `draw_component_overlay`,
+  `draw_collision_visualization`
 
-```python
-def render_shadow_maps(self, shadow_lights, config, camera_pos=None)
-```
-
-`shadow_lights` is the dense `(EntityTable, light_slots)` tuple published by
-the render state. Shadow casters are selected from `RenderTable` and
-`EntityTable` slots; the shadow pass does not accept or traverse authored
-`Brush`/`Thing`/`Light` collections. A custom renderer should preserve that
-dense execution boundary. Returns `True` if registered, `False` in a
-headless/player context with no viewport. This is how a whole new renderer
-ships as a plugin.
+The renderer owns its technique — shaders, passes, lighting model, shadowing,
+G-buffer — and consumes the dense tables rather than authored
+`Brush`/`Thing`/`Light` objects. It need not inherit anything from Fio;
+`engine.renderer.core.RendererCore` is optional reusable infrastructure
+(texture/model resources, table lookups, culling, editor overlays). Returns
+`True` if registered, `False` in a headless/player context with no viewport.
+This is how a whole new renderer ships as a plugin.
 
 ### Developer/editor tools (API 1.4.0)
 

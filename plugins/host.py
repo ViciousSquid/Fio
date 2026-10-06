@@ -305,9 +305,10 @@ class PluginHost:
         Returns True if registered, False in a host with no viewport (player).
         """
         try:
-            from engine.qt_game_view import register_renderer
+            from engine.qt_game_view import QtGameView  # noqa: F401 -- the viewport that uses renderers
         except Exception:
             return False
+        from engine.renderer import register_renderer
         return register_renderer(name, cls)
 
     def log(self, message: str) -> None:

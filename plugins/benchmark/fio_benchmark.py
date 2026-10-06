@@ -4,7 +4,7 @@ This is deliberately independent of pytest.  The development test suite uses
 pytest, but Tools > Benchmark must measure Fio without making pytest a runtime
 dependency.
 
-The renderer workload uses Fio's real Renderer and world representation.
+The renderer workload uses Fio's real ForwardRenderer and world representation.
 I/O uses the production IOManager, OutputConnection, LogicRelay and registered
 input handlers.  CSG uses the production engine.brush_geometry.clip_brush API.
 
@@ -171,7 +171,7 @@ def _resolutions():
 
 
 def _render(renderer, context, brushes, things):
-    """Render one real production Renderer frame and synchronise GPU completion.
+    """Render one real production ForwardRenderer frame and synchronise GPU completion.
 
     This standalone renderer microbenchmark intentionally does not enable
     camera-distance culling. The live Play Mode benchmarks exercise the actual
@@ -870,7 +870,7 @@ def _run_monster_apocalypse():
 def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
     """Measure the already-running Fio viewport through its real Qt event loop.
 
-    No second MainWindow, QOpenGLWidget, OpenGL context, or Renderer is
+    No second MainWindow, QOpenGLWidget, OpenGL context, or renderer is
     created. The existing viewport paints normally while the benchmark dialog
     is open, and SysMon records the frames that actually reached paintGL().    """
     from PyQt5.QtWidgets import QApplication
@@ -1607,7 +1607,7 @@ def format_results(results, info=None):
         "Fio performance benchmark",
         _execution_environment(),
         "",
-        "Renderer path: engine.renderer.Renderer.render_scene",
+        "Renderer path: engine.renderer.forward.ForwardRenderer.render_scene",
         "World data: procedural Fio map generator -> real brushes + Thing entities",
         "Gameplay data: 32 LogicRelay entities linked by serialized UUID I/O",
         "Monster stress: procedural generator creates real Monster entities",

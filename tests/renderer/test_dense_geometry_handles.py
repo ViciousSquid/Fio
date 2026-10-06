@@ -52,7 +52,7 @@ def test_geometry_handle_moves_with_a_surviving_row():
 
 @pytest.mark.gl
 def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     convex = angled_brush("convex")
     table = RenderTable()
@@ -68,7 +68,7 @@ def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
             return "mesh"
 
     probe = Probe()
-    meshes = Renderer._prepare_geo_meshes(
+    meshes = ForwardRenderer._prepare_geo_meshes(
         probe, table, np.array([0], dtype=np.int32))
 
     assert meshes == {0: "mesh"}
@@ -81,7 +81,7 @@ def test_dense_render_paths_have_no_convex_refs_slot_lookup():
     root = Path(__file__).resolve().parents[2]
     renderer = "".join(
         path.read_text(encoding="utf-8")
-        for path in sorted((root / "engine" / "renderer").glob("*.py")))
+        for path in sorted((root / "engine" / "renderer").rglob("*.py")))
 
     assert "refs[slot]" not in renderer
     assert "refs[int(brushes[index])]" not in renderer
@@ -90,7 +90,7 @@ def test_dense_render_paths_have_no_convex_refs_slot_lookup():
 
 @pytest.mark.gl
 def test_shadow_preparation_returns_dense_convex_slots():
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     box = box_brush("box")
     convex = angled_brush("convex")
@@ -105,7 +105,7 @@ def test_shadow_preparation_returns_dense_convex_slots():
             self.packed = len(rows)
 
     probe = Probe()
-    cube_slots, geo_slots = Renderer._prepare_shadow_instances(
+    cube_slots, geo_slots = ForwardRenderer._prepare_shadow_instances(
         probe, table, np.array([0, 1], dtype=np.int32), True)
 
     assert cube_slots.tolist() == [0]

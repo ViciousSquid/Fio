@@ -40,10 +40,10 @@ def test_water_shader_has_no_planar_reflection_inputs():
 
 @pytest.mark.gl
 def test_the_renderer_has_no_reflection_capture_pass():
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     for name in ('WATER_REFLECTION_SIZE', 'WATER_REFLECTION_TEXTURE_UNIT',
                  '_ensure_water_reflection_resources',
                  '_ensure_water_reflection_texture'):
-        assert not hasattr(Renderer, name), name
-    assert not hasattr(Renderer, "_render_water_reflections")
+        assert not hasattr(ForwardRenderer, name), name
+    assert not hasattr(ForwardRenderer, "_render_water_reflections")

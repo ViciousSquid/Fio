@@ -39,13 +39,13 @@ MAX_UPDATES = 2
 
 
 def planes_for(eye, yaw_deg, far):
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
     yaw = math.radians(yaw_deg)
     target = (eye[0] + math.sin(yaw) * 100.0, eye[1] - 20.0,
               eye[2] - math.cos(yaw) * 100.0)
     projection = glm.perspective(glm.radians(70.0), 16 / 9, 1.0, far)
     view = glm.lookAt(glm.vec3(*eye), glm.vec3(*target), glm.vec3(0, 1, 0))
-    return Renderer._frustum_planes(projection * view)
+    return ForwardRenderer._frustum_planes(projection * view)
 
 
 def fake_heights(world_x, world_z, res, size):

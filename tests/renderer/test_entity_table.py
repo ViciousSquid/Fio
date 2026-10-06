@@ -221,7 +221,7 @@ def test_light_render_state_stays_dense_and_tracks_motion_and_io():
 def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
     """The render aperture is smaller, while authored portal dimensions stay intact."""
     pytest.importorskip("OpenGL")
-    from engine.renderer import Renderer
+    from engine.renderer.forward import ForwardRenderer
 
     portal = make_thing(
         Portal, 'portal', (10.0, 20.0, 30.0),
@@ -229,9 +229,9 @@ def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
     )
     table = _synced([portal])
 
-    authored = Renderer._portal_slot_corners(table, 0)
-    rendered = Renderer._portal_slot_corners(
-        table, 0, Renderer.PORTAL_APERTURE_INSET)
+    authored = ForwardRenderer._portal_slot_corners(table, 0)
+    rendered = ForwardRenderer._portal_slot_corners(
+        table, 0, ForwardRenderer.PORTAL_APERTURE_INSET)
 
     authored_width = np.linalg.norm(
         np.asarray(authored[1]) - np.asarray(authored[0]))

@@ -1715,7 +1715,7 @@ class Terrain:
         # Re-resolve late-bound uniforms against the *current* program.  The
         # renderer can swap in an externally-compiled program whose uniform
         # table only covers a subset of locations (see
-        # Renderer.setup_terrain_shader), so any sampler we rely on must be
+        # ForwardRenderer.setup_terrain_shader), so any sampler we rely on must be
         # looked up here or it stays unbound.  An unassigned ``samplerCube``
         # defaults to texture unit 0, collides with the ``sampler2D`` terrain
         # textures bound there, and makes glDrawArrays raise

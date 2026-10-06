@@ -290,7 +290,8 @@ PRODUCTION_OWNER_NAMES = {
     "LogicThread",
     "MainWindow",
     "QtGameView",
-    "Renderer",
+    "ForwardRenderer",
+    "RendererCore",
     "Terrain",
     "PhysicsWorld",
     "PropSession",
@@ -391,7 +392,7 @@ def test_machinery_tests_do_not_import_owner_fakes():
     """Owner doubles must not leak back into behavioural machinery suites.
 
     Small instrumentation helpers such as OrderRecordingDict are legitimate;
-    substitutes for LogicThread, MainWindow, Renderer, AI, or IO ownership
+    substitutes for LogicThread, MainWindow, ForwardRenderer, AI, or IO ownership
     are not. This catches accidental reintroduction even when the fake class
     lives in tests/helpers and therefore evades the local-class check above.
     """

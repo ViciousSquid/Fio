@@ -1,6 +1,6 @@
 """Renderer line-width and point-size limits on a real OpenGL context.
 
-These tests deliberately use the production Renderer and the driver's
+These tests deliberately use the production ForwardRenderer and the driver's
 actual reported limits. Fault-path cases patch one OpenGL call after a real
 context exists, but the renderer, context, and GL state machinery remain real.
 """

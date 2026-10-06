@@ -34,7 +34,7 @@ def context():
 
 @pytest.fixture
 def renderer(context):
-    """A real ``Renderer`` on that context, cleaned up afterwards."""
+    """A real ``ForwardRenderer`` on that context, cleaned up afterwards."""
     made = glh.make_renderer()
     yield made
     try:

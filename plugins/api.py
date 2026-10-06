@@ -580,29 +580,27 @@ class EditorAPI:
         self._manager.register_entity_wizard(entity_type, factory)
 
     def register_renderer(self, name: str, cls) -> bool:
-        """Register a swappable renderer class under *name*.
+        """Register a renderer under *name* in Fio's renderer registry.
 
-        Fio's viewport already selects its renderer from a class registry; this
-        drops *cls* in so it appears as a render mode and can be activated. *cls*
-        must implement the renderer interface (``render_scene``,
-        ``draw_models_instanced``, ``render_shadow_maps``, ``cleanup``,
-        a ``lod_manager``, …).
-
-        The production shadow seam is
-        ``render_shadow_maps(shadow_lights, config, camera_pos=None)`` where
-        ``shadow_lights`` is the dense ``(EntityTable, light_slots)`` tuple.
-        Shadow caster selection and transforms come from ``RenderTable`` and
-        ``EntityTable`` slots; authored Brush/Thing/Light collections are not
-        part of the shadow API.
+        *cls* is a factory called as ``cls(config)`` with the viewport's GL
+        context current -- usually the renderer class itself. What it returns
+        must satisfy :class:`engine.renderer.Renderer`: lifecycle, the frame
+        (``render_scene`` over the dense ``RenderTable``/``EntityTable`` frame
+        input), resources, diagnostics and the host's post-scene drawing
+        operations. How it draws -- shaders, passes, lighting, shadows, a
+        G-buffer -- is entirely its own; it need not inherit anything from
+        Fio, though :class:`engine.renderer.core.RendererCore` offers reusable
+        infrastructure.
 
         Returns True if registered (False in a headless/player context with no
         viewport). This is how a whole new renderer — e.g. a deferred one —
         ships as a plugin.
         """
         try:
-            from engine.qt_game_view import register_renderer
+            from engine.qt_game_view import QtGameView  # noqa: F401 -- the viewport that uses renderers
         except Exception:
             return False
+        from engine.renderer import register_renderer
         return register_renderer(name, cls)
 
     def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:

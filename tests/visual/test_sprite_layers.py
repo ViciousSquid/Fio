@@ -280,7 +280,7 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         gl.glDisable(gl.GL_DEPTH_TEST)
-        drawn = renderer.draw_billboards_instanced(
+        drawn = renderer.draw_billboards(
             projection, view, positions, (40.0, 40.0), red)
         gl.glFinish()
         pixels = context.read_pixels()
@@ -291,7 +291,7 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
     reddish = (pixels[..., 0] > 128) & (pixels[..., 1] < 64)
     assert reddish.sum() > 100
     # Nothing to draw is no draw at all.
-    assert renderer.draw_billboards_instanced(
+    assert renderer.draw_billboards(
         projection, view, np.empty((0, 3), np.float32), (40.0, 40.0), red) == 0
 
 
@@ -301,7 +301,7 @@ def test_building_the_array_leaves_the_pixel_store_as_qt_expects(renderer, conte
     there, which sheared every small glyph of a ``message`` into stripes."""
     import OpenGL.GL as gl
 
-    from engine.renderer import restore_default_pixel_store
+    from engine.qt_game_view import restore_default_pixel_store
 
     red, blue = _solid((255, 0, 0)), _solid((0, 0, 255))
     things = [_billboard(renderer, "a", (0.0, 60.0, 0.0), red),

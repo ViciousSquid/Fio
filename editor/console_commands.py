@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QMessageBox
 from editor.debug_console import debug_log
 from engine.change_journal import touch
 from engine.spatial import set_authored_flag
+from engine.renderer import WATER_QUALITIES
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -1067,21 +1068,12 @@ entity to drive them from the I/O system.</i><br>
         def add_line(name, value):
             lines.append(f"<b>{name}:</b> {value}")
 
-        add_line("Wireframe", "ON" if renderer.wireframe else "OFF")
+        # Only the renderer-independent settings of the Renderer contract;
+        # anything else is the active renderer's own business.
         add_line("Shadows", "ON" if renderer.shadows_enabled else "OFF")
         add_line("Water quality cap",
                  "per brush" if renderer.water_quality == 'expensive'
                  else "cheap (all water)")
-        add_line("Volumetric Fog", "ON" if renderer.fog_enabled else "OFF")
-        add_line("Water Shader", "ON" if renderer.water_enabled else "OFF")
-        add_line("Glass Shader", "ON" if renderer.glass_enabled else "OFF")
-        add_line("Real-time Lighting", "ON" if renderer.lighting_enabled else "OFF")
-        add_line("Deferred Rendering", "ON" if renderer.use_deferred else "OFF")
-        add_line("Low-power Mode", "ON" if renderer.lowpower_mode else "OFF")
-
-        # Clear color
-        cc = renderer.clear_color
-        add_line("Clear Color", f"[{cc[0]:.2f}, {cc[1]:.2f}, {cc[2]:.2f}]")
 
         # View distance and the far-plane fog that hides its clip.
         vd = self.main_window.view_3d.view_distance
@@ -1135,7 +1127,7 @@ entity to drive them from the I/O system.</i><br>
         current = renderer.water_quality
         if args:
             wanted = str(args[0]).strip().lower()
-            if wanted not in renderer.WATER_QUALITIES:
+            if wanted not in WATER_QUALITIES:
                 debug_log("Warning", "Usage: waterquality [cheap|expensive]")
                 return
         else:

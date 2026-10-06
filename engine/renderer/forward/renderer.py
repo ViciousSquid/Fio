@@ -1,10 +1,10 @@
-"""The renderer: shared state, frame orchestration and GL lifecycle.
+"""ForwardRenderer: Fio's built-in renderer implementation.
 
-:class:`Renderer` is Fio's one renderer, for the editor viewport and play mode
-alike.  Its behaviour is split by responsibility across the mixins of this
-package; this module owns only what they share -- the renderer state created
-in :meth:`Renderer.__init__`, the per-frame sequencing in
-:meth:`Renderer.render_scene`, and :meth:`Renderer.cleanup`.
+A forward renderer over the dense ``RenderTable``/``EntityTable`` frame input:
+lit, textured and glow brush passes, instanced models and sprites, effects,
+water/glass/fog volumes, point-light shadow cube-maps and stencil portals. It
+implements :class:`engine.renderer.api.Renderer` and builds on
+:class:`engine.renderer.core.RendererCore`.
 """
 
 import os
@@ -17,7 +17,6 @@ from engine import entity_table as entity_projection
 from engine import shaders
 from engine.constants import (
     RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX)
-from engine.view_distance import ViewDistance
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -26,46 +25,25 @@ from engine.view_distance import ViewDistance
 # portal passes, which keep using the full scene.
 from engine.render_cull import camera_xz as _cull_camera_xz
 
-from .debug import DebugMixin, RenderStats
-from .geometry import GeometryMixin
+from ..core import RendererCore
+from .instancing import InstancingMixin
 from .lighting import LightingMixin
-from .materials import MaterialsMixin, ShaderLoader
 from .passes import PassesMixin
-from .tables import TablesMixin
-from .visibility import LODManager, VisibilityMixin
+from .portals import PortalsMixin
+from .shaders import ShadersMixin
 
 
-def restore_default_pixel_store():
-    """Put the pixel-store state Qt's painter relies on back to GL defaults.
+class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
+                      ShadersMixin, RendererCore):
+    """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
-    The renderer shares its context with the QPainter that draws the HUD,
-    and Qt uploads text glyphs into a texture assuming 4-byte row alignment
-    and no row length. Any pass that changes those for its own uploads and
-    leaves them changed shears every glyph that is not a multiple of four
-    pixels wide -- small HUD and ``message`` text came out garbled. Called
-    once before the painter opens, so no pass can leak into it.
-    """
-    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
-    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
-    gl.glPixelStorei(gl.GL_UNPACK_SKIP_ROWS, 0)
-    gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
-
-
-class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
-               GeometryMixin, MaterialsMixin, DebugMixin):
-    """Fio's forward OpenGL 3.3 renderer, shared by the editor and play mode.
-
-    Consumes the dense ``RenderTable``/``EntityTable`` projections published
-    by the logic thread and draws them; it never walks authored Brush/Thing
-    objects on the hot path.
+    *config* is the application ConfigParser (or None). *texture_loader*
+    optionally replaces how unseen brush textures are resolved; the GL tests
+    use it to serve a fixed texture.
     """
 
-    def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
-        self.texture_manager = {}
-        self.loaded_models = {}
-        #: model path -> perf_counter() of its last failed load.
-        self._failed_models = {}
+    def __init__(self, config=None, *, texture_loader=None):
+        super().__init__(texture_loader)
 
         # Glass samples the already-rendered scene for screen-space transmission.
         # Kept lazy because most frames contain no glass at all.
@@ -79,24 +57,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._water_depth_texture = 0
         self._water_depth_size = (0, 0)
         self._water_depth_texture_unit = 3
-
-
-        self.load_texture_callback = texture_loader
-        self._identity_mat4 = glm.mat4(1.0)
-        self._identity_mat3 = glm.mat3(1.0)
-        self.render_stats = RenderStats()
-        self.lod_manager = LODManager()
-
-        # How far this camera draws, and the fog that hides its far plane.
-        # A renderer/camera setting, never a world-streaming one: it changes
-        # what is on screen and nothing about what is loaded or simulated.
-        # The viewport replaces this with the instance it shares with the
-        # editor spinbox and the console, so a change there reaches the next
-        # frame with no rebuild -- see QtGameView._sync_view_distance.
-        self.view_distance = ViewDistance()
-        # Camera position for the current frame, cached by render_scene so the
-        # passes that do not receive one (sprites) can still fog correctly.
-        self._frame_camera_pos = (0.0, 0.0, 0.0)
 
         # Performance flags.  `lowpower_mode` picks the cheaper lighting shaders, and
         # it defaults from the hardware rather than being pinned on: it used to
@@ -135,25 +95,18 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         # GPU-instanced model data. One persistent VBO is shared by all model
         # VAOs; each instance carries a model matrix and normal matrix (112 B).
         # The shared brush-instance buffer and its VAO. One layout serves every
-        # pass that submits runs (see BRUSH_INSTANCE_ATTRS), so it lives here
-        # rather than on the forward renderer.
+        # pass that submits runs (see BRUSH_INSTANCE_ATTRS).
         self._brush_instance_vbo = None
         self._brush_instance_vao = None
         self._sprite_instance_vbo = None
         self._sprite_instance_vao = None
         self._sprite_instance_capacity = 0
-        self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
-        self._sprite_gl_resolved = 0
         self._sprite_instance_base = 0
-        self._sprite_recipes_seen = None
         self._sprite_instance_data = np.empty(
             (0, self.SPRITE_INSTANCE_FLOATS), dtype=np.float32)
         #: Entity sprite images as layers of one texture array; created on
         #: first use, on the thread that owns the context.
         self._sprite_layers = None
-        #: Mesh bounding radius per interned model recipe (entity frustum cull).
-        self._model_radius_recipes_seen = None
-        self._model_radius_by_recipe = np.zeros(0, dtype=np.float64)
         # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
         # billboard texture path, with one draw per animated texture frame.
         self._effect_instance_vbo = None
@@ -165,12 +118,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
         self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
-        # Decoded animated Effect GIF frames, indexed by dense variant.
-        # FIRE and ORB share this normal-instanced billboard path.
-        self.effect_fire_frames = {}
-        self.effect_fire_cumulative = {}
-        self.effect_orb_frames = {}
-        self.effect_orb_cumulative = {}
         self.effect_custom_frames = {}
         self.effect_custom_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
@@ -184,9 +131,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
-        # Reusable model/normal matrix buffers for the batched transform build.
-        self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
-        self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
         self._model_instance_vbo = None
         self._model_instance_capacity = 0
         self._model_instance_data = np.empty((0, 29), dtype=np.float32)
@@ -195,6 +139,8 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
 
         # Shared std140 light UBO. One upload feeds every lighting shader.
+        # Light data now travels through the shared std140 UBO; no per-slot
+        # uniform-name table is needed on the render path.
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
@@ -219,79 +165,11 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._frame_lights_uploaded = {}
         self._current_shader = None
 
-        # Light data now travels through the shared std140 UBO; no per-slot
-        # uniform-name table is needed on the render path.
-
-        # PERF: cache of texture-name -> "textures/<name>" cache-key path.
-        # draw_textured_brushes_optimized resolves this for every drawn face
-        # every frame in play mode; os.path.join is comparatively expensive,
-        # so memoize the join per unique texture name.
-        self._tex_path_cache = {}
-        # Dense texture ids are local to a RenderTable. With double-buffered
-        # projections the two tables may have discovered different names first,
-        # so a single name_id -> GL-id array is no longer a valid cache boundary.
-        # Cache the resolved arrays per table; each array still grows only when
-        # that table interns a new name.
-        self._gl_tex_by_table = {}
-        self._tex_size_by_table = {}
-
         self._proj_ptr = None
         self._view_ptr = None
-
-        # VAOs and buffers (initialised after shaders compile)
-        self.vaos = {'cube': None, 'sprite': None, 'grid': None}
-        self.grid_indices_count = 0
-        self.sprite_textures = {}
-        self._edge_vao = None
-        self._edge_vbo = None
-        self._gizmo_lines_vbo = None
-        self._gizmo_cone_vbo = None
-        self._portal_outline_vao = None
-        self._portal_outline_vbo = None
-        self._portal_normal_vao = None
-        self._portal_normal_vbo = None
-        self._conn_line_vao = None
-        self._conn_line_vbo = None
-        self.face_highlight_vao = None
-        self.face_highlight_vbo = None
-        # Component-edit handle overlay (editor only).  The buffer is refilled
-        # only when the editor's overlay version changes, never per frame.
-        self._component_overlay_vao = None
-        self._component_overlay_vbo = None
-        self._component_overlay_data = None
-        self._component_overlay_counts = None
-        self._component_overlay_version = None
-        self._component_overlay_dirty = False
-        # Driver limits for wide lines / big points, queried once on first use
-        # (they need a live context, and glGetFloatv stalls the pipeline).
-        self._line_width_range = None
-        self._point_size_range = None
-        self._cube_vbo = None
-        self._sprite_vbo = None
-        self._grid_vbo = None
         self._water_surface_vbo = None
         self._water_surface_ebo = None
         self._water_surface_index_count = 0
-
-        # Convex geometry meshes, owned by geometry signature. The signature
-        # carries the brush's geometry epoch, which every change to its shape
-        # or face mapping bumps, so it names the mesh's content exactly -- and
-        # it survives a table reconcile and is the same in both render
-        # buffers' tables. Keying by (table generation, geometry id) rebuilt
-        # every convex mesh, once per buffer, after any structural edit.
-        # Meshes are dropped after going unused for a while (_begin_geo_frame).
-        self._geo_mesh_cache = {}
-        #: id(GeometryRecord) -> mesh: the per-frame lookup, which does not
-        #: hash the signature. Validated against the record's signature, so a
-        #: recycled id cannot alias; cleared with each stale-mesh sweep.
-        self._geo_mesh_by_record = {}
-        self._geo_mesh_frame = 0
-
-        self._shader_init_failed = False
-
-        # Shaders (will be filled by subclasses or base helpers)
-        self.shaders = {}
-        self.uniforms = {}
 
         # Portal specific GL resources (initialised later)
         self._portal_mask_shader = None
@@ -316,14 +194,7 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._portal_rim_proj_loc = None
         self._portal_rim_view_loc = None
         self._portal_rim_color_loc = None
-        # Cached inverse of the main projection matrix, reused across every
-        # oblique-clip computation in a frame (the projection is constant, only
-        # the per-portal view changes).
-        self._portal_proj_inv_sig = None
-        self._portal_proj_inv = None
-
         # Compile common shaders (simple, sprite, depth_cube, water, glass, fog, terrain)
-        self.shader_loader = ShaderLoader()
         self._compile_common_shaders()
 
         # EXPLOSION keeps its dedicated effect shader. FIRE is a plain animated
@@ -365,7 +236,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
             self.vaos['water_surface'] = self._create_water_surface_vao()
             self.vaos['sprite'] = self._create_sprite_vao()
             self.vaos['grid'] = None
-            self.update_grid_buffers(initial_world_size, initial_grid_size)
             self._create_gizmo_buffers()
             self.noise_texture_id = self._load_3d_texture('assets/noise_3d.bin')
             self.load_texture('default.png', 'textures')
@@ -645,43 +515,11 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
 
-
-    # --------------------------------------------------------------------------
-    # Cleanup
-    # --------------------------------------------------------------------------
     def cleanup(self):
-        """Release all OpenGL resources owned by the renderer."""
+        """Release ForwardRenderer's own GL resources, then RendererCore's."""
         if self._sprite_layers is not None:
             self._sprite_layers.cleanup()
             self._sprite_layers = None
-        # Delete VAOs and VBOs
-        for name, vao in self.vaos.items():
-            if vao:
-                gl.glDeleteVertexArrays(1, [vao])
-        if self._edge_vao:
-            gl.glDeleteVertexArrays(1, [self._edge_vao])
-        if self._edge_vbo:
-            gl.glDeleteBuffers(1, [self._edge_vbo])
-        if self._gizmo_lines_vbo:
-            gl.glDeleteBuffers(1, [self._gizmo_lines_vbo])
-        if self._gizmo_cone_vbo:
-            gl.glDeleteBuffers(1, [self._gizmo_cone_vbo])
-        if self._portal_outline_vao:
-            gl.glDeleteVertexArrays(1, [self._portal_outline_vao])
-        if self._portal_outline_vbo:
-            gl.glDeleteBuffers(1, [self._portal_outline_vbo])
-        if self._portal_normal_vao:
-            gl.glDeleteVertexArrays(1, [self._portal_normal_vao])
-        if self._portal_normal_vbo:
-            gl.glDeleteBuffers(1, [self._portal_normal_vbo])
-        if self._conn_line_vao:
-            gl.glDeleteVertexArrays(1, [self._conn_line_vao])
-        if self._conn_line_vbo:
-            gl.glDeleteBuffers(1, [self._conn_line_vbo])
-        if self.face_highlight_vao:
-            gl.glDeleteVertexArrays(1, [self.face_highlight_vao])
-        if self.face_highlight_vbo:
-            gl.glDeleteBuffers(1, [self.face_highlight_vbo])
         for attr in ('_glass_scene_texture', '_water_depth_texture'):
             tex = getattr(self, attr, 0)
             if tex:
@@ -689,10 +527,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
                 setattr(self, attr, 0)
         self._glass_scene_size = (0, 0)
         self._water_depth_size = (0, 0)
-        for mesh in self._geo_mesh_cache.values():
-            self._delete_geo_mesh(mesh)
-        self._geo_mesh_cache.clear()
-        self._geo_mesh_by_record.clear()
         # Shadow resources. These are owned by this renderer alone and nothing
         # outside it holds their names, so they have to be released here or a
         # renderer rebuild (a render-mode or shadow-quality change) strands the
@@ -713,13 +547,6 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
         self._light_shadow_index = {}
-
-        if self._cube_vbo:
-            gl.glDeleteBuffers(1, [self._cube_vbo])
-        if self._sprite_vbo:
-            gl.glDeleteBuffers(1, [self._sprite_vbo])
-        if self._grid_vbo:
-            gl.glDeleteBuffers(1, [self._grid_vbo])
         if self._water_surface_vbo:
             gl.glDeleteBuffers(1, [self._water_surface_vbo])
         if self._water_surface_ebo:
@@ -739,13 +566,4 @@ class Renderer(PassesMixin, LightingMixin, VisibilityMixin, TablesMixin,
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
         if self._portal_quad_vbo:
             gl.glDeleteBuffers(1, [self._portal_quad_vbo])
-        for prog in self.shaders.values():
-            if prog:
-                try:
-                    gl.glDeleteProgram(prog)
-                except Exception:
-                    pass
-        self.shaders.clear()
-        self.uniforms.clear()
-        self._shader_init_failed = True
-        print("[Renderer] Cleaned up GL resources.")
+        super().cleanup()

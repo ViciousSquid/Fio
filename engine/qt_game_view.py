@@ -18,7 +18,8 @@ from editor.things import (
 )
 from engine.player import Player
 
-from engine.renderer import Renderer, restore_default_pixel_store
+from engine.renderer import DEFAULT_RENDERER, available_renderers, create_renderer
+from editor.selection_overlay import describe_selection
 _HUD_FONT_FILES = {
     1: "Rushfordclean-rgz89.otf",
     2: "O.K.Retro.otf",
@@ -31,32 +32,21 @@ _HUD_FONT_FALLBACKS = {
     3: "HornetDisplay",
     4: "LCD AT&T Phone Time/Date",
 }
-_RENDERER_CLASSES = {
-    'Forward':  Renderer,
-}
+def restore_default_pixel_store():
+    """Put the pixel-store state Qt's painter relies on back to GL defaults.
 
-
-def register_renderer(name, cls):
-    """Register a swappable renderer class under *name* (used by ``switch_renderer``).
-
-    This is the plugin-facing seam for shipping a whole new renderer (e.g. a
-    deferred one) without editing the engine: a plugin calls
-    ``api.register_renderer("Deferred", DeferredRenderer)`` and it becomes an
-    available render mode. *cls* must implement the renderer interface the
-    viewport drives (``render_scene``, ``draw_models_instanced``,
-    ``render_shadow_maps``, ``set_sprite_textures``, ``cleanup``, a
-    ``lod_manager``, …). ``render_shadow_maps`` receives the dense
-    ``(EntityTable, light_slots)`` state plus render config; it must consume
-    ``RenderTable``/``EntityTable`` slots rather than authored
-    Brush/Thing/Light collections. Returns True.
+    The renderer shares its context with the QPainter that draws the HUD,
+    and Qt uploads text glyphs into a texture assuming 4-byte row alignment
+    and no row length. Any pass that changes those for its own uploads and
+    leaves them changed shears every glyph that is not a multiple of four
+    pixels wide -- small HUD and ``message`` text came out garbled. Called
+    once before the painter opens, so no pass can leak into it.
     """
-    _RENDERER_CLASSES[str(name)] = cls
-    return True
-
-
-def available_renderers():
-    """The names of all registered renderer modes."""
-    return list(_RENDERER_CLASSES.keys())
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_ROWS, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
 
 from engine import brush_geometry
 from editor import component_edit
@@ -943,8 +933,8 @@ class QtGameView(QOpenGLWidget):
     def initializeGL(self):
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = self.editor.config
-        self._renderer_mode = 'Forward'
-        self.renderer = Renderer(self.load_texture, self.grid_size, self.world_size, config)
+        self._renderer_mode = DEFAULT_RENDERER
+        self.renderer = create_renderer(DEFAULT_RENDERER, config)
         self.set_cull_distance(self.cull_distance)
         self._preload_assets()
         self.load_all_sprite_textures()
@@ -1060,8 +1050,22 @@ class QtGameView(QOpenGLWidget):
         super().closeEvent(event)
 
     def preload_level_textures(self):
-        if self.renderer:
-            self.renderer.preload_level_textures(self.editor.state.brushes)
+        if not self.renderer:
+            return
+        texture_set = set()
+        for brush in self.editor.state.brushes:
+            for face_tex in brush.get('textures', {}).values():
+                if face_tex and face_tex != 'caulk.jpg':
+                    texture_set.add(face_tex)
+            # Angled brushes can carry per-plane textures (e.g. on cut faces).
+            geo = brush.get('geometry')
+            if geo:
+                for plane in geo.get('planes', []):
+                    tex = plane.get('texture')
+                    if tex and tex != 'caulk.jpg':
+                        texture_set.add(tex)
+        for tex_name in texture_set:
+            self.renderer.load_texture(tex_name, 'textures')
 
     def update_grid(self):
         self.grid_dirty = True
@@ -1372,28 +1376,7 @@ class QtGameView(QOpenGLWidget):
     # =========================================================================
 
     def _render_bullet_marks(self, marks, proj_matrix, view_matrix):
-        if not marks or 'simple' not in self.renderer.shaders:
-            return
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        shader = self.renderer.shaders['simple']
-        uniforms = self.renderer.uniforms['simple']
-        gl.glUseProgram(shader)
-        proj_ptr = glm.value_ptr(proj_matrix)
-        view_ptr = glm.value_ptr(view_matrix)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
-        gl.glBindVertexArray(self.renderer.vaos['cube'])
-        for mark in marks:
-            pos = mark['pos']
-            alpha = mark['alpha']
-            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
-            mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
-            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
-            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-        gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
+        self.renderer.draw_bullet_marks(proj_matrix, view_matrix, marks)
 
     def _render_player_glasses(self, positions, proj_matrix, view_matrix):
         """Draw one or more player bodies as glasses billboards."""
@@ -1414,7 +1397,7 @@ class QtGameView(QOpenGLWidget):
         gl.glDisable(gl.GL_DEPTH_TEST)
 
     def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
-        if not len(projectiles) or 'sprite_instanced' not in self.renderer.shaders:
+        if not len(projectiles):
             return
         tex_id = (self.sprite_textures.get('projectile') or
                   self.sprite_textures.get('Monster'))
@@ -1425,7 +1408,7 @@ class QtGameView(QOpenGLWidget):
         # instanced draw of the published position array.
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        self.renderer.draw_billboards_instanced(
+        self.renderer.draw_billboards(
             proj_matrix, view_matrix, projectiles, MONSTER_PROJECTILE_SPRITE_SIZE,
             tex_id)
         gl.glDisable(gl.GL_BLEND)
@@ -1502,7 +1485,7 @@ class QtGameView(QOpenGLWidget):
         gl.glBindVertexArray(0)
 
     def paintGL(self):
-        if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
+        if not self.renderer or not self.renderer.ready:
             return
         started = time.perf_counter()
         render_state: Optional[RenderState] = None
@@ -1602,7 +1585,7 @@ class QtGameView(QOpenGLWidget):
             self._cached_underwater_tint = render_state.underwater_tint
             self._cached_p2_underwater = render_state.player2_underwater
         if self.grid_dirty:
-            self.renderer.update_grid_buffers(self.world_size, self.grid_size)
+            self.renderer.set_grid(self.world_size, self.grid_size)
             self.grid_dirty = False
         self.view_matrix = render_state.camera_view_matrix
         if render_state.is_play_mode:
@@ -1652,7 +1635,10 @@ class QtGameView(QOpenGLWidget):
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
         self._render_config["render_mode"] = self.current_render_mode
         self._render_config["play_mode"] = self.play_mode
-        self._render_config["primary_selection"] = self.editor.primary_selection()
+        # The renderer sees the selection only as this descriptor, on both
+        # channels: render_scene's argument and the frame input.
+        _selection = describe_selection(self.editor.primary_selection())
+        self._render_config["primary_selection"] = _selection
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
@@ -1720,7 +1706,7 @@ class QtGameView(QOpenGLWidget):
 
             self.renderer.render_scene(
                 _split_proj, self.view_matrix, camera_pos,
-                self.editor.primary_selection(), self._render_config,
+                _selection, self._render_config,
                 clear=False, brush_slots=_main_brush_slots,
             )
 
@@ -1758,7 +1744,7 @@ class QtGameView(QOpenGLWidget):
             _p2_brush_slots = self._render_config.get("all_brush_slots")
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
-                self.editor.primary_selection(), self._render_config,
+                _selection, self._render_config,
                 clear=False, brush_slots=_p2_brush_slots
             )
 
@@ -1784,7 +1770,7 @@ class QtGameView(QOpenGLWidget):
         else:
             self.renderer.render_scene(
                 self.projection_matrix, self.view_matrix, camera_pos,
-                self.editor.primary_selection(), self._render_config,
+                _selection, self._render_config,
                 brush_slots=_main_brush_slots,
             )
             # Native overhead player sprite (top-down mode), depth-tested so
@@ -2668,21 +2654,15 @@ class QtGameView(QOpenGLWidget):
         """Push the shared view-distance object at everything that reads it.
 
         The render runtime and renderer hold the *same* instance rather than
-        a copy, so this only has to run when one of them is created or swapped
-        — and the per-frame LOD bands, which are plain numbers, are refreshed
-        here too.
+        a copy, so this only has to run when one of them is created or swapped.
         """
-        distance = self.view_distance.distance
         if self.renderer:
             self.renderer.view_distance = self.view_distance
-            self.renderer.lod_manager.cull_dist_sq = distance * distance
-            self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
 
     def switch_renderer(self, mode: str):
         if mode == self._renderer_mode:
             return
-        cls = _RENDERER_CLASSES.get(mode)
-        if cls is None:
+        if mode not in available_renderers():
             print(f"[QtGameView] Unknown renderer mode '{mode}' — ignoring.")
             return
         print(f"[QtGameView] Switching renderer: {self._renderer_mode} → {mode}")
@@ -2698,8 +2678,7 @@ class QtGameView(QOpenGLWidget):
                         print(f"[QtGameView] Renderer cleanup warning: {e}")
                 del old
             config = self.editor.config
-            self.renderer = cls(
-                self.load_texture, self.grid_size, self.world_size, config)
+            self.renderer = create_renderer(mode, config)
             self.renderer.set_sprite_textures(self.sprite_textures)
             self._sync_view_distance()
             self.grid_dirty = True
@@ -2709,9 +2688,8 @@ class QtGameView(QOpenGLWidget):
             print(f"[QtGameView] switch_renderer FAILED: {exc}")
             try:
                 config = self.editor.config
-                self.renderer = Renderer(
-                    self.load_texture, self.grid_size, self.world_size, config)
-                self._renderer_mode = 'Forward'
+                self.renderer = create_renderer(DEFAULT_RENDERER, config)
+                self._renderer_mode = DEFAULT_RENDERER
             except Exception as fe:
                 print(f"[QtGameView] Emergency fallback also failed: {fe}")
         finally:

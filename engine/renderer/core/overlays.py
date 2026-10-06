@@ -1,15 +1,12 @@
-"""Renderer diagnostics and editor overlays.
+"""Editor and debug overlays any renderer can reuse.
 
-Per-pass CPU timing (:func:`timed_pass`, :class:`RenderStats`), driver-clamped
-line/point sizes, the opt-in GL state dump, and everything the editor draws on
-top of the world: grid, gizmo, selection outline, AABBs, face highlight,
-component-edit handles, PathNode cubes, portal wireframes, connection lines and
-collision visualisation.
+Grid, gizmo, selection outline and bounds, face highlight, component handles,
+PathNode cubes, portal wireframes, connection lines, collision boxes and
+bullet marks. They draw with the ``simple`` program from
+:meth:`ResourcesMixin._compile_overlay_shader` and the shared cube VAO.
 """
 
 import ctypes
-import functools
-import time
 
 import glm
 import numpy as np
@@ -17,50 +14,11 @@ import OpenGL.GL as gl
 
 from engine.constants import brush_aabb_bounds
 from engine import brush_geometry
-from editor.things import Thing, Effect
+from .diagnostics import timed_pass
 
 
-class RenderStats:
-    __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
-                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
-                 'entity_candidates', 'culled_entities', 'pass_ms')
-    def __init__(self):
-        #: CPU milliseconds spent submitting each pass this frame, measured by
-        #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
-        #: shadow maps) counts theirs too.
-        self.pass_ms = {}
-        self.reset()
-    def reset(self):
-        self.total_brushes = self.culled_brushes = self.visible_brushes = 0
-        self.draw_calls = self.shadow_draw_calls = self.batched_draws = 0
-        self.total_tris = self.visible_tris = 0
-        #: Sprite and model rows offered to the main view's entity passes,
-        #: and how many of them its frustum rejected.
-        self.entity_candidates = self.culled_entities = 0
-        self.pass_ms.clear()
-
-
-def timed_pass(name):
-    """Accumulate a renderer pass's CPU time into ``render_stats.pass_ms``.
-
-    Two clock reads per call, a handful of calls per frame: what the Debug
-    Tables instrument shows as the per-pass submission cost.
-    """
-    def decorate(method):
-        @functools.wraps(method)
-        def timed(self, *args, **kwargs):
-            started = time.perf_counter()
-            try:
-                return method(self, *args, **kwargs)
-            finally:
-                ms = self.render_stats.pass_ms
-                ms[name] = ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
-        return timed
-    return decorate
-
-
-class DebugMixin:
-    """Diagnostics and editor overlays of :class:`engine.renderer.Renderer`."""
+class OverlaysMixin:
+    """Editor and debug overlays."""
 
     # --------------------------------------------------------------------------
     # Editor helpers (outlines, gizmo, etc.)
@@ -121,59 +79,11 @@ class DebugMixin:
             return 1.0
         return clamped
 
-    def _debug_textured_brush_gl_state(self):
-        """Print the VAO/program state used by the textured-brush pass.
-
-        This is an opt-in diagnostic path only. It is intentionally called once
-        before the face submission loop rather than from the per-face hot path.
-        """
-        print(
-            '[Renderer] textured-brush GL state: '
-            f'program={int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))}, '
-            f'vao={int(gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING))}, '
-            f'array_buffer={int(gl.glGetIntegerv(gl.GL_ARRAY_BUFFER_BINDING))}, '
-            f'element_buffer={int(gl.glGetIntegerv(gl.GL_ELEMENT_ARRAY_BUFFER_BINDING))}, '
-            f'tf_active={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_ACTIVE)))}, '
-            f'tf_paused={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_PAUSED)))}, '
-            f'rasterizer_discard={bool(int(gl.glGetBooleanv(gl.GL_RASTERIZER_DISCARD)))}'
-        )
-
-        def _scalar(value):
-            return int(np.asarray(value).reshape(-1)[0])
-
-        for attrib in (0, 1, 2):
-            enabled = _scalar(
-                gl.glGetVertexAttribiv(
-                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED
-                )
-            )
-            buffer = _scalar(
-                gl.glGetVertexAttribiv(
-                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
-                )
-            )
-            stride = _scalar(
-                gl.glGetVertexAttribiv(
-                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_STRIDE
-                )
-            )
-            attr_type = _scalar(
-                gl.glGetVertexAttribiv(
-                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_TYPE
-                )
-            )
-            print(
-                f'[Renderer] attrib{attrib}: '
-                f'enabled={bool(enabled)}, '
-                f'buffer={buffer}, '
-                f'stride={stride}, '
-                f'type=0x{attr_type:x}'
-            )
-
     # --------------------------------------------------------------------------
     # Grid
     # --------------------------------------------------------------------------
-    def update_grid_buffers(self, world_size, grid_size):
+    def set_grid(self, world_size, grid_size):
+        """Size the editor grid; a non-positive grid_size removes it."""
         if self.vaos.get('grid') is None and self.vaos.get('cube') is None:
             if grid_size <= 0 or self._shader_init_failed:
                 return
@@ -275,15 +185,14 @@ class DebugMixin:
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
 
-    def draw_selected_brush_outline(self, projection, view, brush, table=None):
+    def draw_selected_brush_outline(self, projection, view, pos, size,
+                                    brush_id=None, table=None):
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [64, 64, 64])
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
@@ -311,8 +220,8 @@ class DebugMixin:
         # but convex geometry comes from the dense RenderTable geometry records.
         # Do not reintroduce the removed object-based mesh lookup here.
         mesh = None
-        if table is not None and isinstance(brush, dict):
-            slot = table.slot_of_id.get(brush.get('id'))
+        if table is not None:
+            slot = table.slot_of_id.get(brush_id)
             if slot is not None:
                 slot = int(slot)
                 gid = int(table.geometry_id[slot])
@@ -330,24 +239,16 @@ class DebugMixin:
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
         gl.glBindVertexArray(0)
 
-    def draw_effect_billboard_aabb(
-        self, projection, view, effect, explosion=False
-    ):
+    def draw_effect_billboard_aabb(self, projection, view, effect):
         """Draw the selected Effect billboard's editor-only world AABB.
 
         The bounds are derived from the same width/height and billboard basis
         used by the Effect shaders. EXPLOSION frame 10 uses its current shader
         growth factor so the preview box remains visually accurate.
         """
-        props = getattr(effect, 'properties', {}) or {}
-        try:
-            width = max(0.01, float(props.get('width', 32.0)))
-        except (TypeError, ValueError):
-            width = 32.0
-        try:
-            height = max(0.01, float(props.get('height', 24.0)))
-        except (TypeError, ValueError):
-            height = 24.0
+        width = effect.width
+        height = effect.height
+        explosion = effect.explosion
 
         right = np.asarray(
             (float(view[0][0]), float(view[1][0]), float(view[2][0])),
@@ -383,10 +284,7 @@ class DebugMixin:
             + np.abs(up) * half_height
         )
 
-        pos = np.asarray(
-            getattr(effect, 'pos', [0.0, 0.0, 0.0]),
-            dtype=np.float32,
-        )
+        pos = np.asarray(effect.pos, dtype=np.float32)
         center = pos.copy()
         if explosion:
             center += up * half_height
@@ -394,14 +292,15 @@ class DebugMixin:
         self.draw_aabb_bounds(
             projection,
             view,
-            {
+            brush_aabb_bounds({
                 'pos': center.tolist(),
                 'size': (extents * 2.0).tolist(),
-            },
+            }),
         )
 
-    def draw_aabb_bounds(self, projection, view, brush):
-        """Draw the exact world-space trigger AABB as orange dashed lines."""
+    def draw_aabb_bounds(self, projection, view, bounds):
+        """Draw a world-space AABB ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``
+        as orange dashed lines."""
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -409,7 +308,7 @@ class DebugMixin:
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
 
-        lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = brush_aabb_bounds(brush)
+        lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = bounds
         corners = np.array([
             [lo_x, lo_y, lo_z], [hi_x, lo_y, lo_z],
             [hi_x, hi_y, lo_z], [lo_x, hi_y, lo_z],
@@ -950,27 +849,41 @@ class DebugMixin:
         gl.glDeleteVertexArrays(1, [vao])
         gl.glDeleteBuffers(1, [vbo])
 
-    def _draw_selection_overlays(self, projection, view, primary_selection, table):
-        """Outline, trigger AABB, Effect bounds and gizmo of the selection."""
-        if isinstance(primary_selection, dict):
+    def _draw_selection_overlays(self, projection, view, selection, table):
+        """Outline, dashed bounds, Effect box and gizmo of a SelectionOverlay."""
+        if selection.outline is not None:
+            pos, size = selection.outline
             self.draw_selected_brush_outline(
-                projection, view, primary_selection, table=table)
-            if primary_selection.get('is_trigger', False) and primary_selection.get('show_aabb_bounds', False):
-                self.draw_aabb_bounds(projection, view, primary_selection)
-            pos = primary_selection.get('pos')
-            if pos is not None and not primary_selection.get('lock', False):
-                self.render_gizmo(projection, view, pos)
-        elif isinstance(primary_selection, Thing):
-            if (isinstance(primary_selection, Effect)
-                    and primary_selection.properties.get('preview', False)):
-                self.draw_effect_billboard_aabb(
-                    projection,
-                    view,
-                    primary_selection,
-                    explosion=(
-                        str(primary_selection.properties.get(
-                            'effect_type', 'FIRE'
-                        )).upper() == 'EXPLOSION'
-                    ),
-                )
-            self.render_gizmo(projection, view, primary_selection.pos)
+                projection, view, pos, size, selection.brush_id, table=table)
+        if selection.dashed_bounds is not None:
+            self.draw_aabb_bounds(projection, view, selection.dashed_bounds)
+        if selection.effect_billboard is not None:
+            self.draw_effect_billboard_aabb(
+                projection, view, selection.effect_billboard)
+        if selection.gizmo_pos is not None:
+            self.render_gizmo(projection, view, selection.gizmo_pos)
+
+    def draw_bullet_marks(self, projection, view, marks):
+        """Impact marks as small dark cubes (Renderer contract)."""
+        if not marks or 'simple' not in self.shaders:
+            return
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        shader = self.shaders['simple']
+        uniforms = self.uniforms['simple']
+        gl.glUseProgram(shader)
+        proj_ptr = glm.value_ptr(projection)
+        view_ptr = glm.value_ptr(view)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+        gl.glBindVertexArray(self.vaos['cube'])
+        for mark in marks:
+            pos = mark['pos']
+            alpha = mark['alpha']
+            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
+            mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
+            mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
+            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        gl.glBindVertexArray(0)
+        gl.glDisable(gl.GL_BLEND)

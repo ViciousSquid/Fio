@@ -182,7 +182,7 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
     """Every draw, cull and shadow pass asks for a Prop's model; a missing one
     was probed on disk and logged each time (1194 lines in a short soak)."""
     pytest.importorskip("OpenGL")
-    from engine.renderer import geometry as renderer_geometry
+    from engine.renderer.core import resources as renderer_resources
     from tests.helpers.gl import GLTestContext, make_renderer, reset_texture_cache
 
     reset_texture_cache()
@@ -191,9 +191,9 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
         try:
             renderer.loaded_models = {}
             probes = []
-            real_exists = renderer_geometry.os.path.exists
+            real_exists = renderer_resources.os.path.exists
             monkeypatch.setattr(
-                renderer_geometry.os.path,
+                renderer_resources.os.path,
                 "exists",
                 lambda p: probes.append(p) or real_exists(p),
             )
@@ -205,7 +205,7 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
             assert capsys.readouterr().out.count("Failed to load model") == 1
 
             # ...but it is retried later, so a model added mid-session appears.
-            monkeypatch.setattr(renderer_geometry, "_MODEL_RETRY_S", 0.0)
+            monkeypatch.setattr(renderer_resources, "_MODEL_RETRY_S", 0.0)
             probes.clear()
             renderer.load_model("no_such_model.glb")
             assert probes, "a failed model must be retried after the back-off"

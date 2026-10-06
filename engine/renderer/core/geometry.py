@@ -1,34 +1,22 @@
-"""GPU geometry: shared VAOs, angled-brush meshes and models.
+"""Renderer-independent GPU geometry.
 
-The unit cube, tessellated water surface and sprite quad VAOs; the convex
-(angled) brush mesh cache keyed by geometry signature; and OBJ/GLB model
-loading.
+The unit cube and sprite quad primitives, and the angled (convex) brush mesh
+cache built from RenderTable geometry records.
 """
 
 import ctypes
 import math
-import os
-import time
 
 import numpy as np
 import OpenGL.GL as gl
 
 from engine import brush_geometry
 
-# Try to import OBJ and GLB loaders
-try:
-    from engine.obj_loader import OBJ
-except ImportError:
-    OBJ = None
 
-try:
-    from engine.glb_loader import GLB
-except ImportError:
-    GLB = None
-
-
-#: Seconds before a model path that failed to load is tried again.
-_MODEL_RETRY_S = 5.0
+# Cube face order — index maps to the face's 6-vertex run in the cube VAO
+# (face_idx * 6). Kept as a module constant so the per-frame texture batch
+# build doesn't allocate a fresh list for every brush.
+_CUBE_FACE_KEYS = ('south', 'north', 'west', 'east', 'down', 'top')
 
 
 class BrushGeoMesh:
@@ -63,111 +51,7 @@ class BrushGeoMesh:
 
 
 class GeometryMixin:
-    """GPU geometry of :class:`engine.renderer.Renderer`."""
-
-    # --------------------------------------------------------------------------
-    # Models
-    # --------------------------------------------------------------------------
-    def load_model(self, filename):
-        """Load a 3D model (OBJ or GLB).
-
-        The normal render-time case is an already-loaded model. Keep that path
-        to a single dictionary lookup; path normalisation and filesystem work
-        belong exclusively to cache misses.
-        """
-        if not filename:
-            return None
-
-        # HOT PATH: model_path values are normally identical strings frame to
-        # frame, so this is the entire lookup on the common render path.
-        model = self.loaded_models.get(filename)
-        if model is not None:
-            return model
-
-        # A path that failed a moment ago is not retried every frame: every
-        # draw, cull and shadow pass asks for it, and each retry was a
-        # filesystem probe, a parse attempt and a log line. Retried after
-        # _MODEL_RETRY_S, so a model added while Fio runs still appears.
-        failed = self.__dict__.setdefault('_failed_models', {}).get(filename)
-        if failed is not None and time.perf_counter() - failed < _MODEL_RETRY_S:
-            return None
-
-        # Cache miss only: normalise alternate slash/absolute-path spellings
-        # so editor/package/file-dialog paths still collapse to one resource.
-        original_filename = str(filename)
-        normalized_filename = os.path.normpath(
-            original_filename.replace('/', os.sep).replace('\\', os.sep)
-        )
-        cache_key = os.path.normcase(normalized_filename)
-
-        model = self.loaded_models.get(cache_key)
-        if model is not None:
-            # Alias this exact authored path so subsequent frames stay on the
-            # one-dictionary-lookup path above.
-            self.loaded_models[filename] = model
-            return model
-
-        full_path = normalized_filename
-        if not os.path.isabs(full_path):
-            candidate = os.path.join('assets', 'models', full_path)
-            if os.path.exists(candidate):
-                full_path = candidate
-            elif os.path.exists(original_filename):
-                full_path = original_filename
-
-        if not os.path.exists(full_path):
-            return self._model_load_failed(filename)
-
-        # Determine format by extension
-        ext = os.path.splitext(full_path)[1].lower()
-
-        if ext == '.glb':
-            if GLB is None:
-                print(f"[Renderer] GLB support not available (glb_loader not found)")
-                return None
-            model = GLB(full_path)
-        elif ext in ('.obj', ''):
-            if OBJ is None:
-                print(f"[Renderer] OBJ support not available (obj_loader not found)")
-                return None
-            model = OBJ(full_path)
-        else:
-            print(f"[Renderer] Unsupported model format: {ext}")
-            return None
-
-        if model.is_loaded:
-            self.loaded_models[cache_key] = model
-            self.loaded_models[filename] = model
-            self.__dict__.setdefault('_failed_models', {}).pop(filename, None)
-            return model
-
-        return self._model_load_failed(filename)
-
-    def _model_load_failed(self, filename):
-        """Remember a failed model path; report it the first time only."""
-        failed = self.__dict__.setdefault('_failed_models', {})
-        if filename not in failed:
-            print(f"Failed to load model: {filename}")
-        failed[filename] = time.perf_counter()
-        return None
-
-    def get_loaded_model(self, filename):
-        """Return a model already loaded by this renderer without touching GL."""
-        if not filename:
-            return None
-
-        model = self.loaded_models.get(filename)
-        if model is not None:
-            return model
-
-        normalized_filename = os.path.normpath(
-            str(filename).replace('/', os.sep).replace('\\', os.sep)
-        )
-        cache_key = os.path.normcase(normalized_filename)
-        model = self.loaded_models.get(cache_key)
-        if model is not None:
-            self.loaded_models[filename] = model
-        return model
+    """Shared primitives and the angled-brush mesh cache."""
 
     def _begin_geo_frame(self):
         """Advance the angled-brush mesh cache clock and drop stale meshes.
@@ -409,54 +293,6 @@ class GeometryMixin:
         gl.glEnableVertexAttribArray(2)
         gl.glBindVertexArray(0)
         self._cube_vbo = vbo
-        return vao
-
-    def _create_water_surface_vao(self, subdivisions=64):
-        """Tessellated unit-square grid on the cube's top face (y = +0.5).
-
-        The water vertex shader needs real geometry to displace with Gerstner
-        waves — the 2-triangle cube top gave it nothing to work with, which is
-        why water used to look like a solid slab. Same attribute layout as the
-        cube VAO (pos, normal, uv) so both bind to the water shader.
-        """
-        n = subdivisions
-        verts = np.zeros(((n + 1) * (n + 1), 8), dtype=np.float32)
-        idx = 0
-        for j in range(n + 1):
-            z = j / n - 0.5
-            for i in range(n + 1):
-                x = i / n - 0.5
-                verts[idx] = (x, 0.5, z, 0.0, 1.0, 0.0, i / n, j / n)
-                idx += 1
-
-        indices = np.zeros(n * n * 6, dtype=np.uint32)
-        k = 0
-        for j in range(n):
-            row = j * (n + 1)
-            for i in range(n):
-                a = row + i
-                c = a + (n + 1)
-                indices[k:k + 6] = (a, c, a + 1, a + 1, c, c + 1)
-                k += 6
-
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, verts.nbytes, verts, gl.GL_STATIC_DRAW)
-        ebo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, ebo)
-        gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
-        gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
-        gl.glEnableVertexAttribArray(1)
-        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
-        gl.glEnableVertexAttribArray(2)
-        gl.glBindVertexArray(0)
-        self._water_surface_vbo = vbo
-        self._water_surface_ebo = ebo
-        self._water_surface_index_count = len(indices)
         return vao
 
     def _create_sprite_vao(self):

@@ -46,7 +46,7 @@ reaches through `editor.things` is here, and so is the logic thread, because it
 pulls in the editor's entity classes.
 
 **`gl` — the visual tier.** Needs a real OpenGL context. These drive the actual
-`Renderer` against an offscreen framebuffer: shaders compile, geometry is
+`ForwardRenderer` against an offscreen framebuffer: shaders compile, geometry is
 submitted, shadow maps are generated, the frame is read back and checked. They
 skip with an explicit reason (not a mysterious error) when no context can be
 created — the offscreen Qt platform plugin cannot make one, so they need a

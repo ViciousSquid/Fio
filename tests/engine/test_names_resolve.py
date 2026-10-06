@@ -32,14 +32,21 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 #: Modules that only ever run with a live GL context.
 RENDER_MODULES = [
-    "engine.renderer.core",
-    "engine.renderer.tables",
-    "engine.renderer.visibility",
-    "engine.renderer.lighting",
-    "engine.renderer.geometry",
-    "engine.renderer.materials",
-    "engine.renderer.passes",
-    "engine.renderer.debug",
+    "engine.renderer.api",
+    "engine.renderer.registry",
+    "engine.renderer.core.base",
+    "engine.renderer.core.diagnostics",
+    "engine.renderer.core.geometry",
+    "engine.renderer.core.overlays",
+    "engine.renderer.core.resources",
+    "engine.renderer.core.tables",
+    "engine.renderer.core.visibility",
+    "engine.renderer.forward.instancing",
+    "engine.renderer.forward.lighting",
+    "engine.renderer.forward.passes",
+    "engine.renderer.forward.portals",
+    "engine.renderer.forward.renderer",
+    "engine.renderer.forward.shaders",
     "engine.brush_geometry",
     "engine.render_cull",
 ]
@@ -123,7 +130,7 @@ def test_the_natural_scale_helpers_are_importable():
 
 def test_detector_notices_a_module_referenced_without_importing_it(tmp_path):
     """Guards the guard: the check must fail on the shape of bug it is for."""
-    module = importlib.import_module("engine.renderer.passes")
+    module = importlib.import_module("engine.renderer.forward.passes")
     broken = tmp_path / "broken.py"
     broken.write_text(
         "from engine.brush_geometry import brush_has_geometry\n"
@@ -136,7 +143,7 @@ def test_detector_notices_a_module_referenced_without_importing_it(tmp_path):
 
 def test_detector_notices_a_name_used_before_it_is_assigned(tmp_path):
     """The ``label_text`` shape: assigned in the function, but only later."""
-    module = importlib.import_module("engine.renderer.passes")
+    module = importlib.import_module("engine.renderer.forward.passes")
     broken = tmp_path / "late.py"
     broken.write_text(
         "def rows(keys):\n"

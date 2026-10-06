@@ -16,16 +16,14 @@ from engine.threaded_game_state import RenderState
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 READERS = ("engine/qt_game_view.py",)
-READER_PREFIX = "engine/renderer"
+READER_PACKAGE = "engine/renderer"
 
 
 def _reader_paths():
     paths = [os.path.join(ROOT, p) for p in READERS]
-    engine = os.path.join(ROOT, "engine")
-    paths += sorted(
-        os.path.join(engine, name) for name in os.listdir(engine)
-        if name.startswith(os.path.basename(READER_PREFIX)) and name.endswith(".py")
-    )
+    package = os.path.join(ROOT, READER_PACKAGE)
+    for folder, _dirs, files in sorted(os.walk(package)):
+        paths += sorted(os.path.join(folder, name) for name in files if name.endswith(".py"))
     return paths
 
 

@@ -1,26 +1,28 @@
-"""Fio's renderer: one OpenGL renderer for the editor and play mode.
+"""Fio's renderer boundary.
 
-Data reaches it along one path::
+The host (``QtGameView``) depends only on what this package exports:
 
-    EditorState -> publication -> LogicThread -> RenderTable / EntityTable
-                -> engine.renderer -> OpenGL
+* :class:`Renderer` -- the contract every renderer implements (``api``)
+* the frame input (:data:`FRAME_INPUT`), :class:`RenderStats` and the
+  selection descriptor (:class:`SelectionOverlay`, :class:`EffectBillboard`)
+* the registry: :func:`register_renderer`, :func:`create_renderer`,
+  :func:`available_renderers`, :data:`DEFAULT_RENDERER`
 
-The package splits that one :class:`Renderer` by responsibility:
-
-``core``        shared renderer state, frame orchestration (``render_scene``), cleanup
-``tables``      RenderTable/EntityTable -> GPU preparation (instance buffers, runs)
-``visibility``  culling, pass classification, LOD bands, portals
-``lighting``    light UBO, fog/ambient block, point-light shadow maps
-``geometry``    shared VAOs, angled-brush meshes, model loading
-``materials``   shaders, textures, effect frames, terrain shader binding
-``passes``      opaque/transparent/water/glass/fog/model/sprite/effect/terrain passes
-``debug``       pass timing and statistics, editor overlays
-
-Each non-core module contributes one mixin; only :class:`Renderer` is ever
-instantiated.
+Implementations live in subpackages and are reached through the registry:
+``forward`` is Fio's built-in renderer; ``core`` is optional infrastructure a
+renderer may reuse. Importing this package needs no OpenGL.
 """
 
-from .core import Renderer, restore_default_pixel_store
-from .visibility import RenderView
+from .api import (
+    FRAME_INPUT, WATER_QUALITIES, EffectBillboard, Renderer, RenderStats,
+    SelectionOverlay)
+from .registry import (
+    DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
+    renderer_factory)
 
-__all__ = ['Renderer', 'RenderView', 'restore_default_pixel_store']
+__all__ = [
+    'Renderer', 'RenderStats', 'SelectionOverlay', 'EffectBillboard',
+    'FRAME_INPUT', 'WATER_QUALITIES',
+    'DEFAULT_RENDERER', 'register_renderer', 'create_renderer',
+    'available_renderers', 'renderer_factory',
+]

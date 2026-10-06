@@ -988,10 +988,6 @@ class MainWindow(QMainWindow):
                 if self.state.terrain_data:
                     self.terrain.from_dict(self.state.terrain_data)
                 
-                # Setup shader in renderer
-                if self.view_3d.renderer:
-                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
-                
                 # Wire up terrain to logic thread for collision
                 if self.view_3d is not None and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.world_runtime.terrain = self.terrain
@@ -1383,8 +1379,6 @@ class MainWindow(QMainWindow):
             self.terrain = Terrain(seed=42)
             if self.state.terrain_data:
                 self.terrain.from_dict(self.state.terrain_data)
-            if self.view_3d.renderer:
-                self.view_3d.renderer.setup_terrain_shader(self.terrain)
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             self.state.terrain_data = self.terrain.to_dict()
@@ -2542,8 +2536,6 @@ class MainWindow(QMainWindow):
             return
 
         terrain.from_dict(terrain_data)
-        if self.view_3d.renderer:
-            self.view_3d.renderer.setup_terrain_shader(terrain)
         if self.view_3d is not None and self.view_3d.logic_thread:
             self.view_3d.logic_thread.world_runtime.terrain = terrain
 
@@ -4158,9 +4150,6 @@ class MainWindow(QMainWindow):
                 from engine.terrain import Terrain
                 self.terrain = Terrain()
             self.terrain.from_dict(self.state.terrain_data)
-
-            if self.view_3d.renderer:
-                self.view_3d.renderer.setup_terrain_shader(self.terrain)
 
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain

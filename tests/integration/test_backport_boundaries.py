@@ -21,14 +21,23 @@ GENERIC_MODULES = [
     "engine/physics.py",
     "engine/player.py",
     "engine/renderer/__init__.py",
-    "engine/renderer/core.py",
-    "engine/renderer/tables.py",
-    "engine/renderer/visibility.py",
-    "engine/renderer/lighting.py",
-    "engine/renderer/geometry.py",
-    "engine/renderer/materials.py",
-    "engine/renderer/passes.py",
-    "engine/renderer/debug.py",
+    "engine/renderer/api.py",
+    "engine/renderer/registry.py",
+    "engine/renderer/core/__init__.py",
+    "engine/renderer/core/base.py",
+    "engine/renderer/core/diagnostics.py",
+    "engine/renderer/core/geometry.py",
+    "engine/renderer/core/overlays.py",
+    "engine/renderer/core/resources.py",
+    "engine/renderer/core/tables.py",
+    "engine/renderer/core/visibility.py",
+    "engine/renderer/forward/__init__.py",
+    "engine/renderer/forward/instancing.py",
+    "engine/renderer/forward/lighting.py",
+    "engine/renderer/forward/passes.py",
+    "engine/renderer/forward/portals.py",
+    "engine/renderer/forward/renderer.py",
+    "engine/renderer/forward/shaders.py",
     "engine/terrain.py",
     "engine/glb_loader.py",
     "editor/editor_state.py",
@@ -183,7 +192,7 @@ def test_angled_brush_geometry_helpers_survive():
 
 
 def test_cut_face_highlight_and_texturing_survive():
-    core = _read("engine/renderer/debug.py")
+    core = _read("engine/renderer/core/overlays.py")
     assert "_geo_face_highlight_verts" in core
     assert "_draw_face_highlight_verts" in core
     assert "def draw_face_highlight(" in core
@@ -225,7 +234,7 @@ def test_renderer_light_capacities_untouched():
     of its array. The budget is now the shader's own number, so the guard checks
     that relationship rather than a literal.
     """
-    src = _read("engine/renderer/lighting.py")
+    src = _read("engine/renderer/forward/lighting.py")
     assert "MAX_LIGHTS = shaders.MAX_LIGHTS" in src
     assert "MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS" in src
 

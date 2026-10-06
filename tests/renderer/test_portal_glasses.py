@@ -1,4 +1,4 @@
-"""Portal glasses projection through a real Renderer and EntityTable."""
+"""Portal glasses projection through a real ForwardRenderer and EntityTable."""
 
 import numpy as np
 import pytest
@@ -9,7 +9,7 @@ pytest.importorskip("OpenGL")
 from editor.things import Portal
 from tests.helpers.worlds import make_thing
 from engine.entity_table import EntityTable
-from engine.renderer import RenderView
+from engine.renderer.core.visibility import RenderView
 from tests.helpers import gl as glh
 from engine.portal_transform import map_point, mirror_point
 
