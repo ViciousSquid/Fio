@@ -60,7 +60,7 @@ MALFORMED = {
     "connections hold strings": _level(brush=_brush(io_connections=["OnTrigger"])),
     "thing properties is a list": _level(thing={"type": "light", "pos": [0, 0, 0],
                                                 "properties": []}),
-    "thing id is a number": _level(thing=_light(id=7)),
+    "thing id is a list": _level(thing=_light(id=["l1"])),
     "light colour is an object": _level(thing=_light(colour={"r": 255})),
     "light colour is too short": _level(thing=_light(colour=[255, 0])),
 }

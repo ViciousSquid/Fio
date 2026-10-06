@@ -10,8 +10,6 @@ Manages all the data for the current level being edited, including:
 
 import json
 import copy
-import math
-import numbers
 import datetime
 import uuid
 import threading
@@ -42,27 +40,13 @@ from engine.brush_geometry import (
 # Runtime-only AABB cache keys written by the physics/AI hot paths (see
 # engine.constants.brush_aabb_bounds). Stripped on save/undo like the rest.
 from engine.constants import AABB_RUNTIME_KEYS
+from engine.level_validation import validate_level
 
 _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer_F)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer_F)
     '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer_F)
 }) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS)
-
-#: Brush fields that are always objects (per-face tables, angled geometry).
-_BRUSH_OBJECT_FIELDS = ('textures', 'uv_scale', 'uv_angle', 'uv_shift',
-                        'uv_offset', 'uv_natural', 'geometry')
-
-#: Brush scalars play start converts with float() and no guard.
-_BRUSH_NUMBER_FIELDS = ('door_speed', 'door_distance', 'door_lip', 'speed', 'distance')
-
-
-def _finite_number(value):
-    """A real, finite number -- not a bool, string, NaN or infinity."""
-    # numbers.Real so the NumPy scalars generated levels carry still pass.
-    if isinstance(value, bool) or not isinstance(value, numbers.Real):
-        return False
-    return math.isfinite(value)
 
 # Import lightmap bake state
 try:
@@ -531,73 +515,10 @@ class EditorState:
     def validate_level_data(level_data):
         """Raise ``ValueError`` if *level_data* is not shaped like a map.
 
-        Structural only (an object holding lists of objects), and cheap, so a
-        caller can reject a document before it clears the current scene.
+        Structural only, and cheap, so a caller can reject a document before
+        it clears the current scene (see :mod:`engine.level_validation`).
         """
-        if not isinstance(level_data, dict):
-            raise ValueError("a map document must be a JSON object")
-        for kind in ('brushes', 'things'):
-            items = level_data.get(kind) or []
-            if not isinstance(items, list):
-                raise ValueError(f"a map's '{kind}' must be a list")
-            for index, item in enumerate(items):
-                if not isinstance(item, dict):
-                    raise ValueError(f"{kind}[{index}] is not an object")
-
-                # Replace the live scene only after authored objects have
-                # passed the structural checks performed here and by
-                # load_from_data(). Keep vector shape validation on this
-                # preflight boundary so malformed data cannot clear the
-                # current level first.
-                fields = ('pos', 'size') if kind == 'brushes' else ('pos',)
-                for field in fields:
-                    value = item.get(field)
-                    if value is None:
-                        # Every brush ever written has both; play start
-                        # indexes them unconditionally.
-                        if kind == 'brushes':
-                            raise ValueError(f"{kind}[{index}] has no '{field}'")
-                        continue
-                    if not isinstance(value, (list, tuple)) or len(value) != 3 \
-                            or not all(_finite_number(v) for v in value):
-                        raise ValueError(
-                            f"{kind}[{index}]['{field}'] must be a 3-element vector"
-                        )
-
-                # Shapes the runtime relies on without checking: a map is
-                # shareable input, and a wrong type here only surfaced as an
-                # exception when Play started.
-                if kind == 'brushes':
-                    for field in _BRUSH_OBJECT_FIELDS:
-                        value = item.get(field)
-                        if value is not None and not isinstance(value, dict):
-                            raise ValueError(
-                                f"{kind}[{index}]['{field}'] must be an object")
-                props = item if kind == 'brushes' else item.get('properties')
-                if props is not None and not isinstance(props, dict):
-                    raise ValueError(f"{kind}[{index}]['properties'] must be an object")
-                for field in ('name', 'id'):
-                    value = (props or {}).get(field)
-                    if value is not None and not isinstance(value, str):
-                        raise ValueError(f"{kind}[{index}]['{field}'] must be a string")
-                # Entity colours are RGB lists (brushes carry their own format).
-                for field in (('colour', 'color') if kind == 'things' else ()):
-                    value = (props or {}).get(field)
-                    if value is not None and (
-                            not isinstance(value, (list, tuple)) or len(value) < 3
-                            or not all(_finite_number(v) for v in value[:3])):
-                        raise ValueError(f"{kind}[{index}]['{field}'] must be an RGB list")
-                connections = item.get('io_connections')
-                if connections is not None and (
-                        not isinstance(connections, list)
-                        or not all(isinstance(c, dict) for c in connections)):
-                    raise ValueError(
-                        f"{kind}[{index}]['io_connections'] must be a list of objects")
-                if kind == 'brushes':
-                    for field in _BRUSH_NUMBER_FIELDS:
-                        if field in item and not _finite_number(item[field]):
-                            raise ValueError(
-                                f"{kind}[{index}]['{field}'] must be a number")
+        validate_level(level_data)
 
     def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
         """Populates the scene from a dictionary.

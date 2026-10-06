@@ -1172,4 +1172,11 @@ def read(path: str) -> dict:
             f"save '{path}' is version {ver}, newer than this build supports "
             f"(v{SAVE_VERSION})"
         )
+    # A save is shareable input and restore writes it straight into the live
+    # world: refuse a malformed one here, before anything is touched.
+    from engine.level_validation import validate_snapshot
+    try:
+        validate_snapshot(data)
+    except ValueError as exc:
+        raise ValueError(f"'{os.path.basename(path)}' is not a valid save: {exc}") from None
     return data
