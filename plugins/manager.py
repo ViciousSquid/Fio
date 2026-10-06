@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib
 import os
 import pkgutil
+import sys
 import traceback
 from typing import List, Optional, Tuple
 
@@ -212,6 +213,18 @@ class PluginManager:
         elif found == 0:
             self._debug("No plugins found.")
 
+    @staticmethod
+    def _package_is_initialising(mod_name: str) -> bool:
+        """Whether ``plugins.<mod_name>`` or any of its submodules is mid-import."""
+        package = f"plugins.{mod_name}"
+        prefix = package + "."
+        for name, module in list(sys.modules.items()):
+            if name != package and not name.startswith(prefix):
+                continue
+            if getattr(getattr(module, "__spec__", None), "_initializing", False):
+                return True
+        return False
+
     def _load_one(self, mod_name: str):
         try:
             module = importlib.import_module(f"plugins.{mod_name}")
@@ -225,7 +238,12 @@ class PluginManager:
         # back the partially-initialised module, which has no PLUGIN yet.
         # Skipping it quietly would drop that plugin for the life of the
         # process, so it is recorded and retried by the outer call instead.
-        if getattr(getattr(module, "__spec__", None), "_initializing", False):
+        # The same holds for any *submodule* of the package: importing
+        # ``plugins.bigworld.entities`` first runs the finished package, then
+        # entities reaches ``editor`` and discovery starts while entities is
+        # still half-built -- and register() importing from it fails.
+        if (getattr(getattr(module, "__spec__", None), "_initializing", False)
+                or self._package_is_initialising(mod_name)):
             self._deferred.add(mod_name)
             self._debug(f"Plugin '{mod_name}' is still importing; will retry")
             return
