@@ -4530,13 +4530,31 @@ class MainWindow(QMainWindow):
         import zipfile
         import os
 
+        from player.fiopak import MAX_ASSET_ENTRY_BYTES, MAX_TOTAL_ASSET_BYTES
+
         dest_dir = os.path.realpath(dest_dir)
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            for member in zf.infolist():
+            members = zf.infolist()
+            # A package is shareable input: hold extraction to the same budget
+            # the player's reader enforces, so a small archive cannot inflate
+            # into gigabytes on disk. zipfile never yields more than an
+            # entry's declared size, so the declared sizes are binding.
+            if len(members) > self.MAX_PACKAGE_ENTRIES:
+                raise ValueError(f"Package has too many files ({len(members)})")
+            total = 0
+            for member in members:
                 target_path = os.path.realpath(os.path.join(dest_dir, member.filename))
                 if not target_path.startswith(dest_dir + os.sep) and target_path != dest_dir:
                     raise ValueError(f"Zip slip attempt detected: {member.filename}")
+                if member.file_size > MAX_ASSET_ENTRY_BYTES:
+                    raise ValueError(f"Package file too large: {member.filename}")
+                total += member.file_size
+                if total > MAX_TOTAL_ASSET_BYTES:
+                    raise ValueError("Package expands past the size limit")
             zf.extractall(dest_dir)
+
+    #: Upper bound on files in one extracted .fiopak.
+    MAX_PACKAGE_ENTRIES = 20000
 
 
     def play_game_package(self):

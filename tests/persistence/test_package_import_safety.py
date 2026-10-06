@@ -146,3 +146,38 @@ def test_a_hostile_package_is_refused_before_the_scene_changes(
     assert getattr(window, "_package_temp_dir", None) is None
     assert window.unsaved_changes is False
     assert not (tmp_path / "escape.json").exists()
+
+
+def test_a_package_that_inflates_past_the_budget_is_not_extracted(
+        tmp_path, main_window, monkeypatch):
+    """A tiny archive of highly compressible data must not be written out
+    whole: extraction keeps to the player's asset budget."""
+    import player.fiopak as fiopak
+
+    # Shrink the budget so the test archive stays small on disk.
+    monkeypatch.setattr(fiopak, "MAX_TOTAL_ASSET_BYTES", 1024 * 1024)
+    pak = str(tmp_path / "bomb.fiopak")
+    with zipfile.ZipFile(pak, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("metadata.json", json.dumps({"map_path": "maps/level.json"}))
+        z.writestr("maps/level.json", json.dumps({
+            "version": 3, "brushes": [], "things": []}))
+        for i in range(4):
+            z.writestr("assets/pad%d.bin" % i, b"\0" * (512 * 1024))
+
+    window = main_window
+    _prepare_package_window(window)
+    created = []
+    real_mkdtemp = __import__("tempfile").mkdtemp
+
+    def tracking_mkdtemp(*args, **kwargs):
+        path = real_mkdtemp(*args, **kwargs)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr("tempfile.mkdtemp", tracking_mkdtemp)
+
+    window.play_package_from_path(pak)
+
+    assert getattr(window, "_package_temp_dir", None) is None
+    assert created and not any(os.path.exists(p) for p in created), (
+        "an over-budget package was extracted (or its temp dir leaked)")
