@@ -11,10 +11,12 @@ against another table.
 
 import pytest
 
-from editor.things import PlayerStart
-from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE, Effect
-from engine.effect_table import FAMILY_EXPLOSION, effect_family
-from tests.helpers.worlds import level_data, make_thing, room
+pytest.importorskip("PyQt5")
+
+from editor.things import PlayerStart                                # noqa: E402
+from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE, Effect  # noqa: E402
+from engine.effect_table import FAMILY_EXPLOSION, effect_family      # noqa: E402
+from tests.helpers.worlds import level_data, make_thing, room        # noqa: E402
 
 pytestmark = [pytest.mark.qt, pytest.mark.integration]
 
