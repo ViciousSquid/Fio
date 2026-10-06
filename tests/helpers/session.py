@@ -22,8 +22,9 @@ ticks and projects the frame, ``ThreadedGameState`` publishes it, and
 * **the display** - offscreen Qt, or Xvfb for :meth:`paint`.
 
 The working directory is the repository root, as for ``main.py``: the engine
-resolves ``assets/`` against it. ``settings.ini`` is restored by the root
-conftest after every test.
+resolves ``assets/`` against it. The editor writes its layout and recent files
+back to the repository's ``settings.ini``; the session restores the file when
+it closes, so a session used outside pytest leaves no trace either.
 """
 
 import contextlib
@@ -41,6 +42,9 @@ class FioTestSession:
         self.app = app
         self._previous_cwd = os.getcwd()
         os.chdir(REPO_ROOT)
+        self._settings_path = os.path.join(REPO_ROOT, "settings.ini")
+        with open(self._settings_path, "rb") as handle:
+            self._settings = handle.read()
         self.window = MainWindow(REPO_ROOT)
         self.window.show()
         self.view = self.window.view_3d
@@ -163,6 +167,8 @@ class FioTestSession:
             self.app.processEvents()
             self.app.sendPostedEvents(None, QEvent.DeferredDelete)
             gc.collect()
+            with open(self._settings_path, "wb") as handle:
+                handle.write(self._settings)
             os.chdir(self._previous_cwd)
 
     def _pump_until(self, predicate, timeout=20.0):
