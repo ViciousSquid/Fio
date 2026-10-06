@@ -5143,7 +5143,7 @@
                 "io_enabled": true,
                 "name": "Speaker_1",
                 "id": "38d2757a-e56f-493d-8546-97defc486b05",
-                "sound_file": "assets/sound/fireloop.mp3",
+                "sound_file": "assets/sounds/fireloop.mp3",
                 "radius": 1024,
                 "global": false,
                 "show_radius": false,
@@ -5559,7 +5559,7 @@
                 "id": "d2396bec-ac82-41a5-931e-a4f978d59643",
                 "model_path": "",
                 "render_mode": "billboard",
-                "sprite_path": "assets/sprites/cig.png",
+                "sprite_path": "assets/sprites/custom1.png",
                 "sprite_size": [
                     32.0,
                     32.0
@@ -5586,7 +5586,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "cig",
+                "collect_weapon": "custom1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
