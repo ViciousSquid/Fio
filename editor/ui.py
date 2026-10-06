@@ -275,6 +275,24 @@ def _run_plugin_menu_action(MainWindow, plugin, callback):
         _log(f"plugin menu action failed for '{plugin.name}': {exc}")
 
 
+#: Where the Plugins menu's "Add entity (at origin)" entries place an entity.
+PLUGIN_MENU_PLACE_POS = (0.0, 40.0, 0.0)
+
+
+def _place_plugin_entity(MainWindow, plugin, cls, label):
+    """Place a plugin entity at the origin from the Plugins menu.
+
+    Placement is owned by View2D (enabled check, singleton refusal, entity
+    wizard, undo checkpoint and selection), so the menu goes through the same
+    path as the 2D view's right-click menu rather than duplicating it.
+    """
+    try:
+        MainWindow.view_top._place_plugin_entity(
+            plugin, cls, label, list(PLUGIN_MENU_PLACE_POS))
+    except Exception as exc:
+        _log(f"menu placement failed for '{label}': {exc}")
+
+
 def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
     from plugins.manager import get_manager
     get_manager().set_enabled(plugin, enabled)

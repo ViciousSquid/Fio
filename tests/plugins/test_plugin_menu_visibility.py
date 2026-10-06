@@ -205,3 +205,38 @@ def test_the_toggle_shows_a_plugin_a_level_auto_enabled(window):
         assert bigworld in mgr._auto_enabled
     finally:
         mgr.set_enabled(bigworld, was)
+
+
+def _plugin_submenu(window, plugin):
+    for action in window.menuBar().actions():
+        if action.text().replace("&", "") != "Plugins":
+            continue
+        for sub in action.menu().actions():
+            if sub.text() == _plugin_menu_name(plugin) and sub.menu() is not None:
+                return sub.menu()
+    return None
+
+
+def test_add_entity_at_origin_places_the_entity(window):
+    """The Plugins menu's "Add entity (at origin)" entries place an entity.
+
+    The menu moved into editor.ui while its placement helper stayed behind in
+    the deleted monkey-patch module, so every entry raised NameError on click.
+    """
+    mgr, tidy = _tidy()
+    was = mgr.is_enabled(tidy)
+    try:
+        mgr.set_enabled(tidy, True)
+        _build_plugins_menu(window)
+        menu = _plugin_submenu(window, tidy)
+        assert menu is not None, "Tidy has no Plugins submenu"
+        entries = [a for a in menu.actions() if a.text() == "   Tidy Goal"]
+        assert entries, "Tidy Goal is not offered under Add entity"
+        before = len(window.state.things)
+        entries[0].trigger()
+        assert len(window.state.things) == before + 1
+        placed = window.state.things[-1]
+        assert placed.properties.get("type") == "tidygoal"
+        assert list(placed.pos) == [0.0, 40.0, 0.0]
+    finally:
+        mgr.set_enabled(tidy, was)
