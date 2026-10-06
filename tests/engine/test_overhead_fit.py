@@ -18,6 +18,7 @@ pytest.importorskip("PyQt5", reason="engine.logic_thread imports the editor tier
 from engine.logic_camera import LogicCamera              # noqa: E402
 from engine.logic_thread import LogicThread               # noqa: E402
 from engine.monster_ai import MonsterAI                   # noqa: E402
+from engine.player import Player                          # noqa: E402
 from engine.spatial import SIM_TIER_KEY, TIER_DORMANT     # noqa: E402
 
 TICK = 1.0 / 30.0
@@ -31,8 +32,9 @@ class _Camera(LogicCamera):
         from editor.editor_state import EditorState
         from engine.threaded_game_state import ThreadedGameState
         logic = LogicThread(ThreadedGameState(), EditorState())
+        # The player exists from Play on, as QtGameView.toggle_play_mode makes it.
+        logic.player_runtime.player = Player(100.0, -40.0, 0.0)
         logic.player_runtime.player.pos = glm.vec3(100.0, 50.0, -40.0)
-        logic.player_runtime.player.angle = 0.0
         super().__init__(logic)
         self._test_logic = logic
         self.frustum_aspect = aspect
@@ -111,6 +113,7 @@ def _ai(bigworld, overhead):
     from plugins.bigworld.runtime import BigWorldSession
 
     logic = LogicThread(ThreadedGameState(), EditorState())
+    logic.player_runtime.player = Player(PLAYER[0], PLAYER[2], 0.0)
     logic.player_runtime.player.pos = glm.vec3(*PLAYER)
     load_plugins()
     if logic.plugins is None:
@@ -144,7 +147,7 @@ def _run(ai, monsters, ticks, dt=TICK, move=None):
 
 
 def test_off_screen_monsters_run_every_interval_with_the_time_they_sat_out():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     on, off = _thing(10.0, 10.0), _thing(900.0, 0.0)
     runs = _run(ai, [on, off], 60)                # two seconds at 30 Hz
     assert runs[0] == [TICK] * 60                 # on screen: every tick
@@ -154,7 +157,7 @@ def test_off_screen_monsters_run_every_interval_with_the_time_they_sat_out():
 
 
 def test_every_monster_covers_exactly_the_time_that_passed():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     walker, leaver = _thing(900.0, 0.0), _thing(0.0, 0.0)
 
     def move(tick):
@@ -169,7 +172,7 @@ def test_every_monster_covers_exactly_the_time_that_passed():
 
 
 def test_a_monster_that_walks_on_screen_runs_from_the_next_tick():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     walker = _thing(900.0, 0.0)
     _run(ai, [walker], 2)                         # sits out, owed 2 ticks
     walker.pos[0] = 100.0
@@ -180,24 +183,25 @@ def test_a_monster_that_walks_on_screen_runs_from_the_next_tick():
 
 
 def test_a_screen_with_nothing_off_it_is_the_plain_tick():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     assert ai._offscreen_rows([_thing(), _thing(50.0)], 0.0, PLAYER, RECT) == (None, None)
 
 
 @pytest.mark.parametrize("bigworld,overhead", [(False, False), (False, True), (True, False)])
 def test_without_big_world_and_an_overhead_camera_nothing_changes(bigworld, overhead):
-    ai = _ai(bigworld, overhead)
+    ai, _logic = _ai(bigworld, overhead)
     assert ai._view_rect() is None
     monsters = [_thing(900.0), _thing(tier=TIER_DORMANT)]
     assert ai._offscreen_rows(monsters, TICK, PLAYER, ai._view_rect()) == (None, None)
 
 
 def test_the_fitted_gate_is_the_published_box():
-    assert _ai(bigworld=True, overhead=True)._view_rect() == RECT
+    ai, _logic = _ai(bigworld=True, overhead=True)
+    assert ai._view_rect() == RECT
 
 
 def test_the_throttle_holds_nothing_once_unfitted():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     _run(ai, [_thing(900.0)], 3)
     assert ai._owed
     ai._offscreen_rows([_thing(900.0)], TICK, PLAYER, None)
@@ -205,7 +209,7 @@ def test_the_throttle_holds_nothing_once_unfitted():
 
 
 def test_row_deltas_are_float64():
-    ai = _ai(bigworld=True, overhead=True)
+    ai, _logic = _ai(bigworld=True, overhead=True)
     row_dt, sit = ai._offscreen_rows([_thing(900.0), _thing()], TICK, PLAYER, RECT)
     assert row_dt.dtype == np.float64 and sit.tolist() == [True, False]
 

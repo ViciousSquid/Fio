@@ -28,6 +28,10 @@ def logic(request):
 
 
 def _player_at(logic, pos=(0.0, 0.0, 0.0), angle=0.0):
+    # The player exists from Play on, as QtGameView.toggle_play_mode makes it.
+    from engine.player import Player
+    if logic.player_runtime.player is None:
+        logic.player_runtime.player = Player(float(pos[0]), float(pos[2]), float(angle))
     player = logic.player_runtime.player
     player.pos = glm.vec3(*pos)
     player.angle = float(angle)
@@ -137,7 +141,7 @@ def test_logic_player_reports_water_transition_through_real_player(logic):
 
     logic.player_runtime.update_water_sounds(0.1)
 
-    assert [sound["file"] for sound in logic.game_state.sounds] == [
+    assert [sound["file"] for sound in logic.game_state.consume_sounds()] == [
         "enterwater.wav",
         "waterwalk.wav",
     ]
@@ -222,7 +226,8 @@ def test_logic_triggers_own_hurt_cadence_on_the_real_runtime(logic):
 
 
 def test_logic_world_packs_real_levelchanger_rows(logic):
-    first = make_thing(LevelChanger, "first", (1, 2, 3), radius=32)
+    # LevelChangers are authored not usable by default.
+    first = make_thing(LevelChanger, "first", (1, 2, 3), radius=32, usable=True)
     second = make_thing(LevelChanger, "second", (4, 5, 6), radius=64, disabled=True)
     logic.editor_state.things = [first, second]
     logic.editor_state.brushes = []
