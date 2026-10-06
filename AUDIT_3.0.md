@@ -79,7 +79,7 @@ Xvfb (`LIBGL_ALWAYS_SOFTWARE=1`): real GL contexts and real shader compiles, but
 | F-13 | Low | Content | `door012.png` (Office_Corridor, Portal_Test) exists in no version | Pre-existing | - |
 | F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; one fix | `cea2bd2` |
 | F-15 | Low | HUD / combat | gun2 `shot_ready` read the cooldown from `LogicThread`, which no longer holds it | Fixed | `f60b382` |
-| F-16 | Medium | Effects | A looping FIRE in Play animated on `perf_counter`'s epoch (the machine's uptime) as a float32 | Fixed | see below |
+| F-16 | Medium | Effects | A looping FIRE in Play animated on `perf_counter`'s epoch (the machine's uptime) as a float32 | Fixed | `65213d0` |
 
 ### F-01 Block-terrain shader never compiled (High)
 
@@ -262,32 +262,6 @@ map); the Play button kept saying Stop. The handler now takes the Stop path.
 style it behind `hasattr(self, 'mode_label')`. Harmless, but it is the
 pattern of guarded legacy interface this audit is meant to remove.
 
-### F-15 gun2 published as ready during its cooldown (Low)
-
-Found while profiling `prepare_render_state`. It computed `shot_ready` from
-`getattr(logic, "_last_player_shot_time", -inf)`; the split moved that field
-to the combat runtime, so the getattr always fell back and gun2 was published
-as ready all through its one-second cooldown. The published flag gates Qt's
-click queue (the logic thread still refused the shot, so no extra shot ever
-fired). Reads `combat_runtime._last_player_shot_time` now.
-`test_gun2_is_published_as_not_ready_while_it_cools_down` (e2e; fails
-before).
-
-### F-16 Looping Effects in Play animated on the machine's uptime (Medium)
-
-Found while profiling `_advance_effects` (F-08's path). With an EffectStore
-(every Play session), 3.0 computed `elapsed = now - spawn_time` from the
-store's raw column, where a looping FIRE has no playback start (0.0), while
-the table's published origin substitutes the shared clock origin; 2.5.10
-measured from that origin. So a looping fire's `effect_elapsed` (the shader's
-animation clock and the light flicker's input) was `perf_counter()` itself:
-time since boot, held as float32. Its resolution degrades with uptime (~8 ms
-after a day, ~60 ms after a week), so the flame animation and flicker
-coarsen the longer the machine has been up. Now measured from the origin it
-publishes. `test_a_looping_fire_in_play_runs_on_the_origin_it_publishes`
-(fails before: elapsed 5903 s, this container's uptime). Not a measurable
-speed change (`_effect_flicker` 0.042 -> 0.040 ms/frame).
-
 ### F-14 NumPy 2.5.3 / CPython 3.14 (Info, measured)
 
 * **Semantics.** No `copy=False` constructors (NumPy 2 raises when a copy is
@@ -317,7 +291,37 @@ speed change (`_effect_flicker` 0.042 -> 0.040 ms/frame).
   submission cost from "GPU" work; Big World's 140 ms paint is mostly
   heightfield vertex shading. GPU-bound cost needs hardware to measure.
 
+### F-15 gun2 published as ready during its cooldown (Low)
+
+Found while profiling `prepare_render_state`. It computed `shot_ready` from
+`getattr(logic, "_last_player_shot_time", -inf)`; the split moved that field
+to the combat runtime, so the getattr always fell back and gun2 was published
+as ready all through its one-second cooldown. The published flag gates Qt's
+click queue (the logic thread still refused the shot, so no extra shot ever
+fired). Reads `combat_runtime._last_player_shot_time` now.
+`test_gun2_is_published_as_not_ready_while_it_cools_down` (e2e; fails
+before).
+
+### F-16 Looping Effects in Play animated on the machine's uptime (Medium)
+
+Found while profiling `_advance_effects` (F-08's path). With an EffectStore
+(every Play session), 3.0 computed `elapsed = now - spawn_time` from the
+store's raw column, where a looping FIRE has no playback start (0.0), while
+the table's published origin substitutes the shared clock origin; 2.5.10
+measured from that origin. So a looping fire's `effect_elapsed` (the shader's
+animation clock and the light flicker's input) was `perf_counter()` itself:
+time since boot, held as float32. Its resolution degrades with uptime (~8 ms
+after a day, ~60 ms after a week), so the flame animation and flicker
+coarsen the longer the machine has been up. Now measured from the origin it
+publishes. `test_a_looping_fire_in_play_runs_on_the_origin_it_publishes`
+(fails before: elapsed 5903 s, this container's uptime). Not a measurable
+speed change (`_effect_flicker` 0.042 -> 0.040 ms/frame).
+
 ## Benchmarks (llvmpipe, 640x360, 300-400 frames, medians)
+
+These are the audit's numbers, taken with PyOpenGL error checking on and
+`tracemalloc` running (see *Performance pass / Method*): use them to compare
+the two versions with each other, not as absolute frame times.
 
 | Map | Metric | 2.5.10 | 3.0 before | 3.0 now |
 | --- | --- | --- | --- | --- |
@@ -344,63 +348,89 @@ baseline, 2.5.10 comparison, change, tests, before/after, commit.
 
 ### Method
 
-* **The benchmark now runs with the shipped app's PyOpenGL settings**
-  (`5eae5fe`). `main.py` sets `PYOPENGL_ERROR_CHECKING=0`; `bench_compare.py`
-  does not come through `main.py`, so every number in *Benchmarks* above
-  includes a Python `glGetError` check after each GL call (530-940 per frame)
-  that the app never runs. With the checks off, Showcase paint drops from ~40
-  to ~31 ms here. `FIO_GL_DEBUG=1` keeps the checks (then
-  `glCheckError`'s callers count GL calls per function, which is how the
-  shadow-sampler item below was found).
-* Timings: 3 interleaved rounds per version (3.0, 2.5.10, and a "before"
-  worktree for each change), 300 frames, medians; ranges in brackets.
+Two faults in the harness inflated every timing above, in both versions:
+
+* **PyOpenGL error checking** (`5eae5fe`). `main.py` sets
+  `PYOPENGL_ERROR_CHECKING=0`; `bench_compare.py` does not come through
+  `main.py`, so it ran a Python `glGetError` after each GL call (530-940 per
+  frame) that the app never runs. Now applied as in `main.py`;
+  `FIO_GL_DEBUG=1` keeps the checks (each then counts one GL call, and
+  `glCheckError`'s callers give GL calls per function: how P-01 was found).
+* **`tracemalloc` during the timed frames** (`c9a04bd`). It hooks every
+  allocation, so NumPy-heavy code read several times slower than it runs: the
+  monster AI on MonsterTest 5.1 ms per update traced, 1.1 ms not; the logic
+  tick 2.5 vs 1.1 ms; Showcase paint 31 vs 17 ms. Memory is now traced only
+  with `--memory`. Profiles taken before this fix (the P-01..P-03 entries'
+  profiled figures) were inflated the same way; their before/after pairs were
+  taken together and compare like with like, but the absolute values are high.
+  A cost judged from them alone was re-measured untraced (`prepare_render_state`,
+  the monster AI, the hitscan below).
+
+Otherwise:
+
+* Timings: 3 interleaved rounds per version, 300 frames, medians; ranges in
+  brackets. Versions: 2.5.10, 3.0 at the start of this pass (`215269c`: the
+  audited head plus the CI fix, no engine change), and the change under test.
   Profiles: one round each, `--profile --dump`, compared per function.
-* **Wall clock cannot resolve paint changes below ~1-2 ms** on llvmpipe (the
-  driver's shading runs on the main thread too). Paint-side changes are
-  therefore measured by the profile's cumulative time for the changed
-  function, which is stable to a few percent; wall clock is reported
-  alongside, and logic (no GL) is measured by wall clock directly.
+* Wall clock cannot resolve paint changes below ~1 ms on llvmpipe (the driver's
+  shading runs on the main thread too), so paint-side changes are measured by
+  the changed function's profiled time and its GL/Python call counts; logic
+  (no GL) is measured by wall clock directly. Real time per line comes from a
+  line tracer scoped to one function, over the same stepped frames.
 * GL calls through ctypes are charged to their Python caller: a renderer
-  function's self time is its Python plus its GL calls. Items below say which
-  dominates.
+  function's self time is its Python plus its GL calls.
 
-### Baseline (production settings, ms, medians of 3 rounds)
+### Result (clean harness, ms, medians of 3 interleaved rounds)
 
-| Map | Metric | 2.5.10 | 3.0 |
-| --- | --- | --- | --- |
-| _SHOWCASE | logic | 2.34 [2.29-2.61] | 2.45 [2.44-2.45] |
-| _SHOWCASE | paint (main-thread CPU) | 20.5 [20.3-24.6] | 22.0 [20.3-22.2] |
-| MonsterTest | logic / AI | 2.56 / 4.51 | 2.49 / 4.42 |
-| MonsterTest | paint (CPU) | 11.2 | 10.8 |
-| Terrain_Test_medium | logic / paint (CPU) | 1.66 / 12.6 | 1.55 / 12.1 |
-| Portal_Test | logic | 1.95 [1.87-1.99] | 2.04 [1.94-2.08] |
-| Portal_Test | paint (CPU) | 23.1 [22.3-23.8] | 24.7 [23.6-24.7] |
-| BigWorld_streaming_test | logic / AI | 2.92 / 1.04 | 2.94 / 1.04 |
-| BigWorld_streaming_test | paint (CPU) | 125.3 | 125.9 |
+| Map | Metric | 2.5.10 | 3.0 at start | 3.0 now |
+| --- | --- | --- | --- | --- |
+| _SHOWCASE | logic | 1.00 [0.99-1.06] | 1.09 [1.04-1.15] | **0.92** [0.87-1.03] |
+| _SHOWCASE | AI per update | 0.176 | 0.188 | 0.186 |
+| _SHOWCASE | paint CPU / wall | 8.72 / 16.8 | 8.94 / 17.5 | 8.97 / 17.4 |
+| MonsterTest | logic | 1.06 [1.02-1.13] | 1.15 [1.07-1.20] | **0.96** [0.94-1.05] |
+| MonsterTest | AI per update | 0.958 | 1.018 | 0.987 |
+| MonsterTest | paint CPU / wall | 5.20 / 11.7 | 5.54 / 12.5 | 5.21 / 11.5 |
+| Terrain_Test_medium | logic | 0.72 [0.71-0.77] | 0.78 [0.71-0.78] | **0.34** [0.33-0.37] |
+| Terrain_Test_medium | paint CPU / wall | 8.69 / 14.1 | 9.19 / 14.9 | 8.31 / 13.5 |
+| Portal_Test | logic | 0.87 [0.81-0.93] | 0.88 [0.79-0.88] | **0.56** [0.49-0.64] |
+| Portal_Test | paint CPU / wall | 8.39 / 13.8 | 8.85 / 14.5 | 8.47 / 14.3 |
+| BigWorld_streaming_test | logic (p95) | 1.32 (2.48) | 1.26 (2.38) | **1.19** (2.23) |
+| BigWorld_streaming_test | paint CPU / wall | 106.2 / 114.8 | 105.4 / 112.7 | 104.5 / 112.3 |
 
-Per function, 3.0's hot code is 2.5.10's moved into the split runtimes: self
-times match within noise except `_bind_shadow_maps` (P-01) and
-`EntityTable._advance_effects` (+0.13 ms, F-08). So parity is close, and the
-gains beyond it are in Python work both versions share.
+Python calls per frame (logic / paint), 2.5.10 -> now: Showcase 718/5,173 ->
+662/5,027; MonsterTest 1,391/2,823 -> 1,345/2,683; Terrain 447/1,434 ->
+338/1,342; Portal 612/5,447 -> 516/5,419; BigWorld 2,144/5,476 ->
+2,134/4,900. Fewer than 2.5.10 on every map, in both phases.
+
+* **Logic: faster than 2.5.10 on every map** (8-52%), almost all from P-02.
+* **Monster AI: at parity.** Same functions, same call counts; per-function
+  differences are 1-13 us (noise). Nothing in it is 3.0-specific.
+* **Paint: at parity** within the run-to-run ranges, faster on Terrain and
+  BigWorld. Showcase's +0.25 ms CPU (ranges overlap) has no Python-call
+  difference: it is `_capture_glass_scene`'s GL readback. What 3.0 adds per
+  frame in GL calls is the 8 shadow samplers (+4 binds per lit pass) and the
+  terrain paint/sampler set-up (+13 per frame); their shader cost needs a GPU
+  to size.
 
 ### Ranked hot paths (3.0, production settings)
 
-Profiled self time, ms/frame (the profiler inflates call-heavy Python ~2-3x;
-the order is what matters). "Shared" = same cost in 2.5.10.
+Ranked from the first, traced profiles (self time, ms/frame); the evidence
+column gives the clean figure where re-measurement changed the picture.
+"Shared" = same cost in 2.5.10.
 
 | # | Path | Evidence | Kind | Status |
 | --- | --- | --- | --- | --- |
 | 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | P-02, fixed |
 | 2 | `_bind_shadow_maps` re-sends sampler units | 136-145 us/call vs 80 in 2.5.10; 4-11 calls/frame; 3.0's 8-sampler shaders doubled its GL calls | GL calls + Python, **3.0 regression** | P-01, fixed |
 | 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | measured: ~0.35 ms real, all dense NumPy; no change |
-| 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB): ~10 ms per shot on BigWorld (3,604 brushes) | Python, shared; p95 spike | open |
-| 5 | Monster AI `_chase` | ~2.8 ms per AI update on MonsterTest; batched already, per-row state write-back and flag loops remain | NumPy + Python, shared | open |
-| 6 | Frustum (`extract_frustum_planes`, `aabb_in_frustum_bounds`) | 0.13-0.18 ms each, every frame | Python, shared | open |
-| 7 | `_advance_effects` five-column copy | 0.41 ms on Showcase (F-08) | NumPy, 3.0 | open |
+| 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB). Untraced: **1.37 ms per shot** on BigWorld (3,604 brushes), not the ~10 ms the traced profile showed | Python, shared | open: see below |
+| 5 | Monster AI `_chase` | traced ~2.8 ms per update; **untraced 0.75 ms**, the whole update 1.1 ms; batched already | NumPy, shared | measured: tracemalloc artefact; at parity |
+| 6 | Frustum (`extract_frustum_planes`, `aabb_in_frustum_bounds`) | 0.13-0.18 ms each, every frame | Python, shared | small clean; see *Open after this pass* |
+| 7 | `_advance_effects` five-column copy | 0.41 ms traced, 0.12 ms clean on Showcase (F-08); found F-16 on the way | NumPy, 3.0 | F-16 fixed; copy kept |
 | 8 | Terrain `chunk_uniforms` (+ its lambda), per-chunk paint uniforms | 68 + 342 calls/frame, ~2.6 ms on BigWorld; 3.0's paint adds a coord tuple, a dict lookup and `glUniform1i` per chunk on maps with no paint | Python + GL, shared + **3.0 regression** | P-03, fixed |
-| 9 | Player collision helpers | `is_water_brush` 19-21, `brush_aabb_bounds` 20-56, `_has_headroom` 7-37 calls/frame | Python, shared | open |
-| 10 | `RenderTable.model_matrices` per pass | 1-5x per frame for the same rows (F-14) | NumPy, shared | open |
-| 11 | Brush-slot classification | `classify_slots` + `_classify_brush_slots` 1.7 ms on Portal (4.5 calls/frame, once per view) | NumPy + Python, shared | open |
+| 9 | Player collision helpers | `is_water_brush` 19-21, `brush_aabb_bounds` 20-56, `_has_headroom` 7-37 calls/frame | Python, shared | small clean; see *Open after this pass* |
+| 10 | `RenderTable.model_matrices` per pass | 1-5x per frame over each pass's own slots, 0.1-0.22 ms/frame clean; already one vectorised build per pass | NumPy, shared | no change: one build per frame needs per-pass buffers (a frame cache) for ~0.1 ms |
+| 11 | Brush-slot classification | `classify_slots` + `_classify_brush_slots` 1.7 ms on Portal (4.5 calls/frame, once per view) | NumPy + Python, shared | small clean; see *Open after this pass* |
 | - | BigWorld cell-debug overlay | `_paint_minimap` 9.4 ms + 293 `fillRect`/frame, only with the map's authored `show_cell_debug` on | Debug-only | not ranked |
 | - | `draw_heightfield_slots`, `draw_block_slots`, glass capture, `_point_brush_instances_at` | self time is GL driver work (llvmpipe vertex shading, ~190 raw attrib-pointer calls) | GL | not Python |
 
@@ -456,8 +486,10 @@ the order is what matters). "Shared" = same cost in 2.5.10.
   | _SHOWCASE | 2.55 | 2.63 | **2.24** (-15%) |
   | BigWorld_streaming_test | 3.03 | 3.11 | **2.77** (-11%) |
 
-  Python calls per logic tick -50 to -100; `mover_table` self time on maps
-  with neither group 0.83-0.85 -> 0.05 ms. The logic tick is now at or below
+  (Measured under `tracemalloc`; untraced, in *Result*: Terrain 0.78 ->
+  0.34, Portal 0.88 -> 0.56, MonsterTest 1.15 -> 0.96, Showcase 1.09 -> 0.92
+  ms.) Python calls per logic tick -50 to -100; `mover_table` self time on
+  maps with neither group 0.83-0.85 -> 0.05 ms. The logic tick is now at or below
   2.5.10's on every map. (BigWorld's p95, ~10.8 ms in both versions, is the
   hitscan, ranked #4.)
 
@@ -490,11 +522,30 @@ the order is what matters). "Shared" = same cost in 2.5.10.
   1); paint Python calls 5,308 -> 4,842 per frame. GL calls in
   `draw_heightfield_slots` now 2.8 *fewer* per frame than 2.5.10. Wall clock
   moved within BigWorld's +-3 ms noise.
+* **Commit.** `223eac8`.
 * **What is left of the BigWorld gap is not Python.** With `FIO_GL_DEBUG=1`,
   3.0 makes +13 GL calls in terrain set-up and +12 in `_bind_shadow_maps` (the
   8 shadow samplers), +5 in `_paint_frame`; the rest is per-fragment shader
   work for the 8-sampler shadows and the paint branch, which only a GPU
   measurement can size.
+
+### Open after this pass
+
+* **Hitscan (#4).** An exact batched version is straightforward arithmetic
+  (`glm.vec3` rounds the box corners to float32, the slab test then runs in
+  float64), but the loop reads live brush state the dense tables do not hold
+  at tick time: the spatial grid files a different set (mesh bounds,
+  `authored_hidden`, no physics bodies), and the render table is one to two
+  publications old while the tick runs (movers, streaming-hidden flags). It
+  needs collision bounds kept current by the change journal, a new structure;
+  for 1.4 ms per shot on the largest map, left for now.
+* **Rows 6, 9, 11** (frustum, player collision helpers, slot classification
+  per portal view): 0.05-0.23 ms each, clean; no Python loop to remove.
+* **Intermittent GL-tier warning.** `test_interleaved_textures_are_one_draw`
+  twice reported NumPy's "invalid value encountered in cast" in a full
+  `-m gl` run (2 of ~6 runs on this branch, 0 of 1 at `215269c`; never alone,
+  never with the warning as an error). Consistent with a cast over
+  uninitialised (`np.empty`) rows somewhere on the sprite path; not traced.
 
 ## Stability
 
@@ -539,6 +590,8 @@ reference compiler now required in CI. A self-hosted GPU runner running
 `pytest -m gl` and `tools/bench_compare.py` remains to be set up.
 
 ## Open work
+
+* Performance: see *Performance pass / Open after this pass*.
 
 * F-06: resolve engine asset paths from the root directory rather than cwd.
 * F-08 / F-09 as above.
