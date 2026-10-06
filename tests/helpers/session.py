@@ -156,20 +156,35 @@ class FioTestSession:
     # -- teardown -----------------------------------------------------------
 
     def close(self):
-        from PyQt5.QtCore import QEvent
+        """Stop Play, close the editor, and make sure it is really gone.
+
+        A closed window that stays reachable keeps its LogicThread's tables
+        subscribed to the process-wide change journal, where they collect
+        every change the next session makes. The window's own deferred timers
+        hold it until the event loop has run them, so events are processed
+        until the window is collected; one still alive after that is a leak.
+        """
         import gc
+        import weakref
+        from PyQt5.QtCore import QEvent
         try:
             self.stop_play()
         finally:
+            window = weakref.ref(self.window)
             self.window.unsaved_changes = False
             self.window.close()
             self.window.deleteLater()
-            self.app.processEvents()
-            self.app.sendPostedEvents(None, QEvent.DeferredDelete)
-            gc.collect()
+            self.window = self.view = self.logic = None
             with open(self._settings_path, "wb") as handle:
                 handle.write(self._settings)
             os.chdir(self._previous_cwd)
+            deadline = time.perf_counter() + 2.0
+            while window() is not None and time.perf_counter() < deadline:
+                self.app.processEvents()
+                self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+                gc.collect()
+                time.sleep(0.01)
+            assert window() is None, "a closed FioTestSession's window is still reachable"
 
     def _pump_until(self, predicate, timeout=20.0):
         deadline = time.perf_counter() + timeout
