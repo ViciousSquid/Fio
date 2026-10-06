@@ -184,3 +184,13 @@ class TestEngineIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_every_registered_shader_has_both_stages():
+    """A SHADER_MAP entry whose sources do not exist is skipped with a warning
+    on every player start ('procedural' was registered but never written)."""
+    from engine.shaders import DEFAULT_SHADERS, SHADER_MAP
+
+    missing = {name: [f for f in files if f not in DEFAULT_SHADERS]
+               for name, files in SHADER_MAP.items()}
+    assert not {k: v for k, v in missing.items() if v}

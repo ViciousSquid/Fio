@@ -2320,6 +2320,4 @@ SHADER_MAP = {
     'water':         ('water.vert',          'water.frag'),
     'glass':         ('glass.vert',          'glass.frag'),
     'terrain':       ('terrain.vert',        'terrain.frag'),
-    # Procedural is available but not yet integrated into the main render loop
-    'procedural':    ('procedural_vert.glsl', 'procedural_frag.glsl'),
 }
