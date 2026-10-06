@@ -376,12 +376,12 @@ the order is what matters). "Shared" = same cost in 2.5.10.
 | --- | --- | --- | --- | --- |
 | 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | P-02, fixed |
 | 2 | `_bind_shadow_maps` re-sends sampler units | 136-145 us/call vs 80 in 2.5.10; 4-11 calls/frame; 3.0's 8-sampler shaders doubled its GL calls | GL calls + Python, **3.0 regression** | P-01, fixed |
-| 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | open |
+| 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | measured: ~0.35 ms real, all dense NumPy; no change |
 | 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB): ~10 ms per shot on BigWorld (3,604 brushes) | Python, shared; p95 spike | open |
 | 5 | Monster AI `_chase` | ~2.8 ms per AI update on MonsterTest; batched already, per-row state write-back and flag loops remain | NumPy + Python, shared | open |
 | 6 | Frustum (`extract_frustum_planes`, `aabb_in_frustum_bounds`) | 0.13-0.18 ms each, every frame | Python, shared | open |
 | 7 | `_advance_effects` five-column copy | 0.41 ms on Showcase (F-08) | NumPy, 3.0 | open |
-| 8 | Terrain `chunk_uniforms` (+ its lambda) | 68 + 342 calls/frame, ~2.6 ms on BigWorld | Python, shared | open |
+| 8 | Terrain `chunk_uniforms` (+ its lambda), per-chunk paint uniforms | 68 + 342 calls/frame, ~2.6 ms on BigWorld; 3.0's paint adds a coord tuple, a dict lookup and `glUniform1i` per chunk on maps with no paint | Python + GL, shared + **3.0 regression** | P-03, fixed |
 | 9 | Player collision helpers | `is_water_brush` 19-21, `brush_aabb_bounds` 20-56, `_has_headroom` 7-37 calls/frame | Python, shared | open |
 | 10 | `RenderTable.model_matrices` per pass | 1-5x per frame for the same rows (F-14) | NumPy, shared | open |
 | 11 | Brush-slot classification | `classify_slots` + `_classify_brush_slots` 1.7 ms on Portal (4.5 calls/frame, once per view) | NumPy + Python, shared | open |
@@ -429,6 +429,7 @@ the order is what matters). "Shared" = same cost in 2.5.10.
   neither): the empty group never plans, the existing group plans once a tick
   and still matches the reference mover loop every tick. Fails before (the
   empty group planned 10 of 10 ticks). Mover equivalence suite: 22 passed.
+* **Commit.** `d02276e`.
 * **Result.** Logic tick median (ms; 3 interleaved rounds):
 
   | Map | 2.5.10 | before | after |
@@ -443,6 +444,41 @@ the order is what matters). "Shared" = same cost in 2.5.10.
   with neither group 0.83-0.85 -> 0.05 ms. The logic tick is now at or below
   2.5.10's on every map. (BigWorld's p95, ~10.8 ms in both versions, is the
   hitscan, ranked #4.)
+
+### P-03 Terrain chunk uniforms one chunk at a time; paint state per chunk
+
+* **Baseline.** BigWorld paint is 3.0's one remaining paint gap to 2.5.10
+  (+2.5 to +5 ms wall clock across runs). Line-timed real time per frame:
+  `glDrawArrays` 94.4 ms (llvmpipe), Fio's Python around it ~2.9 ms:
+  `chunk_uniforms` 1.2 ms (68 calls, each ~8 NumPy scalar reads and 5 lambda
+  calls; shared with 2.5.10), `glUniform1i(uPaintEnabled, 0)` 0.49 ms and the
+  paint coord tuple 0.15 ms (both new in 3.0: sent for every chunk, on a map
+  with no paint at all). GL calls: 3.0 +67/frame in `draw_heightfield_slots`.
+* **Change.** `chunk_uniforms(slots)` computes every drawn chunk's uniforms in
+  one set of column operations (same float64 arithmetic, same float32
+  rounding) and returns plain Python values. The paint lookup runs only when
+  the map has paint, and `uPaintEnabled` is sent when it changes.
+* **Fixed on the way (pre-existing, 3.0).** `_upload_paint_chunk` binds the
+  paint page on the active unit, and it ran inside the loop after the chunk's
+  height page was bound: on the frame a chunk's paint was uploaded, that chunk
+  and the rest of its height page drew with the paint texture as their height
+  grid. Uploads now happen before the loop, as height uploads already did.
+* **Tests.** `test_each_chunk_draws_with_its_own_height_grid_and_paint` (`gl`):
+  painted and unpainted chunks in one draw, on the upload frame; at each
+  chunk's `glDrawArrays` the paint uniforms and the bound height and paint
+  pages are that chunk's. Fails before (a chunk drew with texture 308, the
+  paint page, as its height grid 307). The vertex-data and pixel parity tests
+  (`test_terrain_heightfield_parity.py`) pin `chunk_uniforms`' values. GL
+  tier 163 passed.
+* **Result.** `chunk_uniforms` 2.95 -> 1.21 ms/frame profiled (68.6 calls ->
+  1); paint Python calls 5,308 -> 4,842 per frame. GL calls in
+  `draw_heightfield_slots` now 2.8 *fewer* per frame than 2.5.10. Wall clock
+  moved within BigWorld's +-3 ms noise.
+* **What is left of the BigWorld gap is not Python.** With `FIO_GL_DEBUG=1`,
+  3.0 makes +13 GL calls in terrain set-up and +12 in `_bind_shadow_maps` (the
+  8 shadow samplers), +5 in `_paint_frame`; the rest is per-fragment shader
+  work for the 8-sampler shadows and the paint branch, which only a GPU
+  measurement can size.
 
 ## Stability
 

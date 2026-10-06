@@ -1310,19 +1310,28 @@ class Terrain:
             D[i] = [c1[j] - c0[j] for j in range(3)]
         return len(stops), H, C, W, D
 
-    def chunk_uniforms(self, slot: int):
-        """``(uChunkI, uChunkX, uChunkY)`` for one slot, as float32/int values."""
+    def chunk_uniforms(self, slots):
+        """``(uChunkI, uChunkX, uChunkY)`` for each of *slots*, in order.
+
+        Python ints and floats, the floats rounded to the float32 the shader
+        receives. One set of column operations for a whole draw, rather than
+        a dozen NumPy scalar reads per chunk.
+        """
         table = self.table
-        res = int(table.grid_res[slot])
-        layer = int(slot) % self._page_layers if self._page_layers else 0
-        lo = float(table.min_y[slot])
-        hi = float(table.max_y[slot])
-        height_range = hi - lo if hi > lo else 1.0
-        f = lambda v: float(np.float32(v))
-        return ((res, layer),
-                (f(table.world[slot, 0]), f(table.world[slot, 1]),
-                 f(float(table.size[slot]) / res)),
-                (f(lo), f(height_range)))
+        slots = np.asarray(slots, dtype=np.intp)
+        res = table.grid_res[slots].astype(np.int64)
+        layer = (slots % self._page_layers if self._page_layers
+                 else np.zeros(len(slots), dtype=np.intp))
+        lo = table.min_y[slots]
+        hi = table.max_y[slots]
+        cx = np.empty((len(slots), 3), dtype=np.float32)
+        cx[:, :2] = table.world[slots]
+        cx[:, 2] = table.size[slots] / res
+        cy = np.empty((len(slots), 2), dtype=np.float32)
+        cy[:, 0] = lo
+        cy[:, 1] = np.where(hi > lo, hi - lo, 1.0)
+        return list(zip(zip(res.tolist(), layer.tolist()),
+                        cx.tolist(), cy.tolist()))
 
     def set_heightfield_frame_uniforms(self, u, unit):
         """Per-frame heightfield uniforms: sampler unit, tiling, gradient."""
@@ -1344,25 +1353,42 @@ class Terrain:
         stale = slots[self._gpu_version[slots] != table.version[slots]]
         for slot in stale:
             self._upload_heightfield(int(slot))
+        order = slots.tolist()
+        # Each slot's paint version, 0 where it has none; None when the map
+        # has no paint, which is most maps. Uploads happen here, before the
+        # loop binds any height page: an upload binds the paint page on the
+        # active unit.
+        paint = None
+        versions = self._paint_map_versions
+        if paint_unit is not None and versions:
+            paint = [versions.get(tuple(coord), 0)
+                     for coord in table.coord[slots].tolist()]
+            gpu_version = self._paint_gpu_version
+            for slot, version in zip(order, paint):
+                if version and gpu_version[slot] != version:
+                    self._upload_paint_chunk(slot)
         if not self._empty_vao:
             self._empty_vao = int(gl.glGenVertexArrays(1))
         gl.glBindVertexArray(self._empty_vao)
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+        lods = table.lod[slots].tolist() if lod_level_loc != -1 else None
+        loc_chunk_i, loc_chunk_x, loc_chunk_y = (
+            u['uChunkI'], u['uChunkX'], u['uChunkY'])
+        page_layers = self._page_layers
         bound_page = -1
         bound_paint_page = -1
+        # The program keeps a uniform's value between draws, so uPaintEnabled
+        # is sent when it changes, starting with the first chunk.
+        paint_enabled = None
         triangles = 0
-        for slot in slots:
-            slot = int(slot)
-            page = slot // self._page_layers
+        for i, ((res, layer), cx, cy) in enumerate(self.chunk_uniforms(slots)):
+            slot = order[i]
+            page = slot // page_layers
             if page != bound_page:
                 gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
                 bound_page = page
-            coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
-            paint_version = self._paint_map_versions.get(coord, 0)
             if paint_unit is not None:
-                if paint_version:
-                    if self._paint_gpu_version[slot] != paint_version:
-                        self._upload_paint_chunk(slot)
+                if paint is not None and paint[i]:
                     paint_page = slot // self._paint_page_layers
                     if paint_page != bound_paint_page:
                         gl.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
@@ -1370,18 +1396,19 @@ class Terrain:
                                          self._paint_pages[paint_page])
                         bound_paint_page = paint_page
                         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-                    gl.glUniform1i(u['uPaintEnabled'], 1)
+                    if paint_enabled != 1:
+                        gl.glUniform1i(u['uPaintEnabled'], 1)
+                        paint_enabled = 1
                     gl.glUniform1i(u['uPaintLayer'],
-                                   int(slot) % self._paint_page_layers)
-                else:
+                                   slot % self._paint_page_layers)
+                elif paint_enabled != 0:
                     gl.glUniform1i(u['uPaintEnabled'], 0)
-
-            (res, layer), cx, cy = self.chunk_uniforms(slot)
-            if lod_level_loc != -1:
-                gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
-            gl.glUniform2i(u['uChunkI'], res, layer)
-            gl.glUniform3f(u['uChunkX'], *cx)
-            gl.glUniform2f(u['uChunkY'], *cy)
+                    paint_enabled = 0
+            if lods is not None:
+                gl.glUniform1i(lod_level_loc, lods[i])
+            gl.glUniform2i(loc_chunk_i, res, layer)
+            gl.glUniform3f(loc_chunk_x, *cx)
+            gl.glUniform2f(loc_chunk_y, *cy)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6 * res * res)
             triangles += 2 * res * res
         gl.glActiveTexture(gl.GL_TEXTURE0)

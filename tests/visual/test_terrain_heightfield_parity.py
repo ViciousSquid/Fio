@@ -134,7 +134,7 @@ class Capture:
         gl.glUniformMatrix4fv(self.u['view'], 1, gl.GL_FALSE, glm.value_ptr(identity))
         unit = 8
         t.set_heightfield_frame_uniforms(self.u, unit)
-        (res_u, layer), cx, cy = t.chunk_uniforms(slot)
+        (res_u, layer), cx, cy = t.chunk_uniforms([slot])[0]
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
                          t._height_pages[slot // t._page_layers])
@@ -419,3 +419,104 @@ def test_several_lods_in_one_frame_render_identically(context):
         far=16000.0, lights=False)
     assert len(resolutions) >= 3, f"expected mixed LODs, drew {resolutions}"
     assert_images_match(new, old, "mixed LODs")
+
+
+class _RecordingGL:
+    """``engine.terrain``'s GL, recording the state each chunk is drawn with."""
+
+    def __init__(self, gl, enabled_loc, layer_loc):
+        self._gl = gl
+        self._locs = {enabled_loc: "enabled", layer_loc: "layer"}
+        self.uniforms = {}
+        self.active = gl.GL_TEXTURE0
+        self.bound = {}
+        self.draws = []
+
+    def __getattr__(self, name):
+        return getattr(self._gl, name)
+
+    def glActiveTexture(self, unit):
+        self.active = unit
+        return self._gl.glActiveTexture(unit)
+
+    def glBindTexture(self, target, texture):
+        if target == self._gl.GL_TEXTURE_2D_ARRAY:
+            self.bound[self.active] = int(texture)
+        return self._gl.glBindTexture(target, texture)
+
+    def glUniform1i(self, location, value):
+        name = self._locs.get(location)
+        if name is not None:
+            self.uniforms[name] = int(value)
+        return self._gl.glUniform1i(location, value)
+
+    def glDrawArrays(self, mode, first, count):
+        self.draws.append((dict(self.uniforms), dict(self.bound)))
+        return self._gl.glDrawArrays(mode, first, count)
+
+
+def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatch):
+    """Painted and unpainted chunks in one draw, on the frame their paint is
+    uploaded: at each chunk's draw call the paint uniforms say whether it is
+    painted (and which layer), and its own height page is bound."""
+    import glm
+    import OpenGL.GL as gl
+    from engine import terrain as terrain_module
+    from engine.view_distance import ViewDistance
+
+    t = map_terrain()
+    source = np.zeros((4, 4, 4), dtype=np.uint8)
+    source[..., :3] = (200, 40, 40)
+    source[..., 3] = 255
+    t._load_texture_rgba = lambda _path: source
+    renderer = glh.make_renderer()
+    renderer.view_distance = ViewDistance(3000.0)
+    renderer.setup_terrain_shader(t)
+    t.MAX_UPDATES_PER_FRAME = 100000
+    t.UPDATE_BUDGET_MS = 1e9
+    eye, target = sculpted_view(t)
+    eye_v = glm.vec3(*eye)
+    projection = glm.perspective(glm.radians(70.0), 1.0, 1.0, 3000.0)
+    view = glm.lookAt(eye_v, glm.vec3(*target), glm.vec3(0, 1, 0))
+    config = glh.render_config(all_brushes=[], all_things=[], terrain=t,
+                               shadows_enabled=False)
+
+    def frame():
+        context.bind()
+        renderer.render_scene(projection, view, eye_v, None, config,
+                              brush_slots=config["all_brush_slots"])
+        gl.glFinish()
+        return context.read_pixels()
+
+    frame()                                       # stream + build
+    frame()
+    assert t.paint_texture_at(0.0, -600.0, 300.0, "synthetic", feather=0.0)
+    recorder = _RecordingGL(gl, t.uniforms["uPaintEnabled"],
+                            t.uniforms["uPaintLayer"])
+    monkeypatch.setattr(terrain_module, "gl", recorder)
+    painted_frame = frame()                       # uploads, then draws
+    monkeypatch.undo()
+    try:
+        renderer.cleanup()
+    except Exception:
+        pass
+
+    drawn = [int(s) for s in t.drawn_slots]
+    assert len(recorder.draws) == len(drawn)
+    height_unit = gl.GL_TEXTURE0 + renderer.SHADOW_TEXTURE_UNIT_BASE + \
+        renderer.MAX_SHADOW_LIGHTS
+    painted = 0
+    for slot, (uniforms, bound) in zip(drawn, recorder.draws):
+        coord = (int(t.table.coord[slot, 0]), int(t.table.coord[slot, 1]))
+        assert bound[height_unit] == t._height_pages[slot // t._page_layers], (
+            "chunk %s drew with another texture as its height grid" % (coord,))
+        if t._paint_map_versions.get(coord):
+            painted += 1
+            assert uniforms["enabled"] == 1, coord
+            assert uniforms["layer"] == slot % t._paint_page_layers, coord
+            assert bound[height_unit + 1] == \
+                t._paint_pages[slot // t._paint_page_layers], coord
+        else:
+            assert uniforms["enabled"] == 0, coord
+    assert 0 < painted < len(drawn), "need painted and unpainted chunks"
+    assert not glh.is_blank(painted_frame)
