@@ -7,23 +7,24 @@ import pytest
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 from PyQt5.QtCore import QPointF, QRectF
+from PyQt5.QtGui import QImage, QPainter
 
 from editor.io_system import OutputConnection
 from editor.view_2d import View2D
 
 
-class _Painter:
+class _Painter(QPainter):
+    """A real painter on an image that also records the lines drawn."""
+
     def __init__(self):
+        self._image = QImage(64, 64, QImage.Format_ARGB32)
+        super().__init__(self._image)
         self.lines = []
 
-    def setPen(self, _pen):
-        pass
-
-    def setBrush(self, _brush):
-        pass
-
-    def drawLine(self, p1, p2):
-        self.lines.append((p1, p2))
+    def drawLine(self, *args):
+        if len(args) == 2:
+            self.lines.append(tuple(args))
+        return super().drawLine(*args)
 
 
 def test_segment_visibility_keeps_a_long_link_crossing_the_view():
@@ -74,6 +75,7 @@ def test_io_link_uses_stable_target_id_and_survives_endpoint_culling(main_window
         painter,
         QRectF(-100.0, -100.0, 200.0, 200.0),
     )
+    painter.end()
     assert len(painter.lines) == 1
     start, end = painter.lines[0]
     assert start != end

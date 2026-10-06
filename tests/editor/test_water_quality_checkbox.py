@@ -69,6 +69,7 @@ def test_the_checkbox_shows_the_brush_setting(main_window, props, checked):
     assert editor._widgets['water_quality_cb'].isChecked() == checked
 
 
+@pytest.mark.gl
 def test_ticking_it_sets_only_this_brush_and_never_the_renderer(main_window):
     host, editor = _panel(main_window)
     box = editor._widgets['water_quality_cb']

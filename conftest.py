@@ -425,6 +425,11 @@ def main_window(qt_app, tmp_path, monkeypatch):
     window = MainWindow(_ROOT)
     window.show()
     qt_app.processEvents()
+    if qt_app.platformName() == "offscreen":
+        # The editor always has a logic thread: initializeGL starts it after
+        # building the renderer. Offscreen there is no GL context and no
+        # initializeGL, so start it the same way.
+        window.view_3d._start_logic_thread()
     try:
         yield window
     finally:

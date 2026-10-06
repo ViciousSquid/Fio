@@ -249,6 +249,7 @@ def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
     assert np.isclose(table.portal_width_height[0, 0], 128.0)
     assert np.isclose(table.portal_width_height[0, 1], 256.0)
 
+@pytest.mark.gl
 def test_renderer_consumes_active_lights_as_entity_slots(renderer):
     pytest.importorskip("OpenGL")
     on = make_thing(Light, 'on', state='on')
@@ -614,6 +615,7 @@ def test_portal_glasses_property_is_per_portal():
 
 
 
+@pytest.mark.gl
 def test_portal_candidate_keeps_a_disabled_portal_during_fade_out(renderer):
     """Disabling gameplay must not remove the portal before its visual fade finishes."""
     a = make_thing(Portal, 'A', portal_target='B')

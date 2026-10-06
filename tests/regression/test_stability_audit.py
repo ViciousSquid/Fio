@@ -391,6 +391,7 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
         qt_app.processEvents()
 
 
+@pytest.mark.gl
 def test_a_hidden_light_does_not_light_the_running_world(main_window):
     """Big World parks an out-of-range light by hiding it; the dense light
     selection ignored ``hidden``, so parked lights kept lighting and kept
