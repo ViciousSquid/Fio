@@ -66,10 +66,13 @@ from typing import Any, Callable, List, Optional, Tuple
 #: * 1.4.0 — optional editor Tools actions and console-command registration.
 #: * 1.5.0 — collapsible property sections, LogicState key suggestions and
 #:   entity inspectors.
-#: * 1.6.0 — renderer registration takes the :class:`engine.renderer.Renderer`
-#:   protocol: a factory is called as ``factory(config)``. Not compatible with
-#:   1.3–1.5 renderer factories (``cls(texture_loader, grid, world, config)``
-#:   and the old forward-renderer interface); there is no shim.
+#: * 1.6.0 — Fio 3.0, a major architectural shift from 1.5: renderer
+#:   registration takes the :class:`engine.renderer.Renderer` protocol (a
+#:   factory is called as ``factory(config)``) and renderers swap live.
+#:   Plugins written for 1.3–1.5 that do not use the renderer contract load and
+#:   behave unchanged; renderer implementations written for 1.3–1.5
+#:   (``cls(texture_loader, grid, world, config)`` and the old forward-renderer
+#:   interface) are not compatible, and there is no shim.
 API_VERSION = "1.6.0"
 API_VERSION_INFO = (1, 6, 0)
 
@@ -597,7 +600,14 @@ class EditorAPI:
         infrastructure.
 
         A plugin that registers a renderer declares ``api_version = "1.6.0"``:
-        1.3–1.5 hosts construct renderers differently.
+        1.3–1.5 hosts construct renderers differently, and renderers written
+        for them are not compatible with this contract.
+
+        The renderer owns its GL resources: no GL resource id survives the
+        lifetime of the renderer that owns it. The host discards every handle
+        it was given before calling ``cleanup()``, and a replacement renderer
+        receives fresh resource tables. See the wiki's Renderer Development
+        Guide and ``docs/examples/deferred_renderer``.
 
         Returns True if registered (False in a headless/player context with no
         viewport). This is how a whole new renderer — e.g. a deferred one —

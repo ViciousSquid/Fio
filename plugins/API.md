@@ -76,12 +76,18 @@ History:
   property sections, LogicState preset keys and entity inspectors; [world pause and
   actor pick](#world-pause-and-actor-pick-api-150-play-mode). Additive: every 1.4.0
   plugin loads and behaves unchanged.
-- **1.6.0** — renderer registration takes the `engine.renderer.Renderer` protocol
-  (see [`register_renderer`](#editor-ui-extensions-api-130)): a renderer factory is
-  called as `factory(config)`. **Not compatible** with renderer factories written for
-  1.3–1.5 (`cls(texture_loader, grid_size, world_size, config)` and the old
-  forward-renderer interface); there is no compatibility shim. Every other 1.5.0
-  plugin loads and behaves unchanged.
+- **1.6.0** — **Fio 3.0. A major architectural shift from 1.5:** the renderer is
+  a plugin boundary. Renderer registration takes the `engine.renderer.Renderer`
+  protocol (see [`register_renderer`](#editor-ui-extensions-api-130)): a renderer
+  factory is called as `factory(config)`, and the active renderer can be replaced
+  live. What that means for existing plugins:
+  - **Plugins written for 1.3–1.5 that do not use the renderer contract load and
+    behave unchanged** — entities, I/O, runtime hooks, events, editor extensions.
+  - **Renderer implementations written for 1.3–1.5 are not compatible.** The old
+    factory (`cls(texture_loader, grid_size, world_size, config)`) and the old
+    forward-renderer interface (`renderer_core` / `Renderer_F` internals) are gone,
+    and there is no compatibility shim: port the renderer to the protocol and
+    declare `api_version = "1.6.0"`.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -352,11 +358,54 @@ it returns must satisfy the `engine.renderer.Renderer` protocol:
 
 The renderer owns its technique — shaders, passes, lighting model, shadowing,
 G-buffer — and consumes the dense tables rather than authored
-`Brush`/`Thing`/`Light` objects. It need not inherit anything from Fio;
+`Brush`/`Thing`/`Light` objects. **You do not need to understand or inherit the
+`ForwardRenderer` to implement another renderer**;
 `engine.renderer.core.RendererCore` is optional reusable infrastructure
 (texture/model resources, table lookups, culling, editor overlays). Returns
 `True` if registered, `False` in a headless/player context with no viewport.
 This is how a whole new renderer ships as a plugin.
+
+**Choosing it, live.** `r_renderer` lists the registered renderers and
+`r_renderer <name>` swaps to one (`QtGameView.switch_renderer`), in the editor or
+in Play. The host creates the new renderer first; if its factory raises or it is
+not `ready`, the current one keeps running. Session settings (`shadows_enabled`,
+`water_quality`, the shared `view_distance`) carry over. Map logic cannot run
+`r_renderer`.
+
+**Resource lifetime is part of the contract.** *No GL resource ID survives the
+lifetime of the renderer that owns it.*
+
+- The renderer instance owns its GL resources: programs, buffers, vertex arrays,
+  framebuffers, and every texture and model it loads — including the names it
+  returns from `load_texture`.
+- The host discards renderer-produced GL handles before calling `cleanup()` (its
+  sprite table, the terrain's program and texture bindings), and `cleanup()` must
+  delete everything the renderer made, lazily created objects included.
+- A replacement renderer receives fresh resource tables: the host reloads its
+  sprites through the new renderer's `load_texture` and hands them over with
+  `set_sprite_textures`. Never assume a GL name from another renderer, or from an
+  earlier instance of your own, is still valid.
+
+**Display modes.** The frame input's `brush_display_mode` is the editor's
+Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`, `Points`,
+`Overlay` (Textured with the wireframe drawn over it); `r_wireframe` selects
+Wireframe. The host publishes it every frame and the renderer decides how each
+looks. In Play the host publishes `Textured` unless Wireframe, Points or Overlay
+is selected.
+
+**Diagnostics.** [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables)
+(**Debug → Debug Tables**) works unchanged with any renderer: it labels the
+active one (**FORWARD**, **DEFERRED**, …), shows the dense tables and visible
+slots it is given, follows a selected object to its rows, and reports
+`render_stats` — `draw_calls` (scene draws), `shadow_draw_calls`, `batched_draws`,
+`visible_tris`, pass timings — plus any lines the renderer publishes in
+`render_stats.details` (`name -> text`, or a zero-argument callable).
+
+The contract step by step, GL state rules and a complete working
+`DeferredRenderer` are in the wiki's
+[Renderer Development Guide](https://github.com/ViciousSquid/Fio/wiki/Renderer-Development-Guide);
+the example itself is [`docs/examples/deferred_renderer/`](../docs/examples/deferred_renderer/)
+(copy it into `plugins/` and run `r_renderer Deferred`).
 
 ### Developer/editor tools (API 1.4.0)
 
@@ -982,5 +1031,8 @@ def on_tick(self, logic, ctx):
 - [`plugins/api.py`](api.py) — the annotated source these docs mirror.
 - [`plugins/host.py`](host.py) — the `PluginHost` / `EventBus` source.
 - [`plugins/tidy/`](tidy/) — a complete worked gameplay plugin.
+- [`docs/examples/deferred_renderer/`](../docs/examples/deferred_renderer/) — a complete
+  worked renderer plugin, and the wiki's
+  [Renderer Development Guide](https://github.com/ViciousSquid/Fio/wiki/Renderer-Development-Guide).
 - [`plugins/bigworld/README.md`](bigworld/README.md) — a runtime-scalability
   plugin that uses the event bus, services and host wrapping.

@@ -25,6 +25,17 @@ forward; see **Breaking changes** before upgrading.
   into owned runtimes (`player_runtime`, `combat_runtime`, `render_runtime`,
   `session_runtime`, ...), so plugins that reached into `LogicThread`
   attributes directly must move to the runtime that now owns them.
+- **Renderer / plugin API 1.6.0 — a major architectural shift from 1.5:**
+  `engine/renderer_core.py` is replaced by the `engine.renderer` package, and
+  the renderer is a plugin boundary: any object satisfying the
+  `engine.renderer.Renderer` protocol can be registered by name and drawn
+  through. Plugins written for 1.3–1.5 that don't use the renderer contract
+  load and behave unchanged; renderer implementations written for 1.3–1.5
+  (the old `cls(texture_loader, grid_size, world_size, config)` factory and
+  forward-renderer interface) are not compatible, with no shim.
+- **Console:** `r_fog`, `r_water`, `r_glass`, `r_lighting` and `r_deferred`
+  (and their unprefixed aliases) are gone; they toggled attributes no
+  renderer had.
 
 ### New
 
@@ -38,9 +49,37 @@ forward; see **Breaking changes** before upgrading.
 - `pos` and bulk `delete` console commands; ammo in the procedural map
   generator.
 - Native Windows ARM64 build workflow.
+- Renderers swap live, in the editor and in Play: `r_renderer` lists them,
+  `r_renderer <name>` switches (`QtGameView.switch_renderer`). A renderer that
+  fails to start leaves the current one running.
+- Editor view filters (GtkRadiant style): a **Filter** menu shows or hides world
+  brushes, movers and doors, triggers, water, glass, fog, terrain, lights, path
+  nodes (and their connection lines), monsters, props and models, effects,
+  portals, logic entities, speakers, player starts and other entities — in the
+  3D view through any renderer, the 2D views, picking and the I/O lines. Play
+  ignores them.
+- A complete example renderer plugin, `docs/examples/deferred_renderer/`, and
+  the wiki's Renderer Development Guide.
+- Display modes: **Points** (a laser-scan point cloud, after Scanner Sombre)
+  and **Overlay** (the textured frame with every brush triangle drawn over it);
+  **Wireframe** now draws true brush edges, and Wireframe and Points are
+  coloured by distance from the eye. `r_wireframe` drives the Display box.
+- Debug Tables labels the active renderer (FORWARD, DEFERRED, …) and works
+  unchanged with any renderer; it counts shadow-map draws, shows lines a
+  renderer publishes in `RenderStats.details`, and highlights a selected
+  object's rows (from the viewport or the Scene Hierarchy) with a SELECTION tab
+  listing every column of them.
 
 ### Fixes
 
+- No GL resource outlives the renderer that owns it: replacing a renderer
+  leaked its gizmo, AABB and component-overlay vertex arrays, its instance
+  buffers, its portal programs and an instanced program compiled twice.
+- "Solid Lit" no longer shows textures, and "Wireframe" no longer draws the
+  instanced brushes filled.
+- Portals no longer show an editor sprite; the aperture wireframe shows them.
+- Debug Tables keeps the Follow Selection chain on screen (it vanished at the
+  next refresh) and reports an id that is in no table.
 - The Plugins menu's "Add entity (at origin)" entries work again.
 - Entering Play no longer raises in `paintGL` before the first full frame.
 - A notification is no longer cleared early by an earlier, shorter one.
