@@ -83,3 +83,22 @@ def test_the_weapon_switch_flash_fades_in_holds_and_fades_out_quickly():
     assert 0.0 < alpha(fading) < 1.0
     assert alpha(total + 1e-6) == 0.0
     assert alpha(total + 1.0) == 0.0
+
+
+# -- the bottom-right corner: item icon and keys --------------------------------
+
+@pytest.mark.parametrize("keys", [1, 2, 4])
+def test_the_item_icon_and_the_keys_never_overlap(keys):
+    item, key_rects = QtGameView._hud_corner_layout(1280, 720, 20, True, keys)
+    assert item is not None and len(key_rects) == keys
+    assert item.right() == 1280 - 20 - 1 and item.bottom() == 720 - 20 - 1
+    for rect in key_rects:
+        assert not rect.intersects(item)
+        assert rect.right() < item.left()
+
+
+def test_without_the_item_icon_the_keys_take_the_corner():
+    item, key_rects = QtGameView._hud_corner_layout(1280, 720, 20, False, 2)
+    assert item is None
+    assert key_rects[0].right() == 1280 - 20 - 1
+    assert key_rects[1].x() == key_rects[0].x() - QtGameView.HUD_KEY_STEP

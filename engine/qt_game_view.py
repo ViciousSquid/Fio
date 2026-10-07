@@ -2238,38 +2238,40 @@ class QtGameView(QOpenGLWidget):
             self._draw_actor_pick_hint(painter, viewport_width)
         # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
-        key_slot_offset = 0
-        icon_size = 100
-        if overhead and held is not None:
-            if self._draw_item_icon(painter, held, viewport_width, viewport_height,
-                                    hud_margin, icon_size):
-                # Reserve the weapon's slot so keys don't overlap it.
-                key_slot_offset = icon_size + 15
-        elif held is not None and self._weapon_switch_shown_at is not None:
-            # A slot key took this weapon in hand: show it bottom-right for a
-            # moment, fading in and out quickly.
-            alpha = self._weapon_switch_alpha(
-                time.perf_counter() - self._weapon_switch_shown_at)
-            if alpha > 0.0:
-                painter.save()
-                painter.setOpacity(painter.opacity() * alpha)
-                self._draw_item_icon(painter, held, viewport_width, viewport_height,
-                                     hud_margin, icon_size)
-                painter.restore()
-            else:
-                self._weapon_switch_shown_at = None
-
+        # The bottom-right corner holds the item icon (overhead: the weapon in
+        # hand; first-person: the slot-key flash, while it shows) and the
+        # collected keys; the icon takes the rightmost slot and the keys sit
+        # to its left, so the two never overlap.
+        item_alpha = 0.0
+        if held is not None:
+            if overhead:
+                item_alpha = 1.0
+            elif self._weapon_switch_shown_at is not None:
+                # A slot key took this weapon in hand: show it for a moment,
+                # fading in and out quickly.
+                item_alpha = self._weapon_switch_alpha(
+                    time.perf_counter() - self._weapon_switch_shown_at)
+                if item_alpha <= 0.0:
+                    self._weapon_switch_shown_at = None
+        item_pixmap = self._hud_pixmap(held.world_sprite) if item_alpha > 0.0 else None
+        item_shown = item_pixmap is not None and not item_pixmap.isNull()
         collected_keys = self._cached_collected_keys
+        item_rect, key_rects = self._hud_corner_layout(
+            viewport_width, viewport_height, hud_margin, item_shown,
+            len(collected_keys) if collected_keys else 0)
+        if item_rect is not None:
+            painter.save()
+            painter.setOpacity(painter.opacity() * item_alpha)
+            self._draw_item_icon(painter, held, item_rect)
+            painter.restore()
+
         if collected_keys:
-            key_x = viewport_width - hud_margin - 100 - key_slot_offset
-            key_y = viewport_height - hud_margin - 100
-            key_size = 100
-            key_spacing = 40
+            key_size = self.HUD_CORNER_ICON
             if self._cached_key_size != key_size:
                 self._cached_key_pixmaps.clear()
                 self._cached_key_size = key_size
-            for i, key_name in enumerate(sorted(collected_keys)):
-                icon_x = key_x - i * key_spacing
+            for key_name, key_rect in zip(sorted(collected_keys), key_rects):
+                icon_x, key_y = key_rect.x(), key_rect.y()
                 cached = self._cached_key_pixmaps.get(key_name)
                 if cached is not None and not cached.isNull():
                     painter.drawPixmap(icon_x, key_y, cached)
@@ -3599,22 +3601,43 @@ class QtGameView(QOpenGLWidget):
         elapsed -= cls.WEAPON_SWITCH_HOLD
         return max(0.0, 1.0 - elapsed / cls.WEAPON_SWITCH_FADE_OUT)
 
-    def _draw_item_icon(self, painter, item, viewport_width, viewport_height,
-                        margin, size):
-        """Draw *item*'s world sprite in the bottom-right icon slot."""
+    #: The bottom-right HUD icons: their size, the gap between the item icon
+    #: and the keys, and how far each further key steps left (keys overlap).
+    HUD_CORNER_ICON = 100
+    HUD_CORNER_GAP = 15
+    HUD_KEY_STEP = 40
+
+    @classmethod
+    def _hud_corner_layout(cls, viewport_width, viewport_height, margin,
+                           item_shown, key_count):
+        """``(item rect or None, [key rects])`` of the bottom-right HUD icons.
+
+        The item icon, when shown, takes the rightmost slot; the keys start
+        left of it, so the two never overlap.
+        """
+        size = cls.HUD_CORNER_ICON
+        right = viewport_width - margin
+        y = viewport_height - margin - size
+        item = QRect(right - size, y, size, size) if item_shown else None
+        if item is not None:
+            right = item.x() - cls.HUD_CORNER_GAP
+        keys = [QRect(right - size - i * cls.HUD_KEY_STEP, y, size, size)
+                for i in range(key_count)]
+        return item, keys
+
+    def _draw_item_icon(self, painter, item, rect):
+        """Draw *item*'s world sprite centred in *rect*."""
         pm = self._hud_pixmap(item.world_sprite)
         if not pm or pm.isNull():
-            return False
+            return
+        size = rect.width()
         cache_key = (item.world_sprite, size)
         scaled = self._cached_item_icons.get(cache_key)
         if scaled is None or scaled.isNull():
             scaled = pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self._cached_item_icons[cache_key] = scaled
-        x = viewport_width - margin - size
-        y = viewport_height - margin - size
-        painter.drawPixmap(x + (size - scaled.width()) // 2,
-                           y + (size - scaled.height()) // 2, scaled)
-        return True
+        painter.drawPixmap(rect.x() + (size - scaled.width()) // 2,
+                           rect.y() + (size - scaled.height()) // 2, scaled)
 
     def eventFilter(self, obj, event):
         if obj is self._console_input and event.type() == QEvent.KeyPress:

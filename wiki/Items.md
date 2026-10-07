@@ -7,7 +7,7 @@ Fio has four item slots, each with a stable id. The player selects a weapon they
 | 3   | `custom1` | Cigarette  | Held and shown, never fires                 |
 | 4   | `custom2` | Wine Glass | Held and shown, never fires                 |
 
-A number key only switches to a weapon the player has picked up; otherwise it does nothing. When it switches, the weapon's sprite shows briefly in the bottom-right corner. The player keeps their weapons and ammunition through a LevelChanger.
+A number key only switches to a weapon the player has picked up; otherwise it does nothing. When it switches, the weapon's sprite shows briefly in the bottom-right corner; collected key icons move left to make room while it shows. The player keeps their weapons and ammunition through a LevelChanger.
 
 ## Custom items
 
