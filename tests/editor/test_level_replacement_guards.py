@@ -17,6 +17,7 @@ package's map, not one in the editor's ``maps/`` folder.
 """
 
 import json
+import os
 
 import pytest
 
@@ -221,3 +222,148 @@ def test_a_played_packages_map_command_changes_to_its_own_maps(main_window, tmp_
 
     assert [b.get("name") for b in window.state.brushes] == ["pkg"]
     assert window.file_path is None
+
+
+# ---------------------------------------------------------------------------
+# A level with no Player Start, reached during Play
+# ---------------------------------------------------------------------------
+
+def _playing_on(window, tmp_path):
+    current = _write_map(tmp_path / "maps" / "current.json", PLAYABLE)
+    assert window.load_level_file(current)
+    window.enter_play_mode()
+    assert window.view_3d.play_mode
+    return current
+
+
+def test_a_game_level_change_to_a_map_without_a_start_is_refused(
+        main_window, tmp_path, modal_dialogs, monkeypatch):
+    """The same authoring error as a missing destination spawn: Play carries
+    on where it is, with a toast, not a dialog that blocks the game loop."""
+    window = main_window
+    current = _playing_on(window, tmp_path)
+    toasts = []
+    monkeypatch.setattr(window, "show_toast",
+                        lambda text, is_error=False: toasts.append((text, is_error)))
+    things_before = list(window.state.things)
+    dialogs_before = len(modal_dialogs)
+    startless = _write_map(tmp_path / "maps" / "startless.json")
+
+    window.load_level_signal.emit(startless, "")
+
+    assert window.view_3d.play_mode
+    assert window.file_path == current
+    assert window.state.things == things_before
+    assert toasts == [(f"Level change: '{startless}' has no Player Start", True)]
+    assert len(modal_dialogs) == dialogs_before
+    window._exit_play_mode()
+
+
+def test_map_logics_map_command_to_a_map_without_a_start_is_refused(
+        main_window, tmp_path, monkeypatch):
+    window = main_window
+    monkeypatch.setattr(window, "root_dir", str(tmp_path))
+    current = _playing_on(window, tmp_path)
+    _write_map(tmp_path / "maps" / "startless.json")
+
+    window.console_handler.handle_command("map startless", from_map=True)
+
+    assert window.view_3d.play_mode
+    assert window.file_path == current
+    window._exit_play_mode()
+
+
+def test_a_user_opening_a_map_without_a_start_in_play_gets_no_dialog(
+        main_window, tmp_path, modal_dialogs, monkeypatch):
+    """The user asked for it, so it opens, and Play ends with a toast."""
+    window = main_window
+    _playing_on(window, tmp_path)
+    toasts = []
+    monkeypatch.setattr(window, "show_toast",
+                        lambda text, is_error=False: toasts.append((text, is_error)))
+    dialogs_before = len(modal_dialogs)
+    startless = _write_map(tmp_path / "maps" / "startless.json")
+
+    assert window.open_level_file(startless) is True
+
+    assert window.file_path == startless
+    assert not window.view_3d.play_mode
+    assert toasts[-1] == ("Loaded startless.json; Play stopped: it has no Player Start",
+                          True)
+    assert len(modal_dialogs) == dialogs_before
+
+
+def test_play_tells_the_logic_thread_where_a_played_package_is(main_window, tmp_path):
+    """Cutscenes inside a package are looked up in its extraction."""
+    window = main_window
+    package = tmp_path / "package"
+    _write_map(package / "maps" / "start.json", PLAYABLE)
+    window._package_level_dir = str(package)
+    assert window.open_level_file("maps/start.json")
+
+    window.enter_play_mode()
+    assert window.view_3d.logic_thread.package_root == str(package)
+    window._exit_play_mode()
+
+    window._package_level_dir = None
+    window.enter_play_mode()
+    assert window.view_3d.logic_thread.package_root is None
+    window._exit_play_mode()
+
+
+def test_an_exported_packages_cutscene_plays_from_the_package(main_window, tmp_path):
+    """Export a map whose LogicCamera names a cutscene, play the package on an
+    editor that has no such cutscene, and the cutscene still resolves."""
+    from editor.package_exporter import PackageExporter
+
+    project = tmp_path / "project"
+    cutscene = {"version": 2, "name": "intro", "actors": [],
+                "camera": [{"time": 0.0, "pos": [0, 0, 0], "yaw": 0, "pitch": 0}]}
+    _write_map(project / "cutscenes" / "intro.json", cutscene)
+    level = json.loads(json.dumps(PLAYABLE))
+    level["things"].append({"type": "logic_camera", "pos": [0, 0, 0], "properties": {
+        "type": "logic_camera", "cutscene_file": "cutscenes/intro.json"}})
+    current = _write_map(project / "maps" / "start.json", level)
+    pak = tmp_path / "game.fiopak"
+    ok, errors = PackageExporter(None, str(project)).export(
+        str(pak), {"title": "T"}, current)
+    assert ok and errors == [], errors
+
+    window = main_window
+    window.config["Kiosk"] = {"launch_in_editor": "true"}
+    window.play_package_from_path(str(pak))
+    window.enter_play_mode()
+    try:
+        runtime = window.view_3d.logic_thread.cutscene_runtime
+        found = runtime._cutscene_file_path("cutscenes/intro.json")
+        assert found is not None
+        assert found.startswith(os.path.realpath(window._package_temp_dir))
+        assert runtime._load_cutscene_file("cutscenes/intro.json")["name"] == "intro"
+    finally:
+        window._exit_play_mode()
+        window._discard_package_temp_dir()
+
+
+def test_the_cutscene_lookup_prefers_the_played_package(main_window, tmp_path):
+    logic = main_window.view_3d.logic_thread
+    runtime = logic.cutscene_runtime
+    package = tmp_path / "package"
+    cutscene = {"version": 2, "actors": [], "camera": []}
+    _write_map(package / "cutscenes" / "showcase.json", dict(cutscene, name="pkg"))
+    _write_map(package / "cutscenes" / "only_here.json", cutscene)
+    (package / "outside.json").write_text("{}")
+
+    logic.package_root = str(package)
+    try:
+        assert runtime._cutscene_file_path("cutscenes/showcase.json") == \
+            os.path.realpath(package / "cutscenes" / "showcase.json")
+        assert runtime._cutscene_file_path("cutscenes/only_here.json")
+        assert runtime._cutscene_file_path("cutscenes/../outside.json") is None
+    finally:
+        logic.package_root = None
+    # Without a package: the project's own cutscenes, and nothing else.
+    assert runtime._cutscene_file_path("cutscenes/showcase.json").endswith(
+        os.path.join("cutscenes", "showcase.json"))
+    assert not runtime._cutscene_file_path("cutscenes/showcase.json").startswith(
+        os.path.realpath(package))
+    assert runtime._cutscene_file_path("cutscenes/only_here.json") is None

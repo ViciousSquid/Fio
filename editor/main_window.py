@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         self._previous_tab_index = None
         self.file_path = None
         self.recent_files = []
-        self.load_level_signal.connect(self.open_level_file)
+        self.load_level_signal.connect(self._on_level_change_requested)
 
         self.setWindowTitle("Fio")
         self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
@@ -2325,6 +2325,10 @@ class MainWindow(QMainWindow):
             """)
 
         self._capture_pre_play_world()
+        logic = self.view_3d.logic_thread
+        if logic is not None:
+            # A played package's cutscenes are looked up in the package.
+            logic.package_root = self._package_level_dir
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.toggle_play_mode(player_start, physics_enabled)
         self.view_3d.setFocus()
@@ -4213,7 +4217,11 @@ class MainWindow(QMainWindow):
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
 
-    def open_level_file(self, filePath, destination_spawn=None):
+    def _on_level_change_requested(self, filePath, destination_spawn=''):
+        """A LevelChanger asked for *filePath*: the game, not the user."""
+        return self.open_level_file(filePath, destination_spawn, from_game=True)
+
+    def open_level_file(self, filePath, destination_spawn=None, from_game=False):
         """Open *filePath* in place of the current level, guarding unsaved work.
 
         The entry point for every request that replaces the open level without
@@ -4221,14 +4229,18 @@ class MainWindow(QMainWindow):
         ``map`` command. In the editor it asks first, as File > Open does.
         During Play it cannot stop the game to ask, so :meth:`_load_level`
         writes the unsaved level to its autosave file instead.
+
+        *from_game* marks a change the running game asked for (a LevelChanger,
+        map logic's ``map`` command) rather than the user: see
+        :meth:`_load_level`.
         """
         package_map = self._package_map_path(filePath)
         playing = self.view_3d is not None and bool(self.view_3d.play_mode)
         if not playing and not self.check_unsaved_changes():
             return False
         if package_map is not None:
-            return self._load_package_map(package_map, destination_spawn)
-        return self.load_level_file(filePath, destination_spawn)
+            return self._load_package_map(package_map, destination_spawn, from_game)
+        return self.load_level_file(filePath, destination_spawn, from_game)
 
     def _package_map_path(self, relative_path):
         """The played package's copy of *relative_path*, or ``None``.
@@ -4246,7 +4258,7 @@ class MainWindow(QMainWindow):
             return None
         return candidate if os.path.isfile(candidate) else None
 
-    def _load_package_map(self, map_path, destination_spawn=None):
+    def _load_package_map(self, map_path, destination_spawn=None, from_game=False):
         """Open a map from the extracted package as an untitled, saved level.
 
         Like the package's start map, it never takes the extraction's path as
@@ -4259,13 +4271,13 @@ class MainWindow(QMainWindow):
             print(f"ERROR loading level {map_path}: {e}")
             self.show_toast(f"Failed to load level: {e}", is_error=True)
             return False
-        if not self._load_level(level_data, None, destination_spawn):
+        if not self._load_level(level_data, None, destination_spawn, from_game):
             return False
         self.unsaved_changes = False
         self.update_title()
         return True
 
-    def load_level_file(self, filePath, destination_spawn=None):
+    def load_level_file(self, filePath, destination_spawn=None, from_game=False):
         """Loads a level from disk. Used for both normal loading and LevelChanger.
 
         Replaces the open level unconditionally; callers that have not asked
@@ -4282,9 +4294,10 @@ class MainWindow(QMainWindow):
             print(f"ERROR loading level {filePath}: {e}")
             self.show_toast(f"Failed to load level: {e}", is_error=True)
             return False
-        return self._load_level(level_data, filePath, destination_spawn)
+        return self._load_level(level_data, filePath, destination_spawn, from_game)
 
-    def _load_level(self, level_data, file_path=None, destination_spawn=None):
+    def _load_level(self, level_data, file_path=None, destination_spawn=None,
+                    from_game=False):
         """Make *level_data* the open level.
 
         *file_path* is the file it was read from, or ``None`` for a level that
@@ -4295,6 +4308,11 @@ class MainWindow(QMainWindow):
         LevelChanger's ``destination_spawn``); empty or None means the level's
         primary start. Play resumes there when a level change happens during
         Play. A level without that start is refused before anything changes.
+
+        *from_game* marks a level change the running game asked for. A level
+        with no PlayerStart at all is refused then too, the same authoring
+        error as a missing destination spawn: Play carries on where it is.
+        A user opening such a level during Play gets it, with Play ended.
         """
         destination_spawn = destination_spawn or None
         try:
@@ -4311,6 +4329,14 @@ class MainWindow(QMainWindow):
             # swapped for its primary; the open level (and Play) carry on.
             message = (f"LevelChanger: destination spawn '{destination_spawn}' "
                        f"was not found in '{file_path or '(generated)'}'")
+            print(f"ERROR {message}")
+            debug_log("Error", message)
+            self.show_toast(message, is_error=True)
+            return False
+        if (from_game and self.view_3d is not None and self.view_3d.play_mode
+                and start_rules.resolve_start_record(level_data) is None):
+            message = (f"Level change: '{file_path or '(generated)'}' has no "
+                       f"Player Start")
             print(f"ERROR {message}")
             debug_log("Error", message)
             self.show_toast(message, is_error=True)
@@ -4399,7 +4425,11 @@ class MainWindow(QMainWindow):
             self.update_all_ui()
 
             # Resume play on the new level, at the destination start.
-            if was_playing:
+            # Opened by the user mid-Play with nowhere to resume: said in the
+            # load toast, never with the No Player Start dialog, which would
+            # block the game loop.
+            play_stopped = was_playing and spawn is None
+            if was_playing and not play_stopped:
                 print("[MainWindow] Restarting Play Mode with new level...")
                 self._start_play(spawn)
                 if (loadout is not None
@@ -4408,7 +4438,11 @@ class MainWindow(QMainWindow):
 
             name = os.path.basename(file_path) if file_path else "generated level"
             print(f"[MainWindow] Successfully loaded {name}")
-            self.show_toast(f"Loaded {name}")
+            if play_stopped:
+                self.show_toast(f"Loaded {name}; Play stopped: it has no "
+                                f"Player Start", is_error=True)
+            else:
+                self.show_toast(f"Loaded {name}")
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()

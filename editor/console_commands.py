@@ -2366,7 +2366,8 @@ entity to drive them from the I/O system.</i><br>
         else:
             target = None
         if target is not None:
-            if self.main_window.open_level_file(target):
+            if self.main_window.open_level_file(
+                    target, from_game=self._command_from_map):
                 debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
