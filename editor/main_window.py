@@ -21,13 +21,14 @@ from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
-from editor.things import Light, PlayerStart, Prop, update_all_counters_from_entities
+from editor.things import Light, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
+from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic
 from editor.view_2d import View2D, singleton_instance
@@ -134,7 +135,9 @@ class Toast(QLabel):
         
 
 class MainWindow(QMainWindow):
-    load_level_signal = pyqtSignal(str)
+    #: A LevelChanger asks for a map: ``(map path, destination spawn)``, the
+    #: spawn being a PlayerStart name, or '' for the map's primary start.
+    load_level_signal = pyqtSignal(str, str)
     #: Emitted after set_selected_objects changes the selection (viewport,
     #: Scene Hierarchy, ...); Debug Tables follows it.
     selection_changed = pyqtSignal()
@@ -1307,6 +1310,10 @@ class MainWindow(QMainWindow):
         self.selection_changed.emit()
 
     def update_all_ui(self):
+        # Every editor operation ends here: a PlayerStart it created, deleted,
+        # pasted or cloned is held to the primary invariant inside that
+        # operation (and its undo step), before anything shows the level.
+        self.state.settle_player_starts()
         self.property_editor.set_object(self.primary_selection())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
@@ -2259,14 +2266,12 @@ class MainWindow(QMainWindow):
             self._exit_play_mode()
             return
 
+        self._start_play(self.state.resolve_player_start())
+
+    def _start_play(self, player_start):
+        """Enter play mode with the player at *player_start* (a PlayerStart)."""
         self._store_and_switch_to_debug_console()
 
-        player_start = None
-        for thing in self.state.things:
-            if isinstance(thing, PlayerStart):
-                player_start = thing
-                break
-        
         if not player_start:
             QMessageBox.warning(self, "No Player Start", "Add a Player Start object to the scene before entering play mode.")
             return
@@ -2287,7 +2292,7 @@ class MainWindow(QMainWindow):
 
         self._capture_pre_play_world()
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
-        self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
+        self.view_3d.toggle_play_mode(player_start, physics_enabled)
         self.view_3d.setFocus()
         
         # Update play button color
@@ -2339,7 +2344,7 @@ class MainWindow(QMainWindow):
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
         if self.view_3d.play_mode:
-            self.view_3d.toggle_play_mode(None, None)
+            self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
             self._restore_pre_play_world()
 
@@ -4172,8 +4177,12 @@ class MainWindow(QMainWindow):
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
 
-    def load_level_file(self, filePath):
-        """Loads a level from disk. Used for both normal loading and LevelChanger."""
+    def load_level_file(self, filePath, destination_spawn=None):
+        """Loads a level from disk. Used for both normal loading and LevelChanger.
+
+        *destination_spawn* names the PlayerStart a LevelChanger sends the
+        player to; empty or None means the level's primary start.
+        """
         print(f"[MainWindow] Loading level: {filePath}")
         try:
             with open(filePath, 'r', encoding='utf-8') as f:
@@ -4182,15 +4191,21 @@ class MainWindow(QMainWindow):
             print(f"ERROR loading level {filePath}: {e}")
             self.show_toast(f"Failed to load level: {e}", is_error=True)
             return False
-        return self._load_level(level_data, filePath)
+        return self._load_level(level_data, filePath, destination_spawn)
 
-    def _load_level(self, level_data, file_path=None):
+    def _load_level(self, level_data, file_path=None, destination_spawn=None):
         """Make *level_data* the open level.
 
         *file_path* is the file it was read from, or ``None`` for a level that
         exists only in memory (a generated map): that one opens untitled and
         unsaved, so the first save asks where it goes and closing warns.
+
+        *destination_spawn* is the name of the PlayerStart to start at (a
+        LevelChanger's ``destination_spawn``); empty or None means the level's
+        primary start. Play resumes there when a level change happens during
+        Play. A level without that start is refused before anything changes.
         """
+        destination_spawn = destination_spawn or None
         try:
             self.state.validate_level_data(level_data)
         except ValueError as e:
@@ -4198,6 +4213,16 @@ class MainWindow(QMainWindow):
             # level and its file stay exactly as they were.
             print(f"ERROR loading level {file_path or '(generated)'}: {e}")
             self.show_toast(f"Failed to load level: {e}", is_error=True)
+            return False
+        if (destination_spawn is not None
+                and start_rules.resolve_start_record(level_data, destination_spawn) is None):
+            # An authoring error: the named start is not in that map. Never
+            # swapped for its primary; the open level (and Play) carry on.
+            message = (f"LevelChanger: destination spawn '{destination_spawn}' "
+                       f"was not found in '{file_path or '(generated)'}'")
+            print(f"ERROR {message}")
+            debug_log("Error", message)
+            self.show_toast(message, is_error=True)
             return False
 
         loaded = False
@@ -4230,14 +4255,10 @@ class MainWindow(QMainWindow):
             scene_replacement_started = True
             self._apply_level_data(level_data)
 
-            # --- Find PlayerStart and reposition camera ---
-            player_start_pos = None
-            player_angle = 0.0
-            for t in self.state.things:
-                if isinstance(t, PlayerStart):
-                    player_start_pos = t.pos
-                    player_angle = t.get_angle()
-                    break
+            # --- The start the player will spawn at; the camera goes there ---
+            spawn = self.state.resolve_player_start(destination_spawn)
+            player_start_pos = spawn.pos if spawn is not None else None
+            player_angle = spawn.get_angle() if spawn is not None else 0.0
 
             if player_start_pos:
                 # Read user preference (default = True)
@@ -4280,10 +4301,10 @@ class MainWindow(QMainWindow):
             self.set_selected_objects([])
             self.update_all_ui()
 
-            # Resume play on the new level.
+            # Resume play on the new level, at the destination start.
             if was_playing:
                 print("[MainWindow] Restarting Play Mode with new level...")
-                self.enter_play_mode()
+                self._start_play(spawn)
                 if (loadout is not None
                         and self.view_3d.play_mode):
                     logic.session_runtime.restore_loadout(loadout)

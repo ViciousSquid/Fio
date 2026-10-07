@@ -89,5 +89,8 @@ def test_levelchanger_first_matching_row_wins_after_vectorised_filter(logic):
     logic.interaction_runtime.handle(True)
 
     assert logic.interaction_runtime.current_hud_message == "[E] Complete Level"
-    assert logic.interaction_runtime.level_complete_ui["target_map"] == "NextMap"
+    # The map as the LevelChanger's ChangeLevel input resolves it, and the
+    # start there (its primary: no destination spawn is set).
+    assert logic.interaction_runtime.level_complete_ui["target_map"] == "maps/NextMap.json"
+    assert logic.interaction_runtime.level_complete_ui["destination_spawn"] == ""
     assert fired == [("First", "OnUse")]

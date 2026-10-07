@@ -14,6 +14,7 @@ from .change_journal import JOURNAL, STATE
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
 from .monster_ai import MonsterAIThread
 from .effect_table import EffectStore
+from . import player_starts as start_rules
 
 try:
     from editor.things import (
@@ -44,6 +45,9 @@ class LogicSession:
         self.monster_lock = threading.RLock()
         self.monster_ai_thread = None
         self.effect_store = EffectStore()
+        #: The PlayerStart this play session began at (its OnPlayerSpawn and
+        #: OnPlayerDeath outputs fire); None outside Play.
+        self.spawn_start = None
 
     def set_world_paused(self, owner, paused: bool = True) -> None:
         """Hold or release a world pause owned by *owner*."""
@@ -64,14 +68,26 @@ class LogicSession:
         with self._world_pause_lock:
             return self._world_pause_owners
 
-    def apply_play_mode(self, enabled: bool):
-        """Enter or leave Play Mode under the session's tick lock."""
-        with self.logic._tick_lock:
-            return self._apply_play_mode_unlocked(enabled)
+    def apply_play_mode(self, enabled: bool, spawn_start=None):
+        """Enter or leave Play Mode under the session's tick lock.
 
-    def _apply_play_mode_unlocked(self, enabled: bool):
+        *spawn_start* is the PlayerStart the player was placed at; without one,
+        the level's primary start (see :mod:`engine.player_starts`).
+        """
+        with self.logic._tick_lock:
+            return self._apply_play_mode_unlocked(enabled, spawn_start)
+
+    def _primary_start(self):
+        if not PlayerStart:
+            return None
+        starts = [t for t in self.logic.editor_state.things if isinstance(t, PlayerStart)]
+        position = start_rules.pick_start([t.properties for t in starts])
+        return starts[position] if position is not None else None
+
+    def _apply_play_mode_unlocked(self, enabled: bool, spawn_start=None):
         logic = self.logic
         self.play_mode = enabled
+        self.spawn_start = (spawn_start or self._primary_start()) if enabled else None
 
         # A pause belongs to the session that took it: a new session, or the
         # editor after one, never starts frozen by a request nobody released.
@@ -517,14 +533,7 @@ class LogicSession:
         # an explicit OnPlayerSpawn connection can override authored state.
         self.start_speakers_on_spawn()
 
-        if not PlayerStart:
-            return
-
-        for thing in logic.editor_state.things:
-            if isinstance(thing, PlayerStart):
-                logic.io_manager.fire_output(
-                    thing,
-                    "OnPlayerSpawn",
-                )
-                logic._plugin_emit("player_spawn", start=thing)
-                break
+        start = self.spawn_start
+        if start is not None:
+            logic.io_manager.fire_output(start, "OnPlayerSpawn")
+            logic._plugin_emit("player_spawn", start=start)

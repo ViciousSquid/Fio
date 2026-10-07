@@ -750,6 +750,8 @@ def create_map_data(params, yield_hook=None):
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
+                "primary": True,
+                "creation_index": 0,
                 "id": "player_start"
             },
             "io_connections": []

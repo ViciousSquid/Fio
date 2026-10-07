@@ -14,8 +14,9 @@ import datetime
 import uuid
 import threading
 from collections import deque
-from .things import Thing
+from .things import PlayerStart, Thing
 from editor.things import update_all_counters_from_entities
+from engine import player_starts as start_rules
 
 # Import I/O system for serialization
 try:
@@ -411,6 +412,52 @@ class EditorState:
             self.mark_world_changed(changed)
         return changed
 
+    # -- PlayerStarts ---------------------------------------------------------
+
+    def player_starts(self):
+        return [t for t in self.things if isinstance(t, PlayerStart)]
+
+    def resolve_player_start(self, name=None):
+        """The PlayerStart to spawn at: the one named *name*, else the primary.
+
+        None if there is no such start; a missing named start is never
+        replaced by another.
+        """
+        starts = self.player_starts()
+        position = start_rules.pick_start([s.properties for s in starts], name or None)
+        return starts[position] if position is not None else None
+
+    def settle_player_starts(self):
+        """Hold this level's PlayerStarts to the primary invariant.
+
+        The first PlayerStart created in a level becomes primary, later ones
+        do not, a copy of the primary is not, and deleting the primary promotes
+        the earliest-created remaining start (see
+        :func:`engine.player_starts.settle`). The editor runs this after every
+        operation, so it lands in that operation's undo step. Returns the
+        starts that changed.
+        """
+        starts = self.player_starts()
+        changed = [starts[i] for i in start_rules.settle([s.properties for s in starts])]
+        if changed:
+            self.mark_world_changed(changed)
+        return changed
+
+    def set_primary_player_start(self, start):
+        """Make *start* this level's primary PlayerStart, and no other.
+
+        Checkpoint first (``save_state``) to make the change undoable.
+        """
+        changed = []
+        for other in self.player_starts():
+            primary = other is start
+            if other.properties.get('primary') is not primary:
+                other.properties['primary'] = primary
+                changed.append(other)
+        if changed:
+            self.mark_world_changed(changed)
+        return changed
+
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
         data = {
@@ -610,6 +657,11 @@ class EditorState:
         self.terrain_data = level_data.get('terrain_data', None)
         self.item_definitions.load(level_data.get('items'))
         self.sync_item_props()
+        # A map from before PlayerStarts had an explicit primary (or one
+        # edited by hand) is held to the invariant here, once: its starts are
+        # numbered in file order and the first becomes primary, as it was the
+        # spawn before. Saved, the map then carries both explicitly.
+        self.settle_player_starts()
         # Absent in maps written before this existed; the overview falls back to
         # the file's own timestamps rather than inventing one.
         self.created_at = level_data.get('created', '')

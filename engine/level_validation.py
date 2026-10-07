@@ -163,6 +163,16 @@ def _validate_record(item, kind, label, partial):
                     not isinstance(value, (list, tuple)) or len(value) < 3
                     or not all(finite_number(v) for v in value[:3])):
                 raise ValueError(f"{label}['{field}'] must be an RGB list")
+        record_type = str(item.get('type', '')).lower()
+        if record_type == 'playerstart':
+            if 'primary' in props and not isinstance(props['primary'], bool):
+                raise ValueError(f"{label}['primary'] must be true or false")
+            index = props.get('creation_index')
+            if index is not None and (isinstance(index, bool) or not isinstance(index, int)):
+                raise ValueError(f"{label}['creation_index'] must be a whole number")
+        elif record_type == 'levelchanger':
+            if not isinstance(props.get('destination_spawn', ''), str):
+                raise ValueError(f"{label}['destination_spawn'] must be a PlayerStart name")
 
 
 

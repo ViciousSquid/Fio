@@ -2353,23 +2353,13 @@ class View2D(QWidget):
                     painter.drawPixmap(target_rect.toRect(), pixmap)
                     painter.restore()
 
-                # 2b. Draw Monster Name beneath sprite
-                if isinstance(thing, Monster):
-                    painter.save()
-                    painter.setPen(QPen(QColor(255, 100, 100)))
-                    font = QFont()
-                    font.setPointSize(8)
-                    font.setBold(True)
-                    painter.setFont(font)
-                    monster_name = thing.properties.get('name', '') or getattr(thing, 'name', '') or ''
-                    if monster_name:
-                        fm = painter.fontMetrics()
-                        text_height = fm.height()
-                        # Position at left edge of sprite, with DPI-aware gap
-                        text_x = s_pos.x() - 30
-                        text_y = s_pos.y() + 30 + text_height + 2
-                        painter.drawText(QPointF(text_x, text_y), monster_name)
-                    painter.restore()
+                # 2b. The entity's label (a Monster's name; a PlayerStart's
+                # name and Primary) beneath its sprite.
+                label_lines = thing.editor_label_lines()
+                if label_lines:
+                    self._draw_entity_label(painter, s_pos, label_lines,
+                                            self._ENTITY_LABEL_COLOURS.get(
+                                                type(thing).__name__, QColor(255, 100, 100)))
 
                 # 3. Direction Arrow
                 angle_deg = None
@@ -2586,6 +2576,27 @@ class View2D(QWidget):
             draw_rect = rect_s
 
         return draw_rect
+
+    #: Label colour by entity class; Monsters' red otherwise. A PlayerStart's
+    #: label matches its direction arrow.
+    _ENTITY_LABEL_COLOURS = {'PlayerStart': QColor(0, 255, 255)}
+
+    def _draw_entity_label(self, painter, s_pos, lines, colour):
+        """Write *lines* under the sprite at screen point *s_pos*, top line first."""
+        painter.save()
+        painter.setPen(QPen(colour))
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        painter.setFont(font)
+        line_height = painter.fontMetrics().height()
+        # From the left edge of the sprite, with a DPI-aware gap.
+        text_x = s_pos.x() - 30
+        text_y = s_pos.y() + 30 + line_height + 2
+        for line in lines:
+            painter.drawText(QPointF(text_x, text_y), line)
+            text_y += line_height
+        painter.restore()
 
     def _draw_portal_links(self, painter, axis1_idx, axis2_idx, visible_bounds):
         """

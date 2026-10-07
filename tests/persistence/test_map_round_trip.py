@@ -47,6 +47,8 @@ def scene():
         make_thing(Monster, "grunt", (300, 96, 0), monster_type="human"),
         make_thing(LogicRelay, "relay"),
     ]
+    # As the editor does after the operation that created the start.
+    state.settle_player_starts()
     return state
 
 

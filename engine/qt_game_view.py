@@ -2478,7 +2478,7 @@ class QtGameView(QOpenGLWidget):
             return
         target_map = ui.get('target_map', '')
         if target_map:
-            self.editor.load_level_signal.emit(target_map)
+            self.editor.load_level_signal.emit(target_map, ui.get('destination_spawn', ''))
         self._cached_level_complete_ui = None
         self._level_complete_btn_rect = None
         if self.logic_thread:
@@ -2522,9 +2522,12 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
 
-    def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
+    def toggle_play_mode(self, player_start=None, physics_enabled=True):
+        """Enter Play with the player at *player_start* (a PlayerStart), or leave it."""
         self.play_mode = not self.play_mode
         if self.play_mode:
+            player_start_pos = player_start.pos
+            player_start_angle = player_start.get_angle()
             # Force split-screen OFF when entering play mode
             self.splitscreen_mode = False
             self._last_player_start_pos = player_start_pos
@@ -2558,7 +2561,8 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.player_runtime.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
-                self.logic_thread.session_runtime.apply_play_mode(True)
+                self.logic_thread.session_runtime.apply_play_mode(
+                    True, spawn_start=player_start)
 
             if self.splitscreen_mode:
                 self.player2 = Player(

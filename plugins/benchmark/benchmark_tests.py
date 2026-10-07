@@ -100,27 +100,23 @@ class BenchmarkTests:
     
 
     def _find_player_start(self):
-        """Return the first usable PlayerStart as (x, y, z, yaw_degrees)."""
-        from editor.things import PlayerStart
-    
-        for thing in getattr(self.main_window.state, "things", []):
-            if not isinstance(thing, PlayerStart):
-                continue
-            pos = getattr(thing, "pos", None)
-            if pos is None or len(pos) < 3:
-                return None, "PlayerStart has no usable position"
-            try:
-                x = float(pos[0])
-                y = float(pos[1])
-                z = float(pos[2])
-                angle = float(thing.properties.get("angle", 0.0))
-            except (TypeError, ValueError, IndexError):
-                return None, "PlayerStart has invalid coordinates or angle"
-            if not all(math.isfinite(v) for v in (x, y, z, angle)):
-                return None, "PlayerStart has non-finite coordinates or angle"
-            return (x, y, z, angle), None
-    
-        return None, "no usable PlayerStart"
+        """Return the primary PlayerStart -- where Play starts -- as (x, y, z, yaw_degrees)."""
+        thing = self.main_window.state.resolve_player_start()
+        if thing is None:
+            return None, "no usable PlayerStart"
+        pos = getattr(thing, "pos", None)
+        if pos is None or len(pos) < 3:
+            return None, "PlayerStart has no usable position"
+        try:
+            x = float(pos[0])
+            y = float(pos[1])
+            z = float(pos[2])
+            angle = float(thing.properties.get("angle", 0.0))
+        except (TypeError, ValueError, IndexError):
+            return None, "PlayerStart has invalid coordinates or angle"
+        if not all(math.isfinite(v) for v in (x, y, z, angle)):
+            return None, "PlayerStart has non-finite coordinates or angle"
+        return (x, y, z, angle), None
 
     def _player_area_sweep_duration(self):
         """Return the prepared PlayerStart orbit duration."""

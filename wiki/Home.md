@@ -18,6 +18,8 @@
 
 #### [Items](https://github.com/ViciousSquid/Fio/wiki/Items) - Weapons, custom items, pickups and weapon slots
 
+#### [Player Starts and Level Changers](https://github.com/ViciousSquid/Fio/wiki/Player-Starts-and-Level-Changers) - The primary start, named destinations, hubs
+
 #### [Triggers & The I/O Logic System](https://github.com/ViciousSquid/Fio/wiki/Triggers-&-The-I-O-Logic-System) - make stuff happen in a level
 
 #### [Procedural level generator](https://github.com/ViciousSquid/Fio/wiki/Procedural-level-generator) - Instant playable liminal spaces

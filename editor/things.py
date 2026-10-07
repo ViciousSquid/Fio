@@ -178,6 +178,10 @@ class Thing:
         if '_io_connections' not in self.properties:
             self.properties['_io_connections'] = []
 
+    def editor_label_lines(self):
+        """Text the 2D views write under this entity's sprite, top line first."""
+        return ()
+
     @property
     def name(self):
         """Gets the name from the properties dictionary."""
@@ -429,7 +433,13 @@ class Thing:
 # =============================================================================
 
 class PlayerStart(Thing):
-    """Defines where the player spawns."""
+    """Defines where the player spawns.
+
+    ``name`` is what a LevelChanger's ``destination_spawn`` refers to;
+    ``primary`` marks the level's default start, at most one per level (see
+    :mod:`engine.player_starts`, and ``EditorState.settle_player_starts``,
+    which gives a level's first-created start the flag and keeps it unique).
+    """
     pixmap_path = "assets/sprites/player.png"
     EDITOR_PRIMARY_PROPERTIES = ('angle',)
     
@@ -437,9 +447,20 @@ class PlayerStart(Thing):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'playerstart')
         self.properties.setdefault('angle', 0.0)
+        self.properties.setdefault('primary', False)
 
     def get_angle(self):
         return float(self.properties.get('angle', 0.0))
+
+    @property
+    def primary(self):
+        return self.properties.get('primary') is True
+
+    def editor_label_lines(self):
+        lines = [self.properties['name']] if self.properties.get('name') else []
+        if self.primary:
+            lines.append("Primary")
+        return tuple(lines)
 
 
 class UnresolvedThing(Thing):
@@ -596,6 +617,10 @@ class Monster(Thing):
     _custom_path_exists_cache = {}
     # Cache the project_root lookup once per class; it never changes at runtime.
     _cached_project_root = None
+
+    def editor_label_lines(self):
+        name = self.properties.get('name')
+        return (name,) if name else ()
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -993,6 +1018,9 @@ class LevelChanger(Thing):
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('radius', 128.0)
         self.properties.setdefault('usable', False)
+        # The PlayerStart (by name) to spawn at in the target map; empty for
+        # its primary start.
+        self.properties.setdefault('destination_spawn', '')
         
         # An explicit window to signal (tests set one). Otherwise it is found
         # when the level change fires: an entity holding the MainWindow could
@@ -1013,31 +1041,54 @@ class LevelChanger(Thing):
         debug_log("Warning", f"LevelChanger '{entity_name}': unknown input '{input_name}'")
         return False
 
+    @staticmethod
+    def map_path(target):
+        """The ``maps/...json`` path a target map names, or None if it is outside.
+
+        A bare name gets ``.json`` and the ``maps/`` folder; a target that
+        climbs back out of the folder is refused.  target_map is authored map
+        data (packages included), and the loaded map becomes the editor's save
+        target.
+        """
+        target = (target or '').strip().replace('\\', '/')
+        if not target:
+            return None
+        if not target.lower().endswith('.json'):
+            target += '.json'
+        if not target.startswith('maps/'):
+            target = f"maps/{target}"
+        target = posixpath.normpath(target)
+        return target if target.startswith('maps/') else None
+
+    def destination(self, parameter: str = ""):
+        """``(map path, destination spawn)`` this LevelChanger sends the player to.
+
+        *parameter* (a ChangeLevel input's) names another map instead; the
+        authored ``destination_spawn`` belongs to ``target_map``, so another
+        map is entered at its primary start. The map path is None if it is
+        missing or outside the maps folder.
+        """
+        authored = self.map_path(self.properties.get('target_map', ''))
+        target = self.map_path(parameter) if parameter and parameter.strip() else authored
+        spawn = ''
+        if target is not None and target == authored:
+            spawn = str(self.properties.get('destination_spawn') or '')
+        return target, spawn
+
     def change_level(self, parameter: str = ""):
         """Load a new map when triggered."""
 
-        target_map = parameter.strip() if parameter else self.properties.get('target_map', '').strip()
-
-        if not target_map:
-            debug_log("Error", "LevelChanger has no target_map and no parameter was provided!")
+        target_map, destination_spawn = self.destination(parameter)
+        if target_map is None:
+            requested = (parameter or '').strip() or self.properties.get('target_map', '')
+            if not str(requested).strip():
+                debug_log("Error", "LevelChanger has no target_map and no parameter was provided!")
+            else:
+                debug_log("Error", f"LevelChanger target '{requested}' is outside the maps folder")
             return False
 
-        if not target_map.lower().endswith('.json'):
-            target_map += '.json'
-
-        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present, and
-        # refuse a target that climbs back out of it.  target_map is authored
-        # map data (packages included), and the loaded map becomes the
-        # editor's save target.
-        target_map = target_map.replace('\\', '/')
-        if not target_map.startswith('maps/'):
-            target_map = f"maps/{target_map}"
-        target_map = posixpath.normpath(target_map)
-        if not target_map.startswith('maps/'):
-            debug_log("Error", f"LevelChanger target '{target_map}' is outside the maps folder")
-            return False
-
-        debug_log("IO", f"LevelChanger target resolved → '{target_map}'")
+        debug_log("IO", f"LevelChanger target resolved → '{target_map}'"
+                        + (f", spawn '{destination_spawn}'" if destination_spawn else ""))
 
         # Get MainWindow reference
         main_window = getattr(self, '_main_window', None)
@@ -1059,7 +1110,7 @@ class LevelChanger(Thing):
         # Use signal instead of direct call
         if hasattr(main_window, 'load_level_signal'):
             try:
-                main_window.load_level_signal.emit(target_map)
+                main_window.load_level_signal.emit(target_map, destination_spawn)
                 debug_log("IO", f"LevelChanger emitted load_level_signal('{target_map}')")
                 return True
             except Exception as e:

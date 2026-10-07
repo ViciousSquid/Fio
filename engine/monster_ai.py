@@ -198,15 +198,10 @@ class MonsterAI:
         # ---- Player death check (after all monsters processed) ----
         if self.lt.player_runtime.player_health <= 0 and not self.lt.player_runtime.player_dead:
             self.lt.player_runtime.player_dead = True
-            if self.lt.io_manager:
-                try:
-                    from editor.things import PlayerStart
-                    for thing in self.lt.editor_state.things:
-                        if isinstance(thing, PlayerStart):
-                            self.lt.io_manager.fire_output(thing, 'OnPlayerDeath')
-                            break
-                except ImportError:
-                    pass
+            start = self.lt.session_runtime.spawn_start
+            if self.lt.io_manager and start is not None:
+                # The start this session began at reports the death.
+                self.lt.io_manager.fire_output(start, 'OnPlayerDeath')
             debug_log("MonsterAI", "Player has died.")
 
     #: Set False to run every monster through the per-monster path (the

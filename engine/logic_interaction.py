@@ -136,13 +136,13 @@ class LogicInteraction:
                     thing = world.levelchanger_things[row]
                     self.current_hud_message = "[E] Complete Level"
                     if use_key_pressed:
-                        target_map = thing.properties.get(
-                            "target_map",
-                            "",
-                        )
+                        # The map and the PlayerStart there, as the
+                        # LevelChanger's ChangeLevel input resolves them.
+                        target_map, destination_spawn = thing.destination()
                         self.level_complete_ui = {
                             "active": True,
-                            "target_map": target_map,
+                            "target_map": target_map or "",
+                            "destination_spawn": destination_spawn,
                             "title": "Complete",
                             "button_text": "Continue",
                         }

@@ -22,6 +22,7 @@ from .fiopak import FioPackage
 from .platform.base import HostConfig, FrameCallbacks
 from .input.state import InputState, ACTION_PAUSE, ACTION_USE
 from .plugin_host import PlayerPluginHost
+from engine.player_starts import resolve_start_record
 
 
 class FioPlayerApp:
@@ -166,18 +167,13 @@ class FioPlayerApp:
                 pass
 
     def _place_camera_at_spawn(self) -> None:
-        """Position the camera at a PlayerStart-like entity if present."""
+        """Position the camera at the map's primary PlayerStart, if it has one."""
         if not self.map_data:
             return
-        for thing in self.map_data.get("things", []):
-            if not isinstance(thing, dict):
-                continue
-            ttype = str(thing.get("type", "")).lower()
-            if "start" in ttype or "spawn" in ttype or ttype == "player":
-                pos = thing.get("pos")
-                if isinstance(pos, (list, tuple)) and len(pos) == 3:
-                    self.cam_pos = [float(pos[0]), float(pos[1]) + 48.0, float(pos[2])]
-                    return
+        start = resolve_start_record(self.map_data)
+        pos = start.get("pos") if start is not None else None
+        if isinstance(pos, (list, tuple)) and len(pos) == 3:
+            self.cam_pos = [float(pos[0]), float(pos[1]) + 48.0, float(pos[2])]
 
     def _render_state(self):
         # A camera plugin (e.g. topdown) may move the *render* camera overhead;

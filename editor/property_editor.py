@@ -1,3 +1,4 @@
+import json
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
@@ -12,7 +13,8 @@ from engine.items import ITEM_IDS
 from engine.prop_entity import normalise_collect_type
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState)
+                           LogicState, PlayerStart, LevelChanger)
+from engine import player_starts as start_rules
 from editor import state_values as _sv
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
@@ -2202,6 +2204,12 @@ class PropertyEditor(QWidget):
                 property_keys=primary_properties,
             )
 
+        if isinstance(thing, PlayerStart):
+            self._build_player_start_primary(form, thing)
+
+        if isinstance(thing, LevelChanger):
+            self._build_destination_spawn(form, thing)
+
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
@@ -3259,6 +3267,88 @@ class PropertyEditor(QWidget):
             Prop.DEFAULT_KEY_NAME,
         )
         self.on_collect_key_name_changed(key)
+
+    # -- PlayerStart / LevelChanger ------------------------------------------
+
+    def _build_player_start_primary(self, form, thing):
+        """The Primary flag: Play starts at the level's primary PlayerStart.
+
+        Checking it makes this start primary and the previous one not; there
+        is always exactly one while the level has starts, so the primary's own
+        box cannot be cleared -- mark another start primary instead.
+        """
+        primary_cb = QCheckBox("Primary")
+        primary_cb.setChecked(thing.primary)
+        primary_cb.setEnabled(not thing.primary)
+        primary_cb.setToolTip(
+            "Play starts at the primary PlayerStart, as does a LevelChanger "
+            "whose Destination Spawn is <Primary>. To move it, make another "
+            "PlayerStart primary.")
+        primary_cb.toggled.connect(
+            lambda on: self._make_primary_start(thing) if on else None)
+        form.addRow("Start:", primary_cb)
+        self._widgets['player_start_primary'] = primary_cb
+
+    def _make_primary_start(self, thing):
+        if self._populating or thing.primary:
+            return
+        self.editor.save_state()
+        self.editor.state.set_primary_player_start(thing)
+        self.editor.mark_as_modified()
+        self.editor.update_all_ui()
+
+    @staticmethod
+    def destination_spawn_choices(target_map, current=''):
+        """``[(label, value)]`` for a LevelChanger's Destination Spawn.
+
+        ``<Primary>`` (stored as '') and the named PlayerStarts of *target_map*,
+        read from the map file. A stored name the map does not have is kept,
+        marked missing, so the panel never rewrites it.
+        """
+        choices = [("<Primary>", "")]
+        path = LevelChanger.map_path(target_map)
+        names = []
+        if path is not None:
+            try:
+                with open(os.path.join(_project_root(), *path.split('/')),
+                          encoding='utf-8') as handle:
+                    names = start_rules.start_names(json.load(handle))
+            except (OSError, ValueError):
+                names = []
+        choices += [(name, name) for name in names]
+        if current and current not in names:
+            choices.append((f"{current} (missing)", current))
+        return choices
+
+    def _build_destination_spawn(self, form, thing):
+        combo = QComboBox()
+        combo.setToolTip(
+            "The PlayerStart the player arrives at in the target map: its "
+            "primary start, or one by name.")
+        self._widgets['destination_spawn'] = combo
+        self._fill_destination_spawn(thing)
+        combo.currentIndexChanged.connect(
+            lambda _index: self._on_destination_spawn_changed(combo))
+        form.addRow("Destination Spawn:", combo)
+
+    def _fill_destination_spawn(self, thing):
+        combo = self._widgets.get('destination_spawn')
+        if combo is None:
+            return
+        current = str(thing.properties.get('destination_spawn') or '')
+        combo.blockSignals(True)
+        combo.clear()
+        for label, value in self.destination_spawn_choices(
+                thing.properties.get('target_map', ''), current):
+            combo.addItem(label, value)
+        combo.setCurrentIndex(max(0, combo.findData(current)))
+        combo.blockSignals(False)
+
+    def _on_destination_spawn_changed(self, combo):
+        if self._populating or not isinstance(self.current_object, LevelChanger):
+            return
+        self.update_object_prop('destination_spawn', combo.currentData() or '')
+        self.editor.mark_as_modified()
 
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
@@ -5168,6 +5258,10 @@ class PropertyEditor(QWidget):
             # is the shared "something addressable moved" signal they already
             # fold into their cache key.
             _io_system.bump_io_revision()
+
+        if isinstance(self.current_object, LevelChanger) and key == 'target_map':
+            # The destination choices are the new map's PlayerStarts.
+            self._fill_destination_spawn(self.current_object)
 
         if isinstance(self.current_object, Portal) and key == 'angle':
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])

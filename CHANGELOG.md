@@ -83,6 +83,12 @@ forward; see **Breaking changes** before upgrading.
 - Armor, from armor pickups: it absorbs damage before health from every
   source, and shows under the ammo count (beside it in HUD styles 2 and 3).
 - `hudtext` console alias for `hudstyle`.
+- PlayerStarts have an explicit **Primary** flag (one per level: the first
+  created, movable and undoable, promoted on delete) and Play starts there.
+  LevelChangers gain **Destination Spawn**: a named PlayerStart in the target
+  map (chosen from that map's starts) or its primary. A missing named start
+  stops the level change with an authoring error instead of spawning
+  elsewhere. The 2D views label PlayerStarts with their name and "Primary".
 - Debug Tables labels the active renderer (FORWARD, DEFERRED, …) and works
   unchanged with any renderer; it counts shadow-map draws, shows lines a
   renderer publishes in `RenderStats.details`, and highlights a selected
@@ -104,6 +110,9 @@ forward; see **Breaking changes** before upgrading.
 - A notification is no longer cleared early by an earlier, shorter one.
 - Choosing Custom 2 in the Prop panel no longer flips back to Gun 1.
 - A legacy weapon Prop (`collect_weapon`) keeps its weapon on load.
+- A LevelChanger used with the Use key resolves its target map as its
+  ChangeLevel input does (a bare name gets `maps/` and `.json`).
+- The Benchmark plugin runs again (it called monitor helpers removed earlier).
 - A key pressed in Play before the first frame is drawn no longer raises.
 - GL end-to-end tests no longer depend on the order they run in: the
   application font each editor window sets is restored after every test.

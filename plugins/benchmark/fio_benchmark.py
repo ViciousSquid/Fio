@@ -30,6 +30,7 @@ if ROOT_DIR not in sys.path:
 from tests.helpers import gl as glh
 from tests.helpers.worlds import box_brush, make_thing
 from editor.procedural_generator import create_map_data
+from engine.player_starts import resolve_start_record
 
 
 WARMUP_FRAMES = 10
@@ -379,8 +380,7 @@ def make_model_stress_world(count=500, shadow_lights=4, spacing=72.0,
     data = _generate_procedural_map(monsters=0, relay_count=0, seed=seed,
                                     live_monster=True, yield_hook=yield_hook)
     things = data["things"]
-    start = next((t for t in things
-                  if str(t.get("type", "")).lower() == "playerstart"), None)
+    start = resolve_start_record(data)
     sx, sy, sz = [float(v) for v in (start or {}).get("pos", [0.0, 0.0, 0.0])]
 
     side = max(1, int(math.ceil(math.sqrt(count))))
@@ -531,13 +531,7 @@ def _prepare_brush_stress_scene(
         data["brushes"] = []
         return data, iter(())
 
-    player_start = next(
-        (
-            thing for thing in data.get("things", [])
-            if str(thing.get("type", "")).lower() == "playerstart"
-        ),
-        None,
-    )
+    player_start = resolve_start_record(data)
     target_pos = (player_start or {}).get("pos", [0.0, 0.0, 0.0])
     target_x = float(target_pos[0])
     target_z = float(target_pos[2])
