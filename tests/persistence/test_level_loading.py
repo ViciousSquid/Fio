@@ -153,7 +153,7 @@ def _window_on(main_window, logic, starts_play=True):
 
 def _loadout(logic):
     combat = logic.combat_runtime
-    return (combat.active_weapon, combat.gun2_obtained, combat.player_ammo)
+    return (combat.active_weapon, tuple(sorted(combat.weapons)), combat.player_ammo)
 
 
 def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_path, playing_logic):
@@ -162,14 +162,14 @@ def test_the_player_keeps_their_weapons_through_a_level_change(main_window, tmp_
     path = tmp_path / "next.json"
     path.write_text(json.dumps(PLAYABLE_LEVEL))
     playing_logic.combat_runtime.active_weapon = "gun2"
-    playing_logic.combat_runtime.gun2_obtained = True
+    playing_logic.combat_runtime.weapons = {"gun1", "gun2"}
     playing_logic.combat_runtime.player_ammo = 5
     window = _window_on(main_window, playing_logic)
 
     assert window.load_level_file(str(path)) is True
 
     assert playing_logic.session_runtime.play_mode
-    assert _loadout(playing_logic) == ("gun2", True, 5)
+    assert _loadout(playing_logic) == ("gun2", ("gun1", "gun2"), 5)
 
 
 def test_only_the_weapons_come_along(main_window, tmp_path, playing_logic):
@@ -199,16 +199,16 @@ def test_a_level_that_does_not_restart_play_hands_nothing_back(main_window, tmp_
     assert not playing_logic.session_runtime.play_mode
     playing_logic.session_runtime.apply_play_mode(True)
 
-    assert _loadout(playing_logic) == (None, False, 0)
+    assert _loadout(playing_logic) == (None, (), 0)
 
 
 def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
     playing_logic.combat_runtime.active_weapon = "gun2"
-    playing_logic.combat_runtime.gun2_obtained = True
+    playing_logic.combat_runtime.weapons = {"gun2"}
     playing_logic.combat_runtime.player_ammo = 3
     playing_logic.session_runtime.apply_play_mode(False)
     playing_logic.session_runtime.apply_play_mode(True)
-    assert _loadout(playing_logic) == (None, False, 0)
+    assert _loadout(playing_logic) == (None, (), 0)
 
 
 def test_a_map_with_a_player_start_recentres_now_and_once_deferred(main_window, tmp_path):

@@ -51,6 +51,8 @@ class PropSession:
         self.held = None
         self.collected_ids = set()
         self.respawn_timers = {}
+        #: Props already reported as giving an item that does not resolve.
+        self._reported_items = set()
         self.respawn_fades = {}
         self._by_id = {}
         self._cells = CellIndex()
@@ -310,6 +312,23 @@ class PropSession:
             and not p.get("disabled", False)
         )
 
+    def _item(self, prop):
+        """The compiled item an ``item`` pickup gives, or None."""
+        return self.logic.combat_runtime.items.resolve(
+            prop.properties.get("collect_item"))
+
+    def _activation(self, prop):
+        """How *prop* is collected: walked over, or used.
+
+        An item says for itself: a pickup item by its definition, a weapon by
+        walking over it. Health, ammo and keys use the Prop's own setting.
+        """
+        p = prop.properties
+        if p.get("collect_type") == "item":
+            item = self._item(prop)
+            return item.pickup.activation if item is not None and item.pickup else "walk_over"
+        return p.get("collect_activation", "walk_over")
+
     def _collect_walk_over(self):
         player = self.logic.player_runtime.player
         if player is None:
@@ -320,17 +339,16 @@ class PropSession:
             player_pos[0], player_pos[2],
             self.DEFAULT_COLLECT_WALK_REACH,
         ):
-            p = prop.properties
             if not self._collectable(prop):
                 continue
-            if p.get("collect_activation", "walk_over") != "walk_over":
+            if self._activation(prop) != "walk_over":
                 continue
 
             dx = float(prop.pos[0]) - player_pos[0]
             dy = float(prop.pos[1]) - player_pos[1]
             dz = float(prop.pos[2]) - player_pos[2]
-            if _length((dx, dy, dz)) <= self.DEFAULT_COLLECT_WALK_REACH:
-                self._collect(prop)
+            if (_length((dx, dy, dz)) <= self.DEFAULT_COLLECT_WALK_REACH
+                    and self._collect(prop)):
                 return True
         return False
 
@@ -341,10 +359,9 @@ class PropSession:
         best_distance = None
 
         for prop in candidates:
-            p = prop.properties
             if not self._collectable(prop):
                 continue
-            if p.get("collect_activation", "walk_over") != "use":
+            if self._activation(prop) != "use":
                 continue
 
             dx = float(prop.pos[0]) - eye[0]
@@ -363,14 +380,64 @@ class PropSession:
         if best is None:
             return False
 
-        collect_label = str(
-            best.properties.get("collect_type", "health")
-        ).replace("_", " ").title()
+        if best.properties.get("collect_type") == "item":
+            item = self._item(best)
+            collect_label = item.name if item is not None else "Item"
+        else:
+            collect_label = str(
+                best.properties.get("collect_type", "health")
+            ).replace("_", " ").title()
         self.logic.interaction_runtime.current_hud_message = f"[E] Collect {collect_label}"
-        self._collect(best)
+        return self._collect(best)
+
+    # -- what collecting gives ----------------------------------------------
+
+    def _give_health(self, amount):
+        player_runtime = self.logic.player_runtime
+        player_runtime.player_health = min(
+            player_runtime.player_max_health,
+            player_runtime.player_health + amount,
+        )
+
+    def _give_ammo(self, amount):
+        try:
+            current_ammo = max(0, int(self.logic.combat_runtime.player_ammo))
+        except (AttributeError, TypeError, ValueError):
+            current_ammo = 0
+        self.logic.combat_runtime.player_ammo = current_ammo + max(0, amount)
+
+    def _give_key(self, key_name):
+        if key_name:
+            self.logic.player_runtime.collected_keys.add(key_name)
+            self.logic.interaction_runtime.current_hud_key_name = key_name
+
+    def _give_item(self, item):
+        """Apply what *item* -- a compiled weapon or pickup -- gives.
+
+        Returns False when there is nothing to give (a pickup naming a weapon
+        item that does not resolve), so the Prop stays where it is.
+        """
+        if item.kind == "weapon":
+            self.logic.combat_runtime.give_weapon(item)
+            return True
+        pickup = item.pickup
+        if pickup.effect == "health":
+            self._give_health(pickup.amount)
+        elif pickup.effect == "ammo":
+            self._give_ammo(pickup.amount)
+        elif pickup.effect == "armor":
+            self.logic.player_runtime.give_armor(pickup.amount)
+        elif pickup.effect == "key":
+            self._give_key(pickup.key_name)
+        elif pickup.effect == "weapon":
+            weapon = self.logic.combat_runtime.items.resolve(pickup.item_id)
+            if weapon is None or weapon.kind != "weapon":
+                return False
+            self.logic.combat_runtime.give_weapon(weapon)
         return True
 
     def _collect(self, prop):
+        """Collect *prop*; False (and nothing happens) if it gives nothing."""
         p = prop.properties
         collect_type = p.get("collect_type", "health")
         value = p.get("collect_value", 25)
@@ -380,36 +447,21 @@ class PropSession:
         except (TypeError, ValueError):
             value_num = 25
 
+        item = None
         if collect_type == "health":
-            player_runtime = self.logic.player_runtime
-            player_runtime.player_health = min(
-                player_runtime.player_max_health,
-                player_runtime.player_health + value_num,
-            )
+            self._give_health(value_num)
         elif collect_type == "key":
-            key_name = p.get("collect_key_name", "")
-            if key_name:
-                self.logic.player_runtime.collected_keys.add(key_name)
-                self.logic.interaction_runtime.current_hud_key_name = key_name
+            self._give_key(p.get("collect_key_name", ""))
         elif collect_type == "ammo":
-            try:
-                current_ammo = max(0, int(
-                    self.logic.combat_runtime.player_ammo))
-            except (AttributeError, TypeError, ValueError):
-                current_ammo = 0
-            self.logic.combat_runtime.player_ammo = current_ammo + max(0, value_num)
-        elif collect_type == "weapon":
-            weapon = p.get("collect_weapon", "gun1")
-            self.logic.combat_runtime.active_weapon = weapon
-            if weapon == "gun2" and not self.logic.combat_runtime.gun2_obtained:
-                self.logic.combat_runtime.gun2_obtained = True
-                try:
-                    current_ammo = max(
-                        0, int(self.logic.combat_runtime.player_ammo))
-                except (AttributeError, TypeError, ValueError):
-                    current_ammo = 0
-                self.logic.combat_runtime.player_ammo = max(current_ammo, 8)
-            self.logic.interaction_runtime.current_hud_message = f"Collected {str(weapon).upper()}"
+            self._give_ammo(value_num)
+        elif collect_type == "item":
+            item = self._item(prop)
+            if item is None or not self._give_item(item):
+                # An unknown item, or one whose definition does not compile,
+                # gives nothing -- and never stands in as another item.
+                self._report_unknown_item(prop)
+                return False
+            self.logic.interaction_runtime.current_hud_message = f"Collected {item.name}"
 
         p["collect_collected"] = True
         self.collected_ids.add(id(prop))
@@ -427,16 +479,33 @@ class PropSession:
                 value=value_num,
             )
 
-        if p.get("collect_respawns", False):
+        if item is not None and item.pickup is not None:
+            # A pickup item's definition says whether it comes back.
+            respawns, respawn_time = item.pickup.respawns, item.pickup.respawn_time
+        else:
+            respawns = p.get("collect_respawns", False)
             try:
-                respawn_time = float(
-                    p.get("collect_respawn_time", 20.0))
+                respawn_time = float(p.get("collect_respawn_time", 20.0))
             except (TypeError, ValueError):
                 respawn_time = 20.0
+        if respawns:
             self.respawn_timers[id(prop)] = {
                 "remaining": max(0.0, respawn_time),
                 "entity": prop,
             }
+        return True
+
+    def _report_unknown_item(self, prop):
+        """Say once per Prop why it cannot be collected."""
+        key = id(prop)
+        if key in self._reported_items:
+            return
+        self._reported_items.add(key)
+        item_id = prop.properties.get("collect_item")
+        error = self.logic.combat_runtime.items.errors.get(item_id)
+        reason = f"its definition is invalid: {error}" if error else "there is no such item"
+        print(f"[Props] {prop.properties.get('name', 'Prop')} gives item "
+              f"{item_id!r}, but {reason}")
 
     def collect_prop(self, prop):
         """Collect *prop* through the same path as player collection."""
@@ -444,8 +513,7 @@ class PropSession:
             return False
         if not self._collectable(prop):
             return False
-        self._collect(prop)
-        return True
+        return self._collect(prop)
 
     def respawn_prop(self, prop):
         """Force a collected Prop back into its authored live state."""

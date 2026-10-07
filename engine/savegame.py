@@ -37,8 +37,8 @@ Snapshot shape::
       "runtime": {
         "god_mode", "buddha_mode", "notarget",
         "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
-        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
-        "player_health", "player_max_health", "player_dead",
+        "active_weapon", "weapons", "player_ammo", "current_hud_message",
+        "player_health", "player_max_health", "player_armor", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
         "collected_keys": [ ... ],
         "door_states":   { "<index>": {"state", "progress"} },
@@ -89,8 +89,9 @@ from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
 #: file* format version and is unrelated to the plugin API version. v2 adds the
 #: explicit ``save_mode`` metadata and delta/both support; v1 saves (no
-#: ``save_mode``) still load, treated as legacy ``full``.
-SAVE_VERSION = 2
+#: ``save_mode``) still load, treated as legacy ``full``. v3 saves the weapons
+#: the player has (``runtime.weapons``) in place of v2's ``gun2_obtained``.
+SAVE_VERSION = 3
 
 #: Marker key so a stray JSON file is never mistaken for a Fio save.
 _MAGIC = "fio_savegame"
@@ -389,11 +390,12 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "overhead_tilt": float(logic.camera.overhead_tilt),
         "overhead_orientation": logic.camera.overhead_orientation,
         "active_weapon": logic.combat_runtime.active_weapon,
-        "gun2_obtained": bool(logic.combat_runtime.gun2_obtained),
+        "weapons": sorted(logic.combat_runtime.weapons),
         "player_ammo": max(0, int(logic.combat_runtime.player_ammo)),
         "current_hud_message": logic.interaction_runtime.current_hud_message,
         "player_health": logic.player_runtime.player_health,
         "player_max_health": logic.player_runtime.player_max_health,
+        "player_armor": logic.player_runtime.player_armor,
         "player_dead": bool(logic.player_runtime.player_dead),
         "player2_health": logic.player_runtime.player2_health,
         "player2_max_health": logic.player_runtime.player2_max_health,
@@ -753,7 +755,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # while restoring directly into that owner.
     player_runtime = logic.player_runtime
     for attr in (
-        "player_health", "player_max_health", "player_dead",
+        "player_health", "player_max_health", "player_armor", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
         if attr in runtime:
@@ -766,8 +768,14 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     combat = logic.combat_runtime
     if "active_weapon" in runtime:
         combat.active_weapon = runtime["active_weapon"]
-    if "gun2_obtained" in runtime:
-        combat.gun2_obtained = bool(runtime["gun2_obtained"])
+    if "weapons" in runtime:
+        combat.weapons = set(runtime["weapons"])
+    elif "active_weapon" in runtime:
+        # A v2 save: it recorded the weapon in hand and whether the shotgun had
+        # been picked up, which is what the player had.
+        combat.weapons = {w for w in (runtime["active_weapon"],) if w}
+        if runtime.get("gun2_obtained"):
+            combat.weapons.add("gun2")
     if "player_ammo" in runtime:
         combat.player_ammo = int(runtime["player_ammo"])
 

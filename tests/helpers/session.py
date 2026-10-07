@@ -48,6 +48,10 @@ class FioTestSession:
         self.window = MainWindow(REPO_ROOT)
         self.window.show()
         self.view = self.window.view_3d
+        # Building the window sets the application font, which re-lays the
+        # window out once its events are processed; size the view after that,
+        # or the layout pass replaces the requested size.
+        self.app.processEvents()
         self.view.resize(*size)
         if app.platformName() == "offscreen":
             # No GL context, so initializeGL (which starts the logic thread

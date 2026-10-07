@@ -4350,14 +4350,14 @@
                 "disabled": false,
                 "carry_enabled": true,
                 "collect_enabled": true,
-                "collect_type": "weapon",
+                "collect_type": "item",
                 "collect_value": 25,
                 "collect_activation": "walk_over",
                 "collect_collected": false,
                 "collect_respawns": false,
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun2",
+                "collect_item": "gun2",
                 "sprite_path": "assets/sprites/gun2.png",
                 "model_path": "",
                 "rotation": [
@@ -4729,7 +4729,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": ""
             },
             "io_connections": []
@@ -4800,7 +4800,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": ""
             },
             "io_connections": []
@@ -4871,7 +4871,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": ""
             },
             "io_connections": []
@@ -4973,7 +4973,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
@@ -5044,7 +5044,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
@@ -5115,7 +5115,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
@@ -5423,7 +5423,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
@@ -5493,7 +5493,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
@@ -5579,14 +5579,14 @@
                     0.0
                 ],
                 "collect_enabled": true,
-                "collect_type": "weapon",
+                "collect_type": "item",
                 "collect_value": 25,
                 "collect_activation": "walk_over",
                 "collect_collected": false,
                 "collect_respawns": false,
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "custom1",
+                "collect_item": "custom1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [

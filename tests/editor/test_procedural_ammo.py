@@ -49,7 +49,7 @@ def _weapon_props(data):
     return [
         thing for thing in data["things"]
         if thing["type"] == "prop"
-        and thing["properties"].get("collect_type") == "weapon"
+        and thing["properties"].get("collect_type") == "item"
     ]
 
 
@@ -67,10 +67,10 @@ def test_procedural_generator_places_weapon_on_playerstart_and_ammo_only_for_gun
         weapon = weapons[0]
 
         assert weapon["pos"] == player["pos"]
-        assert weapon["properties"]["collect_weapon"] in {"gun1", "gun2"}
+        assert weapon["properties"]["collect_item"] in {"gun1", "gun2"}
 
         ammo = _props(data, "ammo")
-        if weapon["properties"]["collect_weapon"] == "gun2":
+        if weapon["properties"]["collect_item"] == "gun2":
             saw_gun2 = True
             assert len(ammo) == 4
         else:
@@ -87,7 +87,7 @@ def test_procedural_generator_random_weapon_is_approximately_60_40():
     for seed in range(1000):
         random.seed(seed)
         data = create_map_data(_params())
-        weapon = _weapon_props(data)[0]["properties"]["collect_weapon"]
+        weapon = _weapon_props(data)[0]["properties"]["collect_item"]
         if weapon == "gun1":
             gun1 += 1
         else:
@@ -158,7 +158,7 @@ def test_procedural_generator_preserves_health_when_weapon_is_gun2():
     for seed in range(200):
         random.seed(seed)
         data = create_map_data(_params(spawn_health=True, health_count=3))
-        weapon = _weapon_props(data)[0]["properties"]["collect_weapon"]
+        weapon = _weapon_props(data)[0]["properties"]["collect_item"]
         if weapon == "gun2":
             found = True
             assert len(_props(data, "health")) == 3

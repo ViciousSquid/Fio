@@ -29,6 +29,11 @@ import uuid
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
+if __package__ in (None, ''):
+    # Run as a script: the item definitions live in the repository's engine.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from engine.items import ITEM_IDS, ItemDefinitions
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -77,14 +82,55 @@ MONSTER_CLASSNAMES = {
 COLLECT_CLASSNAMES = {
     'health': 'item_health',
     'ammo': 'item_rockets',
-    'gun1': 'weapon_shotgun',
-    'gun2': 'weapon_nailgun',
-    'custom1': 'weapon_rocketlauncher',
-    'custom2': 'weapon_rocketlauncher',
     'key': 'item_key',
     'armor': 'item_armor1',
     'default': 'item_health',
 }
+
+#: The Quake classnames this exporter writes for Fio's two built-in weapons.
+#: They are the exporter's historical choices and stay here: in Fio, gun1 is
+#: the Pistol and gun2 the Shotgun (engine.items), whatever Quake calls them.
+BUILTIN_WEAPON_CLASSNAMES = {
+    'gun1': 'weapon_shotgun',
+    'gun2': 'weapon_nailgun',
+}
+
+#: For an item Quake has no equivalent of -- a custom weapon, or an item that
+#: does not resolve. Neutral, so it never turns into some other weapon.
+NO_QUAKE_EQUIVALENT = 'info_notnull'
+
+
+def item_classname(item_id, definitions):
+    """The Quake classname for Fio item *item_id*, as the map defines it.
+
+    A custom slot exports as what its definition makes it: a health, ammo,
+    armor or key pickup as that Quake item, a pickup that gives a built-in
+    weapon as that weapon. Anything else has no Quake equivalent.
+    """
+    if item_id in BUILTIN_WEAPON_CLASSNAMES:
+        return BUILTIN_WEAPON_CLASSNAMES[item_id]
+    item = definitions.registry().resolve(item_id)
+    if item is None or item.kind != 'pickup':
+        return NO_QUAKE_EQUIVALENT
+    if item.pickup.effect == 'weapon':
+        return BUILTIN_WEAPON_CLASSNAMES.get(item.pickup.item_id, NO_QUAKE_EQUIVALENT)
+    return COLLECT_CLASSNAMES[item.pickup.effect]
+
+
+def _collected_item(props):
+    """The item id a collectible Prop gives, or None if it gives no item.
+
+    Maps written before items were data say ``collect_type='weapon'`` with
+    ``collect_weapon``; older ones name the weapon as the type itself.
+    """
+    collect_type = props.get('collect_type', 'health')
+    if collect_type == 'item':
+        return props.get('collect_item', 'gun1')
+    if collect_type == 'weapon':
+        return props.get('collect_weapon', 'gun1')
+    if collect_type in ITEM_IDS:
+        return collect_type
+    return None
 
 # Face name to normal vector mapping (Fio coordinate system: Y-up)
 # These define which direction each face points
@@ -392,10 +438,17 @@ def convert_fio_brush(fio_brush: Dict[str, Any], default_texture: str = "__TB_em
 # ENTITY CONVERSION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
-    """Convert a Fio thing/entity to a Quake MapEntity."""
+def convert_fio_entity(fio_thing: Dict[str, Any],
+                       definitions: Optional[ItemDefinitions] = None) -> Optional[MapEntity]:
+    """Convert a Fio thing/entity to a Quake MapEntity.
+
+    *definitions* are the map's item definitions (its top-level ``items``);
+    without them the shipped definitions apply.
+    """
     if not isinstance(fio_thing, dict):
         return None
+    if definitions is None:
+        definitions = ItemDefinitions()
     
     props = fio_thing.get('properties', {})
     entity_type = props.get('type', 'Thing')
@@ -413,11 +466,12 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         classname = MONSTER_CLASSNAMES.get(monster_type, MONSTER_CLASSNAMES['default'])
     
     elif str(entity_type).lower() == 'prop' and props.get('collect_enabled', False):
-        collect_type = props.get('collect_type', 'health')
-        weapon = props.get('collect_weapon', collect_type)
-        collect_class = weapon if collect_type == 'weapon' else collect_type
-        classname = COLLECT_CLASSNAMES.get(
-            collect_class, COLLECT_CLASSNAMES['default'])
+        item_id = _collected_item(props)
+        if item_id is not None:
+            classname = item_classname(item_id, definitions)
+        else:
+            classname = COLLECT_CLASSNAMES.get(
+                props.get('collect_type', 'health'), COLLECT_CLASSNAMES['default'])
     
     elif (str(entity_type).lower() == 'model'
           or (str(entity_type).lower() == 'prop'
@@ -663,9 +717,11 @@ class FioToMapConverter:
         entities.extend(entity_brushes)
         
         # Convert things/entities
+        definitions = ItemDefinitions()
+        definitions.load(fio_data.get('items'))
         things = fio_data.get('things', [])
         for thing in things:
-            entity = convert_fio_entity(thing)
+            entity = convert_fio_entity(thing, definitions)
             if entity:
                 entities.append(entity)
         

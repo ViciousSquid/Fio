@@ -622,7 +622,13 @@ class LogicTriggers:
             if self.logic.player_runtime.god_mode:
                 return
             was_alive = self.logic.player_runtime.player_health > 0
-            self.logic.player_runtime.player_health = max(0, self.logic.player_runtime.player_health - damage)
+            # Every source of player damage comes through here, so armor
+            # applies to all of them alike: it takes the damage first.
+            player_runtime = self.logic.player_runtime
+            absorbed = min(player_runtime.player_armor, max(0, damage))
+            player_runtime.player_armor -= absorbed
+            self.logic.player_runtime.player_health = max(
+                0, self.logic.player_runtime.player_health - (damage - absorbed))
             if self.logic.player_runtime.buddha_mode and self.logic.player_runtime.player_health < 2:
                 self.logic.player_runtime.player_health = 2
             became_dead = was_alive and self.logic.player_runtime.player_health <= 0

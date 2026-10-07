@@ -51,8 +51,8 @@ def test_health_is_not_gated_by_topdown_weapon_suppression():
 def test_ammo_is_not_gated_by_topdown_weapon_suppression():
     hud = _draw_hud_tree()
     parents = _parents(hud)
-    names = _nodes_with_name(hud, "ammo_text")
-    assert names, "_draw_hud must still render ammo"
+    names = _nodes_with_name(hud, "lines")
+    assert names, "_draw_hud must still render the ammo/armor lines"
     assert all(not any("overhead" in guard for guard in _enclosing_ifs(n, parents)) for n in names)
 
 
@@ -70,7 +70,7 @@ def test_first_person_gun_artwork_is_explicitly_suppressed_overhead():
     for node in ast.walk(hud):
         if isinstance(node, ast.If):
             test = ast.unparse(node.test)
-            if "active_weapon" in test and "not overhead" in test and "_load_gun_hud_pixmap" in ast.unparse(node):
+            if "active_weapon" in test and "not overhead" in test and "held.hud_sprite" in ast.unparse(node):
                 matches.append(node)
     assert matches, "gun HUD artwork must be inside an active_weapon and not overhead guard"
 

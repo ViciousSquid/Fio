@@ -31,6 +31,7 @@ from types import SimpleNamespace
 from typing import List, Optional
 
 
+from engine.items import ItemDefinitions
 from engine.prop_runtime import PropSession
 from engine.prop_entity import Prop as CoreProp, legacy_model_properties
 from engine.logic_interaction import LogicInteraction
@@ -218,6 +219,10 @@ class PlayerPluginHost:
             return
 
         self.bridge = _BridgeLogic(things, self.manager)
+        # The map's items, compiled as the editor's play session compiles them.
+        definitions = ItemDefinitions()
+        definitions.load(map_data.get("items"))
+        self.bridge.combat_runtime.items = definitions.registry()
         self._playing = True
         # The engine's Prop registry, exactly as the editor logic thread builds
         # it: one session, filled from the authoritative thing list.  The player

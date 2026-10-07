@@ -46,7 +46,11 @@ def _pillar_rows(session):
 
 
 def test_hiding_brushes_by_io_reaches_the_drawn_image(fio_session):
-    session = fio_session(_level(), size=(320, 180)).start_play()
+    session = fio_session(_level(), size=(320, 180))
+    # SysMon's panel follows settings.ini (always_show_sysmon) and covers much
+    # of a 320x180 view; the frame compared here is the world's, not the HUD's.
+    session.view.sysmon.set_active(False)
+    session.start_play()
     session.step(6)
     hidden, visible = _pillar_rows(session)
     assert hidden == [False] * 4

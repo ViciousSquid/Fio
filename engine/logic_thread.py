@@ -81,7 +81,6 @@ from .monster_ai import MonsterAI
 # Noise "loudness" multipliers scale a monster's hearing range per event.
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
 # quieter, so a monster has to be closer to notice the player entering/leaving.
-_GUNFIRE_LOUDNESS = 1.0
 _WATER_LOUDNESS = 0.7
 
 
@@ -506,6 +505,7 @@ class LogicThread(threading.Thread):
         self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         self.game_state.consume_shot()
+        self.game_state.consume_weapon_slots()
         if self.cutscene_runtime.state or self.player_runtime.player_dead or self.interaction_runtime.level_complete_ui:
             return
         if self.plugins is not None and self.plugins.wants_tick():
@@ -553,6 +553,7 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
+            self.game_state.consume_weapon_slots()
             return
 
         # ---- Player dead: freeze all gameplay input ----
@@ -560,6 +561,7 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
+            self.game_state.consume_weapon_slots()
             return
 
         # ---- Level Complete UI: freeze player input ----
@@ -567,6 +569,7 @@ class LogicThread(threading.Thread):
             self.game_state.consume_mouse_delta()
             self.game_state.consume_use_key()
             self.game_state.consume_shot()
+            self.game_state.consume_weapon_slots()
             return
         
         # Player input
@@ -614,7 +617,9 @@ class LogicThread(threading.Thread):
         # post-physics position is the one tested against portal planes.
         self.portal_runtime.update(delta)
         
-        # Player shooting
+        # Weapon slot keys, then shooting with whatever is now in hand.
+        for slot in self.game_state.consume_weapon_slots():
+            self.combat_runtime.select_slot(slot)
         if self.game_state.consume_shot():
             self.combat_runtime._handle_shooting()
             

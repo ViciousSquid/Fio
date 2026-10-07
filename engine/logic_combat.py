@@ -14,13 +14,9 @@ import numpy as np
 
 from .constants import is_solid_world_brush, is_water_brush
 from .change_journal import touch
+from .items import DEFAULT_REGISTRY, ITEM_IDS
 from .projectile_table import ProjectileStore
-from .monster_constants import (
-    MONSTER_PROJECTILE_MAX_DIST,
-    NON_FIRING_WEAPONS,
-    WEAPON_DAMAGE,
-    WEAPON_SHOOT_SOUND,
-)
+from .monster_constants import MONSTER_PROJECTILE_MAX_DIST
 
 try:
     from editor.things import Monster as MonsterThing
@@ -34,8 +30,9 @@ except ImportError:
         print(f"[{category}] {message}")
 
 
-# Gunfire sound loudness multiplier used by monster hearing.
-_GUNFIRE_LOUDNESS = 1.0
+#: ``owner_id`` of a projectile the player fired. Monster projectiles carry
+#: the firing monster's ``id()``, which is never 0.
+PLAYER_PROJECTILE_OWNER = 0
 
 #: Shared, read-only "no projectiles" array for the published frame.
 NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
@@ -43,53 +40,114 @@ NO_PROJECTILES.flags.writeable = False
 
 
 class LogicCombat:
-    """Runtime for weapons, projectiles, bullet marks, and player noise."""
+    """Runtime for weapons, projectiles, bullet marks, and player noise.
+
+    The player's weapons are the item slots (:mod:`engine.items`): ``weapons``
+    holds the ids of the weapon items the player has picked up, in the order of
+    the slots, and ``active_weapon`` the one in hand. How a weapon fires is its
+    compiled :class:`~engine.items.WeaponSpec`, resolved through ``items`` --
+    the session's :class:`~engine.items.ItemRegistry`.
+    """
 
     def __init__(self, logic):
         self.logic = logic
         self._monster_projectiles = ProjectileStore()
         self.bullet_marks = []
         self.projectile_positions = NO_PROJECTILES
+        self.items = DEFAULT_REGISTRY
         self.active_weapon = None
-        self.gun2_obtained = False
+        self.weapons = set()
         self.player_ammo = 0
         self._last_player_shot_time = float('-inf')
         self.BULLET_FADE_TIME = 20.0
         self.muzzle_flash_active = False
+        #: Bumped each time a slot key takes a weapon the player has in hand.
+        self.weapon_switch_serial = 0
         self._gunfire_events = []
 
-    def _handle_shooting(self):
-        logic = self.logic
-        if not logic.player_runtime.player or not self.active_weapon:
-            return
-        # Non-firing weapons (e.g. cig) never fire: no muzzle flash, no
-        # hitscan/projectile, no damage, and no gunfire noise event.
-        if self.active_weapon in NON_FIRING_WEAPONS:
-            return
+    # -- the player's weapons -------------------------------------------------
 
-        # Gun2 is a deliberately slow, finite-ammo weapon. Keep this check
-        # authoritative on the logic thread so a burst of UI clicks can never
-        # bypass the one-shot-per-second limit or spend ammo twice.
-        if self.active_weapon == "gun2":
-            now = time.perf_counter()
-            if now - self._last_player_shot_time < 1.0:
-                return
-            try:
-                ammo = int(self.player_ammo)
-            except (TypeError, ValueError):
-                ammo = 0
-            if ammo <= 0:
-                return
-            self.player_ammo = ammo - 1
-            self._last_player_shot_time = now
+    def reset_weapons(self):
+        """Unarmed, with no ammunition: how every play session starts."""
+        self.active_weapon = None
+        self.weapons = set()
+        self.player_ammo = 0
+        self._last_player_shot_time = float('-inf')
+
+    def give_weapon(self, item):
+        """The player picks up weapon *item* and takes it in hand.
+
+        A weapon's ammunition is granted the first time the player gets it;
+        picking it up again only takes it in hand.
+        """
+        if item.id not in self.weapons:
+            self.weapons.add(item.id)
+            if item.weapon.ammo:
+                self.player_ammo = max(int(self.player_ammo), item.weapon.ammo)
+        self.active_weapon = item.id
+
+    def select_slot(self, slot):
+        """Take the weapon in slot *slot* (1-4) in hand, if the player has it."""
+        if 1 <= slot <= len(ITEM_IDS):
+            item_id = ITEM_IDS[slot - 1]
+            if item_id in self.weapons:
+                self.active_weapon = item_id
+                self.weapon_switch_serial += 1
+
+    def held_weapon(self):
+        """The :class:`~engine.items.WeaponSpec` in hand, or None."""
+        item = self.items.resolve(self.active_weapon) if self.active_weapon else None
+        return item.weapon if item is not None else None
+
+    def shot_ready(self, now):
+        """Whether a shot fired at *now* would go off."""
+        weapon = self.held_weapon()
+        return (weapon is not None and weapon.fires
+                and now - self._last_player_shot_time >= weapon.cooldown
+                and int(self.player_ammo) >= weapon.ammo_per_shot)
+
+    def _handle_shooting(self):
+        """Fire the weapon in hand, as its definition says.
+
+        Authoritative on the logic thread, so a burst of UI clicks can never
+        beat a cooldown or spend ammunition twice. A weapon whose mode is
+        ``none`` is held and shown but never fires: no flash, no sound, no
+        noise.
+        """
+        logic = self.logic
+        if not logic.player_runtime.player:
+            return
+        weapon = self.held_weapon()
+        if weapon is None or not weapon.fires:
+            return
+        now = time.perf_counter()
+        if not self.shot_ready(now):
+            return
+        self.player_ammo = int(self.player_ammo) - weapon.ammo_per_shot
+        self._last_player_shot_time = now
 
         self.muzzle_flash_active = True
-        logic.game_state.queue_sound({
-            "file": WEAPON_SHOOT_SOUND.get(
-                self.active_weapon, "shoot.wav"),
-            "volume": 1.0,
-        })
+        if weapon.sound:
+            logic.game_state.queue_sound({"file": weapon.sound, "volume": 1.0})
         logic._plugin_emit("player_shoot", weapon=self.active_weapon)
+        ray_origin, ray_dir = self._aim()
+        if weapon.mode == 'projectile':
+            self._fire_projectile(weapon, ray_origin, ray_dir)
+            return
+        any_miss = False
+        for pellet in range(weapon.pellets):
+            direction = self._scatter(ray_dir, weapon.spread, pellet)
+            if not self._fire_ray(weapon, ray_origin, direction):
+                any_miss = True
+        # Monsters hear a shot that hit nothing; one that hits is the fight.
+        if any_miss and weapon.noise > 0.0:
+            self._emit_noise_event(
+                [ray_origin.x, ray_origin.y, ray_origin.z],
+                source='gunfire', loudness=weapon.noise)
+
+    def _aim(self):
+        """The ray a shot leaves along: from the eye, along the view."""
+        logic = self.logic
         yaw_rad = logic.player_runtime.player.angle
         if logic.camera.is_overhead():
             # Top-down aiming is planar: the player rotates to face a target and
@@ -109,7 +167,44 @@ class LogicCombat:
         ray_origin = glm.vec3(logic.player_runtime.player.pos.x,
                               logic.player_runtime.player.pos.y + logic.player_runtime.player.camera_height,
                               logic.player_runtime.player.pos.z)
-        ray_dir = glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
+        return ray_origin, glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
+
+    @staticmethod
+    def _scatter(direction, spread, pellet):
+        """*direction* turned by up to *spread* degrees; unchanged at 0.
+
+        Deterministic per pellet index (a fixed sunflower pattern across the
+        cone), so a shotgun's pattern is the same every shot.
+        """
+        if spread <= 0.0:
+            return direction
+        golden = 2.399963229728653
+        radius = math.radians(spread) * math.sqrt((pellet + 0.5) / 8.0)
+        angle = pellet * golden
+        up = glm.vec3(0.0, 1.0, 0.0)
+        right = glm.cross(direction, up)
+        if glm.length(right) < 1e-6:
+            right = glm.vec3(1.0, 0.0, 0.0)
+        right = glm.normalize(right)
+        up = glm.normalize(glm.cross(right, direction))
+        offset = right * (math.cos(angle) * radius) + up * (math.sin(angle) * radius)
+        return glm.normalize(direction + offset)
+
+    def _fire_projectile(self, weapon, origin, direction):
+        """One projectile into the shared projectile store, owned by the player."""
+        speed = weapon.projectile_speed
+        self._add_monster_projectile(
+            (origin.x, origin.y, origin.z),
+            (direction.x * speed, direction.y * speed, direction.z * speed),
+            PLAYER_PROJECTILE_OWNER, weapon.damage,
+            min(weapon.range, MONSTER_PROJECTILE_MAX_DIST) / speed)
+        self._emit_noise_event([origin.x, origin.y, origin.z],
+                               source='gunfire', loudness=weapon.noise)
+
+    def _fire_ray(self, weapon, ray_origin, ray_dir):
+        """Trace one hitscan or melee ray; True if it hit a monster."""
+        logic = self.logic
+        reach = weapon.range
         closest_brush_hit = None
         closest_brush_dist = float('inf')
         collision_brushes = logic.collision_runtime._collision_brushes_cache
@@ -121,7 +216,7 @@ class LogicCombat:
             size = glm.vec3(brush['size'])
             min_b = pos - size * 0.5
             max_b = pos + size * 0.5
-            hit, dist = self.intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b)
+            hit, dist = self.intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b, reach)
             if hit and dist < closest_brush_dist:
                 closest_brush_dist = dist
                 closest_brush_hit = ray_origin + ray_dir * dist
@@ -149,13 +244,13 @@ class LogicCombat:
                 disc = b * b - 4 * a * c
                 if disc >= 0:
                     t = (-b - math.sqrt(disc)) / (2.0 * a)
-                    if t >= 0 and t < closest_monster_dist:
+                    if 0 <= t <= reach and t < closest_monster_dist:
                         if t < closest_brush_dist:
                             closest_monster_dist = t
                             closest_monster = thing
 
             if closest_monster is not None:
-                damage = WEAPON_DAMAGE.get(self.active_weapon, 25)
+                damage = weapon.damage
                 health_raw = closest_monster.properties.get('health', 100)
                 try:
                     health = int(health_raw)
@@ -182,24 +277,20 @@ class LogicCombat:
                         debug_log("MonsterAI",
                             f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
                             f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (shot by player)')
-                return
-        
-        # Record gunfire sound event for AI hearing
-        self._emit_noise_event(
-            [ray_origin.x, ray_origin.y, ray_origin.z],
-            source='gunfire', loudness=_GUNFIRE_LOUDNESS)
+                return True
 
-        if closest_brush_hit is not None:
+        # A melee strike leaves no mark on the wall it meets.
+        if closest_brush_hit is not None and weapon.mode == 'hitscan':
             self.bullet_marks.append({
                 'pos': closest_brush_hit,
                 'time': time.perf_counter()
             })
+        return False
 
 
-    def intersect_ray_aabb(self, origin, direction, box_min, box_max):
-        logic = self.logic
+    def intersect_ray_aabb(self, origin, direction, box_min, box_max, max_dist=10000.0):
         t_min = 0.0
-        t_max = 10000.0
+        t_max = max_dist
         for i in range(3):
             if abs(direction[i]) < 1e-6:
                 if origin[i] < box_min[i] or origin[i] > box_max[i]:
@@ -440,8 +531,9 @@ class LogicCombat:
             px = float(projectiles.pos[i, 0])
             py = float(projectiles.pos[i, 1])
             pz = float(projectiles.pos[i, 2])
+            owner_id = int(projectiles.owner_id[i])
 
-            if player_can_be_hit:
+            if player_can_be_hit and owner_id != PLAYER_PROJECTILE_OWNER:
                 dx = px - float(player_pos[0])
                 dy = py - float(player_pos[1])
                 dz = pz - float(player_pos[2])
@@ -455,7 +547,6 @@ class LogicCombat:
                         )
                     continue
 
-            owner_id = int(projectiles.owner_id[i])
             owner = logic.world_runtime.monster_by_id.get(owner_id)
             owner_team = (
                 owner.properties.get('team', '')
@@ -579,7 +670,7 @@ class LogicCombat:
                     + d[:, 2] * d[:, 2]
                 )
                 < np.float32(self.PROJECTILE_PLAYER_RADIUS)
-            ) & live
+            ) & live & (projectiles.owner_id[:count] != PLAYER_PROJECTILE_OWNER)
 
         grid = logic.session_runtime.spatial_grid
         all_collision_brushes = logic.collision_runtime._collision_brushes_cache

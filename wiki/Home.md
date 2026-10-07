@@ -16,6 +16,8 @@
 
 #### [Entities (Things)](https://github.com/ViciousSquid/Fio/wiki/Entities-(Things)) - Monsters, Weapons, Lights & Speakers
 
+#### [Items](https://github.com/ViciousSquid/Fio/wiki/Items) - Weapons, custom items, pickups and weapon slots
+
 #### [Triggers & The I/O Logic System](https://github.com/ViciousSquid/Fio/wiki/Triggers-&-The-I-O-Logic-System) - make stuff happen in a level
 
 #### [Procedural level generator](https://github.com/ViciousSquid/Fio/wiki/Procedural-level-generator) - Instant playable liminal spaces

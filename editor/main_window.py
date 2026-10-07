@@ -4779,6 +4779,11 @@ class MainWindow(QMainWindow):
             win.close()
             self._logic_graph_win = None
 
+    def open_item_editor(self):
+        """Tools > Custom Items: redefine the custom1 / custom2 item slots."""
+        from editor.item_editor import ItemEditorDialog
+        ItemEditorDialog(self).exec_()
+
     def open_logic_graph(self):
         """Open (or raise) the Logic Graph Editor window."""
         from editor.logic_graph_widget import LogicGraphWindow

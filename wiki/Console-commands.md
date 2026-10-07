@@ -16,7 +16,7 @@ Commands can be entered directly into the debug console or invoked through the I
 | `ls`                      | Alias for `list`                 |
 | `ent <name>`              | Show information about an entity |
 | `info <name>`             | Alias for `ent`                  |
-| `spawn ...`               | Spawn an entity                  |
+| `spawn ...`               | Spawn an entity (`spawn prop gun1\|gun2\|custom1\|custom2` spawns that [item](https://github.com/ViciousSquid/Fio/wiki/Items)'s pickup) |
 | `delete <name>`           | Delete an entity                 |
 | `kill <name>`             | Alias for `delete`               |
 | `hide <name>`             | Hide an entity                   |
@@ -94,6 +94,17 @@ For example:
 ```text
 message "You found the blue key"
 ```
+
+## HUD
+
+| Command                  | Description                                                      |
+| ------------------------ | ---------------------------------------------------------------- |
+| `hudstyle 0\|1\|2\|3\|4 [font]` | Select the HUD style (0 hides it; 4 takes a custom font)     |
+| `hudtext ...`            | Alias for `hudstyle`                                             |
+| `hudopacity 0..100`      | Set the HUD opacity                                              |
+| `hudfade 0\|1`            | Enable or disable the damage-driven health fade                  |
+
+Beside the health count the HUD shows ammunition (for a weapon that fires; `∞` for one that spends none) and armor (when the player has any), in the ammo colour with armor underneath. Styles 2 and 3 put them along the bottom line instead, two spaces apart.
 
 ## Level and Save Games
 

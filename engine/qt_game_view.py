@@ -84,6 +84,8 @@ def perspective_projection(fov, aspect, near, far):
 
 class QtGameView(QOpenGLWidget):
     _logic_tick_fault_signal = pyqtSignal(str)
+    #: Weapon slot keys in Play: slot n holds item ITEM_IDS[n - 1].
+    _SLOT_KEYS = {Qt.Key_1: 1, Qt.Key_2: 2, Qt.Key_3: 3, Qt.Key_4: 4}
     def __init__(self, editor):
         super().__init__(editor)
         self._logic_tick_fault_signal.connect(self._handle_logic_tick_fault)
@@ -189,9 +191,7 @@ class QtGameView(QOpenGLWidget):
 
         self.texture_manager = {}
         self.sprite_textures = {}
-        self.gun_hud_pixmaps = {}
-        self.gun_flash_pixmaps = {}
-        self.weapon_collect_pixmaps = {}   # item_type -> world/collectible QPixmap
+        self.hud_pixmaps = {}              # sprite path -> QPixmap (None if missing)
         self.show_spatial_grid = False
         self.renderer = None
         #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
@@ -336,6 +336,13 @@ class QtGameView(QOpenGLWidget):
         self._cached_hint_width = 0
 
         self._muzzle_flash_counter = 0
+        #: The weapon-slot flash: which switch was last seen, and when the
+        #: one being shown started.
+        self._weapon_switch_seen = 0
+        self._weapon_switch_shown_at = None
+        self._cached_player_ammo = 0
+        self._cached_player_armor = 0
+        self._cached_level_complete_ui = None
         self._muzzle_flash_duration_frames = 3
 
         self.setAttribute(Qt.WA_OpaquePaintEvent)
@@ -644,8 +651,8 @@ class QtGameView(QOpenGLWidget):
         self._view_message3_started_at = 0.0
         self._view_message3_width = 0
         self._view_message3_queue = deque()
-        self._cached_gun_hud = {}
-        self._cached_weapon_collect = {}   # (item_type, size) -> scaled QPixmap
+        self._cached_gun_hud = {}          # (sprite path, height) -> scaled QPixmap
+        self._cached_item_icons = {}   # (sprite path, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
         self._cached_prompt_key = None
@@ -1575,8 +1582,12 @@ class QtGameView(QOpenGLWidget):
             self._cached_health = render_state.player_health
             self._cached_max_health = render_state.player_max_health
             self._cached_player_ammo = render_state.player_ammo
+            self._cached_player_armor = render_state.player_armor
             self._cached_shot_ready = render_state.shot_ready
             self._cached_active_weapon = render_state.active_weapon
+            if render_state.weapon_switch_serial != self._weapon_switch_seen:
+                self._weapon_switch_seen = render_state.weapon_switch_serial
+                self._weapon_switch_shown_at = time.perf_counter()
             self._cached_hud_message = render_state.hud_message
             self._cached_collected_keys = render_state.collected_keys
             if render_state.muzzle_flash_active:
@@ -2039,6 +2050,8 @@ class QtGameView(QOpenGLWidget):
             return
         hud_margin = 20
         active_weapon = self._cached_active_weapon
+        # What the item in hand is, as this session compiled it.
+        held = self._session_item(active_weapon)
 
         # The entire HUD fades back in for four seconds after a LogicCamera
         # gives control back to the player. The health count has its own
@@ -2057,14 +2070,13 @@ class QtGameView(QOpenGLWidget):
 
         # Draw the weapon before the status counts so the health indicator is
         # always visually on top of any weapon sprite.
-        if active_weapon and not overhead:
-            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
+        if active_weapon and not overhead and held is not None:
+            hud_pixmap = self._hud_pixmap(held.hud_sprite)
             if hud_pixmap and not hud_pixmap.isNull():
-                # Custom 2 is a left-hand HUD item rather than a conventional
-                # right-aligned weapon, and is intentionally a little larger.
-                target_h = int((220 if active_weapon == 'custom2' else 200) *
-                               viewport_height / 600.0)
-                cache_key = (active_weapon, target_h)
+                # The definition places the item: right-hand, centred, or
+                # left-hand, at its own height on a 600-pixel view.
+                target_h = int(held.hud_height * viewport_height / 600.0)
+                cache_key = (held.hud_sprite, target_h)
                 scaled = self._cached_gun_hud.get(cache_key)
                 if scaled is None or scaled.isNull():
                     if hud_pixmap.height() > 0:
@@ -2075,21 +2087,20 @@ class QtGameView(QOpenGLWidget):
                     scaled = QPixmap.fromImage(img).scaled(
                         target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self._cached_gun_hud[cache_key] = scaled
-                if active_weapon == 'gun2':
+                if held.hud_align == 'center':
                     x = (viewport_width - scaled.width()) // 2
-                    y = viewport_height - scaled.height()
-                elif active_weapon == 'custom2':
+                elif held.hud_align == 'left':
                     x = 20
-                    y = viewport_height - scaled.height()
                 else:
                     x = viewport_width - scaled.width() - 20
-                    y = viewport_height - scaled.height()
+                y = viewport_height - scaled.height()
                 painter.save()
                 painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                 painter.drawPixmap(x, y, scaled)
                 painter.restore()
-                if getattr(self, '_cached_muzzle_flash', False):
-                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
+                if (getattr(self, '_cached_muzzle_flash', False)
+                        and held.weapon is not None and held.weapon.muzzle_flash):
+                    flash_pixmap = self._hud_pixmap(held.weapon.muzzle_flash)
                     if flash_pixmap and not flash_pixmap.isNull():
                         painter.save()
                         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
@@ -2120,27 +2131,28 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(health_x, health_y, health_text)
         painter.restore()
 
-        if active_weapon in ('gun1', 'gun2'):
+        lines = self._hud_stat_lines(
+            style, held.weapon if held is not None else None,
+            self._cached_player_ammo, self._cached_player_armor)
+        if lines:
             ammo_font = QFont(health_font) if style == 3 else QFont(self._hud_status_font)
             ammo_font.setPointSize(
                 24 if style == 3 else max(22, min(36, int(viewport_height * 0.045)))
             )
-            ammo_text = (
-                "∞"
-                if active_weapon == 'gun1'
-                else str(max(0, int(getattr(
-                    self, '_cached_player_ammo', 0))))
-            )
             ammo_x = health_x + metrics.horizontalAdvance(health_text)
             if style == 3:
                 # Style 3 uses a single compact status line: separate ammo
-                # from health with one font-space and keep the counter white.
+                # from health with two spaces and keep the counters white.
                 ammo_x += 2 * metrics.horizontalAdvance(" ")
             painter.setFont(ammo_font)
-            painter.setPen(self._hud_count_shadow_pen)
-            painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
-            painter.setPen(Qt.white if style == 3 else self._hud_ammo_green)
-            painter.drawText(ammo_x, health_y, ammo_text)
+            line_height = QFontMetrics(ammo_font).ascent()
+            baseline = health_y - line_height * (len(lines) - 1)
+            for text in lines:
+                painter.setPen(self._hud_count_shadow_pen)
+                painter.drawText(ammo_x + 2, baseline + 2, text)
+                painter.setPen(Qt.white if style == 3 else self._hud_ammo_green)
+                painter.drawText(ammo_x, baseline, text)
+                baseline += line_height
 
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
@@ -2227,21 +2239,25 @@ class QtGameView(QOpenGLWidget):
         # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
         key_slot_offset = 0
-        if overhead and active_weapon:
-            icon_size = 100
-            wx = viewport_width - hud_margin - icon_size
-            wy = viewport_height - hud_margin - icon_size
-            pm = self._load_weapon_collect_pixmap(active_weapon)
-            if pm and not pm.isNull():
-                cache_key = (active_weapon, icon_size)
-                scaled = self._cached_weapon_collect.get(cache_key)
-                if scaled is None or scaled.isNull():
-                    scaled = pm.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self._cached_weapon_collect[cache_key] = scaled
-                painter.drawPixmap(wx + (icon_size - scaled.width()) // 2,
-                                   wy + (icon_size - scaled.height()) // 2, scaled)
+        icon_size = 100
+        if overhead and held is not None:
+            if self._draw_item_icon(painter, held, viewport_width, viewport_height,
+                                    hud_margin, icon_size):
                 # Reserve the weapon's slot so keys don't overlap it.
                 key_slot_offset = icon_size + 15
+        elif held is not None and self._weapon_switch_shown_at is not None:
+            # A slot key took this weapon in hand: show it bottom-right for a
+            # moment, fading in and out quickly.
+            alpha = self._weapon_switch_alpha(
+                time.perf_counter() - self._weapon_switch_shown_at)
+            if alpha > 0.0:
+                painter.save()
+                painter.setOpacity(painter.opacity() * alpha)
+                self._draw_item_icon(painter, held, viewport_width, viewport_height,
+                                     hud_margin, icon_size)
+                painter.restore()
+            else:
+                self._weapon_switch_shown_at = None
 
         collected_keys = self._cached_collected_keys
         if collected_keys:
@@ -2486,13 +2502,6 @@ class QtGameView(QOpenGLWidget):
             'LevelChanger': 'levelchanger.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'custom1', 'custom2']:
-            tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
-            if tid:
-                self.sprite_textures[f'{weapon}_hud'] = tid
-            tid_flash = self.load_texture(f'{weapon}HUD_flash.png', 'sprites')
-            if tid_flash:
-                self.sprite_textures[f'{weapon}_flash'] = tid_flash
         for cls, fname in things.items():
             tid = self.load_texture(fname, 'sprites')
             if tid:
@@ -3344,16 +3353,11 @@ class QtGameView(QOpenGLWidget):
             published = self.game_state.published
             if published('player_dead', False):
                 return
-            active_weapon = published('active_weapon')
-            if active_weapon:
-                from engine.monster_constants import NON_FIRING_WEAPONS
-                # Non-firing weapons (e.g. custom1, custom2) are display-only. For firing
-                # weapons, the published shot_ready flag prevents clicks from
-                # piling up while gun2 is cooling down or out of ammo.
-                if (
-                    active_weapon not in NON_FIRING_WEAPONS
-                    and published('shot_ready', False)
-                ):
+            if published('active_weapon'):
+                # shot_ready is the held weapon's own verdict: False for an item
+                # that never fires, during a cooldown, or out of ammunition --
+                # so clicks never pile up behind any of them.
+                if published('shot_ready', False):
                     self.game_state.queue_shot()
                 return
         _shift_select = (Qt.ShiftModifier, Qt.ShiftModifier | Qt.AltModifier)
@@ -3543,46 +3547,70 @@ class QtGameView(QOpenGLWidget):
             return 'top' if local.y > 0 else 'bottom'
         return 'north' if local.z > 0 else 'south'
 
-    def _load_gun_hud_pixmap(self, gun_type):
-        if gun_type in self.gun_hud_pixmaps:
-            return self.gun_hud_pixmaps[gun_type]
-        path = os.path.join('assets', 'sprites', f'{gun_type}HUD.png')
-        if os.path.exists(path):
-            pixmap = QPixmap(path)
-            self.gun_hud_pixmaps[gun_type] = pixmap
-            return pixmap
-        return None
+    def _session_item(self, item_id):
+        """The compiled item *item_id* of the running session, or None."""
+        if not item_id or self.logic_thread is None:
+            return None
+        return self.logic_thread.combat_runtime.items.resolve(item_id)
 
-    def _load_gun_flash_pixmap(self, gun_type):
-        if gun_type in self.gun_flash_pixmaps:
-            return self.gun_flash_pixmaps[gun_type]
-        path = os.path.join('assets', 'sprites', f'{gun_type}HUD_flash.png')
-        if os.path.exists(path):
-            pixmap = QPixmap(path)
-            self.gun_flash_pixmaps[gun_type] = pixmap
-            return pixmap
-        return None
+    def _hud_pixmap(self, path):
+        """The QPixmap of the HUD sprite at *path*, or None if there is none."""
+        if path not in self.hud_pixmaps:
+            self.hud_pixmaps[path] = QPixmap(path) if path and os.path.exists(path) else None
+        return self.hud_pixmaps[path]
 
-    def _load_weapon_collect_pixmap(self, item_type):
-        """The world/collectible sprite for a weapon (e.g. 'gun1' -> gun1.png).
+    @staticmethod
+    def _hud_stat_lines(style, weapon, ammo, armor):
+        """The ammo and armor counts beside health, top line first.
 
-        Used by the overhead HUD, which shows the small collectible icon bottom-right
-        instead of the first-person gun sprite. Resolved via the Prop
-        GUN_SPRITES map so it matches what the weapon looks like in the world.
+        Ammo shows for a weapon that fires ('∞' if it spends nothing per
+        shot), armor when the player has any; they share the ammo column and
+        colour, armor underneath. Styles 2 and 3 put them on the bottom line
+        instead, two spaces apart.
         """
-        if item_type in self.weapon_collect_pixmaps:
-            return self.weapon_collect_pixmaps[item_type]
-        rel = None
-        try:
-            from engine.prop_entity import Prop
-            rel = Prop.GUN_SPRITES.get(item_type)
-        except Exception:
-            rel = None
-        if not rel:
-            rel = os.path.join('assets', 'sprites', f'{item_type}.png')
-        pixmap = QPixmap(rel) if os.path.exists(rel) else None
-        self.weapon_collect_pixmaps[item_type] = pixmap
-        return pixmap
+        stats = []
+        if weapon is not None and weapon.fires:
+            stats.append("∞" if weapon.ammo_per_shot == 0 else str(max(0, int(ammo))))
+        if armor > 0:
+            stats.append(str(int(armor)))
+        if style in (2, 3) and stats:
+            return ["  ".join(stats)]
+        return stats
+
+    #: The weapon-slot flash: seconds to fade in, to hold, and to fade out.
+    WEAPON_SWITCH_FADE_IN = 0.08
+    WEAPON_SWITCH_HOLD = 0.35
+    WEAPON_SWITCH_FADE_OUT = 0.15
+
+    @classmethod
+    def _weapon_switch_alpha(cls, elapsed):
+        """Opacity of the weapon-slot flash *elapsed* seconds in; 0 when over."""
+        if elapsed < 0.0:
+            return 0.0
+        if elapsed < cls.WEAPON_SWITCH_FADE_IN:
+            return elapsed / cls.WEAPON_SWITCH_FADE_IN
+        elapsed -= cls.WEAPON_SWITCH_FADE_IN
+        if elapsed < cls.WEAPON_SWITCH_HOLD:
+            return 1.0
+        elapsed -= cls.WEAPON_SWITCH_HOLD
+        return max(0.0, 1.0 - elapsed / cls.WEAPON_SWITCH_FADE_OUT)
+
+    def _draw_item_icon(self, painter, item, viewport_width, viewport_height,
+                        margin, size):
+        """Draw *item*'s world sprite in the bottom-right icon slot."""
+        pm = self._hud_pixmap(item.world_sprite)
+        if not pm or pm.isNull():
+            return False
+        cache_key = (item.world_sprite, size)
+        scaled = self._cached_item_icons.get(cache_key)
+        if scaled is None or scaled.isNull():
+            scaled = pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self._cached_item_icons[cache_key] = scaled
+        x = viewport_width - margin - size
+        y = viewport_height - margin - size
+        painter.drawPixmap(x + (size - scaled.width()) // 2,
+                           y + (size - scaled.height()) // 2, scaled)
+        return True
 
     def eventFilter(self, obj, event):
         if obj is self._console_input and event.type() == QEvent.KeyPress:
@@ -3900,6 +3928,11 @@ class QtGameView(QOpenGLWidget):
                 self.editor.set_grid_size(new_size)
                 self.editor.show_toast(f"Grid Size: {new_size}")
                 return
+        if self.play_mode and not self.show_render_menu and event.key() in self._SLOT_KEYS:
+            # Weapon slots 1-4 (gun1, gun2, custom1, custom2): the logic thread
+            # takes the weapon in hand if the player has it.
+            self.game_state.queue_weapon_slot(self._SLOT_KEYS[event.key()])
+            return
         if self.play_mode:
             if self.show_render_menu:
                 if event.key() == Qt.Key_1:

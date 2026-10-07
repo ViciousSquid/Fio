@@ -97,34 +97,6 @@ MONSTER_STUCK_THRESHOLD  = 30    # ticks (~0.5s at 60fps) before detour kicks in
 # Maximum distance (world units) to search for a detour node
 MONSTER_DETOUR_RANGE     = 1024.0
 
-# ---------------------------------------------------------------------------
-# Weapon damage per gun type
-# ---------------------------------------------------------------------------
-# Non-firing weapons (see NON_FIRING_WEAPONS below) are deliberately omitted —
-# they deal no damage.
-WEAPON_DAMAGE = {
-    'gun1': 25,
-    'gun2': 75,    # shotgun — 3× gun1
-}
-
-# ---------------------------------------------------------------------------
-# Per-weapon shoot sound
-# ---------------------------------------------------------------------------
-# Non-firing weapons (see NON_FIRING_WEAPONS below) are deliberately omitted —
-# they play no shoot sound.
-WEAPON_SHOOT_SOUND = {
-    'gun1': 'shoot.wav',
-    'gun2': 'shoot2.wav',
-}
-
-# ---------------------------------------------------------------------------
-# Non-firing weapons
-# ---------------------------------------------------------------------------
-# Display-only / cosmetic guns: they can be picked up and shown in the HUD, but
-# firing them does nothing — no hitscan or projectile, no muzzle-flash
-# animation, and no sound.  These weapons have no HUD_flash sprite and are
-# intentionally absent from WEAPON_DAMAGE and WEAPON_SHOOT_SOUND above.
-NON_FIRING_WEAPONS = {'custom1', 'custom2'}
 
 
 # ---------------------------------------------------------------------------

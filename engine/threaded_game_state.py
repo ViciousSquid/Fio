@@ -36,7 +36,11 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        #: Bumped each time the player takes another weapon in hand by slot
+        #: key; the HUD shows the weapon briefly when it changes.
+        self.weapon_switch_serial = 0
         self.player_ammo = 0
+        self.player_armor = 0
         self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
@@ -138,7 +142,11 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        #: Bumped each time the player takes another weapon in hand by slot
+        #: key; the HUD shows the weapon briefly when it changes.
+        self.weapon_switch_serial = 0
         self.player_ammo = 0
+        self.player_armor = 0
         self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
@@ -269,6 +277,10 @@ class ThreadedGameState:
         # Use key — protected by its own lock
         self._use_key_lock = threading.Lock()
         self._use_key_pressed = False
+
+        # Weapon slot keys (1-4), in the order pressed
+        self._slot_lock = threading.Lock()
+        self._slot_queue = deque()
 
         # Player 2 input (gamepad / arrow keys)
         self._p2_lock = threading.Lock()
@@ -460,6 +472,22 @@ class ThreadedGameState:
                 self._use_key_pressed = False
                 return True
             return False
+
+    # --- Weapon slots ---
+
+    def queue_weapon_slot(self, slot: int):
+        """The player pressed weapon slot key *slot* (1-4)."""
+        with self._slot_lock:
+            self._slot_queue.append(int(slot))
+
+    def consume_weapon_slots(self) -> list:
+        """The slot keys pressed since the last call, oldest first."""
+        if not self._slot_queue:
+            return []
+        with self._slot_lock:
+            slots = list(self._slot_queue)
+            self._slot_queue.clear()
+            return slots
 
     # --- Shooting Handling ---
 

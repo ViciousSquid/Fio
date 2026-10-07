@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import pyqtSignal, QTimer
 
+from engine.items import DEFAULT_DEFINITIONS
+
 # ----------------------------------------------------------------------
 # Constants
 # ----------------------------------------------------------------------
@@ -760,16 +762,16 @@ def create_map_data(params, yield_hook=None):
                 "name": f"Prop_{starting_gun.capitalize()}",
                 "collect_respawns": False,
                 "collect_respawn_time": 20.0,
-                "collect_type": "weapon",
-                "collect_weapon": starting_gun,
+                "collect_type": "item",
+                "collect_item": starting_gun,
                 "collect_enabled": True,
                 "carry_enabled": False,
                 "collect_value": 25,
                 "collect_activation": "walk_over",
                 "collect_collected": False,
                 "collect_key_name": "",
-                "collect_custom_sprite": f"assets/sprites/{starting_gun}.png",
-                "sprite_path": f"assets/sprites/{starting_gun}.png",
+                "collect_custom_sprite": "",
+                "sprite_path": DEFAULT_DEFINITIONS[starting_gun]["world_sprite"],
                 "id": "gun_start"
             },
             "io_connections": []

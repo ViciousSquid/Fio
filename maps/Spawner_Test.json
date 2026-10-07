@@ -334,14 +334,14 @@
                 "id": "9fdef6c9-070d-4089-9afa-607550896c6f",
                 "carry_enabled": false,
                 "collect_enabled": true,
-                "collect_type": "weapon",
+                "collect_type": "item",
                 "collect_value": 25,
                 "collect_activation": "walk_over",
                 "collect_collected": true,
                 "collect_respawns": false,
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun2",
+                "collect_item": "gun2",
                 "sprite_path": "assets/sprites/gun2.png"
             },
             "io_connections": []

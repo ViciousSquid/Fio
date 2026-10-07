@@ -41,11 +41,20 @@ class LogicPlayer:
         self.notarget = False
         self.player_health = 100
         self.player_max_health = 100
+        #: Armor points, taken by damage before health (see
+        #: LogicTriggers._apply_player_damage); given by armor pickups.
+        self.player_armor = 0
+        self.player_max_armor = 100
         self.player_dead = False
         self.damage_lock = threading.Lock()
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
+
+    def give_armor(self, amount):
+        """Add *amount* armor, up to ``player_max_armor``."""
+        self.player_armor = min(self.player_max_armor,
+                                self.player_armor + max(0, int(amount)))
 
     def update_primary(self, delta, keys, mouse_dx, mouse_dy):
         """Apply primary-player look, movement and physics for one tick."""

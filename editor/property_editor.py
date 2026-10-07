@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
+from engine.items import ITEM_IDS
 from engine.prop_entity import normalise_collect_type
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
@@ -18,14 +19,18 @@ from engine.monster_constants import MONSTER_VARIANTS
 from engine.constants import water_high_quality
 from editor.tooltips import set_tooltips_enabled
 
-#: Display label for every collectable weapon id, shared by the Prop panel's
-#: builder and its refresh so the two cannot drift apart again.
-PROP_WEAPON_LABELS = {
-    'gun1': 'Gun 1',
-    'gun2': 'Gun 2',
-    'custom1': 'Custom 1',
-    'custom2': 'Custom 2',
-}
+def item_choices(definitions):
+    """``[(label, item id)]`` for every item slot, by its user-facing name.
+
+    Shared by the Prop panel's builder and its refresh so the two cannot drift
+    apart. Two items given the same name are told apart by their id.
+    """
+    names = [(definitions.name(item_id), item_id) for item_id in ITEM_IDS]
+    counts = {}
+    for name, _ in names:
+        counts[name] = counts.get(name, 0) + 1
+    return [(f"{name} ({item_id})" if counts[name] > 1 else name, item_id)
+            for name, item_id in names]
 
 
 def _plugin_to_float(text):
@@ -683,8 +688,8 @@ class PropertyEditor(QWidget):
             '_prop_collectible_cb',
             '_prop_collect_type_combo',
             '_prop_collect_type_values',
-            '_prop_weapon_combo',
-            '_prop_weapon_values',
+            '_prop_item_combo',
+            '_prop_item_values',
             '_prop_key_combo',
             '_prop_key_values',
             '_prop_activation_combo',
@@ -2883,7 +2888,7 @@ class PropertyEditor(QWidget):
         type_values = (
             ('Health', 'health'),
             ('Ammo', 'ammo'),
-            ('Weapon', 'weapon'),
+            ('Item', 'item'),
             ('Key', 'key'),
         )
         type_labels = [label for label, _ in type_values]
@@ -2900,18 +2905,17 @@ class PropertyEditor(QWidget):
         type_row = form.rowCount()
         form.addRow("Collect as:", type_combo)
 
-        weapon_values = tuple(Prop.GUN_NAMES)
-        weapon_labels = PROP_WEAPON_LABELS
-        weapon_combo = _make_combo(
-            [weapon_labels.get(v, v.title()) for v in weapon_values],
-            weapon_labels.get(
-                thing.properties.get('collect_weapon', 'gun1'),
-                'Gun 1',
-            ),
-            self._on_prop_weapon_changed,
+        choices = item_choices(self.editor.state.item_definitions)
+        item_label = dict((v, k) for k, v in choices)
+        item_combo = _make_combo(
+            [label for label, _ in choices],
+            item_label.get(thing.properties.get('collect_item', 'gun1'), choices[0][0]),
+            self._on_prop_item_changed,
         )
-        weapon_row = form.rowCount()
-        form.addRow("Weapon:", weapon_combo)
+        item_combo.setToolTip(
+            "The item this Prop gives. Redefine the custom items in Tools > Custom Items.")
+        item_row = form.rowCount()
+        form.addRow("Item:", item_combo)
 
         key_values = tuple(Prop.KEY_NAMES)
         key_labels = {
@@ -3014,10 +3018,8 @@ class PropertyEditor(QWidget):
         self._prop_collectible_cb = collectible_cb
         self._prop_collect_type_combo = type_combo
         self._prop_collect_type_values = value_for_label
-        self._prop_weapon_combo = weapon_combo
-        self._prop_weapon_values = {
-            label: value for value, label in weapon_labels.items()
-        }
+        self._prop_item_combo = item_combo
+        self._prop_item_values = dict(choices)
         self._prop_key_combo = key_combo
         self._prop_key_values = {
             label: value for value, label in key_labels.items()
@@ -3033,7 +3035,7 @@ class PropertyEditor(QWidget):
         self._prop_respawn_spin = respawn_spin
         self._prop_collection_rows = {
             'type': type_row,
-            'weapon': weapon_row,
+            'item': item_row,
             'key': key_row,
             'activation': activation_row,
             'value': value_row,
@@ -3095,12 +3097,13 @@ class PropertyEditor(QWidget):
         # The Collect as row is useful whenever collection is enabled. Type
         # specific controls then narrow down from there.
         self._set_form_row_visible(form, rows['type'], enabled)
-        self._set_form_row_visible(form, rows['weapon'], enabled and kind == 'weapon')
+        self._set_form_row_visible(form, rows['item'], enabled and kind == 'item')
         self._set_form_row_visible(form, rows['key'], enabled and kind == 'key')
         self._set_form_row_visible(
             form,
             rows['activation'],
-            enabled and kind not in ('health', 'ammo', 'weapon'),
+            # An item says for itself how it is collected.
+            enabled and kind not in ('health', 'ammo', 'item'),
         )
         self._set_form_row_visible(
             form,
@@ -3127,11 +3130,11 @@ class PropertyEditor(QWidget):
         )
         self._prop_respawn_cb.blockSignals(False)
 
-        weapon = thing.properties.get('collect_weapon', 'gun1')
-        weapon_label = PROP_WEAPON_LABELS.get(weapon, PROP_WEAPON_LABELS['gun1'])
-        self._prop_weapon_combo.blockSignals(True)
-        self._prop_weapon_combo.setCurrentText(weapon_label)
-        self._prop_weapon_combo.blockSignals(False)
+        item_id = thing.properties.get('collect_item', 'gun1')
+        labels = {value: label for label, value in self._prop_item_values.items()}
+        self._prop_item_combo.blockSignals(True)
+        self._prop_item_combo.setCurrentText(labels.get(item_id, item_id))
+        self._prop_item_combo.blockSignals(False)
 
         key = thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME)
         key_label = {
@@ -3192,7 +3195,7 @@ class PropertyEditor(QWidget):
         kind = str(thing.properties.get('collect_type', 'health')).lower()
         derived = (
             bool(thing.properties.get('collect_enabled'))
-            and kind in ('health', 'ammo', 'weapon', 'key')
+            and kind in ('health', 'ammo', 'item', 'key')
         )
         self._set_form_row_visible(
             form,
@@ -3209,9 +3212,9 @@ class PropertyEditor(QWidget):
             kind = str(
                 self.current_object.properties.get('collect_type', 'health') or 'health'
             ).lower()
-            if kind == 'weapon':
-                self._set_prop_weapon_sprite(
-                    self.current_object.properties.get('collect_weapon', 'gun1')
+            if kind == 'item':
+                self._set_prop_item_sprite(
+                    self.current_object.properties.get('collect_item', 'gun1')
                 )
             elif kind == 'key':
                 self._set_prop_key_sprite(
@@ -3245,9 +3248,10 @@ class PropertyEditor(QWidget):
             'walk_over' if str(label) == 'Walk over' else 'use',
         )
 
-    def _on_prop_weapon_changed(self, label):
-        weapon = getattr(self, '_prop_weapon_values', {}).get(label, 'gun1')
-        self.on_collect_weapon_changed(weapon)
+    def _on_prop_item_changed(self, label):
+        item_id = self._prop_item_values.get(label)
+        if item_id is not None:
+            self.on_collect_item_changed(item_id)
 
     def _on_prop_key_changed(self, label):
         key = getattr(self, '_prop_key_values', {}).get(
@@ -4915,9 +4919,9 @@ class PropertyEditor(QWidget):
         thing = self.current_object
         self.update_object_prop('collect_custom_sprite', '')
         kind = normalise_collect_type(thing.properties)
-        if kind == 'weapon':
-            self._set_prop_weapon_sprite(
-                thing.properties.get('collect_weapon', 'gun1')
+        if kind == 'item':
+            self._set_prop_item_sprite(
+                thing.properties.get('collect_item', 'gun1')
             )
         elif kind == 'key':
             self._set_prop_key_sprite(
@@ -4942,12 +4946,12 @@ class PropertyEditor(QWidget):
             self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
-    def on_collect_weapon_changed(self, weapon):
+    def on_collect_item_changed(self, item_id):
         if self.current_object is None or not isinstance(self.current_object, Prop):
             return
-        self.update_object_prop('collect_weapon', weapon)
+        self.update_object_prop('collect_item', item_id)
         self.update_object_prop('collect_custom_sprite', '')
-        self._set_prop_weapon_sprite(weapon)
+        self._set_prop_item_sprite(item_id)
         self._refresh_prop_collection_ui(self.current_object)
         self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(Prop, 'clear_sprite_cache'):
@@ -4956,12 +4960,13 @@ class PropertyEditor(QWidget):
             self.editor.view_3d.update()
         self.editor.mark_as_modified()
 
-    def _set_prop_weapon_sprite(self, weapon):
-        sprite = Prop.GUN_SPRITES.get(
-            weapon,
-            Prop.GUN_SPRITES['gun1'],
-        )
-        self.update_object_prop('sprite_path', sprite)
+    def _set_prop_item_sprite(self, item_id):
+        """Show the Prop as the item it gives: that item's world sprite."""
+        if item_id not in ITEM_IDS:
+            return
+        sprite = self.editor.state.item_definitions.definition(item_id).get('world_sprite')
+        if sprite:
+            self.update_object_prop('sprite_path', sprite)
 
     def on_collect_type_changed(self, collect_type):
         if self.current_object is None or not isinstance(self.current_object, Prop):
@@ -4978,11 +4983,11 @@ class PropertyEditor(QWidget):
             self.update_object_prop('collect_custom_sprite', '')
             self.update_object_prop('collect_activation', 'walk_over')
             self.update_object_prop('sprite_path', 'assets/sprites/health.png')
-        elif collect_type == 'weapon':
+        elif collect_type == 'item':
             self.update_object_prop('collect_custom_sprite', '')
             self.update_object_prop('collect_activation', 'walk_over')
-            self._set_prop_weapon_sprite(
-                self.current_object.properties.get('collect_weapon', 'gun1')
+            self._set_prop_item_sprite(
+                self.current_object.properties.get('collect_item', 'gun1')
             )
         elif collect_type == 'key':
             self.update_object_prop('collect_custom_sprite', '')

@@ -422,7 +422,7 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1",
+                "collect_item": "gun1",
                 "io_enabled": true,
                 "model_path": "",
                 "render_mode": "billboard",

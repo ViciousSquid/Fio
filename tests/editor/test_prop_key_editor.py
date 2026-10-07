@@ -75,7 +75,7 @@ def test_switching_collection_type_to_key_enables_the_colour_selector(panel):
     assert prop.properties["collect_key_name"] == "yellow_key"
 
 
-def test_enabling_collectible_defaults_to_weapon(panel):
+def test_enabling_collectible_defaults_to_the_pistol_item(panel):
     prop = Prop(pos=[0, 0, 0])
     panel.current_object = prop
     panel.populate_for_thing(prop)
@@ -83,33 +83,34 @@ def test_enabling_collectible_defaults_to_weapon(panel):
     panel.on_prop_collectible_toggled(True)
 
     assert prop.properties["collect_enabled"] is True
-    assert prop.properties["collect_type"] == "weapon"
-    assert prop.properties["collect_weapon"] == "gun1"
+    assert prop.properties["collect_type"] == "item"
+    assert prop.properties["collect_item"] == "gun1"
     assert prop.properties["sprite_path"] == "assets/sprites/gun1.png"
-    assert panel._prop_collect_type_combo.currentText() == "Weapon"
+    assert panel._prop_collect_type_combo.currentText() == "Item"
 
 
-@pytest.mark.parametrize("weapon, label", [
-    ("gun1", "Gun 1"), ("gun2", "Gun 2"),
-    ("custom1", "Custom 1"), ("custom2", "Custom 2"),
+@pytest.mark.parametrize("item_id, label", [
+    ("gun1", "Pistol"), ("gun2", "Shotgun"),
+    ("custom1", "Cigarette"), ("custom2", "Wine Glass"),
 ])
-def test_choosing_a_weapon_keeps_it_selected(panel, weapon, label):
-    """Picking a weapon stores it and the combo keeps showing it.
+def test_choosing_an_item_keeps_it_selected(panel, item_id, label):
+    """Picking an item stores its id and the combo keeps showing its name.
 
     The refresh after a change used its own label table, which lacked Custom 2:
-    choosing it stored ``custom2`` and then flipped the combo back to "Gun 1".
+    choosing it stored ``custom2`` and then flipped the combo back to gun1.
     """
+    weapon = item_id
     prop = Prop(
         pos=[0, 0, 0],
-        properties={"collect_enabled": True, "collect_type": "weapon",
-                    "collect_weapon": "gun1" if weapon != "gun1" else "gun2"},
+        properties={"collect_enabled": True, "collect_type": "item",
+                    "collect_item": "gun1" if item_id != "gun1" else "gun2"},
     )
     panel.current_object = prop
     panel.populate_for_thing(prop)
-    combo = panel._prop_weapon_combo
+    combo = panel._prop_item_combo
 
     combo.setCurrentText(label)
 
-    assert prop.properties["collect_weapon"] == weapon
+    assert prop.properties["collect_item"] == item_id
     assert prop.properties["sprite_path"] == f"assets/sprites/{weapon}.png"
     assert combo.currentText() == label

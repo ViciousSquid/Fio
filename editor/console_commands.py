@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
 from engine.change_journal import touch
+from engine.items import ITEM_IDS
 from engine.spatial import set_authored_flag
 from engine.renderer import WATER_QUALITIES, available_renderers
 
@@ -92,6 +93,7 @@ class ConsoleCommandHandler:
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
             'hudstyle': self.cmd_hudstyle,
+            'hudtext': self.cmd_hudstyle,
             'hudopacity': self.cmd_hudopacity,
             'hudfade': self.cmd_hudfade,
             'message': self.cmd_message,
@@ -938,7 +940,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">hudstyle</b> 0|1|2|3|4 [font] — Hide/select the HUD font (1 Rushford, 2 O.K. Retro, 3 HornetDisplay, 4 LCD/custom)<br>
+<b style="color:orange;">hudstyle</b>{sep}<b style="color:orange;">hudtext</b> 0|1|2|3|4 [font] — Hide/select the HUD font (1 Rushford, 2 O.K. Retro, 3 HornetDisplay, 4 LCD/custom)<br>
 <b style="color:orange;">hudopacity</b> 0..100 — Set HUD opacity<br>
 <b style="color:orange;">hudfade</b> 0|1 — Enable/disable damage-driven HUD fading<br>
 <b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
@@ -1839,7 +1841,7 @@ entity to drive them from the I/O system.</i><br>
                 return
             item = parts[1]
             value = parts[2] if len(parts) > 2 else "25"
-            collect_type = "weapon" if item in ("gun1", "gun2", "custom1", "custom2") else item
+            collect_type = "item" if item in ITEM_IDS else item
 
             new_prop = Prop(pos=[0, 0, 0])
             new_prop.properties['carry_enabled'] = False
@@ -1847,9 +1849,10 @@ entity to drive them from the I/O system.</i><br>
             new_prop.properties['collect_type'] = collect_type
             new_prop.properties['collect_value'] = value
             new_prop.properties['name'] = f"Prop_{item}_{self._spawn_counter}"
-            if collect_type == "weapon":
-                new_prop.properties['collect_weapon'] = item
-                new_prop.properties['sprite_path'] = f"assets/sprites/{item}.png"
+            if collect_type == "item":
+                new_prop.properties['collect_item'] = item
+                new_prop.properties['sprite_path'] = (
+                    self.editor_state.item_definitions.definition(item)['world_sprite'])
             elif collect_type == "health":
                 new_prop.properties['sprite_path'] = "assets/sprites/health.png"
             elif collect_type == "key":

@@ -40,6 +40,7 @@ from engine.brush_geometry import (
 # Runtime-only AABB cache keys written by the physics/AI hot paths (see
 # engine.constants.brush_aabb_bounds). Stripped on save/undo like the rest.
 from engine.constants import AABB_RUNTIME_KEYS
+from engine.items import ITEM_IDS, ItemDefinitions
 from engine.view_filters import ViewFilters
 from engine.level_validation import validate_level
 
@@ -89,6 +90,9 @@ class EditorState:
         #: Which kinds of object the editor shows (the Filter menu). View
         #: state, never saved with the map; Play ignores it.
         self.view_filters = ViewFilters()
+        #: What the item slots (gun1, gun2, custom1, custom2) are in this
+        #: world; the custom slots' definitions are saved with the map.
+        self.item_definitions = ItemDefinitions()
         self.terrain_data = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.created_at = ''              # ISO timestamp, set on first save
@@ -366,10 +370,46 @@ class EditorState:
         self._invalidate_entity_caches()
         self.selected_objects = []
         self.terrain_data = None
+        self.item_definitions.reset()
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.mark_lighting_dirty()
         self.save_state()
+
+    def set_item_definition(self, item_id, definition):
+        """Redefine custom item slot *item_id* and re-sync the Props it shows on.
+
+        Raises ``engine.items.ItemDefinitionError`` if *definition* does not
+        compile; nothing changes then. Checkpoint first (``save_state``) to make
+        the change undoable.
+        """
+        self.item_definitions.set_custom(item_id, definition)
+        self.sync_item_props()
+
+    def sync_item_props(self):
+        """Point every item pickup's world sprite at its item's definition.
+
+        A Prop that gives an item shows that item: it references the item by
+        id (``collect_item``) and its sprite follows the definition. Returns the
+        Props that changed.
+        """
+        changed = []
+        for thing in self.things:
+            props = getattr(thing, 'properties', None)
+            if (not isinstance(props, dict) or props.get('type') != 'prop'
+                    or not props.get('collect_enabled')
+                    or props.get('collect_type') != 'item'):
+                continue
+            item_id = props.get('collect_item')
+            if item_id not in ITEM_IDS:
+                continue
+            sprite = self.item_definitions.definition(item_id).get('world_sprite')
+            if sprite and props.get('sprite_path') != sprite:
+                props['sprite_path'] = sprite
+                changed.append(thing)
+        if changed:
+            self.mark_world_changed(changed)
+        return changed
 
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
@@ -391,6 +431,11 @@ class EditorState:
         if not getattr(self, 'created_at', ''):
             self.created_at = datetime.datetime.now().isoformat(timespec='seconds')
         data['created'] = self.created_at
+
+        # The custom item slots, where this world redefines them.
+        items = self.item_definitions.to_level_data()
+        if items:
+            data['items'] = items
 
         # Include terrain data if present
         if self.terrain_data:
@@ -563,6 +608,8 @@ class EditorState:
         self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
+        self.item_definitions.load(level_data.get('items'))
+        self.sync_item_props()
         # Absent in maps written before this existed; the overview falls back to
         # the file's own timestamps rather than inventing one.
         self.created_at = level_data.get('created', '')
@@ -705,6 +752,7 @@ class EditorState:
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
             'terrain_texture_paint': terrain_texture_paint,
+            'items': self.item_definitions.to_level_data(),
         }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
@@ -825,6 +873,8 @@ class EditorState:
         self._invalidate_entity_caches()
 
         self._restore_selection(state['selection'])
+        if 'items' in state:
+            self.item_definitions.load(state['items'])
 
         # Terrain CSG and baked texture paint are the terrain fields included
         # in lightweight editor history. Heightmaps remain outside checkpoints

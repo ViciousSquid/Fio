@@ -36,6 +36,13 @@ forward; see **Breaking changes** before upgrading.
 - **Console:** `r_fog`, `r_water`, `r_glass`, `r_lighting` and `r_deferred`
   (and their unprefixed aliases) are gone; they toggled attributes no
   renderer had.
+- **Items:** a collectible Prop that gives a weapon now says
+  `collect_type: "item"` with `collect_item` (was `"weapon"` with
+  `collect_weapon`); maps are migrated on load. `combat_runtime.gun2_obtained`
+  is replaced by `combat_runtime.weapons` (the weapons the player has), and
+  `monster_constants.WEAPON_DAMAGE`, `WEAPON_SHOOT_SOUND` and
+  `NON_FIRING_WEAPONS` are gone: weapons are described by item definitions
+  (`engine.items`). Save games are version 3; version 2 saves still load.
 
 ### New
 
@@ -64,6 +71,18 @@ forward; see **Breaking changes** before upgrading.
   and **Overlay** (the textured frame with every brush triangle drawn over it);
   **Wireframe** now draws true brush edges, and Wireframe and Points are
   coloured by distance from the eye. `r_wireframe` drives the Display box.
+- Items: `gun1`, `gun2`, `custom1` and `custom2` are data-driven item
+  definitions. **Tools → Custom Items…** makes Custom 1 and Custom 2 weapons
+  (hitscan, projectile or melee, with their own damage, range, cooldown,
+  pellets, ammunition, sound, noise and sprites) or pickups (health, ammo,
+  armor, key or weapon), saved with the map. Props reference items by id and
+  follow their definition.
+- Weapon slots: number keys 1–4 take a weapon the player has in hand, with a
+  brief flash of its sprite bottom-right. Weapons and ammunition carry over a
+  LevelChanger.
+- Armor, from armor pickups: it absorbs damage before health from every
+  source, and shows under the ammo count (beside it in HUD styles 2 and 3).
+- `hudtext` console alias for `hudstyle`.
 - Debug Tables labels the active renderer (FORWARD, DEFERRED, …) and works
   unchanged with any renderer; it counts shadow-map draws, shows lines a
   renderer publishes in `RenderStats.details`, and highlights a selected
@@ -84,6 +103,10 @@ forward; see **Breaking changes** before upgrading.
 - Entering Play no longer raises in `paintGL` before the first full frame.
 - A notification is no longer cleared early by an earlier, shorter one.
 - Choosing Custom 2 in the Prop panel no longer flips back to Gun 1.
+- A legacy weapon Prop (`collect_weapon`) keeps its weapon on load.
+- A key pressed in Play before the first frame is drawn no longer raises.
+- GL end-to-end tests no longer depend on the order they run in: the
+  application font each editor window sets is restored after every test.
 - Big World is no longer dropped when one of its modules is imported before
   plugin discovery.
 - The showcase map's cutscene now ships in every build, and its pickup and

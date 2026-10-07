@@ -696,6 +696,11 @@ class Ui_MainWindow(object):
         MainWindow.procedural_action = QAction('Procedural Map Generator…', MainWindow)
         MainWindow.procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
         
+        MainWindow.item_editor_action = QAction('Custom Items…', MainWindow)
+        MainWindow.item_editor_action.setToolTip(
+            'Define the two custom item slots: weapons or pickups, with their sprites')
+        MainWindow.item_editor_action.triggered.connect(MainWindow.open_item_editor)
+        MainWindow.tools_menu.addAction(MainWindow.item_editor_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
         MainWindow.tools_menu.addSeparator()

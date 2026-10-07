@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from engine.prop_entity import GUN_NAMES
+from engine.items import ITEM_IDS
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MAPS = sorted(glob.glob(os.path.join(ROOT, "maps", "*.json")))
@@ -60,13 +60,24 @@ def test_referenced_files_exist(path):
 
 
 @pytest.mark.parametrize("path", MAPS, ids=os.path.basename)
-def test_weapon_pickups_name_known_weapons(path):
+def test_item_pickups_name_known_items(path):
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     unknown = sorted({
-        str(_properties(t).get("collect_weapon"))
+        str(_properties(t).get("collect_item"))
         for t in _things(data)
-        if _properties(t).get("collect_type") == "weapon"
-        and _properties(t).get("collect_weapon", "gun1") not in GUN_NAMES
+        if _properties(t).get("collect_type") == "item"
+        and _properties(t).get("collect_item", "gun1") not in ITEM_IDS
     })
-    assert not unknown, f"{os.path.basename(path)} has pickups for unknown weapons: {unknown}"
+    assert not unknown, f"{os.path.basename(path)} has pickups for unknown items: {unknown}"
+
+
+@pytest.mark.parametrize("path", MAPS, ids=os.path.basename)
+def test_shipped_maps_use_the_current_item_reference(path):
+    """Shipped maps are written in the current form, not the migrated one."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    for thing in _things(data):
+        props = _properties(thing)
+        assert "collect_weapon" not in props
+        assert props.get("collect_type") != "weapon"

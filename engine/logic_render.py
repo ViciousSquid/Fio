@@ -403,21 +403,10 @@ class LogicRender:
         write_state.hud_message = logic.interaction_runtime.current_hud_message
         write_state.hud_prompt_key = logic.interaction_runtime.current_hud_key_name
         write_state.active_weapon = logic.combat_runtime.active_weapon
+        write_state.weapon_switch_serial = logic.combat_runtime.weapon_switch_serial
+        write_state.player_armor = logic.player_runtime.player_armor
         write_state.muzzle_flash_active = logic.combat_runtime.muzzle_flash_active
-        if logic.combat_runtime.active_weapon == "gun1":
-            write_state.shot_ready = True
-        elif logic.combat_runtime.active_weapon == "gun2":
-            now = time.perf_counter()
-            try:
-                ammo = max(0, int(logic.combat_runtime.player_ammo))
-            except (TypeError, ValueError):
-                ammo = 0
-            write_state.shot_ready = (
-                ammo > 0
-                and now - logic.combat_runtime._last_player_shot_time >= 1.0
-            )
-        else:
-            write_state.shot_ready = False
+        write_state.shot_ready = logic.combat_runtime.shot_ready(time.perf_counter())
         write_state.camera_transition_active = bool(logic.camera.camera_transition)
 
         if logic.session_runtime.play_mode and logic.combat_runtime._monster_projectiles:

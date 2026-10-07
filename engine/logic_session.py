@@ -114,6 +114,7 @@ class LogicSession:
             # Reset player stats.
             logic.player_runtime.player_health = 100
             logic.player_runtime.player_max_health = 100
+            logic.player_runtime.player_armor = 0
             logic.player_runtime.player_dead = False
             logic.player_runtime.god_mode = False
             logic.player_runtime.buddha_mode = False
@@ -140,12 +141,10 @@ class LogicSession:
 
             logic.timing_runtime.timer_states.clear()
 
-            # Reset active weapon / ammunition.
-            logic.combat_runtime.active_weapon = None
-            logic.combat_runtime.player_ammo = 0
-            logic.combat_runtime.gun2_obtained = False
-            logic.combat_runtime._last_player_shot_time = float('-inf')
-            logic.combat_runtime._last_player_shot_time = float("-inf")
+            # The session's items, compiled once from the world's definitions;
+            # the player starts unarmed.
+            logic.combat_runtime.items = logic.editor_state.item_definitions.registry()
+            logic.combat_runtime.reset_weapons()
 
             # Reset visual FX.
             logic.combat_runtime.bullet_marks = []
@@ -249,7 +248,7 @@ class LogicSession:
             logic.interaction_runtime.current_hud_key_name = None
             logic.timing_runtime.timer_states.clear()
             logic.timing_runtime.light_fade_states.clear()
-            logic.combat_runtime.active_weapon = None
+            logic.combat_runtime.reset_weapons()
             logic.combat_runtime.bullet_marks = []
             logic.player_runtime.player_dead = False
             logic.combat_runtime.muzzle_flash_active = False
@@ -301,8 +300,9 @@ class LogicSession:
                 )
             logic._plugin_emit("play_start" if enabled else "play_stop")
 
-    #: What the player intentionally carries through a level change.
-    LOADOUT_FIELDS = ("active_weapon", "gun2_obtained", "player_ammo")
+    #: What the player intentionally carries through a level change: the
+    #: weapons they have, the one in hand, and their ammunition.
+    LOADOUT_FIELDS = ("active_weapon", "weapons", "player_ammo")
 
     def carried_loadout(self) -> dict:
         """Capture the player's carried weapons for a level change."""
@@ -311,7 +311,7 @@ class LogicSession:
             combat = logic.combat_runtime
             return {
                 "active_weapon": combat.active_weapon,
-                "gun2_obtained": combat.gun2_obtained,
+                "weapons": sorted(combat.weapons),
                 "player_ammo": combat.player_ammo,
             }
 
@@ -320,10 +320,10 @@ class LogicSession:
         logic = self.logic
         with logic._tick_lock:
             combat = logic.combat_runtime
+            if "weapons" in loadout:
+                combat.weapons = set(loadout["weapons"])
             if "active_weapon" in loadout:
                 combat.active_weapon = loadout["active_weapon"]
-            if "gun2_obtained" in loadout:
-                combat.gun2_obtained = bool(loadout["gun2_obtained"])
             if "player_ammo" in loadout:
                 combat.player_ammo = int(loadout["player_ammo"])
 

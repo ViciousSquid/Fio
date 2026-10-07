@@ -13,6 +13,7 @@ is read from maps as one (see :data:`LEGACY_MODEL_DEFAULTS`).
 from __future__ import annotations
 
 from engine.change_journal import TrackedAttribute
+from engine.items import DEFAULT_DEFINITIONS, ITEM_IDS
 
 try:
     from editor.things import Thing as _ThingBase
@@ -32,15 +33,9 @@ KEY_SPRITES = {
 KEY_NAMES = tuple(KEY_SPRITES)
 DEFAULT_KEY_NAME = 'blue_key'
 
-GUN_SPRITES = {
-    'gun1': 'assets/sprites/gun1.png',
-    'gun2': 'assets/sprites/gun2.png',
-    'custom1': 'assets/sprites/custom1.png',
-    'custom2': 'assets/sprites/custom2.png',
-}
-GUN_NAMES = ('gun1', 'gun2', 'custom1', 'custom2')
-
-COLLECT_TYPES = ('health', 'ammo', 'weapon', 'key')
+#: ``collect_type`` values. ``item`` gives the item ``collect_item`` names --
+#: one of the item slots of :mod:`engine.items`, weapon or pickup.
+COLLECT_TYPES = ('health', 'ammo', 'item', 'key')
 
 AMMO_SPRITE = 'assets/sprites/ammo.png'
 HEALTH_SPRITE = 'assets/sprites/health.png'
@@ -49,24 +44,34 @@ HEALTH_SPRITE = 'assets/sprites/health.png'
 def normalise_collect_type(properties):
     """Make ``collect_type`` one of :data:`COLLECT_TYPES`, in place.
 
-    There used to be a fifth, ``custom``: a pickup that was consumed and gave
-    the player nothing. Maps still carry it -- the sample map's shotgun was
+    Maps written before items were data name a weapon pickup
+    ``collect_type='weapon'`` with ``collect_weapon``; that is the item of the
+    same id, ``collect_type='item'`` with ``collect_item``.
+
+    There used to be a fifth type, ``custom``: a pickup that was consumed and
+    gave the player nothing. Maps still carry it -- the sample map's shotgun was
     migrated from the old Pickup entity as ``custom`` with the gun's sprite, so
     walking over it made it vanish and handed over no gun. A pickup's sprite
-    says what it is meant to be, so an unrecognised type is read from it: a
-    gun's sprite collects that gun, a key's that key, the ammo box ammo, and
-    anything else health.
+    says what it is meant to be, so an unrecognised type is read from it: an
+    item's shipped sprite collects that item, a key's that key, the ammo box
+    ammo, and anything else health.
     """
+    if 'collect_weapon' in properties:
+        # Such a map predates collect_item, so any collect_item here is only
+        # the default filled in beside it.
+        properties['collect_item'] = properties.pop('collect_weapon')
     kind = str(properties.get('collect_type', 'health') or 'health').lower()
+    if kind == 'weapon':
+        kind = 'item'
     if kind in COLLECT_TYPES:
         properties['collect_type'] = kind
         return kind
     sprite = str(properties.get('collect_custom_sprite')
                  or properties.get('sprite_path') or '').replace('\\', '/')
-    for weapon, path in GUN_SPRITES.items():
-        if sprite == path:
-            properties['collect_weapon'] = weapon
-            kind = 'weapon'
+    for item_id in ITEM_IDS:
+        if sprite == DEFAULT_DEFINITIONS[item_id]['world_sprite']:
+            properties['collect_item'] = item_id
+            kind = 'item'
             break
     else:
         for key_name, path in KEY_SPRITES.items():
@@ -100,14 +105,14 @@ PROP_DEFAULTS = {
 
     # Collection behaviour.
     'collect_enabled': False,
-    'collect_type': 'weapon',
+    'collect_type': 'item',
     'collect_value': 25,
     'collect_activation': 'walk_over',
     'collect_collected': False,
     'collect_respawns': False,
     'collect_respawn_time': 20.0,
     'collect_key_name': DEFAULT_KEY_NAME,
-    'collect_weapon': 'gun1',
+    'collect_item': 'gun1',
     'collect_custom_sprite': '',
 
     # Physics.
@@ -164,8 +169,6 @@ class Prop(_ThingBase):
     KEY_SPRITES = KEY_SPRITES
     KEY_NAMES = KEY_NAMES
     DEFAULT_KEY_NAME = DEFAULT_KEY_NAME
-    GUN_SPRITES = GUN_SPRITES
-    GUN_NAMES = GUN_NAMES
     COLLECT_TYPES = COLLECT_TYPES
 
     pixmap_path = "assets/sprites/pickup.png"
@@ -276,10 +279,11 @@ class Prop(_ThingBase):
             return self.KEY_SPRITES.get(
                 self.properties.get('collect_key_name', self.DEFAULT_KEY_NAME),
                 'assets/sprites/pickup.png')
-        if collect_type == 'weapon':
-            return self.GUN_SPRITES.get(
-                self.properties.get('collect_weapon', 'gun1'),
-                self.GUN_SPRITES['gun1'])
+        if collect_type == 'item':
+            # The item's shipped sprite; the world's own definition is applied
+            # by EditorState.sync_item_props once the Prop is in a world.
+            definition = DEFAULT_DEFINITIONS.get(self.properties.get('collect_item'))
+            return definition['world_sprite'] if definition else 'assets/sprites/pickup.png'
         if collect_type == 'ammo':
             return AMMO_SPRITE
         return self.properties.get('collect_custom_sprite') or HEALTH_SPRITE

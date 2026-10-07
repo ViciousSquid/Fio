@@ -24,7 +24,7 @@ BRUSH_OBJECT_FIELDS = ('textures', 'uv_scale', 'uv_angle', 'uv_shift',
 BRUSH_NUMBER_FIELDS = ('door_speed', 'door_distance', 'door_lip', 'speed', 'distance')
 
 #: Save ``runtime`` fields and the type each must have when present.
-_RUNTIME_NUMBERS = ('player_health', 'player_max_health', 'player2_health',
+_RUNTIME_NUMBERS = ('player_health', 'player_max_health', 'player_armor', 'player2_health',
                     'player2_max_health', 'player_ammo', 'overhead_height',
                     'overhead_tilt')
 _RUNTIME_STRINGS = ('current_hud_message', 'active_weapon', 'camera_mode',
@@ -81,6 +81,29 @@ def validate_level(level_data, *, partial=False, where="map") -> None:
             raise ValueError(f"a {where}'s '{kind}' must be a list")
         for index, item in enumerate(items):
             _validate_record(item, kind, f"{kind}[{index}]", partial)
+    _validate_items(level_data.get('items'), where)
+
+
+def _validate_items(items, where):
+    """A map's ``items``: definitions of the custom item slots, by id.
+
+    Only the shape is checked here. A definition whose *settings* are wrong
+    still loads -- it is kept as authored, and its slot resolves to no item
+    until it is fixed (see :mod:`engine.items`).
+    """
+    if items is None:
+        return
+    from engine.items import CUSTOM_ITEM_IDS, ITEM_IDS
+    if not isinstance(items, dict):
+        raise ValueError(f"a {where}'s 'items' must be an object")
+    for item_id, definition in items.items():
+        if item_id in ITEM_IDS and item_id not in CUSTOM_ITEM_IDS:
+            raise ValueError(f"items['{item_id}'] is a built-in item and cannot be redefined")
+        if item_id not in CUSTOM_ITEM_IDS:
+            raise ValueError(f"items['{item_id}'] is not an item slot "
+                             f"(custom slots: {', '.join(CUSTOM_ITEM_IDS)})")
+        if not isinstance(definition, dict):
+            raise ValueError(f"items['{item_id}'] must be an object")
 
 
 def _validate_record(item, kind, label, partial):
@@ -188,6 +211,10 @@ def validate_snapshot(data) -> None:
     for field in _RUNTIME_STRINGS:
         if runtime.get(field) is not None and not isinstance(runtime[field], str):
             raise ValueError(f"save runtime['{field}'] must be a string")
+    weapons = runtime.get('weapons')
+    if weapons is not None and not (isinstance(weapons, list)
+                                    and all(isinstance(w, str) for w in weapons)):
+        raise ValueError("save runtime['weapons'] must be a list of item ids")
     for family, schema in _STATE_SCHEMAS.items():
         states = runtime.get(family)
         if states is None:
