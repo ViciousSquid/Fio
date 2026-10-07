@@ -125,6 +125,19 @@ forward; see **Breaking changes** before upgrading.
   moves over the 3D view.
 - The standalone/Android player compiles the terrain shader on GLES (every
   ES 3.00 sampler type now gets a default precision).
+- Unsaved edits are no longer lost when the level is replaced. Recent Files,
+  the console `map` / `load` commands and the procedural generator ask first,
+  as File > Open does (regenerating replaces the generator's own untouched
+  preview without asking). A level change during Play cannot stop to ask, so
+  the edited level is written to `maps/<name>_autosave.json` first, as edited
+  rather than as played when "Restore the world when leaving Play" is on.
+- In the editor's Play Game Package, a LevelChanger or the `map` command
+  changes to the package's own map rather than one in the editor's `maps/`
+  folder, so multi-level packages work away from the author's machine.
+- The `fps` console command no longer raises.
+- The terrain panel re-arms the terrain brush whenever it is shown again.
+- The About dialog finds `editor/version.txt` from any working directory.
+- A Debug Console being torn down no longer raises on a late log message.
 
 ### Hardening
 
@@ -133,6 +146,12 @@ forward; see **Breaking changes** before upgrading.
 - Save games are validated on read the same way; a malformed `.fiosave` can
   no longer leave the session unable to leave Play.
 - `.fiopak` extraction keeps to the player's asset size budget.
+- A `.fiopak` manifest or map over 64 MiB is refused before it is inflated.
+- settings.ini is written atomically, so a failed write cannot truncate it.
+- Map logic can no longer run `vsync` / `r_vsync`, and a map's `fps` toggle
+  no longer writes settings.ini.
+- 20 test modules that skipped without PyQt5 but were not marked `qt` ran in
+  no tier; they are marked, and the suite-integrity check refuses another.
 
 ## 2.5.11
 
