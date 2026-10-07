@@ -9,6 +9,7 @@ import zipfile
 from player.fiopak import (
     FioPackage,
     MAX_ASSET_ENTRY_BYTES,
+    MAX_DOCUMENT_BYTES,
     MAX_TOTAL_ASSET_BYTES,
     PackageError,
 )
@@ -16,15 +17,18 @@ from player.tests import fixtures
 
 
 
-def _archive_with_declared_sizes(sizes):
-    """Build a real ZIP whose central-directory sizes can be oversized cheaply."""
+def _archive_with_declared_sizes(sizes, names=None):
+    """Build a real ZIP whose central-directory sizes can be oversized cheaply.
+
+    Entries are ``assets/test<N>.bin`` unless *names* gives them.
+    """
     buf = io.BytesIO()
-    names = []
+    if names is None:
+        names = [f"assets/test{index}.bin" for index in range(len(sizes))]
+    names = list(zip(names, sizes))
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
-        for index, declared_size in enumerate(sizes):
-            name = f"assets/test{index}.bin"
+        for name, _declared_size in names:
             zf.writestr(name, b"X")
-            names.append((name, declared_size))
 
     raw = bytearray(buf.getvalue())
     pos = 0
@@ -179,6 +183,25 @@ class TestFioPackage(unittest.TestCase):
         level = pak.load_start_map()
         self.assertIn("brushes", level)
         self.assertIn("things", level)
+
+
+class TestPackageDocumentLimits(unittest.TestCase):
+    """The manifest and maps are parsed whole, so their declared size is
+    checked before they are inflated."""
+
+    def test_oversized_manifest_is_refused(self):
+        data = _archive_with_declared_sizes(
+            [MAX_DOCUMENT_BYTES + 1], names=["metadata.json"])
+        with self.assertRaises(PackageError):
+            FioPackage.from_bytes(data)
+
+    def test_oversized_map_is_refused(self):
+        data = _archive_with_declared_sizes(
+            [MAX_DOCUMENT_BYTES + 1], names=["maps/huge.json"])
+        pak = FioPackage.from_bytes(data)
+        self.addCleanup(pak.close)
+        with self.assertRaises(PackageError):
+            pak.load_start_map()
 
 
 if __name__ == "__main__":

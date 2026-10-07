@@ -682,6 +682,10 @@ class DebugConsole(QWidget):
         queued and inserted together when it closes, and a flush that finds
         more queued keeps the window open for as long as the burst lasts.
         """
+        if sip.isdeleted(self._flush_timer):
+            # The console is being torn down: its timer (a child) is gone
+            # before the logger connection is, and there is nowhere to write.
+            return
         if self._flush_timer.isActive():
             self._pending.append((category, message))
             return

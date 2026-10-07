@@ -101,3 +101,23 @@ def test_a_save_from_a_newer_build_is_refused(tmp_path):
                                 "save_version": savegame.SAVE_VERSION + 1}))
     with pytest.raises(ValueError, match="newer than this build"):
         savegame.read(str(path))
+
+
+@pytest.mark.qt
+def test_a_failed_settings_save_keeps_settings_ini(main_window, tmp_path, monkeypatch):
+    """settings.ini is read once at startup: a truncated one loses them all."""
+    target = tmp_path / "settings.ini"
+    target.write_text("[Display]\nshow_fps = True\n")
+    monkeypatch.setattr(main_window, "config_path", str(target))
+
+    def fail(handle, *args, **kwargs):
+        handle.write("[Display]\n")
+        raise OSError("disk full")
+    monkeypatch.setattr(main_window.config, "write", fail)
+
+    with pytest.raises(OSError):
+        main_window.save_config()
+
+    assert target.read_text() == "[Display]\nshow_fps = True\n"
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith("settings")] \
+        == ["settings.ini"]

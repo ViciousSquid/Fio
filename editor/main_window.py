@@ -1,4 +1,5 @@
 import sys
+import io
 import json
 import os
 import subprocess
@@ -30,7 +31,7 @@ from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
 from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
-from engine.fileio import write_json_atomic
+from engine.fileio import write_json_atomic, write_text_atomic
 from editor.view_2d import View2D, singleton_instance
 from editor.editor_state import EditorState
 from editor import component_edit
@@ -158,10 +159,17 @@ class MainWindow(QMainWindow):
         self.unsaved_changes = False
         #: The world as Play started, when Stop is set to restore it.
         self._pre_play_world = None
+        #: Set while the open level is the procedural generator's untouched
+        #: output (holds the top undo entry it was loaded with), so a
+        #: regenerate can replace its own preview without asking.
+        self._generated_level_marker = None
+        #: Extraction folder of the package whose levels are open, so a level
+        #: change inside it finds the package's maps.
+        self._package_level_dir = None
         self._previous_tab_index = None
         self.file_path = None
         self.recent_files = []
-        self.load_level_signal.connect(self.load_level_file)
+        self.load_level_signal.connect(self.open_level_file)
 
         self.setWindowTitle("Fio")
         self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
@@ -498,7 +506,7 @@ class MainWindow(QMainWindow):
             action = QAction(fname, self.recent_menu)
             action.setToolTip(path)
             # Use lambda with default arg to capture variable in loop
-            action.triggered.connect(lambda checked, p=path: self.load_level_file(p))
+            action.triggered.connect(lambda checked, p=path: self.open_level_file(p))
             self.recent_menu.addAction(action)
 
     def setup_autosave(self):
@@ -515,7 +523,14 @@ class MainWindow(QMainWindow):
         """Background autosave to a specific autosave file."""
         if not self.unsaved_changes:
             return # Nothing to save
-            
+        self._write_autosave()
+
+    def _write_autosave(self):
+        """Write the open level to its ``maps/*_autosave.json`` file.
+
+        Returns the path written, or ``None`` if the write failed. The
+        unsaved flag is left alone: an autosave is not the level's file.
+        """
         try:
             # Ensure maps directory exists
             autosave_dir = os.path.join(self.root_dir, "maps")
@@ -534,10 +549,11 @@ class MainWindow(QMainWindow):
             write_json_atomic(save_path, self.state.get_level_data(), indent=4)
 
             print(f"[Autosave] Saved to {save_path}")
-            # Do NOT clear unsaved_changes flag on autosave
+            return save_path
             
         except Exception as e:
             print(f"Autosave failed: {e}")
+            return None
 
     def show_procedural_map_generator(self):
         """Open the procedural map generator as an overlay in the Properties dock."""
@@ -557,13 +573,27 @@ class MainWindow(QMainWindow):
         - if map_data is None → user clicked X → close the overlay
         """
         if map_data is not None:
+            # Regenerating replaces the generator's own previous, untouched
+            # output without asking; anything else unsaved is the user's work.
+            marker = self._generated_level_marker
+            replacing_preview = (
+                marker is not None and self.file_path is None
+                and marker[0] is self._undo_top())
+            if not replacing_preview and not self.check_unsaved_changes():
+                return
             # Loaded straight from memory: the level has no file until the
             # user saves it, so it opens untitled and unsaved.
             if self._load_level(map_data, None):
+                self._generated_level_marker = (self._undo_top(),)
                 self.show_toast("Generated map loaded – use Save As to keep it")
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
+
+    def _undo_top(self):
+        """The newest undo entry, or ``None``: any edit or undo changes it."""
+        stack = self.state.undo_stack
+        return stack[-1] if stack else None
 
     def center_2d_views_on(self, world_pos):
         """Center all 2D views on the given world position (list/tuple of [x, y, z])."""
@@ -1815,8 +1845,12 @@ class MainWindow(QMainWindow):
         self.config.read(self.config_path)
 
     def save_config(self):
-        with open(self.config_path, 'w') as configfile:
-            self.config.write(configfile)
+        # Serialised first and swapped in whole: a failed write must not
+        # leave settings.ini truncated (it is read once, at startup).  The
+        # locale encoding matches how config.read() decodes it.
+        buffer = io.StringIO()
+        self.config.write(buffer)
+        write_text_atomic(self.config_path, buffer.getvalue(), encoding=None)
 
     def update_global_font(self):
         font_size = self.config.getint('Display', 'font_size', fallback=11)
@@ -2637,7 +2671,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         try:
-            with open('editor/version.txt', 'r') as f:
+            with open(os.path.join(self.root_dir, 'editor', 'version.txt'), 'r') as f:
                 version = f.read().strip()
         except FileNotFoundError:
             version = "Version not found"
@@ -2828,6 +2862,8 @@ class MainWindow(QMainWindow):
         update_all_counters_from_entities([])
         
         self.file_path = None
+        self._generated_level_marker = None
+        self._package_level_dir = None
         self.unsaved_changes = False
         self.update_title()
         self.update_all_ui()
@@ -4177,8 +4213,63 @@ class MainWindow(QMainWindow):
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain
 
+    def open_level_file(self, filePath, destination_spawn=None):
+        """Open *filePath* in place of the current level, guarding unsaved work.
+
+        The entry point for every request that replaces the open level without
+        a file dialog of its own: Recent Files, a LevelChanger and the console
+        ``map`` command. In the editor it asks first, as File > Open does.
+        During Play it cannot stop the game to ask, so :meth:`_load_level`
+        writes the unsaved level to its autosave file instead.
+        """
+        package_map = self._package_map_path(filePath)
+        playing = self.view_3d is not None and bool(self.view_3d.play_mode)
+        if not playing and not self.check_unsaved_changes():
+            return False
+        if package_map is not None:
+            return self._load_package_map(package_map, destination_spawn)
+        return self.load_level_file(filePath, destination_spawn)
+
+    def _package_map_path(self, relative_path):
+        """The played package's copy of *relative_path*, or ``None``.
+
+        While a level from a ``.fiopak`` is open, a level change names a map
+        inside that package (``maps/next.json``), not one in the editor's own
+        ``maps/`` folder.
+        """
+        package_dir = self._package_level_dir
+        if not package_dir or os.path.isabs(relative_path):
+            return None
+        package_dir = os.path.realpath(package_dir)
+        candidate = os.path.realpath(os.path.join(package_dir, relative_path))
+        if not candidate.startswith(package_dir + os.sep):
+            return None
+        return candidate if os.path.isfile(candidate) else None
+
+    def _load_package_map(self, map_path, destination_spawn=None):
+        """Open a map from the extracted package as an untitled, saved level.
+
+        Like the package's start map, it never takes the extraction's path as
+        its file: the first save goes through Save As.
+        """
+        try:
+            with open(map_path, 'r', encoding='utf-8') as f:
+                level_data = json.load(f)
+        except Exception as e:
+            print(f"ERROR loading level {map_path}: {e}")
+            self.show_toast(f"Failed to load level: {e}", is_error=True)
+            return False
+        if not self._load_level(level_data, None, destination_spawn):
+            return False
+        self.unsaved_changes = False
+        self.update_title()
+        return True
+
     def load_level_file(self, filePath, destination_spawn=None):
         """Loads a level from disk. Used for both normal loading and LevelChanger.
+
+        Replaces the open level unconditionally; callers that have not asked
+        about unsaved changes go through :meth:`open_level_file`.
 
         *destination_spawn* names the PlayerStart a LevelChanger sends the
         player to; empty or None means the level's primary start.
@@ -4242,8 +4333,10 @@ class MainWindow(QMainWindow):
                        if was_playing and logic is not None else None)
             if was_playing:
                 # The world captured at Play belongs to the map being left.
+                captured = self._pre_play_world
                 self._pre_play_world = None
                 self._exit_play_mode()
+                self._keep_unsaved_work_on_level_change(captured)
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
@@ -4291,6 +4384,10 @@ class MainWindow(QMainWindow):
 
             # Update file path and UI state
             self.file_path = file_path
+            self._generated_level_marker = None
+            if file_path is not None:
+                # A map opened from disk ends the package session.
+                self._package_level_dir = None
             self.unsaved_changes = file_path is None
             loaded = True
             self.update_title()
@@ -4337,6 +4434,29 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             self.show_toast(f"Failed to load level: {e}", is_error=True)
             return False
+
+    def _keep_unsaved_work_on_level_change(self, captured):
+        """Save unsaved edits to the autosave file before a level change in Play.
+
+        A LevelChanger or a map's ``map`` command replaces the level while the
+        game runs, so there is no moment to ask. *captured* is the world taken
+        when Play started (``None`` unless Stop restores it); when it held
+        unsaved edits it is put back first, so the autosave holds what the
+        user built rather than what the game did to it.
+        """
+        if captured is not None and captured[3]:
+            self._pre_play_world = captured
+            self._restore_pre_play_world()
+        if not self.unsaved_changes:
+            return None
+        path = self._write_autosave()
+        if path:
+            self.show_toast(
+                f"Unsaved changes kept in maps/{os.path.basename(path)}")
+        else:
+            self.show_toast("Could not keep unsaved changes before the "
+                            "level change", is_error=True)
+        return path
 
     def _enforce_layout_constraints(self):
         """Keep saved/restored Qt layout state inside Fio's supported topology.
@@ -4624,6 +4744,7 @@ class MainWindow(QMainWindow):
     def _discard_package_temp_dir(self):
         temp_dir = getattr(self, '_package_temp_dir', None)
         self._package_temp_dir = None
+        self._package_level_dir = None
         if temp_dir:
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -4659,6 +4780,7 @@ class MainWindow(QMainWindow):
             # One extracted package at a time; the previous one is released.
             self._discard_package_temp_dir()
             self._package_temp_dir = temp_dir
+            self._package_level_dir = temp_dir
             temp_dir = None  # owned by the window now; removed on close
 
             self.unsaved_changes = False

@@ -45,6 +45,10 @@ _ASSET_SUBDIRS = ("", "textures", "models", "sounds", "sprites", "materials")
 MAX_ASSET_ENTRY_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_ASSET_BYTES = 512 * 1024 * 1024
 
+# The manifest and map documents are parsed whole, so they get their own cap.
+# The largest shipped map (a streamed Big World) is under 3 MiB.
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+
 
 
 class PackageError(Exception):
@@ -328,8 +332,17 @@ class FioPackage:
     # Internals
     # ------------------------------------------------------------------
     def _read_raw(self, name: str) -> Optional[bytes]:
+        """Bytes of a manifest or map entry, refusing one too large to parse."""
         if name not in self._names:
             return None
+        try:
+            size = self._zf.getinfo(name).file_size
+        except KeyError:
+            return None
+        if size > MAX_DOCUMENT_BYTES:
+            raise PackageError(
+                f"'{name}' is {size} bytes, over the {MAX_DOCUMENT_BYTES} "
+                f"byte limit for package documents")
         try:
             return self._zf.read(name)
         except (KeyError, zipfile.BadZipFile):

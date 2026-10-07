@@ -1,4 +1,4 @@
-"""Crash-safe writes for Fio's documents (maps, autosaves, saved games).
+"""Crash-safe writes for Fio's documents (maps, autosaves, saved games, settings).
 
 Opening the destination with ``open(path, "w")`` truncates it before a single
 byte of the new document exists, so anything that fails while the document is
@@ -19,10 +19,17 @@ def write_json_atomic(path: str, data, **dump_kwargs) -> None:
     ``default``...).  Serialisation errors are raised before the filesystem is
     touched.
     """
-    text = json.dumps(data, **dump_kwargs)
+    write_text_atomic(path, json.dumps(data, **dump_kwargs))
+
+
+def write_text_atomic(path: str, text: str, encoding="utf-8") -> None:
+    """Write *text* to *path*, replacing it only once fully written.
+
+    ``encoding=None`` uses the locale's default, as a plain ``open`` does.
+    """
     temporary = "%s.tmp" % path
     try:
-        with open(temporary, "w", encoding="utf-8") as handle:
+        with open(temporary, "w", encoding=encoding) as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())

@@ -194,8 +194,9 @@ class ConsoleCommandHandler:
     #: could otherwise leave the user's editor with keys that run its commands
     #: long after the package is closed.
     #: Never from map logic: a renderer swap is the user's (and may start
-    #: plugin code), like a key binding.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer'})
+    #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
+    #: but flip the stored preference in settings.ini.
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync'})
 
     def handle_command(self, cmd_string, *, from_map=False):
         """Run one console command line.
@@ -2335,9 +2336,8 @@ entity to drive them from the I/O system.</i><br>
         if not config.has_section('Display'):
             config.add_section('Display')
         config.set('Display', 'show_fps', str(show))
-        if self.main_window.show_fps_checkbox:
-            self.main_window.show_fps_checkbox.setChecked(show)
-        self.main_window.save_config()
+        if not self._command_from_map:
+            self.main_window.save_config()
         self.main_window.view_3d.update()
         debug_log("Info", f"FPS display {'ON' if show else 'OFF'}")
 
@@ -2356,9 +2356,18 @@ entity to drive them from the I/O system.</i><br>
         if not map_path.startswith(maps_dir + os.sep):
             debug_log("Error", f"map: '{map_name}' is outside the maps folder")
             return
-        if os.path.exists(map_path):
-            self.main_window.load_level_file(map_path)
-            debug_log("Info", f"Loaded map {map_name}")
+        # While a played package is open its own maps/ comes first, as for a
+        # LevelChanger (open_level_file resolves the relative name).
+        relative = os.path.join('maps', os.path.relpath(map_path, maps_dir))
+        if self.main_window._package_map_path(relative) is not None:
+            target = relative
+        elif os.path.exists(map_path):
+            target = map_path
+        else:
+            target = None
+        if target is not None:
+            if self.main_window.open_level_file(target):
+                debug_log("Info", f"Loaded map {map_name}")
         else:
             debug_log("Error", f"Map not found: {map_name}")
 
@@ -2539,7 +2548,10 @@ entity to drive them from the I/O system.</i><br>
             map_path = os.path.join(self.main_window.root_dir, 'maps',
                                     os.path.basename(str(map_name)))
             if os.path.isfile(map_path):
-                self.main_window.load_level_file(map_path)
+                # Cancelled at the unsaved-changes prompt, or the map failed
+                # to load: the save belongs to that map, so stop here.
+                if not self.main_window.open_level_file(map_path):
+                    return
             else:
                 debug_log("Warning",
                           f"load: map '{map_name}' not found; applying to the "

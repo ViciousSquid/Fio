@@ -242,3 +242,16 @@ def test_checking_for_none_does_not_detect_a_destroyed_object(qt_app):
     assert hasattr(widget, "isVisible")
     assert sip.isdeleted(widget) is True, (
         "the only check that works did not work")
+
+
+def test_a_console_being_torn_down_ignores_late_messages():
+    """Its flush timer is a child, destroyed before the console's logger
+    connection is: a message arriving in between raised "wrapped C/C++ object
+    of type QTimer has been deleted" from inside a Qt callback."""
+    console = dc.DebugConsole()
+    try:
+        sip.delete(console._flush_timer)
+        console._on_message("Info", "[Info] late")     # must not raise
+        assert console._pending == []
+    finally:
+        console.deleteLater()

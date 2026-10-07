@@ -1986,10 +1986,6 @@ class TerrainEditorPanel(QWidget):
         if self.editor:
             self.editor._close_current_overlay()
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._sync_terrain_brush_activation()
-
     def closeEvent(self, event):
         """Disable the terrain brush when the panel is closed."""
         view_3d = self.editor.view_3d if self.editor else None
@@ -2041,6 +2037,7 @@ class TerrainEditorPanel(QWidget):
     
     def showEvent(self, event):
         super().showEvent(event)
+        self._sync_terrain_brush_activation()
         self.update_stats()
         if not hasattr(self, '_stats_timer'):
             self._stats_timer = QTimer(self)
