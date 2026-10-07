@@ -24,6 +24,8 @@ from .test_bigworld_tiers import make_thing, grid_world
 
 pytest.importorskip("PyQt5", reason="Big World overhead tests use real LogicThread/LogicCamera")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.threaded_game_state import ThreadedGameState

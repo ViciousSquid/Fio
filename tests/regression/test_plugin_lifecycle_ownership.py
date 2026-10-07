@@ -124,16 +124,6 @@ def test_the_manager_is_the_only_caller_of_the_lifecycle_dispatchers():
 # Behavioural: one dispatch per play session, over repeated cycles
 # ---------------------------------------------------------------------------
 
-pytest.importorskip("PyQt5", reason="drives the real editor state and logic thread")
-
-from editor.editor_state import EditorState               # noqa: E402
-from editor.things import PlayerStart                     # noqa: E402
-from engine.logic_thread import LogicThread               # noqa: E402
-from engine.player import Player                          # noqa: E402
-from engine.threaded_game_state import ThreadedGameState  # noqa: E402
-from plugins.bigworld.entities import BigWorldSettings    # noqa: E402
-from tests.helpers.worlds import box_brush, make_thing    # noqa: E402
-
 
 class _Counter:
     """Counts lifecycle dispatches without changing what they do."""
@@ -162,7 +152,20 @@ class _Counter:
 
 @pytest.fixture
 def streaming_session():
-    """A Big World map in a real ``LogicThread``, with lifecycle instrumented."""
+    """A Big World map in a real ``LogicThread``, with lifecycle instrumented.
+
+    PyQt5 is required here rather than at module level, so the static checks
+    above still run in the fast tier.
+    """
+    pytest.importorskip("PyQt5", reason="drives the real editor state and logic thread")
+    from editor.editor_state import EditorState
+    from editor.things import PlayerStart
+    from engine.logic_thread import LogicThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
+    from plugins.bigworld.entities import BigWorldSettings
+    from tests.helpers.worlds import box_brush, make_thing
+
     made = []
 
     def _build(bigworld=True):

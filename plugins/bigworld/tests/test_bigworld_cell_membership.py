@@ -21,6 +21,8 @@ import sys
 import pytest
 pytest.importorskip("PyQt5", reason="Big World membership tests exercise the real LogicThread owner")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Thing as FioThing
 from engine.logic_thread import LogicThread

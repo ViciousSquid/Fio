@@ -6,6 +6,8 @@ import glm
 
 pytest.importorskip("PyQt5", reason="LevelChanger entities require the Qt-backed editor things")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import LevelChanger
 from engine.logic_thread import LogicThread

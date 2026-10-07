@@ -53,6 +53,8 @@ def _check(cond, msg):
 import pytest
 pytest.importorskip("PyQt5", reason="Big World session tests exercise LogicThread/editor machinery")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Thing
 from engine.logic_thread import LogicThread

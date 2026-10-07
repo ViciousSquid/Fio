@@ -114,7 +114,8 @@ self-contained packages; `pytest.ini` includes them in every run.
 ## Adding a test
 
 Put it in the area it belongs to, mark it if it needs more than Python and
-NumPy, and prefer the factories in `tests/helpers/worlds.py` over hand-built
+NumPy (a module that calls `pytest.importorskip("PyQt5")` needs the `qt`
+mark, or no tier runs it), and prefer the factories in `tests/helpers/worlds.py` over hand-built
 dicts so the fixture reads as a world rather than as JSON. If a test needs a
 plugin, add one to `tests/plugins/fixtures/` rather than reaching for a mock —
 they are real plugins, and the point is that the host treats them as such.

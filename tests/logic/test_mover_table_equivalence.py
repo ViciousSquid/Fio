@@ -37,6 +37,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
+from editor.debug_console import debug_log                         # noqa: E402
 from editor.editor_state import EditorState                       # noqa: E402
 from editor.io_handlers import register_all_input_handlers       # noqa: E402
 from editor.io_system import IOManager, OutputConnection          # noqa: E402

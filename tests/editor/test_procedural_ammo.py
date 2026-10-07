@@ -6,6 +6,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the generator is editor-tier")
 
+pytestmark = pytest.mark.qt
+
 from editor.procedural_generator import (  # noqa: E402
     RANDOM_FLOOR_TEXTURES,
     RANDOM_WALL_TEXTURES,

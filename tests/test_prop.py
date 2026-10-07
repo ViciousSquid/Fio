@@ -2,6 +2,8 @@
 import pytest
 
 pytest.importorskip('PyQt5')
+
+pytestmark = pytest.mark.qt
 from editor.things import Thing, Prop
 
 

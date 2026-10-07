@@ -24,6 +24,8 @@ from plugins.bigworld.tiers import TIER_HYSTERESIS, TierClassifier
 
 pytest.importorskip("PyQt5", reason="Big World machinery uses the real editor/logic owners")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Thing
 from engine.logic_thread import LogicThread

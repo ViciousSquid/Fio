@@ -8,6 +8,8 @@ import pytest
 import threading
 from collections import deque
 
+pytestmark = pytest.mark.qt
+
 
 def _state():
     """A real EditorState whose journal a renderer has already drained.

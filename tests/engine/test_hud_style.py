@@ -4,6 +4,8 @@ import pytest
 
 pytest.importorskip("PyQt5")
 
+pytestmark = pytest.mark.qt
+
 from engine.qt_game_view import QtGameView
 
 

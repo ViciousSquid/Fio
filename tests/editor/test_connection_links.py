@@ -6,6 +6,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
+pytestmark = pytest.mark.qt
+
 from PyQt5.QtCore import QPointF, QRectF
 from PyQt5.QtGui import QImage, QPainter
 

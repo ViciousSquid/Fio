@@ -15,6 +15,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the generator is editor-tier")
 
+pytestmark = pytest.mark.qt
+
 from editor.procedural_generator import (  # noqa: E402
     YIELD_EVERY_COLUMNS, create_map_data, generate_brushes_from_grid)
 

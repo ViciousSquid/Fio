@@ -11,6 +11,8 @@ import glm
 
 pytest.importorskip("PyQt5", reason="the production LogicThread uses Qt-backed editor entities")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Light, LevelChanger, Portal
 from engine.logic_thread import LogicThread

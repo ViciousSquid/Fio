@@ -15,6 +15,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="engine.logic_thread imports the editor tier")
 
+pytestmark = pytest.mark.qt
+
 from engine.logic_camera import LogicCamera              # noqa: E402
 from engine.logic_thread import LogicThread               # noqa: E402
 from engine.monster_ai import MonsterAI                   # noqa: E402

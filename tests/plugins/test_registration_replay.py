@@ -13,6 +13,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the plugin registries are editor-tier")
 
+pytestmark = pytest.mark.qt
+
 from plugins.manager import get_manager, load_plugins  # noqa: E402
 
 

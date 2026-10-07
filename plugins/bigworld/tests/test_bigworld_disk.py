@@ -41,6 +41,8 @@ from plugins.bigworld.streaming import (DiskStreamingSession,   # noqa: E402
 
 pytest.importorskip("PyQt5", reason="Big World disk tests exercise real LogicThread/editor state")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Thing
 from engine.logic_thread import LogicThread

@@ -42,6 +42,8 @@ from plugins.bigworld.runtime import BigWorldSession  # noqa: E402
 import pytest
 pytest.importorskip("PyQt5", reason="Big World save tests exercise the real LogicThread/editor state")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from editor.things import Thing
 from engine.logic_thread import LogicThread
@@ -187,7 +189,7 @@ def test_forced_delta_save_structure():
         base_world=s.base_identity("world.json"))
 
     assert snap["fio_savegame"] is True
-    assert snap["save_version"] == 2
+    assert snap["save_version"] == savegame.SAVE_VERSION
     assert snap["save_mode"] == "delta"          # forced
     assert snap["world_mode"] == "bigworld"
     assert "level" not in snap                     # never a full snapshot

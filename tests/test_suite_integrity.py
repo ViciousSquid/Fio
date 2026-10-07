@@ -75,6 +75,59 @@ def test_every_test_module_compiles(path):
             % (_rel(path), exc.lineno, exc.msg))
 
 
+def _module_skips_without_pyqt5(tree):
+    """True when the module body itself calls ``pytest.importorskip("PyQt5")``."""
+    for node in tree.body:
+        call = node.value if isinstance(node, ast.Expr) else None
+        if (isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "importorskip"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == "PyQt5"):
+            return True
+    return False
+
+
+_DESKTOP_TIERS = ("qt", "gl")
+
+
+def _module_is_in_a_desktop_tier(tree):
+    """True when ``pytestmark`` names the qt or gl tier, or every test does."""
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "pytestmark"
+                   for t in node.targets):
+            continue
+        values = (node.value.elts if isinstance(node.value, (ast.List, ast.Tuple))
+                  else [node.value])
+        if any(isinstance(v, ast.Attribute) and v.attr in _DESKTOP_TIERS
+               for v in values):
+            return True
+    tests = [node for node in tree.body
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name.startswith("test")]
+    return bool(tests) and all(
+        any(isinstance(d, ast.Attribute) and d.attr in _DESKTOP_TIERS
+            for d in test.decorator_list)
+        for test in tests)
+
+
+@pytest.mark.parametrize("path", ALL_MODULES, ids=_rel)
+def test_a_module_that_needs_pyqt5_is_in_the_qt_tier(path):
+    """Skipped without PyQt5 and selected only by ``-m "not qt"``, an unmarked
+    module runs in no tier: the fast tier lacks PyQt5 and the Qt tier
+    deselects it.  Twenty modules sat there, 112 of their tests broken."""
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    if _module_skips_without_pyqt5(tree):
+        assert _module_is_in_a_desktop_tier(tree), (
+            "%s calls pytest.importorskip('PyQt5') at module level but is not "
+            "marked `pytestmark = pytest.mark.qt` (or gl), so no test tier "
+            "runs it"
+            % _rel(path))
+
+
 @pytest.mark.parametrize("path", ALL_MODULES, ids=_rel)
 def test_every_test_module_defines_at_least_one_test(path):
     """A module that parses but declares nothing is coverage that is not there."""

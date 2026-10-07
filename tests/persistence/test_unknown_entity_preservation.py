@@ -25,10 +25,6 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def _legacy():
-    return json.loads(FIXTURE.read_text())
-
-
 def test_unknown_entity_types_are_preserved_not_dropped(state):
     from editor.things import UnresolvedThing
     record = {

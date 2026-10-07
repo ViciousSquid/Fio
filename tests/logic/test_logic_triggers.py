@@ -5,6 +5,8 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="LogicThread owns Qt-backed entity types")
 
+pytestmark = pytest.mark.qt
+
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.threaded_game_state import ThreadedGameState

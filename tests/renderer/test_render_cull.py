@@ -281,7 +281,7 @@ def test_overhead_mode_is_far_tighter_than_the_distance_ceiling():
     half_width = max(max_x - min_x, max_z - min_z) * 0.5
     assert half_width < DEFAULT_VIEW_DISTANCE * 0.5, (
         f"overhead box half-width {half_width:.0f} is no tighter than the "
-        f"{CAMERA_RENDER_CULL_DISTANCE:.0f} ceiling")
+        f"{DEFAULT_VIEW_DISTANCE:.0f} ceiling")
 
 
 def test_first_person_degrades_to_the_distance_ceiling():

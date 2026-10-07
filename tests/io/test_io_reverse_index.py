@@ -155,6 +155,7 @@ def test_the_index_is_rebuilt_when_connections_change(scene):
     assert io.target_index(brushes, things) is not first
 
 
+@pytest.mark.qt
 def test_renaming_bumps_the_revision_so_dependent_panels_rebuild(scene):
     """A target's panel quotes its sources' names but cannot see them change."""
     brushes, things = scene
@@ -178,6 +179,7 @@ def test_renaming_bumps_the_revision_so_dependent_panels_rebuild(scene):
         editor.statusBar().deleteLater()
 
 
+@pytest.mark.qt
 def test_a_deleted_source_does_not_outlive_a_delete_then_place():
     """Delete one entity, place another: counts and list identity are restored.
 

@@ -50,6 +50,7 @@ def test_sprite_candidates_resolves_nested_sprite_path_without_name_error():
     assert candidates[-1] == ("Barrel", "frame_01.png", "sprites/animated/door", True)
 
 
+@pytest.mark.qt
 def test_a_dead_monster_row_interns_a_distinct_dead_sprite_recipe():
     pytest.importorskip("PyQt5", reason="Monster lives in editor.things")
     from editor.things import Monster
