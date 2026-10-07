@@ -546,6 +546,7 @@ class LightingMixin:
                     self._point_brush_instances_at(0)
                     gl.glDrawArraysInstanced(
                         gl.GL_TRIANGLES, 0, 36, len(cube_slots))
+                    self.render_stats.shadow_draw_calls += 1
                     gl.glUseProgram(shader)
                     gl.glUniformMatrix4fv(
                         lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
@@ -556,6 +557,7 @@ class LightingMixin:
                         gl.glUniformMatrix4fv(
                             model_loc, 1, gl.GL_FALSE, cube_models[i])
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                        self.render_stats.shadow_draw_calls += 1
 
                 gl.glBindVertexArray(cube_vao)
                 if len(geo_slots):
@@ -572,6 +574,7 @@ class LightingMixin:
                         gl.glBindVertexArray(mesh.vao)
                         gl.glDrawArrays(
                             gl.GL_TRIANGLES, 0, mesh.count)
+                        self.render_stats.shadow_draw_calls += 1
                         gl.glBindVertexArray(cube_vao)
 
                 for slot_value, obj in resolved_models:
@@ -592,6 +595,7 @@ class LightingMixin:
                     else:
                         gl.glDrawArrays(
                             gl.GL_TRIANGLES, 0, obj.vertex_count)
+                    self.render_stats.shadow_draw_calls += 1
 
             self._shadow_slot_sig[slot] = sig
 

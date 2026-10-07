@@ -8,66 +8,10 @@ GL at all here -- registers by name and is created by the host's own path.
 import pytest
 
 from engine.renderer import (
-    DEFAULT_RENDERER, FRAME_INPUT, RenderStats, Renderer, available_renderers,
+    DEFAULT_RENDERER, FRAME_INPUT, Renderer, available_renderers,
     create_renderer, register_renderer, renderer_factory)
 from engine.renderer import registry
-
-
-class StubRenderer:
-    """The smallest conforming renderer: every member, no technique."""
-
-    def __init__(self, config):
-        self.config = config
-        self.view_distance = None
-        self.shadows_enabled = True
-        self.water_quality = 'expensive'
-        self.render_stats = RenderStats()
-        self.frames = []
-
-    @property
-    def ready(self):
-        return True
-
-    def cleanup(self):
-        pass
-
-    def render_scene(self, projection, view, camera_pos, primary_selection,
-                     config, clear=True, brush_slots=None):
-        self.frames.append((primary_selection, dict(config), brush_slots))
-
-    def set_grid(self, world_size, grid_size):
-        pass
-
-    def load_texture(self, texture_name, subfolder):
-        return 0
-
-    def set_sprite_textures(self, textures):
-        pass
-
-    def get_loaded_model(self, filename):
-        return None
-
-    def draw_billboards(self, projection, view, positions, size, tex_id):
-        return 0
-
-    def draw_player_glasses(self, projection, view, positions,
-                            width=40.0, height=18.0, lift=0.0, sprites=()):
-        pass
-
-    def draw_bullet_marks(self, projection, view, marks):
-        pass
-
-    def draw_connection_lines(self, projection, view, connections):
-        pass
-
-    def draw_face_highlight(self, projection, view, brush, face_name):
-        pass
-
-    def draw_component_overlay(self, projection, view, overlay, version=None):
-        pass
-
-    def draw_collision_visualization(self, projection, view, brushes):
-        pass
+from tests.helpers.renderers import StubRenderer
 
 
 @pytest.fixture

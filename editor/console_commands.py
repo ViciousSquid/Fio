@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QMessageBox
 from editor.debug_console import debug_log
 from engine.change_journal import touch
 from engine.spatial import set_authored_flag
-from engine.renderer import WATER_QUALITIES
+from engine.renderer import WATER_QUALITIES, available_renderers
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -35,6 +35,8 @@ class ConsoleCommandHandler:
         self.main_window = main_window
         self.editor_state = main_window.state
         self._command_from_map = False
+        #: The Display mode r_wireframe returns to when it is turned off.
+        self._display_before_wireframe = None
 
         self.commands = {
             'bind': self.cmd_bind,
@@ -119,14 +121,10 @@ class ConsoleCommandHandler:
             'listsaves': self.cmd_list_saves,
 
             'r_list': self.cmd_render_list,
+            'r_renderer': self.cmd_renderer,
             'r_wireframe': self.cmd_render_wireframe,
             'r_shadows': self.cmd_render_shadows,
-            'r_fog': self.cmd_render_fog,
-            'r_water': self.cmd_render_water,
             'r_waterquality': self.cmd_water_quality,
-            'r_glass': self.cmd_render_glass,
-            'r_lighting': self.cmd_render_lighting,
-            'r_deferred': self.cmd_render_deferred,
             'r_vsync': self.cmd_render_vsync,
             'r_clearcolor': self.cmd_render_clearcolor,
             'r_info': self.cmd_render_info,
@@ -150,12 +148,7 @@ class ConsoleCommandHandler:
             # Short aliases
             'wireframe': self.cmd_render_wireframe,
             'shadows': self.cmd_render_shadows,
-            'fog': self.cmd_render_fog,
-            'water': self.cmd_render_water,
             'waterquality': self.cmd_water_quality,
-            'glass': self.cmd_render_glass,
-            'lighting': self.cmd_render_lighting,
-            'deferred': self.cmd_render_deferred,
             'vsync': self.cmd_render_vsync,
             'viewdistance': self.cmd_view_distance,
             'culldistance': self.cmd_view_distance,
@@ -198,7 +191,9 @@ class ConsoleCommandHandler:
     #: writes a key -> command binding into settings.ini, so a played package
     #: could otherwise leave the user's editor with keys that run its commands
     #: long after the package is closed.
-    USER_ONLY_COMMANDS = frozenset({'bind'})
+    #: Never from map logic: a renderer swap is the user's (and may start
+    #: plugin code), like a key binding.
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer'})
 
     def handle_command(self, cmd_string, *, from_map=False):
         """Run one console command line.
@@ -984,11 +979,10 @@ class ConsoleCommandHandler:
 <b style="color:cyan;">=== Rendering ===</b><br>
 <b style="color:orange;">ss</b> — Toggle split-screen mode (F9)<br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
-<b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
+<b style="color:orange;">r_renderer</b> [name] — List the registered renderers, or switch to one live<br>
+<b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> [on|off] — Wireframe display (the Display box); off returns to the previous mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
-<b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
 <b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Debug cap: cheap forces all water cheap; expensive lets each brush's High quality decide<br>
-<b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
 <i>Fog always reaches full opacity before the clip, so pulling the view
@@ -1070,6 +1064,8 @@ entity to drive them from the I/O system.</i><br>
 
         # Only the renderer-independent settings of the Renderer contract;
         # anything else is the active renderer's own business.
+        add_line("Renderer", self.main_window.view_3d.renderer_mode)
+        add_line("Display", self.main_window.display_mode_combobox.currentText())
         add_line("Shadows", "ON" if renderer.shadows_enabled else "OFF")
         add_line("Water quality cap",
                  "per brush" if renderer.water_quality == 'expensive'
@@ -1088,32 +1084,63 @@ entity to drive them from the I/O system.</i><br>
         """Detailed renderer status"""
         self.cmd_render_list(args)
 
-    def cmd_render_wireframe(self, args):
-        renderer = self._get_renderer()
-        if not renderer:
+    def cmd_renderer(self, args):
+        """List the registered renderers, or switch to one: ``r_renderer [name]``.
+
+        Names match case-insensitively. The swap is live (editor or play) and
+        keeps the current renderer if the new one fails to start.
+        """
+        view = self.main_window.view_3d
+        names = available_renderers()
+        wanted = args.split()[0] if args.split() else ""
+        if not wanted:
+            listing = ", ".join(
+                f"<b>{name}</b> (active)" if name == view.renderer_mode else name
+                for name in names)
+            debug_log("Info", f"Renderers: {listing}")
             return
-        renderer.wireframe = not renderer.wireframe
-        state = "ON" if renderer.wireframe else "OFF"
-        debug_log("Info", f"Wireframe: {state}")
-        self.main_window.view_3d.update()
+        match = next((name for name in names if name.lower() == wanted.lower()), None)
+        if match is None:
+            debug_log("Warning", f"No renderer '{wanted}'. Registered: {', '.join(names)}")
+            return
+        if view.switch_renderer(match):
+            debug_log("Info", f"Renderer: {view.renderer_mode}")
+        else:
+            debug_log("Error", f"Renderer '{match}' failed to start; still using "
+                               f"{view.renderer_mode}.")
+
+    def cmd_render_wireframe(self, args):
+        """Wireframe display: ``r_wireframe [on|off]``; no argument toggles.
+
+        Drives the editor's Display box, so the two always agree: on selects
+        "Wireframe", off returns to the mode that was showing before it
+        ("Solid Lit" if wireframe was already on when the session started).
+        """
+        combo = self.main_window.display_mode_combobox
+        current = combo.currentText()
+        word = args.split()[0].lower() if args.split() else ""
+        if word in ("1", "on", "true", "yes"):
+            wanted = True
+        elif word in ("0", "off", "false", "no"):
+            wanted = False
+        elif not word:
+            wanted = current != "Wireframe"
+        else:
+            debug_log("Warning", "Usage: r_wireframe [on|off]")
+            return
+        if wanted:
+            if current != "Wireframe":
+                self._display_before_wireframe = current
+            combo.setCurrentText("Wireframe")
+        elif current == "Wireframe":
+            combo.setCurrentText(self._display_before_wireframe or "Solid Lit")
+        debug_log("Info", f"Display: {combo.currentText()}")
 
     def cmd_render_shadows(self, args):
         renderer = self._get_renderer()
         if not renderer: return
         renderer.shadows_enabled = not renderer.shadows_enabled
         debug_log("Info", f"Shadows: {'ON' if renderer.shadows_enabled else 'OFF'}")
-
-    def cmd_render_fog(self, args):
-        renderer = self._get_renderer()
-        if not renderer: return
-        renderer.fog_enabled = not renderer.fog_enabled
-        debug_log("Info", f"Volumetric Fog: {'ON' if renderer.fog_enabled else 'OFF'}")
-
-    def cmd_render_water(self, args):
-        renderer = self._get_renderer()
-        if not renderer: return
-        renderer.water_enabled = not renderer.water_enabled
-        debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
 
     def cmd_water_quality(self, args):
         """Debug cap on water quality: cheap / expensive (no argument toggles).
@@ -1126,7 +1153,7 @@ entity to drive them from the I/O system.</i><br>
         if not renderer: return
         current = renderer.water_quality
         if args:
-            wanted = str(args[0]).strip().lower()
+            wanted = args.split()[0].lower()
             if wanted not in WATER_QUALITIES:
                 debug_log("Warning", "Usage: waterquality [cheap|expensive]")
                 return
@@ -1135,24 +1162,6 @@ entity to drive them from the I/O system.</i><br>
         renderer.water_quality = wanted
         debug_log("Info", "Water quality: " + (
             "per brush" if wanted == 'expensive' else "cheap (all water)"))
-
-    def cmd_render_glass(self, args):
-        renderer = self._get_renderer()
-        if not renderer: return
-        renderer.glass_enabled = not renderer.glass_enabled
-        debug_log("Info", f"Glass shader: {'ON' if renderer.glass_enabled else 'OFF'}")
-
-    def cmd_render_lighting(self, args):
-        renderer = self._get_renderer()
-        if not renderer: return
-        renderer.lighting_enabled = not renderer.lighting_enabled
-        debug_log("Info", f"Real-time lighting: {'ON' if renderer.lighting_enabled else 'OFF'}")
-
-    def cmd_render_deferred(self, args):
-        renderer = self._get_renderer()
-        if not renderer: return
-        renderer.use_deferred = not renderer.use_deferred
-        debug_log("Info", f"Deferred rendering: {'ON' if renderer.use_deferred else 'OFF'}")
 
     def cmd_render_vsync(self, args):
         config = self.main_window.config

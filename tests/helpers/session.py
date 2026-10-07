@@ -167,6 +167,8 @@ class FioTestSession:
         import gc
         import weakref
         from PyQt5.QtCore import QEvent
+        if self.window is None:          # already closed
+            return
         try:
             self.stop_play()
         finally:

@@ -40,6 +40,7 @@ from engine.brush_geometry import (
 # Runtime-only AABB cache keys written by the physics/AI hot paths (see
 # engine.constants.brush_aabb_bounds). Stripped on save/undo like the rest.
 from engine.constants import AABB_RUNTIME_KEYS
+from engine.view_filters import ViewFilters
 from engine.level_validation import validate_level
 
 _RENDERER_PRIVATE_KEYS = frozenset({
@@ -85,6 +86,9 @@ class EditorState:
         # main window, so undo/redo and scene loads can keep it pointing at
         # objects that are actually in the scene.
         self.selected_objects = []
+        #: Which kinds of object the editor shows (the Filter menu). View
+        #: state, never saved with the map; Play ignores it.
+        self.view_filters = ViewFilters()
         self.terrain_data = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.created_at = ''              # ISO timestamp, set on first save

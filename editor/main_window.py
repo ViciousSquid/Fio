@@ -135,6 +135,9 @@ class Toast(QLabel):
 
 class MainWindow(QMainWindow):
     load_level_signal = pyqtSignal(str)
+    #: Emitted after set_selected_objects changes the selection (viewport,
+    #: Scene Hierarchy, ...); Debug Tables follows it.
+    selection_changed = pyqtSignal()
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
@@ -1301,6 +1304,7 @@ class MainWindow(QMainWindow):
         self.state.selected_objects = list(objects or [])
         primary = self.primary_selection()
         self.update_all_ui()
+        self.selection_changed.emit()
 
     def update_all_ui(self):
         self.property_editor.set_object(self.primary_selection())
@@ -2431,6 +2435,20 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front, self.view_3d]:
             view.world_size = snapped_size
         self.view_3d.update_grid()
+        self.update_views()
+
+    def set_view_filter(self, key, shown):
+        """Show or hide one kind of object in every editor view (Filter menu)."""
+        if self.state.view_filters.set_shown(key, shown):
+            action = self.filter_actions.get(key)
+            if action is not None and action.isChecked() != shown:
+                action.setChecked(shown)
+            self.update_views()
+
+    def show_all_view_filters(self):
+        self.state.view_filters.show_all()
+        for action in self.filter_actions.values():
+            action.setChecked(True)
         self.update_views()
 
     def set_brush_display_mode(self, text):

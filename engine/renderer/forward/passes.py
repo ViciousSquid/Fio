@@ -95,7 +95,7 @@ class PassesMixin:
             self._draw_lit_brushes_instanced(
                 projection, view, lights, table, visible,
                 np.flatnonzero(~geometry).astype(np.int32), models, normals,
-                config, selected_slot)
+                config, selected_slot, fill_mode)
             gl.glUseProgram(shader)
             self._current_shader = shader
             gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
@@ -156,9 +156,96 @@ class PassesMixin:
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
+    @timed_pass('brush edges')
+    def draw_brush_edges(self, projection, view, brushes, config, table):
+        """Each brush as its true edges in its own colour: no fill, no texture.
+
+        A box brush is its 12 edges and an angled brush its convex mesh's
+        edges -- never the triangles a filled mesh is cut into.
+        """
+        if len(brushes) == 0 or 'simple' not in self.shaders:
+            return
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+        model_loc, color_loc = uniforms['model'], uniforms['color']
+        models, _normals = self._frame_transforms(table, brushes)
+        bits = table.class_bits[brushes]
+        colours = table.colour[brushes]
+        selected_slot = self._selected_slot(table, config)
+        geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_meshes = (self._prepare_geo_meshes(table, brushes[geometry])
+                      if geometry.any() else {})
+        edge_vao = self._ensure_edge_vao()
+        bound_vao = None
+        for index, slot in enumerate(brushes):
+            slot = int(slot)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            gl.glUniform3fv(color_loc, 1, _SELECTED_COLOR if slot == selected_slot
+                            else colours[index])
+            mesh = (geo_meshes.get(int(table.geometry_id[slot]))
+                    if geometry[index] else None)
+            vao, count = ((mesh.edge_vao, mesh.edge_count)
+                          if mesh is not None and mesh.edge_count else (edge_vao, 24))
+            if vao != bound_vao:
+                gl.glBindVertexArray(vao)
+                bound_vao = vao
+            gl.glDrawArrays(gl.GL_LINES, 0, count)
+            self.render_stats.draw_calls += 1
+        self.render_stats.visible_brushes += len(brushes)
+        gl.glBindVertexArray(0)
+
+    @timed_pass('triangle overlay')
+    def draw_triangle_overlay(self, projection, view, brushes, table):
+        """Overlay display: every brush triangle as a white line on the frame.
+
+        Drawn over the finished textured, lit brushes, depth-tested and pulled
+        slightly toward the eye so a line wins against its own surface and
+        loses to anything in front of it.
+        """
+        if len(brushes) == 0 or 'simple' not in self.shaders:
+            return
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+        model_loc = uniforms['model']
+        models, _normals = self._frame_transforms(table, brushes)
+        geometry = (table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_meshes = (self._prepare_geo_meshes(table, brushes[geometry])
+                      if geometry.any() else {})
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        gl.glEnable(gl.GL_POLYGON_OFFSET_LINE)
+        gl.glPolygonOffset(-1.0, -1.0)
+        gl.glDepthFunc(gl.GL_LEQUAL)
+        gl.glDepthMask(gl.GL_FALSE)
+        cube_vao = self.vaos['cube']
+        bound_vao = None
+        for index, slot in enumerate(brushes):
+            mesh = (geo_meshes.get(int(table.geometry_id[int(slot)]))
+                    if geometry[index] else None)
+            vao, count = (mesh.vao, mesh.count) if mesh is not None else (cube_vao, 36)
+            if vao != bound_vao:
+                gl.glBindVertexArray(vao)
+                bound_vao = vao
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, count)
+            self.render_stats.draw_calls += 1
+        gl.glBindVertexArray(0)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDisable(gl.GL_POLYGON_OFFSET_LINE)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+
     def _draw_lit_brushes_instanced(self, projection, view, lights, table,
                                     slots, cube_rows, models, normals, config,
-                                    selected_slot):
+                                    selected_slot, fill_mode=gl.GL_FILL):
         """Pack the lit pass's instances and hand its runs to the GPU.
 
         The lit pass binds no texture and draws the whole cube, so both key
@@ -185,11 +272,13 @@ class PassesMixin:
         run_texture, run_first = self._run_descriptors(
             zeros, zeros, run_starts)
         self._submit_brush_runs('lit_brush_instanced', projection, view,
-                                lights, run_starts, run_texture, run_first, 36)
+                                lights, run_starts, run_texture, run_first, 36,
+                                fill_mode)
         return count
 
     def _submit_brush_runs(self, program_name, projection, view, lights,
-                           run_starts, run_texture, run_first, vertex_count):
+                           run_starts, run_texture, run_first, vertex_count,
+                           fill_mode=gl.GL_FILL):
         """Submit sorted brush runs. The one place brush geometry reaches GL.
 
         A *run* is a stretch of items whose render key is equal, so everything
@@ -208,7 +297,8 @@ class PassesMixin:
         taking a different route to the GPU.
         """
         self._begin_instanced_pass(program_name, projection, view, lights)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        # GL_LINE when the lit pass draws the Wireframe display mode.
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
         gl.glBindVertexArray(self._ensure_brush_instance_vao())
 
         current_tex = None
@@ -533,12 +623,15 @@ class PassesMixin:
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
         if terrain is None or not terrain.enabled:
             return
-        self._ensure_terrain_textures(terrain)
         # A Terrain compiles its own program when it is built with a context
         # current; bind this renderer's program whenever the frame's terrain
         # does not hold it (new, reloaded, or bound by a previous renderer).
+        # Its texture names go with it: a previous renderer freed its own, so
+        # this one loads its copies.
         if terrain.shader_program != self.shaders.get('terrain'):
+            terrain.grass_tex = terrain.rock_tex = terrain.sand_tex = terrain.snow_tex = 0
             self.setup_terrain_shader(terrain)
+        self._ensure_terrain_textures(terrain)
         if not (isinstance(lights, tuple) and len(lights) == 2
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("terrain rendering requires (LightTable, slots)")

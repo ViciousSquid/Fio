@@ -30,11 +30,12 @@ from .instancing import InstancingMixin
 from .lighting import LightingMixin
 from .passes import PassesMixin
 from .portals import PortalsMixin
+from .distance import DistanceMixin
 from .shaders import ShadersMixin
 
 
 class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
-                      ShadersMixin, RendererCore):
+                      DistanceMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
     *config* is the application ConfigParser (or None). *texture_loader*
@@ -44,6 +45,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
     def __init__(self, config=None, *, texture_loader=None):
         super().__init__(texture_loader)
+        self.render_stats.details['sprite texture array'] = self._describe_sprite_layers
 
         # Glass samples the already-rendered scene for screen-space transmission.
         # Kept lazy because most frames contain no glass at all.
@@ -242,6 +244,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self.load_texture('caulk', 'textures')
             self._init_portal_gl()
             self._init_shadow_resources()
+            self._init_distance()
 
     def render_scene(self, projection, view, camera_pos,
                      primary_selection, config, clear=True, brush_slots=None):
@@ -256,8 +259,13 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         the normal numeric brush/entity passes run.
         """
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
+        # 'Points' or 'Wireframe': geometry drawn for depth, then coloured by
+        # distance in one pass over the frame (draw_distance_pass).
+        look = self._distance_look(config, current_mode)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
+        if look:
+            gl.glClearColor(0.0, 0.0, 0.0, 1.0)     # what was not hit is black
         if clear:
             # FIX: Don't clear color when rendering a portal virtual view
             if getattr(self, '_portal_scene_pass', False):
@@ -284,8 +292,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._set_point_size(4.0)
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        self.draw_grid(projection, view, self.grid_indices_count,
-                      config.get('play_mode', False), config.get('grid_visible', True))
+        if not look:            # Wireframe draws it after; Points never
+            self.draw_grid(projection, view, self.grid_indices_count,
+                           config.get('play_mode', False), config.get('grid_visible', True))
         # Broad-phase distance cull (main camera pass only): feed the main
         # camera's slot/object classification a range-limited view of the scene,
         # on top of the frustum cull it already applies downstream. The original
@@ -372,7 +381,15 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # Effects own a dedicated dense slot vector. Do not derive this
         # transient render pass from the generic Thing classification; a newly
         # authored Effect must become visible as soon as the EntityTable row exists.
-        effect_slots = etable.effect_slots
+        # Every entity pass draws only rows this view publishes as visible
+        # (the editor's filters leave rows out); lights still light.
+        drawn = np.zeros(etable.count, dtype=bool)
+        drawn[thing_slots] = True
+
+        def drawn_rows(slots):
+            return slots[drawn[slots]]
+
+        effect_slots = drawn_rows(etable.effect_slots)
         if (config.get('camera_distance_cull', config.get('play_mode', False))
                 and cx is not None and len(effect_slots)):
             effect_slots = self._distance_cull_thing_slots(
@@ -394,6 +411,17 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 self.render_shadow_maps(
                     (light_table, shadow_slots), config, camera_pos)
 
+        if look:
+            # Everything opaque up to draw_distance_pass is drawn for its depth
+            # only -- as surfaces for Points, as lines for Wireframe. Water and
+            # glass are brushes like any other here.
+            gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+            opaque_brushes = np.concatenate(
+                (opaque_brushes, glow_brushes, water_brushes, glass_brushes))
+            glow_brushes = water_brushes = glass_brushes = fog_volumes = (
+                np.empty(0, dtype=np.int32))
+        if look == 'Wireframe':
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)   # terrain
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
             # The same planes the entity passes cull against. Their far plane
@@ -441,7 +469,11 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
             elif current_mode == RENDER_MODE_LIT:
-                if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
+                # 'Solid Lit' shades every brush with its colour, no textures;
+                # 'Wireframe' draws each brush's true edges.
+                if look == 'Wireframe':
+                    self.draw_brush_edges(projection, view, opaque_brushes, config, _tbl)
+                elif brush_display_mode in ('Textured', 'Overlay'):
                     self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
                 else:
@@ -459,17 +491,37 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 raise RuntimeError(
                     "Fio 2.5 requires instanced model shaders for dense entity rendering")
             fading_model_mask = etable.render_alpha[numeric_model_slots] < 1.0
+            if look:
+                fading_model_mask[:] = False     # distance colour has no alpha
             opaque_model_slots = numeric_model_slots[~fading_model_mask]
             fading_model_slots = numeric_model_slots[fading_model_mask]
             if len(opaque_model_slots):
+                if look == 'Wireframe':
+                    gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
                 self.draw_models_instanced(
                     projection, view, camera_pos, etable, opaque_model_slots,
                     lights, config)
+        if brush_display_mode == 'Overlay' and current_mode == RENDER_MODE_LIT:
+            # The textured, lit frame with its triangles drawn over it.
+            self.draw_triangle_overlay(
+                projection, view,
+                np.concatenate((opaque_brushes, glow_brushes)), _tbl)
+        if look:
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+            if not self.draw_distance_pass(projection, view, camera_pos,
+                                           points=look == 'Points'):
+                # No depth to read back: the brushes' edges in their colours.
+                self.draw_brush_edges(projection, view, opaque_brushes, config, _tbl)
+            if look == 'Wireframe':
+                self.draw_grid(projection, view, self.grid_indices_count,
+                               config.get('play_mode', False), config.get('grid_visible', True))
         if not config.get('play_mode', False):
-            self.draw_path_node_cubes(projection, view, etable)
+            self.draw_path_node_cubes(projection, view, etable,
+                                      drawn_rows(etable.path_node_slots))
         if etable is not None:
             self.draw_portal_wireframes(
-                projection, view, etable, etable.portal_slots,
+                projection, view, etable, drawn_rows(etable.portal_slots),
                 config.get('play_mode', False))
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
@@ -561,9 +613,31 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._light_ubo = None
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
-        # Portal resources
+        # Instance streams: one buffer and one vertex array per pass.
+        for vao in (self._brush_instance_vao, self._sprite_instance_vao,
+                    self._effect_instance_vao):
+            if vao:
+                gl.glDeleteVertexArrays(1, [vao])
+        for vbo in (self._brush_instance_vbo, self._sprite_instance_vbo,
+                    self._effect_instance_vbo):
+            if vbo:
+                gl.glDeleteBuffers(1, [vbo])
+        self._brush_instance_vao = self._sprite_instance_vao = None
+        self._effect_instance_vao = None
+        self._brush_instance_vbo = self._sprite_instance_vbo = None
+        self._effect_instance_vbo = None
+        # Portal resources. The mask and rim programs are not in ``shaders``.
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
         if self._portal_quad_vbo:
             gl.glDeleteBuffers(1, [self._portal_quad_vbo])
+        for program in (self._portal_mask_shader, self._portal_rim_shader):
+            if program:
+                gl.glDeleteProgram(program)
+        self._portal_mask_shader = self._portal_rim_shader = None
+        self._portal_gl_ready = False
+        # The 3D noise texture is not in the texture cache RendererCore frees.
+        if self.noise_texture_id:
+            gl.glDeleteTextures([self.noise_texture_id])
+            self.noise_texture_id = 0
         super().cleanup()

@@ -194,6 +194,8 @@ class QtGameView(QOpenGLWidget):
         self.weapon_collect_pixmaps = {}   # item_type -> world/collectible QPixmap
         self.show_spatial_grid = False
         self.renderer = None
+        #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
+        self._renderer_mode = DEFAULT_RENDERER
 
         self.debug_shader = None
         self.debug_vao = None
@@ -1304,25 +1306,30 @@ class QtGameView(QOpenGLWidget):
         except ImportError:
             PathNode = None
             Monster = None
+        # A link is drawn only between objects the view filters show.
+        filters = self.editor.state.view_filters
+        brushes = [b for b in self.editor.state.brushes if not filters.hides_brush(b)]
+        things = [t for t in self.editor.state.things if not filters.hides_thing(t)]
+
         def find_pos_by_name(name):
-            for b in self.editor.state.brushes:
+            for b in brushes:
                 if b.get('name') == name:
                     return b['pos']
-            for t in self.editor.state.things:
+            for t in things:
                 t_name = getattr(t, 'name', t.properties.get('name', ''))
                 if t_name == name:
                     return t.pos
             return None
         lines = []
         if io_available:
-            for brush in self.editor.state.brushes:
+            for brush in brushes:
                 for conn in get_connections(brush):
                     dst = find_pos_by_name(conn.target_name)
                     if dst:
                         is_logic = brush.get('is_trigger') or brush.get('is_mover') or brush.get('is_door')
                         color = COLOR_LOGIC if is_logic else COLOR_IO
                         lines.append({'src': brush['pos'], 'dst': dst, 'color': color})
-            for thing in self.editor.state.things:
+            for thing in things:
                 for conn in get_connections(thing):
                     dst = find_pos_by_name(conn.target_name)
                     if dst:
@@ -1331,7 +1338,7 @@ class QtGameView(QOpenGLWidget):
                         lines.append({'src': thing.pos, 'dst': dst, 'color': color})
         node_lookup = {}
         if PathNode is not None:
-            for t in self.editor.state.things:
+            for t in things:
                 if isinstance(t, PathNode):
                     n = t.properties.get('name', '') or ''
                     if n:
@@ -1345,7 +1352,7 @@ class QtGameView(QOpenGLWidget):
                     continue
                 lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATHNODE})
         if Monster is not None and PathNode is not None:
-            for t in self.editor.state.things:
+            for t in things:
                 if not isinstance(t, Monster):
                     continue
                 if not t.properties.get('patrol', False):
@@ -1358,7 +1365,7 @@ class QtGameView(QOpenGLWidget):
                     lines.append({'src': t.pos, 'dst': dst, 'color': COLOR_PATROL})
         COLOR_TELEPORT = (0.78, 0.39, 1.0)
         if PathNode is not None:
-            for brush in self.editor.state.brushes:
+            for brush in brushes:
                 if not brush.get('is_trigger', False):
                     continue
                 if brush.get('trigger_action') != 'teleport':
@@ -1631,7 +1638,13 @@ class QtGameView(QOpenGLWidget):
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
-        self._render_config["brush_display_mode"] = self.brush_display_mode
+        # The Display box is published as-is while editing. In Play the game
+        # is drawn textured; only the debug views (Wireframe, Points, Overlay)
+        # carry over.
+        _display = self.brush_display_mode
+        if self.play_mode and _display not in ("Wireframe", "Points", "Overlay"):
+            _display = "Textured"
+        self._render_config["brush_display_mode"] = _display
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
         self._render_config["render_mode"] = self.current_render_mode
         self._render_config["play_mode"] = self.play_mode
@@ -1658,7 +1671,10 @@ class QtGameView(QOpenGLWidget):
         self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
         self._render_config["grid_visible"] = self.grid_visible and not self.play_mode
-        self._render_config["terrain"] = self.editor.terrain
+        _filters = self.editor.state.view_filters
+        self._render_config["terrain"] = (
+            None if not self.play_mode and not _filters.shows('terrain')
+            else self.editor.terrain)
         # Both editor and play rendering consume the same canonical dense
         # projection published by LogicRender. There is no editor-side table.
         self._render_config["render_table"] = render_state.render_table
@@ -1808,7 +1824,8 @@ class QtGameView(QOpenGLWidget):
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(self.projection_matrix, self.view_matrix)
         if not self.play_mode and self.editor.show_logic_links:
-            _scene_ver = (len(self.editor.state.brushes), len(self.editor.state.things))
+            _scene_ver = (len(self.editor.state.brushes), len(self.editor.state.things),
+                          self.editor.state.view_filters.version)
             if self._io_conn_cache is None or self._io_conn_scene_ver != _scene_ver:
                 self._io_conn_cache     = self._gather_io_connections()
                 self._io_conn_scene_ver = _scene_ver
@@ -2467,7 +2484,6 @@ class QtGameView(QOpenGLWidget):
             'Prop': 'pickup.png',
             'Speaker': 'speaker.png',
             'LevelChanger': 'levelchanger.png',
-            'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
         for weapon in ['gun1', 'gun2', 'custom1', 'custom2']:
@@ -2486,21 +2502,6 @@ class QtGameView(QOpenGLWidget):
             tid = self.load_texture(fname, GLASSES_SUBFOLDER)
             if tid:
                 self.sprite_textures[glasses_sprite_key(style)] = tid
-        if 'Portal' not in self.sprite_textures and self.renderer:
-            try:
-                tex_id = gl.glGenTextures(1)
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                cyan = (gl.GLubyte * (4 * 4))(
-                    0, 220, 255, 255,  0, 220, 255, 255,
-                    0, 220, 255, 255,  0, 220, 255, 255,
-                )
-                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0,
-                                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, cyan)
-                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
-                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
-                self.sprite_textures['Portal'] = tex_id
-            except Exception:
-                pass
         key_textures = {'blue_key': 'bluekey.png', 'red_key': 'redkey.png', 'yellow_key': 'yellowkey.png', 'green_key': 'greenkey.png'}
         for key_name, fname in key_textures.items():
             tid = self.load_texture(fname, 'sprites')
@@ -2659,42 +2660,70 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.view_distance = self.view_distance
 
+    @property
+    def renderer_mode(self):
+        """The registry name of the active renderer."""
+        return self._renderer_mode
+
     def switch_renderer(self, mode: str):
-        if mode == self._renderer_mode:
-            return
+        """Replace the active renderer with the one registered as *mode*, live.
+
+        Works in the editor and in play: the frame input is rebuilt every
+        frame, so a renderer needs nothing from its predecessor. The new
+        renderer is created first, in this view's GL context; only once it is
+        ready does it take over and the old one release its resources, so a
+        renderer that fails to start leaves the current one running.
+        Session settings (view distance, shadows, water quality) carry over,
+        and the sprite table is reloaded through the new renderer, because the
+        old renderer's textures die with it. Returns True when *mode* is the
+        active renderer afterwards.
+        """
+        if self.renderer is not None and mode == self._renderer_mode:
+            return True
         if mode not in available_renderers():
-            print(f"[QtGameView] Unknown renderer mode '{mode}' — ignoring.")
-            return
+            print(f"[QtGameView] Unknown renderer '{mode}'; available: "
+                  f"{', '.join(available_renderers())}")
+            return False
         print(f"[QtGameView] Switching renderer: {self._renderer_mode} → {mode}")
         self.makeCurrent()
         try:
-            old = self.renderer
-            self.renderer = None
-            if old is not None:
-                if hasattr(old, 'cleanup'):
-                    try:
-                        old.cleanup()
-                    except Exception as e:
-                        print(f"[QtGameView] Renderer cleanup warning: {e}")
-                del old
-            config = self.editor.config
-            self.renderer = create_renderer(mode, config)
-            self.renderer.set_sprite_textures(self.sprite_textures)
-            self._sync_view_distance()
-            self.grid_dirty = True
-            self._renderer_mode = mode
-            print(f"[QtGameView] Renderer switched to {mode}.")
-        except Exception as exc:
-            print(f"[QtGameView] switch_renderer FAILED: {exc}")
             try:
-                config = self.editor.config
-                self.renderer = create_renderer(DEFAULT_RENDERER, config)
-                self._renderer_mode = DEFAULT_RENDERER
-            except Exception as fe:
-                print(f"[QtGameView] Emergency fallback also failed: {fe}")
+                new = create_renderer(mode, self.editor.config)
+            except Exception as exc:
+                print(f"[QtGameView] Renderer '{mode}' failed to start: {exc}")
+                return False
+            if not new.ready:
+                print(f"[QtGameView] Renderer '{mode}' is not ready; keeping "
+                      f"{self._renderer_mode}.")
+                new.cleanup()
+                return False
+            old = self.renderer
+            if old is not None:
+                new.shadows_enabled = old.shadows_enabled
+                new.water_quality = old.water_quality
+            # Drop every GL name the host holds from the old renderer before it
+            # is retired; the new one hands out its own.
+            terrain = self.editor.terrain
+            if terrain is not None:
+                terrain.release_renderer_resources()
+            self.renderer = new
+            self._renderer_mode = mode
+            self._sync_view_distance()
+            self.sprite_textures = {}
+            self._preload_assets()
+            self.load_all_sprite_textures()
+            self.preload_level_textures()
+            self.grid_dirty = True
+            if old is not None:
+                try:
+                    old.cleanup()
+                except Exception as exc:
+                    print(f"[QtGameView] Renderer cleanup warning: {exc}")
+            print(f"[QtGameView] Renderer switched to {mode}.")
+            return True
         finally:
             self.doneCurrent()
-        self.update()
+            self.update()
 
     def get_primary_selection_pos(self):
         if not self.editor.primary_selection():
@@ -2928,8 +2957,10 @@ class QtGameView(QOpenGLWidget):
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_obj, best_t = None, float('inf')
         hits = []
+        filters = self.editor.state.view_filters
         for brush in self.editor.state.brushes:
-            if brush.get('hidden', False) or brush.get('lock', False):
+            if (brush.get('hidden', False) or brush.get('lock', False)
+                    or filters.hides_brush(brush)):
                 continue
             pos = glm.vec3(brush.get('pos', [0, 0, 0]))
             size = glm.vec3(brush.get('size', [64, 64, 64]))
@@ -2957,7 +2988,7 @@ class QtGameView(QOpenGLWidget):
                     best_t = tmin
                     best_obj = brush
         for thing in self.editor.state.things:
-            if not component_edit.is_selectable(thing):
+            if not component_edit.is_selectable(thing) or filters.hides_thing(thing):
                 continue
             tp = glm.vec3(thing.pos)
             radius = 32.0
@@ -2999,8 +3030,9 @@ class QtGameView(QOpenGLWidget):
         best_hit = None
         ray_o_t = (float(ray_o.x), float(ray_o.y), float(ray_o.z))
         ray_d_t = (float(ray_d.x), float(ray_d.y), float(ray_d.z))
+        filters = self.editor.state.view_filters
         for brush in self.editor.state.brushes:
-            if brush.get('hidden', False):
+            if brush.get('hidden', False) or filters.hides_brush(brush):
                 continue
             # Angled (clipped) brushes: pick against their real convex faces so
             # the sloped cut face is selectable, not just the six sides of the

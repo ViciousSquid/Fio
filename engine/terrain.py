@@ -2618,6 +2618,18 @@ class Terrain:
             except (TypeError, ValueError, OSError, zlib.error):
                 continue
 
+    def release_renderer_resources(self):
+        """Drop every GL name the renderer gave this terrain.
+
+        The terrain program and the four ground textures belong to the
+        renderer that bound them (``setup_terrain_shader``). The host calls
+        this before that renderer is retired, so no retired name is kept; the
+        next renderer binds its own the first time it draws the terrain.
+        """
+        self.shader_program = 0
+        self.uniforms = {}
+        self.grass_tex = self.rock_tex = self.sand_tex = self.snow_tex = 0
+
     def cleanup(self):
         self._free_gl(self.table.clear())
         if self.block_program:

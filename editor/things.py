@@ -1273,7 +1273,9 @@ class Portal(Thing):
       appears scaled when viewed through the smaller end.
     """
 
-    pixmap_path = "assets/sprites/portal.png"
+    #: Portals have no editor sprite: the aperture wireframe is how the
+    #: editor shows them.
+    pixmap_path = None
     EDITOR_PRIMARY_PROPERTIES = (
     'portal_target',
     'width',

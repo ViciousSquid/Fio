@@ -110,6 +110,10 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         # only when the editor's overlay version changes, never per frame.
         self._component_overlay_vao = None
         self._component_overlay_vbo = None
+        self.vao_gizmo_lines = None
+        self.vao_gizmo_cone = None
+        self._aabb_vao = None
+        self._aabb_vbo = None
         self._component_overlay_data = None
         self._component_overlay_counts = None
         self._component_overlay_version = None
@@ -169,6 +173,16 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
             gl.glDeleteBuffers(1, [self._gizmo_lines_vbo])
         if self._gizmo_cone_vbo:
             gl.glDeleteBuffers(1, [self._gizmo_cone_vbo])
+        for vao in (self.vao_gizmo_lines, self.vao_gizmo_cone,
+                    self._aabb_vao, self._component_overlay_vao):
+            if vao:
+                gl.glDeleteVertexArrays(1, [vao])
+        for vbo in (self._aabb_vbo, self._component_overlay_vbo):
+            if vbo:
+                gl.glDeleteBuffers(1, [vbo])
+        self.vao_gizmo_lines = self.vao_gizmo_cone = None
+        self._aabb_vao = self._aabb_vbo = None
+        self._component_overlay_vao = self._component_overlay_vbo = None
         if self._portal_outline_vao:
             gl.glDeleteVertexArrays(1, [self._portal_outline_vao])
         if self._portal_outline_vbo:
@@ -196,6 +210,16 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
             gl.glDeleteBuffers(1, [self._sprite_vbo])
         if self._grid_vbo:
             gl.glDeleteBuffers(1, [self._grid_vbo])
+        # Every texture and model this renderer loaded. A retired renderer's
+        # resources are nobody's: the host reloads its sprite table through
+        # the renderer that replaces this one (QtGameView.switch_renderer).
+        textures = sorted({int(t) for t in self.texture_manager.values() if t})
+        if textures:
+            gl.glDeleteTextures(textures)
+        self.texture_manager.clear()
+        for model in {id(m): m for m in self.loaded_models.values()}.values():
+            model.cleanup()
+        self.loaded_models.clear()
         for prog in self.shaders.values():
             if prog:
                 try:

@@ -1,6 +1,6 @@
 """Live numerical instrument panel for Fio's dense render projections.
 
-Loaded only when Tools -> Debug Tables is invoked. The window reads the
+Loaded only when Debug -> Debug Tables is invoked. The window reads the
 published render-state snapshot; it does not add a second world representation
 or alter the logic/render hot path. In play mode it also copies the monster
 AI's MonsterTable, taken only when the monster lock is free so the instrument
@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
-from PyQt5.QtGui import QFont, QPainter
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QLabel, QMainWindow, QPushButton,
     QFileDialog,
@@ -27,6 +27,9 @@ from engine import monster_table
 from engine import render_table as rt
 from engine.render_keys import KeyLayout, sort_into_runs
 
+
+#: Fio's accent colour.
+FIO_ORANGE = "#f08000"
 
 _DARK = """
 QMainWindow, QWidget { background:#101214; color:#d7dce0; }
@@ -128,12 +131,19 @@ def _set_text_preserve_scroll(widget, text):
     widget.setText(text)
 
     def restore():
-        if at_bottom:
-            bar.setValue(bar.maximum())
-        else:
-            bar.setValue(min(value, bar.maximum()))
+        try:
+            if at_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(value, bar.maximum()))
+        except RuntimeError:
+            pass        # the window closed before this deferred restore ran
 
     QTimer.singleShot(0, restore)
+
+
+_HIGHLIGHT_BG = QBrush(QColor(FIO_ORANGE))
+_HIGHLIGHT_FG = QBrush(QColor("#101214"))
 
 
 class ArrayModel(QAbstractTableModel):
@@ -144,6 +154,8 @@ class ArrayModel(QAbstractTableModel):
         self.array = np.empty((0, 0), dtype=np.float32)
         self.names = []
         self.offset = 0
+        #: The followed selection's row, drawn highlighted; -1 for none.
+        self.highlight = -1
 
     def set_array(self, array, names=None, offset=0):
         self.beginResetModel()
@@ -169,10 +181,27 @@ class ArrayModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else self.array.shape[1]
 
+    def set_highlight(self, row):
+        row = -1 if row is None else int(row)
+        if row == self.highlight:
+            return
+        old, self.highlight = self.highlight, row
+        for changed in (old, row):
+            if 0 <= changed < len(self.array):
+                self.dataChanged.emit(self.index(changed, 0),
+                                      self.index(changed, self.columnCount() - 1))
+
     def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
+        if not index.isValid():
             return None
-        return _fmt(self.array[index.row(), index.column()])
+        if role == Qt.DisplayRole:
+            return _fmt(self.array[index.row(), index.column()])
+        if index.row() == self.highlight:
+            if role == Qt.BackgroundRole:
+                return _HIGHLIGHT_BG
+            if role == Qt.ForegroundRole:
+                return _HIGHLIGHT_FG
+        return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
@@ -219,6 +248,14 @@ class RawTable(QWidget):
         self.selector.blockSignals(False)
         self._field_changed()
 
+    def set_highlight(self, row):
+        """Mark the followed selection's *row* (None for none) and show it."""
+        self.model.set_highlight(row)
+        if row is not None and 0 <= int(row) < self.model.rowCount():
+            index = self.model.index(int(row), 0)
+            self.view.selectRow(int(row))
+            self.view.scrollTo(index, QTableView.PositionAtCenter)
+
     def _field_changed(self):
         if self.table is None:
             return
@@ -245,12 +282,17 @@ class RawTable(QWidget):
         value = bar.value()
         at_bottom = value >= bar.maximum() - 2
         self.model.set_array(shown, names=names)
+        if 0 <= self.model.highlight < len(shown):
+            return      # set_highlight scrolls to the followed row instead
 
         def restore():
-            if at_bottom:
-                bar.setValue(bar.maximum())
-            else:
-                bar.setValue(min(value, bar.maximum()))
+            try:
+                if at_bottom:
+                    bar.setValue(bar.maximum())
+                else:
+                    bar.setValue(min(value, bar.maximum()))
+            except RuntimeError:
+                pass    # the window closed before this deferred restore ran
 
         QTimer.singleShot(0, restore)
 
@@ -343,9 +385,22 @@ class DebugTablesWindow(QMainWindow):
         tabs.addTab(self.keys_text, "KEY MICROSCOPE")
         self.memory_text = QTextBrowser()
         tabs.addTab(self.memory_text, "MEMORY")
+        #: The followed selection's dense representation: every column of
+        #: every row its id has.
+        self.selection_text = QTextBrowser()
+        tabs.addTab(self.selection_text, "SELECTION")
+        self.tabs = tabs
 
         controls = QHBoxLayout()
         controls.addWidget(QLabel("DENSE NUMERICAL INSTRUMENT"))
+        #: The active renderer's registry name -- FORWARD, DEFERRED, ... The
+        #: instrument reads only the Renderer contract, so it works the same
+        #: whichever renderer is drawing.
+        self.renderer_label = QLabel("-")
+        self.renderer_label.setStyleSheet(
+            f"color:{FIO_ORANGE}; font-weight:bold; padding:0 10px;")
+        self.renderer_label.setToolTip("Active renderer (r_renderer)")
+        controls.addWidget(self.renderer_label)
         controls.addStretch(1)
         controls.addWidget(self.follow)
         controls.addWidget(self.always_top)
@@ -401,8 +456,10 @@ class DebugTablesWindow(QMainWindow):
         self._last_raw_signature = {}
         self._last_keys_text = None
         self._last_memory_text = None
-        self._last_follow_text = None
         self.timer.start()
+        # Follow a new selection at once (viewport, Scene Hierarchy, ...)
+        # rather than on the next tick.
+        main_window.selection_changed.connect(self._selection_changed)
         self.destroyed.connect(self._stop)
         self.refresh()
 
@@ -450,34 +507,7 @@ class DebugTablesWindow(QMainWindow):
 
     def _follow_export_text(self):
         """Return the current FOLLOW SELECTION chain, or an explicit empty state."""
-        selected = next(
-            iter(self.main_window.state.selected_objects),
-            None,
-        )
-        if selected is None:
-            return "FOLLOW SELECTION\n\nNO SELECTION"
-        props = selected if isinstance(selected, dict) else getattr(
-            selected, "properties", {}
-        )
-        ident = props.get("id") if isinstance(props, dict) else None
-        if not ident:
-            return "FOLLOW SELECTION\n\nSELECTION HAS NO ID"
-        lines = [f"FOLLOW id={ident}"]
-        rslot = self.render.slot_of_id.get(ident) if self.render is not None else None
-        eslot = self.entities.slot_of_id.get(ident) if self.entities is not None else None
-        if rslot is not None:
-            lines.append(f"render-row={int(rslot)}")
-        if eslot is not None:
-            lines.append(f"entity-row={int(eslot)}")
-            key_id = int(self.entities.sprite_key_id[int(eslot)])
-            if key_id >= 0:
-                lines.append(f"sprite-key={key_id}")
-        mslot = self.monsters.slot_of_id.get(ident) if self.monsters is not None else None
-        if mslot is not None:
-            lines.append(f"monster-row={int(mslot)}")
-        if rslot is None and eslot is None and mslot is None:
-            lines.append("ID NOT PRESENT IN RENDERTABLE, ENTITYTABLE OR MONSTERTABLE")
-        return "FOLLOW SELECTION\n\n" + " -> ".join(lines)
+        return "FOLLOW SELECTION\n\n" + self._follow_chain()
 
     def export_snapshot(self):
         """Export raw table storage plus every derived instrument view."""
@@ -508,12 +538,14 @@ class DebugTablesWindow(QMainWindow):
             "frame_age_ms": self._frame_age_ms(),
             "timings_ms": self._timings(),
             "is_play_mode": bool(getattr(self.snapshot, "is_play_mode", False)),
+            "renderer": self._renderer_name(),
             "render_rows": int(self.render.count),
             "render_capacity": int(len(self.render.center)),
             "entity_rows": int(self.entities.count),
             "entity_capacity": int(len(self.entities.pos)),
             "render_draw_calls": int(getattr(stats, "draw_calls", 0)) if stats else 0,
             "batched_draws": int(getattr(stats, "batched_draws", 0)) if stats else 0,
+            "shadow_draw_calls": int(getattr(stats, "shadow_draw_calls", 0)) if stats else 0,
             "visible_triangles": int(getattr(stats, "visible_tris", 0)) if stats else 0,
             "render_dense_bytes": int(_num_bytes(self.render)[0]),
             "entity_dense_bytes": int(_num_bytes(self.entities)[0]),
@@ -681,6 +713,7 @@ class DebugTablesWindow(QMainWindow):
 
     def refresh(self):
         started = time.perf_counter()
+        self.renderer_label.setText(self._renderer_name().upper())
         game_state = self._game_state()
         if game_state is None:
             self.status.setText("DETACHED — no LogicThread/render state")
@@ -857,17 +890,13 @@ class DebugTablesWindow(QMainWindow):
         draw_calls = int(getattr(stats, "draw_calls", 0)) if stats else 0
         entity_candidates = int(getattr(stats, "entity_candidates", 0)) if stats else 0
         culled_entities = int(getattr(stats, "culled_entities", 0)) if stats else 0
-        layers = getattr(self.main_window.view_3d.renderer,
-                         "_sprite_layers", None)
-        if layers is not None and layers.texture:
-            layer_bytes = int(layers.size * layers.size * 4 * layers.capacity * 4 / 3)
-            layer_line = (f"  sprite texture array  {layers.count} of {layers.capacity} layers "
-                          f"at {layers.size}x{layers.size}  (~{layer_bytes/1024/1024:.1f} MiB)")
-        elif layers is not None and layers.disabled:
-            layer_line = "  sprite texture array  DISABLED (per-texture runs in depth order)"
-        else:
-            layer_line = "  sprite texture array  not created"
+        # Whatever diagnostics the active renderer publishes; the instrument
+        # knows no renderer's internals.
+        detail_lines = "".join(
+            f"  {name}  {value() if callable(value) else value}\n"
+            for name, value in (getattr(stats, "details", None) or {}).items())
         batched = int(getattr(stats, "batched_draws", 0)) if stats else 0
+        shadow_draws = int(getattr(stats, "shadow_draw_calls", 0)) if stats else 0
         tris = int(getattr(stats, "visible_tris", 0)) if stats else 0
         total = rbytes + ebytes
         timings = self._timings()
@@ -899,20 +928,27 @@ class DebugTablesWindow(QMainWindow):
             f"  swaps declined     {timings['declined_per_s']:7.1f} /s"
             "   (renderer was reading the other buffer)\n\n"
             "TIMINGS (measured, CPU)\n"
+            f"  renderer                     {self._renderer_name()}\n"
             f"  simulation tick (logic)      {timings['tick']:8.3f} ms\n"
             f"  monster AI update            {timings['ai']:8.3f} ms\n"
             f"  prepare (logic thread)       {timings['prepare']:8.3f} ms\n"
             f"  paint (UI thread, total)     {timings['paint']:8.3f} ms\n"
-            f"  draw calls {draw_calls:,}   batched draws {batched:,}   "
+            f"  draw calls {draw_calls:,}   shadow-map draws {shadow_draws:,}   "
+            f"batched draws {batched:,}   "
             f"visible triangles {tris:,}\n"
             f"  entity rows offered {entity_candidates:,}   "
             f"frustum-culled {culled_entities:,}   "
             f"drawn {entity_candidates - culled_entities:,}\n"
-            + layer_line + "\n\n"
+            + detail_lines + "\n"
             + self._monster_lines(timings)
             + self._terrain_lines(timings) +
             "PASSES (inclusive)\n" + pass_lines
         )
+
+    def _renderer_name(self):
+        """The registry name of the active renderer, or a dash before one exists."""
+        view = self.main_window.view_3d
+        return view.renderer_mode if view is not None and view.renderer is not None else "-"
 
     def _monster_lines(self, timings):
         """The MONSTER AI section of the dashboard: what the dense pass did."""
@@ -1066,28 +1102,47 @@ class DebugTablesWindow(QMainWindow):
             _set_text_preserve_scroll(self.memory_text, text)
             self._last_memory_text = text
 
-    def _update_follow(self):
-        if not self.follow.isChecked():
-            return
+    def _followed_rows(self):
+        """``(id, {table label: row})`` for the primary selection.
+
+        Without a selection, or one with no id, ``(None, reason)``.
+        """
         selected = next(
             iter(getattr(self.main_window.state,
                          "selected_objects", []) or []),
             None,
         )
         if selected is None:
-            return
+            return None, "NO SELECTION"
         props = selected if isinstance(selected, dict) else getattr(
             selected, "properties", {}
         )
         ident = props.get("id") if isinstance(props, dict) else None
         if not ident:
-            return
-        rslot = self.render.slot_of_id.get(ident) if self.render is not None else None
-        eslot = self.entities.slot_of_id.get(ident) if self.entities is not None else None
-        mslot = self.monsters.slot_of_id.get(ident) if self.monsters is not None else None
-        if rslot is None and eslot is None and mslot is None:
-            return
+            return None, "SELECTION HAS NO ID"
+        rows = {}
+        for label, table in self._tables():
+            slot = table.slot_of_id.get(ident)
+            if slot is not None and int(slot) < int(table.count):
+                rows[label] = int(slot)
+        return ident, rows
+
+    def _follow_chain(self):
+        """The selection traced through the copied tables, as one line.
+
+        ``authored id -> render-row -> key -> run`` for a brush (key and run
+        when the row is visible), ``-> entity-row -> sprite-key`` for an
+        entity, ``-> monster-row`` in play; or why there is no chain.
+        """
+        ident, rows = self._followed_rows()
+        if ident is None:
+            return rows
+        rslot, eslot, mslot = (rows.get(label) for label in
+                               ("RenderTable", "EntityTable", "MonsterTable"))
         chain = [f"FOLLOW id={ident}"]
+        if rslot is None and eslot is None and mslot is None:
+            chain.append("ID NOT PRESENT IN RENDERTABLE, ENTITYTABLE OR MONSTERTABLE")
+            return " -> ".join(chain)
         if rslot is not None:
             chain.append(f"render-row={int(rslot)}")
             slots = np.asarray(
@@ -1144,13 +1199,58 @@ class DebugTablesWindow(QMainWindow):
                 chain.append("target=player")
             elif target >= 0:
                 chain.append(f"target=monster-row {target}")
-        follow_text = " -> ".join(chain)
-        if follow_text != self._last_follow_text:
-            self.status.setText(
-                self.status.text().split("  |  FOLLOW")[0]
-                + "  |  " + follow_text
-            )
-            self._last_follow_text = follow_text
+        return " -> ".join(chain)
+
+    def _update_follow(self):
+        """Append the FOLLOW chain to the status line the dashboard just set.
+
+        Every refresh rewrites the status line, so the chain is appended every
+        time, not only when it changes.
+        """
+        if not self.follow.isChecked():
+            for raw in self._raw_views().values():
+                raw.set_highlight(None)
+            return
+        ident, rows = self._followed_rows()
+        found = rows if ident is not None else {}
+        for label, raw in self._raw_views().items():
+            raw.set_highlight(found.get(label))
+        _set_text_preserve_scroll(self.selection_text, self._selection_dump(ident, rows))
+        chain = self._follow_chain()
+        if not chain.startswith("FOLLOW"):
+            chain = "FOLLOW: " + chain
+        self.status.setText(
+            self.status.text().split("  |  FOLLOW")[0] + "  |  " + chain)
+
+
+    def _raw_views(self):
+        return {"RenderTable": self.render_raw, "EntityTable": self.entity_raw,
+                "MonsterTable": self.monster_raw, "TerrainTable": self.terrain_raw}
+
+    def _selection_dump(self, ident, rows):
+        """The followed object's dense representation, column by column."""
+        if ident is None:
+            return f"SELECTION\n\n{rows}"
+        lines = [f"SELECTION  id={ident}", ""]
+        if not rows:
+            lines.append("ID NOT PRESENT IN RENDERTABLE, ENTITYTABLE OR MONSTERTABLE")
+        tables = dict(self._tables())
+        for label, row in rows.items():
+            lines.append(f"{label}  row {row}")
+            for name, value in _array_fields(tables[label]):
+                if value.ndim == 0 or row >= len(value):
+                    continue
+                cell = value[row]
+                shown = (" ".join(_fmt(v) for v in np.ravel(cell))
+                         if isinstance(cell, np.ndarray) else _fmt(cell))
+                lines.append(f"  {name:<28} {shown}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _selection_changed(self):
+        """A new selection: follow it now, from the tables already copied."""
+        if self.render is not None and self.entities is not None:
+            self._update_follow()
 
 
 _INSTANCE = None

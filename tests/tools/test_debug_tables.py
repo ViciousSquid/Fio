@@ -6,6 +6,7 @@ sampled until its next refresh, a quarter of a second later, and so held a
 borrow permanently -- with it open, the renderer never saw another frame.
 """
 
+import io
 import os
 import random
 import numpy as np
@@ -665,3 +666,240 @@ def test_debug_tables_observes_real_terrain_csg_rebuild(window):
     shown = instrument.terrain
     assert shown is not None
     np.testing.assert_allclose(shown.heights[slot], terrain.table.heights[slot])
+
+
+# ---------------------------------------------------------------------------
+# The wiki page (https://github.com/ViciousSquid/Fio/wiki/Debug-Tables),
+# claim by claim
+# ---------------------------------------------------------------------------
+
+def test_wiki_it_opens_from_the_debug_menu(real_world_window):
+    instrument, _state, _logic = real_world_window
+    menu = [a.text() for a in instrument.main_window.debug_menu.actions() if a.text()]
+    assert "Debug Tables" in menu
+    assert any(t.startswith("Project Overview") for t in menu)
+    assert any(t.startswith("Validate All Connections") for t in menu)
+
+
+def test_wiki_the_window_has_the_described_tabs_and_controls(real_world_window):
+    from PyQt5.QtWidgets import QPushButton, QTabWidget
+    instrument, _state, _logic = real_world_window
+    tabs = instrument.findChild(QTabWidget)
+    names = [tabs.tabText(i) for i in range(tabs.count())]
+    for name in ("PIPELINE", "RENDERTABLE", "ENTITYTABLE", "KEY MICROSCOPE", "MEMORY"):
+        assert name in names
+    assert instrument.follow.text() == "FOLLOW SELECTION"
+    buttons = {b.text() for b in instrument.findChildren(QPushButton)}
+    assert {"Refresh", "Export"} <= buttons
+    assert instrument.timer.interval() == 250       # "refreshes automatically"
+
+
+def test_wiki_it_is_read_only(real_world_window):
+    instrument, _state, logic = real_world_window
+    snap = logic.game_state.get_render_state()
+    try:
+        from tools.debug_tables import _array_fields
+        before = {name: value.copy() for name, value in _array_fields(snap.render_table)
+                  if value.dtype != object}
+        assert "bounds" in before
+        count = snap.render_table.count
+        for _ in range(3):
+            instrument.refresh()
+        assert snap.render_table.count == count
+        for name, value in before.items():
+            assert np.array_equal(getattr(snap.render_table, name), value), name
+    finally:
+        logic.game_state.release_render_state(snap)
+
+
+def test_wiki_the_pipeline_tab_reports_its_numbers(real_world_window):
+    instrument, state, _logic = real_world_window
+    instrument.refresh()
+    text = instrument.dashboard.toPlainText()
+    assert f"RenderTable   rows={len(state.brushes):,}" in text
+    assert f"EntityTable   rows={len(state.things):,}" in text
+    assert f"capacity={len(instrument.render.center):,}" in text
+    assert "dense bytes=" in text and "TOTAL NUMERICAL STORAGE" in text
+    assert "frame age" in instrument.status.text()
+    for words in ("draw calls", "batched draws", "visible triangles", "renderer"):
+        assert words in text
+
+
+def test_wiki_a_raw_array_shows_shape_dtype_and_bytes(real_world_window):
+    instrument, _state, _logic = real_world_window
+    instrument.refresh()
+    raw = instrument.render_raw
+    raw.selector.setCurrentText("bounds")
+    value = instrument.render.bounds
+    count = int(instrument.render.count)
+    assert raw.meta.text() == (f"shape={(count, 6)}  dtype={value.dtype}  "
+                               f"bytes={int(value.nbytes):,}")
+    assert raw.model.rowCount() == count
+
+
+def test_wiki_the_key_microscope_shows_runs_of_logical_keys(real_world_window):
+    instrument, _state, _logic = real_world_window
+    instrument.refresh()
+    text = instrument.keys_text.toPlainText()
+    assert "Logical key layout: [ texture-name-id:32 | cube-face:3 ]" in text
+    data = instrument._key_snapshot()
+    assert f"visible cube rows   {len(data['visible_cube_slots']):,}" in text
+    assert f"drawable faces      {len(data['logical_keys']):,}" in text
+    assert f"contiguous runs     {len(data['run_starts']) - 1:,}" in text
+    assert "  000  rows " in text and "KEY DISTRIBUTION" in text
+    # Runs are contiguous stretches of equal keys over the sorted stream.
+    keys, starts = data["sorted_keys"], data["run_starts"]
+    for a, b in zip(starts[:-1], starts[1:]):
+        assert len(set(keys[a:b].tolist())) == 1
+
+
+def test_wiki_follow_selection_traces_a_brush_and_an_entity(real_world_window):
+    instrument, state, _logic = real_world_window
+    brush = state.brushes[0]
+    state.selected_objects = [brush]
+    instrument.refresh()
+    assert f"FOLLOW id={brush['id']} -> render-row=" in instrument.status.text()
+    instrument.refresh()            # the next refresh keeps showing it
+    assert f"FOLLOW id={brush['id']}" in instrument.status.text()
+
+    sprite = next(t for t in state.things if t.properties["name"] == "audit_sprite")
+    state.selected_objects = [sprite]
+    instrument.refresh()
+    status = instrument.status.text()
+    assert "entity-row=" in status and "sprite-key=" in status
+
+
+def test_wiki_follow_selection_reports_an_id_it_cannot_find(real_world_window):
+    instrument, state, _logic = real_world_window
+    state.selected_objects = [{"id": "not-in-any-table"}]
+    instrument.refresh()
+    assert "ID NOT PRESENT IN RENDERTABLE, ENTITYTABLE" in instrument.status.text()
+    assert "ID NOT PRESENT" in instrument._follow_export_text()
+
+
+def test_wiki_memory_lists_allocated_bytes_and_live_shapes(real_world_window):
+    instrument, _state, _logic = real_world_window
+    instrument.refresh()
+    text = instrument.memory_text.toPlainText()
+    assert "TABLE / FIELD" in text and "SHAPE" in text and "DTYPE" in text and "BYTES" in text
+    bounds = instrument.render.bounds
+    live = (int(instrument.render.count), 6)
+    assert any(line.split()[:1] == ["bounds"] and str(live) in line
+               and f"{int(bounds.nbytes):,}" in line for line in text.splitlines())
+
+
+def test_wiki_export_is_the_documented_archive(real_world_window, tmp_path):
+    import json
+    import zipfile
+    from unittest import mock
+
+    instrument, _state, _logic = real_world_window
+    instrument.refresh()
+    path = tmp_path / "snapshot.zip"
+    with mock.patch("tools.debug_tables.QFileDialog.getSaveFileName",
+                    return_value=(str(path), "")):
+        instrument.export_snapshot()
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read("manifest.json"))
+        memory = json.loads(archive.read("memory.json"))
+        bounds = np.load(io.BytesIO(archive.read("RenderTable/bounds.npy")))
+    assert manifest["format"] == "fio-debug-tables-v1"
+    for name in ("manifest.json", "pipeline.json", "pipeline.txt",
+                 "visible_brush_slots.npy", "key_microscope.json",
+                 "key_microscope.txt", "memory.json", "memory.txt",
+                 "follow_selection.txt"):
+        assert name in names, name
+    assert any(n.startswith("KeyMicroscope/") for n in names)
+    # Full allocated capacity, live shape recorded separately.
+    assert bounds.shape == instrument.render.bounds.shape
+    field = memory["tables"]["RenderTable"]["fields"]["bounds"]
+    assert field["shape"] == list(bounds.shape)
+    assert field["live_shape"] == [int(instrument.render.count), 6]
+
+
+# ---------------------------------------------------------------------------
+# Tracking an editor object: selecting it anywhere -- the Scene Hierarchy
+# included -- highlights its rows and shows its dense representation
+# ---------------------------------------------------------------------------
+
+def _select_in_hierarchy(host, kind, index):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QTreeWidgetItemIterator
+    hierarchy = host.scene_hierarchy
+    hierarchy.refresh_list()
+    found = QTreeWidgetItemIterator(hierarchy.tree)
+    while found.value() is not None:
+        item = found.value()
+        if item.data(0, Qt.UserRole) == (kind, index):
+            hierarchy.tree.clearSelection()
+            item.setSelected(True)
+            return item
+        found += 1
+    raise AssertionError(f"no hierarchy item for {(kind, index)}")
+
+
+def test_selecting_in_the_hierarchy_highlights_the_entity_row(real_world_window):
+    instrument, state, _logic = real_world_window
+    host = instrument.main_window
+    instrument.refresh()
+    index, sprite = next((i, t) for i, t in enumerate(state.things)
+                         if t.properties["name"] == "audit_sprite")
+    _select_in_hierarchy(host, "thing", index)
+    assert state.selected_objects == [sprite]
+
+    # Followed at once, without waiting for the next refresh.
+    row = instrument.entities.slot_of_id[sprite.properties["id"]]
+    assert instrument.entity_raw.model.highlight == row
+    assert instrument.render_raw.model.highlight == -1
+    assert [i.row() for i in instrument.entity_raw.view.selectionModel().selectedRows()] == [row]
+    assert f"entity-row={row}" in instrument.status.text()
+
+    # The SELECTION tab is the row itself, every column of it.
+    dump = instrument.selection_text.toPlainText()
+    assert f"EntityTable  row {row}" in dump
+    pos = " ".join(f"{float(v):.5g}" for v in instrument.entities.pos[row])
+    assert any(line.split()[:1] == ["pos"] and line.split()[1:] == pos.split()
+               for line in dump.splitlines()), dump
+    assert any(line.split()[:1] == ["sprite_key_id"] for line in dump.splitlines())
+
+
+def test_selecting_a_brush_in_the_hierarchy_highlights_its_render_row(real_world_window):
+    instrument, state, _logic = real_world_window
+    host = instrument.main_window
+    instrument.refresh()
+    brush = state.brushes[3]
+    _select_in_hierarchy(host, "brush", 3)
+    row = instrument.render.slot_of_id[brush["id"]]
+    assert instrument.render_raw.model.highlight == row
+    assert instrument.entity_raw.model.highlight == -1
+    dump = instrument.selection_text.toPlainText()
+    assert f"RenderTable  row {row}" in dump
+    bounds = [float(v) for v in instrument.render.bounds[row]]
+    assert bounds[:3] == pytest.approx(brush["pos"])
+    assert any(line.split()[:1] == ["bounds"] for line in dump.splitlines())
+
+    # The highlight survives refreshes and a change of the shown array.
+    instrument.refresh()
+    instrument.render_raw.selector.setCurrentText("class_bits")
+    assert instrument.render_raw.model.highlight == row
+
+    # Deselecting, or turning FOLLOW SELECTION off, clears it.
+    host.scene_hierarchy.tree.clearSelection()
+    assert instrument.render_raw.model.highlight == -1
+    _select_in_hierarchy(host, "brush", 3)
+    instrument.follow.setChecked(False)
+    instrument.refresh()
+    assert instrument.render_raw.model.highlight == -1
+
+
+def test_the_highlighted_row_is_drawn_marked(real_world_window):
+    from PyQt5.QtCore import Qt
+    instrument, state, _logic = real_world_window
+    instrument.refresh()
+    _select_in_hierarchy(instrument.main_window, "brush", 0)
+    model = instrument.render_raw.model
+    row = model.highlight
+    assert model.data(model.index(row, 0), Qt.BackgroundRole) is not None
+    other = (row + 1) % model.rowCount()
+    assert model.data(model.index(other, 0), Qt.BackgroundRole) is None

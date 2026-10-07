@@ -134,6 +134,24 @@ def _persist_disabled(MainWindow):
         _log(f"could not persist plugin toggle: {exc}")
 
 
+def _build_filter_menu(MainWindow, menu):
+    """The Filter menu (GtkRadiant style): one checkable entry per kind of
+    object, ticked while it shows, and Show All. See engine.view_filters."""
+    from engine.view_filters import FILTERS
+    MainWindow.filter_menu = menu
+    MainWindow.filter_actions = {}
+    for key, label in FILTERS:
+        action = QAction(label.replace('&', '&&'), MainWindow, checkable=True)
+        action.setChecked(True)
+        action.toggled.connect(
+            lambda shown, key=key: MainWindow.set_view_filter(key, shown))
+        menu.addAction(action)
+        MainWindow.filter_actions[key] = action
+    menu.addSeparator()
+    menu.addAction(QAction('Show All', MainWindow,
+                           triggered=MainWindow.show_all_view_filters))
+
+
 def _build_plugins_menu(MainWindow):
     from PyQt5.QtWidgets import QMessageBox
     from plugins.manager import get_manager
@@ -458,6 +476,7 @@ class Ui_MainWindow(object):
         edit_menu = menubar.addMenu('Edit')
         select_menu = menubar.addMenu('Select')
         view_menu = menubar.addMenu('View')
+        _build_filter_menu(MainWindow, menubar.addMenu('Filter'))
         MainWindow.tools_menu = menubar.addMenu('Tools')
         MainWindow.debug_menu = menubar.addMenu('Debug')
         help_menu = menubar.addMenu('Help')
@@ -1001,7 +1020,7 @@ class Ui_MainWindow(object):
         
         # 2. Mid-aligned Controls
         MainWindow.display_mode_combobox = QComboBox()
-        MainWindow.display_mode_combobox.addItems(["Wireframe", "Solid Lit", "Textured"])
+        MainWindow.display_mode_combobox.addItems(["Wireframe", "Points", "Solid Lit", "Textured", "Overlay"])
         MainWindow.display_mode_combobox.setCurrentText("Solid Lit")
         MainWindow.display_mode_combobox.currentTextChanged.connect(MainWindow.set_brush_display_mode)
         

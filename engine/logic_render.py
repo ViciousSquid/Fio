@@ -511,6 +511,13 @@ class LogicRender:
         total_count = table.count
 
         keep, all_slots = table.shown()
+        # The editor's Filter menu: filtered brushes are not published, so no
+        # renderer is asked to draw them.
+        view_filters = logic.editor_state.view_filters
+        filtering = view_filters.active and not logic.session_runtime.play_mode
+        if filtering and total_count:
+            keep = keep & ~view_filters.hidden_brush_rows(table.class_bits[:total_count])
+            all_slots = np.flatnonzero(keep)
         if self.culling_enabled and total_count:
             visible_slots = np.flatnonzero(
                 keep
@@ -556,6 +563,12 @@ class LogicRender:
         logic.editor_state.clear_render_dirty(render_dirty_snapshot)
 
         visible_thing_slots = etable.all_slots
+        if filtering and thing_count:
+            # Filtered entities are left out of the rows this view draws;
+            # a filtered light still lights the editor, as in Radiant.
+            filtered = view_filters.hidden_entity_rows(etable)
+            visible_thing_slots = visible_thing_slots[
+                ~filtered[visible_thing_slots]]
         collected = logic.prop_runtime.collected_ids
         if logic.session_runtime.play_mode and collected:
             prop_slots = np.flatnonzero(

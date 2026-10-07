@@ -554,7 +554,7 @@ class View2D(QWidget):
         hits = []
 
         for brush in self.editor.state.brushes:
-            if brush.get('hidden', False):
+            if self._hidden(brush):
                 continue
             if locked_out and brush.get('lock', False):
                 continue
@@ -567,7 +567,7 @@ class View2D(QWidget):
                 hits.append(brush)
 
         for thing in self.editor.state.things:
-            if thing.properties.get('hidden', False):
+            if self._hidden(thing):
                 continue
             if locked_out and thing.properties.get('lock', False):
                 continue
@@ -1237,9 +1237,18 @@ class View2D(QWidget):
         
         return bounds
 
+    def _filtered(self, obj):
+        """Whether the editor's view filters (the Filter menu) hide *obj*."""
+        return self.editor.state.view_filters.hides(obj)
+
+    def _hidden(self, obj):
+        """Hidden by the map, or filtered out of the editor's views."""
+        props = obj if isinstance(obj, dict) else obj.properties
+        return bool(props.get('hidden', False)) or self._filtered(obj)
+
     def is_brush_visible(self, brush, visible_bounds, axis1_idx, axis2_idx):
         """Check if a brush's projected bounding box intersects the visible area."""
-        if brush.get('hidden', False):
+        if self._hidden(brush):
             return False
         
         # Get brush bounds in the 2D view's coordinate system
@@ -1481,6 +1490,8 @@ class View2D(QWidget):
         pos_by_id = {}
         pos_by_name = {}
         for b in self.editor.state.brushes:
+            if self._filtered(b):
+                continue
             b_id = b.get('id')
             b_name = b.get('name')
             if b_id:
@@ -1488,6 +1499,8 @@ class View2D(QWidget):
             if b_name and b_name not in pos_by_name:
                 pos_by_name[b_name] = b['pos']
         for t in self.editor.state.things:
+            if self._filtered(t):
+                continue
             props = getattr(t, 'properties', {})
             t_id = props.get('id')
             t_name = props.get('name', '')
@@ -1520,6 +1533,8 @@ class View2D(QWidget):
         if IO_AVAILABLE:
             # From brushes
             for brush in self.editor.state.brushes:
+                if self._filtered(brush):
+                    continue
                 io_conns = get_connections(brush)
                 for conn in io_conns:
                     target_pos = get_target_pos(conn)
@@ -1536,6 +1551,8 @@ class View2D(QWidget):
             
             # From things
             for thing in self.editor.state.things:
+                if self._filtered(thing):
+                    continue
                 io_conns = get_connections(thing)
                 for conn in io_conns:
                     target_pos = get_target_pos(conn)
@@ -1607,7 +1624,7 @@ class View2D(QWidget):
         # Build a lookup: node-name → thing, for fast resolution
         node_lookup = {}
         for t in self.editor.state.things:
-            if isinstance(t, PathNode):
+            if isinstance(t, PathNode) and not self._filtered(t):
                 n = t.properties.get('name', '') or ''
                 if n:
                     node_lookup[n] = t
@@ -1659,7 +1676,7 @@ class View2D(QWidget):
         # --- 2. Monster → patrol_target lines (teal, dotted, thinner) ----
         patrol_pen = QPen(QColor(38, 166, 154, 120), 1, Qt.DotLine)
         for t in self.editor.state.things:
-            if not isinstance(t, Monster):
+            if not isinstance(t, Monster) or self._filtered(t):
                 continue
             if not t.properties.get('patrol', False):
                 continue
@@ -2210,7 +2227,7 @@ class View2D(QWidget):
         
         for thing in self.editor.state.things:
             # Skip hidden things
-            if thing.properties.get('hidden', False):
+            if self._hidden(thing):
                 continue
             
             # CULL thing if not visible
@@ -2576,7 +2593,7 @@ class View2D(QWidget):
         """
         portals_by_name = {}
         for t in self.editor.state.things:
-            if isinstance(t, Portal):
+            if isinstance(t, Portal) and not self._filtered(t):
                 name = t.properties.get('name', '')
                 if name:
                     portals_by_name[name] = t
@@ -3924,7 +3941,7 @@ class View2D(QWidget):
         locked_not_selectable = self.main_window.config.getboolean('Display', 'locked_not_selectable_2d', fallback=False)
         
         for brush in reversed(self.editor.state.brushes):
-            if brush.get('hidden', False):
+            if self._hidden(brush):
                 continue
             # Skip locked brushes if setting is enabled
             if locked_not_selectable and brush.get('lock', False):
@@ -4009,7 +4026,7 @@ class View2D(QWidget):
         for brush in self.editor.state.brushes:
             if brush is self.connection_source:
                 continue
-            if brush.get('hidden', False):
+            if self._hidden(brush):
                 continue
             
             # Get brush center in screen coords
@@ -4029,7 +4046,7 @@ class View2D(QWidget):
         
         # Check all things
         for thing in self.editor.state.things:
-            if thing.properties.get('hidden', False):
+            if self._hidden(thing):
                 continue
             
             # Get thing position in screen coords
@@ -4106,7 +4123,7 @@ class View2D(QWidget):
         for brush in self.editor.state.brushes:
             if brush is container_brush:
                 continue
-            if brush.get('hidden', False):
+            if self._hidden(brush):
                 continue
 
             b_pos = brush['pos']
@@ -4120,7 +4137,7 @@ class View2D(QWidget):
 
         # Entities (Things): centre inside the box.
         for thing in self.editor.state.things:
-            if thing.properties.get('hidden', False):
+            if self._hidden(thing):
                 continue
             p = thing.pos
             if (c_min1 <= p[i1] <= c_max1 and c_min2 <= p[i2] <= c_max2):
@@ -4201,7 +4218,7 @@ class View2D(QWidget):
         locked_not_selectable = self.main_window.config.getboolean('Display', 'locked_not_selectable_2d', fallback=False)
 
         for thing in reversed(self.editor.state.things):
-            if thing.properties.get('hidden', False):
+            if self._hidden(thing):
                 continue
             
             is_hit = False
@@ -4256,7 +4273,7 @@ class View2D(QWidget):
                     candidates.append(thing)
         
         for brush in reversed(self.editor.state.brushes):
-            if brush.get('hidden', False): 
+            if self._hidden(brush):
                 continue
 
             # FIX: Use .get() to avoid KeyError if 'pos' or 'size' are missing

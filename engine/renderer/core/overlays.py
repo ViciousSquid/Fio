@@ -197,24 +197,7 @@ class OverlaysMixin:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
-        if not hasattr(self, '_edge_vao') or self._edge_vao is None:
-            edge_vertices = np.array([
-                -0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5, 0.5,
-                 0.5,-0.5, 0.5, -0.5,-0.5, 0.5, -0.5,-0.5, 0.5, -0.5,-0.5,-0.5,
-                -0.5, 0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5, 0.5,
-                 0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5,-0.5,
-                -0.5,-0.5,-0.5, -0.5, 0.5,-0.5,  0.5,-0.5,-0.5,  0.5, 0.5,-0.5,
-                 0.5,-0.5, 0.5,  0.5, 0.5, 0.5, -0.5,-0.5, 0.5, -0.5, 0.5, 0.5,
-            ], dtype=np.float32)
-            self._edge_vao = gl.glGenVertexArrays(1)
-            gl.glBindVertexArray(self._edge_vao)
-            vbo = gl.glGenBuffers(1)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, edge_vertices.nbytes, edge_vertices, gl.GL_STATIC_DRAW)
-            gl.glEnableVertexAttribArray(0)
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glBindVertexArray(0)
-            self._edge_vbo = vbo
+        edge_vao = self._ensure_edge_vao()
         gl.glLineWidth(1.0)
         # Editor selection is still represented by the authored selection dict,
         # but convex geometry comes from the dense RenderTable geometry records.
@@ -235,9 +218,31 @@ class OverlaysMixin:
             gl.glBindVertexArray(mesh.edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, mesh.edge_count)
         else:
-            gl.glBindVertexArray(self._edge_vao)
+            gl.glBindVertexArray(edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
         gl.glBindVertexArray(0)
+
+    def _ensure_edge_vao(self):
+        """The unit cube's 12 edges as GL_LINES (24 vertices), made once."""
+        if self._edge_vao is None:
+            edge_vertices = np.array([
+                -0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5, 0.5,
+                 0.5,-0.5, 0.5, -0.5,-0.5, 0.5, -0.5,-0.5, 0.5, -0.5,-0.5,-0.5,
+                -0.5, 0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5, 0.5,
+                 0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5,-0.5,
+                -0.5,-0.5,-0.5, -0.5, 0.5,-0.5,  0.5,-0.5,-0.5,  0.5, 0.5,-0.5,
+                 0.5,-0.5, 0.5,  0.5, 0.5, 0.5, -0.5,-0.5, 0.5, -0.5, 0.5, 0.5,
+            ], dtype=np.float32)
+            self._edge_vao = gl.glGenVertexArrays(1)
+            gl.glBindVertexArray(self._edge_vao)
+            vbo = gl.glGenBuffers(1)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, edge_vertices.nbytes, edge_vertices, gl.GL_STATIC_DRAW)
+            gl.glEnableVertexAttribArray(0)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glBindVertexArray(0)
+            self._edge_vbo = vbo
+        return self._edge_vao
 
     def draw_effect_billboard_aabb(self, projection, view, effect):
         """Draw the selected Effect billboard's editor-only world AABB.
@@ -335,8 +340,8 @@ class OverlaysMixin:
         if not vertices:
             return
         data = np.asarray(vertices, dtype=np.float32)
-        vao = getattr(self, '_aabb_vao', None)
-        vbo = getattr(self, '_aabb_vbo', None)
+        vao = self._aabb_vao
+        vbo = self._aabb_vbo
         if vao is None:
             vao = self._aabb_vao = gl.glGenVertexArrays(1)
             vbo = self._aabb_vbo = gl.glGenBuffers(1)
@@ -565,11 +570,10 @@ class OverlaysMixin:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_path_node_cubes(self, projection, view, table):
-        """The editor's PathNode markers, from the entity table's node rows."""
+    def draw_path_node_cubes(self, projection, view, table, slots):
+        """The editor's PathNode markers for the entity table's node *slots*."""
         if 'simple' not in self.shaders or table is None:
             return
-        slots = table.path_node_slots
         if not len(slots):
             return
 

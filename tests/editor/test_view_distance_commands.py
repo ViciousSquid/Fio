@@ -64,9 +64,10 @@ def test_every_name_is_registered(handler, name):
     assert name in handler.commands
 
 
-def test_the_volumetric_fog_toggle_is_left_alone(handler):
-    """`fog` still means fog *brushes*; far-plane fog is `distancefog`."""
-    assert handler.commands["fog"].__func__ is ConsoleCommandHandler.cmd_render_fog
+def test_far_plane_fog_is_distancefog(handler):
+    """Far-plane fog is `distancefog`. The old `fog`/`r_fog` toggle, which set
+    an attribute no renderer had, is gone."""
+    assert "fog" not in handler.commands and "r_fog" not in handler.commands
     assert (handler.commands["distancefog"].__func__
             is ConsoleCommandHandler.cmd_distance_fog)
 

@@ -304,7 +304,10 @@ class PortalsMixin:
             # Match the main numeric scene pipeline: every brush
             # material class consumes the same projected slots,
             # narrowed only by the virtual camera frustum.
-            if mode in ('Textured', 'Solid Lit'):
+            if mode == 'Wireframe':
+                self.draw_brush_edges(
+                    proj, vw, portal_groups['opaque'], cfg, portal_table)
+            elif mode in ('Textured', 'Overlay'):
                 self.draw_textured_brushes_optimized(
                     proj, vw, cam,
                     portal_groups['textured'], portal_lights, cfg,

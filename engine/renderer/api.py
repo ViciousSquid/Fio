@@ -26,6 +26,15 @@ between its calls, and the host never manages state on a renderer's behalf.
 The host restores only what its own Qt painter relies on (viewport, scissor,
 depth/stencil/blend/cull enables and the default pixel-store alignment)
 before painting the 2D overlay.
+
+Resource lifetime: no GL resource id survives the lifetime of the renderer
+that owns it. A renderer instance owns every GL object it makes -- programs,
+buffers, vertex arrays, framebuffers, and the textures and models it loads,
+including the names ``load_texture`` returns -- and :meth:`Renderer.cleanup`
+deletes them all. The host discards every renderer-produced handle it holds
+(its sprite table, the terrain's bindings) before calling ``cleanup()``, and a
+renderer that replaces it (``QtGameView.switch_renderer``) receives fresh
+resource tables: the host reloads its sprites through the new renderer.
 """
 
 from dataclasses import dataclass
@@ -47,10 +56,14 @@ WATER_QUALITIES = ('cheap', 'expensive')
 FRAME_INPUT = {
     # Dense world projections (engine.render_table / engine.entity_table)
     'render_table': 'RenderTable: dense brush projection published by LogicRender',
-    'all_brush_slots': 'int32 slots of every live (not hidden) brush in render_table',
+    'all_brush_slots': 'int32 slots of every live brush in render_table: not '
+                       'hidden, and not filtered out by the editor\'s view filters',
     'entity_table': 'EntityTable: dense entity projection (lights, sprites, models, '
                     'effects, portals, path nodes)',
-    'visible_thing_slots': 'int32 entity slots the logic thread published as visible',
+    'visible_thing_slots': 'int32 entity slots to draw in this view: every entity '
+                           'pass (sprites, models, effects, path nodes, portal '
+                           'outlines) draws only these rows. The editor\'s view '
+                           'filters leave rows out; a light left out still lights',
     'thing_hidden': 'bool per entity row: hidden or collected in the running world',
     'terrain': 'engine.terrain.Terrain or None; the renderer prepares whatever '
                'GPU state it needs from it when it first sees it',
@@ -59,7 +72,13 @@ FRAME_INPUT = {
     # View settings
     'play_mode': 'bool: running game rather than editing',
     'render_mode': 'one of engine.constants.RENDER_MODE_* (lit, unlit, wireframe, vertex)',
-    'brush_display_mode': "editor brush display: 'Textured', 'Solid Lit', ...",
+    'brush_display_mode': "the editor's Display box: 'Textured' (everything as "
+                          "normal), 'Solid Lit' (brushes shaded, no textures), "
+                          "'Wireframe' (the world as lines), 'Points' (the "
+                          "world as points) or 'Overlay' (Textured with the "
+                          "world's wireframe drawn over it). How each looks is "
+                          "the renderer's choice. The host publishes 'Textured' "
+                          "in play unless Wireframe, Points or Overlay is on",
     'show_triggers_as_solid': 'bool: draw trigger volumes filled rather than outlined',
     'show_sprites_in_play_mode': 'bool: keep editor entity sprites visible in play',
     'grid_visible': 'bool: draw the editor grid',
@@ -81,12 +100,16 @@ class RenderStats:
     """
     __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
                  'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
-                 'entity_candidates', 'culled_entities', 'pass_ms')
+                 'entity_candidates', 'culled_entities', 'pass_ms', 'details')
     def __init__(self):
         #: CPU milliseconds spent submitting each pass this frame, measured by
         #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
         #: shadow maps) counts theirs too.
         self.pass_ms = {}
+        #: Renderer-specific diagnostic lines for tools such as Debug Tables:
+        #: ``name -> text``, or a zero-argument callable returning the text
+        #: (evaluated only when a tool shows it). Not cleared by :meth:`reset`.
+        self.details = {}
         self.reset()
     def reset(self):
         self.total_brushes = self.culled_brushes = self.visible_brushes = 0
@@ -163,7 +186,11 @@ class Renderer(Protocol):
         """False when start-up failed and the renderer cannot draw."""
 
     def cleanup(self) -> None:
-        """Release GL resources; the renderer is not used afterwards."""
+        """Delete every GL object this renderer made; it is not used afterwards.
+
+        Also called on a renderer whose ``ready`` is False, so it must cope
+        with a partly initialised instance.
+        """
 
     # -- the frame -------------------------------------------------------------
     def render_scene(self, projection, view, camera_pos,

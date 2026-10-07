@@ -248,6 +248,9 @@ layout (location = 10) in vec4 iPayload;
         except Exception as exc:
             print(f'[Renderer] {name} instancing disabled: {exc}')
             return False
+        replaced = self.shaders.get(name)
+        if replaced:
+            gl.glDeleteProgram(replaced)    # compiled again: free the first
         self.shaders[name] = program
         self.uniforms[name] = UniformCache(program)
         self._preload_lit_uniforms(name)
@@ -611,6 +614,17 @@ layout (location = 10) in float iInstanceAlpha;
             if not current_id or current_id == -1:
                 new_id = self.load_texture(filename, 'textures/terrain')
                 setattr(terrain, attr, new_id)
+
+    def _describe_sprite_layers(self):
+        """The sprite texture array's state, for ``render_stats.details``."""
+        layers = self._sprite_layers
+        if layers is not None and layers.texture:
+            layer_bytes = int(layers.size * layers.size * 4 * layers.capacity * 4 / 3)
+            return (f"{layers.count} of {layers.capacity} layers "
+                    f"at {layers.size}x{layers.size}  (~{layer_bytes/1024/1024:.1f} MiB)")
+        if layers is not None and layers.disabled:
+            return "DISABLED (per-texture runs in depth order)"
+        return "not created"
 
     def _sprite_layer_array(self):
         """The entity sprite texture array, created on first use."""
