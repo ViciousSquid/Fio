@@ -33,22 +33,30 @@ class CutsceneRuntime:
         self._message_queue = queue.SimpleQueue()
 
     def _cutscene_file_path(self, filename):
-        """Resolve an authored cutscene path without allowing it outside cutscenes/."""
+        """Resolve an authored cutscene path without allowing it outside cutscenes/.
+
+        A played package's own ``cutscenes/`` (``logic.package_root``) is
+        searched before the project's.
+        """
         raw = str(filename or "").strip().replace("\\", "/")
         if not raw:
             return None
-        project_root = os.path.realpath(
-            getattr(self.logic, "root_dir", os.path.dirname(os.path.dirname(__file__)))
-        )
-        root = os.path.realpath(os.path.join(project_root, "cutscenes"))
-        candidate = os.path.realpath(os.path.join(project_root, raw))
-        try:
-            inside = os.path.commonpath((root, candidate)) == root
-        except ValueError:
-            inside = False
-        if not inside or not os.path.isfile(candidate):
-            return None
-        return candidate
+        roots = [getattr(self.logic, "package_root", None),
+                 getattr(self.logic, "root_dir",
+                         os.path.dirname(os.path.dirname(__file__)))]
+        for project_root in roots:
+            if not project_root:
+                continue
+            project_root = os.path.realpath(project_root)
+            root = os.path.realpath(os.path.join(project_root, "cutscenes"))
+            candidate = os.path.realpath(os.path.join(project_root, raw))
+            try:
+                inside = os.path.commonpath((root, candidate)) == root
+            except ValueError:
+                inside = False
+            if inside and os.path.isfile(candidate):
+                return candidate
+        return None
 
     def _load_cutscene_file(self, filename):
         path = self._cutscene_file_path(filename)

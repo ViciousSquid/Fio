@@ -29,6 +29,9 @@ class PackageExporter:
     MAP_KEYS = ('target_map', 'map', 'next_map', 'next_level', 'target_level',
                 'level_name', 'map_name')
 
+    # Property naming the cutscene a LogicCamera plays (cutscenes/<name>.json).
+    CUTSCENE_KEY = 'cutscene_file'
+
     # Where a bare asset filename may live under assets/.
     ASSET_SUBDIRS = ('textures', 'models', 'sounds', 'sprites', 'materials')
 
@@ -84,12 +87,26 @@ class PackageExporter:
             manifest = dict(metadata)
             manifest['map_path'] = map_archive_paths[current_map_abs]
 
-            # ---- 3. Referenced assets from every map ----
+            # ---- 3. Cutscenes and referenced assets from every map ----
             referenced_assets: Set[str] = set()
+            cutscene_entries: Dict[str, str] = {}   # arcname -> source
             for map_file in map_archive_paths:
                 data = self._read_map(map_file)
-                if data is not None:
-                    referenced_assets |= self._asset_references(data)
+                if data is None:
+                    continue
+                referenced_assets |= self._asset_references(data)
+                for name in sorted(self._cutscene_references(data)):
+                    src_path = self._resolve_cutscene(name, map_file)
+                    if src_path is None:
+                        continue
+                    arcname = os.path.relpath(src_path, root).replace('\\', '/')
+                    if arcname in cutscene_entries:
+                        continue
+                    cutscene_entries[arcname] = src_path
+                    # Actors a cutscene spawns name their own sprites/models.
+                    cutscene = self._read_map(src_path)
+                    if cutscene is not None:
+                        referenced_assets |= self._cutscene_asset_references(cutscene)
 
             asset_entries: Dict[str, str] = {}   # arcname -> source
             for asset_name in sorted(referenced_assets):
@@ -107,6 +124,8 @@ class PackageExporter:
                 zf.writestr('metadata.json', json.dumps(manifest, indent=2))
                 for map_file, archive_path in map_archive_paths.items():
                     zf.write(map_file, archive_path)
+                for arcname, src_path in sorted(cutscene_entries.items()):
+                    zf.write(src_path, arcname)
                 for arcname, src_path in sorted(asset_entries.items()):
                     zf.write(src_path, arcname)
             os.replace(temporary, output_path)
@@ -167,6 +186,44 @@ class PackageExporter:
                     if val and isinstance(val, str):
                         refs.add(val)
         return refs
+
+    def _cutscene_references(self, data: dict) -> Set[str]:
+        """Every cutscene file a map's entities name."""
+        refs: Set[str] = set()
+        for entity in (data.get('things', []) or []) + (data.get('brushes', []) or []):
+            if not isinstance(entity, dict):
+                continue
+            props = entity.get('properties')
+            props = props if isinstance(props, dict) else entity
+            val = props.get(self.CUTSCENE_KEY)
+            if val and isinstance(val, str) and val.strip():
+                refs.add(val.strip())
+        return refs
+
+    def _resolve_cutscene(self, name: str, map_file: str) -> Optional[str]:
+        """The project's ``cutscenes/`` file *name* refers to, or None (reported).
+
+        Resolved as the cutscene runtime does: against the project root, and
+        only inside ``cutscenes/``.
+        """
+        cutscenes_dir = os.path.join(self.root_dir, 'cutscenes')
+        rel = name.replace('\\', '/')
+        candidate = os.path.join(self.root_dir, rel)
+        where = os.path.basename(map_file)
+        if os.path.isabs(rel) or not self._inside(candidate, cutscenes_dir):
+            self.errors.append(
+                f"Skipped cutscene outside cutscenes/: '{name}' referenced in {where}")
+            return None
+        if not os.path.isfile(candidate):
+            self.errors.append(f"Missing cutscene: '{name}' referenced in {where}")
+            return None
+        return os.path.normpath(candidate)
+
+    def _cutscene_asset_references(self, cutscene: dict) -> Set[str]:
+        """Assets named by the entities a cutscene spawns as actors."""
+        spawned = [row.get('definition') for row in cutscene.get('actors', []) or []
+                   if isinstance(row, dict) and isinstance(row.get('definition'), dict)]
+        return self._asset_references({'things': spawned})
 
     def _inside(self, path: str, base: str) -> bool:
         path = os.path.realpath(path)

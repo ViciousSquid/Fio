@@ -211,3 +211,81 @@ def test_map_name_collisions_get_distinct_archive_paths(project, tmp_path):
     with FioPackage.open(str(out)) as pak:
         assert pak.list_maps() == ["maps/start.json", "maps/start_1.json"]
         assert pak.start_map_path() == "maps/start.json"
+
+
+# ---------------------------------------------------------------------------
+# Cutscenes: a LogicCamera's cutscene_file travels with the map
+# ---------------------------------------------------------------------------
+
+def _camera(cutscene_file):
+    return {"type": "logic_camera", "pos": [0, 0, 0],
+            "properties": {"type": "logic_camera", "cutscene_file": cutscene_file}}
+
+
+def _cutscene(actors=()):
+    return {"version": 2, "name": "intro", "actors": list(actors),
+            "camera": [{"time": 0.0, "pos": [0, 0, 0], "yaw": 0, "pitch": 0}]}
+
+
+def test_a_maps_cutscene_is_packaged(project, tmp_path):
+    _write_json(project / "cutscenes" / "intro.json", _cutscene())
+    current = _write_json(project / "maps" / "start.json",
+                          _level([_camera("cutscenes/intro.json")]))
+    out = tmp_path / "game.fiopak"
+
+    ok, errors = _export(project, current, out)
+
+    assert ok, errors
+    assert errors == []
+    with zipfile.ZipFile(out) as zf:
+        assert json.loads(zf.read("cutscenes/intro.json"))["name"] == "intro"
+
+
+def test_a_linked_maps_cutscene_and_its_spawned_actors_assets_are_packaged(
+        project, tmp_path):
+    actor = {"id": "a1", "spawn": True, "definition": {
+        "type": "monster", "pos": [0, 0, 0],
+        "properties": {"type": "monster", "texture": "floor.png"}}}
+    _write_json(project / "cutscenes" / "boss.json", _cutscene([actor]))
+    _write_json(project / "maps" / "second.json",
+                _level([_camera("cutscenes/boss.json")]))
+    current = _write_json(project / "maps" / "first.json",
+                          _level([_changer("second.json")]))
+    out = tmp_path / "game.fiopak"
+
+    ok, errors = _export(project, current, out)
+
+    assert ok, errors
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+    assert "cutscenes/boss.json" in names
+    assert "assets/textures/floor.png" in names
+
+
+@pytest.mark.parametrize("reference", ["../secret.json", "maps/start.json",
+                                       "/etc/passwd"])
+def test_a_cutscene_outside_cutscenes_is_not_packaged(project, tmp_path, reference):
+    (project / "secret.json").write_text("{}")
+    current = _write_json(project / "maps" / "start.json",
+                          _level([_camera(reference)]))
+    out = tmp_path / "game.fiopak"
+
+    ok, errors = _export(project, current, out)
+
+    assert ok, errors
+    assert any("outside cutscenes/" in e for e in errors), errors
+    with zipfile.ZipFile(out) as zf:
+        assert not [n for n in zf.namelist()
+                    if n.startswith("cutscenes/") or n == "secret.json"]
+
+
+def test_a_missing_cutscene_is_reported(project, tmp_path):
+    current = _write_json(project / "maps" / "start.json",
+                          _level([_camera("cutscenes/gone.json")]))
+    out = tmp_path / "game.fiopak"
+
+    ok, errors = _export(project, current, out)
+
+    assert ok
+    assert any("Missing cutscene" in e and "gone.json" in e for e in errors), errors
+

@@ -268,6 +268,9 @@ class LogicThread(threading.Thread):
 
         # CutsceneRuntime owns cinematic playback state. LogicThread remains
         # the simulation orchestrator and delegates the state machine here.
+        #: Extraction folder of a played .fiopak, set by the editor at Play;
+        #: its cutscenes/ is searched before the project's.
+        self.package_root = None
         self.cutscene_runtime = CutsceneRuntime(self)
         # LogicPortals owns portal topology, transit and fade runtime.
         self.portal_runtime = LogicPortals(self, portal_type=Portal)
