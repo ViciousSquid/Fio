@@ -138,6 +138,14 @@ forward; see **Breaking changes** before upgrading.
 - The terrain panel re-arms the terrain brush whenever it is shown again.
 - The About dialog finds `editor/version.txt` from any working directory.
 - A Debug Console being torn down no longer raises on a late log message.
+- Export Game Package bundles the cutscenes its maps play (and the assets of
+  actors those cutscenes spawn), and a played package's cutscenes are found
+  inside the package. A cutscene reference outside `cutscenes/` is reported
+  and left out.
+- A level change the game asks for (a LevelChanger, a map's `map` command)
+  into a map with no Player Start is refused with a toast and Play carries on,
+  as for a missing destination spawn. Opening such a map yourself during Play
+  ends Play with a toast instead of a dialog that blocked the game loop.
 
 ### Hardening
 
