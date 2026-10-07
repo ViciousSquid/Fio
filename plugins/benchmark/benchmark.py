@@ -255,7 +255,6 @@ class BenchmarkRunner:
     
         self._worker_process = process
         self._worker_active = True
-        self._start_monitor_for_risky_test(label, timeout_s, process)
         self.status_label.setText(
             "Running isolated worker: %s (%.0f s hard timeout)"
             % (label, timeout_s)
@@ -360,11 +359,6 @@ class BenchmarkRunner:
         if not self._worker_active:
             return
     
-        monitor_failed, monitor_reason = self._monitor_failed()
-        if monitor_failed:
-            self._abort_worker_test(monitor_reason, timed_out=True)
-            return
-    
         process = self._worker_process
         if process is None:
             self._abort_worker_test("isolated benchmark worker disappeared")
@@ -386,7 +380,6 @@ class BenchmarkRunner:
         label = self._worker_label
         self._worker_active = False
         self._timer.stop()
-        self._stop_monitor()
     
         payload = None
         if result_path and os.path.exists(result_path):
@@ -754,10 +747,6 @@ class BenchmarkRunner:
 
     def _check_preparation_budget(self, label):
         elapsed = time.perf_counter() - self._phase_started
-        self._monitor_beat(label, deadline=self._preparation_deadline)
-        monitor_failed, monitor_reason = self._monitor_failed()
-        if monitor_failed:
-            raise TimeoutError(monitor_reason)
         if time.perf_counter() > self._preparation_deadline:
             raise TimeoutError(
                 "%s exceeded the %.0f s preparation limit after %.1f s. The workload was not measured; restoring the original world."
@@ -794,7 +783,6 @@ class BenchmarkRunner:
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
-        self._stop_live_stress_monitor()
         self._restore_benchmark_window_mode()
         self._restore_sysmon_after_benchmark()
     
@@ -849,8 +837,6 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._worker_active = False
         self._live_stress_active = False
-        self._stop_live_stress_monitor()
-        self._stop_monitor()
         self._restore_sysmon_after_benchmark()
     
         try:
@@ -889,7 +875,6 @@ class BenchmarkRunner:
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
-        self._stop_live_stress_monitor()
         self._results.append({
             "test": label,
             "status": "skipped",
@@ -924,7 +909,6 @@ class BenchmarkRunner:
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
-        self._stop_live_stress_monitor()
     
         try:
             if label == "monster_chaos_witness":
@@ -972,7 +956,6 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._live_stress_active = False
         self._timer.stop()
-        self._stop_live_stress_monitor()
         metrics = dict(metrics)
         if "frame_time_ms" in metrics:
             metrics["current_frame_time_ms"] = float(metrics.get("frame_time_ms", 0.0) or 0.0)
@@ -1225,7 +1208,6 @@ class BenchmarkRunner:
     
         self._running = True
         self.throbber.setVisible(True)
-        self._stop_monitor()
     
         try:
             # Load the benchmark implementation from the plugin itself.
@@ -1568,17 +1550,6 @@ class BenchmarkRunner:
             app = QApplication.instance()
             view = self.main_window.view_3d
             now = time.perf_counter()
-
-            if (
-                self._live_stress_active
-                and self._live_stress_timeout
-                and now >= self._measurement_watchdog_deadline
-            ):
-                self._abort_live_stress(
-                    self._live_stress_timeout_reason or
-                    "live benchmark exceeded its cooperative time budget"
-                )
-                return
 
             if self._current and self._current[0] == "monster_chaos_witness":
                 self._tick_monster_chaos_witness(now, app, view)
@@ -2533,7 +2504,6 @@ class BenchmarkHost:
     def _start_benchmark(self, config):
         self._last_result_count = 0
         self._last_current = None
-        self._last_running = False
 
         self.runner._requested_duration = config.get("duration")
         self.runner._requested_repetitions = max(

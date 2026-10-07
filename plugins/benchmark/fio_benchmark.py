@@ -1131,9 +1131,19 @@ def _selected_monster_counts():
 
 def _render_sample_set(renderer, context, brushes, things, warmup, samples):
     """Render frames and collect the same metrics exposed by Fio SysMon."""
+    from types import SimpleNamespace
     from engine.sysmon import SysMon
 
-    sysmon = SysMon(None)
+    # SysMon reads its host view's logic thread, renderer and editor; give it
+    # this standalone render's equivalents.
+    sysmon = SysMon(SimpleNamespace(
+        logic_thread=SimpleNamespace(actual_tps=0.0),
+        renderer=renderer,
+        editor=SimpleNamespace(
+            state=SimpleNamespace(brushes=brushes, things=things),
+            terrain=None,
+        ),
+    ))
 
     for _ in range(warmup):
         _render(renderer, context, brushes, things)

@@ -386,7 +386,7 @@ class BenchmarkTests:
 
     def _face_monster_chaos_camera(self, logic, monster):
         """Aim the Play camera at the first witness monster."""
-        player = getattr(logic, "player", None)
+        player = logic.player_runtime.player
         if player is None:
             raise RuntimeError("Monster chaos witness has no live player")
 
