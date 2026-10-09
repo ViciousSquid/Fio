@@ -33,7 +33,7 @@ class PackageExporter:
     CUTSCENE_KEY = 'cutscene_file'
 
     # Where a bare asset filename may live under assets/.
-    ASSET_SUBDIRS = ('textures', 'models', 'sounds', 'sprites', 'materials')
+    ASSET_SUBDIRS = ('textures', 'models', 'sounds', 'music', 'sprites', 'materials')
 
     def __init__(self, editor_state, root_dir: str):
         self.editor_state = editor_state

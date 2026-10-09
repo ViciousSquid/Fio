@@ -431,7 +431,24 @@ class QtGameView(QOpenGLWidget):
             return False
 
     def _get_sound_instance(self, name):
-        """Get a pygame Sound object by name. Loads on-demand if not cached."""
+        """Get a pygame Sound object by name. Loads on-demand if not cached.
+
+        A path into assets/sounds or assets/music (what a Speaker sends,
+        ``assets/music/theme.ogg``) loads that file, subfolders included; any
+        other name is looked up by its basename in assets/sounds.
+        """
+        from engine.speaker_audio import resolve_speaker_sound, speaker_sound_path
+        rel = speaker_sound_path(name) if '/' in str(name).replace('\\', '/') else None
+        if rel is not None:
+            if rel in self.sound_pool:
+                return self.sound_pool[rel]
+            if not self._ensure_pygame_mixer():
+                return None
+            path = resolve_speaker_sound(rel, os.getcwd())
+            if path and os.path.isfile(path) and self._load_sound_to_cache(rel, path):
+                return self.sound_pool[rel]
+            print(f"[Audio] Sound not found: {rel}")
+            return None
         clean_name = os.path.basename(name)
         
         # Already cached?

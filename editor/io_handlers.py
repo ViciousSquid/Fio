@@ -566,12 +566,21 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('Speaker', f"PlaySound called on '{entity_name}'")
         debug_log('Speaker', f"  sound_file='{sound_file}', volume={volume}, looping={looping}")
 
-        entity.properties['state'] = 'on'
-        speaker_id = id(entity)
-
         if not sound_file:
+            entity.properties['state'] = 'on'
             debug_log('Error', f"No sound file configured for speaker '{entity_name}'!")
             return
+        # Speakers play only from assets/sounds and assets/music.
+        from engine.speaker_audio import speaker_sound_path
+        sound_file = speaker_sound_path(sound_file)
+        if sound_file is None:
+            debug_log('Error', f"Speaker '{entity_name}': "
+                      f"'{entity.properties.get('sound_file')}' is not in "
+                      f"assets/sounds or assets/music; not played.")
+            return
+
+        entity.properties['state'] = 'on'
+        speaker_id = id(entity)
 
         game_state = logic.game_state
 

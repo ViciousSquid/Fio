@@ -12,6 +12,7 @@ from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
 from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
+from engine.speaker_audio import AUDIO_EXTENSIONS, SPEAKER_AUDIO_FOLDERS, speaker_sound_path
 
 
 def render_obj_thumbnail(filepath, width, height):
@@ -126,17 +127,36 @@ def render_obj_thumbnail(filepath, width, height):
     painter.end()
     return pixmap
 
+def audio_thumbnail(path, size):
+    """A note on a tile, the file type under it: sounds teal, music violet."""
+    parts = os.path.abspath(path).replace('\\', '/').split('/')
+    is_music = 'assets' in parts and parts[parts.index('assets') + 1:][:1] == ['music']
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(70, 50, 95) if is_music else QColor(40, 80, 85))
+    painter = QPainter(pixmap)
+    painter.setPen(QColor(230, 230, 230))
+    painter.setFont(QFont("Arial", size // 3, QFont.Bold))
+    painter.drawText(QRect(0, 0, size, size * 3 // 4), Qt.AlignCenter, "\u266b" if is_music else "\u266a")
+    painter.setFont(QFont("Arial", max(7, size // 9), QFont.Bold))
+    painter.setPen(QColor(240, 128, 0))
+    ext = os.path.splitext(path)[1].lstrip('.').upper()
+    painter.drawText(QRect(0, size * 2 // 3, size, size // 3), Qt.AlignCenter, ext)
+    painter.end()
+    return pixmap
+
+
 class AssetItem(QWidget):
     """
     A widget representing a single asset (file) in the grid view.
     Selection is shown by a 3px orange border around the entire item.
     """
-    def __init__(self, name, path, browser, is_model=False):
+    def __init__(self, name, path, browser, is_model=False, is_audio=False):
         super().__init__()
         self.name_text = name
         self.file_path = path
         self.browser = browser
         self.is_model = is_model
+        self.is_audio = is_audio
         
         self.setFixedSize(100, 120)
         # Reduce layout margins so the border has room
@@ -181,6 +201,9 @@ class AssetItem(QWidget):
     def _load_thumbnail(self):
         pixmap = QPixmap()
 
+        if self.is_audio:
+            self.thumb_label.setPixmap(audio_thumbnail(self.file_path, 90))
+            return
         if self.is_model:
             # 1. Look for .png sidecar
             base_path = os.path.splitext(self.file_path)[0]
@@ -238,6 +261,10 @@ class AssetItem(QWidget):
         if event.button() == Qt.LeftButton:
             self.browser.select_item(self)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and hasattr(self.browser, 'activate_item'):
+            self.browser.activate_item(self)
+
     def set_selected(self, selected):
         if self.selected == selected:
             return
@@ -249,8 +276,16 @@ class AssetBrowserTab(QWidget):
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
     """
-    def __init__(self, root_path, file_extensions, editor=None, is_model_tab=False, parent_browser=None):
+    def __init__(self, root_path, file_extensions, editor=None, is_model_tab=False,
+                 parent_browser=None, audio_folders=None):
         super().__init__()
+        #: The Audio tab: ``{'sounds': path, 'music': path}``, toggled by the
+        #: header link as the Maps tab toggles Maps and Packages.
+        self.audio_folders = audio_folders
+        self.is_audio_tab = audio_folders is not None
+        self.audio_mode = 'sounds'
+        self.assign_btn = None
+        self.audio_header = None
         self.root_path = root_path
         self.current_asset_folder = root_path
         self.extensions = file_extensions
@@ -347,7 +382,26 @@ class AssetBrowserTab(QWidget):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(12)
 
-        if self.is_model_tab:
+        if self.is_audio_tab:
+            # Sounds | Music, toggled like the Maps tab's Maps | Packages.
+            self.audio_header = QLabel()
+            self.audio_header.setTextFormat(Qt.RichText)
+            self.audio_header.setOpenExternalLinks(False)
+            self.audio_header.linkActivated.connect(self.toggle_audio_folder)
+            self.audio_header.setStyleSheet("color: #ddd; font-size: 10pt;")
+            button_layout.addWidget(self.audio_header)
+            button_layout.addStretch()
+            self.assign_btn = QPushButton("Give to Speaker")
+            self.assign_btn.setEnabled(False)
+            self.assign_btn.setStyleSheet(button_style)
+            self.assign_btn.setToolTip(
+                "Set the selected sound as the sound file of every selected Speaker\n"
+                "(double-click a sound does the same). Speakers play only from\n"
+                "assets/sounds and assets/music.")
+            self.assign_btn.clicked.connect(self.assign_to_speakers)
+            button_layout.addWidget(self.assign_btn)
+            self._update_audio_header()
+        elif self.is_model_tab:
             self.add_btn = QPushButton("Add to Scene")
             self.add_btn.setEnabled(False)
             self.add_btn.setStyleSheet(button_style)
@@ -570,7 +624,8 @@ class AssetBrowserTab(QWidget):
                     # image) must not abort loading the rest of the folder. The
                     # skipped file is named so the failure stays diagnosable.
                     try:
-                        item = AssetItem(f, full_path, self, is_model=self.is_model_tab)
+                        item = AssetItem(f, full_path, self, is_model=self.is_model_tab,
+                                         is_audio=self.is_audio_tab)
                         self.items.append(item)
                     except Exception as e:
                         print(f"[AssetBrowser] Skipped '{f}': {e}")
@@ -587,10 +642,71 @@ class AssetBrowserTab(QWidget):
         self.update_buttons_enabled()
 
     def update_buttons_enabled(self):
-        # Only the model tab has a button that needs a selection.  The
-        # Inspector button opens a panel and so is always available.
+        # Only the model and audio tabs have a button that needs a selection.
+        # The Inspector button opens a panel and so is always available.
         if self.is_model_tab and self.add_btn:
             self.add_btn.setEnabled(self.selected_item is not None)
+        if self.assign_btn is not None:
+            self.assign_btn.setEnabled(self.selected_item is not None)
+
+    # -- Audio tab ---------------------------------------------------------
+
+    def _update_audio_header(self):
+        label = "Sounds" if self.audio_mode == 'sounds' else "Music"
+        self.audio_header.setText(
+            f'Showing: <a href="switch" style="color: #F08000; text-decoration: none;">{label}</a>')
+
+    def toggle_audio_folder(self, _link=None):
+        """Switch the Audio tab between assets/sounds and assets/music."""
+        self.set_audio_folder('music' if self.audio_mode == 'sounds' else 'sounds')
+
+    def set_audio_folder(self, mode):
+        if not self.is_audio_tab or mode not in self.audio_folders:
+            return
+        self.audio_mode = mode
+        self.root_path = self.audio_folders[mode]
+        os.makedirs(self.root_path, exist_ok=True)
+        self.dir_model.setRootPath(self.root_path)
+        self.tree_view.setRootIndex(self.dir_model.index(self.root_path))
+        self.home_btn.setText(f"🏠 {mode.capitalize()}")
+        self.home_btn.setToolTip(f"Go to root {mode} folder")
+        self._update_audio_header()
+        self.load_directory(self.root_path)
+
+    def selected_speaker_sound(self):
+        """The selected file as a Speaker's sound_file, or None."""
+        if self.selected_item is None or self.editor is None:
+            return None
+        rel = os.path.relpath(self.selected_item.file_path, self.editor.root_dir)
+        rel = rel.replace('\\', '/')
+        return rel if speaker_sound_path(rel) == rel else None
+
+    def activate_item(self, item):
+        if self.is_audio_tab:
+            self.select_item(item)
+            self.assign_to_speakers()
+
+    def assign_to_speakers(self):
+        """Give every selected Speaker the selected sound (one undo step)."""
+        editor = self.editor
+        if editor is None:
+            return 0
+        sound = self.selected_speaker_sound()
+        if sound is None:
+            return 0
+        from editor.things import Speaker
+        speakers = [o for o in (editor.state.selected_objects or [])
+                    if isinstance(o, Speaker)]
+        if not speakers:
+            editor.show_toast("Select a Speaker to give it this sound")
+            return 0
+        editor.save_state()
+        for speaker in speakers:
+            speaker.properties['sound_file'] = sound
+        editor.state.mark_world_changed(speakers)
+        editor.update_all_ui()
+        editor.show_toast(f"Speaker sound: {os.path.basename(sound)}")
+        return len(speakers)
 
     def add_current_model(self):
         if self.editor and self.selected_item:
@@ -813,10 +929,19 @@ class AssetBrowser(QWidget):
         self.tab_maps = MapsBrowserTab(self.maps_folder, self.packages_folder, editor, parent_browser=self)
         self.tabs.addTab(self.tab_maps, "Maps")
 
+        # Speakers play only from these folders (engine.speaker_audio).
+        audio_folders = {name: os.path.join(self.assets_root, name)
+                         for name in SPEAKER_AUDIO_FOLDERS}
+        self.tab_audio = AssetBrowserTab(audio_folders['sounds'], list(AUDIO_EXTENSIONS),
+                                         editor, parent_browser=self,
+                                         audio_folders=audio_folders)
+        self.tabs.addTab(self.tab_audio, "Audio")
+
     def get_selected_filepath(self):
         """Return the file path of the currently selected asset, or None."""
         w = self.tabs.currentWidget()
-        if isinstance(w, MapsBrowserTab):
+        # Maps and sounds are not textures: the texture tools read this.
+        if isinstance(w, MapsBrowserTab) or getattr(w, 'is_audio_tab', False):
             return None
         if w and w.selected_item:
             return w.selected_item.file_path

@@ -146,6 +146,12 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   `close_pause_menu()`; set in the bundled HornetDisplay font.
 - `quit` console command: closes Fio at once, without asking (unsaved
   changes are lost). Map logic cannot run it.
+- Asset Browser **Audio** tab: `assets/sounds` or `assets/music` (the
+  orange link toggles them, as on the Maps tab), each with the folder panel
+  for its subfolders. Double-click a sound, or **Give to Speaker**, to set it
+  on the selected Speakers. Speakers play only from those two folders: a
+  sound file anywhere else is refused, in the editor and at run time. Music
+  files (`.ogg`, `.mp3`, `.wav`) play like sounds.
 
 ### Fixes
 

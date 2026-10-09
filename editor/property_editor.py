@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QHBoxLayout, QColorDialog, QFileDialog, QGridLayout,
                              QToolButton, QSlider, QTabWidget, QGroupBox, QScrollArea,
                              QFrame, QDoubleSpinBox, QSizePolicy,
-                             QTableWidget, QTableWidgetItem)
+                             QTableWidget, QTableWidgetItem, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
@@ -5171,10 +5171,12 @@ class PropertyEditor(QWidget):
         line_edit = QLineEdit(str(value))
         line_edit.setReadOnly(True)
         button = QPushButton("Browse...")
-        button.setToolTip("Choose a sound file from the Fio project.")
+        button.setToolTip("Choose a sound from assets/sounds or assets/music\n"
+                          "(or double-click one in the Asset Browser's Audio tab).")
         button.setFixedWidth(80)
 
         def open_dialog():
+            from engine.speaker_audio import speaker_sound_path
             start = os.path.join(_project_root(), 'assets', 'sounds')
             os.makedirs(start, exist_ok=True)
             fp, _ = QFileDialog.getOpenFileName(
@@ -5185,9 +5187,15 @@ class PropertyEditor(QWidget):
             )
             if fp:
                 rel = _normalise_project_asset_path(fp)
-                if rel:
-                    self.update_object_prop(key, rel)
-                    line_edit.setText(rel)
+                # Speakers play only from assets/sounds and assets/music.
+                if speaker_sound_path(rel) != rel:
+                    QMessageBox.warning(
+                        self, "Sound File",
+                        "Speakers play sounds from assets/sounds or assets/music only.\n"
+                        "Move the file into one of those folders first.")
+                    return
+                self.update_object_prop(key, rel)
+                line_edit.setText(rel)
 
         button.clicked.connect(open_dialog)
         h.addWidget(line_edit, 1)
