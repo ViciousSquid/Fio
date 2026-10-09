@@ -25,6 +25,55 @@ def _read_text(path: str) -> Optional[str]:
     return text if len(text) <= MAX_OBJ_FILE_BYTES else None
 
 
+# ---------------------------------------------------------------------------
+# Up axis
+# ---------------------------------------------------------------------------
+# Fio is Y-up. An OBJ file does not say which way is up, and some exporters
+# write Z-up (the model then appears on its side). A model is taken as Z-up
+# when it stands on the z = 0 plane, has real depth along Z, and hangs well
+# below y = 0 -- a Y-up model standing on y = 0, or one centred on both, is
+# left as it is. A comment in the file settles it either way:
+#     # fio:up=z      or      # fio:up=y
+
+UP_AXIS_TAG = 'fio:up='
+_BASE_TOLERANCE = 0.01          # of the model's extent along that axis
+
+
+def up_axis_tag(comment):
+    """'y' or 'z' from a ``# fio:up=...`` comment line, else None."""
+    text = comment.lstrip('#').strip().lower().replace(' ', '')
+    if text.startswith(UP_AXIS_TAG):
+        value = text[len(UP_AXIS_TAG):][:1]
+        if value in ('y', 'z'):
+            return value
+    return None
+
+
+def detect_up_axis(vertices, tag=None):
+    """'z' for a model authored Z-up, else 'y' (see above)."""
+    if tag in ('y', 'z'):
+        return tag
+    if not vertices:
+        return 'y'
+    ys = [v[1] for v in vertices]
+    zs = [v[2] for v in vertices]
+    y_min, y_size = min(ys), max(ys) - min(ys)
+    z_min, z_size = min(zs), max(zs) - min(zs)
+    if z_size <= 0.0 or y_size <= 0.0:
+        return 'y'
+    stands_on_z = abs(z_min) <= _BASE_TOLERANCE * z_size
+    stands_on_y = abs(y_min) <= _BASE_TOLERANCE * y_size
+    hangs_below_y = y_min < -_BASE_TOLERANCE * y_size
+    deep_along_z = z_size >= 0.5 * y_size
+    return 'z' if stands_on_z and not stands_on_y and hangs_below_y and deep_along_z else 'y'
+
+
+def z_up_to_y_up(v):
+    """A Z-up point or normal in Fio's Y-up: -90 degrees about X (a rotation,
+    so faces keep their winding)."""
+    return (v[0], v[2], -v[1])
+
+
 class OBJLoader:
     """
     Wavefront OBJ/MTL loader, reading straight from the filesystem like the
@@ -37,6 +86,8 @@ class OBJLoader:
         self.normals: List[Tuple[float, float, float]] = []
         self.faces: List[dict] = []
         self.materials: dict = {}
+        #: The up axis the file was authored in; a 'z' file was turned Y-up.
+        self.up_axis = 'y'
     
     @staticmethod
     def _resolve_index(value: str, length: int) -> int:
@@ -72,10 +123,14 @@ class OBJLoader:
         lines = text.splitlines()
         current_material = None
         mtl_lib_name = None
+        up_tag = None
         
         for line in lines:
             line = line.strip()
-            if not line or line.startswith('#'):
+            if not line:
+                continue
+            if line.startswith('#'):
+                up_tag = up_axis_tag(line) or up_tag
                 continue
             
             parts = line.split()
@@ -122,6 +177,12 @@ class OBJLoader:
             elif keyword == 'mtllib' and len(parts) > 1:
                 mtl_lib_name = ' '.join(parts[1:])
         
+        self.up_axis = detect_up_axis(self.vertices, up_tag)
+        if self.up_axis == 'z':
+            self.vertices = [z_up_to_y_up(v) for v in self.vertices]
+            self.normals = [z_up_to_y_up(n) for n in self.normals]
+            print(f"[OBJLoader] {os.path.basename(filepath)} is Z-up; turned to Fio's Y-up")
+
         if mtl_lib_name:
             self._load_mtl(filepath, mtl_lib_name)
         

@@ -19,8 +19,10 @@ def render_obj_thumbnail(filepath, width, height):
     """
     Simple software renderer to generate a wireframe thumbnail from an OBJ file.
     """
+    from engine.obj_loader import detect_up_axis, up_axis_tag, z_up_to_y_up
     vertices = []
     faces = []
+    up_tag = None
     
     try:
         # Limit processing to avoid freezing on huge files
@@ -32,7 +34,9 @@ def render_obj_thumbnail(filepath, width, height):
                 line_count += 1
                 if line_count > max_lines: break
                 
-                if line.startswith('v '):
+                if line.startswith('#'):
+                    up_tag = up_axis_tag(line) or up_tag
+                elif line.startswith('v '):
                     parts = line.split()
                     vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
                 elif line.startswith('f '):
@@ -47,6 +51,10 @@ def render_obj_thumbnail(filepath, width, height):
 
     if not vertices:
         return None
+    # Drawn the way the editor will place it (engine.obj_loader turns a Z-up
+    # model Y-up).
+    if detect_up_axis(vertices, up_tag) == 'z':
+        vertices = [list(z_up_to_y_up(v)) for v in vertices]
 
     # Normalize vertices to -1..1 range
     min_v = [float('inf')] * 3

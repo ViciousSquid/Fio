@@ -52,6 +52,12 @@ forward; see **Breaking changes** before upgrading.
   it starts drawing a new brush there, as on empty space. Shift+click
   selects a brush. Entities, resize handles and the Select tool are
   unchanged.
+- **Z-up OBJ models are turned Y-up when they load.** A model standing on
+  z = 0, deep along Z and hanging well below y = 0 is taken as exported
+  Z-up and loaded upright, in the editor, Play, collision and the Asset
+  Browser thumbnail. A map that stood such a model up with its own X
+  rotation should drop that rotation. `# fio:up=y` (or `=z`) in the file
+  overrides the guess.
 - **Esc in Play opens the pause menu** instead of leaving Play. Exit to
   Editor (Quit in a played package) is in the menu; with the player dead,
   Esc still leaves Play.
