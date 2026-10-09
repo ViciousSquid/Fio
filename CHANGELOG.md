@@ -146,6 +146,15 @@ forward; see **Breaking changes** before upgrading.
   into a map with no Player Start is refused with a toast and Play carries on,
   as for a missing destination spawn. Opening such a map yourself during Play
   ends Play with a toast instead of a dialog that blocked the game loop.
+- GLB models with indices load again: under NumPy 2 every indexed GLB (nearly
+  every glTF export) raised `TypeError` while building its buffers or its
+  2D-view wireframe.
+- OBJ material groups are contiguous: an OBJ that returns to an earlier
+  material (`usemtl A`, `B`, `A` -- the bundled `Tree low.obj` does) drew
+  overlapping index ranges, so some triangles were drawn twice with the wrong
+  material.
+- A non-numeric coordinate in an OBJ or MTL loads as zero instead of failing
+  the whole model.
 
 ### Hardening
 
@@ -160,6 +169,23 @@ forward; see **Breaking changes** before upgrading.
   no longer writes settings.ini.
 - 20 test modules that skipped without PyQt5 but were not marked `qt` ran in
   no tier; they are marked, and the suite-integrity check refuses another.
+- GLB: external buffers must be relative paths to regular files (an absolute
+  path, a scheme or `/dev/zero` is not read); models are capped at 256 MiB;
+  a primitive with out-of-range indices or negative offsets is dropped
+  instead of reaching the GPU.
+- OBJ/MTL: only regular files up to 256 MiB are read, so `mtllib /dev/zero`
+  no longer hangs the loader.
+- A terrain heightmap that is not a plain 2-D numeric `.npy` (corrupt, truncated,
+  an `.npz`) or a malformed sculpt entry is dropped rather than failing the
+  map load.
+- CI workflows default to a read-only `GITHUB_TOKEN`; only the release job can
+  write to the repository.
+
+### Performance
+
+- GLB accessors, vertex interleaving and triangle lists are decoded in bulk
+  with NumPy instead of per-element Python loops (a 200k-vertex model parses
+  in ~13 ms instead of ~490 ms).
 
 ## 2.5.11
 
