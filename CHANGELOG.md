@@ -180,6 +180,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- A carried model (an oil drum, say) turns with the player, so the side
+  that faced you when you picked it up keeps facing you. It kept its world
+  facing, so turning swung your view round it. Dropped, it keeps the facing
+  it was carried at. Carried billboards are unchanged.
 - `LowPoly_Tree_v1.obj` no longer lies on its side when inserted: it was
   exported Z-up while Fio (and the other bundled models) are Y-up. The file
   is now Y-up, and the maps that stood it up with a 270 degree rotation no

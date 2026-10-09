@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 
 from .physics import world_gravity
+from .change_journal import touch
 from .spatial import CellIndex, cell_of_point
 
 
@@ -299,6 +300,12 @@ class PropSession:
                 best._carry_sprite_yaw = float(self.logic.player_runtime.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
+            # A model turns with the player instead, so the side facing the
+            # player stays facing them: without it the player's view swung
+            # round a model that kept its world facing.
+            if self._is_model(best):
+                best._carry_turn = (best._carry_sprite_yaw,
+                                    list(best.properties.get('rotation') or (0.0, 0.0, 0.0)))
             self._falling.pop(id(best), None)
             if self.physics is not None:
                 self.physics.set_kinematic(best, True)
@@ -655,6 +662,28 @@ class PropSession:
         for pid in finished:
             self._falling.pop(pid, None)
 
+    @staticmethod
+    def _is_model(prop):
+        p = prop.properties
+        return p.get("render_mode") == "model" and bool(p.get("model_path"))
+
+    def _turn_with_player(self, prop):
+        """Keep a carried model's facing relative to the player: its yaw
+        follows how far the player has turned since picking it up."""
+        turn = getattr(prop, "_carry_turn", None)
+        if turn is None:
+            return
+        yaw0, rotation0 = turn
+        try:
+            delta = math.degrees(float(self.logic.player_runtime.player.angle) - yaw0)
+        except (TypeError, ValueError, AttributeError):
+            return
+        rotation = list(rotation0) + [0.0] * (3 - len(rotation0))
+        rotation[1] = float(rotation0[1]) + delta
+        if rotation != prop.properties.get("rotation"):
+            prop.properties["rotation"] = rotation
+            touch(prop)
+
     def _carry(self, eye, forward, use_pressed):
         prop = self.held
         p = prop.properties
@@ -667,6 +696,7 @@ class PropSession:
             eye[2] + forward[2] * distance + float(offset[2]),
         ]
         self.moved(prop)
+        self._turn_with_player(prop)
 
         if not (use_pressed or p.pop("_drop_requested", False)):
             self.logic.interaction_runtime.current_hud_message = "[E] Carry / Drop"
@@ -708,4 +738,5 @@ class PropSession:
                 "velocity": float(p.get("drop_velocity", 0.0)),
             }
         prop._carry_sprite_yaw = None
+        prop._carry_turn = None              # it keeps the facing it was carried at
         self._fire(prop, "OnDropped")

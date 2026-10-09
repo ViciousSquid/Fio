@@ -285,3 +285,51 @@ def test_aabb_collision_shape_skips_mesh_collision(real_logic):
     assert brushes[0]['_collision_mode'] == 'aabb'
     assert brushes[0]['size'] == [128.0, 128.0, 128.0]
     assert brushes[0]['pos'] == [10.0, 20.0, 30.0]
+
+
+def _model_prop(**props):
+    props = {'carry_enabled': True, 'render_mode': 'model',
+             'model_path': 'assets/models/Oil_Drum_Grey.obj',
+             'rotation': [0.0, 30.0, 0.0], **props}
+    return Prop(pos=[0.0, 40.0, 55.0], properties=props)
+
+
+def test_a_carried_model_keeps_the_same_side_towards_the_player(real_logic):
+    """Turning while holding a model turns the model with you: the side that
+    faced you at pickup keeps facing you, rather than your view swinging
+    round a model that held its world facing."""
+    import math
+    prop = _model_prop()
+    logic, session, events = real_logic([prop])
+    player = logic.player_runtime.player
+
+    session.tick(1 / 60, use_pressed=True)
+    assert session.held is prop
+    for angle in (0.5, -1.0, 2.75):
+        player.angle = angle
+        session.tick(1 / 60, use_pressed=False)
+        yaw = prop.properties['rotation'][1]
+        assert yaw == pytest.approx(30.0 + math.degrees(angle))
+        # The model's facing relative to the direction it is carried in is
+        # the same whichever way the player looks.
+        direction = math.degrees(math.atan2(prop.pos[0] - player.pos.x,
+                                            prop.pos[2] - player.pos.z))
+        assert (yaw - direction) % 360.0 == pytest.approx(30.0)
+    assert prop.properties['rotation'][0] == 0.0 and prop.properties['rotation'][2] == 0.0
+
+    session.tick(1 / 60, use_pressed=True)                 # drop it
+    assert session.held is None
+    dropped = list(prop.properties['rotation'])
+    player.angle = 0.0
+    session.tick(1 / 60, use_pressed=False)
+    assert prop.properties['rotation'] == dropped          # keeps the facing it had
+
+
+def test_a_carried_billboard_is_not_given_a_model_rotation(real_logic):
+    prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True,
+                                                   'rotation': [0, 0, 0]})
+    logic, session, events = real_logic([prop])
+    session.tick(1 / 60, use_pressed=True)
+    logic.player_runtime.player.angle = 1.0
+    session.tick(1 / 60, use_pressed=False)
+    assert prop.properties['rotation'] == [0, 0, 0]
