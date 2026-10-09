@@ -186,6 +186,9 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- Q steps through the whole tool group in toolbar order, Select -> Brush ->
+  Vertex -> Edge -> Face -> Select. It stepped object, vertex, edge and face
+  only, so it never reached Select (object mode showed as Brush).
 - A carried model (an oil drum, say) turns with the player, so the side
   that faced you when you picked it up keeps facing you. It kept its world
   facing, so turning swung your view round it. Dropped, it keeps the facing

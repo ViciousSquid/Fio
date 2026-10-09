@@ -3874,12 +3874,26 @@ class MainWindow(QMainWindow):
         self._sync_component_buttons()
         self.refresh_views()
 
+    #: Q steps through the base-tool group in toolbar order.
+    TOOL_CYCLE = ('select', 'brush', MODE_VERTEX, MODE_EDGE, MODE_FACE)
+
     def cycle_component_mode(self):
-        """Step OBJECT -> VERTEX -> EDGE -> FACE -> OBJECT (Radiant's Tab-ish)."""
-        order = (MODE_OBJECT, MODE_VERTEX, MODE_EDGE, MODE_FACE)
+        """Q: Select -> Brush -> Vertex -> Edge -> Face -> Select.
+
+        The whole base-tool group, in toolbar order. (It stepped only object,
+        vertex, edge and face, and object mode is whichever base tool was
+        active -- Brush in a new editor -- so Q never reached Select.)
+        """
         current = self.components.mode
+        if current == MODE_OBJECT:
+            current = self.tool_mode
+        order = self.TOOL_CYCLE
         index = order.index(current) if current in order else 0
-        self.set_component_mode(order[(index + 1) % len(order)])
+        nxt = order[(index + 1) % len(order)]
+        if nxt in ('select', 'brush'):
+            self.set_tool_mode(nxt)
+        else:
+            self.set_component_mode(nxt)
 
     def _sync_tool_group_buttons(self):
         """Light exactly one strip in the base-tool group.

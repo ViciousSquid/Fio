@@ -580,8 +580,8 @@ class Ui_MainWindow(object):
         select_menu.addAction(MainWindow.surface_inspector_action)
 
         select_menu.addSeparator()
-        cycle_action = QAction('Cycle Component Mode', MainWindow, shortcut='Q')
-        cycle_action.setToolTip('Step Object -> Vertex -> Edge -> Face')
+        cycle_action = QAction('Cycle Tool / Component Mode', MainWindow, shortcut='Q')
+        cycle_action.setToolTip('Step Select -> Brush -> Vertex -> Edge -> Face')
         cycle_action.triggered.connect(MainWindow.cycle_component_mode)
         select_menu.addAction(cycle_action)
 

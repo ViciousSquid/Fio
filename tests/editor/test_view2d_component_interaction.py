@@ -350,13 +350,35 @@ def test_leaving_component_mode_clears_the_handles(editor):
     assert host.components.selection == []
 
 
-def test_cycling_walks_the_component_modes(editor):
+def _lit(host):
+    """The base-tool group button that is lit."""
+    names = ('select_tool_btn', 'brush_tool_btn', 'vertex_mode_btn',
+             'edge_mode_btn', 'face_mode_btn')
+    lit = [n for n in names if getattr(host, n).isChecked()]
+    assert len(lit) == 1, lit
+    return lit[0]
+
+
+def test_q_walks_the_whole_tool_group_select_included(editor):
+    """Q stepped object/vertex/edge/face only, and object mode lit whichever
+    base tool was active (Brush in a new editor), so Select was never reached."""
     host, _ = editor
+    assert _lit(host) == 'select_tool_btn'
     order = []
+    for _ in range(5):
+        host.cycle_component_mode()
+        order.append(_lit(host))
+    assert order == ['brush_tool_btn', 'vertex_mode_btn', 'edge_mode_btn',
+                     'face_mode_btn', 'select_tool_btn']
+    assert host.tool_mode == 'select' and host.components.mode == ce.MODE_OBJECT
+
+
+def test_q_from_a_new_editor_reaches_select(main_window):
+    host = main_window
+    assert host.tool_mode == 'brush'
     for _ in range(4):
         host.cycle_component_mode()
-        order.append(host.components.mode)
-    assert order == [ce.MODE_VERTEX, ce.MODE_EDGE, ce.MODE_FACE, ce.MODE_OBJECT]
+    assert host.tool_mode == 'select' and host.select_tool_btn.isChecked()
 
 
 def test_an_invalid_drag_keeps_the_brush_usable(editor):
