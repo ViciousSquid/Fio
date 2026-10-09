@@ -275,6 +275,7 @@ def _capture_player(player) -> Optional[dict]:
         "on_ground": bool(getattr(player, "on_ground", False)),
         "in_water": bool(getattr(player, "in_water", False)),
         "swimming": bool(getattr(player, "swimming", False)),
+        "ducked": bool(getattr(player, "ducked", False)),
     }
 
 
@@ -289,6 +290,13 @@ def _apply_player(player, data: Optional[dict]) -> None:
         player.pitch = float(data["pitch"])
     if "camera_height" in data:
         player.camera_height = float(data["camera_height"])
+    if hasattr(player, "set_ducked"):
+        # The saved position is the centre of whichever hull was in use.
+        # A saved standing eye height becomes the one ducking scales from.
+        ducked = bool(data.get("ducked", False))
+        if not ducked and "camera_height" in data:
+            player.stand_camera_height = player.camera_height
+        player.set_ducked(ducked)
     if "physics_enabled" in data:
         player.physics_enabled = bool(data["physics_enabled"])
     if "on_ground" in data:

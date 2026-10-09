@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from .constants import SV_GRAVITY, SV_MAXVELOCITY
 from .spatial import CellIndex, cell_of_point
 
 
@@ -40,8 +41,8 @@ class PropSession:
     DEFAULT_CARRY_REACH = 110.0
     DEFAULT_COLLECT_USE_REACH = 80.0
     DEFAULT_COLLECT_WALK_REACH = 32.0
-    DROP_GRAVITY = 900.0
-    DROP_TERMINAL_VELOCITY = 2400.0
+    DROP_GRAVITY = SV_GRAVITY
+    DROP_TERMINAL_VELOCITY = SV_MAXVELOCITY
     SPRITE_CAMERA_FACING = -10000.0
     RESPAWN_FADE_DURATION = 2.0
 

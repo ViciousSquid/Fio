@@ -182,31 +182,53 @@ def test_a_step_is_climbed_and_a_wall_is_not():
 # Waterjump
 # ---------------------------------------------------------------------------
 
-def _waterjump_rise(ledge_props=None):
-    """Upward velocity after one jump frame pushing at the pool rim.
+# Quake 2 waterjumps on its own, with no key: waist under water, eyes above
+# it, facing a wall whose top is above the waist sample and below the eyes.
+# The player stands with its centre at y=0: feet -50, eyes +40.
+_POOL = dict(pos=(0.0, -80.0, 0.0), size=(400.0, 200.0, 400.0))   # surface y=20
+_RIM = dict(pos=(260.0, -90.0, 0.0), size=(120.0, 220.0, 400.0))  # top y=20
 
-    Swimming with jump held is itself an upward move, so this is only readable
-    against the same scene with no ledge: the waterjump is the difference.
-    """
+
+def _waterjump(ledge_props=None, frames=1):
+    """The player after *frames* idle frames, facing a pool rim (+x)."""
     import glm
-    pool = box_brush(name="pool", pos=(0.0, 0.0, 0.0), size=(400.0, 200.0, 400.0),
-                     is_water=True)
-    brushes = [pool]
+    brushes = [box_brush(name="pool", **_POOL, is_water=True)]
     if ledge_props is not None:
-        # Top at y=+40: above the feet, inside WATERJUMP_MAX_CLIMB of them, and
-        # below the waterline plus WATERJUMP_EDGE_ABOVE_SURFACE.
-        brushes.append(box_brush(name="ledge", pos=(260.0, -90.0, 0.0),
-                                 size=(120.0, 260.0, 400.0), **ledge_props))
-    player = player_at(150.0, 0.0, 0.0)
-    player.update(1 / 60.0, glm.vec3(0.0, 0.0, 0.0), False, False, brushes)
-    assert player.in_water, "fixture is wrong: the player must start submerged"
-    player.update(1 / 60.0, glm.vec3(1.0, 0.0, 0.0), True, False, brushes)
-    return float(player.velocity.y)
+        brushes.append(box_brush(name="ledge", **_RIM, **ledge_props))
+    player = player_at(170.0, 0.0, 0.0)
+    player.angle = math.pi / 2.0            # facing +x
+    for _ in range(frames):
+        player.update(1 / 60.0, glm.vec3(0.0, 0.0, 0.0), False, False, brushes)
+    return player
 
 
 def test_a_waterjump_launches_the_player_at_a_reachable_ledge():
-    """Pushing at a pool rim while in water vaults out of the pool."""
-    assert _waterjump_rise({}) > _waterjump_rise(None) + 100.0
+    player = _waterjump({})
+    assert player.waterjumping
+    assert float(player.velocity.y) > 300.0
+
+
+def test_a_waterjump_lands_the_player_on_the_ledge():
+    player = _waterjump({}, frames=90)
+    assert player.on_ground
+    assert player.ground_object["name"] == "ledge"
+    # Standing on the rim (the box overlaps its edge), out of the water.
+    rim_top = _RIM["pos"][1] + _RIM["size"][1] * 0.5
+    assert abs(float(player.pos.y - player._half.y) - rim_top) < 1.0
+    assert not player.in_water
+
+
+def test_no_waterjump_with_the_eyes_under_water():
+    """Fully submerged is swimming, not climbing out (waterlevel 3)."""
+    import glm
+    pool = box_brush(name="pool", pos=(0.0, 0.0, 0.0), size=(400.0, 300.0, 400.0),
+                     is_water=True)
+    ledge = box_brush(name="ledge", **_RIM)
+    player = player_at(170.0, 0.0, 0.0)
+    player.angle = math.pi / 2.0
+    player.update(1 / 60.0, glm.vec3(0.0, 0.0, 0.0), False, False, [pool, ledge])
+    assert player.waterlevel == 3
+    assert not player.waterjumping
 
 
 @pytest.mark.parametrize("props", [
@@ -215,7 +237,9 @@ def test_a_waterjump_launches_the_player_at_a_reachable_ledge():
     {"is_water": True},
 ], ids=["hidden", "trigger", "water"])
 def test_a_waterjump_ignores_a_ledge_that_is_not_solid(props):
-    assert _waterjump_rise(props) == _waterjump_rise(None)
+    player = _waterjump(props)
+    assert not player.waterjumping
+    assert float(player.velocity.y) == float(_waterjump(None).velocity.y)
 
 
 # ---------------------------------------------------------------------------

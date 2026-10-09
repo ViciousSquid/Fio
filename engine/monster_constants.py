@@ -3,6 +3,8 @@ Monster AI constants
 All distances are in world units. All times are in seconds.
 """
 
+from .constants import GRAVITY, SV_MAXVELOCITY
+
 # How far away (units) a monster can detect the player
 MONSTER_SIGHT_RANGE = 1024
 
@@ -82,8 +84,8 @@ MONSTER_PROJECTILE_SPRITE_SIZE = (40.0, 40.0)   # billboard size in world units
 # ---------------------------------------------------------------------------
 # Monster physics & collision
 # ---------------------------------------------------------------------------
-MONSTER_GRAVITY        = -500.0   # same gravity as player
-MONSTER_TERMINAL_VEL   = -500.0
+MONSTER_GRAVITY        = GRAVITY  # sv_gravity, as for the player
+MONSTER_TERMINAL_VEL   = -SV_MAXVELOCITY
 MONSTER_MIN_WIDTH      = 200.0    # monsters are always at least 200px wide
 MONSTER_WALL_MARGIN    = 100.0    # half of MONSTER_MIN_WIDTH — keep this far from wall surfaces
 MONSTER_DEAD_FALL_SPEED = 300.0   # world-units/sec the dead sprite falls

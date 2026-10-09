@@ -3,7 +3,7 @@ import glm
 import numpy as np
 
 from .change_journal import touch
-from .constants import is_water_brush, brush_aabb_bounds
+from .constants import GRAVITY, is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
 
 class _LosRows:
@@ -968,7 +968,7 @@ class PhysicsWorld:
     of memory.
     """
 
-    GRAVITY = np.float32(-900.0)
+    GRAVITY = np.float32(GRAVITY)   # sv_gravity, as for the player
     #: Active-body count from which the grouped floor query is worth its setup.
     #: Below it the NumPy assembly costs more than the scalar raycasts it saves
     #: -- measured crossover is around 56-64 bodies on this scene shape, so the
