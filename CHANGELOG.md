@@ -46,6 +46,8 @@ forward; see **Breaking changes** before upgrading.
   `monster_constants.WEAPON_DAMAGE`, `WEAPON_SHOOT_SOUND` and
   `NON_FIRING_WEAPONS` are gone: weapons are described by item definitions
   (`engine.items`). Save games are version 3; version 2 saves still load.
+- **Benchmark plugin removed:** `plugins/benchmark` and everything that
+  referred to it are gone.
 
 ### Player physics: Quake 2
 
@@ -139,7 +141,6 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 - A legacy weapon Prop (`collect_weapon`) keeps its weapon on load.
 - A LevelChanger used with the Use key resolves its target map as its
   ChangeLevel input does (a bare name gets `maps/` and `.json`).
-- The Benchmark plugin runs again (it called monitor helpers removed earlier).
 - A key pressed in Play before the first frame is drawn no longer raises.
 - GL end-to-end tests no longer depend on the order they run in: the
   application font each editor window sets is restored after every test.

@@ -38,7 +38,6 @@ different kinds of extension:
 |--------|------|----------------------|
 | [`tidy`](tidy/) | **Gameplay** | Pick-up-and-put-away games (books back on the shelf, tidy the museum, sort the warehouse). Entities, I/O ports, a carry/place runtime, a HUD goal. |
 | [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming that keeps only the area around the player active in maps of hundreds of thousands of brushes. Uses the event bus, cross-plugin services, and host wrapping rather than adding entities to place. See its own [README](bigworld/README.md). |
-| [`benchmark`](benchmark/) | **Developer tooling** | Optional live runtime benchmark tooling. Registers the `benchmark` console command and launches the benchmark manager against the existing editor `MainWindow`. |
 
 Between them they exercise nearly the whole API: entity registration and I/O
 (`tidy`), and the open-ended [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam)

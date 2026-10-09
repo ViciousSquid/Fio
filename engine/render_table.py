@@ -827,7 +827,7 @@ class RenderTable:
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)
                            if bid is not None}
         # Publish exactly the row set reconciled above. The live list may grow
-        # concurrently during benchmark/editor stress insertion; the next
+        # concurrently (insertion from another thread); the next
         # frame will reconcile any newly appended rows.
         self.brushes = list(brushes[:n])
         self._row_tuple = tuple(self.brushes)

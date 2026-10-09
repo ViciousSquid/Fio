@@ -57,8 +57,6 @@
 * **[Renderer](https://github.com/ViciousSquid/Fio/wiki/Renderer-Technical-overview):** Substantial renderer and shader refactoring, with improvements to batching, instancing, lighting, water reflections, terrain, fog, and render-state management.
 * **Effects:** Added the new `Effect` primitive with animated GIF effects, fire/orb variants, custom effects, visibility and looping controls, numeric I/O variants, sprites, and associated sounds.
 * **Terrain:** Expanded terrain editing and rendering capabilities, including improved editor interaction and water-reflection support.
-* **Benchmarking:** Major overhaul of the optional Benchmark plugin with dedicated stress tests, live SysMon measurements, monster and brush workloads, controlled benchmark sessions, and improved result reporting.
-* **Benchmark reports:** Added one-click HTML benchmark report export and improved completion/status presentation and metric definitions.
 * **Debugging & observability:** Added the [**Debug Tables** tool](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables) for directly inspecting `EntityTable` and `RenderTable` contents, dense rows, keys, and render data from the editor.
 * **Console messages:** Added timed `message` and `message2` commands, queued view messages, separate message lines, expiry ordering, and improved 3D-view positioning.
 * **Editor:** Continued improvements to the property editor, terrain editor, 2D view, toolbar, settings, and editor UI.
@@ -92,7 +90,6 @@
 
 ### Editor & Tools
 - Continued EditorState, hierarchy/property editing, procedural authoring, and I/O tooling improvements.
-- Expanded plugin infrastructure and moved benchmarking into the optional benchmark plugin.
 - Continued `.fiopak` packaging, import/export, and persistence work.
 
 ### Testing & Cleanup

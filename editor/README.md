@@ -61,7 +61,7 @@ Guided wizard for common I/O setups, covering monster encounters, doors/movers, 
 ### `main_window.py`
 Main editor window. Hosts the 2D and 3D views, property editor, scene hierarchy, asset browser and debug console, and controls play mode, menus, toolbars and notifications.
 
-It owns the shared component controller, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects. Developer instrumentation such as Benchmark and the live Debug Tables view is layered on top of the real MainWindow/QtGameView rather than maintaining a parallel renderer or scene model.
+It owns the shared component controller, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects. Developer instrumentation such as the live Debug Tables view is layered on top of the real MainWindow/QtGameView rather than maintaining a parallel renderer or scene model.
 
 ### `monster_customise_dialog.py`
 Dialog for assigning custom Monster sprites and billboard dimensions. Paths are stored relative to the project asset tree.

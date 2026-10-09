@@ -34,7 +34,7 @@ def _synced(brushes, epoch=1):
 def test_a_frame_reads_the_live_brush_list_exactly_once():
     """The row set is frozen by one C-level copy; the live list is never indexed.
 
-    The editor and the benchmark append to the live list from another thread,
+    Brushes can be appended to the live list from another thread,
     so everything a frame does has to agree on one row set: an append lands
     in the next frame, whole.
     """

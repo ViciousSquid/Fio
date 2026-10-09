@@ -26,8 +26,8 @@ uploaded with ``glTexSubImage3D`` -- every mip level included.  The array is
 never a render target: no framebuffer blit, no ``glGenerateMipmap``.  That is a
 measured choice, not a stylistic one.  Filled by blit, the array was a texture
 the driver had rendered into, and Mesa's llvmpipe then made the draw that
-sampled it wait for the whole frame's pending rendering -- 5 ms per frame in
-the live benchmark, against 0.14 ms once that wait was paid elsewhere.  Uploads
+sampled it wait for the whole frame's pending rendering -- 5 ms per frame
+measured live, against 0.14 ms once that wait was paid elsewhere.  Uploads
 carry no such hazard on any driver, and the cost moves to the one moment a
 sprite image is first seen.
 

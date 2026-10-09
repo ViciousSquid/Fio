@@ -65,10 +65,6 @@ class SysMon:
         self.drag_offset = QPoint(0, 0)
         self.active = False
         self.window_rect = QRect(20, 20, 400, 200)
-        # Benchmark mode owns SysMon for the duration of a measurement.
-        # The close and collapse controls are hidden and input cannot disable
-        # the overlay until the benchmark releases it.
-        self._benchmark_locked = False
 
         # Frame time ring buffer (pre-allocated numpy array)
         self._ft_buffer = np.zeros(self.GRAPH_POINTS, dtype=np.float32)
@@ -129,25 +125,11 @@ class SysMon:
     # ------------------------------------------------------------------
 
     def toggle(self):
-        if self._benchmark_locked:
-            return self.active
         self.active = not self.active
         return self.active
 
     def set_active(self, active):
-        if self._benchmark_locked:
-            self.active = True
-            return
         self.active = active
-
-    def set_benchmark_locked(self, locked):
-        """Lock SysMon visible and non-closable for a benchmark run."""
-        self._benchmark_locked = bool(locked)
-        if self._benchmark_locked:
-            self.active = True
-
-    def is_benchmark_locked(self):
-        return self._benchmark_locked
 
     def is_active(self):
         return self.active
@@ -292,9 +274,8 @@ class SysMon:
         if not self.window_rect.contains(event.pos()):
             return False
 
-        # Close button. Benchmark mode deliberately removes this control.
-        if (not self._benchmark_locked
-                and event.x() > self.window_rect.right() - 25
+        # Close button.
+        if (event.x() > self.window_rect.right() - 25
                 and event.y() < self.window_rect.y() + 25):
             self.active = False
             return True
@@ -303,9 +284,8 @@ class SysMon:
         title_bar = QRect(self.window_rect.x(), self.window_rect.y(),
                           self.window_rect.width(), 25)
         if title_bar.contains(event.pos()):
-            # Benchmark mode removes the collapse/minimize arrow.
-            if (not self._benchmark_locked
-                    and event.x() > self.window_rect.right() - 50):
+            # Collapse/expand arrow.
+            if event.x() > self.window_rect.right() - 50:
                 self.expanded = not self.expanded
                 return True
             self.dragging = True
@@ -452,11 +432,10 @@ class SysMon:
         painter.setPen(self._white)
         painter.drawText(header_rect.adjusted(10, 0, 0, 0),
                          Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
-        if not self._benchmark_locked:
-            painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25),
-                             Qt.AlignCenter, "▼" if self.expanded else "▶")
-            painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25),
-                             Qt.AlignCenter, "[X]")
+        painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25),
+                         Qt.AlignCenter, "▼" if self.expanded else "▶")
+        painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25),
+                         Qt.AlignCenter, "[X]")
 
         if not self.expanded:
             return

@@ -4,9 +4,9 @@
 so a caller driving them from a UI thread can keep its event loop alive during
 the two O(w*h) grid walks. The parameter was added with a syntax error, the
 file was then truncated and restored, and what came out the far side accepted
-the hook and threaded it through without ever calling it -- so the benchmark
-plugin, which passes one, froze the editor for the whole of geometry
-generation believing it had asked not to be.
+the hook and threaded it through without ever calling it -- so a caller that
+passed one froze the editor for the whole of geometry generation believing it
+had asked not to be.
 """
 import copy
 import random
