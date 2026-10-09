@@ -513,8 +513,11 @@ is:
 | *plugin items* | Each enabled plugin's items, in registration order. |
 | Exit to Editor | Leave Play. In a played package it reads **Quit** and asks before quitting the game. |
 
-Up/Down (or W/S) choose, Enter, Space or E activates, Left/Right (or A/D) move
-a slider, and Esc goes back a page. The mouse works too.
+The menu is a floating window like SysMon's, titled with the current page: drag
+it by its title bar (it opens where it was left), and its [X] resumes. Up/Down
+(or W/S) choose, Enter, Space or E activates, Left/Right (or A/D) move a slider,
+and Esc goes back a page. The cursor is free while it is open, and the mouse
+works too.
 
 ```python
 api.register_pause_menu_item(label, callback, close_menu=True)  # in register(api)

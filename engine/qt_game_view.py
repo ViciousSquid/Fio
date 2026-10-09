@@ -316,6 +316,9 @@ class QtGameView(QOpenGLWidget):
         self._pause_menu_family = None
         #: The frame the menu opened over, blurred: drawn behind the menu.
         self._pause_backdrop = None
+        #: The menu's floating window (SysMon-style), and where it was left.
+        self._pause_window = None
+        self._pause_window_pos = None
         #: Master volume, 0..1, over every game sound (Settings > Play Modes,
         #: and the pause menu's Options > Volume).
         self.master_volume = 1.0
@@ -2530,6 +2533,12 @@ class QtGameView(QOpenGLWidget):
         # Grabbed before the menu exists, so the frame is the game alone.
         self._pause_backdrop = self._blurred_backdrop()
         self.pause_menu = PauseMenu(self._pause_root_page())
+        from engine.pause_menu_window import PauseMenuWindow
+        self._pause_window = PauseMenuWindow(self.pause_menu, self._pause_font)
+        if self._pause_window_pos is None:
+            self._pause_window.centre_in(self.width(), self.height())
+        else:
+            self._pause_window.window_rect.moveTo(*self._pause_window_pos)
         logic = self.logic_thread
         if logic is not None:
             logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, True)
@@ -2545,6 +2554,7 @@ class QtGameView(QOpenGLWidget):
             return False
         self.pause_menu = None
         self._pause_backdrop = None
+        self._drop_pause_window()
         logic = self.logic_thread
         if logic is not None:
             logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, False)
@@ -2647,6 +2657,14 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode:
             self.pause_menu = None
             self._pause_backdrop = None
+            self._drop_pause_window()
+
+    def _drop_pause_window(self):
+        """Forget the window, remembering where it was for the next opening."""
+        window = self._pause_window
+        if window is not None:
+            self._pause_window_pos = (window.window_rect.x(), window.window_rect.y())
+        self._pause_window = None
 
     # -- input -----------------------------------------------------------------
 
@@ -2744,10 +2762,8 @@ class QtGameView(QOpenGLWidget):
         return font
 
     def _draw_pause_menu(self, painter):
-        menu = self.pause_menu
-        page = menu.page
+        """The blurred, dimmed game, and the menu's floating window over it."""
         w, h = self.width(), self.height()
-        orange, green = QColor(240, 128, 0), QColor(120, 200, 80)
         painter.save()
         dim = 170
         if self._pause_backdrop is not None:
@@ -2757,51 +2773,10 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(QColor(0, 0, 0, dim)))
         painter.drawRect(0, 0, w, h)
-
-        row_w, row_h, gap = min(420, w - 32), 44, 10
-        total = len(page.items) * (row_h + gap) - gap
-        title_font = self._pause_font(max(28, min(64, h // 12)))
-        title_h = QFontMetrics(title_font).height()
-        top = max(title_h + 40, (h - total) // 2 + title_h // 2)
-        x = (w - row_w) // 2
-
-        painter.setFont(title_font)
-        painter.setPen(orange)
-        painter.drawText(QRect(0, top - title_h - 30, w, title_h), Qt.AlignCenter, page.title)
-        if menu.notice:
-            painter.setFont(self._pause_font(16))
-            painter.setPen(green)
-            painter.drawText(QRect(0, top - 28, w, 22), Qt.AlignCenter, menu.notice)
-
-        painter.setFont(self._pause_font(22))
-        rects = []
-        for index, item in enumerate(page.items):
-            row = QRect(x, top + index * (row_h + gap), row_w, row_h)
-            selected = index == menu.selected and item.enabled
-            painter.setPen(QPen(orange if selected else QColor(110, 110, 110), 2))
-            painter.setBrush(QBrush(QColor(70, 45, 20, 235) if selected else QColor(35, 35, 35, 220)))
-            painter.drawRoundedRect(row, 6, 6)
-            painter.setPen(QColor(255, 255, 255) if item.enabled else QColor(120, 120, 120))
-            bar = None
-            text = item.label
-            if item.checked:
-                text = "\u25cf  " + text
-            if item.slider is not None:
-                painter.drawText(row.adjusted(16, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
-                bar = QRect(row.x() + row_w // 3, row.center().y() - 6, row_w // 2, 12)
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QBrush(QColor(80, 80, 80)))
-                painter.drawRect(bar)
-                fill = QRect(bar.x(), bar.y(), int(bar.width() * item.slider_fraction()), bar.height())
-                painter.setBrush(QBrush(green))
-                painter.drawRect(fill)
-                painter.setPen(QColor(255, 255, 255))
-                painter.drawText(QRect(bar.right() + 4, row.y(), row.right() - bar.right() - 10, row_h),
-                                 Qt.AlignVCenter | Qt.AlignRight, str(item.slider_value()))
-            else:
-                painter.drawText(row, Qt.AlignCenter, text)
-            rects.append((row, bar))
-        menu.rects = rects
+        window = self._pause_window
+        if window is not None:
+            window.clamp_to(w, h)
+            window.draw(painter, focused=True)
         painter.restore()
 
     def _confirm_level_complete(self):
@@ -2924,6 +2899,7 @@ class QtGameView(QOpenGLWidget):
             # The world pause it held ends with the session.
             self.pause_menu = None
             self._pause_backdrop = None
+            self._drop_pause_window()
             self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_ai.monster_debug_active = False
@@ -3624,8 +3600,15 @@ class QtGameView(QOpenGLWidget):
 
     def mousePressEvent(self, event):
         if self.play_mode and self.pause_menu is not None:
-            if event.button() == Qt.LeftButton:
-                self._click_pause_menu(event.x(), event.y())
+            window = self._pause_window
+            if event.button() == Qt.LeftButton and window is not None and window.hit(event.pos()):
+                in_body = event.y() >= window.window_rect.y() + window.HEADER_H
+                window.handle_mouse_press(event)
+                if not window.active:              # its [X]: play on
+                    self.close_pause_menu()
+                elif in_body and not window.dragging:
+                    self._click_pause_menu(event.x(), event.y())
+                self.update()
             return
         if self.play_mode and self._actor_pick is not None:
             if event.button() == Qt.RightButton:
@@ -3775,6 +3758,10 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
         if self.play_mode and self.pause_menu is not None:
+            window = self._pause_window
+            if window is not None and window.handle_mouse_move(event, self.width(), self.height()):
+                self.update()
+                return
             self._hover_pause_menu(event.x(), event.y(),
                                    drag=bool(event.buttons() & Qt.LeftButton))
             return
@@ -3826,6 +3813,10 @@ class QtGameView(QOpenGLWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self.play_mode and self.pause_menu is not None:
+            if self._pause_window is not None:
+                self._pause_window.handle_mouse_release(event)
+            return
         controller = self._components()
         if (event.button() == Qt.LeftButton and controller is not None and
                 controller.drag is not None):

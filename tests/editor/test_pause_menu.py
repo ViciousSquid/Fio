@@ -276,3 +276,90 @@ def test_the_game_is_blurred_behind_the_menu(fio_session):
 
     view.close_pause_menu()
     assert view._pause_backdrop is None
+
+
+def _mouse(view, kind, pos, buttons=Qt.LeftButton):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QMouseEvent
+    types = {"press": QEvent.MouseButtonPress, "move": QEvent.MouseMove,
+             "release": QEvent.MouseButtonRelease}
+    button = Qt.NoButton if kind == "move" else Qt.LeftButton
+    event = QMouseEvent(types[kind], QPoint(*pos), button, buttons, Qt.NoModifier)
+    {"press": view.mousePressEvent, "move": view.mouseMoveEvent,
+     "release": view.mouseReleaseEvent}[kind](event)
+
+
+def test_the_menu_is_a_floating_window_like_sysmon(playing):
+    from engine.floating_windows import FloatingWindow
+    view = playing.view
+    view.resize(800, 600)
+    view.open_pause_menu()
+    window = view._pause_window
+    assert isinstance(window, FloatingWindow) and window.title == "Paused"
+    rect = window.window_rect
+    assert abs(rect.center().x() - 400) <= 2              # opens centred
+
+    _choose(view.pause_menu, "Options")
+    from PyQt5.QtGui import QImage, QPainter
+    image = QImage(800, 600, QImage.Format_ARGB32)
+    painter = QPainter(image)
+    view._draw_pause_menu(painter)
+    painter.end()
+    assert window.title == "Options"
+
+    # Drag it by its title bar; it opens there next time.
+    origin = (rect.x(), rect.y())
+    start = (origin[0] + 40, origin[1] + 10)
+    _mouse(view, "press", start)
+    _mouse(view, "move", (start[0] - 100, start[1] - 50))
+    _mouse(view, "release", (start[0] - 100, start[1] - 50), buttons=Qt.NoButton)
+    moved = (window.window_rect.x(), window.window_rect.y())
+    assert moved == (origin[0] - 100, origin[1] - 50)
+    assert view.pause_menu_active
+
+    # [X] closes it and play goes on.
+    _mouse(view, "press", (window.window_rect.right() - 10, window.window_rect.y() + 10))
+    assert not view.pause_menu_active
+    assert not playing.logic.session_runtime.pause_menu_open
+
+    view.open_pause_menu()
+    assert (view._pause_window.window_rect.x(), view._pause_window.window_rect.y()) == moved
+    view.close_pause_menu()
+
+
+def test_clicking_a_row_in_the_window_activates_it(playing):
+    from PyQt5.QtGui import QImage, QPainter
+    view = playing.view
+    view.resize(800, 600)
+    view.open_pause_menu()
+    image = QImage(800, 600, QImage.Format_ARGB32)
+    painter = QPainter(image)
+    view._draw_pause_menu(painter)                       # lays the rows out
+    painter.end()
+    row, _bar = view.pause_menu.rects[0]                 # Resume
+    _mouse(view, "press", (row.center().x(), row.center().y()))
+    assert not view.pause_menu_active
+
+
+def test_the_cursor_is_free_while_the_menu_is_open(playing, monkeypatch):
+    import engine.qt_game_view as gv
+    view = playing.view
+    view._capture_play_cursor()
+    assert QApplication.overrideCursor().shape() == Qt.BlankCursor
+
+    view.open_pause_menu()
+    assert QApplication.overrideCursor().shape() == Qt.ArrowCursor
+    recentred = []
+    monkeypatch.setattr(gv.QCursor, "setPos", lambda *a: recentred.append(a))
+    playing.game_state.consume_mouse_delta()
+    for pos in ((10, 10), (300, 200), (40, 400)):
+        _mouse(view, "move", pos, buttons=Qt.NoButton)
+    assert recentred == [], "mouse look kept pulling the cursor back"
+    assert playing.game_state.consume_mouse_delta() == (0.0, 0.0)
+    assert QApplication.overrideCursor().shape() == Qt.ArrowCursor
+
+    monkeypatch.undo()
+    view.close_pause_menu()
+    assert QApplication.overrideCursor().shape() == Qt.BlankCursor
+    while QApplication.overrideCursor() is not None:
+        QApplication.restoreOverrideCursor()
