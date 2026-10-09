@@ -3,8 +3,10 @@ name: Nuitka Build and Validate
 on:
   workflow_dispatch:
 
+# Read-only by default: only the release job, which runs no third-party build
+# tooling, is given write access.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tests:
@@ -352,6 +354,9 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     needs:
       - tests

@@ -8,6 +8,9 @@ on:
     paths:
       - .github/workflows/build-windows-arm64.yml
 
+permissions:
+  contents: read
+
 jobs:
   build-windows-arm64:
     name: Windows ARM64 / Python 3.14 / PyQt5 source / Nuitka
