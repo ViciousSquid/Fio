@@ -505,7 +505,8 @@ class LogicRender:
         view_filters = logic.editor_state.view_filters
         filtering = view_filters.active and not logic.session_runtime.play_mode
         if filtering and total_count:
-            keep = keep & ~view_filters.hidden_brush_rows(table.class_bits[:total_count])
+            keep = keep & ~view_filters.hidden_brush_rows(
+                table.class_bits[:total_count], table)
             all_slots = np.flatnonzero(keep)
         if self.culling_enabled and total_count:
             visible_slots = np.flatnonzero(

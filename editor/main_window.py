@@ -1397,6 +1397,9 @@ class MainWindow(QMainWindow):
         self.property_editor.set_object(self.primary_selection())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
+        window = getattr(self, 'visgroups_window', None)
+        if window is not None and window.isVisible():
+            window.refresh()
         self.update_views()
 
     def update_views(self):
@@ -2331,6 +2334,21 @@ class MainWindow(QMainWindow):
         keys = face_texture.face_keys(brushes[0])
         if keys:
             self.show_surface_inspector(brushes[0], keys[0], raise_window=False)
+
+    def toggle_visgroups_window(self):
+        """Open (or close) Visgroups & Cordon (the button above the Scene
+        Hierarchy's search bar)."""
+        window = getattr(self, 'visgroups_window', None)
+        if window is None:
+            from editor.visgroups_window import VisgroupsWindow
+            window = self.visgroups_window = VisgroupsWindow(self)
+        if window.isVisible():
+            window.hide()
+        else:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+        return window
 
     def toggle_surface_inspector(self):
         """Open (or close) the Surface Inspector on the current texture target.

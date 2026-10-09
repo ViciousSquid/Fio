@@ -44,6 +44,20 @@ class SceneHierarchy(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Visgroups & Cordon (editor.visgroups_window), above the search.
+        self.visgroups_button = QPushButton("Visgroups && Cordon")
+        self.visgroups_button.setToolTip(
+            "Show or hide groups of objects (visgroups), kinds of object, and\n"
+            "everything outside a cordon box, in the editor's views")
+        self.visgroups_button.setFixedHeight(30)
+        self.visgroups_button.setStyleSheet("""
+            QPushButton { background-color: #333; color: #ddd; border: none;
+                          border-bottom: 1px solid #444; font-weight: bold; }
+            QPushButton:hover { background-color: #444; color: #F08000; }
+        """)
+        self.visgroups_button.clicked.connect(self.main_window.toggle_visgroups_window)
+        layout.addWidget(self.visgroups_button)
+
         # Search container (QLineEdit + Match Whole Word button)
         search_container = QWidget()
         search_layout = QHBoxLayout(search_container)

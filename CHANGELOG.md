@@ -166,6 +166,15 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   still, and an animated GIF has a small orange arrow that plays the
   animation on the thumbnail (click again to stop). Renderers may implement
   the optional `animate_textures(clock)`.
+- **Visgroups & Cordon** (Hammer's Visgroups and Cordon tool in one window),
+  from the button above the Scene Hierarchy's search bar. *User*: named
+  groups of brushes and entities, each shown or hidden by its checkbox; new
+  from the selection, add or remove the selection, select members, rename,
+  delete. *Auto*: every kind of object (the Filter menu, kept in step).
+  *Cordon*: a box -- from the selection or typed -- outside which nothing is
+  shown, drawn in the 2D views. They hide objects in every editor view and
+  in what the renderer is given, never in Play; visgroups and the cordon
+  are saved with the map. The padlock keeps the window on top.
 - Asset Browser: hovering a texture shows its type and size ("PNG
   512x512"; an animated GIF adds "animated"), read from the file header.
 

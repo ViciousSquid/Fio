@@ -1418,6 +1418,8 @@ class View2D(QWidget):
             current_screen = self.world_to_screen(self.draw_current_pos)
             painter.drawRect(QRectF(start_screen, current_screen).normalized())
 
+        self.draw_cordon(painter)
+
         if self.is_marquee_select:
             self.draw_marquee(painter)
 
@@ -1431,6 +1433,24 @@ class View2D(QWidget):
 
         if self.is_connecting and self.connection_source:
             self.draw_connection_drag(painter)
+
+    def draw_cordon(self, painter):
+        """The cordon box, while it is on (Visgroups & Cordon window)."""
+        cordon = self.editor.state.view_filters.cordon
+        if not cordon.enabled:
+            return
+        ax1, ax2 = self.get_axes()
+        index = {'x': 0, 'y': 1, 'z': 2}
+        i1, i2 = index[ax1], index[ax2]
+        a = self.world_to_screen(QPointF(cordon.lo[i1], cordon.lo[i2]))
+        b = self.world_to_screen(QPointF(cordon.hi[i1], cordon.hi[i2]))
+        painter.save()
+        painter.setPen(QPen(QColor(240, 128, 0), 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(a, b).normalized())
+        painter.setPen(QColor(240, 128, 0))
+        painter.drawText(QRectF(a, b).normalized().topLeft() + QPointF(4, 14), "Cordon")
+        painter.restore()
 
     @staticmethod
     def _segment_intersects_rect(p1, p2, rect):

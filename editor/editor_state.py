@@ -371,6 +371,7 @@ class EditorState:
         self._invalidate_entity_caches()
         self.selected_objects = []
         self.terrain_data = None
+        self.view_filters.load_level_data({})
         self.item_definitions.reset()
         self.undo_stack.clear()
         self.redo_stack.clear()
@@ -487,6 +488,14 @@ class EditorState:
         # Include terrain data if present
         if self.terrain_data:
             data['terrain_data'] = self.terrain_data
+
+        # Visgroups and the cordon (Visgroups & Cordon window), when used.
+        filters = self.view_filters
+        if filters.visgroups or filters.cordon.enabled:
+            live = {str(b.get('id')) for b in self.brushes if b.get('id')}
+            live |= {str(t.properties.get('id')) for t in self.things
+                     if t.properties.get('id')}
+            data.update(filters.to_level_data(live))
 
         # Persist the scene hash so we can skip a rebake on reload
         if self.bake_state is not None and self.bake_state.scene_hash:
@@ -655,6 +664,7 @@ class EditorState:
         self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
+        self.view_filters.load_level_data(level_data)
         self.item_definitions.load(level_data.get('items'))
         self.sync_item_props()
         # A map from before PlayerStarts had an explicit primary (or one

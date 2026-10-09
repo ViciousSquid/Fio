@@ -15,6 +15,12 @@ the ``EntityTable``. The renderer is not involved: the logic thread publishes
 fewer rows (see :meth:`ViewFilters.hidden_brush_rows`,
 :meth:`ViewFilters.hidden_entity_rows`).
 
+Beside the kinds of object (Hammer's *auto* visgroups) the editor has
+**user visgroups** -- named sets of brushes and entities, by stable id, each
+shown or hidden -- and a **cordon**: a box outside which nothing is shown
+while it is on. Both are saved with the map (:meth:`ViewFilters.to_level_data`)
+and, like the filter groups, apply while editing only.
+
 GL-free and Qt-free.
 """
 
@@ -93,21 +99,158 @@ def entity_group(thing):
     return 'entities'
 
 
-class ViewFilters:
-    """The set of filter groups currently hidden. Everything shows by default.
+def object_id(obj):
+    """The stable id of a brush dict or an entity, or ''."""
+    if isinstance(obj, dict):
+        return str(obj.get('id') or '')
+    props = getattr(obj, 'properties', None)
+    return str(props.get('id') or '') if isinstance(props, dict) else ''
 
-    ``version`` changes on every change, so views and caches can tell.
+
+class Visgroup:
+    """A user visgroup: a name, whether it shows, and its members' ids."""
+
+    def __init__(self, name, ids=(), visible=True):
+        self.name = str(name)
+        self.visible = bool(visible)
+        self.ids = {str(i) for i in ids if i}
+
+    def to_data(self):
+        return {'name': self.name, 'visible': self.visible, 'ids': sorted(self.ids)}
+
+
+class Cordon:
+    """A box; while enabled, only what reaches into it is shown."""
+
+    def __init__(self, enabled=False, lo=(-512.0, -512.0, -512.0), hi=(512.0, 512.0, 512.0)):
+        self.enabled = bool(enabled)
+        self.lo, self.hi = self._ordered(lo, hi)
+
+    @staticmethod
+    def _ordered(lo, hi):
+        lo = [float(v) for v in lo]
+        hi = [float(v) for v in hi]
+        return ([min(a, b) for a, b in zip(lo, hi)], [max(a, b) for a, b in zip(lo, hi)])
+
+    def contains_point(self, p):
+        return all(self.lo[i] <= float(p[i]) <= self.hi[i] for i in range(3))
+
+    def touches_box(self, lo, hi):
+        return all(float(hi[i]) >= self.lo[i] and float(lo[i]) <= self.hi[i] for i in range(3))
+
+    def to_data(self):
+        return {'enabled': self.enabled, 'min': list(self.lo), 'max': list(self.hi)}
+
+
+def brush_bounds(brush):
+    """``(lo, hi)`` corners of a brush dict's box."""
+    pos = brush.get('pos') or (0.0, 0.0, 0.0)
+    size = brush.get('size') or (64.0, 64.0, 64.0)
+    lo = [float(pos[i]) - float(size[i]) * 0.5 for i in range(3)]
+    hi = [float(pos[i]) + float(size[i]) * 0.5 for i in range(3)]
+    return lo, hi
+
+
+class ViewFilters:
+    """What the editor's views leave out: filter groups, visgroups, the cordon.
+
+    Everything shows by default. ``version`` changes on every change, so views
+    and caches can tell.
     """
 
     def __init__(self):
         self.hidden = set()
         self.version = 0
         self._entity_cache = (None, None)
+        #: User visgroups, in the order they are listed.
+        self.visgroups = []
+        self.cordon = Cordon()
+        #: Ids of every member of a hidden visgroup.
+        self._hidden_ids = frozenset()
 
     @property
     def active(self):
         """Whether anything is filtered out."""
-        return bool(self.hidden)
+        return bool(self.hidden) or bool(self._hidden_ids) or self.cordon.enabled
+
+    # -- user visgroups ------------------------------------------------------------
+
+    def _changed(self):
+        self._hidden_ids = frozenset().union(
+            *(g.ids for g in self.visgroups if not g.visible))
+        self.version += 1
+
+    def add_visgroup(self, name, objects=()):
+        """A new, shown visgroup holding *objects* (brush dicts or entities)."""
+        group = Visgroup(name, (object_id(o) for o in objects))
+        self.visgroups.append(group)
+        self._changed()
+        return group
+
+    def remove_visgroup(self, group):
+        if group in self.visgroups:
+            self.visgroups.remove(group)
+            self._changed()
+
+    def rename_visgroup(self, group, name):
+        group.name = str(name).strip() or group.name
+        self.version += 1
+
+    def set_visgroup_visible(self, group, visible):
+        if group.visible != bool(visible):
+            group.visible = bool(visible)
+            self._changed()
+
+    def add_to_visgroup(self, group, objects):
+        group.ids.update(i for i in (object_id(o) for o in objects) if i)
+        self._changed()
+
+    def remove_from_visgroup(self, group, objects):
+        group.ids.difference_update(object_id(o) for o in objects)
+        self._changed()
+
+    def visgroups_of(self, obj):
+        oid = object_id(obj)
+        return [g for g in self.visgroups if oid and oid in g.ids]
+
+    # -- the cordon ------------------------------------------------------------------
+
+    def set_cordon(self, enabled=None, lo=None, hi=None):
+        cordon = self.cordon
+        if enabled is not None:
+            cordon.enabled = bool(enabled)
+        if lo is not None or hi is not None:
+            cordon.lo, cordon.hi = Cordon._ordered(
+                lo if lo is not None else cordon.lo, hi if hi is not None else cordon.hi)
+        self.version += 1
+
+    # -- saved with the map ------------------------------------------------------------
+
+    def to_level_data(self, live_ids=None):
+        """``{'visgroups': [...], 'cordon': {...}}``; ids of deleted objects are dropped."""
+        groups = []
+        for g in self.visgroups:
+            data = g.to_data()
+            if live_ids is not None:
+                data['ids'] = [i for i in data['ids'] if i in live_ids]
+            groups.append(data)
+        return {'visgroups': groups, 'cordon': self.cordon.to_data()}
+
+    def load_level_data(self, level):
+        """Take a map's visgroups and cordon (none in maps from before them)."""
+        self.visgroups = []
+        for data in (level or {}).get('visgroups') or []:
+            if isinstance(data, dict) and data.get('name'):
+                self.visgroups.append(Visgroup(data['name'], data.get('ids') or (),
+                                               data.get('visible', True)))
+        cordon = (level or {}).get('cordon') or {}
+        try:
+            self.cordon = Cordon(cordon.get('enabled', False),
+                                 cordon.get('min', (-512, -512, -512)),
+                                 cordon.get('max', (512, 512, 512)))
+        except (TypeError, ValueError, AttributeError):
+            self.cordon = Cordon()
+        self._changed()
 
     def shows(self, key):
         return key not in self.hidden
@@ -130,10 +273,18 @@ class ViewFilters:
     # -- authored objects (2D views, picking, connection lines) -----------------
 
     def hides_brush(self, brush):
-        return bool(self.hidden) and brush_group(rt._brush_class_bits(brush)) in self.hidden
+        if self.hidden and brush_group(rt._brush_class_bits(brush)) in self.hidden:
+            return True
+        if self._hidden_ids and object_id(brush) in self._hidden_ids:
+            return True
+        return self.cordon.enabled and not self.cordon.touches_box(*brush_bounds(brush))
 
     def hides_thing(self, thing):
-        return bool(self.hidden) and entity_group(thing) in self.hidden
+        if self.hidden and entity_group(thing) in self.hidden:
+            return True
+        if self._hidden_ids and object_id(thing) in self._hidden_ids:
+            return True
+        return self.cordon.enabled and not self.cordon.contains_point(thing.pos)
 
     def hides(self, obj):
         """Whether *obj* -- a brush dict or an entity -- is filtered out."""
@@ -143,8 +294,29 @@ class ViewFilters:
 
     # -- dense rows (publication) ---------------------------------------------------
 
-    def hidden_brush_rows(self, class_bits):
-        """Bool mask over *class_bits* (``RenderTable.class_bits[:count]``)."""
+    def hidden_brush_rows(self, class_bits, table=None):
+        """Bool mask over *class_bits* (``RenderTable.class_bits[:count]``).
+
+        Visgroups and the cordon need the rows themselves: pass the
+        RenderTable as *table* (without it only filter groups apply).
+        """
+        mask = self._hidden_brush_groups(class_bits)
+        if table is not None and len(mask):
+            count = len(mask)
+            if self._hidden_ids:
+                hidden_ids = self._hidden_ids
+                mask |= np.fromiter((object_id(b) in hidden_ids
+                                     for b in table.brushes[:count]),
+                                    dtype=bool, count=count)
+            if self.cordon.enabled:
+                bounds = np.asarray(table.bounds[:count], dtype=np.float64)
+                lo = bounds[:, :3] - bounds[:, 3:]
+                hi = bounds[:, :3] + bounds[:, 3:]
+                touches = ((hi >= self.cordon.lo) & (lo <= self.cordon.hi)).all(axis=1)
+                mask |= ~touches
+        return mask
+
+    def _hidden_brush_groups(self, class_bits):
         bits = np.asarray(class_bits)
         if not self.hidden or not len(bits):
             return np.zeros(len(bits), dtype=bool)
@@ -165,14 +337,22 @@ class ViewFilters:
         table's row objects -- once per filter or table change, not per frame.
         """
         count = int(table.count)
-        if not self.hidden or not count:
+        if not self.active or not count:
             return np.zeros(count, dtype=bool)
         key = (self.version, id(table), table.generation, count)
         cached_key, mask = self._entity_cache
         if cached_key != key:
-            hidden = self.hidden
+            hidden, hidden_ids = self.hidden, self._hidden_ids
             mask = np.fromiter(
-                (entity_group(thing) in hidden for thing in table.things[:count]),
+                ((bool(hidden) and entity_group(thing) in hidden)
+                 or (bool(hidden_ids) and object_id(thing) in hidden_ids)
+                 for thing in table.things[:count]),
                 dtype=bool, count=count)
             self._entity_cache = (key, mask)
+        if self.cordon.enabled:
+            # Entities move without a new generation: the cordon is checked
+            # against where they are now, every time.
+            pos = np.asarray(table.pos[:count], dtype=np.float64)
+            inside = ((pos >= self.cordon.lo) & (pos <= self.cordon.hi)).all(axis=1)
+            return mask | ~inside
         return mask
