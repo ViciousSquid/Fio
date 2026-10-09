@@ -1,0 +1,82 @@
+# Materials for Theatre_Spotlight.obj; compact, fully self-contained model.
+newmtl housing_black
+Ka 0.1100 0.1200 0.1300
+Kd 0.0550 0.0610 0.0680
+Ks 0.2300 0.2500 0.2800
+Ns 48.0
+d 1.0
+
+newmtl housing_edge
+Ka 0.1400 0.1500 0.1600
+Kd 0.0900 0.1000 0.1100
+Ks 0.3000 0.3200 0.3400
+Ns 48.0
+d 1.0
+
+newmtl rubber_black
+Ka 0.0150 0.0160 0.0180
+Kd 0.0150 0.0180 0.0210
+Ks 0.0450 0.0480 0.0520
+Ns 48.0
+d 1.0
+
+newmtl gunmetal
+Ka 0.1000 0.1000 0.1100
+Kd 0.1050 0.1170 0.1290
+Ks 0.3100 0.3300 0.3500
+Ns 48.0
+d 1.0
+
+newmtl metal_highlight
+Ka 0.2200 0.2200 0.2300
+Kd 0.2400 0.2600 0.2800
+Ks 0.4300 0.4500 0.4700
+Ns 48.0
+d 1.0
+
+newmtl vent_dark
+Ka 0.0030 0.0030 0.0040
+Kd 0.0080 0.0100 0.0120
+Ks 0.0180 0.0210 0.0240
+Ns 48.0
+d 1.0
+
+newmtl lens_rim
+Ka 0.0900 0.1000 0.1200
+Kd 0.0180 0.0230 0.0300
+Ks 0.1400 0.1600 0.1900
+Ns 48.0
+d 1.0
+
+newmtl lens_glass
+Ka 0.6200 0.6300 0.6400
+Kd 0.8200 0.8300 0.8400
+Ks 0.6500 0.6700 0.6900
+Ns 64.0
+d 1.0
+newmtl lens_glass_light
+Ka 0.8200 0.8300 0.8400
+Kd 0.9600 0.9650 0.9700
+Ks 0.7800 0.8000 0.8200
+Ns 72.0
+d 1.0
+newmtl lens_reflection
+Ka 0.7200 0.7300 0.7400
+Kd 0.7200 0.7350 0.7500
+Ks 0.8200 0.8400 0.8600
+Ns 72.0
+d 1.0
+newmtl label_dark
+Ka 0.0200 0.0200 0.0200
+Kd 0.0240 0.0280 0.0310
+Ks 0.0700 0.0800 0.0900
+Ns 48.0
+d 1.0
+
+newmtl label_light
+Ka 0.1600 0.1600 0.1600
+Kd 0.5400 0.5600 0.5600
+Ks 0.6800 0.6900 0.6800
+Ns 48.0
+d 1.0
+
