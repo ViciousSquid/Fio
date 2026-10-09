@@ -24,6 +24,35 @@ import OpenGL.GL as gl
 from typing import List, Tuple, Optional, Dict, Any
 
 
+# Models arrive inside shared maps and .fiopak packages, so their sizes and
+# indices are untrusted. A .glb (or an external .bin it names) larger than
+# this is refused rather than read whole into memory.
+MAX_GLB_FILE_BYTES = 256 * 1024 * 1024
+
+
+def _non_negative_int(value) -> Optional[int]:
+    """*value* as an int when it is a non-negative JSON integer, else None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _read_bounded(path: str) -> Optional[bytes]:
+    """A regular file's bytes, or None if missing, special, or too large.
+
+    Requiring a regular file keeps a crafted path such as ``/dev/zero`` from
+    being read forever.
+    """
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > MAX_GLB_FILE_BYTES:
+            return None
+        with open(path, 'rb') as f:
+            data = f.read(MAX_GLB_FILE_BYTES + 1)
+    except OSError:
+        return None
+    return data if len(data) <= MAX_GLB_FILE_BYTES else None
+
+
 # ---------------------------------------------------------------------------
 # GLB Binary Format Parser
 # ---------------------------------------------------------------------------
@@ -102,12 +131,8 @@ class GLBLoader:
             return False
 
     def _read_file(self, filepath: str) -> Optional[bytes]:
-        """The file's bytes, or None when it is missing or unreadable."""
-        try:
-            with open(filepath, 'rb') as f:
-                return f.read()
-        except OSError:
-            return None
+        """The file's bytes, or None when it is missing, unreadable or too large."""
+        return _read_bounded(filepath)
 
     def _parse_glb(self, data: bytes):
         """Parse GLB header and chunks."""
@@ -164,7 +189,9 @@ class GLBLoader:
         self.buffers = []
         for i, buf in enumerate(self.buffers_json):
             uri = buf.get('uri', '')
-            byte_length = buf.get('byteLength', 0)
+            if not isinstance(uri, str):
+                uri = ''
+            byte_length = _non_negative_int(buf.get('byteLength', 0)) or 0
 
             if not uri and i == 0 and self.binary_blob is not None:
                 # First buffer with no URI → GLB binary chunk
@@ -176,14 +203,14 @@ class GLBLoader:
             elif uri.startswith('data:image/'):
                 # Skip image data URIs for buffer resolution
                 self.buffers.append(b'')
+            elif not uri or os.path.isabs(uri) or ':' in uri:
+                # glTF buffer URIs are relative references; an absolute path,
+                # a drive letter or another scheme is not resolved.
+                self.buffers.append(b'')
             else:
-                # External file reference
+                # External file reference, relative to the model.
                 ext_path = os.path.join(os.path.dirname(self._filepath_hint or ''), uri)
-                if os.path.exists(ext_path):
-                    with open(ext_path, 'rb') as f:
-                        self.buffers.append(f.read())
-                else:
-                    self.buffers.append(b'')
+                self.buffers.append(_read_bounded(ext_path) or b'')
 
     def _parse_materials(self):
         """Extract material properties (PBR, textures, colors)."""
@@ -283,7 +310,7 @@ class GLBLoader:
             return None
 
         positions = self._read_accessor(pos_acc_idx)
-        if positions is None or len(positions) == 0:
+        if positions is None or len(positions) == 0 or positions.shape[1] != 3:
             return None
 
         # Optional attributes
@@ -298,6 +325,12 @@ class GLBLoader:
         indices = None
         if 'indices' in prim:
             indices = self._read_accessor(prim['indices'], is_index=True)
+            # An index past the vertex data would have the GPU read outside
+            # the vertex buffer; such a primitive is dropped, not drawn.
+            if indices is not None and len(indices) and (
+                    int(indices.min()) < 0 or int(indices.max()) >= len(positions)):
+                print("[GLBLoader] Skipping primitive with out-of-range indices")
+                return None
 
         # Material
         mat_idx = prim.get('material')
@@ -321,103 +354,113 @@ class GLBLoader:
             'mode': mode,
         }
 
+    # componentType -> little-endian dtype
+    _COMPONENT_DTYPES = {
+        5120: np.dtype('<i1'),   # BYTE
+        5121: np.dtype('<u1'),   # UNSIGNED_BYTE
+        5122: np.dtype('<i2'),   # SHORT
+        5123: np.dtype('<u2'),   # UNSIGNED_SHORT
+        5125: np.dtype('<u4'),   # UNSIGNED_INT
+        5126: np.dtype('<f4'),   # FLOAT
+    }
+
+    _TYPE_COMPONENTS = {
+        'SCALAR': 1,
+        'VEC2': 2,
+        'VEC3': 3,
+        'VEC4': 4,
+        'MAT2': 4,
+        'MAT3': 9,
+        'MAT4': 16,
+    }
+
     def _read_accessor(self, accessor_idx: Optional[int], is_index: bool = False) -> Optional[np.ndarray]:
-        """Read data from an accessor into a numpy array."""
+        """Read an accessor as an ``(count, components)`` array.
+
+        Float accessors come back as float32, integer ones as int32. Index
+        accessors are flattened to 1-D. Elements that would run past the end
+        of the buffer are dropped, as is an accessor with a negative offset or
+        stride.
+        """
+        accessor_idx = _non_negative_int(accessor_idx)
         if accessor_idx is None or accessor_idx >= len(self.accessors):
             return None
 
         acc = self.accessors[accessor_idx]
-        bv_idx = acc.get('bufferView')
+        bv_idx = _non_negative_int(acc.get('bufferView'))
         if bv_idx is None or bv_idx >= len(self.buffer_views):
             return None
 
         bv = self.buffer_views[bv_idx]
-        buf_idx = bv.get('buffer', 0)
-        if buf_idx >= len(self.buffers):
+        buf_idx = _non_negative_int(bv.get('buffer', 0))
+        if buf_idx is None or buf_idx >= len(self.buffers):
             return None
 
         buf = self.buffers[buf_idx]
-        byte_offset = bv.get('byteOffset', 0) + acc.get('byteOffset', 0)
-        count = acc.get('count', 0)
-        component_type = acc.get('componentType', 5126)  # FLOAT default
-        accessor_type = acc.get('type', 'SCALAR')
-
-        # Determine component size and numpy dtype
-        type_map = {
-            5120: ('b', 1),   # BYTE
-            5121: ('B', 1),   # UNSIGNED_BYTE
-            5122: ('h', 2),   # SHORT
-            5123: ('H', 2),   # UNSIGNED_SHORT
-            5125: ('I', 4),   # UNSIGNED_INT
-            5126: ('f', 4),   # FLOAT
-        }
-
-        fmt, comp_size = type_map.get(component_type, ('f', 4))
-
-        # Determine number of components per element
-        type_components = {
-            'SCALAR': 1,
-            'VEC2': 2,
-            'VEC3': 3,
-            'VEC4': 4,
-            'MAT2': 4,
-            'MAT3': 9,
-            'MAT4': 16,
-        }
-        num_comps = type_components.get(accessor_type, 1)
-
-        # Calculate stride
-        stride = bv.get('byteStride', 0)
-        if stride == 0:
-            stride = num_comps * comp_size
-
-        # Read data
-        data = []
-        for i in range(count):
-            offset = byte_offset + i * stride
-            if offset + num_comps * comp_size > len(buf):
-                break
-            vals = struct.unpack(f'<{num_comps}{fmt}', buf[offset:offset + num_comps * comp_size])
-            data.append(vals)
-
-        if not data:
+        bv_offset = _non_negative_int(bv.get('byteOffset', 0))
+        acc_offset = _non_negative_int(acc.get('byteOffset', 0))
+        count = _non_negative_int(acc.get('count', 0))
+        if bv_offset is None or acc_offset is None or count is None:
             return None
+        byte_offset = bv_offset + acc_offset
 
-        arr = np.array(data, dtype=np.float32 if fmt == 'f' else np.int32)
-        if arr.ndim == 1 and num_comps > 1:
-            arr = arr.reshape(-1, num_comps)
-        return arr
+        dtype = self._COMPONENT_DTYPES.get(acc.get('componentType', 5126),
+                                           self._COMPONENT_DTYPES[5126])
+        num_comps = self._TYPE_COMPONENTS.get(acc.get('type', 'SCALAR'), 1)
+        elem_size = num_comps * dtype.itemsize
+
+        stride = _non_negative_int(bv.get('byteStride', 0))
+        if stride is None:
+            return None
+        if stride == 0:
+            stride = elem_size
+
+        # Whole elements that fit in the buffer.
+        available = len(buf) - byte_offset - elem_size
+        if available < 0 or count == 0:
+            return None
+        count = min(count, available // stride + 1)
+
+        view = np.ndarray(shape=(count, num_comps), dtype=dtype, buffer=buf,
+                          offset=byte_offset, strides=(stride, dtype.itemsize))
+        if is_index:
+            # int64 so a large UNSIGNED_INT index stays large (and is then
+            # rejected as out of range) instead of wrapping negative.
+            return view.astype(np.int64).reshape(-1)
+        return view.astype(np.float32 if dtype.kind == 'f' else np.int32)
+
+    def _primitives(self):
+        for mesh in self.meshes:
+            yield from mesh['primitives']
 
     def get_flattened_vertices(self) -> List[Tuple[float, float, float]]:
         """Get all vertex positions flattened for CPU storage / 2D projection."""
-        verts = []
-        for mesh in self.meshes:
-            for prim in mesh['primitives']:
-                pos = prim['positions']
-                if pos is not None:
-                    for v in pos:
-                        verts.append((float(v[0]), float(v[1]), float(v[2])))
-        return verts
+        blocks = [prim['positions'] for prim in self._primitives()
+                  if prim['positions'] is not None]
+        if not blocks:
+            return []
+        return [tuple(v) for v in np.concatenate(blocks)[:, :3].tolist()]
 
     def get_flattened_triangles(self) -> List[Tuple[int, int, int]]:
-        """Get all triangle indices flattened."""
-        tris = []
+        """Get all triangle indices flattened (complete triangles only)."""
+        blocks = []
         base = 0
-        for mesh in self.meshes:
-            for prim in mesh['primitives']:
-                indices = prim['indices']
-                if indices is not None:
-                    for i in range(0, len(indices), 3):
-                        tris.append((int(indices[i]) + base, int(indices[i+1]) + base, int(indices[i+2]) + base))
-                else:
-                    # Non-indexed: generate sequential triangles
-                    pos = prim['positions']
-                    if pos is not None:
-                        for i in range(0, len(pos), 3):
-                            tris.append((base + i, base + i + 1, base + i + 2))
-                if prim['positions'] is not None:
-                    base += len(prim['positions'])
-        return tris
+        for prim in self._primitives():
+            pos = prim['positions']
+            n_verts = len(pos) if pos is not None else 0
+            indices = prim['indices']
+            if indices is not None:
+                tri = np.asarray(indices, dtype=np.int64).reshape(-1)
+            else:
+                # Non-indexed: sequential triangles
+                tri = np.arange(n_verts, dtype=np.int64)
+            tri = tri[:len(tri) - len(tri) % 3]
+            if len(tri):
+                blocks.append(tri.reshape(-1, 3) + base)
+            base += n_verts
+        if not blocks:
+            return []
+        return [tuple(t) for t in np.concatenate(blocks).tolist()]
 
 
 # ---------------------------------------------------------------------------
@@ -502,9 +545,9 @@ class GLB:
         import ctypes
 
         # Build interleaved vertex data: position(3) + normal(3) + texcoord(2)
-        vertices = []
-        cpu_verts = []  # List of (x,y,z) tuples for 2D projection
-        indices = []
+        vertex_blocks = []
+        index_blocks = []
+        total_indices = 0
         vertex_offset = 0
 
         for mesh in loader.meshes:
@@ -520,34 +563,22 @@ class GLB:
                     continue
 
                 prim_vertex_count = len(pos)
-                prim_index_count = 0
-
-                # Build interleaved vertices
-                for i in range(prim_vertex_count):
-                    # Position
-                    vx, vy, vz = pos[i]
-                    vertices.extend([vx, vy, vz])
-                    cpu_verts.append((vx, vy, vz))
-
-                    # Normal
-                    if nrm is not None and i < len(nrm):
-                        nx, ny, nz = nrm[i]
-                        vertices.extend([nx, ny, nz])
-                    else:
-                        vertices.extend([0.0, 1.0, 0.0])
-
-                    # Texcoord
-                    if uvs is not None and i < len(uvs):
-                        tu, tv = uvs[i]
-                        vertices.extend([tu, tv])
-                    else:
-                        vertices.extend([0.0, 0.0])
+                block = np.zeros((prim_vertex_count, 8), dtype=np.float32)
+                block[:, 0:3] = pos[:, :3]
+                block[:, 4] = 1.0  # default normal (0, 1, 0)
+                if nrm is not None and nrm.shape[1] >= 3:
+                    m = min(prim_vertex_count, len(nrm))
+                    block[:m, 3:6] = nrm[:m, :3]
+                if uvs is not None and uvs.shape[1] >= 2:
+                    m = min(prim_vertex_count, len(uvs))
+                    block[:m, 6:8] = uvs[:m, :2]
+                vertex_blocks.append(block)
 
                 # Indices
                 if idx is not None and len(idx) > 0:
-                    for ix in idx:
-                        indices.append(int(ix) + vertex_offset)
+                    index_blocks.append(idx + vertex_offset)
                     prim_index_count = len(idx)
+                    total_indices += prim_index_count
                     self.has_indices = True
                 else:
                     # Non-indexed: sequential
@@ -556,7 +587,7 @@ class GLB:
                 # Register group for material-based rendering
                 self.groups.append({
                     'material': mat_name or 'default',
-                    'start': len(indices) - prim_index_count if self.has_indices else vertex_offset,
+                    'start': total_indices - prim_index_count if self.has_indices else vertex_offset,
                     'count': prim_index_count,
                     'mode': mode,
                     'indexed': self.has_indices and idx is not None,
@@ -564,22 +595,28 @@ class GLB:
 
                 vertex_offset += prim_vertex_count
 
-        self.vertex_count = len(cpu_verts)
-        self.index_count = len(indices)
+        if vertex_blocks:
+            interleaved = np.concatenate(vertex_blocks)
+            vertex_data = interleaved.reshape(-1)
+            # Store cpu_vertices as (N, 3) numpy array for 2D view projection
+            self.cpu_vertices = np.ascontiguousarray(interleaved[:, 0:3])
+        else:
+            vertex_data = np.zeros(0, dtype=np.float32)
+            self.cpu_vertices = np.array([], dtype=np.float32)
+        index_data = (np.concatenate(index_blocks).astype(np.uint32)
+                      if index_blocks else np.zeros(0, dtype=np.uint32))
 
-        # Store cpu_vertices as (N, 3) numpy array for 2D view projection
-        self.cpu_vertices = np.array(cpu_verts, dtype=np.float32)
-        
+        self.vertex_count = vertex_offset
+        self.index_count = len(index_data)
+
         # Store flattened triangles for wireframe rendering
         self.cpu_triangles = loader.get_flattened_triangles()
 
-        if not vertices:
+        if not len(vertex_data):
             print(f"[GLB] No vertices generated for {self.filepath}")
             return
 
         # Create GL buffers
-        vertex_data = np.array(vertices, dtype=np.float32)
-
         self.vao = gl.glGenVertexArrays(1)
         self.vbo = gl.glGenBuffers(1)
 
@@ -602,9 +639,8 @@ class GLB:
         gl.glEnableVertexAttribArray(2)
 
         # Element buffer if indexed
-        if self.has_indices and indices:
+        if self.has_indices and len(index_data):
             self.ebo = gl.glGenBuffers(1)
-            index_data = np.array(indices, dtype=np.uint32)
             gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, self.ebo)
             gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, index_data.nbytes, index_data, gl.GL_STATIC_DRAW)
 
