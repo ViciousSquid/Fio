@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer, QFileSystemWatcher
-from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon
+from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage
 from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
@@ -198,6 +198,96 @@ class AssetItem(QWidget):
         self.selected = False
         self._update_border()
 
+        # An animated GIF shows its first frame; the orange arrow plays it
+        # on the thumbnail (and stops it again).
+        self.preview_btn = None
+        self._preview_frames = None
+        self._preview_index = 0
+        self._preview_timer = None
+        # A copy: QLabel.pixmap() is the label's own, replaced by a preview.
+        current = self.thumb_label.pixmap()
+        self._static_thumb = QPixmap(current) if current is not None else None
+        if not is_model and not is_audio and path.lower().endswith('.gif'):
+            from engine.animated_texture import is_animated_gif
+            if is_animated_gif(path):
+                self._add_preview_button()
+
+    def _add_preview_button(self):
+        btn = QPushButton("\u25b6", self.thumb_label)
+        btn.setFixedSize(20, 20)
+        btn.move(self.thumb_label.width() - 22, self.thumb_label.height() - 22)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip("Preview the animation")
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 150);
+                color: #F08000;
+                border: 1px solid #F08000;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover { background-color: rgba(240, 128, 0, 60); }
+        """)
+        btn.clicked.connect(self.toggle_preview)
+        btn.show()
+        self.preview_btn = btn
+
+    @property
+    def previewing(self):
+        return self._preview_timer is not None and self._preview_timer.isActive()
+
+    def toggle_preview(self):
+        """Play the GIF on the thumbnail, or stop it on its first frame."""
+        if self.previewing:
+            self.stop_preview()
+            return
+        if self._preview_frames is None:
+            from engine.animated_texture import decode_gif_frames
+            try:
+                images, seconds = decode_gif_frames(self.file_path)
+            except Exception as exc:
+                print(f"[AssetBrowser] Could not preview '{self.name_text}': {exc}")
+                return
+            frames = []
+            for image in images:
+                qimage = QImage(image.tobytes(), image.width, image.height,
+                                image.width * 4, QImage.Format_RGBA8888).copy()
+                frames.append(QPixmap.fromImage(qimage).scaled(
+                    90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self._preview_frames = list(zip(frames, seconds))
+        if not self._preview_frames:
+            return
+        self._preview_index = 0
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._next_preview_frame)
+        self.preview_btn.setText("\u25a0")
+        self.preview_btn.setToolTip("Stop the preview")
+        self._show_preview_frame()
+
+    def _show_preview_frame(self):
+        pixmap, seconds = self._preview_frames[self._preview_index]
+        self.thumb_label.setPixmap(pixmap)
+        self._preview_timer.start(max(20, int(seconds * 1000)))
+
+    def _next_preview_frame(self):
+        if self._preview_timer is None:
+            return
+        self._preview_index = (self._preview_index + 1) % len(self._preview_frames)
+        self._show_preview_frame()
+
+    def stop_preview(self):
+        if self._preview_timer is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
+        if self._static_thumb is not None:
+            self.thumb_label.setPixmap(self._static_thumb)
+        if self.preview_btn is not None:
+            self.preview_btn.setText("\u25b6")
+            self.preview_btn.setToolTip("Preview the animation")
+
     def _load_thumbnail(self):
         pixmap = QPixmap()
 
@@ -237,6 +327,18 @@ class AssetItem(QWidget):
         else:
             # Assume image
             pixmap.load(self.file_path)
+            if pixmap.isNull():
+                # No Qt image plugin for it (a GIF without qgif): Pillow
+                # reads it, first frame only for an animation.
+                try:
+                    from PIL import Image
+                    with Image.open(self.file_path) as source:
+                        image = source.convert("RGBA")
+                    qimage = QImage(image.tobytes(), image.width, image.height,
+                                    image.width * 4, QImage.Format_RGBA8888).copy()
+                    pixmap = QPixmap.fromImage(qimage)
+                except Exception:
+                    pixmap = QPixmap()
 
         if not pixmap.isNull():
             if self.is_model and not os.path.exists(os.path.splitext(self.file_path)[0] + ".png"):
@@ -920,7 +1022,7 @@ class AssetBrowser(QWidget):
         """)
 
         # Create tabs, passing editor reference
-        self.tab_textures = AssetBrowserTab(self.textures_path, ['.png', '.jpg', '.jpeg', '.tga', '.bmp'], editor, is_model_tab=False, parent_browser=self)
+        self.tab_textures = AssetBrowserTab(self.textures_path, ['.png', '.jpg', '.jpeg', '.tga', '.bmp', '.gif'], editor, is_model_tab=False, parent_browser=self)
         self.tabs.addTab(self.tab_textures, "Textures")
         
         self.tab_models = AssetBrowserTab(self.models_path, ['.obj', '.glb'], editor, is_model_tab=True, parent_browser=self)

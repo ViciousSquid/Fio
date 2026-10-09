@@ -316,6 +316,9 @@ class QtGameView(QOpenGLWidget):
         self._pause_menu_family = None
         #: The frame the menu opened over, blurred: drawn behind the menu.
         self._pause_backdrop = None
+        #: Seconds of unpaused Play, for animated textures (_animate_textures).
+        self._texture_clock = 0.0
+        self._texture_clock_last = None
         #: The menu's floating window (SysMon-style), and where it was left.
         self._pause_window = None
         self._pause_window_pos = None
@@ -1024,7 +1027,7 @@ class QtGameView(QOpenGLWidget):
         tex_dir = os.path.join('assets', 'textures')
         if os.path.exists(tex_dir):
             for f in os.listdir(tex_dir):
-                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga')):
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga', '.gif')):
                     self.renderer.load_texture(f, 'textures')
         terrain_dir = os.path.join('assets', 'textures', 'terrain')
         if os.path.exists(terrain_dir):
@@ -1539,6 +1542,7 @@ class QtGameView(QOpenGLWidget):
             render_state = self.game_state.get_render_state()
         if render_state is None:
             return
+        self._animate_textures()
         try:
             self._paint_frame(render_state)
         finally:
@@ -1552,6 +1556,26 @@ class QtGameView(QOpenGLWidget):
 
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
+
+    def _animate_textures(self):
+        """Advance animated (GIF) textures by the play clock.
+
+        The clock runs only in Play and stops while the world is paused (the
+        pause menu, an actor pick); outside Play every animated texture shows
+        its first frame. A renderer without ``animate_textures`` has none.
+        """
+        animate = getattr(self.renderer, 'animate_textures', None)
+        now = time.perf_counter()
+        last, self._texture_clock_last = self._texture_clock_last, now
+        if not self.play_mode:
+            self._texture_clock = 0.0
+        elif last is not None:
+            logic = self.logic_thread
+            paused = logic is not None and logic.session_runtime.world_paused
+            if not paused:
+                self._texture_clock += min(now - last, 0.25)
+        if animate is not None:
+            animate(self._texture_clock)
 
     def show_pos_window(self):
         """Open or raise the live camera-position floating window."""

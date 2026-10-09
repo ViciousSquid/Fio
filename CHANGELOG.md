@@ -153,6 +153,13 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   on the selected Speakers. Speakers play only from those two folders: a
   sound file anywhere else is refused, in the editor and at run time. Music
   files (`.ogg`, `.mp3`, `.wav`) play like sounds.
+- Animated GIF textures: a GIF goes on a brush or face like a PNG or JPG
+  (Fit, Natural, scale and stretch in the Surface Inspector included) and
+  animates in Play at its own frame times, holding while the game is paused;
+  the editor shows its first frame. In the Asset Browser its thumbnail is
+  still, and an animated GIF has a small orange arrow that plays the
+  animation on the thumbnail (click again to stop). Renderers may implement
+  the optional `animate_textures(clock)`.
 
 ### Fixes
 

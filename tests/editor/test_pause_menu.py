@@ -363,3 +363,37 @@ def test_the_cursor_is_free_while_the_menu_is_open(playing, monkeypatch):
     assert QApplication.overrideCursor().shape() == Qt.BlankCursor
     while QApplication.overrideCursor() is not None:
         QApplication.restoreOverrideCursor()
+
+
+def test_animated_textures_run_on_unpaused_play_time(main_window, monkeypatch):
+    import engine.qt_game_view as gv
+    view = main_window.view_3d
+    clocks = []
+
+    class Renderer:
+        ready = True
+
+        def animate_textures(self, clock):
+            clocks.append(round(clock, 3))
+
+    now = [100.0]
+    monkeypatch.setattr(gv.time, "perf_counter", lambda: now[0])
+    monkeypatch.setattr(view, "renderer", Renderer())
+
+    def frame(dt):
+        now[0] += dt
+        view._animate_textures()
+
+    view._texture_clock_last = None
+    frame(0.0)                                   # editor: first frame
+    monkeypatch.setattr(view, "play_mode", True)
+    frame(0.1)
+    frame(0.1)
+    session = view.logic_thread.session_runtime
+    session.set_world_paused("test", True)
+    frame(0.5)                                   # paused: the clock holds
+    session.set_world_paused("test", False)
+    frame(1.0)                                   # a long hitch counts 0.25 at most
+    monkeypatch.setattr(view, "play_mode", False)
+    frame(0.1)                                   # back in the editor: first frame
+    assert clocks == [0.0, 0.1, 0.2, 0.2, 0.45, 0.0]

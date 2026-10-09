@@ -21,7 +21,7 @@ from typing import Dict, Set
 
 
 _ASSET_EXTS = {
-    "textures": (".png", ".jpg", ".jpeg", ".tga", ".bmp"),
+    "textures": (".png", ".jpg", ".jpeg", ".tga", ".bmp", ".gif"),
     "models": (".obj", ".glb", ".gltf"),
     "sounds": (".wav", ".ogg", ".mp3"),
 }

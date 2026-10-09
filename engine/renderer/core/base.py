@@ -217,6 +217,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         if textures:
             gl.glDeleteTextures(textures)
         self.texture_manager.clear()
+        self._animated_texture_table = {}
         for model in {id(m): m for m in self.loaded_models.values()}.values():
             model.cleanup()
         self.loaded_models.clear()

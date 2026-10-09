@@ -185,8 +185,15 @@ class ResourcesMixin:
 
         try:
             from PIL import Image
-            img = Image.open(texture_path).convert("RGBA")
-            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            from engine.animated_texture import cumulative, decode_gif_frames, is_animated_gif
+            frames = None
+            if is_animated_gif(texture_path):
+                images, seconds = decode_gif_frames(texture_path)
+                frames = [im.transpose(Image.FLIP_TOP_BOTTOM).tobytes() for im in images]
+                img = images[0].transpose(Image.FLIP_TOP_BOTTOM)
+            else:
+                img = Image.open(texture_path).convert("RGBA")
+                img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             self._texture_dimensions[tex_cache_name] = (img.width, img.height)
@@ -198,10 +205,50 @@ class ResourcesMixin:
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
                            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+            if frames and len(frames) > 1:
+                self._animated_textures()[int(tex_id)] = {
+                    'size': (img.width, img.height), 'frames': frames,
+                    'ends': cumulative(seconds), 'shown': 0}
             return tex_id
         except Exception as e:
             print(f"Error loading texture '{texture_name}': {e}")
             return self.load_texture('default.png', 'textures')
+
+    # --------------------------------------------------------------------------
+    # Animated (GIF) textures
+    # --------------------------------------------------------------------------
+    def _animated_textures(self):
+        """``{GL texture name: animation}`` for every animated texture loaded."""
+        table = getattr(self, '_animated_texture_table', None)
+        if table is None:
+            table = self._animated_texture_table = {}
+        return table
+
+    def animate_textures(self, clock: float) -> None:
+        """Show each animated texture's frame for *clock* seconds of play.
+
+        Optional for renderers; the host calls it before drawing a frame,
+        with 0 outside Play (the first frame). A frame change re-uploads into
+        the same texture, so nothing that holds the texture name notices.
+        """
+        table = getattr(self, '_animated_texture_table', None)
+        if not table:
+            return
+        from engine.animated_texture import frame_at
+        changed = False
+        for tex_id, anim in table.items():
+            index = frame_at(anim['ends'], clock)
+            if index == anim['shown']:
+                continue
+            anim['shown'] = index
+            width, height = anim['size']
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                               gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, anim['frames'][index])
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+            changed = True
+        if changed:
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
     def _load_3d_texture(self, filepath, size=32):
         try:

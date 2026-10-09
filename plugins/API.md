@@ -354,6 +354,10 @@ it returns must satisfy the `engine.renderer.Renderer` protocol:
   `set_grid(world_size, grid_size)`
 - **resources:** `load_texture`, `set_sprite_textures`, `get_loaded_model`
 - **diagnostics:** `render_stats` (an `engine.renderer.RenderStats`)
+- **optional:** `animate_textures(clock)` -- animated (GIF) textures. The host
+  calls it before each frame with the seconds of unpaused Play (0 outside
+  Play); show each animated texture's frame for that time, keeping its GL
+  name. `RendererCore` implements it; a renderer without it shows GIFs still.
 - **post-scene drawing the viewport asks for:** `draw_billboards`,
   `draw_player_glasses`, `draw_bullet_marks`, `draw_connection_lines`,
   `draw_face_highlight`, `draw_component_overlay`,

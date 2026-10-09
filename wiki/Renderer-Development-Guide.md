@@ -171,6 +171,12 @@ inspect them live in [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Deb
   textures through it and hands the table back with `set_sprite_textures(...)`.
   `get_loaded_model(filename)` returns an already-loaded model or `None` — it never
   loads; the 2D view falls back to a box on `None`.
+- **Animated textures (optional).** A GIF texture animates in Play when the
+  renderer has `animate_textures(clock)`: the host calls it before each frame
+  with the seconds of unpaused Play (0 outside Play), and the renderer shows each
+  animated texture's frame for that time in the *same* GL texture.
+  `RendererCore` does this (`engine.animated_texture` decodes and times the
+  frames); a renderer without the method shows every GIF's first frame.
 - **Post-scene drawing.** After `render_scene` the host asks for projectiles
   (`draw_billboards`), players (`draw_player_glasses`), impact marks, editor I/O
   links, face highlights, component-edit handles and collision debug boxes. They
