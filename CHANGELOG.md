@@ -169,6 +169,11 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- A portal fading in or out (Enable, Disable, Toggle) changes its opacity:
+  its view and rim show at the fade's opacity over the scene behind the
+  aperture. It darkened to black instead, then popped to the scene behind
+  at the end of a fade-out. The console's `portal_enable` / `portal_disable`
+  fade too (a console-enabled portal stayed black).
 - Settings > Display > Big toolbar buttons resizes the toolbar buttons (the
   small setting changed nothing), and applies at once instead of asking for
   a restart.

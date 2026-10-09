@@ -178,6 +178,11 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._portal_rim_shader = None
         self._portal_quad_vao = None
         self._portal_quad_vbo = None
+        self._portal_fade_shader = None
+        #: The colour behind a fading portal's aperture, copied before its
+        #: view is drawn (see PortalsMixin._capture_behind_portal).
+        self._portal_behind_texture = 0
+        self._portal_behind_size = (0, 0)
         self._portal_gl_ready = False
         # True only while the opaque brush passes are drawing a portal's virtual
         # scene. The oblique near-plane clip slices solid brushes open at the
@@ -631,10 +636,16 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
         if self._portal_quad_vbo:
             gl.glDeleteBuffers(1, [self._portal_quad_vbo])
-        for program in (self._portal_mask_shader, self._portal_rim_shader):
+        for program in (self._portal_mask_shader, self._portal_rim_shader,
+                        self._portal_fade_shader):
             if program:
                 gl.glDeleteProgram(program)
         self._portal_mask_shader = self._portal_rim_shader = None
+        self._portal_fade_shader = None
+        if self._portal_behind_texture:
+            gl.glDeleteTextures([self._portal_behind_texture])
+        self._portal_behind_texture = 0
+        self._portal_behind_size = (0, 0)
         self._portal_gl_ready = False
         # The 3D noise texture is not in the texture cache RendererCore frees.
         if self.noise_texture_id:

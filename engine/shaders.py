@@ -2294,6 +2294,18 @@ void main() {
     FragColor = vec4(0.0);
 }"""
 
+# A fading portal: what was behind the aperture, laid back over the portal's
+# view with alpha (1 - fade), so the view's opacity is the portal's fade.
+DEFAULT_SHADERS['portal_fade.frag'] = """#version 330 core
+out vec4 FragColor;
+uniform sampler2D behind;
+uniform vec4 viewport_rect;
+uniform float alpha;
+void main() {
+    vec2 uv = (gl_FragCoord.xy - viewport_rect.xy) / viewport_rect.zw;
+    FragColor = vec4(texture(behind, uv).rgb, alpha);
+}"""
+
 DEFAULT_SHADERS['portal_rim.vert'] = """#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 projection;

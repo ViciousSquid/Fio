@@ -698,6 +698,7 @@ class ConsoleCommandHandler:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 self.editor_state.save_state()
                 t.properties['active'] = True
+                t._fade_target = 1.0             # fades in, as the Enable input does
                 touch(t)
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
@@ -716,6 +717,7 @@ class ConsoleCommandHandler:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 self.editor_state.save_state()
                 t.properties['active'] = False
+                t._fade_target = 0.0             # fades out, as the Disable input does
                 touch(t)
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()

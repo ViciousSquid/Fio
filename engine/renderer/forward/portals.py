@@ -44,9 +44,11 @@ class PortalsMixin:
         mask_frag = DEFAULT_SHADERS.get('portal_mask.frag', '')
         rim_vert  = DEFAULT_SHADERS.get('portal_rim.vert', '')
         rim_frag  = DEFAULT_SHADERS.get('portal_rim.frag', '')
+        fade_frag = DEFAULT_SHADERS.get('portal_fade.frag', '')
         try:
             self._portal_mask_shader = self.shader_loader.compile_from_source(mask_vert, mask_frag)
             self._portal_rim_shader = self.shader_loader.compile_from_source(rim_vert, rim_frag)
+            self._portal_fade_shader = self.shader_loader.compile_from_source(rim_vert, fade_frag)
         except Exception as e:
             print(f"[Portal] Shader compile error: {e}")
             return
@@ -63,6 +65,9 @@ class PortalsMixin:
         self._portal_rim_proj_loc  = gl.glGetUniformLocation(self._portal_rim_shader,  'projection')
         self._portal_rim_view_loc  = gl.glGetUniformLocation(self._portal_rim_shader,  'view')
         self._portal_rim_color_loc = gl.glGetUniformLocation(self._portal_rim_shader,  'rim_color')
+        fade = self._portal_fade_shader
+        self._portal_fade_locs = {name: gl.glGetUniformLocation(fade, name) for name in
+                                  ('projection', 'view', 'behind', 'viewport_rect', 'alpha')}
         self._portal_gl_ready = True
         print("[Portal] GL resources initialised")
 
@@ -170,6 +175,9 @@ class PortalsMixin:
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(main_view)
         fade_a = float(portal_table.portal_fade[portal_a])
+        # A portal fading in or out shows its view at that opacity over what
+        # is behind it: keep that picture before the view replaces it.
+        behind = self._capture_behind_portal() if depth == 1 and fade_a < 0.999 else None
         rect = self._portal_screen_rect(corners_a, pv)
         if rect is not None:
             if rect[2] <= 0 or rect[3] <= 0:
@@ -226,7 +234,9 @@ class PortalsMixin:
             r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
             gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,float(r),float(g),float(b),0.55*fade_a)
             gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_LINE_LOOP,0,4); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA); gl.glDisable(gl.GL_BLEND)
-        if fade_a < 0.999:
+        if fade_a < 0.999 and behind is not None:
+            self._draw_behind_portal(corners_a, proj_ptr, view_ptr, depth, behind, 1.0 - fade_a)
+        elif fade_a < 0.999:
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA)
             self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader); gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,0.0,0.0,0.0,1.0-fade_a)
             gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4); gl.glDisable(gl.GL_BLEND)
@@ -235,6 +245,64 @@ class PortalsMixin:
         # after all portal colour/rim/fade work is complete.
         self._portal_flatten_depth(corners_a, projection, main_view, depth)
         gl.glDisable(gl.GL_STENCIL_TEST); gl.glDisable(gl.GL_SCISSOR_TEST); gl.glBindVertexArray(0)
+
+    def _capture_behind_portal(self):
+        """Copy the frame drawn so far; returns the viewport, or None.
+
+        The same plain colour copy the glass pass makes. Only a portal that
+        is fading pays for it, and only while it fades.
+        """
+        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        if viewport is None or len(viewport) < 4 or not self._portal_fade_shader:
+            return None
+        x, y, width, height = (int(v) for v in viewport[:4])
+        if width <= 0 or height <= 0:
+            return None
+        if not self._portal_behind_texture:
+            self._portal_behind_texture = int(gl.glGenTextures(1))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._portal_behind_texture)
+        if self._portal_behind_size != (width, height):
+            for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                 (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, pname, value)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
+                            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            self._portal_behind_size = (width, height)
+        gl.glCopyTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        return (x, y, width, height)
+
+    def _draw_behind_portal(self, corners, proj_ptr, view_ptr, stencil_level, viewport, alpha):
+        """Lay the copied picture back over the aperture at *alpha*."""
+        locs = self._portal_fade_locs
+        gl.glEnable(gl.GL_STENCIL_TEST)
+        gl.glStencilFunc(gl.GL_EQUAL, stencil_level, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+        gl.glStencilMask(0x00)
+        depth_test = gl.glIsEnabled(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        self._portal_upload_quad(corners)
+        gl.glUseProgram(self._portal_fade_shader)
+        gl.glUniformMatrix4fv(locs['projection'], 1, gl.GL_FALSE, proj_ptr)
+        gl.glUniformMatrix4fv(locs['view'], 1, gl.GL_FALSE, view_ptr)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._portal_behind_texture)
+        gl.glUniform1i(locs['behind'], 0)
+        gl.glUniform4f(locs['viewport_rect'], *(float(v) for v in viewport))
+        gl.glUniform1f(locs['alpha'], max(0.0, min(1.0, float(alpha))))
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glDepthMask(gl.GL_TRUE)
+        if depth_test:
+            gl.glEnable(gl.GL_DEPTH_TEST)
 
     def _draw_nested_portals(self, portal_table, from_a, from_b, projection, view, cam, config, draw_scene_fn, portal_slots, depth):
         candidates=self._portal_candidate_slots(portal_table,portal_slots,cam); pv=projection*view
