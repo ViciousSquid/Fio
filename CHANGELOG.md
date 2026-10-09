@@ -144,8 +144,8 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   `saves/slot1.fiosave` to `slot3.fiosave`), Options (Sound Volume, Music
   Volume, and Video: Fullscreen, Borderless or Windowed), plugins' items,
   and Exit, in a floating window like SysMon's (drag it by its title bar;
-  [X] resumes). The game pauses and is blurred behind it, and the cursor is
-  free. The volumes and Video are the settings of Settings > Play Modes, so
+  [X] resumes). The game pauses and is blurred behind it (fading in over
+  a second, and out again over the resumed game), and the cursor is free. The volumes and Video are the settings of Settings > Play Modes, so
   the two always agree; Settings gains Sound volume and Music volume. Music
   is whatever plays from `assets/music`; every other game sound is sound.
   Plugin API 1.7.0 adds `register_pause_menu_item`, `pause_menu_opened` /

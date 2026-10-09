@@ -316,6 +316,12 @@ class QtGameView(QOpenGLWidget):
         self._pause_menu_family = None
         #: The frame the menu opened over, blurred: drawn behind the menu.
         self._pause_backdrop = None
+        #: The backdrop's fade: ``(start time, from level, to level)`` while
+        #: it fades in (menu opened) or out (play resumed), else None.
+        self._pause_fade = None
+        self._pause_fade_timer = QTimer(self)
+        self._pause_fade_timer.setInterval(16)
+        self._pause_fade_timer.timeout.connect(self.update)
         #: Seconds of unpaused Play, for animated textures (_animate_textures).
         self._texture_clock = 0.0
         self._texture_clock_last = None
@@ -2029,8 +2035,10 @@ class QtGameView(QOpenGLWidget):
                        width=self.width(), height=self.height(),
                        play_mode=self.play_mode)
 
-        # The pause menu covers everything, plugin overlays included.
-        if self.play_mode and self.pause_menu is not None:
+        # The pause menu covers everything, plugin overlays included; its
+        # backdrop outlives it while it fades out over the resumed game.
+        if self.play_mode and (self.pause_menu is not None or self._pause_backdrop is not None
+                               or self._pause_fade is not None):
             self._draw_pause_menu(painter)
 
         painter.end()
@@ -2560,8 +2568,13 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode or self.pause_menu is not None:
             return False
         from engine.pause_menu import PauseMenu
-        # Grabbed before the menu exists, so the frame is the game alone.
-        self._pause_backdrop = self._blurred_backdrop()
+        level = self._pause_fade_level()
+        if self._pause_backdrop is None:
+            # Grabbed before the menu exists, so the frame is the game alone.
+            # (Reopened while the last one still fades out, it keeps that one.)
+            self._pause_backdrop = self._blurred_backdrop()
+            level = 0.0
+        self._start_pause_fade(level, 1.0)
         self.pause_menu = PauseMenu(self._pause_root_page())
         from engine.pause_menu_window import PauseMenuWindow
         self._pause_window = PauseMenuWindow(self.pause_menu, self._pause_font)
@@ -2582,9 +2595,11 @@ class QtGameView(QOpenGLWidget):
         """Close the pause menu and play on."""
         if self.pause_menu is None:
             return False
+        level = self._pause_fade_level()
         self.pause_menu = None
-        self._pause_backdrop = None
         self._drop_pause_window()
+        # Play resumes now; the paused picture fades out over it.
+        self._start_pause_fade(level, 0.0)
         logic = self.logic_thread
         if logic is not None:
             logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, False)
@@ -2687,8 +2702,42 @@ class QtGameView(QOpenGLWidget):
         self.editor.leave_play_mode_from_escape()
         if not self.play_mode:
             self.pause_menu = None
-            self._pause_backdrop = None
+            self._end_pause_fade()
             self._drop_pause_window()
+
+    # -- the backdrop's fade ---------------------------------------------------
+
+    #: Seconds the blurred backdrop takes to fade in, and out again.
+    PAUSE_FADE_SECONDS = 1.0
+
+    @staticmethod
+    def _pause_clock():
+        return time.perf_counter()
+
+    def _start_pause_fade(self, from_level, to_level):
+        self._pause_fade = (self._pause_clock(), float(from_level), float(to_level))
+        self._pause_fade_timer.start()        # repaints: a paused world draws no new frames
+
+    def _pause_fade_level(self):
+        """How far the backdrop has faded in, 0..1; finishing a fade ends it."""
+        fade = self._pause_fade
+        if fade is None:
+            return 1.0 if self.pause_menu is not None or self._pause_backdrop is not None else 0.0
+        start, from_level, to_level = fade
+        duration = self.PAUSE_FADE_SECONDS
+        t = 1.0 if duration <= 0 else min(1.0, max(0.0, (self._pause_clock() - start) / duration))
+        level = from_level + (to_level - from_level) * t
+        if t >= 1.0:
+            self._pause_fade = None
+            self._pause_fade_timer.stop()
+            if to_level <= 0.0:
+                self._pause_backdrop = None
+        return level
+
+    def _end_pause_fade(self):
+        self._pause_fade = None
+        self._pause_fade_timer.stop()
+        self._pause_backdrop = None
 
     def _drop_pause_window(self):
         """Forget the window, remembering where it was for the next opening."""
@@ -2793,16 +2842,24 @@ class QtGameView(QOpenGLWidget):
         return font
 
     def _draw_pause_menu(self, painter):
-        """The blurred, dimmed game, and the menu's floating window over it."""
+        """The blurred, dimmed game, and the menu's floating window over it.
+
+        The backdrop and dim fade in over PAUSE_FADE_SECONDS when the menu
+        opens, and out again over the resumed game when it closes.
+        """
         w, h = self.width(), self.height()
+        level = self._pause_fade_level()
+        backdrop = self._pause_backdrop
         painter.save()
         dim = 170
-        if self._pause_backdrop is not None:
+        if backdrop is not None:
+            painter.setOpacity(level)
             painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            painter.drawImage(QRect(0, 0, w, h), self._pause_backdrop)
+            painter.drawImage(QRect(0, 0, w, h), backdrop)
+            painter.setOpacity(1.0)
             dim = 110
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(QColor(0, 0, 0, dim)))
+        painter.setBrush(QBrush(QColor(0, 0, 0, int(dim * level))))
         painter.drawRect(0, 0, w, h)
         window = self._pause_window
         if window is not None:
@@ -2929,7 +2986,7 @@ class QtGameView(QOpenGLWidget):
                 self.console_overlay_active = False
             # The world pause it held ends with the session.
             self.pause_menu = None
-            self._pause_backdrop = None
+            self._end_pause_fade()
             self._drop_pause_window()
             self.show_spatial_grid = False
             if self.logic_thread:

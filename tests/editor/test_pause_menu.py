@@ -309,6 +309,9 @@ def test_the_game_is_blurred_behind_the_menu(fio_session):
     assert (behind != before).any(), "the menu drew nothing"
 
     view.close_pause_menu()
+    assert view._pause_backdrop is not None              # fading out over the game
+    view._pause_clock = lambda: float("inf")
+    view._pause_fade_level()
     assert view._pause_backdrop is None
 
 
@@ -431,3 +434,52 @@ def test_animated_textures_run_on_unpaused_play_time(main_window, monkeypatch):
     monkeypatch.setattr(view, "play_mode", False)
     frame(0.1)                                   # back in the editor: first frame
     assert clocks == [0.0, 0.1, 0.2, 0.2, 0.45, 0.0]
+
+
+def test_the_backdrop_fades_in_and_out_over_a_second(playing, monkeypatch):
+    from PyQt5.QtGui import QImage
+    view, session = playing.view, playing.logic.session_runtime
+    now = [100.0]
+    monkeypatch.setattr(view, "_pause_clock", lambda: now[0])
+    monkeypatch.setattr(view, "_blurred_backdrop", lambda: QImage(8, 8, QImage.Format_RGB32))
+    assert view.PAUSE_FADE_SECONDS == 1.0
+
+    view.open_pause_menu()
+    assert session.pause_menu_open                        # paused at once
+    backdrop = view._pause_backdrop
+    levels = []
+    for dt in (0.0, 0.5, 0.5, 0.5):
+        now[0] += dt
+        levels.append(round(view._pause_fade_level(), 3))
+    assert levels == [0.0, 0.5, 1.0, 1.0]
+    assert view._pause_fade is None and not view._pause_fade_timer.isActive()
+
+    view.close_pause_menu()
+    assert not session.pause_menu_open                    # play resumes at once
+    assert view._pause_fade_timer.isActive()
+    now[0] += 0.5
+    assert view._pause_fade_level() == pytest.approx(0.5)
+    assert view._pause_backdrop is backdrop               # still fading out
+
+    view.open_pause_menu()                                # back in, mid-fade
+    assert view._pause_backdrop is backdrop
+    assert view._pause_fade_level() == pytest.approx(0.5)
+    now[0] += 0.25
+    assert view._pause_fade_level() == pytest.approx(0.625)
+    view.close_pause_menu()
+    now[0] += 1.0
+    assert view._pause_fade_level() == 0.0
+    assert view._pause_backdrop is None and not view._pause_fade_timer.isActive()
+
+    # The overlay is drawn for as long as it fades out, and no longer.
+    from PyQt5.QtGui import QPainter
+    image = QImage(64, 64, QImage.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+    view.open_pause_menu()
+    now[0] += 1.0
+    view.close_pause_menu()
+    now[0] += 0.5
+    painter = QPainter(image)
+    view._draw_pause_menu(painter)
+    painter.end()
+    assert image.pixelColor(2, 2).red() < 255             # half-faded dim
