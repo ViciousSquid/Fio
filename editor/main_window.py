@@ -272,6 +272,7 @@ class MainWindow(QMainWindow):
         
         # Tooltips
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
+        self.view_3d.master_volume = self.master_volume() / 100.0
         self.startup_tooltip_shown = False
         self.tooltip_tips = [
             "Right-click + WASD: Move camera",
@@ -1956,6 +1957,10 @@ class MainWindow(QMainWindow):
             if old_show_caulk != new_show_caulk:
                 self.update_views()
 
+            self.view_3d.master_volume = self.master_volume() / 100.0
+            if getattr(self, 'is_kiosk_mode', False):
+                self._apply_kiosk_window_mode()
+
             # Player glasses visibility is live; no restart is required.
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
@@ -3445,15 +3450,14 @@ class MainWindow(QMainWindow):
                 return
 
             if event.key() == Qt.Key_Escape:
-                self._exit_play_mode()
+                # Esc pauses (the pause menu's Exit leaves Play); with the
+                # player dead there is nothing to pause, and Esc leaves.
+                if not self.view_3d.handle_pause_menu_key(event):
+                    self.leave_play_mode_from_escape()
+                return
 
-                if getattr(self, 'is_kiosk_mode', False):
-                    self.exit_kiosk_mode()
-                    return
-
-                if not self.camera_movement_learned:
-                    self._after(500, lambda: self.show_tooltip(
-                        "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
+            if self.view_3d.pause_menu_active:
+                self.view_3d.handle_pause_menu_key(event)
                 return
 
             elif event.key() == Qt.Key_F3:
@@ -4936,6 +4940,128 @@ class MainWindow(QMainWindow):
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def leave_play_mode_from_escape(self):
+        """Leave Play the way Esc did before the pause menu.
+
+        Kiosk mode quits the game (after asking); otherwise Play ends and the
+        editor returns.
+        """
+        if getattr(self, 'is_kiosk_mode', False):
+            self.exit_kiosk_mode()
+            return
+        self._exit_play_mode()
+        if not self.camera_movement_learned:
+            self._after(500, lambda: self.show_tooltip(
+                "Hold right mouse to move camera with WASD", duration=0, toast_id="camera_tip"))
+
+    def open_pause_menu(self):
+        """Open the Play Mode pause menu (what Esc does). False outside Play."""
+        return self.view_3d.open_pause_menu()
+
+    def close_pause_menu(self):
+        """Close the pause menu and play on. False when it was not open."""
+        return self.view_3d.close_pause_menu()
+
+    def quit_immediately(self):
+        """Console ``quit``: close Fio now, without the unsaved-changes prompt."""
+        self._quit_without_prompt = True
+        self.close()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    # -- Save slots (pause menu > Save Game / Load Game) -----------------------
+
+    SAVE_SLOTS = 3
+
+    def _slot_save_name(self, slot):
+        return f"slot{int(slot)}"
+
+    def save_slot_time(self, slot):
+        """When slot *slot* was saved ("09 Oct 2026  14:02"), or None if empty."""
+        path = self.console_handler._resolve_save_path(self._slot_save_name(slot))
+        try:
+            return time.strftime("%d %b %Y  %H:%M", time.localtime(os.path.getmtime(path)))
+        except OSError:
+            return None
+
+    def save_to_slot(self, slot):
+        """Save the play session to slot *slot* (saves/slotN.fiosave)."""
+        return bool(self.console_handler.cmd_save(self._slot_save_name(slot)))
+
+    def load_from_slot(self, slot):
+        """Restore slot *slot* into the running play session."""
+        return bool(self.console_handler.cmd_load(self._slot_save_name(slot)))
+
+    # -- Master volume (Settings > Play Modes, pause menu > Options) ----------
+
+    def master_volume(self):
+        """The master volume, 0-100."""
+        try:
+            value = self.config.getint('Audio', 'master_volume', fallback=100)
+        except ValueError:
+            value = 100
+        return max(0, min(100, value))
+
+    def set_master_volume(self, percent):
+        percent = max(0, min(100, int(percent)))
+        if not self.config.has_section('Audio'):
+            self.config.add_section('Audio')
+        self.config.set('Audio', 'master_volume', str(percent))
+        self.view_3d.master_volume = percent / 100.0
+        self.save_config()
+
+    # -- Game window mode (Settings > Play Modes > Display Mode, F12) ---------
+
+    KIOSK_WINDOW_MODES = ("Fullscreen", "Borderless", "Windowed")
+
+    def kiosk_window_mode(self):
+        mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
+        return mode if mode in self.KIOSK_WINDOW_MODES else 'Fullscreen'
+
+    def set_kiosk_window_mode(self, mode):
+        """Pick the game window mode, and show the game in it now.
+
+        The same setting as Settings > Play Modes > Display Mode. In Play
+        outside the game window, choosing a mode switches to it (as F12 does).
+        """
+        if mode not in self.KIOSK_WINDOW_MODES:
+            return
+        if not self.config.has_section('Kiosk'):
+            self.config.add_section('Kiosk')
+        self.config.set('Kiosk', 'window_mode', mode)
+        self.save_config()
+        if getattr(self, 'is_kiosk_mode', False):
+            self._apply_kiosk_window_mode()
+        elif self.view_3d.play_mode:
+            self.enter_kiosk_mode()
+
+    def _apply_kiosk_window_mode(self):
+        """Show the window as the configured game window mode.
+
+        Toggling the frameless hint keeps the native window (and the 3D
+        view's GL context): Qt 5 updates the flags in place.
+        """
+        mode = self.kiosk_window_mode()
+        frameless = mode == 'Borderless'
+        if bool(self.windowFlags() & Qt.FramelessWindowHint) != frameless:
+            self.setWindowFlag(Qt.FramelessWindowHint, frameless)
+        if mode == 'Fullscreen':
+            self.showFullScreen()
+            return
+        self.showNormal()
+        self.setWindowState(Qt.WindowNoState)
+        screen = self.screen() or QApplication.primaryScreen()
+        area = screen.geometry() if mode == 'Borderless' else screen.availableGeometry()
+        if mode == 'Borderless':
+            self.setGeometry(area)
+        else:
+            width = min(self.config.getint('Kiosk', 'res_width', fallback=1280), area.width())
+            height = min(self.config.getint('Kiosk', 'res_height', fallback=720), area.height())
+            self.resize(width, height)
+            self.move(area.x() + (area.width() - width) // 2,
+                      area.y() + (area.height() - height) // 2)
+
     def enter_kiosk_mode(self):
         """Hide all editor UI and launch play mode fullscreen."""
         self.is_kiosk_mode = True
@@ -4967,8 +5093,8 @@ class MainWindow(QMainWindow):
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
         self.view_3d.sysmon.set_active(False)
 
-        # Go fullscreen
-        self.showFullScreen()
+        # Fullscreen, borderless or windowed (Settings > Play Modes)
+        self._apply_kiosk_window_mode()
 
         # Launch play mode ONLY if not already in play mode
         if not self.view_3d.play_mode:
@@ -5005,6 +5131,8 @@ class MainWindow(QMainWindow):
             self._restore_properties_tab()
 
         # Exit fullscreen FIRST - critical for proper geometry restoration
+        if self.windowFlags() & Qt.FramelessWindowHint:
+            self.setWindowFlag(Qt.FramelessWindowHint, False)
         self.showNormal()
 
         # Restore the complete layout state (geometry, docks, toolbars)
@@ -5225,7 +5353,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
-            if not self.check_unsaved_changes():
+            if (not getattr(self, '_quit_without_prompt', False)
+                    and not self.check_unsaved_changes()):
                 event.ignore()
                 return
 

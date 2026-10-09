@@ -48,6 +48,9 @@ forward; see **Breaking changes** before upgrading.
   (`engine.items`). Save games are version 3; version 2 saves still load.
 - **Benchmark plugin removed:** `plugins/benchmark` and everything that
   referred to it are gone.
+- **Esc in Play opens the pause menu** instead of leaving Play. Exit to
+  Editor (Quit in a played package) is in the menu; with the player dead,
+  Esc still leaves Play.
 
 ### Player physics: Quake 2
 
@@ -133,12 +136,24 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   building the level, and it can never outlive the editor.
 - Up recalls the last command in the Play console (`) as it does in the
   Debug Console; the two share one command history.
+- Pause menu (Esc in Play): Resume, Save Game and Load Game (three slots,
+  `saves/slot1.fiosave` to `slot3.fiosave`), Options (Volume and Video:
+  Fullscreen, Borderless or Windowed), plugins' items, and Exit. The world
+  pauses while it is open. Volume and Video are the settings of Settings >
+  Play Modes, so the two always agree; Settings gains the master volume.
+  Plugin API 1.7.0 adds `register_pause_menu_item`, `pause_menu_opened` /
+  `pause_menu_closed` events and `main_window.open_pause_menu()` /
+  `close_pause_menu()`; set in the bundled HornetDisplay font.
+- `quit` console command: closes Fio at once, without asking (unsaved
+  changes are lost). Map logic cannot run it.
 
 ### Fixes
 
 - Settings > Display > Big toolbar buttons resizes the toolbar buttons (the
   small setting changed nothing), and applies at once instead of asking for
   a restart.
+- Settings > Play Modes > Display Mode is applied: the game window (F12) was
+  always full screen, whatever was chosen.
 - No GL resource outlives the renderer that owns it: replacing a renderer
   leaked its gizmo, AABB and component-overlay vertex arrays, its instance
   buffers, its portal programs and an instanced program compiled twice.

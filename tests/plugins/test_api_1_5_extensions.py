@@ -29,8 +29,8 @@ def _thing(type_name, **props):
 # ---------------------------------------------------------------------------
 
 def test_the_host_api_is_1_6_0():
-    assert API_VERSION == "1.6.0"
-    assert API_VERSION_INFO == version_tuple(API_VERSION) == (1, 6, 0)
+    assert API_VERSION == "1.7.0"
+    assert API_VERSION_INFO == version_tuple(API_VERSION) == (1, 7, 0)
 
 
 def test_the_editor_api_offers_the_1_5_methods():

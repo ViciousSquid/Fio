@@ -61,8 +61,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.6.0"` |
-| `API_VERSION_INFO` | `(1, 6, 0)` |
+| `API_VERSION` | `"1.7.0"` |
+| `API_VERSION_INFO` | `(1, 7, 0)` |
 
 History:
 
@@ -88,6 +88,9 @@ History:
     forward-renderer interface (`renderer_core` / `Renderer_F` internals) are gone,
     and there is no compatibility shim: port the renderer to the protocol and
     declare `api_version = "1.6.0"`.
+- **1.7.0** — the [pause menu](#pause-menu-api-170-play-mode):
+  `register_pause_menu_item`, the `pause_menu_opened` / `pause_menu_closed`
+  events, and `main_window.open_pause_menu()` / `close_pause_menu()`. Additive.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -494,6 +497,46 @@ world, frees the cursor and calls `on_pick(entity)` for the next actor clicked
 brushes in front of an actor block the click (as drawn, rotation included);
 terrain does not.
 
+### Pause menu (API 1.7.0, Play Mode)
+
+Esc in Play Mode opens the pause menu (with the player dead, Esc still leaves
+Play). It holds the world pause owner `"pause_menu"` while it is open, so the
+world stops and plugins keep ticking, and it frees the cursor. Its first page
+is:
+
+| Item | What it does |
+|------|--------------|
+| Resume | Close the menu and play on (Esc does the same). |
+| Save Game | Three slots, `saves/slot1.fiosave` to `slot3.fiosave`, each labelled with when it was saved. |
+| Load Game | The same slots (an empty one cannot be chosen); loading closes the menu. |
+| Options | **Volume** (master volume, 0-100) and **Video** (Fullscreen, Borderless, Windowed). These are the settings of Settings > Play Modes (Audio, and Display Mode), so the two always agree. |
+| *plugin items* | Each enabled plugin's items, in registration order. |
+| Exit to Editor | Leave Play. In a played package it reads **Quit** and asks before quitting the game. |
+
+Up/Down (or W/S) choose, Enter, Space or E activates, Left/Right (or A/D) move
+a slider, and Esc goes back a page. The mouse works too.
+
+```python
+api.register_pause_menu_item(label, callback, close_menu=True)  # in register(api)
+main_window.open_pause_menu()        # what Esc does; False outside Play
+main_window.close_pause_menu()       # resume; False when it was not open
+main_window.view_3d.pause_menu_active
+logic.session_runtime.pause_menu_open
+```
+`callback(main_window, logic)` runs on the UI thread, with the world paused,
+when the item is chosen; an exception in it is logged and play continues. With
+`close_menu=True` the menu then closes; pass `False` for an item that opens a
+screen of its own, then call `main_window.close_pause_menu()` when that is done.
+
+The logic thread emits `pause_menu_opened` and `pause_menu_closed` on the
+[event bus](#events) when the menu opens and closes:
+
+```python
+def connect(self, host):
+    host.on("pause_menu_opened", lambda ev: self.mute_radio())
+    host.on("pause_menu_closed", lambda ev: self.unmute_radio())
+```
+
 ### Global store & logging
 
 ```python
@@ -750,7 +793,8 @@ def clear(self) -> None
 single int compare.
 
 Common event names include `play_start`, `tick`, `player_damage`,
-`portal_transit`, `prop_collected`, `entity_spawned`, and the render hooks
+`portal_transit`, `prop_collected`, `entity_spawned`, `pause_menu_opened` /
+`pause_menu_closed`, and the render hooks
 `render.overlay` / `render.*`. Prefer subscribing through `host.on(...)` (which
 gates on `enabled`) over the raw bus.
 
@@ -983,6 +1027,9 @@ Driven from the editor's debug console (see
 | `load [name]` | Load a save. In Play Mode it overlays the running session; from the editor it loads the save's map, enters Play Mode, then applies. |
 | `quickload` / `ql` | Load the quicksave slot. |
 | `saves` | List available save files. |
+
+The pause menu's Save Game and Load Game use the same saves, under the names
+`slot1` to `slot3` (`load slot2` from the console loads the menu's Slot 2).
 
 ### Reaching it from a plugin
 

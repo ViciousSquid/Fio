@@ -49,6 +49,14 @@ class LogicSession:
         #: OnPlayerDeath outputs fire); None outside Play.
         self.spawn_start = None
 
+    #: The world-pause owner the Play Mode pause menu holds while it is open.
+    PAUSE_MENU = "pause_menu"
+
+    @property
+    def pause_menu_open(self) -> bool:
+        """True while the pause menu is open (it holds a world pause)."""
+        return self.PAUSE_MENU in self.world_pause_owners()
+
     def set_world_paused(self, owner, paused: bool = True) -> None:
         """Hold or release a world pause owned by *owner*."""
         with self._world_pause_lock:

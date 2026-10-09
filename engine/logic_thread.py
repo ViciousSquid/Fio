@@ -297,6 +297,8 @@ class LogicThread(threading.Thread):
         #: GUI-thread callback used only to marshal fatal tick teardown.
         #: The engine stays Qt-free; QtGameView supplies a bound signal emitter.
         self._gui_fault_teardown = None
+        #: Pause-menu state the plugins were last told about.
+        self._pause_menu_announced = False
         self._gui_fault_teardown_requested = False
         self._tick_fault_message = ""
 
@@ -484,7 +486,19 @@ class LogicThread(threading.Thread):
             self._tick_count = 0
             self._last_tps_time = t
 
+    def _announce_pause_menu(self):
+        """Emit ``pause_menu_opened`` / ``pause_menu_closed`` on a change.
+
+        The menu is opened and closed on the UI thread; its events reach
+        plugins here, on the logic thread, like every other engine event.
+        """
+        is_open = self.session_runtime.pause_menu_open
+        if is_open != self._pause_menu_announced:
+            self._pause_menu_announced = is_open
+            self._plugin_emit("pause_menu_opened" if is_open else "pause_menu_closed")
+
     def _tick(self, delta: float):
+        self._announce_pause_menu()
         if self.session_runtime.play_mode:
             self._tick_play_mode(delta)
             self.collision_runtime.rebuild_if_dirty()

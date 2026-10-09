@@ -352,6 +352,23 @@ class SettingsWindow(QDialog):
         save_group.setLayout(save_form)
         layout.addWidget(save_group)
         
+        # Also the pause menu's Options > Volume.
+        audio_group = QGroupBox("Audio")
+        audio_layout = QFormLayout()
+        self.master_volume_slider = QSlider(Qt.Horizontal)
+        self.master_volume_slider.setRange(0, 100)
+        self.master_volume_slider.setSingleStep(5)
+        self.master_volume_label = QLabel()
+        self.master_volume_slider.valueChanged.connect(
+            lambda v: self.master_volume_label.setText(f"{v}%"))
+        volume_row = QHBoxLayout()
+        volume_row.addWidget(self.master_volume_slider)
+        volume_row.addWidget(self.master_volume_label)
+        audio_layout.addRow("Volume:", volume_row)
+        audio_group.setLayout(audio_layout)
+        layout.addWidget(audio_group)
+
+        # Also the pause menu's Options > Video.
         mode_group = QGroupBox("Window Mode (Fullscreen Mode F12)")
         mode_layout = QFormLayout()
         self.kiosk_mode_combo = QComboBox()
@@ -609,6 +626,13 @@ class SettingsWindow(QDialog):
             self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
         )
         
+        try:
+            volume = self.config.getint('Audio', 'master_volume', fallback=100)
+        except ValueError:
+            volume = 100
+        self.master_volume_slider.setValue(max(0, min(100, volume)))
+        self.master_volume_label.setText(f"{self.master_volume_slider.value()}%")
+
         k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
         idx = self.kiosk_mode_combo.findText(k_mode)
         if idx >= 0:
@@ -723,6 +747,10 @@ class SettingsWindow(QDialog):
         self.config.set('Controls', 'middle_click_drag', str(self.middle_click_drag_checkbox.isChecked()))
         self.config.set('Controls', 'p2_turn_sensitivity', str(self.p2_turn_sensitivity_spin.value()))
         
+        if not self.config.has_section('Audio'):
+            self.config.add_section('Audio')
+        self.config.set('Audio', 'master_volume', str(self.master_volume_slider.value()))
+
         if not self.config.has_section('Kiosk'):
             self.config.add_section('Kiosk')
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())

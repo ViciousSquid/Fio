@@ -73,8 +73,11 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   behave unchanged; renderer implementations written for 1.3–1.5
 #:   (``cls(texture_loader, grid, world, config)`` and the old forward-renderer
 #:   interface) are not compatible, and there is no shim.
-API_VERSION = "1.6.0"
-API_VERSION_INFO = (1, 6, 0)
+#: * 1.7.0 — the pause menu: :meth:`EditorAPI.register_pause_menu_item`, the
+#:   ``pause_menu_opened`` / ``pause_menu_closed`` events, and
+#:   ``main_window.open_pause_menu()`` / ``close_pause_menu()``.
+API_VERSION = "1.7.0"
+API_VERSION_INFO = (1, 7, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -631,6 +634,20 @@ class EditorAPI:
     def register_console_command(self, name: str, callback: Callable, help_text: str = "") -> None:
         """Register a plugin-owned debug console command."""
         self._manager._register_console_command(self._plugin, name, callback, help_text)
+
+    def register_pause_menu_item(self, label: str, callback: Callable,
+                                 close_menu: bool = True) -> None:
+        """Add an item to the Play Mode pause menu (API 1.7.0).
+
+        Esc in Play opens the pause menu: Resume, Save Game, Load Game and
+        Options, then every enabled plugin's items in registration order, then
+        Exit to Editor (Quit in a played package). Choosing this item calls
+        ``callback(main_window, logic)`` on the UI thread with the world
+        paused; with *close_menu* the menu then closes and play resumes,
+        otherwise it stays open (for an item that opens a screen of its own;
+        call ``main_window.close_pause_menu()`` when done).
+        """
+        self._manager._record_pause_menu_item(self._plugin, label, callback, close_menu)
 
     # -- global store -------------------------------------------------------
     @property

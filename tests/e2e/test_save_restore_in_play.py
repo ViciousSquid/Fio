@@ -68,3 +68,33 @@ def test_console_save_then_load_restores_the_published_world(fio_session):
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def _play_console(session, line):
+    """The console at the bottom of the screen in Play (` opens it)."""
+    window = session.window
+    window._show_play_console_overlay()
+    window._play_console_input.setText(line)
+    window._on_play_console_submit()
+
+
+@pytest.mark.parametrize("save, load, filename", [
+    ("save {name}", "load {name}", "{name}.fiosave"),
+    ("quicksave", "quickload", "quicksave.fiosave"),
+    ("qs", "ql", "quicksave.fiosave"),
+], ids=["save-load", "quicksave-quickload", "qs-ql"])
+def test_the_play_console_saves_and_loads(fio_session, tmp_path, monkeypatch, save, load, filename):
+    session = fio_session(_arena()).start_play()
+    monkeypatch.setattr(session.window.console_handler, "_saves_dir", lambda: str(tmp_path))
+    name = "e2e_%s" % uuid.uuid4().hex[:8]
+    session.step(40, keys={Qt.Key_W}, mouse=(3.0, 0.0))
+    saved = _world(session)
+    _play_console(session, save.format(name=name))
+    assert (tmp_path / filename.format(name=name)).is_file(), "save wrote nothing"
+
+    session.step(60, keys={Qt.Key_W, Qt.Key_A}, mouse=(-7.0, 0.0))
+    assert _world(session)[0] != saved[0]
+
+    _play_console(session, load.format(name=name))
+    assert session.playing
+    assert _world(session) == saved

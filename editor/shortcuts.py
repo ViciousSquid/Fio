@@ -87,7 +87,7 @@ DECLARED = (
 
     ('Play mode', 'W A S D', 'Move'),
     ('Play mode', 'E', 'Use / interact'),
-    ('Play mode', 'Esc', 'Leave play mode'),
+    ('Play mode', 'Esc', 'Pause menu (Save, Load, Options, Exit)'),
     ('Play mode', 'F6', 'Toggle model collision'),
     ('Play mode', 'F7', 'Toggle monster debug'),
     ('Play mode', 'F9', 'Toggle the lighting debug view'),

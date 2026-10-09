@@ -137,6 +137,7 @@ class PluginManager:
         self._tools_actions: list = []
         self._menu_actions: list = []
         self._console_commands: dict = {}
+        self._pause_menu_items: list = []   # [(plugin, label, callback, close_menu)]
         # Disabled plugin names (by directory or plugin.name). Populated from
         # the FIO_DISABLED_PLUGINS env var, comma-separated.
         self._disabled = {
@@ -349,6 +350,23 @@ class PluginManager:
 
     def menu_actions(self):
         return list(self._menu_actions)
+
+    def _record_pause_menu_item(self, plugin, label: str, callback, close_menu: bool = True) -> None:
+        if callable(callback) and str(label).strip():
+            self._pause_menu_items.append((plugin, str(label), callback, bool(close_menu)))
+
+    def pause_menu_items(self):
+        """``[(label, callback, close_menu)]`` from enabled plugins, in order."""
+        return [(label, callback, close_menu)
+                for plugin, label, callback, close_menu in self._pause_menu_items
+                if self.is_enabled(plugin)]
+
+    def run_pause_menu_item(self, callback, main_window=None, logic=None) -> None:
+        """Call a plugin's pause-menu callback, fully guarded."""
+        try:
+            callback(main_window, logic)
+        except Exception:
+            self._log(f"pause menu item failed:\n{traceback.format_exc()}")
 
     def _register_console_command(self, plugin, name: str, callback, help_text: str = "") -> None:
         key = str(name).strip().lower()

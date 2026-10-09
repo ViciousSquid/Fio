@@ -5,6 +5,7 @@ import json
 
 import glm
 from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtCore import QTimer
 
 from editor.debug_console import debug_log
 from engine.change_journal import touch
@@ -107,6 +108,7 @@ class ConsoleCommandHandler:
             'god': self.cmd_god,
             'buddha': self.cmd_buddha,
             'clear': self.cmd_clear,
+            'quit': self.cmd_quit,
             'fps': self.cmd_fps,
             'map': self.cmd_map,
 
@@ -195,8 +197,9 @@ class ConsoleCommandHandler:
     #: long after the package is closed.
     #: Never from map logic: a renderer swap is the user's (and may start
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
-    #: but flip the stored preference in settings.ini.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync'})
+    #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
+    #: without asking, so a map could throw away the user's unsaved work.
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit'})
 
     def handle_command(self, cmd_string, *, from_map=False):
         """Run one console command line.
@@ -948,6 +951,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
 <b style="color:orange;">message3</b> &quot;text&quot; — Show a timed Rushford-font message on the third play-view line<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
+<b style="color:orange;">quit</b> — Quit Fio at once (no confirmation; unsaved changes are lost)<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
 <b style="color:orange;">load</b> [name] — Load a saved play session<br>
@@ -2330,6 +2334,12 @@ entity to drive them from the I/O system.</i><br>
     def cmd_clear(self, args):
         self.main_window.debug_console.clear()
 
+    def cmd_quit(self, args):
+        """quit — Quit Fio immediately, without asking (unsaved work is lost)."""
+        # After this command returns: it may be running inside a key event of
+        # the console it was typed in.
+        QTimer.singleShot(0, self.main_window.quit_immediately)
+
     def cmd_fps(self, args):
         config = self.main_window.config
         show = not config.getboolean('Display', 'show_fps', fallback=False)
@@ -2498,6 +2508,7 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info" if ok else "Error", msg)
         if ok:
             self.main_window.show_toast(f"Saved: {os.path.basename(path)}")
+        return ok
 
     def cmd_quicksave(self, args):
         """quicksave — Save to the quicksave slot (saves/quicksave.fiosave)."""
@@ -2527,10 +2538,10 @@ entity to drive them from the I/O system.</i><br>
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
                 self.main_window.update_all_ui()
-            return
+            return ok
 
         # In the editor → load the save's map, enter play, then apply.
-        self._load_from_editor(path)
+        return self._load_from_editor(path)
 
     def _load_from_editor(self, path):
         """Load a save while in editor mode: reload map, enter play, overlay."""
@@ -2598,6 +2609,7 @@ entity to drive them from the I/O system.</i><br>
         if ok:
             self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
             self.main_window.update_all_ui()
+        return ok
 
     def _confirm_force_delta(self, path):
         """Ask whether to force-apply a delta whose base map doesn't match.

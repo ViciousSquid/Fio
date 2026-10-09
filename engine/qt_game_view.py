@@ -310,6 +310,13 @@ class QtGameView(QOpenGLWidget):
         self._view_ptr = None
 
         self.console_overlay_active = False
+        #: The open pause menu (Esc in Play), an engine.pause_menu.PauseMenu,
+        #: or None. It holds the world pause owner PAUSE_MENU while open.
+        self.pause_menu = None
+        self._pause_menu_family = None
+        #: Master volume, 0..1, over every game sound (Settings > Play Modes,
+        #: and the pause menu's Options > Volume).
+        self.master_volume = 1.0
         # Up repeats the last command (the history every console shares).
         self._console_input = CommandInput(self)
         self._console_input.setPlaceholderText("Enter command…   Esc to close")
@@ -1107,7 +1114,8 @@ class QtGameView(QOpenGLWidget):
         self._process_console_command_queue()
 
         if self.logic_thread:
-            keys = set() if self.console_overlay_active else self.editor.keys_pressed
+            keys = (set() if self.console_overlay_active or self.pause_menu is not None
+                    else self.editor.keys_pressed)
             self.game_state.set_keys(keys)
             # Update Player 2 input from arrow keys (if no gamepad)
             self._update_p2_keyboard_input()
@@ -1214,6 +1222,7 @@ class QtGameView(QOpenGLWidget):
                 bool(meta.get('global', False)),
             )
             volume = max(0.0, min(1.0, float(meta.get('volume', 1.0))))
+            volume *= max(0.0, min(1.0, float(self.master_volume)))
             if meta.get('position') is not None and not meta.get('global', False):
                 channel.set_volume(
                     volume * gain * left,
@@ -1968,6 +1977,10 @@ class QtGameView(QOpenGLWidget):
                        width=self.width(), height=self.height(),
                        play_mode=self.play_mode)
 
+        # The pause menu covers everything, plugin overlays included.
+        if self.play_mode and self.pause_menu is not None:
+            self._draw_pause_menu(painter)
+
         painter.end()
 
 
@@ -2475,6 +2488,270 @@ class QtGameView(QOpenGLWidget):
         tw = fm.horizontalAdvance(hint)
         painter.drawText((w - tw) // 2, btn_y + btn_h + 30, hint)
 
+    # =========================================================================
+    # PAUSE MENU (Esc in Play Mode; plugin API 1.7.0)
+    # =========================================================================
+
+    #: Bundled face the menu is set in (assets/fonts), and the fallback.
+    PAUSE_MENU_FONT = "HornetDisplay-Regular.ttf"
+    PAUSE_MENU_FALLBACK_FONT = "Arial"
+
+    @property
+    def pause_menu_active(self) -> bool:
+        return self.pause_menu is not None
+
+    def open_pause_menu(self) -> bool:
+        """Open the pause menu: the world pauses and the cursor is freed.
+
+        Returns False outside Play Mode or when it is already open.
+        """
+        if not self.play_mode or self.pause_menu is not None:
+            return False
+        from engine.pause_menu import PauseMenu
+        self.pause_menu = PauseMenu(self._pause_root_page())
+        logic = self.logic_thread
+        if logic is not None:
+            logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, True)
+        while QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+        QApplication.setOverrideCursor(Qt.ArrowCursor)
+        self.update()
+        return True
+
+    def close_pause_menu(self) -> bool:
+        """Close the pause menu and play on."""
+        if self.pause_menu is None:
+            return False
+        self.pause_menu = None
+        logic = self.logic_thread
+        if logic is not None:
+            logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, False)
+        if self.play_mode and not self.console_overlay_active:
+            if self._actor_pick is not None:
+                self._show_pick_cursor()
+            else:
+                self._capture_play_cursor()
+        self.update()
+        return True
+
+    # -- pages -----------------------------------------------------------------
+
+    def _pause_root_page(self):
+        """Resume, Save, Load, Options, the plugins' items, then Exit.
+
+        Exit leaves Play for the editor -- or quits the game in kiosk mode,
+        as Esc did before the menu existed.
+        """
+        from engine.pause_menu import Item, Page
+        editor = self.editor
+        items = [
+            Item("Resume", self.close_pause_menu),
+            Item("Save Game", page=lambda: self._pause_slots_page(save=True)),
+            Item("Load Game", page=lambda: self._pause_slots_page(save=False)),
+            Item("Options", page=self._pause_options_page),
+        ]
+        mgr = self._plugin_manager()
+        if mgr is not None:
+            for label, callback, close_menu in mgr.pause_menu_items():
+                items.append(Item(label, self._plugin_pause_action(mgr, callback, close_menu)))
+        kiosk = bool(getattr(editor, 'is_kiosk_mode', False))
+        items.append(Item("Quit" if kiosk else "Exit to Editor", self._exit_from_pause_menu))
+        return Page("Paused", items)
+
+    def _pause_slots_page(self, save):
+        from engine.pause_menu import Item, Page
+        editor = self.editor
+
+        def label(slot):
+            stamp = editor.save_slot_time(slot)
+            return f"Slot {slot}    {stamp}" if stamp else f"Slot {slot}    Empty"
+
+        def run(slot):
+            def action():
+                if save:
+                    ok = editor.save_to_slot(slot)
+                    self.pause_menu.notice = (f"Saved to Slot {slot}" if ok
+                                              else "Save failed (see the console)")
+                    return
+                # A load restores the saved session into this one; play on.
+                if editor.load_from_slot(slot):
+                    self.close_pause_menu()
+                elif self.pause_menu is not None:
+                    self.pause_menu.notice = "Load failed (see the console)"
+            return action
+
+        items = [Item((lambda n=n: label(n)), run(n),
+                      enabled=True if save else (lambda n=n: editor.save_slot_time(n) is not None))
+                 for n in range(1, editor.SAVE_SLOTS + 1)]
+        return Page("Save Game" if save else "Load Game", items)
+
+    def _pause_options_page(self):
+        from engine.pause_menu import Item, Page
+        editor = self.editor
+        return Page("Options", [
+            Item("Volume", slider=(editor.master_volume, editor.set_master_volume, 0, 100, 5)),
+            Item("Video", page=self._pause_video_page),
+        ])
+
+    def _pause_video_page(self):
+        """The window mode of Settings > Play Modes > Display Mode."""
+        from engine.pause_menu import Item, Page
+        editor = self.editor
+        return Page("Video", [
+            Item(mode, (lambda m=mode: editor.set_kiosk_window_mode(m)),
+                 checked=(lambda m=mode: editor.kiosk_window_mode() == m))
+            for mode in editor.KIOSK_WINDOW_MODES
+        ])
+
+    @staticmethod
+    def _plugin_manager():
+        try:
+            from plugins.manager import get_manager
+            return get_manager()
+        except Exception:
+            return None
+
+    def _plugin_pause_action(self, mgr, callback, close_menu):
+        def action():
+            mgr.run_pause_menu_item(callback, main_window=self.editor,
+                                    logic=self.logic_thread)
+            if close_menu:
+                self.close_pause_menu()
+        return action
+
+    def _exit_from_pause_menu(self):
+        # Kiosk mode asks before quitting; a No keeps the menu open.
+        self.editor.leave_play_mode_from_escape()
+        if not self.play_mode:
+            self.pause_menu = None
+
+    # -- input -----------------------------------------------------------------
+
+    def handle_pause_menu_key(self, event) -> bool:
+        """Pause-menu keys in Play. True when the key was used.
+
+        Esc opens the menu -- unless the player is dead, when it leaves Play
+        as before -- and goes back a page (closing it from the first).
+        Up/Down or W/S choose, Left/Right or A/D move a slider, Enter, Space
+        or E activates. Every other key is swallowed while the menu is open.
+        """
+        key = event.key()
+        menu = self.pause_menu
+        if menu is None:
+            if key == Qt.Key_Escape and not event.isAutoRepeat() \
+                    and not self.game_state.published('player_dead', False):
+                return self.open_pause_menu()
+            return False
+        if key == Qt.Key_Escape:
+            if not event.isAutoRepeat() and not menu.back():
+                self.close_pause_menu()
+        elif key in (Qt.Key_Up, Qt.Key_W):
+            menu.move(-1)
+        elif key in (Qt.Key_Down, Qt.Key_S):
+            menu.move(1)
+        elif key in (Qt.Key_Left, Qt.Key_A):
+            menu.adjust(-1)
+        elif key in (Qt.Key_Right, Qt.Key_D):
+            menu.adjust(1)
+        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space, Qt.Key_E):
+            if not event.isAutoRepeat():
+                menu.activate()
+        self.update()
+        return True
+
+    def _click_pause_menu(self, x, y):
+        menu = self.pause_menu
+        index, fraction = menu.hit(x, y)
+        if index is None:
+            return
+        menu.selected = index
+        item = menu.item
+        if item.slider is not None:
+            if fraction is not None and item.enabled:
+                item.set_slider_fraction(fraction)
+        else:
+            menu.activate()
+        self.update()
+
+    def _hover_pause_menu(self, x, y, drag=False):
+        menu = self.pause_menu
+        index, fraction = menu.hit(x, y)
+        if index is None or not menu.page.items[index].enabled:
+            return
+        if index != menu.selected:
+            menu.selected = index
+            self.update()
+        item = menu.item
+        if drag and item.slider is not None and fraction is not None:
+            item.set_slider_fraction(fraction)
+            self.update()
+
+    # -- drawing ---------------------------------------------------------------
+
+    def _pause_font(self, size):
+        if self._pause_menu_family is None:
+            self._pause_menu_family = (self._resolve_hud_font_family(self.PAUSE_MENU_FONT)
+                                       or self.PAUSE_MENU_FALLBACK_FONT)
+        font = QFont(self._pause_menu_family)
+        font.setPixelSize(size)
+        return font
+
+    def _draw_pause_menu(self, painter):
+        menu = self.pause_menu
+        page = menu.page
+        w, h = self.width(), self.height()
+        orange, green = QColor(240, 128, 0), QColor(120, 200, 80)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        painter.drawRect(0, 0, w, h)
+
+        row_w, row_h, gap = min(420, w - 32), 44, 10
+        total = len(page.items) * (row_h + gap) - gap
+        title_font = self._pause_font(max(28, min(64, h // 12)))
+        title_h = QFontMetrics(title_font).height()
+        top = max(title_h + 40, (h - total) // 2 + title_h // 2)
+        x = (w - row_w) // 2
+
+        painter.setFont(title_font)
+        painter.setPen(orange)
+        painter.drawText(QRect(0, top - title_h - 30, w, title_h), Qt.AlignCenter, page.title)
+        if menu.notice:
+            painter.setFont(self._pause_font(16))
+            painter.setPen(green)
+            painter.drawText(QRect(0, top - 28, w, 22), Qt.AlignCenter, menu.notice)
+
+        painter.setFont(self._pause_font(22))
+        rects = []
+        for index, item in enumerate(page.items):
+            row = QRect(x, top + index * (row_h + gap), row_w, row_h)
+            selected = index == menu.selected and item.enabled
+            painter.setPen(QPen(orange if selected else QColor(110, 110, 110), 2))
+            painter.setBrush(QBrush(QColor(70, 45, 20, 235) if selected else QColor(35, 35, 35, 220)))
+            painter.drawRoundedRect(row, 6, 6)
+            painter.setPen(QColor(255, 255, 255) if item.enabled else QColor(120, 120, 120))
+            bar = None
+            text = item.label
+            if item.checked:
+                text = "\u25cf  " + text
+            if item.slider is not None:
+                painter.drawText(row.adjusted(16, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
+                bar = QRect(row.x() + row_w // 3, row.center().y() - 6, row_w // 2, 12)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(80, 80, 80)))
+                painter.drawRect(bar)
+                fill = QRect(bar.x(), bar.y(), int(bar.width() * item.slider_fraction()), bar.height())
+                painter.setBrush(QBrush(green))
+                painter.drawRect(fill)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(QRect(bar.right() + 4, row.y(), row.right() - bar.right() - 10, row_h),
+                                 Qt.AlignVCenter | Qt.AlignRight, str(item.slider_value()))
+            else:
+                painter.drawText(row, Qt.AlignCenter, text)
+            rects.append((row, bar))
+        menu.rects = rects
+        painter.restore()
+
     def _confirm_level_complete(self):
         ui = getattr(self, '_cached_level_complete_ui', None)
         if not ui:
@@ -2592,6 +2869,8 @@ class QtGameView(QOpenGLWidget):
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
+            # The world pause it held ends with the session.
+            self.pause_menu = None
             self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_ai.monster_debug_active = False
@@ -3291,6 +3570,10 @@ class QtGameView(QOpenGLWidget):
                                           shear=armed['shear'])
 
     def mousePressEvent(self, event):
+        if self.play_mode and self.pause_menu is not None:
+            if event.button() == Qt.LeftButton:
+                self._click_pause_menu(event.x(), event.y())
+            return
         if self.play_mode and self._actor_pick is not None:
             if event.button() == Qt.RightButton:
                 self.cancel_actor_pick()
@@ -3437,6 +3720,10 @@ class QtGameView(QOpenGLWidget):
             self._terrain_brush_mouse_pos = event.pos()
             self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
             self.update()
+            return
+        if self.play_mode and self.pause_menu is not None:
+            self._hover_pause_menu(event.x(), event.y(),
+                                   drag=bool(event.buttons() & Qt.LeftButton))
             return
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
@@ -3871,6 +4158,10 @@ class QtGameView(QOpenGLWidget):
             elif event.key() == Qt.Key_Escape:
                 self._cancel_level_complete()
                 return
+
+        if (self.play_mode and not self.console_overlay_active
+                and self.handle_pause_menu_key(event)):
+            return
 
         # ----- Player 2 arrow key handling (when no gamepad) -----
         if self.play_mode and not self.gamepad and self.splitscreen_mode:
