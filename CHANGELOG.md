@@ -127,6 +127,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   new random level with the same generator settings (and a fresh seed) and
   sends the player there. An untouched generated level is replaced without
   an autosave prompt.
+- Loading a large level (4 MB and up) shows a five-pixel strip of orange and
+  green stripes scrolling across the top of the editor. It runs as its own
+  small process, so it keeps moving while the editor is busy parsing and
+  building the level, and it can never outlive the editor.
 
 ### Fixes
 

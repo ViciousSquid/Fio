@@ -7,6 +7,7 @@ import random
 import numpy as np
 import configparser
 import math
+import contextlib
 import copy
 import uuid
 import glm
@@ -4311,15 +4312,16 @@ class MainWindow(QMainWindow):
         Like the package's start map, it never takes the extraction's path as
         its file: the first save goes through Save As.
         """
-        try:
-            with open(map_path, 'r', encoding='utf-8') as f:
-                level_data = json.load(f)
-        except Exception as e:
-            print(f"ERROR loading level {map_path}: {e}")
-            self.show_toast(f"Failed to load level: {e}", is_error=True)
-            return False
-        if not self._load_level(level_data, None, destination_spawn, from_game):
-            return False
+        with self._loading_throbber(map_path):
+            try:
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    level_data = json.load(f)
+            except Exception as e:
+                print(f"ERROR loading level {map_path}: {e}")
+                self.show_toast(f"Failed to load level: {e}", is_error=True)
+                return False
+            if not self._load_level(level_data, None, destination_spawn, from_game):
+                return False
         self.unsaved_changes = False
         self.update_title()
         return True
@@ -4334,14 +4336,50 @@ class MainWindow(QMainWindow):
         player to; empty or None means the level's primary start.
         """
         print(f"[MainWindow] Loading level: {filePath}")
+        with self._loading_throbber(filePath):
+            try:
+                with open(filePath, 'r', encoding='utf-8') as f:
+                    level_data = json.load(f)
+            except Exception as e:
+                print(f"ERROR loading level {filePath}: {e}")
+                self.show_toast(f"Failed to load level: {e}", is_error=True)
+                return False
+            return self._load_level(level_data, filePath, destination_spawn, from_game)
+
+    @contextlib.contextmanager
+    def _loading_throbber(self, path):
+        """Show the loading throbber over the window while a big level loads.
+
+        The GUI thread is busy for the whole load, so the throbber is a
+        separate process (see load_throbber.py). It is stopped on the next
+        turn of the event loop, after the new level's first repaint.
+        """
+        from load_throbber import MIN_LEVEL_BYTES, LoadThrobber, throbber_geometry
+        throbber = None
         try:
-            with open(filePath, 'r', encoding='utf-8') as f:
-                level_data = json.load(f)
-        except Exception as e:
-            print(f"ERROR loading level {filePath}: {e}")
-            self.show_toast(f"Failed to load level: {e}", is_error=True)
-            return False
-        return self._load_level(level_data, filePath, destination_spawn, from_game)
+            if os.path.getsize(path) >= MIN_LEVEL_BYTES:
+                self._stop_load_throbber()
+                frame = self.frameGeometry()
+                throbber = LoadThrobber(
+                    f"Loading {os.path.basename(path)}\u2026",
+                    throbber_geometry((frame.x(), frame.y(), frame.width(), frame.height())),
+                    self.root_dir).start()
+        except OSError:
+            throbber = None
+        # Held by the window: Qt keeps no reference to a plain object's
+        # method, and an unreferenced but running Popen keeps its pipe open.
+        self._load_throbber = throbber
+        try:
+            yield throbber
+        finally:
+            if throbber is not None:
+                QTimer.singleShot(0, self._stop_load_throbber)
+
+    def _stop_load_throbber(self):
+        throbber = getattr(self, '_load_throbber', None)
+        self._load_throbber = None
+        if throbber is not None:
+            throbber.stop()
 
     def _load_level(self, level_data, file_path=None, destination_spawn=None,
                     from_game=False):
@@ -5184,6 +5222,7 @@ class MainWindow(QMainWindow):
 
             # Cleanup extracted package temp dir
             self._discard_package_temp_dir()
+            self._stop_load_throbber()
 
             try:
                 self.save_layout()

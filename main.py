@@ -123,6 +123,14 @@ dark_stylesheet = """
 if __name__ == "__main__":
     require_supported_python()
 
+    # The loading throbber the editor shows over itself during a big level
+    # load runs as a separate process of this same program (see
+    # load_throbber.py); it needs nothing but PyQt5.
+    from load_throbber import CHILD_FLAG
+    if CHILD_FLAG in sys.argv:
+        from load_throbber import child_main
+        raise SystemExit(child_main(sys.argv))
+
     # ---------------------------------------------------------
     # Android / standalone player entry point.
     # Under python-for-android (ANDROID_ARGUMENT is set), or when FIO_PLAYER=1
