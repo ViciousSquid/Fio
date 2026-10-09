@@ -4935,7 +4935,7 @@
                 "id": "023bab19-f71e-4b6c-9cd8-1544f6d90fb5",
                 "model_path": "assets/models/LowPoly_Tree_v1.obj",
                 "rotation": [
-                    270,
+                    0,
                     0,
                     0
                 ],
@@ -5006,7 +5006,7 @@
                 "id": "9a56371c-da21-442f-a3a3-e4b32e24ee39",
                 "model_path": "assets/models/LowPoly_Tree_v1.obj",
                 "rotation": [
-                    270,
+                    0,
                     20,
                     0
                 ],
@@ -5077,14 +5077,14 @@
                 "id": "7de5285a-f758-4974-a3f8-962073de7251",
                 "model_path": "assets/models/LowPoly_Tree_v1.obj",
                 "rotation": [
-                    270,
+                    0,
                     20,
                     0
                 ],
                 "scale": [
                     0.67,
-                    0.65,
-                    0.59
+                    0.59,
+                    0.65
                 ],
                 "collision_shape": "auto",
                 "hidden": false,

@@ -180,7 +180,7 @@
                 "name": "LowPoly_Tree_v1",
                 "model_path": "assets/models/LowPoly_Tree_v1.obj",
                 "rotation": [
-                    270.0,
+                    0.0,
                     0,
                     0
                 ],

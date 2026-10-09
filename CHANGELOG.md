@@ -180,6 +180,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- `LowPoly_Tree_v1.obj` no longer lies on its side when inserted: it was
+  exported Z-up while Fio (and the other bundled models) are Y-up. The file
+  is now Y-up, and the maps that stood it up with a 270 degree rotation no
+  longer need it (their trees look exactly as before).
 - A portal fading in or out (Enable, Disable, Toggle) changes its opacity:
   its view and rim show at the fade's opacity over the scene behind the
   aperture. It darkened to black instead, then popped to the scene behind
