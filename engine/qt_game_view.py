@@ -2479,7 +2479,9 @@ class QtGameView(QOpenGLWidget):
         if not ui:
             return
         target_map = ui.get('target_map', '')
-        if target_map:
+        if ui.get('generate_level'):
+            self.editor.generate_level_signal.emit(dict(ui.get('generator_params') or {}))
+        elif target_map:
             self.editor.load_level_signal.emit(target_map, ui.get('destination_spawn', ''))
         self._cached_level_complete_ui = None
         self._level_complete_btn_rect = None

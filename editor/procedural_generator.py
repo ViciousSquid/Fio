@@ -51,6 +51,82 @@ RANDOM_FLOOR_TEXTURES = [
 TEXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "textures")
 
 
+# The generator's settings, their defaults and the ranges the generator panel
+# offers. A generated map's exit LevelChanger carries its settings so the next
+# level is made the same way; those come back from map data (a shared map or a
+# package), so they are always passed through sanitize_params.
+WORLD_SIZES = (1024, 2048, 4096)
+PARAM_LIMITS = {
+    'room_count': (8, 24),
+    'min_room': (192, 320),
+    'max_room': (256, 512),
+    'monster_count': (1, 64),
+    'health_count': (1, 64),
+    'floor_room_count': (0, 16),
+    'floor_height': (STEP_RISE, 512),
+}
+DEFAULT_PARAMS = {
+    'room_count': 14,
+    'min_room': 256,
+    'max_room': 384,
+    'wall_tex': 'default.png',
+    'floor_tex': 'default.png',
+    'random_wall_texture': False,
+    'random_floor_texture': False,
+    'spawn_monsters': True,
+    'monster_count': 4,
+    'world_width': 2048,
+    'world_height': 2048,
+    'spawn_health': True,
+    'health_count': 6,
+    'enable_floors': False,
+    'floor_room_count': 2,
+    'floor_height': UPPER_FLOOR_HEIGHT,
+}
+
+
+def _texture_name(value, default):
+    """A texture name inside the textures folder, else *default*."""
+    name = str(value or '').strip().replace('\\', '/')
+    parts = name.split('/')
+    if not name or name.startswith('/') or ':' in name or '..' in parts:
+        return default
+    return name
+
+
+def sanitize_params(params):
+    """Generator settings from untrusted data, defaulted and held in range.
+
+    Unknown keys are dropped, numbers are clamped to the generator panel's
+    ranges, the world is one of the panel's three sizes, and texture names
+    must stay inside ``assets/textures``.
+    """
+    src = params if isinstance(params, dict) else {}
+    out = dict(DEFAULT_PARAMS)
+    for key, (lo, hi) in PARAM_LIMITS.items():
+        try:
+            value = int(src.get(key, out[key]))
+        except (TypeError, ValueError, OverflowError):
+            value = out[key]
+        out[key] = max(lo, min(hi, value))
+    if out['max_room'] < out['min_room']:
+        out['max_room'] = min(PARAM_LIMITS['max_room'][1], out['min_room'])
+    for key in ('world_width', 'world_height'):
+        try:
+            value = float(src.get(key, out[key]))
+        except (TypeError, ValueError, OverflowError):
+            value = out[key]
+        if value != value:          # NaN
+            value = out[key]
+        out[key] = min(WORLD_SIZES, key=lambda size: abs(size - value))
+    for key in ('random_wall_texture', 'random_floor_texture', 'spawn_monsters',
+                'spawn_health', 'enable_floors'):
+        out[key] = bool(src.get(key, out[key]))
+    for key in ('wall_tex', 'floor_tex'):
+        out[key] = _texture_name(src.get(key, out[key]), DEFAULT_PARAMS[key])
+    return out
+
+
 def _resolve_texture(texture_name):
     """Return an existing texture filename, falling back to default.png."""
     name = str(texture_name or "").strip()
@@ -779,12 +855,17 @@ def create_map_data(params, yield_hook=None):
             "io_connections": []
         },
         {
+            # Used with E, the exit generates the next level with these same
+            # settings (and a new seed) and sends the player there.
             "type": "levelchanger",
             "pos": [exit_x, exit_y, exit_z],
             "properties": {
                 "type": "levelchanger",
                 "name": "LevelChanger_Exit",
-                "target_map": "Simple_Map_Test.json",
+                "target_map": "",
+                "generate_level": True,
+                "generator_params": sanitize_params(params),
+                "usable": True,
                 "delay": 0.0,
                 "fade_time": 0.5,
                 "show_radius": False,
@@ -1120,17 +1201,17 @@ class ProceduralMapWidget(QWidget):
         form.addRow("Map Size:", self.map_size_combo)
 
         self.room_count = QSpinBox()
-        self.room_count.setRange(8, 24)
+        self.room_count.setRange(*PARAM_LIMITS['room_count'])
         self.room_count.setValue(14)
         form.addRow("Target Rooms:", self.room_count)
 
         self.min_room = QSpinBox()
-        self.min_room.setRange(192, 320)
+        self.min_room.setRange(*PARAM_LIMITS['min_room'])
         self.min_room.setValue(256)
         form.addRow("Min Room Size (world units):", self.min_room)
 
         self.max_room = QSpinBox()
-        self.max_room.setRange(256, 512)
+        self.max_room.setRange(*PARAM_LIMITS['max_room'])
         self.max_room.setValue(384)
         form.addRow("Max Room Size (world units):", self.max_room)
 
@@ -1150,7 +1231,7 @@ class ProceduralMapWidget(QWidget):
         self.spawn_monsters = QCheckBox("Spawn Monsters")
         self.spawn_monsters.setChecked(True)
         self.monster_amount = QSpinBox()
-        self.monster_amount.setRange(1, 64)
+        self.monster_amount.setRange(*PARAM_LIMITS['monster_count'])
         self.monster_amount.setValue(4)
         form.addRow(self.spawn_monsters, self.monster_amount)
 
@@ -1158,7 +1239,7 @@ class ProceduralMapWidget(QWidget):
         self.spawn_health = QCheckBox("Spawn Health")
         self.spawn_health.setChecked(True)
         self.health_amount = QSpinBox()
-        self.health_amount.setRange(1, 64)
+        self.health_amount.setRange(*PARAM_LIMITS['health_count'])
         self.health_amount.setValue(6)
         form.addRow(self.spawn_health, self.health_amount)
 
@@ -1166,12 +1247,12 @@ class ProceduralMapWidget(QWidget):
         self.enable_floors = QCheckBox("Steps")
         self.enable_floors.setChecked(False)
         self.floor_amount = QSpinBox()
-        self.floor_amount.setRange(0, 16)
+        self.floor_amount.setRange(*PARAM_LIMITS['floor_room_count'])
         self.floor_amount.setValue(2)
         form.addRow(self.enable_floors, self.floor_amount)
 
         self.floor_height = QSpinBox()
-        self.floor_height.setRange(STEP_RISE, 512)
+        self.floor_height.setRange(*PARAM_LIMITS['floor_height'])
         self.floor_height.setSingleStep(STEP_RISE)
         self.floor_height.setValue(UPPER_FLOOR_HEIGHT)
         self.floor_height.setEnabled(False)

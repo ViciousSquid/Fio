@@ -123,6 +123,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   renderer publishes in `RenderStats.details`, and highlights a selected
   object's rows (from the viewport or the Scene Hierarchy) with a SELECTION tab
   listing every column of them.
+- A procedurally generated level's LevelChanger, used with E, generates a
+  new random level with the same generator settings (and a fresh seed) and
+  sends the player there. An untouched generated level is replaced without
+  an autosave prompt.
 
 ### Fixes
 

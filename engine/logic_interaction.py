@@ -146,6 +146,14 @@ class LogicInteraction:
                             "title": "Complete",
                             "button_text": "Continue",
                         }
+                        if thing.generates_level():
+                            # Continue makes a new level rather than load one.
+                            self.level_complete_ui.update(
+                                target_map="",
+                                destination_spawn="",
+                                generate_level=True,
+                                generator_params=thing.generator_params(),
+                            )
                         if logic.io_manager:
                             logic.io_manager.fire_output(
                                 thing,

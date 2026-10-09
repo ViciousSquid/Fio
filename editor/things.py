@@ -1007,6 +1007,7 @@ class LevelChanger(Thing):
         'show_radius',
         'radius',
         'usable',
+        'generate_level',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -1021,7 +1022,10 @@ class LevelChanger(Thing):
         # The PlayerStart (by name) to spawn at in the target map; empty for
         # its primary start.
         self.properties.setdefault('destination_spawn', '')
-        
+        # Instead of target_map, generate a new random level (with the
+        # procedural generator's ``generator_params``) and go there.
+        self.properties.setdefault('generate_level', False)
+
         # An explicit window to signal (tests set one). Otherwise it is found
         # when the level change fires: an entity holding the MainWindow could
         # not be cloned or copied (deepcopy reached the window), and kept the
@@ -1075,8 +1079,45 @@ class LevelChanger(Thing):
             spawn = str(self.properties.get('destination_spawn') or '')
         return target, spawn
 
+    def generates_level(self, parameter: str = ""):
+        """True when this sends the player to a newly generated level.
+
+        A ChangeLevel input that names a map goes to that map instead.
+        """
+        return (bool(self.properties.get('generate_level'))
+                and not (parameter or '').strip())
+
+    def generator_params(self):
+        """The procedural generator settings for the level this generates."""
+        params = self.properties.get('generator_params')
+        return dict(params) if isinstance(params, dict) else {}
+
+    def _find_main_window(self):
+        main_window = getattr(self, '_main_window', None)
+        if main_window:
+            return main_window
+        try:
+            from PyQt5.QtWidgets import QApplication
+            for w in QApplication.topLevelWidgets():
+                if w.__class__.__name__ == 'MainWindow':
+                    return w
+        except Exception as e:
+            debug_log("Error", f"LevelChanger QApplication lookup failed: {e}")
+        return None
+
     def change_level(self, parameter: str = ""):
         """Load a new map when triggered."""
+
+        if self.generates_level(parameter):
+            main_window = self._find_main_window()
+            if not main_window or not hasattr(main_window, 'generate_level_signal'):
+                debug_log("Error", "LevelChanger could not find MainWindow!")
+                return False
+            # Queued to the UI thread, as load_level_signal is.
+            main_window.generate_level_signal.emit(self.generator_params())
+            debug_log("IO", f"LevelChanger '{self.properties.get('name', 'LevelChanger')}' "
+                            "requested a generated level")
+            return True
 
         target_map, destination_spawn = self.destination(parameter)
         if target_map is None:
@@ -1090,19 +1131,7 @@ class LevelChanger(Thing):
         debug_log("IO", f"LevelChanger target resolved → '{target_map}'"
                         + (f", spawn '{destination_spawn}'" if destination_spawn else ""))
 
-        # Get MainWindow reference
-        main_window = getattr(self, '_main_window', None)
-
-        if not main_window:
-            try:
-                from PyQt5.QtWidgets import QApplication
-                for w in QApplication.topLevelWidgets():
-                    if w.__class__.__name__ == 'MainWindow':
-                        main_window = w
-                        break
-            except Exception as e:
-                debug_log("Error", f"LevelChanger QApplication lookup failed: {e}")
-
+        main_window = self._find_main_window()
         if not main_window:
             debug_log("Error", "LevelChanger could not find MainWindow!")
             return False

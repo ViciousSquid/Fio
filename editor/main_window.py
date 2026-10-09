@@ -139,6 +139,9 @@ class MainWindow(QMainWindow):
     #: A LevelChanger asks for a map: ``(map path, destination spawn)``, the
     #: spawn being a PlayerStart name, or '' for the map's primary start.
     load_level_signal = pyqtSignal(str, str)
+    #: A LevelChanger asks for a newly generated level: the procedural
+    #: generator's settings (untrusted map data; sanitised before use).
+    generate_level_signal = pyqtSignal(object)
     #: Emitted after set_selected_objects changes the selection (viewport,
     #: Scene Hierarchy, ...); Debug Tables follows it.
     selection_changed = pyqtSignal()
@@ -170,6 +173,7 @@ class MainWindow(QMainWindow):
         self.file_path = None
         self.recent_files = []
         self.load_level_signal.connect(self._on_level_change_requested)
+        self.generate_level_signal.connect(self._on_generate_level_requested)
 
         self.setWindowTitle("Fio")
         self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
@@ -575,11 +579,8 @@ class MainWindow(QMainWindow):
         if map_data is not None:
             # Regenerating replaces the generator's own previous, untouched
             # output without asking; anything else unsaved is the user's work.
-            marker = self._generated_level_marker
-            replacing_preview = (
-                marker is not None and self.file_path is None
-                and marker[0] is self._undo_top())
-            if not replacing_preview and not self.check_unsaved_changes():
+            if (not self._is_untouched_generated_level()
+                    and not self.check_unsaved_changes()):
                 return
             # Loaded straight from memory: the level has no file until the
             # user saves it, so it opens untitled and unsaved.
@@ -589,6 +590,52 @@ class MainWindow(QMainWindow):
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
+
+    def _is_untouched_generated_level(self):
+        """True while the open level is generator output nobody has edited."""
+        marker = self._generated_level_marker
+        return (marker is not None and self.file_path is None
+                and marker[0] is self._undo_top())
+
+    def _on_generate_level_requested(self, params=None):
+        """A LevelChanger asked for a new random level: make it and go there.
+
+        *params* are the procedural generator settings the LevelChanger
+        carries (the ones its own level was generated with); each level gets
+        a fresh seed. The level is loaded from memory exactly as a level
+        change to a map file is, so during Play the player keeps their weapons
+        and play resumes at the new level's start.
+        """
+        from editor.procedural_generator import create_map_data, sanitize_params
+
+        untouched = self._is_untouched_generated_level()
+        playing = self.view_3d is not None and bool(self.view_3d.play_mode)
+        if not playing and not untouched and not self.check_unsaved_changes():
+            return False
+
+        params = sanitize_params(params)
+        random.seed()
+        seed = random.randint(0, 999999)
+        random.seed(seed)
+        try:
+            map_data = create_map_data(params)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.show_toast(f"Could not generate a level: {e}", is_error=True)
+            return False
+
+        was_unsaved = self.unsaved_changes
+        if untouched:
+            # Generator output nobody edited holds nothing to keep: the level
+            # change must not autosave it.
+            self.unsaved_changes = False
+        if not self._load_level(map_data, None, None, from_game=True):
+            self.unsaved_changes = was_unsaved
+            return False
+        self._generated_level_marker = (self._undo_top(),)
+        self.show_toast(f"Generated a new level (seed {seed})")
+        return True
 
     def _undo_top(self):
         """The newest undo entry, or ``None``: any edit or undo changes it."""
