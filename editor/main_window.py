@@ -837,6 +837,7 @@ class MainWindow(QMainWindow):
         self.view_3d.setCursor(Qt.ArrowCursor)
 
         self._play_console_input.clear()
+        self._play_console_input.reset_history_position()
         self._play_console_input.setFocus()
 
     def _hide_play_console_overlay(self):

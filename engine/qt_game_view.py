@@ -58,7 +58,7 @@ from engine.glasses import (
 )
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.debug_console import DebugConsole, debug_log
+from editor.debug_console import CommandInput, DebugConsole, debug_log
 from .sysmon import SysMon
 from .floating_windows import CallbackWindow, WindowManager
 
@@ -310,7 +310,8 @@ class QtGameView(QOpenGLWidget):
         self._view_ptr = None
 
         self.console_overlay_active = False
-        self._console_input = QLineEdit(self)
+        # Up repeats the last command (the history every console shares).
+        self._console_input = CommandInput(self)
         self._console_input.setPlaceholderText("Enter command…   Esc to close")
         self._console_input.setFont(QFont("Consolas", 11))
         self._console_input.setStyleSheet("""
@@ -3657,6 +3658,7 @@ class QtGameView(QOpenGLWidget):
         self._console_input.raise_()
         self._console_input.setFocus()
         self._console_input.clear()
+        self._console_input.reset_history_position()
 
     def _close_console_overlay(self):
         self.console_overlay_active = False

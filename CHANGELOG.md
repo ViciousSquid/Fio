@@ -131,6 +131,8 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   green stripes scrolling across the top of the editor. It runs as its own
   small process, so it keeps moving while the editor is busy parsing and
   building the level, and it can never outlive the editor.
+- Up recalls the last command in the Play console (`) as it does in the
+  Debug Console; the two share one command history.
 
 ### Fixes
 

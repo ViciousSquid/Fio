@@ -120,12 +120,25 @@ def install_excepthook():
     return _report
 
 
+#: Commands run from any console, oldest first, shared by every command input
+#: so Up repeats the last command wherever it was typed.
+COMMAND_HISTORY = []
+
+
 class CommandInput(QLineEdit):
-    """Custom line edit that keeps command history (Quake style)."""
-    def __init__(self, parent=None):
+    """Command line with Quake-style history: Up recalls the last command.
+
+    All command inputs share :data:`COMMAND_HISTORY` unless given their own
+    list; each keeps its own place while browsing it.
+    """
+    def __init__(self, parent=None, history=None):
         super().__init__(parent)
-        self.history = []
-        self.history_idx = 0
+        self.history = COMMAND_HISTORY if history is None else history
+        self.history_idx = len(self.history)
+
+    def reset_history_position(self):
+        """Start browsing from the newest command again (on open/clear)."""
+        self.history_idx = len(self.history)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Up:
