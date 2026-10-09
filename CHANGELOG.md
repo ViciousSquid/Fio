@@ -138,8 +138,8 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   Debug Console; the two share one command history.
 - Pause menu (Esc in Play): Resume, Save Game and Load Game (three slots,
   `saves/slot1.fiosave` to `slot3.fiosave`), Options (Volume and Video:
-  Fullscreen, Borderless or Windowed), plugins' items, and Exit. The world
-  pauses while it is open. Volume and Video are the settings of Settings >
+  Fullscreen, Borderless or Windowed), plugins' items, and Exit. The game
+  pauses and is blurred behind it while it is open. Volume and Video are the settings of Settings >
   Play Modes, so the two always agree; Settings gains the master volume.
   Plugin API 1.7.0 adds `register_pause_menu_item`, `pause_menu_opened` /
   `pause_menu_closed` events and `main_window.open_pause_menu()` /

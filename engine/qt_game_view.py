@@ -314,6 +314,8 @@ class QtGameView(QOpenGLWidget):
         #: or None. It holds the world pause owner PAUSE_MENU while open.
         self.pause_menu = None
         self._pause_menu_family = None
+        #: The frame the menu opened over, blurred: drawn behind the menu.
+        self._pause_backdrop = None
         #: Master volume, 0..1, over every game sound (Settings > Play Modes,
         #: and the pause menu's Options > Volume).
         self.master_volume = 1.0
@@ -2508,6 +2510,8 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode or self.pause_menu is not None:
             return False
         from engine.pause_menu import PauseMenu
+        # Grabbed before the menu exists, so the frame is the game alone.
+        self._pause_backdrop = self._blurred_backdrop()
         self.pause_menu = PauseMenu(self._pause_root_page())
         logic = self.logic_thread
         if logic is not None:
@@ -2523,6 +2527,7 @@ class QtGameView(QOpenGLWidget):
         if self.pause_menu is None:
             return False
         self.pause_menu = None
+        self._pause_backdrop = None
         logic = self.logic_thread
         if logic is not None:
             logic.session_runtime.set_world_paused(logic.session_runtime.PAUSE_MENU, False)
@@ -2624,6 +2629,7 @@ class QtGameView(QOpenGLWidget):
         self.editor.leave_play_mode_from_escape()
         if not self.play_mode:
             self.pause_menu = None
+            self._pause_backdrop = None
 
     # -- input -----------------------------------------------------------------
 
@@ -2688,6 +2694,30 @@ class QtGameView(QOpenGLWidget):
 
     # -- drawing ---------------------------------------------------------------
 
+    #: How far the backdrop is shrunk before it is scaled back up: the blur.
+    PAUSE_BLUR_FACTOR = 16
+
+    def _blurred_backdrop(self):
+        """The current frame, blurred, or None (no GL frame to grab).
+
+        The world is paused while the menu is open, so one grab serves the
+        whole time it is shown. Shrinking with smooth filtering in two steps
+        and drawing it back at full size with smooth filtering is a cheap,
+        even blur.
+        """
+        try:
+            image = self.grabFramebuffer()
+        except Exception:
+            return None
+        if image is None or image.isNull():
+            return None
+        w, h = image.width(), image.height()
+        f = self.PAUSE_BLUR_FACTOR
+        small = image.scaled(max(1, w // f), max(1, h // f),
+                             Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        return small.scaled(max(1, w // 4), max(1, h // 4),
+                            Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
     def _pause_font(self, size):
         if self._pause_menu_family is None:
             self._pause_menu_family = (self._resolve_hud_font_family(self.PAUSE_MENU_FONT)
@@ -2702,8 +2732,13 @@ class QtGameView(QOpenGLWidget):
         w, h = self.width(), self.height()
         orange, green = QColor(240, 128, 0), QColor(120, 200, 80)
         painter.save()
+        dim = 170
+        if self._pause_backdrop is not None:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.drawImage(QRect(0, 0, w, h), self._pause_backdrop)
+            dim = 110
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(QColor(0, 0, 0, 170)))
+        painter.setBrush(QBrush(QColor(0, 0, 0, dim)))
         painter.drawRect(0, 0, w, h)
 
         row_w, row_h, gap = min(420, w - 32), 44, 10
@@ -2835,7 +2870,7 @@ class QtGameView(QOpenGLWidget):
             self.game_state.consume_mouse_delta()
             self.game_state.set_mouse_delta(0.0, 0.0)
 
-            self._play_mode_hint = "ESC to Exit, F12 Fullscreen"
+            self._play_mode_hint = "ESC to Pause, F12 Fullscreen"
             self._play_mode_hint_timer.start(3000)
 
             self._reload_hud_settings()
@@ -2871,6 +2906,7 @@ class QtGameView(QOpenGLWidget):
                 self.console_overlay_active = False
             # The world pause it held ends with the session.
             self.pause_menu = None
+            self._pause_backdrop = None
             self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_ai.monster_debug_active = False

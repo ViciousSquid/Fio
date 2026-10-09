@@ -252,3 +252,27 @@ def test_map_logic_cannot_quit(main_window, qt_app, monkeypatch):
                         lambda: pytest.fail("a map quit Fio"))
     main_window.console_handler.handle_command("quit", from_map=True)
     qt_app.processEvents()
+
+
+@pytest.mark.gl
+def test_the_game_is_blurred_behind_the_menu(fio_session):
+    from editor.things import Light
+    start = make_thing(PlayerStart, "start", (0.0, 8.0, 0.0))
+    lamp = make_thing(Light, "lamp", (0.0, 200.0, 0.0))
+    session = fio_session(level_data(brushes=room(), things=[start, lamp]))
+    session.start_play()
+    session.step(5)
+    view = session.view
+    before = session.paint()
+
+    assert view.open_pause_menu()
+    backdrop = view._pause_backdrop
+    assert backdrop is not None and not backdrop.isNull()
+    scale = view.devicePixelRatioF()
+    assert backdrop.width() == int(view.width() * scale) // 4
+    assert backdrop.height() == int(view.height() * scale) // 4
+    behind = session.paint()
+    assert (behind != before).any(), "the menu drew nothing"
+
+    view.close_pause_menu()
+    assert view._pause_backdrop is None
