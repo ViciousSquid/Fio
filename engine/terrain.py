@@ -2716,6 +2716,29 @@ class Terrain:
             data['heightmap_blend'] = self.heightmap_blend
         return data
     
+    @staticmethod
+    def _decode_heightmap_blob(blob) -> Optional[np.ndarray]:
+        """The saved heightmap as a 2-D float array, or None if unusable.
+
+        The blob comes from the map file, which may come from a package. It
+        is a plain ``.npy`` (never unpickled); anything else -- corrupt
+        base64, a header promising more data than it holds, an ``.npz``, a
+        non-numeric or non-2-D array -- drops the heightmap rather than the
+        whole map load.
+        """
+        import base64, binascii, io
+        try:
+            arr = np.load(io.BytesIO(base64.b64decode(blob)), allow_pickle=False)
+        except (TypeError, ValueError, EOFError, OSError, MemoryError,
+                binascii.Error) as exc:
+            print(f"[Terrain] Ignoring unreadable heightmap: {exc}")
+            return None
+        if (not isinstance(arr, np.ndarray) or arr.ndim != 2 or arr.size == 0
+                or arr.dtype.kind not in 'fiu'):
+            print("[Terrain] Ignoring heightmap that is not a 2-D numeric array")
+            return None
+        return arr
+
     def from_dict(self, data: dict):
         self.enabled = data.get('enabled', True)
         self.solid = data.get('solid', True)
@@ -2788,8 +2811,11 @@ class Terrain:
         self._touch_sculpt()
         self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
         for entry in data.get('sculpt_offsets', []):
-            gx, gz, val = entry
-            self.sculpt_offsets[(int(gx), int(gz))] = float(val)
+            try:
+                gx, gz, val = entry
+                self.sculpt_offsets[(int(gx), int(gz))] = float(val)
+            except (TypeError, ValueError):
+                continue
 
         # Terrain CSG cutters
         self.csg_subtractions = []
@@ -2810,9 +2836,7 @@ class Terrain:
 
         # Heightmap
         if 'heightmap_blob' in data:
-            import base64, io
-            buf = io.BytesIO(base64.b64decode(data['heightmap_blob']))
-            self.heightmap_data = np.load(buf)
+            self.heightmap_data = self._decode_heightmap_blob(data['heightmap_blob'])
             self.heightmap_strength = data.get('heightmap_strength', 100.0)
             self.heightmap_blend = data.get('heightmap_blend', 'additive')
         else:
