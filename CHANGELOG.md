@@ -134,6 +134,9 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- Settings > Display > Big toolbar buttons resizes the toolbar buttons (the
+  small setting changed nothing), and applies at once instead of asking for
+  a restart.
 - No GL resource outlives the renderer that owns it: replacing a renderer
   leaked its gizmo, AABB and component-overlay vertex arrays, its instance
   buffers, its portal programs and an instanced program compiled twice.

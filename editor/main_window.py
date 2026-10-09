@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, Prop, update_all_counters_from_entities
@@ -1556,6 +1556,24 @@ class MainWindow(QMainWindow):
         self.scene_hierarchy.highlight_item(obj)
 
 
+    def apply_toolbar_button_size(self):
+        """Resize the toolbar buttons (Play included) to the current setting."""
+        from editor.ui import toolbar_metrics
+        if not hasattr(self, 'tool_toolbar'):
+            return
+        icon, length = toolbar_metrics(self.config)
+        self._toolbar_icon_size = icon
+        self._play_button_length = length
+        for button in self.tool_toolbar.findChildren(QPushButton):
+            if button.property("toolbar_icon_button"):
+                button.setIconSize(QSize(icon, icon))
+                button.setFixedSize(icon + 4, icon + 8)
+        if hasattr(self, 'play_button'):
+            self.play_button.setIconSize(QSize(icon, icon))
+            sync = getattr(self, '_sync_play_button', None)
+            if sync is not None:
+                sync(self.tool_toolbar.orientation())
+
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
         if hasattr(self, 'play_button'):
@@ -1569,8 +1587,6 @@ class MainWindow(QMainWindow):
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
-                        min-width: 250px;
-                        max-width: 250px;
                     }
                     QPushButton:hover {
                         background-color: #D32F2F;
@@ -1590,8 +1606,6 @@ class MainWindow(QMainWindow):
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
-                        min-width: 250px;
-                        max-width: 250px;
                     }
                     QPushButton:hover {
                         background-color: #388E3C;
@@ -1957,7 +1971,7 @@ class MainWindow(QMainWindow):
                 
             new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
             if old_big_toolbar_buttons != new_big_toolbar_buttons:
-                restart_required.append("Toolbar button size")
+                self.apply_toolbar_button_size()
             
             # Show restart message if any settings require it
             if restart_required:

@@ -81,6 +81,18 @@ class RotatablePlayButton(QPushButton):
         painter.end()
 
 
+#: Toolbar icon edge and Play button length, by Settings > Large Toolbar
+#: Buttons (``[Display] big_toolbar_buttons``).
+TOOLBAR_ICON_SIZES = {True: 45, False: 35}
+PLAY_BUTTON_LENGTHS = {True: 250, False: 170}
+
+
+def toolbar_metrics(config):
+    """``(icon size, Play button length)`` for the current setting."""
+    big = config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
+    return TOOLBAR_ICON_SIZES[big], PLAY_BUTTON_LENGTHS[big]
+
+
 #: Bumped whenever the default dock arrangement changes.  A layout saved by
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
@@ -739,8 +751,7 @@ class Ui_MainWindow(object):
         help_menu.addAction(QAction('About', MainWindow, triggered=MainWindow.show_about))
 
     def create_toolbars(self, MainWindow):
-        big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 45 if big_toolbar_buttons else 35
+        icon_size_val, _length = toolbar_metrics(MainWindow.config)
 
         MainWindow.play_button = RotatablePlayButton(
             QIcon("assets/b_test.png"), "Play", MainWindow)
@@ -782,8 +793,11 @@ class Ui_MainWindow(object):
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
 
-        big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 45 if big else 35
+        icon_size_val, play_length = toolbar_metrics(MainWindow.config)
+        # Read back by MainWindow.apply_toolbar_button_size when the setting
+        # changes, so a resize needs no restart.
+        MainWindow._toolbar_icon_size = icon_size_val
+        MainWindow._play_button_length = play_length
 
         #: The strip under a toggle button when it is off.
         strip_off_color = "#555"
@@ -802,6 +816,7 @@ class Ui_MainWindow(object):
             action buttons by colour.
             """
             b = QPushButton()
+            b.setProperty("toolbar_icon_button", True)
             b.setIcon(QIcon(icon))
             b.setIconSize(QSize(icon_size_val, icon_size_val))
             
@@ -985,11 +1000,14 @@ class Ui_MainWindow(object):
             # builder tolerant of lightweight test/fake windows too.
             if hasattr(MainWindow.play_button, "set_vertical"):
                 MainWindow.play_button.set_vertical(vertical)
+            icon = MainWindow._toolbar_icon_size
+            length = MainWindow._play_button_length
             if vertical:
-                MainWindow.play_button.setFixedSize(icon_size_val + 16, 250)
+                MainWindow.play_button.setFixedSize(icon + 16, length)
             else:
-                MainWindow.play_button.setFixedSize(250, icon_size_val + 16)
+                MainWindow.play_button.setFixedSize(length, icon + 16)
 
+        MainWindow._sync_play_button = sync_play_button_orientation
         tool_toolbar.orientationChanged.connect(sync_play_button_orientation)
         sync_play_button_orientation(tool_toolbar.orientation())
 
