@@ -137,11 +137,13 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 - Up recalls the last command in the Play console (`) as it does in the
   Debug Console; the two share one command history.
 - Pause menu (Esc in Play): Resume, Save Game and Load Game (three slots,
-  `saves/slot1.fiosave` to `slot3.fiosave`), Options (Volume and Video:
-  Fullscreen, Borderless or Windowed), plugins' items, and Exit, in a
-  floating window like SysMon's (drag it by its title bar; [X] resumes).
-  The game pauses and is blurred behind it, and the cursor is free. Volume and Video are the settings of Settings >
-  Play Modes, so the two always agree; Settings gains the master volume.
+  `saves/slot1.fiosave` to `slot3.fiosave`), Options (Sound Volume, Music
+  Volume, and Video: Fullscreen, Borderless or Windowed), plugins' items,
+  and Exit, in a floating window like SysMon's (drag it by its title bar;
+  [X] resumes). The game pauses and is blurred behind it, and the cursor is
+  free. The volumes and Video are the settings of Settings > Play Modes, so
+  the two always agree; Settings gains Sound volume and Music volume. Music
+  is whatever plays from `assets/music`; every other game sound is sound.
   Plugin API 1.7.0 adds `register_pause_menu_item`, `pause_menu_opened` /
   `pause_menu_closed` events and `main_window.open_pause_menu()` /
   `close_pause_menu()`; set in the bundled HornetDisplay font.
@@ -152,7 +154,7 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   for its subfolders. Double-click a sound, or **Give to Speaker**, to set it
   on the selected Speakers. Speakers play only from those two folders: a
   sound file anywhere else is refused, in the editor and at run time. Music
-  files (`.ogg`, `.mp3`, `.wav`) play like sounds.
+  files (`.ogg`, `.mp3`, `.wav`) play like sounds, at the music volume.
 - Animated GIF textures: a GIF goes on a brush or face like a PNG or JPG
   (Fit, Natural, scale and stretch in the Surface Inspector included) and
   animates in Play at its own frame times, holding while the game is paused;

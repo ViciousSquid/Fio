@@ -38,6 +38,15 @@ def speaker_sound_path(value):
     return "/".join(parts)
 
 
+def is_music(value) -> bool:
+    """True for a file in ``assets/music``: it plays at the music volume.
+
+    Everything else a game plays -- sounds, weapons, footsteps -- is sound.
+    """
+    rel = speaker_sound_path(value)
+    return rel is not None and rel.startswith("assets/music/")
+
+
 def resolve_speaker_sound(value, root):
     """The file *value* names under *root*, or None when not allowed.
 

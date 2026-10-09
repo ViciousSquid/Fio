@@ -513,7 +513,7 @@ is:
 | Resume | Close the menu and play on (Esc does the same). |
 | Save Game | Three slots, `saves/slot1.fiosave` to `slot3.fiosave`, each labelled with when it was saved. |
 | Load Game | The same slots (an empty one cannot be chosen); loading closes the menu. |
-| Options | **Volume** (master volume, 0-100) and **Video** (Fullscreen, Borderless, Windowed). These are the settings of Settings > Play Modes (Audio, and Display Mode), so the two always agree. |
+| Options | **Sound Volume** and **Music Volume** (0-100; music is whatever plays from `assets/music`, sound is everything else) and **Video** (Fullscreen, Borderless, Windowed). These are the settings of Settings > Play Modes (Audio, and Display Mode), so the two always agree. |
 | *plugin items* | Each enabled plugin's items, in registration order. |
 | Exit to Editor | Leave Play. In a played package it reads **Quit** and asks before quitting the game. |
 

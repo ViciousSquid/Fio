@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         
         # Tooltips
         self.camera_movement_learned = self.config.getboolean('Tooltips', 'camera_movement_learned', fallback=False)
-        self.view_3d.master_volume = self.master_volume() / 100.0
+        self._apply_audio_volumes()
         self.startup_tooltip_shown = False
         self.tooltip_tips = [
             "Right-click + WASD: Move camera",
@@ -1957,7 +1957,7 @@ class MainWindow(QMainWindow):
             if old_show_caulk != new_show_caulk:
                 self.update_views()
 
-            self.view_3d.master_volume = self.master_volume() / 100.0
+            self._apply_audio_volumes()
             if getattr(self, 'is_kiosk_mode', False):
                 self._apply_kiosk_window_mode()
 
@@ -4993,23 +4993,42 @@ class MainWindow(QMainWindow):
         """Restore slot *slot* into the running play session."""
         return bool(self.console_handler.cmd_load(self._slot_save_name(slot)))
 
-    # -- Master volume (Settings > Play Modes, pause menu > Options) ----------
+    # -- Volumes (Settings > Play Modes > Audio, pause menu > Options) -------
+    # Music is what plays from assets/music; every other game sound is sound
+    # (engine.speaker_audio.is_music). Each has its own volume.
 
-    def master_volume(self):
-        """The master volume, 0-100."""
+    def _audio_volume(self, key):
         try:
-            value = self.config.getint('Audio', 'master_volume', fallback=100)
+            value = self.config.getint('Audio', key, fallback=100)
         except ValueError:
             value = 100
         return max(0, min(100, value))
 
-    def set_master_volume(self, percent):
+    def _set_audio_volume(self, key, percent):
         percent = max(0, min(100, int(percent)))
         if not self.config.has_section('Audio'):
             self.config.add_section('Audio')
-        self.config.set('Audio', 'master_volume', str(percent))
-        self.view_3d.master_volume = percent / 100.0
+        self.config.set('Audio', key, str(percent))
+        self._apply_audio_volumes()
         self.save_config()
+
+    def _apply_audio_volumes(self):
+        self.view_3d.sound_volume = self.sound_volume() / 100.0
+        self.view_3d.music_volume = self.music_volume() / 100.0
+
+    def sound_volume(self):
+        """The volume of every game sound but music, 0-100."""
+        return self._audio_volume('sound_volume')
+
+    def set_sound_volume(self, percent):
+        self._set_audio_volume('sound_volume', percent)
+
+    def music_volume(self):
+        """The volume of music (files from assets/music), 0-100."""
+        return self._audio_volume('music_volume')
+
+    def set_music_volume(self, percent):
+        self._set_audio_volume('music_volume', percent)
 
     # -- Game window mode (Settings > Play Modes > Display Mode, F12) ---------
 

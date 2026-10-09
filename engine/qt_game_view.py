@@ -322,9 +322,10 @@ class QtGameView(QOpenGLWidget):
         #: The menu's floating window (SysMon-style), and where it was left.
         self._pause_window = None
         self._pause_window_pos = None
-        #: Master volume, 0..1, over every game sound (Settings > Play Modes,
-        #: and the pause menu's Options > Volume).
-        self.master_volume = 1.0
+        #: Volumes, 0..1: music (files from assets/music) and every other
+        #: game sound (Settings > Play Modes > Audio, and the pause menu).
+        self.sound_volume = 1.0
+        self.music_volume = 1.0
         # Up repeats the last command (the history every console shares).
         self._console_input = CommandInput(self)
         self._console_input.setPlaceholderText("Enter command…   Esc to close")
@@ -1240,6 +1241,8 @@ class QtGameView(QOpenGLWidget):
         if speaker_mix is None:
             speaker_mix = self._speaker_mix = {}
 
+        from engine.speaker_audio import is_music
+
         def apply_mix(channel, meta):
             gain, left, right = self._spatial_sound_mix(
                 meta.get('position'),
@@ -1247,7 +1250,8 @@ class QtGameView(QOpenGLWidget):
                 bool(meta.get('global', False)),
             )
             volume = max(0.0, min(1.0, float(meta.get('volume', 1.0))))
-            volume *= max(0.0, min(1.0, float(self.master_volume)))
+            channel_volume = self.music_volume if meta.get('music') else self.sound_volume
+            volume *= max(0.0, min(1.0, float(channel_volume)))
             if meta.get('position') is not None and not meta.get('global', False):
                 channel.set_volume(
                     volume * gain * left,
@@ -1299,6 +1303,8 @@ class QtGameView(QOpenGLWidget):
                     'radius': request.get('radius', 512.0),
                     'global': bool(request.get('global', False)),
                     'volume': volume,
+                    # Music and sound have their own volumes.
+                    'music': is_music(sound_file),
                 }
                 apply_mix(channel, meta)
 
@@ -2645,7 +2651,8 @@ class QtGameView(QOpenGLWidget):
         from engine.pause_menu import Item, Page
         editor = self.editor
         return Page("Options", [
-            Item("Volume", slider=(editor.master_volume, editor.set_master_volume, 0, 100, 5)),
+            Item("Sound Volume", slider=(editor.sound_volume, editor.set_sound_volume, 0, 100, 5)),
+            Item("Music Volume", slider=(editor.music_volume, editor.set_music_volume, 0, 100, 5)),
             Item("Video", page=self._pause_video_page),
         ])
 

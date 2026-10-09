@@ -50,3 +50,13 @@ def test_listing_walks_subfolders_and_skips_other_files(tmp_path):
     assert list_speaker_audio(str(tmp_path), "music") == [
         "assets/music/act1/a.mp3", "assets/music/b.ogg"]
     assert list_speaker_audio(str(tmp_path), "textures") == []
+
+
+@pytest.mark.parametrize("value, music", [
+    ("assets/music/theme.ogg", True), ("music/act1/boss.mp3", True),
+    ("assets/sounds/beep.wav", False), ("beep.wav", False),
+    ("shotgun.wav", False), ("assets/textures/music/x.wav", False), ("", False),
+])
+def test_only_files_from_the_music_folder_are_music(value, music):
+    from engine.speaker_audio import is_music
+    assert is_music(value) is music

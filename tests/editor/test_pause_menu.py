@@ -158,25 +158,33 @@ def test_a_failing_plugin_item_does_not_take_play_down(playing, monkeypatch):
     assert view.play_mode and not view.pause_menu_active
 
 
-def test_volume_is_the_settings_volume(playing):
+def test_sound_and_music_volumes_are_the_settings_volumes(playing):
     from editor.SettingsWindow import SettingsWindow
     window, view = playing.window, playing.view
-    window.set_master_volume(100)
+    window.set_sound_volume(100)
+    window.set_music_volume(100)
     view.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Options")
-    assert menu.item.label == "Volume"
+    assert _labels(menu) == ["Sound Volume", "Music Volume", "Video", "Back"]
+    _press(view, Qt.Key_Left)                          # Sound Volume
     _press(view, Qt.Key_Left)
-    _press(view, Qt.Key_Left)
-    assert window.config.get("Audio", "master_volume") == "90"
-    assert view.master_volume == pytest.approx(0.9)
+    _press(view, Qt.Key_Down)                          # Music Volume
+    for _ in range(4):
+        _press(view, Qt.Key_Left)
+    assert window.config.get("Audio", "sound_volume") == "90"
+    assert window.config.get("Audio", "music_volume") == "80"
+    assert view.sound_volume == pytest.approx(0.9)
+    assert view.music_volume == pytest.approx(0.8)
 
     dialog = SettingsWindow(window.config, window)
-    assert dialog.master_volume_slider.value() == 90
-    dialog.master_volume_slider.setValue(40)
+    assert dialog.sound_volume_slider.value() == 90
+    assert dialog.music_volume_slider.value() == 80
+    dialog.sound_volume_slider.setValue(40)
+    dialog.music_volume_slider.setValue(15)
     dialog._save_settings()
     dialog.deleteLater()
-    assert menu.item.slider_value() == 40
+    assert [item.slider_value() for item in menu.page.items[:2]] == [40, 15]
 
 
 def test_video_is_the_settings_display_mode(playing):
@@ -204,23 +212,49 @@ def test_video_is_the_settings_display_mode(playing):
     assert not window.is_kiosk_mode
 
 
-def test_master_volume_scales_every_game_sound(main_window, monkeypatch):
+def test_music_plays_at_the_music_volume_and_everything_else_at_the_sound_volume(
+        main_window, monkeypatch):
     view = main_window.view_3d
-    volumes = []
+    volumes = {}
 
     class Channel:
+        def __init__(self, name):
+            self.name = name
+
         def set_volume(self, *v):
-            volumes.append(v)
+            volumes[self.name] = v
 
     class Sound:
-        def play(self, loops=0):
-            return Channel()
+        def __init__(self, name):
+            self.name = name
 
-    monkeypatch.setattr(view, "_get_sound_instance", lambda name: Sound())
-    main_window.set_master_volume(50)
-    view.game_state.queue_sound({"file": "x.wav", "volume": 0.8})
+        def play(self, loops=0):
+            return Channel(self.name)
+
+    monkeypatch.setattr(view, "_get_sound_instance", lambda name: Sound(name))
+    main_window.set_sound_volume(50)
+    main_window.set_music_volume(25)
+    for name in ("x.wav", "assets/sounds/ui/click.wav", "assets/music/theme.ogg",
+                 "music/act1/boss.mp3"):
+        view.game_state.queue_sound({"file": name, "volume": 0.8})
     view._process_sound_queue()
-    assert volumes == [(pytest.approx(0.4),)]
+    assert volumes == {
+        "x.wav": (pytest.approx(0.4),),
+        "assets/sounds/ui/click.wav": (pytest.approx(0.4),),
+        "assets/music/theme.ogg": (pytest.approx(0.2),),
+        "music/act1/boss.mp3": (pytest.approx(0.2),),
+    }
+
+    # A looping music speaker follows a change of the music volume live.
+    volumes.clear()
+    view.game_state.queue_sound({"file": "assets/music/theme.ogg", "volume": 1.0,
+                                 "looping": True, "entity_id": 7})
+    view._process_sound_queue()
+    main_window.set_music_volume(60)
+    view._process_sound_queue()
+    assert volumes["assets/music/theme.ogg"] == (pytest.approx(0.6),)
+    view._speaker_channels.clear()
+    view._speaker_mix.clear()
 
 
 def test_quit_closes_fio_without_asking(main_window, qt_app, monkeypatch):

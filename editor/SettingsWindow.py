@@ -352,19 +352,14 @@ class SettingsWindow(QDialog):
         save_group.setLayout(save_form)
         layout.addWidget(save_group)
         
-        # Also the pause menu's Options > Volume.
+        # Also the pause menu's Options > Sound Volume and Music Volume.
+        # Music is what plays from assets/music; everything else is sound.
         audio_group = QGroupBox("Audio")
         audio_layout = QFormLayout()
-        self.master_volume_slider = QSlider(Qt.Horizontal)
-        self.master_volume_slider.setRange(0, 100)
-        self.master_volume_slider.setSingleStep(5)
-        self.master_volume_label = QLabel()
-        self.master_volume_slider.valueChanged.connect(
-            lambda v: self.master_volume_label.setText(f"{v}%"))
-        volume_row = QHBoxLayout()
-        volume_row.addWidget(self.master_volume_slider)
-        volume_row.addWidget(self.master_volume_label)
-        audio_layout.addRow("Volume:", volume_row)
+        self.sound_volume_slider, sound_row = self._volume_slider()
+        self.music_volume_slider, music_row = self._volume_slider()
+        audio_layout.addRow("Sound volume:", sound_row)
+        audio_layout.addRow("Music volume:", music_row)
         audio_group.setLayout(audio_layout)
         layout.addWidget(audio_group)
 
@@ -410,6 +405,20 @@ class SettingsWindow(QDialog):
     def _update_save_mode_desc(self):
         mode = self.save_mode_combo.currentData() or "full"
         self.save_mode_desc.setText(self._SAVE_MODE_DESCS.get(mode, ""))
+
+    @staticmethod
+    def _volume_slider():
+        """A 0-100 slider with its percentage beside it, and their row."""
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setSingleStep(5)
+        label = QLabel()
+        slider.valueChanged.connect(lambda v: label.setText(f"{v}%"))
+        row = QHBoxLayout()
+        row.addWidget(slider)
+        row.addWidget(label)
+        slider.label = label
+        return slider, row
 
     def _toggle_resolution_visibility(self):
         mode = self.kiosk_mode_combo.currentText()
@@ -626,12 +635,14 @@ class SettingsWindow(QDialog):
             self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
         )
         
-        try:
-            volume = self.config.getint('Audio', 'master_volume', fallback=100)
-        except ValueError:
-            volume = 100
-        self.master_volume_slider.setValue(max(0, min(100, volume)))
-        self.master_volume_label.setText(f"{self.master_volume_slider.value()}%")
+        for key, slider in (('sound_volume', self.sound_volume_slider),
+                            ('music_volume', self.music_volume_slider)):
+            try:
+                volume = self.config.getint('Audio', key, fallback=100)
+            except ValueError:
+                volume = 100
+            slider.setValue(max(0, min(100, volume)))
+            slider.label.setText(f"{slider.value()}%")
 
         k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
         idx = self.kiosk_mode_combo.findText(k_mode)
@@ -749,7 +760,8 @@ class SettingsWindow(QDialog):
         
         if not self.config.has_section('Audio'):
             self.config.add_section('Audio')
-        self.config.set('Audio', 'master_volume', str(self.master_volume_slider.value()))
+        self.config.set('Audio', 'sound_volume', str(self.sound_volume_slider.value()))
+        self.config.set('Audio', 'music_volume', str(self.music_volume_slider.value()))
 
         if not self.config.has_section('Kiosk'):
             self.config.add_section('Kiosk')
