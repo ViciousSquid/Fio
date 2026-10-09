@@ -166,6 +166,8 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   still, and an animated GIF has a small orange arrow that plays the
   animation on the thumbnail (click again to stop). Renderers may implement
   the optional `animate_textures(clock)`.
+- Asset Browser: hovering a texture shows its type and size ("PNG
+  512x512"; an animated GIF adds "animated"), read from the file header.
 
 ### Fixes
 

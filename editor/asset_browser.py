@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer, QFileSystemWatcher
-from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage
+from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage, QImageReader
 from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
@@ -127,6 +127,29 @@ def render_obj_thumbnail(filepath, width, height):
     painter.end()
     return pixmap
 
+def texture_info(path, animated=False):
+    """``"PNG 512x512"``: a texture's type and pixel size, for its tooltip.
+
+    Read from the file's header, not by decoding it. An animated GIF adds
+    "animated"; a file whose size cannot be read gives its type alone.
+    """
+    ext = os.path.splitext(path)[1].lstrip('.').upper()
+    kind = {'JPEG': 'JPG'}.get(ext, ext) or 'Image'
+    width = height = 0
+    size = QImageReader(path).size()
+    if size.isValid():
+        width, height = size.width(), size.height()
+    else:
+        try:
+            from PIL import Image
+            with Image.open(path) as image:
+                width, height = image.size
+        except Exception:
+            pass
+    text = f"{kind} {width}x{height}" if width > 0 and height > 0 else kind
+    return f"{text}, animated" if animated else text
+
+
 def audio_thumbnail(path, size):
     """A note on a tile, the file type under it: sounds teal, music violet."""
     parts = os.path.abspath(path).replace('\\', '/').split('/')
@@ -207,10 +230,14 @@ class AssetItem(QWidget):
         # A copy: QLabel.pixmap() is the label's own, replaced by a preview.
         current = self.thumb_label.pixmap()
         self._static_thumb = QPixmap(current) if current is not None else None
+        animated = False
         if not is_model and not is_audio and path.lower().endswith('.gif'):
             from engine.animated_texture import is_animated_gif
-            if is_animated_gif(path):
+            animated = is_animated_gif(path)
+            if animated:
                 self._add_preview_button()
+        if not is_model and not is_audio:
+            self.setToolTip(texture_info(path, animated))
 
     def _add_preview_button(self):
         btn = QPushButton("\u25b6", self.thumb_label)

@@ -86,3 +86,35 @@ def test_the_surface_inspector_sizes_a_gif_like_a_png(main_window, tmp_path, mon
         assert inspector._texture_size("anim.gif") == (64, 32)
     finally:
         inspector.deleteLater()
+
+
+def test_a_texture_tooltip_gives_its_type_and_size(qt_app, tmp_path):
+    from editor.asset_browser import texture_info
+    textures = tmp_path / "assets" / "textures"
+    textures.mkdir(parents=True)
+    Image.new("RGB", (512, 256), (1, 2, 3)).save(textures / "wall.png")
+    Image.new("RGB", (64, 32), (1, 2, 3)).save(textures / "floor.jpeg")
+    write_gif(textures / "anim.gif", size=(16, 8))
+    (textures / "broken.png").write_bytes(b"not an image")
+    b = AssetBrowser(str(textures))
+    try:
+        tips = {item.name_text: item.toolTip() for item in b.tab_textures.items}
+        assert tips["wall.png"] == "PNG 512x256"
+        assert tips["floor.jpeg"] == "JPG 64x32"
+        assert tips["anim.gif"] == "GIF 16x8, animated"
+        assert tips["broken.png"] == "PNG"
+        assert texture_info(str(textures / "wall.png")) == "PNG 512x256"
+    finally:
+        b.deleteLater()
+
+
+def test_models_and_sounds_have_no_texture_tooltip(qt_app, tmp_path):
+    textures = tmp_path / "assets" / "textures"
+    textures.mkdir(parents=True)
+    (tmp_path / "assets" / "sounds").mkdir()
+    (tmp_path / "assets" / "sounds" / "beep.wav").write_bytes(b"")
+    b = AssetBrowser(str(textures))
+    try:
+        assert [item.toolTip() for item in b.tab_audio.items] == [""]
+    finally:
+        b.deleteLater()
