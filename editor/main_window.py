@@ -3822,7 +3822,7 @@ class MainWindow(QMainWindow):
 
         self.show_toast("Select tool — drag a box to select, click empty to deselect"
                         if mode == 'select' else
-                        "Brush tool — drag in a 2D view to create geometry")
+                        "Brush tool — drag in a 2D view to create geometry; Shift+click selects a brush")
 
     # ======================================================================
     # Component mode: OBJECT / FACE / EDGE / VERTEX

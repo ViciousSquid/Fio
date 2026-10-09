@@ -900,7 +900,8 @@ class Ui_MainWindow(object):
         MainWindow.brush_tool_btn = make_btn(
             "assets/box.png",
             "Brush tool (Shift+B)\n"
-            "Drag in a 2D view to create geometry",
+            "Drag in a 2D view to create geometry\n"
+            "(Shift+click selects a brush)",
             on_click=lambda: MainWindow.set_tool_mode('brush'),
             checkable=True, checked=MainWindow.tool_mode == 'brush',
             shortcut="Shift+B", bottom_color=group_1_color,

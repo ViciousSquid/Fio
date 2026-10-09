@@ -48,6 +48,10 @@ forward; see **Breaking changes** before upgrading.
   (`engine.items`). Save games are version 3; version 2 saves still load.
 - **Benchmark plugin removed:** `plugins/benchmark` and everything that
   referred to it are gone.
+- **Brush tool, 2D views:** a plain click on a brush no longer selects it;
+  it starts drawing a new brush there, as on empty space. Shift+click
+  selects a brush. Entities, resize handles and the Select tool are
+  unchanged.
 - **Esc in Play opens the pause menu** instead of leaving Play. Exit to
   Editor (Quit in a played package) is in the menu; with the player dead,
   Esc still leaves Play.

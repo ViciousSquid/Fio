@@ -3309,6 +3309,12 @@ class View2D(QWidget):
             cycle = bool(event.modifiers() & Qt.AltModifier)
             clicked_object = self.get_object_at(event.pos(), highlight_locked=True, cycle=cycle)
 
+            # The Brush tool draws: a plain click on a brush starts a new brush
+            # there, as on empty space, and Shift+click is what selects one.
+            if (self._brush_tool_active() and isinstance(clicked_object, dict)
+                    and not (event.modifiers() & Qt.ShiftModifier)):
+                clicked_object = None
+
             # A second plain click inside an existing group (without dragging)
             # flips the group handles between scale and rotate — decided on release.
             self._maybe_toggle_manip = False
