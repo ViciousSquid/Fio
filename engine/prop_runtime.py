@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .constants import SV_GRAVITY, SV_MAXVELOCITY
+from .physics import world_gravity
 from .spatial import CellIndex, cell_of_point
 
 
@@ -41,8 +41,7 @@ class PropSession:
     DEFAULT_CARRY_REACH = 110.0
     DEFAULT_COLLECT_USE_REACH = 80.0
     DEFAULT_COLLECT_WALK_REACH = 32.0
-    DROP_GRAVITY = SV_GRAVITY
-    DROP_TERMINAL_VELOCITY = SV_MAXVELOCITY
+    DROP_TERMINAL_VELOCITY = 2400.0
     SPRITE_CAMERA_FACING = -10000.0
     RESPAWN_FADE_DURATION = 2.0
 
@@ -603,6 +602,8 @@ class PropSession:
         if raycast_down is None and physics is not None:
             raycast_down = getattr(physics, "raycast_down", None)
 
+        # Dropped props fall by the live PhysicsWorld's gravity, as bodies do.
+        drop_gravity = -world_gravity(physics)
         finished = []
         for pid, state in tuple(self._falling.items()):
             prop = state.get("entity")
@@ -612,7 +613,7 @@ class PropSession:
 
             velocity = min(
                 self.DROP_TERMINAL_VELOCITY,
-                float(state.get("velocity", 0.0)) + self.DROP_GRAVITY * delta,
+                float(state.get("velocity", 0.0)) + drop_gravity * delta,
             )
             old_y = float(prop.pos[1])
             new_y = old_y - velocity * delta

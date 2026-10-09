@@ -10,6 +10,8 @@ import math
 import threading
 import glm
 
+from .physics import world_gravity
+
 # Qt key values used by the engine's input state.
 KEY_W = 0x57
 KEY_S = 0x53
@@ -93,6 +95,7 @@ class LogicPlayer:
             logic.world_runtime.terrain,
             spatial_grid=logic.session_runtime.spatial_grid,
             sprint=sprint,
+            gravity=world_gravity(logic.session_runtime.physics_world),
         )
 
     def update_player2(self, delta):
@@ -119,6 +122,7 @@ class LogicPlayer:
             logic.mover_runtime._door_brush_list,
             logic.world_runtime.terrain,
             spatial_grid=logic.session_runtime.spatial_grid,
+            gravity=world_gravity(logic.session_runtime.physics_world),
         )
 
     def update_water_sounds(self, delta):

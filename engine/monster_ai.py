@@ -25,13 +25,13 @@ from .change_journal import JOURNAL, STATE, set_positions, touch
 from . import monster_table
 from .spatial import TIER_DORMANT, tier_of
 from .constants import is_solid_world_brush
+from .physics import world_gravity
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
     MONSTER_SHOOT_INTERVAL,
     MONSTER_SHOOT_ANIM_TIME,
     MONSTER_MOVE_SPEED,
     MONSTER_STOP_DISTANCE,
-    MONSTER_GRAVITY,
     MONSTER_TERMINAL_VEL,
     MONSTER_WALL_MARGIN,
     MONSTER_STUCK_THRESHOLD,
@@ -466,6 +466,11 @@ all accumulated time when it runs, so simulation time is not lost.
             last = phase[name]
         t.phase_ms = phase_ms
 
+    def _gravity(self):
+        """Gravity from the live PhysicsWorld, the one authority for it."""
+        session = getattr(self.lt, 'session_runtime', None)
+        return world_gravity(getattr(session, 'physics_world', None))
+
     def _fall_dead(self, t, rows, delta):
         """Dead monsters drop to the ground: the per-monster rule, batched."""
         props = t.props
@@ -479,7 +484,7 @@ all accumulated time when it runs, so simulation time is not lost.
         settle = has_ground & ~falling & (np.abs(pos[:, 1] - target_y) > 1.0)
         new_vel = np.where(has_ground & falling, vel, 0.0)
         dl = np.broadcast_to(np.asarray(delta, dtype=np.float64), (len(rows),))[falling]
-        fv = vel[falling] + MONSTER_GRAVITY * dl
+        fv = vel[falling] + self._gravity() * dl
         fv = np.maximum(fv, MONSTER_TERMINAL_VEL)
         new_y = pos[falling, 1] + fv * dl
         landed = new_y <= target_y[falling]
@@ -542,7 +547,7 @@ all accumulated time when it runs, so simulation time is not lost.
             foot = y - half
             falling = has_ground & (foot > ground + 1.0)
             dg = delta[g][falling]
-            fv = np.maximum(v[falling] + MONSTER_GRAVITY * dg, MONSTER_TERMINAL_VEL)
+            fv = np.maximum(v[falling] + self._gravity() * dg, MONSTER_TERMINAL_VEL)
             new_foot = foot[falling] + fv * dg
             landed = new_foot <= ground[falling]
             new_foot[landed] = ground[falling][landed]
@@ -747,7 +752,7 @@ all accumulated time when it runs, so simulation time is not lost.
                 sprite_h = thing.properties.get('sprite_height', 128)
                 target_y = ground_y + sprite_h / 2.0
                 if pos[1] > target_y + 1.0:
-                    vel_y += MONSTER_GRAVITY * delta
+                    vel_y += self._gravity() * delta
                     if vel_y < MONSTER_TERMINAL_VEL:
                         vel_y = MONSTER_TERMINAL_VEL
                     new_y = pos[1] + vel_y * delta
@@ -851,7 +856,7 @@ all accumulated time when it runs, so simulation time is not lost.
             if ground_y is not None:
                 foot_y = thing_pos.y - half_height
                 if foot_y > ground_y + 1.0:
-                    vel_y += MONSTER_GRAVITY * delta
+                    vel_y += self._gravity() * delta
                     if vel_y < MONSTER_TERMINAL_VEL:
                         vel_y = MONSTER_TERMINAL_VEL
                     new_foot_y = foot_y + vel_y * delta

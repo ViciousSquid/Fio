@@ -49,30 +49,27 @@ forward; see **Breaking changes** before upgrading.
 
 ### Player physics: Quake 2
 
-The player now moves as Quake 2's does (qcommon/pmove.c), with its constants,
-on Fio's own 50 x 100 hull:
+Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
-- Movement sweeps the player's box through the world and slides along what it
-  hits, instead of resolving each axis separately. Steps up to 18 units are
-  climbed on the ground *and in the air*, so a jump (270 u/s, about 46 units
-  high) lands on a ledge a step above its peak, about 64 units.
-- Walk 200, run (sprint, Quake 2's +speed) 300, duck 100; walking diagonally
-  is faster (283) as in Quake 2. Ground acceleration 10, air 1, friction 6
-  with stop speed 100.
-- Ground is a surface no steeper than ~45 degrees; steeper slopes are slid
-  down. Rising faster than 180 u/s leaves the ground.
-- A landing faster than 200 u/s blocks jumping for 144 ms (200 ms past
-  400 u/s); jump must be released between jumps.
-- Ducking (crouch) halves the hull, so the player fits under 50-unit gaps,
-  and stands up only where there is room.
-- Water level is sampled at feet, waist and eyes. Swimming follows the view at
-  half speed with no gravity; idle swimmers sink; held jump swims up. With the
-  waist under water, facing a ledge between waist and eye height throws the
-  player out (the waterjump), with no key needed.
-- One gravity, 800 (sv_gravity), for the player, monsters, physics bodies and
-  dropped props (was 800 / 500 / 900 / 900); speeds are capped at 2000.
-- Model meshes without convex planes collide with the player as their bounding
-  box, as Quake 2 treats entities.
+- Gravity is Quake 2's 800 and has one authority, the live PhysicsWorld
+  (``engine.physics.world_gravity``) that Big World already relies on. The
+  player, monsters and dropped props read it from there (they had 800, 500
+  and 900 of their own; physics bodies 900), so ``phys_gravity`` now changes
+  how everything falls.
+- The player keeps Fio's collision (spatial-grid colliders, box resolution,
+  angled-brush capsules, terrain, water) and follows Quake 2's movement rules:
+  walk 200, run (sprint, Quake 2's +speed) 300, duck 100, with diagonals
+  adding up as in Quake 2 (283 walking); acceleration 10 on the ground and 1
+  in the air, friction 6 with stop speed 100; the forward wish shortened by a
+  third of the view pitch.
+- Jump 270 (about 46 units). Jump must be released between jumps; a press in
+  the air jumps on landing; a landing faster than 200 u/s holds off the next
+  jump for 144 ms (200 ms past 400 u/s).
+- Steps up to 18 units are taken in the air as well as on the ground, so a
+  jump lands on a ledge a step above its peak (about 64 units).
+- Crouch ducks: the hull halves from the top, so the player fits under
+  50-unit gaps, and stands back up only where there is room.
+- A surface steeper than about 45 degrees is not ground.
 
 ### New
 

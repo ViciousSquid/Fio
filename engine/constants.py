@@ -27,80 +27,55 @@ RENDER_MODE_VERTEX = 3     # Points
 
 # --- Physics Constants ---
 #
-# World and player physics follow Quake 2: the values below are the ones
-# qcommon/pmove.c, client/cl_input.c and the server cvars ship with, in the
-# same Quake units Fio's maps are built in (16/32/64/128 grid, 18-unit stairs).
-# Only the player's hull is Fio's own (50 x 100, see Player); everything that
-# Quake 2 measures against the hull is taken in proportion to it.
+# Gravity is not here: engine.physics.PhysicsWorld is the one authority for
+# it (Quake 2's sv_gravity, 800), and the player, monsters and dropped props
+# all read it from the live world.
+#
+# Player movement follows Quake 2's rules (qcommon/pmove.c, client/cl_input.c)
+# in the same Quake units Fio's maps are built in, applied by Fio's own player
+# controller and collision (engine.player).
 
-SV_GRAVITY = 800.0              # sv_gravity: one gravity for player, monsters, props
-GRAVITY = -SV_GRAVITY           # signed, for Fio's +Y-up world
-SV_MAXVELOCITY = 2000.0         # sv_maxvelocity: per-axis speed limit
+JUMP_STRENGTH = 270.0           # Quake 2's jump speed: ~46 units high
+TERMINAL_VELOCITY = -800.0
 
-# client/cl_input.c: a key press asks for this much speed; +speed (Fio's
-# sprint key) doubles it, and pmove then clamps the wish to PM_MAXSPEED.
+# A key press asks for this much speed; +speed (Fio's sprint key) doubles the
+# request and the wish is then clamped to PM_MAXSPEED (or PM_DUCKSPEED).
 CL_FORWARDSPEED = 200.0
 CL_SIDESPEED = 200.0
-CL_UPSPEED = 200.0
 CL_RUN_SCALE = 2.0
 
-# qcommon/pmove.c movement parameters.
 PM_STOPSPEED = 100.0
 PM_MAXSPEED = 300.0
 PM_DUCKSPEED = 100.0
 PM_ACCELERATE = 10.0
-PM_AIRACCELERATE = 1.0          # pm_airaccelerate 0 -> PM_Accelerate(..., 1)
-PM_WATERACCELERATE = 10.0
+PM_AIRACCELERATE = 1.0
 PM_FRICTION = 6.0
-PM_WATERFRICTION = 1.0
-PM_WATER_WISH_SCALE = 0.5       # PM_WaterMove halves the clamped wish speed
-PM_WATER_DRIFT = 60.0           # idle swimmers sink at this wish speed
+PM_GROUND_NORMAL = 0.7          # a surface steeper than ~45 degrees is not ground
 
-PM_STEPSIZE = 18.0
-PM_MIN_STEP_NORMAL = 0.7        # can't step up onto steeper slopes
-PM_GROUND_NORMAL = 0.7          # steeper than this is a wall, not ground
-PM_GROUND_PROBE = 0.25          # the ground trace reaches this far down
-PM_AIRBORNE_SPEED = 180.0       # rising faster than this leaves the ground
-PM_NUM_BUMPS = 4
-PM_MAX_CLIP_PLANES = 5
-PM_OVERCLIP = 1.01
-PM_STOP_EPSILON = 0.1
-PM_DIST_EPSILON = 0.03125       # traces stop this far short of a surface
-
-PM_JUMP_SPEED = 270.0
-JUMP_STRENGTH = PM_JUMP_SPEED
-PM_SWIM_JUMP_SPEED = 100.0      # jump held with the waist under water
-PM_SWIM_JUMP_MAX_FALL = -300.0  # sinking faster than this, jump does nothing
-
-# Landing: pm_time counts 8 ms units. A landing faster than 200 u/s locks
-# out jumping for 18 units (144 ms), faster than 400 u/s for 25 (200 ms).
+# Landing faster than 200 u/s blocks jumping for 144 ms, faster than 400 u/s
+# for 200 ms (Quake 2's pm_time of 18 / 25 eight-millisecond units).
 PM_LAND_SPEED = -200.0
 PM_HARD_LAND_SPEED = -400.0
 PM_LAND_TIME = 18 * 0.008
 PM_HARD_LAND_TIME = 25 * 0.008
 
-# Waterjump: with the waist under water, a wall ahead whose top is between
-# the waist and the eyes throws the player up and over it for up to 255
-# units (2.04 s), or until they start to fall or land.
-PM_WATERJUMP_UP = 350.0
-PM_WATERJUMP_FORWARD = 50.0
-PM_WATERJUMP_TIME = 255 * 0.008
-
-# Ducking halves the hull (Quake 2: 56 -> 28 tall) and lowers the eye from
-# 46 to 22 units above the feet; both are applied to Fio's hull in proportion.
+# Ducking halves the hull (Quake 2: 56 -> 28 tall) and lowers the eye from 46
+# to 22 units above the feet, in proportion to Fio's hull.
 PM_DUCK_HEIGHT_FRACTION = 28.0 / 56.0
 PM_DUCK_EYE_FRACTION = 22.0 / 46.0
 
-# Hull-relative Quake 2 probes, as fractions of the 46-unit standing eye
-# height (origin is 24 above the feet): the waterjump wall must be solid 28
-# above the feet and clear 44 above them, 14 units ahead of the hull.
-PM_WATERJUMP_SOLID_FRACTION = 28.0 / 46.0
-PM_WATERJUMP_CLEAR_FRACTION = 44.0 / 46.0
-PM_WATERJUMP_REACH = 14.0
-
-# Fio's sprint key is Quake 2's +speed: straight-ahead speed goes from
-# cl_forwardspeed (200) to pm_maxspeed (300).
+# Fio's sprint key is Quake 2's +speed: 200 -> 300 straight ahead.
 PM_SPRINT_SCALE = PM_MAXSPEED / CL_FORWARDSPEED
+
+# --- Water Physics Constants ---
+WATER_SWIM_SPEED_MULT = 0.55    # Horizontal swim speed as a fraction of run speed
+WATER_VERTICAL_SPEED_MULT = 0.85  # Swim up/down speed as a fraction of swim speed
+WATER_DRAG = 5.5                # How quickly velocity converges on the swim target (1/s)
+WATER_WADE_SPEED_MULT = 0.75    # Speed while wading (knee/waist deep, not swimming)
+WATER_MAX_SINK_SPEED = -240.0   # Water resistance caps fall speed while immersed
+WATERJUMP_MAX_CLIMB = 120.0     # Highest ledge (above the feet) a waterjump can clear
+WATERJUMP_EDGE_ABOVE_SURFACE = 48.0  # Ledge top may be at most this far above the waterline
+WATERJUMP_MAX_BOOST = 360.0     # Cap on the vertical launch speed of a waterjump
 
 
 def is_water_brush(brush):
