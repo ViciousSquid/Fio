@@ -121,7 +121,8 @@ jobs:
           tar.exe -xf qt-everywhere-src-5.15.2.tar.xz
           cd qt-everywhere-src-5.15.2
           rem Qt 5.15.2 uses stdext iterators removed by MSVC 14.51; Qt 6 uses raw-pointer fallbacks.
-          python -c "from pathlib import Path; import re; p=Path(r'qtbase/src/corelib/global/qcompilerdetection.h'); s=p.read_text(encoding='utf-8'); pattern=r'(?m)^[ \t]*#[ \t]*define QT_MAKE_UNCHECKED_ARRAY_ITERATOR\(x\)[^\r\n]*stdext::make_unchecked_array_iterator\(x\)[^\r\n]*\r?\n[ \t]*#[ \t]*define QT_MAKE_CHECKED_ARRAY_ITERATOR\(x, N\)[^\r\n]*stdext::make_checked_array_iterator\(x, size_t\(N\)\)[^\r\n]*          mkdir build
+          python -c "from pathlib import Path; p=Path(r'qtbase/src/corelib/global/qcompilerdetection.h'); s=p.read_text(encoding='utf-8'); old='# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) stdext::make_unchecked_array_iterator(x) // Since _MSC_VER >= 1800' + chr(10) + '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) stdext::make_checked_array_iterator(x, size_t(N)) // Since _MSC_VER >= 1500'; new=chr(10).join(['# if _MSC_VER < 1938', '# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) stdext::make_unchecked_array_iterator(x)', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) stdext::make_checked_array_iterator(x, size_t(N))', '# else', '# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) (x) // stdext removed in MSVC 14.51+', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) (x) // stdext removed in MSVC 14.51+', '# endif']); assert s.count(old)==1, 'Expected one Qt 5 MSVC iterator macro pair'; p.write_text(s.replace(old,new), encoding='utf-8'); print('Applied Qt 5.15.2 iterator compatibility patch for MSVC 14.51+.')"
+          mkdir build
           cd build
 
           ..\configure.bat ^
