@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 2.6_CANARY
+      - ARM64
     paths:
       - .github/workflows/build-windows-arm64.yml
 
@@ -50,13 +51,42 @@ jobs:
       - name: Locate Visual Studio ARM64 toolchain
         shell: pwsh
         run: |
-          $vswhere = "$env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            $vswhere = "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vswhere = (Get-Command 'vswhere.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if (-not $vswhere) {
+            $vswhereCandidates = @()
+            foreach ($base in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramFiles)) {
+              if ($base) {
+                $vswhereCandidates += (Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe')
+              }
+            }
+            $vswhere = $vswhereCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+
+          $vs = $null
+          if ($vswhere) {
+            Write-Host "Using vswhere: $vswhere"
+            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          } else {
+            Write-Host "vswhere.exe not found in PATH or standard Installer directories; checking Visual Studio installation roots."
+          }
+
           if (-not $vs) {
-            throw "Visual Studio ARM64 C++ toolchain was not found."
+            $vsCandidates = @(
+              "$env:ProgramFiles\Microsoft Visual Studio\18\Enterprise",
+              "$env:ProgramFiles\Microsoft Visual Studio\17\Enterprise"
+            )
+            $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            if ($programFilesX86) {
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise')
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools')
+            }
+            $vs = $vsCandidates | Where-Object {
+              Test-Path -LiteralPath (Join-Path $_ 'VC\Auxiliary\Build\vcvarsall.bat')
+            } | Select-Object -First 1
+          }
+
+          if (-not $vs) {
+            throw "Visual Studio ARM64 C++ toolchain was not found. Checked vswhere and known Visual Studio installation roots."
           }
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
           if (-not (Test-Path $vcvars)) {
@@ -186,6 +216,11 @@ jobs:
           call "%VCVARS%" arm64
           python -m nuitka --version
 
+      - name: Verify volumetric fog source texture
+        shell: cmd
+        run: |
+          python -c "from pathlib import Path; p=Path('assets/noise_3d.bin'); assert p.is_file() and p.stat().st_size == 32768, f'Required fog texture missing or invalid: {p} (expected 32768 bytes)'; print(f'Fog texture source OK: {p.stat().st_size} bytes')"
+
       - name: Build Fio with Nuitka
         shell: cmd
         run: |
@@ -200,6 +235,7 @@ jobs:
             --include-package=editor ^
             --include-package=PIL ^
             --include-data-dir=assets=assets ^
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin ^
             --include-package=plugins ^
             --include-package-data=plugins ^
             --include-data-dir=tools=tools ^
@@ -208,7 +244,7 @@ jobs:
             --include-data-files=settings.ini=settings.ini ^
             --include-data-files=editor/version.txt=editor/version.txt ^
             --windows-icon-from-ico=assets/icon.ico ^
-            --windows-console-mode=force ^
+            --windows-console-mode=disable ^
             --output-dir=build ^
             main.py
 
@@ -220,6 +256,11 @@ jobs:
           dumpbin /headers build\main.dist\Fio.exe | findstr /i "machine"
           if errorlevel 1 exit /b 1
           python -c "from pathlib import Path; p=Path('build/main.dist/Fio.exe'); print(f'Fio.exe: {p.stat().st_size:,} bytes')"
+
+      - name: Validate packaged volumetric fog texture
+        shell: cmd
+        run: |
+          python -c "from pathlib import Path; p=Path('build/main.dist/assets/noise_3d.bin'); assert p.is_file() and p.stat().st_size == 32768, f'Packaged fog texture missing or invalid: {p} (expected 32768 bytes)'; print(f'Packaged fog texture OK: {p.stat().st_size} bytes')"
 
       - name: Upload ARM64 build
         uses: actions/upload-artifact@v7
