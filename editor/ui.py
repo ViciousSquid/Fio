@@ -666,9 +666,13 @@ class Ui_MainWindow(object):
             MainWindow.toggle_system_monitor)
         MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
 
-        MainWindow.position_action = QAction('Position', MainWindow)
+        MainWindow.position_action = QAction('Position (P)', MainWindow)
+        MainWindow.position_action.setShortcut('P')
+        # Anywhere in the application, docks and floating windows included; a
+        # text field still takes a typed "p" (it claims printable keys first).
+        MainWindow.position_action.setShortcutContext(Qt.ApplicationShortcut)
         MainWindow.position_action.setToolTip(
-            'Open the live camera-position window (pos)')
+            'Open the live camera-position window (P, or the console\'s pos)')
         MainWindow.position_action.triggered.connect(
             MainWindow.view_3d.show_pos_window)
         MainWindow.debug_menu.addAction(MainWindow.position_action)

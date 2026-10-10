@@ -184,6 +184,8 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   shown, drawn in the 2D views. They hide objects in every editor view and
   in what the renderer is given, never in Play; visgroups and the cordon
   are saved with the map. The padlock keeps the window on top.
+- P opens Debug > Position (the live camera-position window) from anywhere
+  in the editor; the menu item reads "Position (P)".
 - Asset Browser: hovering a texture shows its type and size ("PNG
   512x512"; an animated GIF adds "animated"), read from the file header.
 
