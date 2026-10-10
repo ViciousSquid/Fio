@@ -102,7 +102,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\fio\qt-arm64
-          key: fio-qt-5.15.2-win-arm64-v2
+          key: fio-qt-5.15.2-win-arm64-v3
 
       - name: Build Qt 5.15.2 for Windows ARM64
         if: steps.qt-cache.outputs.cache-hit != 'true'
@@ -120,8 +120,9 @@ jobs:
 
           tar.exe -xf qt-everywhere-src-5.15.2.tar.xz
           cd qt-everywhere-src-5.15.2
-          rem Qt 5.15.2 uses stdext iterators removed by MSVC 14.51; Qt 6 uses raw-pointer fallbacks.
-          python -c "from pathlib import Path; p=Path(r'qtbase/src/corelib/global/qcompilerdetection.h'); s=p.read_text(encoding='utf-8'); old='# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) stdext::make_unchecked_array_iterator(x) // Since _MSC_VER >= 1800' + chr(10) + '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) stdext::make_checked_array_iterator(x, size_t(N)) // Since _MSC_VER >= 1500'; new=chr(10).join(['# if _MSC_VER < 1938', '# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) stdext::make_unchecked_array_iterator(x)', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) stdext::make_checked_array_iterator(x, size_t(N))', '# else', '# define QT_MAKE_UNCHECKED_ARRAY_ITERATOR(x) (x) // stdext removed in MSVC 14.51+', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) (x) // stdext removed in MSVC 14.51+', '# endif']); assert s.count(old)==1, 'Expected one Qt 5 MSVC iterator macro pair'; p.write_text(s.replace(old,new), encoding='utf-8'); print('Applied Qt 5.15.2 iterator compatibility patch for MSVC 14.51+.')"
+          rem Qt 5.15.2 uses a stdext iterator removed by MSVC 14.51.
+          python -c "from pathlib import Path; import re; p=Path(r'qtbase/src/corelib/global/qcompilerdetection.h'); s=p.read_text(encoding='utf-8'); pattern=r'(?m)^[ \t]*#[ \t]*define QT_MAKE_CHECKED_ARRAY_ITERATOR\(x, N\) stdext::make_checked_array_iterator\(x, size_t\(N\)\) // Since _MSC_VER >= 1500[ \t]*$'; replacement=chr(10).join(['# if _MSC_VER < 1938', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) stdext::make_checked_array_iterator(x, size_t(N)) // Since _MSC_VER >= 1500', '# else', '# define QT_MAKE_CHECKED_ARRAY_ITERATOR(x, N) (x) // stdext removed in MSVC 14.51+', '# endif']); s,n=re.subn(pattern, lambda _: replacement, s); assert n==1, f'Expected exactly one checked-iterator macro, found {n}'; p.write_text(s, encoding='utf-8'); print('Applied Qt 5.15.2 checked-iterator compatibility patch for MSVC 14.51+.')"
+          if errorlevel 1 exit /b 1
           mkdir build
           cd build
 
