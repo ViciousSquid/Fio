@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 2.6_CANARY
+      - ARM64
     paths:
       - .github/workflows/build-windows-arm64.yml
 
@@ -55,7 +56,7 @@ jobs:
             $vswhereCandidates = @()
             foreach ($base in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramFiles)) {
               if ($base) {
-                $vswhereCandidates += Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe'
+                $vswhereCandidates += (Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe')
               }
             }
             $vswhere = $vswhereCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -76,8 +77,8 @@ jobs:
             )
             $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
             if ($programFilesX86) {
-              $vsCandidates += Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise'
-              $vsCandidates += Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools'
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise')
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools')
             }
             $vs = $vsCandidates | Where-Object {
               Test-Path -LiteralPath (Join-Path $_ 'VC\Auxiliary\Build\vcvarsall.bat')
