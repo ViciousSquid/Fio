@@ -1671,6 +1671,11 @@ class MainWindow(QMainWindow):
 
             original_pos = list(brush['pos'])
 
+            # As in Play: from where the mover is, to the first node, then
+            # along the chain. (It snapped the mover to the first node and then
+            # fell through to the back-and-forth preview, which kept that node
+            # as the position to restore -- so stopping the preview left the
+            # mover parked on the first node.)
             self.preview_data = {
                 'obj': brush,
                 'is_path': True,
@@ -1678,15 +1683,15 @@ class MainWindow(QMainWindow):
                 'current_idx': 0,
                 'lerp_t': 0.0,
                 'speed': brush.get('speed', 64.0),
-                'origin': np.array(chain[0].pos, dtype=float),
+                'origin': np.array(original_pos, dtype=float),
                 'target': np.array(chain[0].pos, dtype=float),
                 'waiting': False,
                 'wait_remaining': 0.0,
                 'time': 0.0,
                 'original_pos': original_pos,
             }
-            # Position the brush at the first node to start
-            brush['pos'] = list(chain[0].pos)
+            self.preview_timer.start(16)
+            return
 
         # No path – use oscillation preview (original behaviour)
         self._start_oscillation_preview(brush)

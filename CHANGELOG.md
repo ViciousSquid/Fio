@@ -189,6 +189,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- A mover's Preview Movement follows its Path Target chain (to the first
+  PathNode, then the next...) from where the mover is. It jumped the mover to
+  the first node and then ran the back-and-forth preview instead, and
+  stopping it left the mover parked on that node. Play was not affected.
 - Shift+clicking a brush after a click on empty space (or, with the Brush
   tool, on a brush) no longer raises in the 2D views' paint ('NoneType'
   object has no attribute 'pos'): the selection never holds None.
