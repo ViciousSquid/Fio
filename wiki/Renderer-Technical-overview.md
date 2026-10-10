@@ -386,8 +386,8 @@ The editor's **Display** box (bottom bar) is published to the renderer as the fr
 |---|---|
 | `Wireframe` | the world as lines |
 | `Points` | the world as points |
-| `Solid Lit` (default) | brushes shaded with their colour, **no textures** |
-| `Textured` | everything drawn as normal |
+| `Solid Lit` | brushes shaded with their colour, **no textures** |
+| `Textured` (default) | everything drawn as normal |
 | `Overlay` | `Textured`, with the world's wireframe drawn over it |
 
 Changing the box repaints immediately; the renderer simply receives the new value with the next frame. How each mode looks is the renderer's choice. In Play the host publishes `Textured` unless `Wireframe`, `Points` or `Overlay` is selected — those carry over into Play as debug views. The console's `r_wireframe` drives the same box.

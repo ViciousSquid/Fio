@@ -98,7 +98,7 @@ class QtGameView(QOpenGLWidget):
         self.setFormat(fmt)
 
         self.editor = editor
-        self.brush_display_mode = "Solid Lit"
+        self.brush_display_mode = "Textured"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
         # set from the editor's "Camera" dropdown.
         self.camera_mode = "First Person"

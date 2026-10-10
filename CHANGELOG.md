@@ -191,6 +191,7 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- The editor’s **Display** box now defaults to **Textured** rather than **Solid Lit**, so newly opened sessions show texture maps immediately. `r_wireframe off` also falls back to **Textured** when there is no previous display mode.
 - A mover's Preview Movement follows its Path Target chain (to the first
   PathNode, then the next...) from where the mover is. It jumped the mover to
   the first node and then ran the back-and-forth preview instead, and
