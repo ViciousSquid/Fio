@@ -1123,7 +1123,7 @@ entity to drive them from the I/O system.</i><br>
 
         Drives the editor's Display box, so the two always agree: on selects
         "Wireframe", off returns to the mode that was showing before it
-        ("Solid Lit" if wireframe was already on when the session started).
+        ("Textured" if wireframe was already on when the session started).
         """
         combo = self.main_window.display_mode_combobox
         current = combo.currentText()
@@ -1142,7 +1142,7 @@ entity to drive them from the I/O system.</i><br>
                 self._display_before_wireframe = current
             combo.setCurrentText("Wireframe")
         elif current == "Wireframe":
-            combo.setCurrentText(self._display_before_wireframe or "Solid Lit")
+            combo.setCurrentText(self._display_before_wireframe or "Textured")
         debug_log("Info", f"Display: {combo.currentText()}")
 
     def cmd_render_shadows(self, args):

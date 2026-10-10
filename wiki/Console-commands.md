@@ -163,7 +163,7 @@ Renderers: Forward (active), Deferred
 `r_wireframe [on|off]` (alias `wireframe`) drives the editor's **Display** box, so the two always agree:
 
 * `on` selects **Wireframe**.
-* `off` returns to the mode that was showing before (**Solid Lit** if there was none).
+* `off` returns to the mode that was showing before (**Textured** if there was none).
 * No argument toggles.
 
 It is not renderer-specific: it only changes the editor's display mode, which every renderer receives as frame input. The other Display modes (Points, Solid Lit, Textured, Overlay) are chosen from the Display box.
