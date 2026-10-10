@@ -208,7 +208,7 @@ jobs:
             --include-data-files=settings.ini=settings.ini ^
             --include-data-files=editor/version.txt=editor/version.txt ^
             --windows-icon-from-ico=assets/icon.ico ^
-            --windows-console-mode=force ^
+            --windows-console-mode=disable ^
             --output-dir=build ^
             main.py
 
