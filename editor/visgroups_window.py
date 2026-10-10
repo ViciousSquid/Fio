@@ -1,6 +1,6 @@
 """Visgroups & Cordon: Hammer's Visgroups and Cordon tool in one window.
 
-Opened from the button above the Scene Hierarchy's search bar. Three tabs:
+Opened from the eye on the toolbar. Three tabs:
 
 * **User** -- named groups of brushes and entities, each shown or hidden by
   its checkbox: make one from the selection, add or remove the selection,
@@ -208,6 +208,17 @@ class VisgroupsWindow(QWidget):
             self.filters.remove_visgroup(group)
             self._changed()
 
+    def show_group(self, group=None, rename=False):
+        """Show the User tab with *group* selected (its name being edited)."""
+        self.refresh()
+        self.tabs.setCurrentIndex(0)
+        if group is None:
+            return
+        self._select_group(group)
+        item = self.group_tree.currentItem()
+        if rename and item is not None:
+            self.group_tree.editItem(item, 0)
+
     def _select_group(self, group):
         for i in range(self.group_tree.topLevelItemCount()):
             item = self.group_tree.topLevelItem(i)
@@ -354,3 +365,8 @@ class VisgroupsWindow(QWidget):
     def showEvent(self, event):
         self.refresh()
         super().showEvent(event)
+        self.main_window.sync_visgroups_button()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.main_window.sync_visgroups_button()

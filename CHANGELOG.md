@@ -173,7 +173,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   animation on the thumbnail (click again to stop). Renderers may implement
   the optional `animate_textures(clock)`.
 - **Visgroups & Cordon** (Hammer's Visgroups and Cordon tool in one window),
-  from the button above the Scene Hierarchy's search bar. *User*: named
+  from the eye on the toolbar or View > Visgroups / Cordon. The Scene
+  Hierarchy's right-click menu has a Visgroup submenu: put the objects in a
+  new visgroup (opened to be named) or an existing one, take them out, or
+  manage visgroups. *User*: named
   groups of brushes and entities, each shown or hidden by its checkbox; new
   from the selection, add or remove the selection, select members, rename,
   delete. *Auto*: every kind of object (the Filter menu, kept in step).
@@ -186,6 +189,9 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- Shift+clicking a brush after a click on empty space (or, with the Brush
+  tool, on a brush) no longer raises in the 2D views' paint ('NoneType'
+  object has no attribute 'pos'): the selection never holds None.
 - Q steps through the whole tool group in toolbar order, Select -> Brush ->
   Vertex -> Edge -> Face -> Select. It stepped object, vertex, edge and face
   only, so it never reached Select (object mode showed as Brush).

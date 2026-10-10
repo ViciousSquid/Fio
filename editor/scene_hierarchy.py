@@ -44,20 +44,6 @@ class SceneHierarchy(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Visgroups & Cordon (editor.visgroups_window), above the search.
-        self.visgroups_button = QPushButton("Visgroups && Cordon")
-        self.visgroups_button.setToolTip(
-            "Show or hide groups of objects (visgroups), kinds of object, and\n"
-            "everything outside a cordon box, in the editor's views")
-        self.visgroups_button.setFixedHeight(30)
-        self.visgroups_button.setStyleSheet("""
-            QPushButton { background-color: #333; color: #ddd; border: none;
-                          border-bottom: 1px solid #444; font-weight: bold; }
-            QPushButton:hover { background-color: #444; color: #F08000; }
-        """)
-        self.visgroups_button.clicked.connect(self.main_window.toggle_visgroups_window)
-        layout.addWidget(self.visgroups_button)
-
         # Search container (QLineEdit + Match Whole Word button)
         search_container = QWidget()
         search_layout = QHBoxLayout(search_container)
@@ -381,6 +367,40 @@ class SceneHierarchy(QWidget):
                     item.setBackground(column,
                                        QBrush(QColor("#4a4320")) if matched
                                        else QBrush(Qt.transparent))
+
+    def _add_visgroup_menu(self, menu, objects):
+        """The Visgroup submenu: put the clicked objects in a visgroup, take
+        them out, or manage visgroups in Visgroups & Cordon."""
+        main_window = self.main_window
+        filters = main_window.state.view_filters
+        objects = list(objects)
+        sub = menu.addMenu("Visgroup")
+        new = sub.addAction("New Visgroup from Selection...")
+        new.setToolTip("Make a visgroup of these objects and name it")
+        new.triggered.connect(
+            lambda _checked=False: main_window.add_to_visgroup(objects, None))
+        member_of = {id(g) for o in objects for g in filters.visgroups_of(o)}
+        if filters.visgroups:
+            sub.addSeparator()
+            for group in filters.visgroups:
+                add = sub.addAction("Add to '%s'" % group.name)
+                add.setEnabled(not all(group in filters.visgroups_of(o) for o in objects))
+                add.triggered.connect(
+                    lambda _checked=False, g=group: main_window.add_to_visgroup(objects, g))
+            removable = [g for g in filters.visgroups if id(g) in member_of]
+            if removable:
+                sub.addSeparator()
+                for group in removable:
+                    remove = sub.addAction("Remove from '%s'" % group.name)
+                    remove.triggered.connect(
+                        lambda _checked=False, g=group:
+                        main_window.remove_from_visgroup(objects, g))
+        sub.addSeparator()
+        groups = [g for g in filters.visgroups if id(g) in member_of]
+        manage = sub.addAction("Manage Visgroups...")
+        manage.triggered.connect(
+            lambda _checked=False: main_window.show_visgroup(groups[0] if groups else None))
+        return sub
 
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""
@@ -788,6 +808,7 @@ class SceneHierarchy(QWidget):
             focus_action.triggered.connect(
                 lambda _checked=False, targets=list(focus_targets):
                 self.focus_on(targets))
+            self._add_visgroup_menu(menu, focus_targets)
             menu.addSeparator()
 
         # If multiple items of the same type selected, show bulk operations

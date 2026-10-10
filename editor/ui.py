@@ -624,6 +624,14 @@ class Ui_MainWindow(object):
             MainWindow.toggle_surface_inspector)
         view_menu.addAction(MainWindow.surface_inspector_view_action)
 
+        MainWindow.visgroups_view_action = QAction(
+            'Visgroups / Cordon', MainWindow, checkable=True)
+        MainWindow.visgroups_view_action.setToolTip(
+            'Show or hide the Visgroups & Cordon window (also the eye on the toolbar)')
+        MainWindow.visgroups_view_action.triggered.connect(
+            MainWindow.set_visgroups_window_visible)
+        view_menu.addAction(MainWindow.visgroups_view_action)
+
         MainWindow.connection_links_action = QAction(
             'Connection Links', MainWindow, checkable=True)
         MainWindow.connection_links_action.setChecked(
@@ -985,6 +993,12 @@ class Ui_MainWindow(object):
         terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
         terrain_btn.clicked.connect(lambda: terrain_menu.popup(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
+
+        MainWindow.visgroups_btn = make_btn(
+            "assets/eye.png", "Visgroups & Cordon",
+            on_click=MainWindow.set_visgroups_window_visible,
+            checkable=True, checked=False, bottom_color=group_3_color,
+            toggle_strip=True)
 
         MainWindow.grid_btn = make_btn(
             "assets/b_grid.png", "Toggle 3D Grid (G)",

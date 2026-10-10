@@ -1384,7 +1384,10 @@ class MainWindow(QMainWindow):
         # overlay stale, since the brushes it was drawing handles for changed.
         self.components.clear()
         self.components.invalidate()
-        self.state.selected_objects = list(objects or [])
+        # Callers pass [None] for "nothing" (a click on empty space); None is
+        # never a member, or a later Shift+click made a two-object "group"
+        # with nothing in it (and its bounding box raised).
+        self.state.selected_objects = [o for o in (objects or []) if o is not None]
         primary = self.primary_selection()
         self.update_all_ui()
         self.selection_changed.emit()
@@ -2336,19 +2339,77 @@ class MainWindow(QMainWindow):
             self.show_surface_inspector(brushes[0], keys[0], raise_window=False)
 
     def toggle_visgroups_window(self):
-        """Open (or close) Visgroups & Cordon (the button above the Scene
-        Hierarchy's search bar)."""
+        """Open (or close) Visgroups & Cordon (the eye on the toolbar)."""
+        window = getattr(self, 'visgroups_window', None)
+        return self.set_visgroups_window_visible(window is None or not window.isVisible())
+
+    def set_visgroups_window_visible(self, visible):
         window = getattr(self, 'visgroups_window', None)
         if window is None:
+            if not visible:
+                self.sync_visgroups_button()
+                return None
             from editor.visgroups_window import VisgroupsWindow
             window = self.visgroups_window = VisgroupsWindow(self)
-        if window.isVisible():
-            window.hide()
-        else:
+        if visible:
             window.show()
             window.raise_()
             window.activateWindow()
+        else:
+            window.hide()
+        self.sync_visgroups_button()
         return window
+
+    def sync_visgroups_button(self):
+        """Light the toolbar's eye, and tick View > Visgroups / Cordon,
+        while Visgroups & Cordon is open."""
+        window = getattr(self, 'visgroups_window', None)
+        shown = window is not None and window.isVisible()
+        for control in (getattr(self, 'visgroups_btn', None),
+                        getattr(self, 'visgroups_view_action', None)):
+            if control is not None and control.isChecked() != shown:
+                control.blockSignals(True)
+                control.setChecked(shown)
+                control.blockSignals(False)
+
+    def show_visgroup(self, group=None, rename=False):
+        """Open Visgroups & Cordon on *group* (its User tab), optionally
+        with its name ready to edit."""
+        window = self.set_visgroups_window_visible(True)
+        window.show_group(group, rename=rename)
+        return window
+
+    def add_to_visgroup(self, objects, group=None):
+        """Put *objects* in *group* -- or in a new visgroup, opened in Visgroups
+        & Cordon with its name ready to edit (Scene Hierarchy > Visgroup)."""
+        objects = [o for o in objects if o is not None]
+        if not objects:
+            return None
+        filters = self.state.view_filters
+        if group is None:
+            group = filters.add_visgroup("Visgroup %d" % (len(filters.visgroups) + 1), objects)
+            self.mark_as_modified()
+            self.update_views()
+            self.show_visgroup(group, rename=True)
+        else:
+            filters.add_to_visgroup(group, objects)
+            self.mark_as_modified()
+            self.update_views()
+            self._refresh_visgroups_window()
+            self.show_toast("Added to visgroup '%s'" % group.name)
+        return group
+
+    def remove_from_visgroup(self, objects, group):
+        self.state.view_filters.remove_from_visgroup(group, objects)
+        self.mark_as_modified()
+        self.update_views()
+        self._refresh_visgroups_window()
+        self.show_toast("Removed from visgroup '%s'" % group.name)
+
+    def _refresh_visgroups_window(self):
+        window = getattr(self, 'visgroups_window', None)
+        if window is not None and window.isVisible():
+            window.refresh()
 
     def toggle_surface_inspector(self):
         """Open (or close) the Surface Inspector on the current texture target.

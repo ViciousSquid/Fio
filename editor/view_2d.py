@@ -525,7 +525,7 @@ class View2D(QWidget):
 
     def _selected_list(self):
         """Current multi-selection as a plain list (never None)."""
-        objs = list(self.editor.state.selected_objects)
+        objs = [o for o in self.editor.state.selected_objects if o is not None]
         sel = self.editor.primary_selection()
         if sel is not None and sel not in objs:
             objs.append(sel)
@@ -3342,7 +3342,8 @@ class View2D(QWidget):
             # Handle shift-click for multi-selection
             if event.modifiers() & Qt.ShiftModifier and clicked_object:
                 # Get current selected_objects list
-                selected_objects = self.editor.state.selected_objects
+                selected_objects = [o for o in self.editor.state.selected_objects
+                                    if o is not None]
                 if not selected_objects:
                     selected_objects = []
                     if self.editor.primary_selection():

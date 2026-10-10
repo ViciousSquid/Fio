@@ -73,3 +73,27 @@ def test_the_select_tool_still_selects_with_a_plain_click(main_window, view):
     press(view, (10, 10))
     release(view, (10, 10))
     assert _selected(main_window) == [brush]
+
+
+def test_shift_click_after_a_plain_click_selects_one_brush(main_window, view):
+    """A plain click (drawing) set the selection to [None]; a Shift+click then
+    made [None, brush], a two-object group whose bounding box raised in
+    paintEvent ('NoneType' object has no attribute 'pos')."""
+    brush = make_box(pos=(0, 0, 0), size=(128, 128, 128))
+    main_window.state.brushes.append(brush)
+    press(view, (10, 10))
+    release(view, (10, 10))
+    press(view, (10, 10), modifiers=Qt.ShiftModifier)
+    release(view, (10, 10), modifiers=Qt.ShiftModifier)
+    assert main_window.state.selected_objects == [brush]
+    assert not view._group_manip_active()
+    view.grab()                                           # paints
+
+
+def test_none_is_never_a_selected_object(main_window, view):
+    brush = make_box(pos=(0, 0, 0), size=(128, 128, 128))
+    main_window.set_selected_objects([None])
+    assert main_window.state.selected_objects == []
+    main_window.state.selected_objects = [None, brush]    # however it got there
+    assert view._selected_list() == [brush]
+    assert view._selection_bounds_2d() is not None

@@ -111,20 +111,23 @@ def test_visgroups_and_the_cordon_are_saved_with_the_map(main_window):
 
 # -- the window -----------------------------------------------------------------------
 
-def test_the_button_above_the_search_opens_and_closes_the_window(main_window):
-    hierarchy = main_window.scene_hierarchy
-    layout = hierarchy.layout()
-    widgets = [layout.itemAt(i).widget() for i in range(layout.count())]
-    button = hierarchy.visgroups_button
-    search_row = hierarchy.search_box.parentWidget()
-    assert widgets.index(button) == widgets.index(search_row) - 1
+def test_the_eye_on_the_toolbar_opens_and_closes_the_window(main_window):
+    button = main_window.visgroups_btn
+    assert button.parent() is main_window.tool_toolbar or \
+        main_window.tool_toolbar.isAncestorOf(button)
+    assert not hasattr(main_window.scene_hierarchy, "visgroups_button")
+    assert button.isCheckable() and not button.isChecked()
     button.click()
     window = main_window.visgroups_window
-    assert window.isVisible()
+    assert window.isVisible() and button.isChecked()           # lit while open
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == \
         ["User", "Auto", "Cordon"]
     button.click()
-    assert not window.isVisible()
+    assert not window.isVisible() and not button.isChecked()
+    main_window.toggle_visgroups_window()
+    assert button.isChecked()
+    window.close()                                             # its own close box
+    assert not button.isChecked()
 
 
 def test_the_padlock_keeps_the_window_on_top(main_window):
@@ -245,3 +248,60 @@ def test_hidden_visgroups_and_the_cordon_are_not_published_while_editing(fio_ses
     session.step(1)
     brushes, _things = _published(session)
     assert by_name["crate"]["id"] in brushes
+
+
+# -- Scene Hierarchy > Visgroup, and View > Visgroups / Cordon --------------------------
+
+_MENUS = []        # the parent menus, kept alive while their submenus are used
+
+
+def _visgroup_menu(main_window, objects):
+    from PyQt5.QtWidgets import QMenu
+    parent = QMenu()
+    _MENUS.append(parent)
+    sub = main_window.scene_hierarchy._add_visgroup_menu(parent, objects)
+    assert sub.title() == "Visgroup"
+    return {a.text(): a for a in sub.actions() if a.text()}
+
+
+def test_the_scene_hierarchy_visgroup_menu(main_window):
+    state = main_window.state
+    crate = box_brush("crate", (0, 0, 0), (64, 64, 64))
+    wall = box_brush("wall", (300, 0, 0), (64, 64, 64))
+    state.brushes.extend([crate, wall])
+
+    actions = _visgroup_menu(main_window, [crate])
+    assert set(actions) == {"New Visgroup from Selection...", "Manage Visgroups..."}
+    actions["New Visgroup from Selection..."].trigger()
+    group = state.view_filters.visgroups[0]
+    assert group.ids == {crate["id"]}
+    window = main_window.visgroups_window
+    assert window.isVisible() and window.current_group() is group   # ready to rename
+    assert window.tabs.currentIndex() == 0
+
+    actions = _visgroup_menu(main_window, [wall])
+    assert actions["Add to 'Visgroup 1'"].isEnabled()
+    assert "Remove from 'Visgroup 1'" not in actions
+    actions["Add to 'Visgroup 1'"].trigger()
+    assert group.ids == {crate["id"], wall["id"]}
+
+    actions = _visgroup_menu(main_window, [wall])
+    assert not actions["Add to 'Visgroup 1'"].isEnabled()           # already in it
+    actions["Remove from 'Visgroup 1'"].trigger()
+    assert group.ids == {crate["id"]}
+
+    window.hide()
+    _visgroup_menu(main_window, [crate])["Manage Visgroups..."].trigger()
+    assert window.isVisible() and window.current_group() is group
+    window.hide()
+    _MENUS.clear()
+
+
+def test_view_menu_visgroups_cordon_follows_the_window(main_window):
+    action = main_window.visgroups_view_action
+    assert action.text() == "Visgroups / Cordon" and action.isCheckable()
+    action.trigger()
+    window = main_window.visgroups_window
+    assert window.isVisible() and action.isChecked() and main_window.visgroups_btn.isChecked()
+    main_window.visgroups_btn.click()
+    assert not window.isVisible() and not action.isChecked()
