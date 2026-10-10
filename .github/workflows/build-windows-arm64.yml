@@ -216,6 +216,11 @@ jobs:
           call "%VCVARS%" arm64
           python -m nuitka --version
 
+      - name: Verify volumetric fog source texture
+        shell: cmd
+        run: |
+          python -c "from pathlib import Path; p=Path('assets/noise_3d.bin'); assert p.is_file() and p.stat().st_size == 32768, f'Required fog texture missing or invalid: {p} (expected 32768 bytes)'; print(f'Fog texture source OK: {p.stat().st_size} bytes')"
+
       - name: Build Fio with Nuitka
         shell: cmd
         run: |
@@ -230,6 +235,7 @@ jobs:
             --include-package=editor ^
             --include-package=PIL ^
             --include-data-dir=assets=assets ^
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin ^
             --include-package=plugins ^
             --include-package-data=plugins ^
             --include-data-dir=tools=tools ^
@@ -250,6 +256,11 @@ jobs:
           dumpbin /headers build\main.dist\Fio.exe | findstr /i "machine"
           if errorlevel 1 exit /b 1
           python -c "from pathlib import Path; p=Path('build/main.dist/Fio.exe'); print(f'Fio.exe: {p.stat().st_size:,} bytes')"
+
+      - name: Validate packaged volumetric fog texture
+        shell: cmd
+        run: |
+          python -c "from pathlib import Path; p=Path('build/main.dist/assets/noise_3d.bin'); assert p.is_file() and p.stat().st_size == 32768, f'Packaged fog texture missing or invalid: {p} (expected 32768 bytes)'; print(f'Packaged fog texture OK: {p.stat().st_size} bytes')"
 
       - name: Upload ARM64 build
         uses: actions/upload-artifact@v7

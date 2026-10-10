@@ -254,8 +254,20 @@ class ResourcesMixin:
         try:
             with open(filepath, 'rb') as f:
                 data = f.read()
-            if len(data) != size ** 3:
-                return 0
+        except OSError as exc:
+            print(f"{_RENDERER_PREFIX} Could not read 3D texture '{filepath}': {exc}")
+            return 0
+
+        expected_size = size ** 3
+        if len(data) != expected_size:
+            print(
+                f"{_RENDERER_PREFIX} Invalid 3D texture '{filepath}': "
+                f"expected {expected_size} bytes, got {len(data)}"
+            )
+            return 0
+
+        texture_id = 0
+        try:
             texture_id = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_3D, texture_id)
             for param in [(gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT), (gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT),
@@ -265,7 +277,13 @@ class ResourcesMixin:
             gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_R8, size, size, size, 0,
                             gl.GL_RED, gl.GL_UNSIGNED_BYTE, data)
             return texture_id
-        except Exception:
+        except Exception as exc:
+            if texture_id:
+                try:
+                    gl.glDeleteTextures([texture_id])
+                except Exception:
+                    pass
+            print(f"{_RENDERER_PREFIX} Could not upload 3D texture '{filepath}': {exc}")
             return 0
 
     # ------------------------------------------------------------------
