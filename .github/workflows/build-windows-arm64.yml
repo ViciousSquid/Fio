@@ -50,13 +50,42 @@ jobs:
       - name: Locate Visual Studio ARM64 toolchain
         shell: pwsh
         run: |
-          $vswhere = "$env:ProgramFiles(x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            $vswhere = "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vswhere = (Get-Command 'vswhere.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if (-not $vswhere) {
+            $vswhereCandidates = @()
+            foreach ($base in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramFiles)) {
+              if ($base) {
+                $vswhereCandidates += Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe'
+              }
+            }
+            $vswhere = $vswhereCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+
+          $vs = $null
+          if ($vswhere) {
+            Write-Host "Using vswhere: $vswhere"
+            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          } else {
+            Write-Host "vswhere.exe not found in PATH or standard Installer directories; checking Visual Studio installation roots."
+          }
+
           if (-not $vs) {
-            throw "Visual Studio ARM64 C++ toolchain was not found."
+            $vsCandidates = @(
+              "$env:ProgramFiles\Microsoft Visual Studio\18\Enterprise",
+              "$env:ProgramFiles\Microsoft Visual Studio\17\Enterprise"
+            )
+            $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            if ($programFilesX86) {
+              $vsCandidates += Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise'
+              $vsCandidates += Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools'
+            }
+            $vs = $vsCandidates | Where-Object {
+              Test-Path -LiteralPath (Join-Path $_ 'VC\Auxiliary\Build\vcvarsall.bat')
+            } | Select-Object -First 1
+          }
+
+          if (-not $vs) {
+            throw "Visual Studio ARM64 C++ toolchain was not found. Checked vswhere and known Visual Studio installation roots."
           }
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
           if (-not (Test-Path $vcvars)) {
