@@ -156,6 +156,15 @@ plugin enabled later is already wired in; its event hooks self-gate on
 `enabled`). Subscribe to events, publish services, reach any subsystem here.
 
 ```python
+def map_uses_plugin(self, map_data: dict) -> bool
+```
+Optional. Return True when *map_data* needs this plugin active, for a plugin
+whose behaviour attaches to core entities rather than an entity type of its
+own (a plugin is already detected by its registered entity types). The manager
+asks it when a level loads (`auto_enable_for_map`) and switches a
+disabled-by-default plugin on; an exception is logged and treated as False.
+
+```python
 def on_play_start(self, logic) -> None
 def on_play_stop(self, logic) -> None
 def on_tick(self, logic, ctx: TickContext) -> None
@@ -518,7 +527,9 @@ is:
 | Exit to Editor | Leave Play. In a played package it reads **Quit** and asks before quitting the game. |
 
 The menu is a floating window like SysMon's, titled with the current page: drag
-it by its title bar (it opens where it was left), and its [X] resumes. Up/Down
+it by its title bar (it opens where it was left), and its [X] resumes. Behind
+it the frame the menu opened over is blurred; it fades in over a second, and out
+again over the resumed game (play resumes at once). Up/Down
 (or W/S) choose, Enter, Space or E activates, Left/Right (or A/D) move a slider,
 and Esc goes back a page. The cursor is free while it is open, and the mouse
 works too.

@@ -1,211 +1,42 @@
 # `editor/`
 
-Fio's editor is the authoring side of the same executable-world system as the engine. It edits the authoritative scene/entity representation directly; there is no separate compile or bake stage between editing and play.
-
-The editor's gameplay model is based on entity I/O and declarative logic primitives rather than an embedded scripting language. `LogicState`, `LogicRelay`, `LogicGate`, `LogicTimer` and the rest of the I/O system compose into executable map behaviour.
-
-The event-driven world model is documented in **[`LOGIC.md`](LOGIC.md)**.
-
-## Editor modules
-
-### `__init__.py`
-Package initialiser. Loads the plugin registry before maps or the main window are built so plugin-provided entity types and I/O definitions are available to the native editor extension points.
-
-### `asset_browser.py`
-Texture and model browser with live thumbnails, OBJ/GLB previews, FIT / TILE / FACE texture actions and drag-and-drop support.
-
-### `component_edit.py`
-Shared Radiant-style component editing model for object, face, edge and vertex editing. Defines component identity, hover/selection state, press policy and drag operations used by both the 2D views and 3D viewport. Plane and point edits use NumPy geometry operations and validate the resulting convex brush before committing.
-
-### `console_commands.py`
-Debug console command handler for commands such as `noclip`, `map`, `fps` and `cam`. Also provides save/load, quicksave/quickload and save-list commands and allows `LogicCommand` map entities to invoke explicitly requested debug/play commands through I/O.
-
-### `cutscene_wizard.py`
-Non-modal cutscene authoring panel. Creates temporary cutscene actors, captures existing monsters, authors camera waypoints and advanced timed events, then saves the authored sequence as JSON under `cutscenes/`. Temporary actors remain ordinary editor entities while being authored, so normal selection, movement and property editing continue to work.
-
-The wizard is an authoring tool, not a second runtime. Playback is owned by `engine.cutscene_runtime.CutsceneRuntime`.
-
-### `debug_console.py`
-Quake-style drop-down debug console with category filtering, entity-name links, I/O tracing, font controls, command history and the shared `debug_log` logger.
-
-### `editor_state.py`
-Central editor model. Owns brushes, Things, terrain data, selection, undo/redo and scene serialisation.
-
-Undo/redo replaces scene objects rather than mutating historical objects in place, so UI references are re-resolved by stable identity after a history operation. Gesture tools checkpoint at mouse-down and preserve the redo branch correctly when a gesture is discarded.
-
-### `entity_inspector.py`
-Focused entity inspection UI for examining and editing entity properties and runtime-relevant state without replacing the normal property/editor model.
-
-### `face_texture.py`
-Unified face-texture mapping access for box sides and angled brush planes. Reads/writes texture shift, scale and rotation through one interface and invalidates derived brush geometry when a mapping changes.
-
-### `io_editor_widget.py`
-Hammer-style Output Connections panel for creating and editing entity I/O connections: target, input, parameter, delay and fire-once behaviour.
-
-### `io_handlers.py`
-Registers the runtime input handlers used by the I/O system. Covers gameplay entities, movers, lights, monsters, triggers, Props, speakers and logic entities.
-
-`LogicState` operations are parameterised (for example, `Increment killed,1`) rather than requiring a separate input for every possible state mutation. This keeps the I/O vocabulary small while allowing maps to express new combinations of behaviour.
-
-### `io_system.py`
-Core I/O framework. Defines input/output declarations, the per-entity I/O registry, output connections and the runtime dispatcher with delayed firing and fire-once tracking.
-
-It also owns reverse lookup for “what points at this entity?”, scene connection validation and the declaration/implementation audit that checks registered inputs against the handlers that actually execute them.
-
-### `logic_graph_widget.py`
-Visual node-graph editor for entity I/O connections. Displays entities as nodes and I/O connections as wires; supports creating, deleting and editing connection delay/parameters.
-
-### `logic_wizard.py`
-Guided wizard for common I/O setups, covering monster encounters, doors/movers, environment/audio and more complex logic combinations.
-
-### `main_window.py`
-Main editor window. Hosts the 2D and 3D views, property editor, scene hierarchy, asset browser and debug console, and controls play mode, menus, toolbars and notifications.
-
-It owns the shared component controller, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects. Developer instrumentation such as the live Debug Tables view is layered on top of the real MainWindow/QtGameView rather than maintaining a parallel renderer or scene model.
-
-### `monster_customise_dialog.py`
-Dialog for assigning custom Monster sprites and billboard dimensions. Paths are stored relative to the project asset tree.
-
-### `package_dialog.py`
-Package-export metadata dialog. Collects title, author, version, description and banner data and previews package dependencies.
-
-### `package_exporter.py`
-Builds `.fiopak` archives. Resolves map dependencies, crawls referenced assets and writes the package manifest.
-
-### `procedural_generator.py`
-Procedural map-generation UI and core generation logic. Builds playable liminal maps with configurable rooms, dimensions, textures, spawns, multiple floors and corridor connectivity.
-
-### `procedural_map_gen.py`
-Command-line front end for procedural map generation. Wraps the generator and writes map JSON using configurable size, room, seed, monster and floor parameters.
-
-### `project_overview.py`
-Project/map overview UI for inspecting the current world and project-level information before and during authoring.
-
-### `property_editor.py`
-Per-object property panel for position, size, texture/shader, colour, I/O and type-specific properties.
-
-Pages are cached using a signature of the data they actually display, so geometry/position changes do not rebuild unrelated property pages. I/O revision is included because the “Targeted by” information depends on the rest of the scene.
-
-### `scene_hierarchy.py`
-Scene tree listing brushes and entities. Supports sorting, selection synchronisation and context actions.
-
-### `SettingsWindow.py`
-Application settings dialog covering editor, display, play modes, controls, keyboard and split-screen configuration. Renderer settings expose low-power mode, dynamic shadows, view distance and appearance options such as player glasses.
-
-### `shortcuts.py`
-Single inventory of editor keyboard shortcuts. Combines shortcuts discoverable from Qt actions/widgets, user-configured bindings and explicitly declared shortcuts for event handlers that Qt cannot enumerate.
-
-### `shortcuts_window.py`
-Help > Keys window showing the shortcut inventory from `editor.shortcuts`. It is searchable and can remain open while the user works.
-
-### `state_values.py`
-Fio's typed state-value system: `string`, `int`, `float`, `bool`, `null` and `uuid`. Handles parsing, formatting, comparison, arithmetic and deterministic serialisation without importing Qt, the engine or the entity model.
-
-### `surface_inspector.py`
-Radiant-style Surface Inspector for per-face texture mapping. Edits shift, scale and rotation, supports grid-snap and multi-face application, and coalesces repeated spin-box changes into a single undo step.
-
-### `terrain_editor.py`
-Terrain parameter editor for noise seed, scale, amplitude and texturing/chunk settings.
-
-### `things.py`
-Definitions for placeable authoring entities including `PlayerStart`, `Light`, `Speaker`, `Prop`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
-
-Every 3D model is a `Prop` with `render_mode='model'`. A Prop is neither solid nor carryable by default until the author turns either behaviour on. Legacy model data is loaded as Props with compatibility defaults.
-
-`LogicState` is the persistent typed-state primitive shared by maps and plugins. `LogicCommand` is a deliberate bridge from declarative I/O into an explicitly requested debug/play command rather than a general-purpose scripting runtime.
-
-### `tooltips.py`
-Per-area tooltip enable/disable support. Original tooltip text is retained on Qt widgets so it can be restored without maintaining a second description table.
-
-### `ui.py`
-Shared Qt UI widgets, dialogs, styling helpers and layout utilities. `Ui_MainWindow` also owns the Plugins menu bar and its live enable/disable state.
-
-### `view_2d.py`
-Orthographic top, front and side editing views. Handles brush drawing, selection, transforms, grid snapping, marquee selection, rotation, cloning, entity placement, plugin placement entries and the clip tool's screen-to-world mapping.
-
-Component-mode editing is delegated to `component_edit`, so the 2D view supplies interaction mapping while the shared model owns the actual editing rules.
-
-## Cutscenes
-
-Cutscenes are authored as data, not as embedded Python or Lua scripts.
-
-The editor-side workflow is:
-
-```
-Cutscene Wizard
-    ↓
-cutscenes/*.json
-    ↓
-LogicCamera / authored actor definitions
-    ↓
-CutsceneRuntime
-    ↓
-camera + actor tracks + timed I/O/events
-```
-
-The wizard supports camera keyframes, interpolation, yaw/pitch/FOV, teleports and look-at behaviour; actor waypoints and temporary actors; capture/restoration of existing monsters; timed I/O; messages; and timed fights. Runtime playback is constrained to authored files beneath the project's `cutscenes/` directory.
-
-## Editor architecture
-
-The editor is the authoring interface to the same world that the engine executes:
-
-```
-editor UI
-    ↓
-EditorState / Things / brush geometry
-    ↓
-authoritative map representation
-    ↓
-engine runtime
-    ↓
-play mode / standalone player
-```
-
-The important separation is between **authoring state** and **execution state**. The editor owns the authoritative scene model; the engine derives runtime representations from it as required.
-
-For rendering, editor-authored brushes and entities feed the engine's dense numerical projections. The editor does not treat RenderTable, EntityTable or MonsterTable as authoring stores; they are derived execution views.
-
-For gameplay, the editor's I/O connections are the program: entity outputs fire entity inputs, logic primitives transform and route those events, and `LogicState` supplies persistent typed state. Runtime entity creation updates the relevant execution caches at the mutation boundary, so a live-spawned entity becomes visible to gameplay and rendering without a second source of truth.
-
-Runtime inspection follows the same boundary. Debug Tables exposes live numerical projections, packed key/range data and related counters without replacing the production data path.
-
-## Runtime baseline
-
-Fio CANARY is developed and tested against **CPython 3.14, GIL-enabled**. The normal free-threaded `3.14t` build is not the supported baseline.
-
-The current application dependency baseline is maintained in the repository root `requirements.txt`, including NumPy 2.5.3, pygame-ce 2.5.8, PyQt5 5.15.11, PyOpenGL 3.1.10, PyGLM 2.8.3 and Pillow 11.3.0.
-
-## Design principles
-
-- **Map is the program.** Entity placement, properties and I/O connections describe executable behaviour.
-- **The editor is an engine mode.** Play Mode executes the same authored world rather than exporting to an intermediate compiled representation.
-- **World state has one authority.** Derived caches and numerical projections do not become competing sources of truth.
-- **Direct manipulation is first-class.** Brush geometry can be edited as objects, faces, edges and vertices.
-- **I/O is compositional.** Small primitives and parameterised operations combine instead of requiring a large scripting vocabulary.
-- **Cutscenes are data-driven.** Camera, actor and event tracks are authored as data and executed by the runtime state machine.
-- **The hot path is allowed to be numerical.** The editor remains flexible and object-oriented while the engine projects large homogeneous data into dense execution representations.
-
-## Security and trust boundaries
-
-### Plugins
-
-Fio's plugin model is deliberately an **in-process Python extension model, not a sandbox**. The editor discovers and imports Python packages from `plugins/` during startup so plugin-provided entity types, I/O definitions and editor extensions can participate in the normal machinery.
-
-Anything placed in `plugins/` must therefore be trusted code. A plugin has the same process and OS privileges as the editor. Do not install untrusted, downloaded or user-supplied Python packages into this directory expecting the plugin API to constrain them.
-
-`.fiopak` packages do not automatically install plugin code. A package can declare dependencies on plugins, but those plugins must already exist in the host's trusted `plugins/` directory.
-
-### `.fiopak` packages are untrusted input
-
-Package export produces ZIP-based `.fiopak` archives, while package loading may consume archives obtained from elsewhere. Asset extraction therefore has explicit memory limits before ZIP entries are inflated:
-
-- **128 MiB maximum declared uncompressed size per asset entry**
-- **512 MiB maximum cumulative asset data admitted to the in-memory cache**
-
-An entry exceeding its limit is rejected, and the cumulative limit prevents a package from exhausting memory by loading many individually acceptable assets. These limits apply at the engine package-reading boundary rather than relying on the editor UI to validate package contents.
-
-### Docker is not a sandbox
-
-The Docker image runs Fio as an unprivileged `fio` user rather than root. However, the supplied Compose configuration is **not an isolation boundary**: it deliberately gives the graphical application access to host facilities including the X11 socket, host networking and `/dev/dri`.
-
-Use the container for reproducible packaging/runtime environments, not as a mechanism for safely executing untrusted plugins, packages or Python code.
+| File | What it is |
+| --- | --- |
+| `__init__.py` | Loads the plugin registry before the editor starts. |
+| `LOGIC.md` | Documentation of the entity I/O and logic system. |
+| `SettingsWindow.py` | The Settings dialog. |
+| `asset_browser.py` | The Asset Browser: Textures, Models, Maps and Audio tabs. |
+| `component_edit.py` | Face, edge and vertex editing of brushes. |
+| `console_commands.py` | The console commands. |
+| `cutscene_wizard.py` | The Cutscene Wizard panel. |
+| `debug_console.py` | The debug console, its command input and history, and `debug_log`. |
+| `editor_state.py` | The scene: brushes, entities, terrain, selection, undo/redo, map save/load. |
+| `entity_inspector.py` | The Entity Inspector window. |
+| `face_texture.py` | Reads and writes a face's texture mapping. |
+| `io_editor_widget.py` | The I/O connections panel. |
+| `io_handlers.py` | The input handlers for every entity type. |
+| `io_system.py` | The I/O system: declarations, connections, dispatch. |
+| `item_editor.py` | The Custom Items dialog. |
+| `logic_graph_widget.py` | The Logic Graph node editor. |
+| `logic_wizard.py` | The Logic Wizard for common I/O setups. |
+| `main_window.py` | The main editor window. |
+| `monster_customise_dialog.py` | The monster sprite dialog. |
+| `package_dialog.py` | The package export dialog. |
+| `package_exporter.py` | Builds `.fiopak` packages. |
+| `procedural_generator.py` | The procedural level generator and its dialog. |
+| `procedural_map_gen.py` | Command-line procedural level generator. |
+| `project_overview.py` | The Project Overview window. |
+| `property_editor.py` | The Properties panel. |
+| `scene_hierarchy.py` | The Scene Hierarchy panel. |
+| `selection_overlay.py` | Turns the editor selection into the renderer's selection overlay. |
+| `shortcuts.py` | The list of keyboard shortcuts. |
+| `shortcuts_window.py` | The Help > Keys window. |
+| `state_values.py` | Typed values for LogicState. |
+| `surface_inspector.py` | The Surface Inspector. |
+| `terrain_editor.py` | The terrain editor panel. |
+| `things.py` | The placeable entity classes. |
+| `tooltips.py` | Turns tooltips on and off per area. |
+| `ui.py` | Builds the main window's menus, toolbar and docks. |
+| `version.txt` | The editor version string. |
+| `view_2d.py` | The 2D top, front and side views. |
+| `visgroups_window.py` | The Visgroups & Cordon window. |
