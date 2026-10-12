@@ -1,5 +1,9 @@
 name: Nuitka Build and Validate
 
+# One workflow for every desktop build: Windows x64, Windows ARM64 (native
+# runner, PyQt5-WinARM64 wheel, version marked "WinARM64"), macOS (app
+# bundle, ad-hoc signed) and Linux, then one GitHub release with all four.
+
 on:
   workflow_dispatch:
 
@@ -66,6 +70,237 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: fio-windows
+          path: build/main.dist/
+
+
+  build-windows-arm64:
+    name: Windows ARM64 / Python 3.14 / PyQt5-WinARM64 / Nuitka
+    runs-on: windows-11-vs2026-arm
+    env:
+      # Appended to editor/version.txt for this build only (as the ARM64
+      # branch's file reads: "version X.X.X.XXXX WinARM64").
+      ARM64_VERSION_SUFFIX: " WinARM64"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up native ARM64 Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: 'arm64'
+          cache: pip
+
+      - name: Verify native architecture
+        shell: pwsh
+        run: |
+          $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          $proc = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          Write-Host "OS architecture: $arch"
+          Write-Host "Process architecture: $proc"
+          if ($arch -ne 'Arm64' -or $proc -ne 'Arm64') {
+            throw "This job is not running natively on Windows ARM64."
+          }
+          $machine = python -c "import platform; print(platform.machine())"
+          Write-Host "Python machine: $machine"
+          if ($machine -ne 'ARM64') {
+            throw "Python is not a native ARM64 build: $machine"
+          }
+          if ((python -c "import struct; print(struct.calcsize('P') * 8)") -ne '64') {
+            throw "Python is not 64-bit."
+          }
+
+      - name: Locate Visual Studio ARM64 toolchain
+        shell: pwsh
+        run: |
+          $vswhere = (Get-Command 'vswhere.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if (-not $vswhere) {
+            $vswhereCandidates = @()
+            foreach ($base in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramFiles)) {
+              if ($base) {
+                $vswhereCandidates += (Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe')
+              }
+            }
+            $vswhere = $vswhereCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+
+          $vs = $null
+          if ($vswhere) {
+            Write-Host "Using vswhere: $vswhere"
+            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          } else {
+            Write-Host "vswhere.exe not found in PATH or standard Installer directories; checking Visual Studio installation roots."
+          }
+
+          if (-not $vs) {
+            $vsCandidates = @(
+              "$env:ProgramFiles\Microsoft Visual Studio\18\Enterprise",
+              "$env:ProgramFiles\Microsoft Visual Studio\17\Enterprise"
+            )
+            $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            if ($programFilesX86) {
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise')
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools')
+            }
+            $vs = $vsCandidates | Where-Object {
+              Test-Path -LiteralPath (Join-Path $_ 'VC\Auxiliary\Build\vcvarsall.bat')
+            } | Select-Object -First 1
+          }
+
+          if (-not $vs) {
+            throw "Visual Studio ARM64 C++ toolchain was not found. Checked vswhere and known Visual Studio installation roots."
+          }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (-not (Test-Path $vcvars)) {
+            throw "vcvarsall.bat not found at $vcvars"
+          }
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Visual Studio: $vs"
+          Write-Host "ARM64 environment script: $vcvars"
+
+      - name: Install ARM64 Python dependencies
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --upgrade pip
+          # Use the published native ARM64 wheel; do not compile Qt or PyQt5.
+          # --only-binary prevents silent source builds of dependencies.
+          python -m pip install --only-binary=:all: -r requirements.txt
+          python -m pip install "nuitka==4.2.2" zstandard
+          python -m pip check
+          python -m pip list
+
+      - name: Verify PyQt5 loads its own bundled Qt
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($dir in $env:PATH.Split([IO.Path]::PathSeparator)) {
+            if ($dir -and (Test-Path (Join-Path $dir "Qt5Core.dll"))) {
+              throw "Qt5Core.dll is reachable on PATH via $dir; the check would not be meaningful"
+            }
+          }
+          @'
+          import ctypes
+          from ctypes import wintypes
+          from pathlib import Path
+
+          import PyQt5
+          from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QLibraryInfo
+          from PyQt5.QtWidgets import QApplication
+
+          app = QApplication([])
+          bundled = (Path(PyQt5.__file__).parent / "Qt5").resolve()
+          kernel32 = ctypes.WinDLL("kernel32")
+          kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+          kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+          kernel32.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+          buffer = ctypes.create_unicode_buffer(32768)
+          handle = kernel32.GetModuleHandleW("Qt5Core.dll")
+          assert handle, "Qt5Core.dll is not loaded after QApplication initialisation"
+          kernel32.GetModuleFileNameW(handle, buffer, len(buffer))
+          qtcore = Path(buffer.value).resolve()
+          assert bundled in qtcore.parents, f"Qt5Core.dll loaded from {qtcore}, not {bundled}"
+          print("PyQt5", PYQT_VERSION_STR, "Qt", QT_VERSION_STR)
+          print("Qt5Core.dll:", qtcore)
+          print("Qt plugins:", QLibraryInfo.location(QLibraryInfo.PluginsPath))
+          print("Platform:", app.platformName())
+          '@ | Set-Content qt_check.py -Encoding utf8
+          python qt_check.py
+
+      - name: Verify volumetric fog source texture
+        shell: pwsh
+        run: |
+          $texture = Get-Item "assets/noise_3d.bin" -ErrorAction Stop
+          if ($texture.Length -ne 32768) {
+            throw "Required fog texture is $($texture.Length) bytes; expected 32768."
+          }
+          Write-Host "Fog texture source OK: $($texture.Length) bytes"
+
+      - name: Mark the version as the Windows ARM64 build
+        # Shown in Help -> About, the console banner and the start-up log.
+        # Only this job's checkout is changed; every other build, and the
+        # release's version check, read the committed file.
+        shell: pwsh
+        run: |
+          $path = "editor/version.txt"
+          $text = ([IO.File]::ReadAllText($path)).TrimEnd()
+          if ($text -notmatch '^version \d+(\.\d+)+$') {
+            throw "Unexpected editor/version.txt: '$text'"
+          }
+          [IO.File]::WriteAllText($path, "$text$env:ARM64_VERSION_SUFFIX`n")
+          Write-Host "editor/version.txt: $([IO.File]::ReadAllText($path).TrimEnd())"
+
+      - name: Build Fio with Nuitka
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m nuitka ^
+            --standalone ^
+            --output-filename=Fio ^
+            --assume-yes-for-downloads ^
+            --plugin-enable=pyqt5 ^
+            --include-qt-plugins=sensible,platforms,styles,imageformats ^
+            --include-package=engine ^
+            --include-package=editor ^
+            --include-package=PIL ^
+            --include-data-dir=assets=assets ^
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin ^
+            --include-package=plugins ^
+            --include-package-data=plugins ^
+            --include-data-dir=tools=tools ^
+            --include-data-dir=maps=maps ^
+            --include-data-dir=cutscenes=cutscenes ^
+            --include-data-files=settings.ini=settings.ini ^
+            --include-data-files=editor/version.txt=editor/version.txt ^
+            --windows-icon-from-ico=assets/icon.ico ^
+            --windows-console-mode=disable ^
+            --output-dir=build ^
+            main.py
+
+      - name: Validate ARM64 build
+        shell: pwsh
+        run: |
+          $dist = "build\main.dist"
+          $exe = Join-Path $dist "Fio.exe"
+          if (-not (Test-Path $exe)) { throw "Fio.exe not found" }
+
+          $qtcore = @(Get-ChildItem $dist -Recurse -Filter "Qt5Core.dll")
+          $qwindows = @(Get-ChildItem $dist -Recurse -Filter "qwindows.dll")
+          if (-not $qtcore) { throw "Qt5Core.dll was not included in the build" }
+          if (-not $qwindows) { throw "The qwindows platform plugin was not included in the build" }
+
+          $fog = Join-Path $dist "assets\noise_3d.bin"
+          if (-not (Test-Path $fog)) { throw "Packaged volumetric fog texture not found: $fog" }
+          if ((Get-Item $fog).Length -ne 32768) {
+            throw "Packaged volumetric fog texture has the wrong size."
+          }
+
+          $binaries = @(Get-Item $exe) + @(Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -in ".dll", ".pyd" })
+          foreach ($binary in $binaries) {
+            $dump = cmd /c ('call "' + $env:VCVARS + '" arm64 >nul && dumpbin /headers "' + $binary.FullName + '"')
+            if (-not ($dump -join [Environment]::NewLine).Contains("AA64 machine (ARM64)")) {
+              throw "$($binary.FullName) is not an ARM64 PE image"
+            }
+          }
+          Write-Host "Fio.exe: $((Get-Item $exe).Length) bytes; $($binaries.Count) native binaries, all ARM64"
+          Write-Host "Qt5Core.dll: $($qtcore[0].FullName)"
+          Write-Host "qwindows.dll: $($qwindows[0].FullName)"
+          Write-Host "Packaged volumetric fog texture: $((Get-Item $fog).Length) bytes"
+
+      - name: Validate packaged version marks ARM64
+        shell: pwsh
+        run: |
+          $packaged = ([IO.File]::ReadAllText("build/main.dist/editor/version.txt")).TrimEnd()
+          if (-not $packaged.EndsWith("ARM64")) {
+            throw "Packaged editor/version.txt does not end with ARM64: '$packaged'"
+          }
+          Write-Host "Packaged version: $packaged"
+
+      - name: Upload ARM64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fio-windows-arm64
           path: build/main.dist/
 
 
@@ -361,6 +596,7 @@ jobs:
     needs:
       - tests
       - build-windows
+      - build-windows-arm64
       - build-macos
       - build-linux
 
@@ -385,6 +621,12 @@ jobs:
         with:
           name: fio-windows
           path: release/windows
+
+      - name: Download Windows ARM64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fio-windows-arm64
+          path: release/windows-arm64
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v8
@@ -443,6 +685,13 @@ jobs:
             zip -r "../assets/Fio_${VERSION}_Windows.zip" .
           )
 
+          # Package Windows ARM64 build.
+          echo "Packaging Windows ARM64..."
+          (
+            cd release/windows-arm64
+            zip -r "../assets/Fio_${VERSION}_Windows_ARM64.zip" .
+          )
+
           # Package Linux build.
           echo "Packaging Linux..."
           (
@@ -481,6 +730,7 @@ jobs:
 
           gh release create "$VERSION" \
             "release/assets/Fio_${VERSION}_Windows.zip" \
+            "release/assets/Fio_${VERSION}_Windows_ARM64.zip" \
             "release/assets/Fio_${VERSION}_macOS.zip" \
             "release/assets/Fio_${VERSION}_linux.zip" \
             --repo "$GITHUB_REPOSITORY" \
