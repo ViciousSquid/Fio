@@ -30,6 +30,117 @@ COLLISION_KEYS = (
 )
 
 
+class CollisionRows:
+    """Every box in the collision brush cache, as rows in the cache's order.
+
+    What the per-brush walks over ``_collision_brushes_cache`` read, held as
+    arrays so a query is a handful of NumPy operations instead of a Python
+    loop over every brush. Two sets of boxes, because the two walks round
+    differently:
+
+    * ``lo32``/``hi32``: the corners the hitscan walk tests, ``glm.vec3(pos)
+      -/+ glm.vec3(size) * 0.5`` -- rounded to float32 -- held as float64,
+      since the slab test itself then runs in Python floats;
+    * ``lo``/``hi``: the corners the projectile wall walk tests, ``pos -/+
+      size * 0.5`` in float64.
+
+    Only geometry lives here. Whether a brush blocks (``hidden``, water, fog,
+    trigger) is asked of the brush itself, live, for the few rows a query
+    returns: a streaming layer or an I/O input can change those at any time.
+    Movers and doors are the only brushes whose ``pos`` changes during play,
+    and their rows are re-read on every query (:meth:`refresh_movers`), which
+    is what the walks do.
+
+    Rebuilt when the cache list is replaced or the editor's world epoch moves;
+    see :meth:`LogicCollision.collision_rows`.
+    """
+
+    __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi',
+                 'mover_rows', 'movers')
+
+    def __init__(self, brushes, epoch):
+        self.source = brushes
+        self.epoch = epoch
+        self.brushes = list(brushes)
+        count = len(self.brushes)
+        # One contiguous row per axis: every query reads a whole axis at once.
+        self.lo32 = np.empty((3, count), dtype=np.float64)
+        self.hi32 = np.empty((3, count), dtype=np.float64)
+        self.lo = np.empty((3, count), dtype=np.float64)
+        self.hi = np.empty((3, count), dtype=np.float64)
+        self._resolve(slice(None), self.brushes)
+        movers = [row for row, b in enumerate(self.brushes)
+                  if b.get('is_mover') or b.get('is_door')]
+        self.mover_rows = np.asarray(movers, dtype=np.intp)
+        self.movers = [self.brushes[row] for row in movers]
+
+    def _resolve(self, rows, brushes):
+        count = len(brushes)
+        pos = np.array([(p[0], p[1], p[2]) for p in (b['pos'] for b in brushes)],
+                       dtype=np.float64).reshape(count, 3).T
+        size = np.array([(s[0], s[1], s[2]) for s in (b['size'] for b in brushes)],
+                        dtype=np.float64).reshape(count, 3).T
+        pos32 = pos.astype(np.float32)
+        half32 = size.astype(np.float32) * np.float32(0.5)
+        self.lo32[:, rows] = pos32 - half32
+        self.hi32[:, rows] = pos32 + half32
+        half = size * 0.5
+        self.lo[:, rows] = pos - half
+        self.hi[:, rows] = pos + half
+
+    def refresh_movers(self):
+        if self.movers:
+            self._resolve(self.mover_rows, self.movers)
+
+    def ray_hits(self, origin, direction, reach):
+        """Rows whose box the ray meets within *reach*, nearest first.
+
+        The slab test of :meth:`LogicCombat.intersect_ray_aabb` on every row
+        at once, in the same float64 arithmetic: ``(rows, dist)``, ordered by
+        distance and then by row, so the first row that blocks is the one the
+        walk would have kept (it keeps the first brush at the least distance).
+        """
+        count = self.lo32.shape[1]
+        t_min = np.zeros(count)
+        t_max = np.full(count, float(reach))
+        t1 = np.empty(count)
+        t2 = np.empty(count)
+        hit = None
+        for axis in range(3):
+            lo = self.lo32[axis]
+            hi = self.hi32[axis]
+            o = float(origin[axis])
+            d = float(direction[axis])
+            if abs(d) < 1e-6:
+                within = (lo <= o) & (o <= hi)
+                hit = within if hit is None else hit & within
+                continue
+            inv_d = 1.0 / d
+            np.multiply(np.subtract(lo, o, out=t1), inv_d, out=t1)
+            np.multiply(np.subtract(hi, o, out=t2), inv_d, out=t2)
+            np.maximum(t_min, np.minimum(t1, t2), out=t_min)
+            np.minimum(t_max, np.maximum(t1, t2), out=t_max)
+        if hit is None:
+            hit = t_min <= t_max
+        else:
+            hit &= t_min <= t_max
+        rows = np.flatnonzero(hit)
+        dist = t_min[rows]
+        if len(rows) > 1:
+            order = np.lexsort((rows, dist))
+            rows, dist = rows[order], dist[order]
+        # + 0.0: the walk's distance starts at 0.0 and can never become -0.0.
+        return rows, dist + 0.0
+
+    def point_hits(self, x, y, z):
+        """Rows whose float64 box holds the point, boundaries included."""
+        lo, hi = self.lo, self.hi
+        return np.flatnonzero(
+            (lo[0] <= x) & (x <= hi[0])
+            & (lo[1] <= y) & (y <= hi[1])
+            & (lo[2] <= z) & (z <= hi[2]))
+
+
 class LogicCollision:
     """Runtime for static and model-backed collision geometry."""
 
@@ -40,6 +151,7 @@ class LogicCollision:
         self._model_collision_brushes = []
         self._physics_body_brushes = []
         self._collision_brushes_cache = []
+        self._collision_rows = None
 
     def mark_dirty(self):
         self._dirty = True
@@ -512,6 +624,51 @@ class LogicCollision:
         """
         logic = self.logic
         self._collision_brushes_cache = logic.editor_state.brushes + self._model_collision_brushes
+        self._collision_rows = None
+
+    #: Brushes the collision cache must hold before a whole-cache walk (the
+    #: hitscan, the small-swarm projectile wall test) is run as one NumPy
+    #: query over :class:`CollisionRows` instead of a Python loop.
+    #:
+    #: The walk never exits early -- it must see every brush to find the
+    #: nearest -- so it costs about 2 us a brush; the query is a fixed ~21 us
+    #: of NumPy dispatch until the rows get long. One pellet's brush pass, 200
+    #: rays, best of 7:
+    #:
+    #: =======  =========  ========
+    #: brushes  scalar us  dense us
+    #: =======  =========  ========
+    #:       4        8.2      20.5
+    #:       8       16.4      21.5
+    #:      16       32.3      21.4
+    #:      64      130.2      20.8
+    #:     256      552.4      23.4
+    #:    3600     7718.4      59.4
+    #: =======  =========  ========
+    #:
+    #: Both answer identically, so this is purely a speed knob; zero means
+    #: always dense. Re-measure with
+    #: ``tests/performance/test_hitscan_threshold_benchmark.py``.
+    DENSE_WALK_MIN_BRUSHES = 16
+
+    def collision_rows(self):
+        """:class:`CollisionRows` for the current cache, or None below the
+        dense threshold.
+
+        Built on first use after :meth:`refresh_collision_brushes_cache`, and
+        again if the cache list is replaced behind its back (Stop assigns an
+        empty one) or an editor edit moves the world epoch; movers and doors
+        are re-read on every call.
+        """
+        brushes = self._collision_brushes_cache
+        if len(brushes) < self.DENSE_WALK_MIN_BRUSHES:
+            return None
+        epoch = getattr(self.logic.editor_state, 'world_epoch', 0)
+        rows = self._collision_rows
+        if rows is None or rows.source is not brushes or rows.epoch != epoch:
+            rows = self._collision_rows = CollisionRows(brushes, epoch)
+        rows.refresh_movers()
+        return rows
 
     # -- visibility invalidation ------------------------------------------
     #

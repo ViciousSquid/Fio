@@ -439,7 +439,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.waypoint_action.currentIndexChanged.connect(
             lambda _index: self._update_waypoint_controls()
         )
-        self.load_button.clicked.connect(self._load_cutscene)
+        self.load_button.clicked.connect(lambda _checked=False: self._load_cutscene())
         self.save_button.clicked.connect(self._save_and_close)
         self.apply_button.clicked.connect(self._apply_to_map)
         self.cancel_button.clicked.connect(self.reject)

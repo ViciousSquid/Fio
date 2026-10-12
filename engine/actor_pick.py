@@ -103,7 +103,9 @@ def pick_actor(ray_o, ray_d, entity_table, render_table=None,
     if not len(slots):
         return NO_SLOT
     o, d = _as_vec(ray_o), _as_vec(ray_d)
-    centres = entity_table.pos[slots].astype(np.float64)
+    # The fancy index is already a fresh array; asarray only guards the dtype
+    # (the column is float64, so it costs nothing).
+    centres = np.asarray(entity_table.pos[slots], dtype=np.float64)
     radius = np.maximum(entity_table.sprite_size[slots].max(axis=1) * 0.5,
                         float(min_radius)).astype(np.float64)
     oc = o - centres

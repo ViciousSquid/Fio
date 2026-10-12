@@ -192,6 +192,10 @@ class Player:
         self.stand_height = self.height
         self.stand_camera_height = self.camera_height
         self.ducked = False
+        # The hull ducks at once, as Quake 2's does; the view follows over
+        # DUCK_VIEW_TIME. view_offset is how far the eye still has to travel
+        # to camera_height (0 when it has arrived); see view_height.
+        self.view_offset = 0.0
         # Quake 2's landing lockout: no jumping for a moment after a hard landing.
         self.landing = False
         self.pm_time = 0.0
@@ -220,6 +224,36 @@ class Player:
         self._jump_held = False
         self._gravity = world_gravity()
 
+    #: Seconds the view takes to move between the standing and ducked eye.
+    DUCK_VIEW_TIME = 0.5
+
+    @property
+    def view_height(self):
+        """The eye the player sees from, above ``pos``: ``camera_height``,
+        except while the view is still travelling after a duck or a stand."""
+        return self.camera_height + self.view_offset
+
+    def _duck_eye_travel(self):
+        """How far the eye moves, in world units, between standing and ducked."""
+        stand_eye = self.stand_height * 0.5 + self.stand_camera_height
+        duck_height = self.stand_height * PM_DUCK_HEIGHT_FRACTION
+        duck_eye = stand_eye * PM_DUCK_EYE_FRACTION - duck_height * 0.5
+        return self._duck_drop() + self.stand_camera_height - duck_eye
+
+    def _settle_view(self, delta):
+        """Move the view toward the eye at the rate that covers a whole duck
+        in DUCK_VIEW_TIME, so turning back half way takes half as long."""
+        if not self.view_offset:
+            return
+        step = self._duck_eye_travel() / self.DUCK_VIEW_TIME * delta
+        # The tolerance absorbs rounding, so the last step lands on 0.
+        if abs(self.view_offset) <= step * (1.0 + 1e-9):
+            self.view_offset = 0.0
+        elif self.view_offset > 0.0:
+            self.view_offset -= step
+        else:
+            self.view_offset += step
+
     def _duck_drop(self):
         """How far the centre moves when the hull shrinks from the top."""
         return self.stand_height * (1.0 - PM_DUCK_HEIGHT_FRACTION) * 0.5
@@ -242,8 +276,11 @@ class Player:
         """Duck on the ground with crouch held; stand up only where there is room."""
         if crouch and self.on_ground:
             if not self.ducked:
+                eye = self.pos.y + self.camera_height
                 self.pos.y -= self._duck_drop()
                 self.set_ducked(True)
+                # The view starts where the eye was and follows it down.
+                self.view_offset += eye - (self.pos.y + self.camera_height)
             return
         if not self.ducked:
             return
@@ -252,12 +289,14 @@ class Player:
         centre = glm.vec3(self.pos.x, self.pos.y + lift, self.pos.z)
         lo, hi = centre - half, centre + half
         if all(self._has_headroom(b, lo, hi) for b in aabb_brushes):
+            eye = self.pos.y + self.camera_height
             self.pos.y += lift
             self.set_ducked(False)
+            self.view_offset += eye - (self.pos.y + self.camera_height)
 
     def get_view_matrix(self):
         """Calculate the view matrix for rendering."""
-        cam_pos = self.pos + glm.vec3(0, self.camera_height, 0)
+        cam_pos = self.pos + glm.vec3(0, self.view_height, 0)
         direction = glm.vec3(
             math.sin(self.angle) * math.cos(self.pitch),
             math.sin(self.pitch),
@@ -277,6 +316,9 @@ class Player:
         from the grid (only nearby cells) instead of iterating every brush.
         Movers and doors are always included since they're dynamic.
         """
+        # Before this tick's duck check: a duck made now shows its whole first
+        # step of travel next tick, so a full duck takes DUCK_VIEW_TIME.
+        self._settle_view(delta)
         if gravity is None:
             gravity = world_gravity()
         self._gravity = gravity

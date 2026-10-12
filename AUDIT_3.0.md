@@ -423,7 +423,7 @@ column gives the clean figure where re-measurement changed the picture.
 | 1 | `MoverTable._walk` plans empty groups | `mover_table` 0.75-1.05 ms/frame on **every** map, Terrain_Test_medium has no brushes at all; ~30 NumPy calls per empty group per tick | Python, shared | P-02, fixed |
 | 2 | `_bind_shadow_maps` re-sends sampler units | 136-145 us/call vs 80 in 2.5.10; 4-11 calls/frame; 3.0's 8-sampler shaders doubled its GL calls | GL calls + Python, **3.0 regression** | P-01, fixed |
 | 3 | `prepare_render_state` | 0.25-0.75 ms self every frame (BigWorld highest) | Python, shared | measured: ~0.35 ms real, all dense NumPy; no change |
-| 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB). Untraced: **1.37 ms per shot** on BigWorld (3,604 brushes), not the ~10 ms the traced profile showed | Python, shared | open: see below |
+| 4 | Player hitscan (`_handle_shooting`) | per shot: a Python loop over every collision brush (dict gets, `is_water_brush`, two `glm.vec3`, ray/AABB). Untraced: **1.37 ms per shot** on BigWorld (3,604 brushes), not the ~10 ms the traced profile showed | Python, shared | fixed: see *Open after this pass* |
 | 5 | Monster AI `_chase` | traced ~2.8 ms per update; **untraced 0.75 ms**, the whole update 1.1 ms; batched already | NumPy, shared | measured: tracemalloc artefact; at parity |
 | 6 | Frustum (`extract_frustum_planes`, `aabb_in_frustum_bounds`) | 0.13-0.18 ms each, every frame | Python, shared | small clean; see *Open after this pass* |
 | 7 | `_advance_effects` five-column copy | 0.41 ms traced, 0.12 ms clean on Showcase (F-08); found F-16 on the way | NumPy, 3.0 | F-16 fixed; copy kept |
@@ -531,14 +531,32 @@ column gives the clean figure where re-measurement changed the picture.
 
 ### Open after this pass
 
-* **Hitscan (#4).** An exact batched version is straightforward arithmetic
-  (`glm.vec3` rounds the box corners to float32, the slab test then runs in
-  float64), but the loop reads live brush state the dense tables do not hold
-  at tick time: the spatial grid files a different set (mesh bounds,
-  `authored_hidden`, no physics bodies), and the render table is one to two
-  publications old while the tick runs (movers, streaming-hidden flags). It
-  needs collision bounds kept current by the change journal, a new structure;
-  for 1.4 ms per shot on the largest map, left for now.
+* **Hitscan (#4): done.** `CollisionRows` (`engine/logic_collision.py`)
+  holds every box of `_collision_brushes_cache` in cache order, built on
+  first use after `refresh_collision_brushes_cache` and again when the cache
+  list is replaced or the world epoch moves. The objections above are met by
+  reading live what can change live: mover and door rows are re-read once a
+  shot, and blocking flags (`hidden`, water, fog, trigger) are asked only of
+  the few rows a ray meets, nearest first. Box corners are float32 as
+  `glm.vec3` rounds them; the slab test is float64 as the walk's Python
+  floats were. Hit positions are bit-identical to the walk on every map
+  in `maps/` with the dense path forced, and on randomised worlds
+  (`tests/engine/test_hitscan_dense.py`). The monster pass is one batched
+  ray/sphere test whose float32 dot products are summed `(x + y) + z` as
+  `glm.dot` does (verified bitwise on 200k pairs).
+  **Behaviour change, by decision:** a shot's pellets trace one snapshot and
+  apply their effects afterwards in pellet order, so a pellet's I/O reaches
+  the next shot, not the rest of this one (`tests/engine/test_hitscan_snapshot.py`,
+  CHANGELOG). Per shot on BigWorld (1,224 shots, 3 interleaved rounds, ms
+  median): 1 pellet 0.80-1.32 -> 0.16-0.41; 8 pellets 6.2-10.0 -> 0.64-1.00.
+  What is left is NumPy dispatch, about equally the slab test over 3,604
+  rows, the 34 movers' re-read, the monster snapshot and the batched sphere
+  test; skipping unmoved movers by identity would save ~35 us but the 2D
+  view resizes brushes in place, so it is not done. The small-swarm
+  projectile wall test uses the same rows (exact, float64 boxes):
+  511 -> 37 us a projectile on BigWorld. Threshold
+  `DENSE_WALK_MIN_BRUSHES = 16`, measured by
+  `tests/performance/test_hitscan_threshold_benchmark.py`.
 * **Rows 6, 9, 11** (frustum, player collision helpers, slot classification
   per portal view): 0.05-0.23 ms each, clean; no Python loop to remove.
 * **Intermittent GL-tier warning.** `test_interleaved_textures_are_one_draw`

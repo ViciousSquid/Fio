@@ -1,3 +1,4 @@
+import contextlib
 import time
 import os
 import math
@@ -6,8 +7,8 @@ import numpy as np
 import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, pyqtSignal
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
+from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -980,6 +981,10 @@ class QtGameView(QOpenGLWidget):
 
 
     def initializeGL(self):
+        # Terrain deletes its GL objects from the GUI thread too (opening a
+        # map, the terrain editor); they must go to this view's context.
+        from engine.terrain import Terrain
+        Terrain.gl_context = self.gl_context
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = self.editor.config
         self._renderer_mode = DEFAULT_RENDERER
@@ -1053,6 +1058,23 @@ class QtGameView(QOpenGLWidget):
             self.editor._exit_play_mode()
         if message:
             self._play_mode_hint = "Logic tick failed; Play Mode stopped"
+
+    def set_editor_camera(self, pos, yaw=None, pitch=None):
+        """Move the editor camera, keeping *yaw*/*pitch* unless given.
+
+        The logic thread owns the editor camera: every paint copies this
+        view's camera back from the published render state. A move made here
+        alone is undone by the next frame, so it is made on both.
+        """
+        camera = self.camera
+        camera.pos = glm.vec3(pos)
+        if yaw is not None:
+            camera.yaw = float(yaw)
+        if pitch is not None:
+            camera.pitch = float(pitch)
+        if self.logic_thread is not None:
+            self.logic_thread.camera.set_editor_camera(
+                camera.pos, camera.yaw, camera.pitch, camera.fov)
 
     def _start_logic_thread(self):
         if self._thread_started:
@@ -2666,8 +2688,8 @@ class QtGameView(QOpenGLWidget):
         from engine.pause_menu import Item, Page
         editor = self.editor
         return Page("Options", [
-            Item("Sound Volume", slider=(editor.sound_volume, editor.set_sound_volume, 0, 100, 5)),
-            Item("Music Volume", slider=(editor.music_volume, editor.set_music_volume, 0, 100, 5)),
+            Item("Sound", slider=(editor.sound_volume, editor.set_sound_volume, 0, 100, 5)),
+            Item("Music", slider=(editor.music_volume, editor.set_music_volume, 0, 100, 5)),
             Item("Video", page=self._pause_video_page),
         ])
 
@@ -3138,6 +3160,28 @@ class QtGameView(QOpenGLWidget):
         finally:
             self.doneCurrent()
             self.update()
+
+    @contextlib.contextmanager
+    def gl_context(self):
+        """Make this view's GL context current for GL work outside paintGL.
+
+        Outside paintGL the current context is usually Qt's own compositing
+        context, which shares buffers and textures with this one but not VAOs:
+        GL calls made there free the wrong objects and corrupt driver state.
+        A no-op when this context is already current (inside paintGL), before
+        the context exists, or off the GUI thread, where makeCurrent is unsafe.
+        """
+        ctx = self.context()
+        if (ctx is None or not ctx.isValid()
+                or QOpenGLContext.currentContext() is ctx
+                or QThread.currentThread() is not self.thread()):
+            yield
+            return
+        self.makeCurrent()
+        try:
+            yield
+        finally:
+            self.doneCurrent()
 
     def get_primary_selection_pos(self):
         if not self.editor.primary_selection():
@@ -4360,7 +4404,7 @@ class QtGameView(QOpenGLWidget):
             self._toggle_splitscreen()
             return
         if self.play_mode and event.key() == Qt.Key_F12:
-            if self.editor.is_kiosk_mode:
+            if getattr(self.editor, 'is_kiosk_mode', False):
                 self.editor.exit_kiosk_mode(keep_play_mode=True)
             else:
                 self.editor.enter_kiosk_mode()

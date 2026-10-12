@@ -518,3 +518,99 @@ def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
             "the portal system did per-frame work on a map with no portals")
     finally:
         thread.session_runtime.apply_play_mode(False)
+
+
+# ---------------------------------------------------------------------------
+# The player's hitscan, and the small-swarm projectile wall test
+# ---------------------------------------------------------------------------
+
+def _counting(monkeypatch, module, name):
+    calls = [0]
+    real = getattr(module, name)
+
+    def counted(*args, **kwargs):
+        calls[0] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, counted)
+    return calls
+
+
+def _armed(thread, item_id):
+    from engine.player import Player
+    thread.player_runtime.player = Player(0.0, 0.0)
+    player = thread.player_runtime.player
+    player.pos.x, player.pos.y, player.pos.z = 0.0, 40.0, 0.0
+    player.angle, player.pitch = 0.0, 0.0
+    combat = thread.combat_runtime
+    combat.give_weapon(combat.items.resolve(item_id))
+    return combat
+
+
+def test_a_shot_walks_no_brush_the_ray_does_not_meet(logic, monkeypatch):
+    """1,600 brushes and a shotgun's eight pellets: the old walk asked every
+    brush whether it was water and ray-tested every box, per pellet."""
+    from engine import logic_combat
+    brushes = room(size=8192.0) + pillar_grid(40, 40, spacing=180.0, size=(32, 256, 32))
+    thread = logic(brushes=brushes)
+    thread.session_runtime.apply_play_mode(True)
+    try:
+        combat = _armed(thread, "gun2")
+        water = _counting(monkeypatch, logic_combat, "is_water_brush")
+        slab = _counting(monkeypatch, type(combat), "intersect_ray_aabb")
+        combat._handle_shooting()
+        weapon = combat.held_weapon()
+        assert slab[0] == 0, "the hitscan ray-tested brushes one by one"
+        # Each pellet asks only the boxes it meets, nearest first, until one
+        # blocks: here the first pillar (or wall) it reaches.
+        assert water[0] <= weapon.pellets * 4, (
+            "%d brush predicate calls for %d pellets over %d brushes"
+            % (water[0], weapon.pellets, len(brushes)))
+    finally:
+        thread.session_runtime.apply_play_mode(False)
+
+
+def test_the_hitscan_rows_are_built_once_per_session_and_refreshed_once_per_shot(logic, monkeypatch):
+    from engine import logic_collision
+    brushes = room(size=4096.0) + pillar_grid(10, 10, spacing=300.0)
+    brushes[-1]["is_mover"] = True
+    thread = logic(brushes=brushes)
+    thread.session_runtime.apply_play_mode(True)
+    try:
+        combat = _armed(thread, "gun2")
+        built = _counting(monkeypatch, logic_collision.CollisionRows, "__init__")
+        refreshed = _counting(monkeypatch, logic_collision.CollisionRows, "refresh_movers")
+        for _ in range(10):
+            combat._last_player_shot_time = float("-inf")
+            combat.player_ammo = 8
+            combat._handle_shooting()
+        assert built[0] == 1, "the rows were rebuilt %d times in 10 shots" % built[0]
+        assert refreshed[0] == 10, (
+            "movers were re-read %d times in 10 eight-pellet shots; once a "
+            "shot is enough" % refreshed[0])
+    finally:
+        thread.session_runtime.apply_play_mode(False)
+
+
+def test_a_small_swarm_wall_test_walks_no_brush_the_point_is_not_in(logic, monkeypatch):
+    from engine import logic_combat
+    brushes = room(size=8192.0) + pillar_grid(30, 30, spacing=250.0, size=(32, 256, 32))
+    thread = logic(brushes=brushes)
+    thread.session_runtime.apply_play_mode(True)
+    try:
+        from engine.player import Player
+        thread.player_runtime.player = Player(0.0, -3000.0)
+        combat = thread.combat_runtime
+        for i in range(10):
+            combat._add_monster_projectile((40.0 + 250.0 * i, 128.0, 125.0),
+                                           (0.0, 0.0, 1.0), 777, 5.0, 10.0)
+        solid = _counting(monkeypatch, logic_combat, "is_solid_world_brush")
+        combat._update_monster_projectiles(1.0 / 60.0)
+        assert len(combat._monster_projectiles) == 10
+        # In open air between the pillars: no box holds a point, so no brush
+        # is asked whether it is solid.
+        assert solid[0] == 0, (
+            "%d solidity checks for 10 projectiles in open air over %d brushes"
+            % (solid[0], len(brushes)))
+    finally:
+        thread.session_runtime.apply_play_mode(False)

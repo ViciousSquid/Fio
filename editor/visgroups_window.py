@@ -37,6 +37,14 @@ _LOCK_STYLE = """
     QPushButton:hover { background-color: #444; }
     QPushButton:checked { background-color: #F08000; border: 1px solid #F08000; }
 """
+# Column headers are drawn natively (white on Windows) unless styled here.
+_HEADER_STYLE = """
+    QHeaderView { background-color: #333; border: none; }
+    QHeaderView::section { background-color: #333; color: white;
+                           padding: 4px 6px; border: none;
+                           border-right: 1px solid #555;
+                           border-bottom: 1px solid #555; }
+"""
 
 
 class VisgroupsWindow(QWidget):
@@ -46,7 +54,7 @@ class VisgroupsWindow(QWidget):
         super().__init__(main_window, Qt.Window)
         self.main_window = main_window
         self.setWindowTitle("Visgroups & Cordon")
-        self.resize(320, 420)
+        self.resize(320, 560)
         self.setStyleSheet("QWidget { background-color: #2b2b2b; color: #ddd; }")
         self._refreshing = False
 
@@ -136,6 +144,7 @@ class VisgroupsWindow(QWidget):
         layout = QVBoxLayout(tab)
         self.group_tree = QTreeWidget()
         self.group_tree.setHeaderLabels(["Visgroup", "Objects"])
+        self.group_tree.header().setStyleSheet(_HEADER_STYLE)
         self.group_tree.setRootIsDecorated(False)
         self.group_tree.setColumnWidth(0, 200)
         self.group_tree.itemChanged.connect(self._on_group_item_changed)

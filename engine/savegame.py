@@ -297,6 +297,8 @@ def _apply_player(player, data: Optional[dict]) -> None:
         if not ducked and "camera_height" in data:
             player.stand_camera_height = player.camera_height
         player.set_ducked(ducked)
+        # Put back, not walked back: the view is at the restored eye at once.
+        player.view_offset = 0.0
     if "physics_enabled" in data:
         player.physics_enabled = bool(data["physics_enabled"])
     if "on_ground" in data:
@@ -745,6 +747,11 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     entity overlay. Caller is responsible for having overlaid entity state first.
     """
     runtime = data.get("runtime", {}) or {}
+
+    # Linked portals share one active state; a save from before that rule
+    # may hold a pair that disagrees.
+    from editor.portal_links import normalize_portal_groups
+    normalize_portal_groups(logic.editor_state.things)
 
     # Player(s)
     _apply_player(logic.player_runtime.player, data.get("player"))

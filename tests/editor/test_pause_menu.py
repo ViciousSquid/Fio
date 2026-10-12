@@ -166,10 +166,10 @@ def test_sound_and_music_volumes_are_the_settings_volumes(playing):
     view.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Options")
-    assert _labels(menu) == ["Sound Volume", "Music Volume", "Video", "Back"]
-    _press(view, Qt.Key_Left)                          # Sound Volume
+    assert _labels(menu) == ["Sound", "Music", "Video", "Back"]
+    _press(view, Qt.Key_Left)                          # Sound
     _press(view, Qt.Key_Left)
-    _press(view, Qt.Key_Down)                          # Music Volume
+    _press(view, Qt.Key_Down)                          # Music
     for _ in range(4):
         _press(view, Qt.Key_Left)
     assert window.config.get("Audio", "sound_volume") == "90"

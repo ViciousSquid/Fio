@@ -657,6 +657,11 @@ class EditorState:
             except ImportError:
                 pass
 
+        # Linked portals share one active state; a map whose pairs disagree
+        # (authored before that rule) loads with them agreeing.
+        from editor.portal_links import normalize_portal_groups
+        normalize_portal_groups(new_things)
+
         # Published before the invalidation, for the reason restore_state
         # gives: a frame between the two must not rebuild the outgoing world.
         self.brushes = new_brushes

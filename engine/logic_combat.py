@@ -134,11 +134,9 @@ class LogicCombat:
         if weapon.mode == 'projectile':
             self._fire_projectile(weapon, ray_origin, ray_dir)
             return
-        any_miss = False
-        for pellet in range(weapon.pellets):
-            direction = self._scatter(ray_dir, weapon.spread, pellet)
-            if not self._fire_ray(weapon, ray_origin, direction):
-                any_miss = True
+        directions = [self._scatter(ray_dir, weapon.spread, pellet)
+                      for pellet in range(weapon.pellets)]
+        any_miss = not all(self._fire_rays(weapon, ray_origin, directions))
         # Monsters hear a shot that hit nothing; one that hits is the fight.
         if any_miss and weapon.noise > 0.0:
             self._emit_noise_event(
@@ -164,9 +162,10 @@ class LogicCombat:
             dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
             dir_y = math.sin(pitch_rad)
             dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
-        ray_origin = glm.vec3(logic.player_runtime.player.pos.x,
-                              logic.player_runtime.player.pos.y + logic.player_runtime.player.camera_height,
-                              logic.player_runtime.player.pos.z)
+        player = logic.player_runtime.player
+        # From the eye the player sees from (it eases after a duck).
+        eye = getattr(player, 'view_height', player.camera_height)
+        ray_origin = glm.vec3(player.pos.x, player.pos.y + eye, player.pos.z)
         return ray_origin, glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
 
     @staticmethod
@@ -201,16 +200,74 @@ class LogicCombat:
         self._emit_noise_event([origin.x, origin.y, origin.z],
                                source='gunfire', loudness=weapon.noise)
 
-    def _fire_ray(self, weapon, ray_origin, ray_dir):
-        """Trace one hitscan or melee ray; True if it hit a monster."""
+    def _fire_rays(self, weapon, ray_origin, directions):
+        """Trace one shot's hitscan or melee rays; per ray, True if it hit a monster.
+
+        Every ray of a shot traces against one instant of the world: the
+        collision brushes, and a snapshot of the monsters taken once, under a
+        single ``monster_lock`` acquisition. Only then are the effects applied
+        -- damage, death, I/O outputs, bullet marks -- one ray at a time in
+        pellet order. A monster an earlier ray's damage killed is passed over
+        by a later ray, which goes on to whatever it met behind (another
+        monster, or the wall); otherwise nothing an effect does, I/O it fires
+        included, is seen by the other rays of the same shot, only by the next.
+        """
         logic = self.logic
         reach = weapon.range
+        rows = logic.collision_runtime.collision_rows()
+        walls = [self._trace_brushes(rows, ray_origin, direction, reach)
+                 for direction in directions]
+        results = []
+        with logic.session_runtime.monster_lock:
+            monsters, centres, radii = self._hitscan_monster_snapshot()
+            pending = self._trace_monsters(ray_origin, directions, reach,
+                                           [dist for dist, _ in walls],
+                                           centres, radii)
+            killed = set()
+            for (dist, point), candidates in zip(walls, pending):
+                target = None
+                for row in candidates:
+                    if id(monsters[row]) not in killed:
+                        target = monsters[row]
+                        break
+                if target is not None:
+                    if self._damage_monster(weapon, target):
+                        killed.add(id(target))
+                    results.append(True)
+                    continue
+                # A melee strike leaves no mark on the wall it meets.
+                if point is not None and weapon.mode == 'hitscan':
+                    self.bullet_marks.append({
+                        'pos': point,
+                        'time': time.perf_counter()
+                    })
+                results.append(False)
+        return results
+
+    @staticmethod
+    def _blocks_hitscan(brush):
+        return not (brush.get('is_trigger') or brush.get('hidden') or
+                    is_water_brush(brush) or brush.get('is_fog'))
+
+    def _trace_brushes(self, rows, ray_origin, ray_dir, reach):
+        """``(distance, point)`` of the nearest blocking brush, or ``(inf, None)``.
+
+        The first brush in cache order wins a tie. Given the cache's
+        :class:`~engine.logic_collision.CollisionRows` (None below the dense
+        threshold), the boxes are tested as one NumPy query, and only the few
+        the ray meets are asked whether they block, nearest first.
+        """
+        if rows is not None:
+            hit_rows, dists = rows.ray_hits(ray_origin, ray_dir, reach)
+            brushes = rows.brushes
+            for row, dist in zip(hit_rows.tolist(), dists.tolist()):
+                if self._blocks_hitscan(brushes[row]):
+                    return dist, ray_origin + ray_dir * dist
+            return float('inf'), None
         closest_brush_hit = None
         closest_brush_dist = float('inf')
-        collision_brushes = logic.collision_runtime._collision_brushes_cache
-        for brush in collision_brushes:
-            if (brush.get('is_trigger') or brush.get('hidden') or
-                is_water_brush(brush) or brush.get('is_fog')):
+        for brush in self.logic.collision_runtime._collision_brushes_cache:
+            if not self._blocks_hitscan(brush):
                 continue
             pos = glm.vec3(brush['pos'])
             size = glm.vec3(brush['size'])
@@ -220,72 +277,101 @@ class LogicCombat:
             if hit and dist < closest_brush_dist:
                 closest_brush_dist = dist
                 closest_brush_hit = ray_origin + ray_dir * dist
-        
-        # Raycast against monsters — acquire lock for consistent positions
-        closest_monster = None
-        closest_monster_dist = float('inf')
-        
-        with logic.session_runtime.monster_lock:
-            for thing in logic.editor_state.things:
-                if not isinstance(thing, MonsterThing):
-                    continue
-                if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
-                    continue
-                sprite_width = float(thing.properties.get('sprite_width', 64.0))
-                sprite_height = float(thing.properties.get('sprite_height', 128.0))
-                # Use a wider, more forgiving hit box for better gameplay feel
-                # Width matters more than height for shooting comfort
-                radius = max(sprite_width * 0.75, sprite_height * 0.4, 48.0)
-                center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height * 0.45, thing.pos[2])
-                oc = ray_origin - center
-                a = glm.dot(ray_dir, ray_dir)
-                b = 2.0 * glm.dot(oc, ray_dir)
-                c = glm.dot(oc, oc) - radius * radius
-                disc = b * b - 4 * a * c
-                if disc >= 0:
-                    t = (-b - math.sqrt(disc)) / (2.0 * a)
-                    if 0 <= t <= reach and t < closest_monster_dist:
-                        if t < closest_brush_dist:
-                            closest_monster_dist = t
-                            closest_monster = thing
+        return closest_brush_dist, closest_brush_hit
 
-            if closest_monster is not None:
-                damage = weapon.damage
-                health_raw = closest_monster.properties.get('health', 100)
-                try:
-                    health = int(health_raw)
-                except (ValueError, TypeError):
-                    health = 100
-                new_health = health - damage
-                closest_monster.properties['health'] = new_health
-                debug_log("MonsterAI", f"Monster {closest_monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
-                logic.game_state.queue_sound({
-                    'file': 'hit.wav',
-                    'volume': 1.0,
-                    'entity_id': id(closest_monster)
-                })
-                if logic.io_manager:
-                    logic.io_manager.fire_output(closest_monster, 'OnDamaged')
-                if new_health <= 0:
-                    closest_monster.properties['dead'] = True
-                    closest_monster.properties.pop('is_shooting', None)
-                    touch(closest_monster)
-                    if logic.io_manager:
-                        logic.io_manager.fire_output(closest_monster, 'OnDeath')
-                    if logic.monster_ai.monster_debug_active:
-                        name = closest_monster.properties.get('name', '?')
-                        debug_log("MonsterAI",
-                            f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
-                            f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (shot by player)')
-                return True
+    def _hitscan_monster_snapshot(self):
+        """The shootable monsters, in things order, with their hit spheres.
 
-        # A melee strike leaves no mark on the wall it meets.
-        if closest_brush_hit is not None and weapon.mode == 'hitscan':
-            self.bullet_marks.append({
-                'pos': closest_brush_hit,
-                'time': time.perf_counter()
-            })
-        return False
+        ``(monsters, centres, radii)``: ``centres`` float32 as ``glm.vec3``
+        rounds them, ``radii`` float64. The sphere is wider than the sprite,
+        for a more forgiving feel: width matters more than height when
+        shooting. Taken under ``monster_lock``.
+        """
+        monsters = []
+        centres = []
+        radii = []
+        for thing in self.logic.editor_state.things:
+            if not isinstance(thing, MonsterThing):
+                continue
+            props = thing.properties
+            if props.get('dead', False) or props.get('hidden', False):
+                continue
+            sprite_width = float(props.get('sprite_width', 64.0))
+            sprite_height = float(props.get('sprite_height', 128.0))
+            monsters.append(thing)
+            centres.append((thing.pos[0], thing.pos[1] + sprite_height * 0.45, thing.pos[2]))
+            radii.append(max(sprite_width * 0.75, sprite_height * 0.4, 48.0))
+        return (monsters,
+                np.array(centres, dtype=np.float32).reshape(len(monsters), 3),
+                np.array(radii, dtype=np.float64))
+
+    @staticmethod
+    def _trace_monsters(ray_origin, directions, reach, wall_dists, centres, radii):
+        """Per ray, the monster rows it meets before its wall, nearest first.
+
+        The ray/sphere quadratic of every ray against every monster at once,
+        in the arithmetic the ``glm`` walk used: the offsets and dot products
+        in float32 (each dot summed ``(x + y) + z``, as ``glm.dot`` does), the
+        quadratic in float64. Ties go to the first monster in things order.
+        """
+        if not len(radii):
+            return [[] for _ in directions]
+        o = np.array((ray_origin[0], ray_origin[1], ray_origin[2]), dtype=np.float32)
+        d = np.array([(v[0], v[1], v[2]) for v in directions], dtype=np.float32)
+        oc = o - centres                                            # (M, 3)
+        a = ((d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1])
+             + d[:, 2] * d[:, 2]).astype(np.float64)[:, None]        # (P, 1)
+        b = 2.0 * ((oc[None, :, 0] * d[:, None, 0] + oc[None, :, 1] * d[:, None, 1])
+                   + oc[None, :, 2] * d[:, None, 2]).astype(np.float64)  # (P, M)
+        c = ((oc[:, 0] * oc[:, 0] + oc[:, 1] * oc[:, 1])
+             + oc[:, 2] * oc[:, 2]).astype(np.float64) - radii * radii   # (M,)
+        disc = b * b - 4 * a * c
+        real = disc >= 0
+        t = (-b - np.sqrt(np.where(real, disc, 0.0))) / (2.0 * a)
+        walls = np.asarray(wall_dists, dtype=np.float64)[:, None]
+        valid = real & (0 <= t) & (t <= reach) & (t < walls)
+        if not valid.any():
+            return [[] for _ in directions]
+        pending = []
+        for ray in range(len(directions)):
+            rows = np.flatnonzero(valid[ray])
+            if len(rows) > 1:
+                rows = rows[np.lexsort((rows, t[ray, rows]))]
+            pending.append(rows.tolist())
+        return pending
+
+    def _damage_monster(self, weapon, monster):
+        """Apply one ray's hit to *monster*; True if it died of it."""
+        logic = self.logic
+        damage = weapon.damage
+        health_raw = monster.properties.get('health', 100)
+        try:
+            health = int(health_raw)
+        except (ValueError, TypeError):
+            health = 100
+        new_health = health - damage
+        monster.properties['health'] = new_health
+        debug_log("MonsterAI", f"Monster {monster.properties.get('name')} health: {health} -> {new_health} (weapon={self.active_weapon}, dmg={damage})")
+        logic.game_state.queue_sound({
+            'file': 'hit.wav',
+            'volume': 1.0,
+            'entity_id': id(monster)
+        })
+        if logic.io_manager:
+            logic.io_manager.fire_output(monster, 'OnDamaged')
+        if new_health > 0:
+            return False
+        monster.properties['dead'] = True
+        monster.properties.pop('is_shooting', None)
+        touch(monster)
+        if logic.io_manager:
+            logic.io_manager.fire_output(monster, 'OnDeath')
+        if logic.monster_ai.monster_debug_active:
+            name = monster.properties.get('name', '?')
+            debug_log("MonsterAI",
+                f'<a href="filter:{name}" style="color: #EF5350; font-weight: bold; text-decoration: none;">{name}</a> '
+                f'<span style="color: #B71C1C; font-weight: bold;">DIED</span> (shot by player)')
+        return True
 
 
     def intersect_ray_aabb(self, origin, direction, box_min, box_max, max_dist=10000.0):
@@ -482,6 +568,9 @@ class LogicCombat:
         count = len(projectiles)
         has_portals = bool(logic.portal_runtime.portal_things)
         collision_brushes = logic.collision_runtime._collision_brushes_cache
+        # The swarm is small but the world may not be: on a large cache each
+        # wall test is one NumPy query over every box instead of a walk.
+        collision_rows = logic.collision_runtime.collision_rows()
         survivors = []
 
         player = logic.player_runtime.player
@@ -588,18 +677,25 @@ class LogicCombat:
                 continue
 
             hit_wall = False
-            for brush in collision_brushes:
-                if not is_solid_world_brush(brush):
-                    continue
-                bp = brush['pos']
-                bs = brush['size']
-                if (
-                    bp[0] - bs[0] * 0.5 <= px <= bp[0] + bs[0] * 0.5
-                    and bp[1] - bs[1] * 0.5 <= py <= bp[1] + bs[1] * 0.5
-                    and bp[2] - bs[2] * 0.5 <= pz <= bp[2] + bs[2] * 0.5
-                ):
-                    hit_wall = True
-                    break
+            if collision_rows is not None:
+                brushes = collision_rows.brushes
+                hit_wall = any(
+                    is_solid_world_brush(brushes[row])
+                    for row in collision_rows.point_hits(px, py, pz).tolist()
+                )
+            else:
+                for brush in collision_brushes:
+                    if not is_solid_world_brush(brush):
+                        continue
+                    bp = brush['pos']
+                    bs = brush['size']
+                    if (
+                        bp[0] - bs[0] * 0.5 <= px <= bp[0] + bs[0] * 0.5
+                        and bp[1] - bs[1] * 0.5 <= py <= bp[1] + bs[1] * 0.5
+                        and bp[2] - bs[2] * 0.5 <= pz <= bp[2] + bs[2] * 0.5
+                    ):
+                        hit_wall = True
+                        break
             if hit_wall:
                 continue
 

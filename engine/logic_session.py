@@ -436,6 +436,7 @@ class LogicSession:
         logic = self.logic
         logic.world_runtime.release_session_indexes()
         logic.collision_runtime._collision_brushes_cache = []
+        logic.collision_runtime._collision_rows = None
         logic.collision_runtime._model_collision_brushes = []
         logic.collision_runtime._physics_body_brushes = []
         logic.mover_runtime._mover_brush_list = []

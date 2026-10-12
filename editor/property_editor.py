@@ -16,6 +16,7 @@ from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicState, PlayerStart, LevelChanger)
 from engine import player_starts as start_rules
 from editor import state_values as _sv
+from editor.portal_links import sync_group_to
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from engine.constants import water_high_quality
@@ -2831,6 +2832,8 @@ class PropertyEditor(QWidget):
         def on_changed(text):
             clean = text.replace(" (missing)", "")
             thing.properties['portal_target'] = '' if clean == '(none)' else clean
+            # The portal now linked takes this one's active state.
+            sync_group_to(thing, self.editor.state.things)
             self.editor.update_all_ui()
 
         combo.currentTextChanged.connect(on_changed)
@@ -5270,6 +5273,12 @@ class PropertyEditor(QWidget):
         if isinstance(self.current_object, LevelChanger) and key == 'target_map':
             # The destination choices are the new map's PlayerStarts.
             self._fill_destination_spawn(self.current_object)
+
+        if isinstance(self.current_object, Portal) and key in ('active', 'name'):
+            # Linked portals share one active state: switching this one
+            # switches its linked portals, and a rename that completes a link
+            # brings the newly linked end to this portal's state.
+            sync_group_to(self.current_object, self.editor.state.things)
 
         if isinstance(self.current_object, Portal) and key == 'angle':
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])
