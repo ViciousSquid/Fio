@@ -629,6 +629,7 @@ class EntityTable:
         '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
         '_effect_custom_ids', '_effect_custom_paths',
         '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', 'rows_read',
+        '_effect_published', '_effect_static',
         '__weakref__'))
 
     def __init__(self):
@@ -675,6 +676,13 @@ class EntityTable:
         self._row_tuple = ()
         #: Rows whose entity the last :meth:`begin_frame` read (Debug Tables).
         self.rows_read = 0
+        #: ``(effect store, its generation)`` the Effect rows' static columns
+        #: were last published from, or None when they must be published
+        #: again (see :meth:`_publish_effect_rows`).
+        self._effect_published = None
+        #: What :meth:`_advance_effects` reads every tick, gathered once per
+        #: publication.
+        self._effect_static = None
         JOURNAL.subscribe(self)
 
     # -- recipe interning --------------------------------------------------
@@ -843,6 +851,7 @@ class EntityTable:
         self._epoch = peer._epoch
         self._row_tuple = peer._row_tuple
         self._slot_of_obj = dict(peer._slot_of_obj)
+        self._effect_published = None
         self.generation += 1
 
     def _refresh_in_place(self, things, epoch, dirty_objects, effect_store=None):
@@ -945,35 +954,111 @@ class EntityTable:
         self.hidden[slots] = [
             bool(_props_of(things[s]).get('hidden', False)) for s in slots.tolist()]
 
-    def _advance_effects(self, effect_runtime, effect_store=None):
-        """Advance Effect execution state as bounded NumPy column arithmetic."""
-        effect_ls = self.effect_slots
-        now = time.perf_counter()
+    def _publish_effect_rows(self, effect_store):
+        """Copy the store's execution columns into the Effect rows, if stale.
 
-        if effect_store is not None:
-            count = len(effect_ls)
-            family = effect_store.family_id[:count]
-            active = effect_store.active[:count]
-            lifetime = np.maximum(effect_store.lifetime[:count], 0.01)
+        ``effect_type``, ``effect_lifetime``, ``effect_spawn_time``,
+        ``effect_phase`` and ``effect_active`` change only when the store
+        does (a rebuild, ``sync_authored``, ``set_type``,
+        ``trigger_explosion``) or when this table re-resolves or re-slots
+        an Effect row -- never with the clock.  They used to be copied
+        every tick (~0.14 ms a showcase frame); now they are published when
+        the store's ``generation`` or this table's Effect rows have moved
+        since the last publication, and :meth:`_advance_effects` reads the
+        gathered copies kept here.  The two tables of the double buffer
+        publish independently: each remembers the generation it last saw.
+
+        Rows are paired with store rows by object identity
+        (:meth:`EffectStore.index_of`), not by position, so a row the store
+        appended out of world order still reaches its own Effect;
+        ``effect_store_index`` is refreshed to match.  A row the store does
+        not hold keeps the values :meth:`_resolve_row` gave it.
+
+        Also gathered here, because they too change only on a re-resolve:
+        the preview flags, the authored light switch and parameters, the
+        flicker seeds and the explosion/fire split.
+
+        Without a store (tables driven directly, as tests do) the columns
+        are the execution state and are gathered again every tick, as
+        before.
+        """
+        generation = None if effect_store is None else effect_store.generation
+        published = self._effect_published
+        if (published is not None and published[0] is effect_store
+                and published[1] == generation):
+            return self._effect_static
+        effect_ls = self.effect_slots
+        if effect_store is not None and len(effect_ls):
+            things = self.things
+            rows = np.fromiter(
+                (effect_store.index_of(things[slot]) for slot in effect_ls.tolist()),
+                dtype=np.int64, count=len(effect_ls))
+            held = rows >= 0
+            if held.all():
+                target = effect_ls
+            else:
+                target, rows = effect_ls[held], rows[held]
+            self.effect_store_index[target] = rows
+            self.effect_type[target] = effect_store.family_id[rows]
+            self.effect_lifetime[target] = np.maximum(
+                effect_store.lifetime[rows], 0.01)
             # The animation's origin, as _resolve_row derives it: an Effect
             # with no playback start runs on the shared clock origin.
-            spawn = effect_store.spawn_time[:count]
-            spawn = np.where(spawn > 0.0, spawn, _CLOCK_ORIGIN)
-            phase = np.clip(effect_store.phase[:count], 0.0, 1.0)
-            self.effect_type[effect_ls] = family
-            self.effect_lifetime[effect_ls] = lifetime
-            self.effect_spawn_time[effect_ls] = spawn
-            self.effect_phase[effect_ls] = phase
-            self.effect_active[effect_ls] = active
-        else:
-            family = self.effect_type[effect_ls]
-            active = self.effect_active[effect_ls]
-            lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
-            spawn = self.effect_spawn_time[effect_ls]
-            phase = self.effect_phase[effect_ls]
+            spawn = effect_store.spawn_time[rows]
+            self.effect_spawn_time[target] = np.where(
+                spawn > 0.0, spawn, _CLOCK_ORIGIN)
+            self.effect_phase[target] = np.clip(
+                effect_store.phase[rows], 0.0, 1.0)
+            self.effect_active[target] = effect_store.active[rows]
 
+        family = self.effect_type[effect_ls]
         explosion = family == 1
         fire = ~explosion
+        # The authored light, which the clock modulates from tick to tick:
+        # an explosion's flash overwrites its rows every tick, a fire's
+        # flicker its intensity, so these hold between ticks.
+        self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
+        self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
+        self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
+        fire_slots = effect_ls[fire]
+        explosion_slots = effect_ls[explosion]
+        self._effect_static = (
+            explosion,
+            fire,
+            self.effect_active[effect_ls],
+            np.maximum(self.effect_lifetime[effect_ls], 0.01),
+            self.effect_spawn_time[effect_ls],
+            self.effect_phase[effect_ls],
+            self.effect_preview[effect_ls],
+            explosion.any(),
+            fire.any(),
+            explosion_slots,
+            self.effect_light_enabled[explosion_slots],
+            self.effect_params[explosion_slots, 2],
+            fire_slots,
+            self.effect_seed[fire_slots],
+            self.effect_params[fire_slots, 2],
+        )
+        # Without a store the columns themselves are the execution state
+        # (anything may write them between ticks), so nothing is kept.
+        self._effect_published = (
+            None if effect_store is None else (effect_store, generation))
+        return self._effect_static
+
+    def _advance_effects(self, effect_runtime, effect_store=None):
+        """Advance Effect execution state: the clock's share only.
+
+        Everything that does not move with the clock is published by
+        :meth:`_publish_effect_rows` when it changes; what is left per tick
+        is the elapsed time, which explosions are still playing, their flash
+        and the fires' flicker.
+        """
+        effect_ls = self.effect_slots
+        now = time.perf_counter()
+        (explosion, fire, active, lifetime, spawn, phase, preview,
+         any_explosion, any_fire, explosion_slots, explosion_light,
+         explosion_intensity, fire_slots, fire_seed,
+         fire_intensity) = self._publish_effect_rows(effect_store)
 
         if effect_runtime:
             elapsed = np.maximum(now - spawn, 0.0).astype(
@@ -982,23 +1067,17 @@ class EntityTable:
             explosion_active = (
                 explosion & active & (elapsed < lifetime)
             )
-            preview_explosion = np.zeros_like(explosion)
+            preview_explosion = None
         else:
             elapsed = np.where(
                 fire,
                 np.float32(now - _CLOCK_ORIGIN),
                 np.float32(0.0),
             ).astype(np.float32)
-            explosion_active = np.zeros_like(explosion)
-            preview_explosion = (
-                explosion & self.effect_preview[effect_ls]
-            )
+            explosion_active = None
+            preview_explosion = explosion & preview
 
-        self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
-        self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
-        self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
-        if explosion.any():
-            explosion_slots = effect_ls[explosion]
+        if any_explosion:
             if effect_runtime:
                 explosion_elapsed = elapsed[explosion]
                 flash_active = (
@@ -1010,17 +1089,16 @@ class EntityTable:
                     np.float32
                 )
                 self.light_enabled[explosion_slots] = (
-                    self.effect_light_enabled[explosion_slots]
-                    & flash_active
+                    explosion_light & flash_active
                 )
                 self.light_params[explosion_slots, 0] = (
-                    self.effect_params[explosion_slots, 2]
-                    * (1.0 + 2.0 * decay)
+                    explosion_intensity * (1.0 + 2.0 * decay)
                 )
             else:
                 self.light_enabled[explosion_slots] = False
+                self.light_params[explosion_slots, 0] = explosion_intensity
 
-        if preview_explosion.any():
+        if preview_explosion is not None and preview_explosion.any():
             preview_t = (
                 (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
                 / _EXPLOSION_FRAME_COUNT
@@ -1032,20 +1110,20 @@ class EntityTable:
             )
         self.effect_elapsed[effect_ls] = elapsed
 
-        if fire.any():
-            fire_slots = effect_ls[fire]
+        if any_fire:
             flicker = _effect_flicker(
-                self.effect_seed[fire_slots],
+                fire_seed,
                 elapsed[fire] + phase[fire],
             )
             self.light_params[fire_slots, 0] = (
-                self.effect_params[fire_slots, 2]
+                fire_intensity
                 * (0.78 + 0.38 * flicker)
             )
 
-        self.effect_alive[effect_ls] = (
-            fire | explosion_active | preview_explosion
-        )
+        if effect_runtime:
+            self.effect_alive[effect_ls] = fire | explosion_active
+        else:
+            self.effect_alive[effect_ls] = fire | preview_explosion
 
     def sync(self, things, epoch=None, dirty_objects=None) -> bool:
         """Reconcile without the frame's journal step.  Returns whether it did.
@@ -1120,6 +1198,7 @@ class EntityTable:
         bits = self.class_bits[:n]
         self.all_slots = np.arange(n, dtype=np.int32)
         self.effect_slots = np.flatnonzero(bits & ENT_EFFECT).astype(np.int32)
+        self._effect_published = None
         self.light_slots = np.flatnonzero(
             bits & (ENT_LIGHT | ENT_EFFECT)).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
@@ -1180,6 +1259,7 @@ class EntityTable:
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
         if self.class_bits[slot] & ENT_EFFECT:
+            self._effect_published = None
             props = _props_of(thing)
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
             store_index = -1
@@ -1190,8 +1270,7 @@ class EntityTable:
                 else:
                     # Refresh authored position/lifetime without clobbering
                     # execution state such as an active explosion.
-                    effect_store.pos[store_index] = effect_store._position(thing)
-                    effect_store.lifetime[store_index] = effect_store._lifetime(thing)
+                    effect_store.refresh_authored(store_index, thing)
                 self.effect_store_index[slot] = store_index
                 self.effect_type[slot] = effect_store.family_id[store_index]
             else:
@@ -1298,6 +1377,12 @@ class EntityTable:
             )
             self.light_casts_shadows[slot] = False
         else:
+            if (self._effect_published is not None
+                    and (self.effect_slots == slot).any()):
+                # A row the Effect slots still list (it stopped being an
+                # Effect without a reconcile): publish over it again, as the
+                # per-tick copy did.
+                self._effect_published = None
             self.effect_type[slot] = 0
             self.effect_fire_variant[slot] = 0
             self.effect_custom_id[slot] = 0

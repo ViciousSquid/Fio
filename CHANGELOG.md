@@ -346,6 +346,15 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   kind falls back to PyOpenGL's wrapper. `FIO_GL_DEBUG=1` keeps the wrappers
   (every call checked). Frames are pixel-identical. Exercised on Linux
   x86-64 only: Windows on ARM64, macOS and Android have not run this path yet.
+- Effects no longer copy the EffectStore's type, lifetime, start time, phase
+  and playing flag into the entity table every tick: they are published when
+  the store changes (each change moves its `generation`) or the table re-reads
+  an Effect row, and the tick does only the clock's arithmetic. On the
+  showcase the Effect pass falls from ~0.13 ms to ~0.07 ms a frame. Rows are
+  now paired with store rows by identity rather than by position, so a store
+  row appended out of world order (an Effect triggered before the next
+  reconcile) still drives its own Effect. Published values are bit-identical
+  to the per-tick copy.
 - The player's hitscan tests every collision box as one NumPy query instead
   of a Python loop over every brush, per pellet. On BigWorld_streaming_test
   (3,604 brushes) a single-pellet shot takes ~0.2 ms instead of ~0.8-1.3 ms

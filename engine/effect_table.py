@@ -47,6 +47,21 @@ class EffectStore:
     The store deliberately keeps no references to the authoring objects.
     The id(object) -> row mapping is only a transient lookup key; the arrays
     are the authoritative execution state.
+
+    **Row order.** :meth:`rebuild` (every entity-table reconcile, and Play
+    start) writes the rows in world order: the order of the Effects in the
+    entity list it is given.  An Effect the store has not seen yet that is
+    synced between rebuilds (:meth:`sync_authored`, and through it
+    :meth:`set_type` / :meth:`trigger_explosion`) is appended after them, in
+    the order such Effects are first synced, until the next rebuild puts it in
+    its world position.  Nothing pairs rows by position: readers ask
+    :meth:`index_of`.
+
+    **Generation.** ``generation`` moves on every change to ``family_id``,
+    ``lifetime``, ``spawn_time``, ``phase``, ``active`` or the row set -- the
+    columns an entity table publishes only when they change, rather than
+    copying them every tick.  ``pos`` is not among them (it is read where it
+    is used), so :meth:`set_position` leaves the generation alone.
     """
 
     __slots__ = (
@@ -57,6 +72,7 @@ class EffectStore:
         "spawn_time",
         "active",
         "ids",
+        "generation",
         "_index_by_object",
         "_capacity",
         "_count",
@@ -72,6 +88,7 @@ class EffectStore:
         self.spawn_time = np.empty(self._capacity, dtype=np.float64)
         self.active = np.empty(self._capacity, dtype=bool)
         self.ids = []
+        self.generation = 0
         self._index_by_object = {}
 
     def __len__(self):
@@ -129,6 +146,7 @@ class EffectStore:
         self.spawn_time[index] = 0.0
         self.active[index] = self.family_id[index] != FAMILY_EXPLOSION
         self._count = index + 1
+        self.generation += 1
         return index
 
     def clear(self):
@@ -136,6 +154,7 @@ class EffectStore:
         self._count = 0
         self.ids.clear()
         self._index_by_object.clear()
+        self.generation += 1
 
     def rebuild(self, things, *, reset_runtime=False):
         """Reconcile execution rows to the current authoring Effect set.
@@ -187,6 +206,7 @@ class EffectStore:
                 self.spawn_time[i] = 0.0
                 self.active[i] = self.family_id[i] != FAMILY_EXPLOSION
             self._count = i + 1
+        self.generation += 1
 
     def begin_session(self, things):
         """Reset every Effect runtime row at Play start."""
@@ -208,7 +228,18 @@ class EffectStore:
         self.family_id[index] = effect_family(
             props.get("effect_type", EFFECT_FIRE)
         )
+        self.generation += 1
         return index
+
+    def refresh_authored(self, index, thing):
+        """Re-read one row's authored position and lifetime only.
+
+        Leaves the execution state (family, playback) alone, so an explosion
+        that is playing keeps playing.
+        """
+        self.pos[index] = self._position(thing)
+        self.lifetime[index] = self._lifetime(thing)
+        self.generation += 1
 
     def set_type(self, thing, value):
         """Apply a SetType runtime reset to one dense execution row."""
@@ -217,6 +248,7 @@ class EffectStore:
         self.phase[index] = random.random()
         self.spawn_time[index] = 0.0
         self.active[index] = self.family_id[index] != FAMILY_EXPLOSION
+        self.generation += 1
         return index
 
     def trigger_explosion(self, thing, now):
@@ -226,10 +258,14 @@ class EffectStore:
         self.phase[index] = 0.0
         self.spawn_time[index] = float(now)
         self.active[index] = True
+        self.generation += 1
         return index
 
     def set_position(self, thing, position):
-        """Update an Effect execution position without reading object state."""
+        """Update an Effect execution position without reading object state.
+
+        Position is not a published column, so the generation does not move.
+        """
         index = self.index_of(thing)
         if index >= 0:
             self.pos[index] = position
