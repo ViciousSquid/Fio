@@ -2655,6 +2655,39 @@ class MainWindow(QMainWindow):
         """Switch the play-mode camera between First Person and Overhead."""
         self.view_3d.set_camera_mode(text)
 
+    def sync_camera_mode_combo(self):
+        """Show the camera mode the game is actually using in the Camera dropdown.
+
+        Play can switch the camera itself (the ``cam`` command, usually run by a
+        logic_command, or a loaded save), so the dropdown follows the logic
+        thread's camera. Signals are blocked: re-applying the mode through the
+        dropdown would be redundant, and the engine already holds it.
+        """
+        lt = self.view_3d.logic_thread
+        mode = lt.camera.camera_mode if lt is not None else self.view_3d.camera_mode
+        mode = "Overhead" if str(mode).strip().lower() in (
+            "overhead", "top-down", "topdown") else "First Person"
+        self.view_3d.camera_mode = mode
+        combo = getattr(self, "camera_mode_combobox", None)
+        if combo is not None and combo.currentText() != mode:
+            combo.blockSignals(True)
+            try:
+                combo.setCurrentText(mode)
+            finally:
+                combo.blockSignals(False)
+
+    def reset_camera_mode(self):
+        """Return the play camera to First Person for a newly opened map.
+
+        A map that wants Overhead switches to it itself (a logic_command
+        running ``cam topdown``); the previous map's choice must not carry over.
+        """
+        lt = self.view_3d.logic_thread
+        if lt is not None:
+            lt.camera.camera_transition = None
+        self.view_3d.set_camera_mode("First Person")
+        self.sync_camera_mode_combo()
+
     def set_cull_distance(self, distance):
         """Set Cull Dist and mirror the actual clamped value in the spinner."""
         self.view_3d.set_cull_distance(distance)
@@ -3017,7 +3050,8 @@ class MainWindow(QMainWindow):
         self._clear_terrain()
         self.state.clear_scene()
         update_all_counters_from_entities([])
-        
+        self.reset_camera_mode()
+
         self.file_path = None
         self._generated_level_marker = None
         self._package_level_dir = None
@@ -4576,6 +4610,7 @@ class MainWindow(QMainWindow):
             self.file_path = None
             scene_replacement_started = True
             self._apply_level_data(level_data)
+            self.reset_camera_mode()
 
             # --- The start the player will spawn at; the camera goes there ---
             spawn = self.state.resolve_player_start(destination_spawn)

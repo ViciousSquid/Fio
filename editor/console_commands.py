@@ -2084,9 +2084,11 @@ entity to drive them from the I/O system.</i><br>
         new_mode = lt.camera.start_camera_transition(target_mode=target_mode, duration=duration)
 
         # Keep the view's cached camera_mode in step so its own _is_overhead()
-        # (sprite/gameplay helpers) matches the target immediately.
+        # (sprite/gameplay helpers) matches the target immediately, and show
+        # the new mode in the editor's Camera dropdown.
         try:
             self.main_window.view_3d.camera_mode = new_mode
+            self.main_window.sync_camera_mode_combo()
         except Exception:
             pass
 
@@ -2539,6 +2541,7 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+                self.main_window.sync_camera_mode_combo()
                 self.main_window.update_all_ui()
             return ok
 
@@ -2610,6 +2613,7 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info" if ok else "Error", msg)
         if ok:
             self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+            self.main_window.sync_camera_mode_combo()
             self.main_window.update_all_ui()
         return ok
 
