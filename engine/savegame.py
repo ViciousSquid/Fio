@@ -297,6 +297,8 @@ def _apply_player(player, data: Optional[dict]) -> None:
         if not ducked and "camera_height" in data:
             player.stand_camera_height = player.camera_height
         player.set_ducked(ducked)
+        # Put back, not walked back: the view is at the restored eye at once.
+        player.view_offset = 0.0
     if "physics_enabled" in data:
         player.physics_enabled = bool(data["physics_enabled"])
     if "on_ground" in data:

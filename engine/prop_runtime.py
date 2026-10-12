@@ -244,7 +244,8 @@ class PropSession:
         eye_pos = _vec(player.pos)
         eye = (
             eye_pos[0],
-            eye_pos[1] + float(getattr(player, "camera_height", 40.0)),
+            eye_pos[1] + float(getattr(player, "view_height",
+                                       getattr(player, "camera_height", 40.0))),
             eye_pos[2],
         )
         forward = _forward(player)

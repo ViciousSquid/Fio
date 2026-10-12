@@ -272,6 +272,66 @@ def test_ducking_halves_the_hull_and_the_speed():
     assert not p.ducked                                   # room to stand
 
 
+def _eye(p):
+    return float(p.pos.y + p.view_height)
+
+
+def test_the_hull_ducks_at_once_and_the_view_follows_over_half_a_second():
+    world = [floor()]
+    p = standing(world)
+    stand_eye = _eye(p)
+    frames(p, world, 1, crouch=True)
+    assert p.ducked                                       # the hull: at once
+    duck_eye = float(p.pos.y + p.camera_height)
+    assert _eye(p) == pytest.approx(stand_eye)            # the view: not yet
+    travel = stand_eye - duck_eye
+    seen = []
+    for _ in range(30):                                   # 0.5 s at 60 Hz
+        frames(p, world, 1, crouch=True)
+        seen.append(_eye(p))
+    assert all(a > b for a, b in zip([stand_eye] + seen, seen[:-1])), "moved down steadily"
+    assert seen[14] == pytest.approx(stand_eye - travel * 0.5)   # half way at 0.25 s
+    assert seen[-2] > duck_eye
+    assert seen[-1] == pytest.approx(duck_eye)            # arrived at 0.5 s
+    assert p.view_offset == 0.0
+
+
+def test_standing_up_eases_the_view_back_over_half_a_second():
+    world = [floor()]
+    p = standing(world)
+    stand_eye = _eye(p)
+    frames(p, world, 40, crouch=True)
+    frames(p, world, 1)                                   # let go: room to stand
+    assert not p.ducked
+    frames(p, world, 29)
+    assert _eye(p) < stand_eye
+    frames(p, world, 1)
+    assert _eye(p) == pytest.approx(stand_eye)
+
+
+def test_letting_go_half_way_down_comes_back_in_half_the_time():
+    world = [floor()]
+    p = standing(world)
+    stand_eye = _eye(p)
+    frames(p, world, 16, crouch=True)                     # duck, then 15 ticks down
+    # Each tick moves the view before it ducks or stands: the standing tick
+    # takes a 16th step down, so the view starts back 16 of 30 steps below.
+    frames(p, world, 1)
+    frames(p, world, 15)
+    assert _eye(p) < stand_eye
+    frames(p, world, 1)                                   # 16 ticks: about 0.27 s
+    assert _eye(p) == pytest.approx(stand_eye)
+
+
+def test_the_view_through_the_camera_is_the_eased_eye():
+    world = [floor()]
+    p = standing(world)
+    frames(p, world, 10, crouch=True)
+    eye = glm.inverse(p.get_view_matrix())[3]
+    assert float(eye.y) == pytest.approx(_eye(p), abs=1e-3)
+    assert _eye(p) > float(p.pos.y + p.camera_height)
+
+
 def test_a_ducked_player_fits_under_a_low_ceiling_and_stays_ducked_there():
     ceiling = box_brush(name="ceiling", pos=(300.0, 70.0 + 100.0, 0.0),
                         size=(200.0, 200.0, 400.0))         # 70 units of headroom

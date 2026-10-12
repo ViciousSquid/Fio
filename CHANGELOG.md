@@ -208,6 +208,14 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- **Crouching eases the view:** pressing or releasing C moves the eye between
+  the standing and crouched heights over 0.5 s instead of snapping. The hull
+  still ducks at once (so a ducked player fits under a ledge straight away);
+  letting go part way back takes proportionally less time. Shots leave from
+  the eye you see from.
+- **Pause menu text reads at any view size:** rows are 22 px and the title
+  17 px (were 19 and 15), each glyph traced to thicken the display font's
+  hairline strokes. Options' sliders say **Sound** and **Music**.
 - **Focus Player_Start on load** works on every map opened, not only when
   the logic thread had not started yet: the camera was moved on the 3D view
   alone, and the next frame copied the logic thread's editor camera back

@@ -162,9 +162,10 @@ class LogicCombat:
             dir_x = math.sin(yaw_rad) * math.cos(pitch_rad)
             dir_y = math.sin(pitch_rad)
             dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
-        ray_origin = glm.vec3(logic.player_runtime.player.pos.x,
-                              logic.player_runtime.player.pos.y + logic.player_runtime.player.camera_height,
-                              logic.player_runtime.player.pos.z)
+        player = logic.player_runtime.player
+        # From the eye the player sees from (it eases after a duck).
+        eye = getattr(player, 'view_height', player.camera_height)
+        ray_origin = glm.vec3(player.pos.x, player.pos.y + eye, player.pos.z)
         return ray_origin, glm.normalize(glm.vec3(dir_x, dir_y, dir_z))
 
     @staticmethod

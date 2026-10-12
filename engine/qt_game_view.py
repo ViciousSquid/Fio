@@ -2688,8 +2688,8 @@ class QtGameView(QOpenGLWidget):
         from engine.pause_menu import Item, Page
         editor = self.editor
         return Page("Options", [
-            Item("Sound Volume", slider=(editor.sound_volume, editor.set_sound_volume, 0, 100, 5)),
-            Item("Music Volume", slider=(editor.music_volume, editor.set_music_volume, 0, 100, 5)),
+            Item("Sound", slider=(editor.sound_volume, editor.set_sound_volume, 0, 100, 5)),
+            Item("Music", slider=(editor.music_volume, editor.set_music_volume, 0, 100, 5)),
             Item("Video", page=self._pause_video_page),
         ])
 

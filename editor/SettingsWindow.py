@@ -352,7 +352,7 @@ class SettingsWindow(QDialog):
         save_group.setLayout(save_form)
         layout.addWidget(save_group)
         
-        # Also the pause menu's Options > Sound Volume and Music Volume.
+        # Also the pause menu's Options > Sound and Music.
         # Music is what plays from assets/music; everything else is sound.
         audio_group = QGroupBox("Audio")
         audio_layout = QFormLayout()

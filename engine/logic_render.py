@@ -278,7 +278,9 @@ class LogicRender:
                 )
                 player_angle = logic.player_runtime.player.angle
                 player_pitch = logic.player_runtime.player.pitch
-                camera_height = logic.player_runtime.player.camera_height
+                # The eye the player sees from (it eases after a duck).
+                camera_height = getattr(logic.player_runtime.player, 'view_height',
+                                        logic.player_runtime.player.camera_height)
                 ct = logic.camera.camera_transition
                 if ct:
                     dur = ct["duration"]
@@ -585,7 +587,8 @@ class LogicRender:
             p2_pos = glm.vec3(logic.player_runtime.player2.pos)
             p2_cam = p2_pos + glm.vec3(
                 0,
-                logic.player_runtime.player2.camera_height,
+                getattr(logic.player_runtime.player2, 'view_height',
+                        logic.player_runtime.player2.camera_height),
                 0,
             )
             p2_angle = logic.player_runtime.player2.angle
