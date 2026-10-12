@@ -71,13 +71,13 @@ Xvfb (`LIBGL_ALWAYS_SOFTWARE=1`): real GL contexts and real shader compiles, but
 | F-05 | Low | Persistence | Opening a map validated it three times (~25 ms each on Big World) | Fixed | `0ec788f` |
 | F-06 | Medium | Tests | Editor test host had no LogicThread offscreen; runs with cwd != repo root | Partly fixed | `4b60278` |
 | F-07 | Info | Maps | Showcase endboss I/O removed "to repair CI": dead connections | No action | - |
-| F-08 | Low | Effects | EntityTable pairs Effect rows with EffectStore rows by position | Verified, test added | `605a242` |
-| F-09 | Info | Session start | `PropSession.start()` runs twice per Play | No action | - |
+| F-08 | Low | Effects | EntityTable pairs Effect rows with EffectStore rows by position | Fixed: paired by identity, store order defined, copy only on change | `605a242`, `571de5e` |
+| F-09 | Info | Session start | `PropSession.start()` runs twice per Play | Fixed | `c7b930d` |
 | F-10 | Info | Threading | Would free-threaded (no-GIL) Python help? | Analysis | - |
 | F-11 | Medium | Play lifecycle | A failed tick ended Play without the editor's Stop path (world not restored, UI left in Play) | Fixed | `ab3aa5a` |
 | F-12 | Low | Editor | `mode_label` never exists; all uses are behind `hasattr` (dead, guarded code) | Open | - |
 | F-13 | Low | Content | `door012.png` (Office_Corridor, Portal_Test) exists in no version | Pre-existing | - |
-| F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; one fix | `cea2bd2` |
+| F-14 | Info | Performance | NumPy 2.5.3 / CPython 3.14 usage | Measured; two fixes (second pass) | `cea2bd2`, `576b288` |
 | F-15 | Low | HUD / combat | gun2 `shot_ready` read the cooldown from `LogicThread`, which no longer holds it | Fixed | `f60b382` |
 | F-16 | Medium | Effects | A looping FIRE in Play animated on `perf_counter`'s epoch (the machine's uptime) as a float32 | Fixed | `65213d0` |
 
@@ -565,6 +565,205 @@ column gives the clean figure where re-measurement changed the picture.
   never with the warning as an error). Consistent with a cast over
   uninitialised (`np.empty`) rows somewhere on the sprite path; not traced.
 
+## Second performance pass: remaining Python in hot paths
+
+Goal: the measured-but-unadopted items left by the first pass, each kept only
+if it shows a reliable benefit. Design yardstick: *tables all the way to GL* --
+a direct path from authoritative table columns to GPU submission with as little
+redundant work as possible, and no machinery that does not pay for itself.
+
+### Environment and method
+
+* **Interpreter: CPython 3.13.16** in this container (3.14 was not installable
+  here); otherwise the pinned set (PyQt5 5.15.11, numpy 2.5.3, PyOpenGL
+  3.1.10, PyGLM 2.8.3, pygame-ce 2.5.8). Mesa llvmpipe under Xvfb, 4 cores;
+  every timing ran pinned to two cores (`taskset`, `LP_NUM_THREADS=2`) with
+  the other two idle or running only stepped-clock captures.
+* **Revisions.** `base` = `88f52e9` (start of this pass). Each change was
+  measured as a worktree snapshot against the revision before it; the final
+  candidate (`t5`) is task 1 + task 3 + task 5 + F-09, i.e. `576b288`,
+  `571de5e`, `73428aa`, `c7b930d`.
+* **In-place timing.** One `perf_counter` pair around the function in question
+  during `tools/bench_compare.py`'s scripted run (300 frames, 3 interleaved
+  rounds, medians, ranges in brackets). The pair costs the same on both sides,
+  so differences are the function's own. Wall-clock paint on llvmpipe cannot
+  resolve sub-millisecond paint changes (first pass, *Method*); logic-thread
+  time can.
+* **Debug Tables as oracle, never alone.** `tools/oracle_capture.py` (diffed
+  with `tools/oracle_diff.py`) plays each level
+  on a stepped clock (`perf_counter` = the effect clock's origin + whole
+  ticks) with seeded RNGs and scripted input, and at every 20th tick records
+  (a) everything Debug Tables shows -- every RenderTable/EntityTable column it
+  freezes, rows read, visible slots, its draw/shadow/batched/triangle counters
+  -- and (b) an independent read: the published frame's tables read directly,
+  the GL draws counted by wrapping `OpenGL.GL`, and the frame's pixels.
+  Terrain streaming is capped by a wall-clock budget per paint
+  (`Terrain.UPDATE_BUDGET_MS`) and the paints Qt makes while a level loads run
+  on the real clock, so how many chunks have streamed by the first checkpoint
+  varied between runs of the *same* revision (one chunk, 4,608 triangles, on
+  Terrain_Test_small); captures lift that budget so every paint streams what
+  it needs.
+* **Levels.** Every map in `maps/` (23) and a random level from
+  `tools/procedural_map_gen.py` (seed 359815, large, 28 rooms: 866 brushes,
+  28 lights, 10 monsters, 9 props), plus a copy augmented with what the
+  generator does not make: 12 linear movers (4 spinning), 6 doors toggled by
+  movers' I/O, fire/orb effects and an explosion triggered every ~0.5 s,
+  water/glass/fog/glow volumes, 4 angled brushes (896 brushes, 55 things;
+  `tools/augment_level.py`, same seed; both reproduce byte for byte).
+* **Suite.** The whole suite, per top-level directory in its own process
+  (`tests/tools/test_debug_tables.py` segfaulted the single-process run at
+  ~93% on the untouched baseline in this container), compared test by test
+  against the baseline.
+* **Harness fault found and fixed.** A benchmark killed mid-run left the
+  baseline worktree's `settings.ini` without its `[Display]`/`[Renderer]`
+  sections, so for a while base and the candidate ran the editor with
+  different settings (sysmon off on one side). Every comparison of whole-frame
+  time against base from that period was discarded; every harness now resets
+  `settings.ini` from git before each run. Captures were unaffected (they
+  switch sysmon and the FPS counter off themselves and matched bit for bit).
+
+### Judgement of the final candidate
+
+**1. Correctness.** Whole suite, base vs candidate, test by test: no test
+that passes on base fails on the candidate. Both share 9 failures and 61
+errors that are this container's, not the code's: `r_wireframe` console tests
+(3), `test_editor_chrome`, `test_load_throbber`, `test_toolbar_buttons`,
+`test_portal_fade` (3), and a session teardown error ("a closed
+FioTestSession's window is still reachable") on every GL session test. The
+candidate adds one error of that last kind (the new GL e2e test's teardown;
+its body passes). One real regression was found and fixed before judging: the
+F-09 test patched `PropSession` itself, which `test_suite_integrity`
+forbids; it now counts calls on the instance.
+
+**2. Visual equivalence.** All 23 shipped maps and both random levels, 7
+checkpoints each, stepped clock, unbudgeted terrain: every Debug Tables
+reading and every independent reading (published tables, GL draws issued,
+pixels) of the candidate is bit-identical to base, except
+`effect_spawn_time` -- the load-time wall-clock stamp, which differs just as
+much between two runs of the candidate. Checked element by element: no
+spawn-time element differs base/candidate where it is stable between the
+candidate's two runs. The same levels also ran the excluded changes
+(transform cache, 2b, 7b) bit-identical; they were excluded for speed, not
+correctness.
+
+**3. Performance, end to end** (`bench_compare`, 5 interleaved rounds x 600
+frames, medians [range], ms):
+
+| Level | Logic tick, base | candidate | Paint CPU, base | candidate |
+| --- | --- | --- | --- | --- |
+| _SHOWCASE | 0.708 [0.665-0.732] | **0.520** [0.494-0.538] | 6.98 [6.75-7.18] | 7.08 [6.78-7.16] |
+| MonsterTest | 0.602 [0.570-0.675] | **0.497** [0.491-0.566] | 3.08 [2.87-3.29] | 3.21 [3.20-3.53] |
+| random_large_aug | 1.300 [1.220-1.397] | **1.198** [1.040-1.229] | 3.64 [3.31-3.80] | 3.66 [3.23-3.76] |
+| random_large | 0.658 [0.536-0.733] | 0.591 [0.527-0.662] | 2.89 [2.53-3.24] | 2.66 [2.50-2.97] |
+| BigWorld_streaming_test | 0.977 [0.970-0.990] | 0.963 [0.951-0.978] | 91.2 [90.1-92.9] | 90.4 [89.6-90.9] |
+| Portal_Test | 0.370 [0.346-0.417] | 0.394 [0.347-0.560] | 5.89 [5.60-6.36] | 6.27 [5.71-9.68] |
+
+The logic tick is faster wherever there are Effects or movers (-27% on the
+showcase, -17% on MonsterTest, -8% on the augmented level, ranges apart) and
+unchanged elsewhere. Paint CPU per frame at 640x360 cannot show task 1's
+~0.24 ms: llvmpipe rasterises on the paint thread and rounds differ by up to
+1 ms. Measured instead as total paint-thread CPU in `paintGL` over all
+frames, base vs task 1 alone, 9 paired rounds at 64x36 (every GL call and
+upload kept, rasterisation minimised): showcase **-0.26 ms** median, lower in
+8 of 9 rounds; the control (MonsterTest, 2 uploads a frame) +0.14 ms, lower in
+3 of 9. At 640x360 the showcase reads -0.19 ms, lower in 6 of 9 -- within the
+noise. Task 1's frame-level gain is real but only where per-row uploads are
+many, and small against llvmpipe's own cost; a GPU measurement would size it
+better.
+
+**4. Selection.** Kept only what showed a repeatable benefit, or (F-09)
+removed code. Excluded with numbers: see the table.
+
+
+### Decisions, one per task
+
+| # | Task | Measured | Decision |
+| --- | --- | --- | --- |
+| 1 | Per-row uniforms by raw address | Uploads, showcase 28.3/frame: 330-415 -> 85-91 us/frame; MonsterTest 33-35 -> 7-9; frame: above | **Kept** `576b288` |
+| 2 | Per-frame `model_matrices` cache | Builds/frame fall only where passes repeat a slot set: Portal_Test 5.38 -> 3.59 (302 -> 240 us/frame); elsewhere the key/pool bookkeeping costs more than it saves: showcase 255 -> 294, MonsterTest 151 -> 159, Office 104 -> 106, BigWorld 125 -> 122 | **Excluded** |
+| 2b | Rotated rows' fill vectorised (found on the way) | Isolated: 99 -> 69 us for 14 rows with 2 rotated, bit-identical; in place no change (showcase 253 vs 251, augmented level 124 vs 123) | **Excluded** |
+| 3 | Effect columns published on change | `_advance_effects` showcase 126 -> 71 us/frame, augmented level 157 -> 107 | **Kept** `571de5e` |
+| 4 | No `tuple(things)` per frame | Saving per table per frame 0.07 / 2.3 / 9 us at 45 / 1,000 / 3,604 rows; the tuple is also the cross-thread snapshot | **Not adopted** |
+| 5 | Small-N thresholds | Movers/doors: below 12 rows walk `_one`: showcase mover tick 316 -> 138 us, MonsterTest 274 -> 92, 6 doors 84-95 -> 55-58. `_advance_effects`: after task 3 it is clock-only and ~70 us on the showcase with no row-count crossover left worth code. Projectile wall test: already has `PROJECTILE_DENSE_THRESHOLD` | **Kept** (movers/doors) `73428aa` |
+| 6 | Frustum planes once per view | Already once per view per frame (logic tick, `render_scene`, each portal view); 9-12 us each, Portal_Test 4.5 distinct views ~35-40 us; nothing repeated within a frame | **No change** |
+| 7a | F-09 duplicate `PropSession.start()` | ~25 us once per Play start; removes code | **Kept** `c7b930d` |
+| 7b | Skip unmoved movers in `CollisionRows` (+ the physics grid's twin) | Per shot on BigWorld 116 -> 12 us, but 0.05 shots/frame on the scripted route: ~5 us/frame; the grid twin saved nothing measurable. Needs an in-place-edit stamp in editor code | **Excluded** |
+| 8 | mypyc spike | See below | **Not merged** |
+
+### Notes on the kept changes
+
+* **Task 1** (`engine/renderer/core/uniform_rows.py`). The native call uses
+  PyOpenGL's own resolved pointer (refused if null), its own ctypes function
+  type and scalar argument types; only the data argument is `void *`. Every
+  row index is bounds-checked before an address is formed; the uploader holds
+  the array. The first raw upload of each kind is read back through
+  PyOpenGL's checked `glGetUniformfv` into an oversized buffer and compared
+  byte for byte, falling back to the wrapper on any mismatch -- which catches
+  wrong data, not a wrong ABI. `FIO_GL_DEBUG=1` keeps the wrappers.
+  `tools/profile_uniform_uploads.py --tree <checkout>` reproduces the per-pass
+  table. **Platform status:** executed on Linux x86-64 / Mesa only. Windows on
+  ARM64, macOS and Android have not run it and are unverified until the GL
+  tier runs there; the ARM64 CI job builds but runs no tests. The `player/`
+  GLES front end does not run these passes yet.
+* **Task 3.** `EffectStore.generation` moves on every change to a published
+  column; each table of the double buffer publishes when it differs from what
+  it last saw, pairing rows by identity. Store rows are in world order after
+  a rebuild and in first-synced order for rows appended in between (the F-08
+  wart).
+* **Task 5.** The walked path is the per-row code the plan is already proven
+  against (`tests/logic/test_mover_table_equivalence.py`), now run on every
+  world both planned and walked.
+
+### Spike: mypyc (not merged)
+
+* **Effort.** mypy/mypyc 2.4 in a separate virtualenv (a build-time tool;
+  nothing at runtime). `engine/` is a namespace package, so mypyc needs
+  `--explicit-package-bases --ignore-missing-imports --follow-imports=silent`.
+  `render_cull`, `mover_table` and `physics` compiled (~56 s) after small
+  edits: return annotations on `PhysicsBody`'s properties (mypyc otherwise
+  hits an internal error), `KEYS: tuple` on two `_Group` subclasses,
+  `GRAVITY: ClassVar`. `entity_table` does not compile: the defensive
+  `editor.things` import rebinds classes to `None`, and its columns are
+  created with `setattr` from `_COLUMNS` -- native classes need declared
+  attributes.
+* **Tests do not pass unchanged.** On the physics, monster AI, render cull,
+  engine and logic suites: interpreted 1,280 passed; compiled 366 failed and
+  160 errors. Native classes refuse weak references (the change journal and
+  caches hold tables and grids weakly), attributes added at runtime
+  (`PhysicsBody._initial`) and attribute deletion. Each is fixable in the
+  source (`@mypyc_attr(...)`, declared attributes), i.e. the modules would
+  have to be written for mypyc.
+* **Speed** (quiet core, 3 interleaved rounds, BigWorld's brushes):
+  `render_cull.cull_by_distance` over 3,000 objects 617-990 -> 337-384 us
+  (1.7-2.9x); `SpatialGrid.raycast_down`, `get_potential_colliders`,
+  `overlaps_wall` (1.0-2.7 us a query) and `populate` (19-22 ms) unchanged:
+  the hot code is NumPy and glm bound, which compilation does not touch.
+* **Packaging.** One extension per module per platform and ABI, plus
+  mypyc's shared runtime module at the package root: the Windows ARM64 job
+  would need MSVC ARM64 builds of each, Android a python-for-android recipe,
+  and the standalone tier must keep importing the `.py` sources. The Nuitka
+  builds already compile all Python to C, so mypyc would mainly help source
+  runs.
+* **Verdict.** Not worth adopting now: one function gets ~2x, the
+  dispatch-bound hot paths do not, and the modules would need rewriting for
+  mypyc's object model.
+
+### Open after this pass
+
+* Per-pass `projection`/`view` uploads still go through PyOpenGL's wrapper
+  with `glm.value_ptr` (6.3 us each, measured): ~26 a showcase frame, ~63 on
+  Portal_Test. Same treatment as task 1 would apply.
+* `_draw_dense_model_single` still uploads one matrix through the wrapper
+  (~0.4 a frame on the showcase, ~4 us).
+* Props adopted at Play start never get a rest callback on the new session's
+  `PhysicsWorld` (neither `start()` call ran while it existed); `OnRest` may
+  not fire for them. Unverified; not changed.
+* Terrain streaming's wall-clock budget makes the first frames of a terrain
+  level timing-dependent; harmless in play, but tests that compare frames
+  must lift it (as `oracle_capture --unbudgeted-terrain` does).
+* A GPU (and a Windows ARM64 machine) to measure paint-side changes and run
+  the GL tier where the raw uploads have not yet run.
+
 ## Stability
 
 | Check | 2.5.10 | 3.0 |
@@ -609,7 +808,8 @@ reference compiler now required in CI. A self-hosted GPU runner running
 
 ## Open work
 
-* Performance: see *Performance pass / Open after this pass*.
+* Performance: see *Performance pass / Open after this pass* and *Second
+  performance pass / Open after this pass*.
 
 * F-06: resolve engine asset paths from the root directory rather than cwd.
 * F-08 / F-09 as above.
