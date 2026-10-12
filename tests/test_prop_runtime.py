@@ -333,3 +333,23 @@ def test_a_carried_billboard_is_not_given_a_model_rotation(real_logic):
     logic.player_runtime.player.angle = 1.0
     session.tick(1 / 60, use_pressed=False)
     assert prop.properties['rotation'] == [0, 0, 0]
+
+
+def test_play_start_builds_the_prop_registry_once(real_logic, monkeypatch):
+    """Audit F-09: Play start called ``PropSession.start()`` twice -- an
+    O(props) rebuild the second time that found every Prop already adopted.
+    Once now, and the registry it leaves is the same."""
+    prop = Prop(pos=[0.0, 0.0, 0.0], properties={"carry_enabled": True})
+    logic, session, _events = real_logic([prop])
+    starts = []
+    real_start = session.start
+    monkeypatch.setattr(session, "start",
+                        lambda: (starts.append(1), real_start())[1])
+    logic.session_runtime.apply_play_mode(True)
+    try:
+        assert len(starts) == 1
+        assert session.props == [prop]
+        assert session.by_id(id(prop)) is prop
+        assert session.held is None
+    finally:
+        logic.session_runtime.apply_play_mode(False)

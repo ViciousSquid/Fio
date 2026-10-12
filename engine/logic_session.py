@@ -206,9 +206,6 @@ class LogicSession:
             self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
             logic.monster_ai.set_spatial_grid(self.spatial_grid)
 
-            # PropSession is the registry for the Prop runtime domain.
-            logic.prop_runtime.start()
-
             # Reset cinematic state.
             logic.cutscene_runtime.state = None
             logic.camera.camera_transition = None
