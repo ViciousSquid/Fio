@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QTimer
 
 from editor.debug_console import debug_log
+from editor.portal_links import set_group_active, sync_group_to
 from engine.change_journal import touch
 from engine.items import ITEM_IDS
 from engine.spatial import set_authored_flag
@@ -26,7 +27,7 @@ except ImportError:
     # debug_log("Warning", "I/O system not fully loaded in console")
 
 # For spawn command
-from editor.things import Prop, Light, LevelChanger
+from editor.things import Prop, Light, LevelChanger, Portal
 
 
 class ConsoleCommandHandler:
@@ -643,6 +644,7 @@ class ConsoleCommandHandler:
         self.editor_state.save_state()
         portal.properties['portal_target'] = target_name
         touch(portal)
+        sync_group_to(portal, self.editor_state.things)   # the linked end follows
         self._rebuild_logic_entity_caches()
 
         status = f"linked to '{target_name}'"
@@ -697,9 +699,8 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 self.editor_state.save_state()
-                t.properties['active'] = True
-                t._fade_target = 1.0             # fades in, as the Enable input does
-                touch(t)
+                # Fades in, with its linked portals, as the Enable input does.
+                set_group_active(t, self.editor_state.things, True)
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
                 return
@@ -716,9 +717,8 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 self.editor_state.save_state()
-                t.properties['active'] = False
-                t._fade_target = 0.0             # fades out, as the Disable input does
-                touch(t)
+                # Fades out, with its linked portals, as the Disable input does.
+                set_group_active(t, self.editor_state.things, False)
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()
                 return
@@ -1657,6 +1657,11 @@ entity to drive them from the I/O system.</i><br>
         else:
             props[key] = value
         touch(entity)
+        if key in ('active', 'portal_target', 'name') and \
+                isinstance(entity, Portal):
+            # Linked portals share one active state: this portal's spreads
+            # to every portal it is (now) linked to.
+            sync_group_to(entity, self.editor_state.things)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
         # A name, id or portal target is indexed by the running logic thread.

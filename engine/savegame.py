@@ -746,6 +746,11 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     """
     runtime = data.get("runtime", {}) or {}
 
+    # Linked portals share one active state; a save from before that rule
+    # may hold a pair that disagrees.
+    from editor.portal_links import normalize_portal_groups
+    normalize_portal_groups(logic.editor_state.things)
+
     # Player(s)
     _apply_player(logic.player_runtime.player, data.get("player"))
     _apply_player(logic.player_runtime.player2, data.get("player2"))

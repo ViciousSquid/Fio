@@ -8,6 +8,15 @@ forward; see **Breaking changes** before upgrading.
 
 ### Breaking changes
 
+- **Linked portals share one active state.** Portals linked by
+  `portal_target` (either way round, and through chains of links) are always
+  all active or all inactive: Enable, Disable and Toggle on one switch them
+  all, and so do the console (`portal_enable`, `portal_disable`, `setprop`),
+  the property panel and SetTarget/linking, where the newly linked portal
+  takes the edited portal's state. Only the portal sent the input fires its
+  output. A map or save whose linked portals disagree loads with all of them
+  inactive -- how it already played, since a transit needs both ends active.
+  The Showcase's portals now open when its monster dies (it enabled one end).
 - **Hitscan pellets are simultaneous:** every pellet of one shot now traces
   the same instant of the world -- the collision brushes and one snapshot of
   the monsters -- and the hits are applied afterwards, pellet by pellet in

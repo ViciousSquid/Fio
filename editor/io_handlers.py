@@ -9,6 +9,7 @@ Handler signature: (entity, parameter: str, logic_thread) -> None
 
 from .io_system import IOManager, authored_flag, set_authored_flag
 from . import state_values as _sv
+from .portal_links import set_group_active, sync_group_to
 import glm
 import os
 import time
@@ -1729,32 +1730,30 @@ def register_all_input_handlers(io_manager: IOManager):
     # PORTAL INPUTS
     # ==========================================================================
 
+    # A portal and the portals linked to it share one active state, so each
+    # input sets the whole group (fading each in or out). Only the portal the
+    # input was sent to fires its output: the others changed because of it.
+
     def portal_enable(entity, param, logic):
-        """Activate the portal — fades it in."""
-        entity.properties['active'] = True
-        if hasattr(entity, '_fade_target'):
-            entity._fade_target = 1.0        # fade in
+        """Activate the portal and its linked portals — fades them in."""
+        set_group_active(entity, logic.editor_state.things, True)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Portal '{name}' enabled")
         logic.io_manager.fire_output(entity, 'OnEnabled')
 
     def portal_disable(entity, param, logic):
-        """Deactivate the portal — fades it out."""
-        entity.properties['active'] = False
-        if hasattr(entity, '_fade_target'):
-            entity._fade_target = 0.0        # fade out
+        """Deactivate the portal and its linked portals — fades them out."""
+        set_group_active(entity, logic.editor_state.things, False)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Portal '{name}' disabled")
         logic.io_manager.fire_output(entity, 'OnDisabled')
 
     def portal_toggle(entity, param, logic):
-        """Toggle portal active state with fade."""
-        was_active = entity.properties.get('active', False)
-        entity.properties['active'] = not was_active
-        if hasattr(entity, '_fade_target'):
-            entity._fade_target = 1.0 if entity.properties['active'] else 0.0
+        """Flip the portal's active state, and its linked portals' with it."""
+        active = not entity.is_active()
+        set_group_active(entity, logic.editor_state.things, active)
         name = entity.properties.get('name', 'unnamed')
-        state = "enabled" if entity.properties['active'] else "disabled"
+        state = "enabled" if active else "disabled"
         debug_log('IO', f"Portal '{name}' toggled → {state}")
         logic.io_manager.fire_output(entity, 'OnToggled')
 
@@ -1776,6 +1775,7 @@ def register_all_input_handlers(io_manager: IOManager):
         """Change the paired portal target by name."""
         if param:
             entity.properties['portal_target'] = param.strip()
+            sync_group_to(entity, logic.editor_state.things)
             logic.portal_runtime.rebuild_links()
             name = entity.properties.get('name', 'unnamed')
             debug_log('IO', f"Portal '{name}' target set to '{param.strip()}'")

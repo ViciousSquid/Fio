@@ -1322,6 +1322,9 @@ class Portal(Thing):
                            full orientation.
     active         (bool)  When False the portal acts as a solid wall.
                            Toggle at runtime via Enable/Disable/Toggle inputs.
+                           Linked portals (either targets the other, and
+                           chained links) share one active state: setting it
+                           on one sets it on all (editor.portal_links).
     color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
     show_rim       (bool)  Draw outline.
     glasses        (bool)  Looking into this portal shows your own glasses
@@ -1330,14 +1333,16 @@ class Portal(Thing):
     I/O outputs
     -----------
     OnPlayerEnter  Fired once per transit when the player passes through.
-    OnActivate     Fired when the portal is enabled.
-    OnDeactivate   Fired when the portal is disabled.
+    OnEnabled      Fired when the portal is sent Enable.
+    OnDisabled     Fired when the portal is sent Disable.
+    OnToggled      Fired when the portal is sent Toggle.
 
     I/O inputs
     ----------
-    Enable         Sets active = True  and fires OnActivate.
-    Disable        Sets active = False and fires OnDeactivate.
-    Toggle         Flips the active state.
+    Enable         Sets active = True on this portal and its linked
+                   portals, and fires OnEnabled on this one.
+    Disable        Sets active = False on the same group; fires OnDisabled.
+    Toggle         Flips the group's active state; fires OnToggled.
 
     Non-Euclidean design tips
     -------------------------
