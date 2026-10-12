@@ -199,6 +199,12 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- **Focus Player_Start on load** works on every map opened, not only when
+  the logic thread had not started yet: the camera was moved on the 3D view
+  alone, and the next frame copied the logic thread's editor camera back
+  over it. The camera now also faces the way the player spawns (it faced the
+  opposite way). Focusing a selected object had the same fault and is fixed
+  with it.
 - The editor’s **Display** box now defaults to **Textured** rather than **Solid Lit**, so newly opened sessions show texture maps immediately. `r_wireframe off` also falls back to **Textured** when there is no previous display mode.
 - A mover's Preview Movement follows its Path Target chain (to the first
   PathNode, then the next...) from where the mover is. It jumped the mover to

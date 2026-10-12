@@ -1059,6 +1059,23 @@ class QtGameView(QOpenGLWidget):
         if message:
             self._play_mode_hint = "Logic tick failed; Play Mode stopped"
 
+    def set_editor_camera(self, pos, yaw=None, pitch=None):
+        """Move the editor camera, keeping *yaw*/*pitch* unless given.
+
+        The logic thread owns the editor camera: every paint copies this
+        view's camera back from the published render state. A move made here
+        alone is undone by the next frame, so it is made on both.
+        """
+        camera = self.camera
+        camera.pos = glm.vec3(pos)
+        if yaw is not None:
+            camera.yaw = float(yaw)
+        if pitch is not None:
+            camera.pitch = float(pitch)
+        if self.logic_thread is not None:
+            self.logic_thread.camera.set_editor_camera(
+                camera.pos, camera.yaw, camera.pitch, camera.fov)
+
     def _start_logic_thread(self):
         if self._thread_started:
             return

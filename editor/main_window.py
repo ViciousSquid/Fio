@@ -717,7 +717,8 @@ class MainWindow(QMainWindow):
             import glm
             front = camera.get_front_vector()
             distance = max(radius * 3.0, 128.0)
-            camera.pos = glm.vec3(centre[0], centre[1], centre[2]) - front * distance
+            self.view_3d.set_editor_camera(
+                glm.vec3(centre[0], centre[1], centre[2]) - front * distance)
             self.view_3d.update()
         except Exception:
             pass
@@ -4622,10 +4623,12 @@ class MainWindow(QMainWindow):
                 place_camera = self.config.getboolean('Display', 'place_camera_at_player_start', fallback=True)
 
                 if place_camera:
-                    # Place 3D editor camera exactly at player start
-                    self.view_3d.camera.pos = glm.vec3(player_start_pos)
-                    self.view_3d.camera.yaw = player_angle      # face the same direction
-                    self.view_3d.camera.pitch = 0.0
+                    # Place 3D editor camera exactly at player start, facing
+                    # the way the player spawns: Play turns the start's angle
+                    # into radians(90 - angle) + pi, which the play view
+                    # shows as yaw 90 - degrees(that) = angle - 180.
+                    self.view_3d.set_editor_camera(
+                        player_start_pos, yaw=player_angle - 180.0, pitch=0.0)
 
                     # Center 2D views so the camera frustum is visible
                     self.center_2d_views_on(player_start_pos)
@@ -4633,18 +4636,14 @@ class MainWindow(QMainWindow):
                     self._after(50, lambda: self.center_2d_views_on(player_start_pos))
                 else:
                     # Old behaviour: offset camera behind the spawn
-                    self.view_3d.camera.pos = [
-                        player_start_pos[0],
-                        player_start_pos[1] + 80,
-                        player_start_pos[2] + 200
-                    ]
-                    self.view_3d.camera.pitch = -20
-                    self.view_3d.camera.yaw = -90
+                    self.view_3d.set_editor_camera(
+                        (player_start_pos[0],
+                         player_start_pos[1] + 80,
+                         player_start_pos[2] + 200),
+                        yaw=-90, pitch=-20)
             else:
                 # No player start – reset camera to default position
-                self.view_3d.camera.pos = glm.vec3(0, 150, 400)
-                self.view_3d.camera.yaw = -90
-                self.view_3d.camera.pitch = -20
+                self.view_3d.set_editor_camera((0, 150, 400), yaw=-90, pitch=-20)
 
             # Update file path and UI state
             self.file_path = file_path
