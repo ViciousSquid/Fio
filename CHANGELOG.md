@@ -8,6 +8,14 @@ forward; see **Breaking changes** before upgrading.
 
 ### Breaking changes
 
+- **Hitscan pellets are simultaneous:** every pellet of one shot now traces
+  the same instant of the world -- the collision brushes and one snapshot of
+  the monsters -- and the hits are applied afterwards, pellet by pellet in
+  scatter order. A monster an earlier pellet's damage kills is still passed
+  over by the later pellets, which go on to what is behind it. What changes
+  is I/O: an output a pellet's hit fires (an `OnDamaged` that hides, moves,
+  reveals or kills a monster, say) no longer affects the other pellets of the
+  same shot, only the next shot. Single-pellet weapons are unaffected.
 - **Jump height:** the player jumps at Quake 2's 270 u/s (about 46 units,
   about 64 with the step-up) instead of 355 (about 79). A ledge between 64
   and 79 units that was reachable is not any more.
@@ -305,6 +313,13 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Performance
 
+- The player's hitscan tests every collision box as one NumPy query instead
+  of a Python loop over every brush, per pellet. On BigWorld_streaming_test
+  (3,604 brushes) a single-pellet shot takes ~0.2 ms instead of ~0.8-1.3 ms
+  and an eight-pellet shot ~0.6-1.0 ms instead of ~6-10 ms. Hit positions are
+  bit-for-bit what the per-brush walk produced. Small monster-projectile
+  swarms test walls the same way (~37 us instead of ~0.5 ms a projectile on
+  that map).
 - GLB accessors, vertex interleaving and triangle lists are decoded in bulk
   with NumPy instead of per-element Python loops (a 200k-vertex model parses
   in ~13 ms instead of ~490 ms).
