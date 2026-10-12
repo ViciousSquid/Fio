@@ -355,6 +355,12 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   row appended out of world order (an Effect triggered before the next
   reconcile) still drives its own Effect. Published values are bit-identical
   to the per-tick copy.
+- A mover or door group with fewer than 12 rows steps them one by one
+  through the per-row code instead of planning one vectorised pass: the plan
+  is some forty NumPy calls whatever the row count. The mover tick falls from
+  ~0.32 to ~0.14 ms on the showcase (one mover) and from ~0.27 to ~0.09 ms on
+  MonsterTest. Positions, spins, state and I/O order are bit-identical either
+  way.
 - The player's hitscan tests every collision box as one NumPy query instead
   of a Python loop over every brush, per pellet. On BigWorld_streaming_test
   (3,604 brushes) a single-pellet shot takes ~0.2 ms instead of ~0.8-1.3 ms

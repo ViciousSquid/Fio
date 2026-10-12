@@ -804,14 +804,64 @@ def _run(seed, ticks=700, ride=True, script=None, io=True):
 # Equivalence
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def planned(monkeypatch):
+    """For the tests about the vectorised pass itself: plan every group."""
+    from engine.mover_table import Doors, LinearMovers
+    monkeypatch.setattr(LinearMovers, "WALK_ROWS_BELOW", 0)
+    monkeypatch.setattr(Doors, "WALK_ROWS_BELOW", 0)
+
+
+@pytest.fixture(params=["planned", "walked"])
+def group_path(request, monkeypatch):
+    """Run under each of the two paths a group can take: planned whatever its
+    size, or walked row by row whatever its size (``WALK_ROWS_BELOW``)."""
+    from engine.mover_table import Doors, LinearMovers
+    below = 0 if request.param == "planned" else 1 << 30
+    monkeypatch.setattr(LinearMovers, "WALK_ROWS_BELOW", below)
+    monkeypatch.setattr(Doors, "WALK_ROWS_BELOW", below)
+    return request.param
+
+
 @pytest.mark.parametrize("seed", range(10))
-def test_every_tick_matches_the_loop(seed):
+def test_every_tick_matches_the_loop(seed, group_path):
     ref, _ = _run(seed)
     assert ref.events, "the run fired no I/O at all; the wiring is not exercised"
 
 
+@pytest.mark.parametrize("count", [3, 7, 11, 16])
+@pytest.mark.parametrize("seed", range(4))
+def test_small_worlds_at_the_default_thresholds_match_the_loop(seed, count, monkeypatch):
+    """Worlds with a few movers and doors, which the default thresholds walk
+    row by row (and, where a group reaches its threshold, plan)."""
+    import engine.mover_table as mt
+    assert mt.LinearMovers.WALK_ROWS_BELOW > 1 and mt.Doors.WALK_ROWS_BELOW > 1
+    real_world = _world
+    monkeypatch.setitem(globals(), "_world",
+                        lambda seed_, count_=70: real_world(seed_, count=count))
+    _run(seed, ticks=300)
+
+
+def test_a_small_group_walks_its_rows_and_never_plans(monkeypatch):
+    """Fails before the threshold: a one-mover group planned every tick."""
+    brushes = [{"id": "b0", "name": "b0", "pos": [0.0, 0.0, 0.0],
+                "size": [64.0, 64.0, 64.0], "is_mover": True, "start_on": True,
+                "speed": 64.0, "distance": 128.0, "direction": [1, 0, 0]}]
+    ref = _Side(True, brushes, [], None)
+    new = _Side(False, brushes, [], None)
+    group = new.logic.mover_runtime._mover_table.movers
+    plans = []
+    real_plan = group._plan
+    group._plan = lambda *args: (plans.append(1), real_plan(*args))[1]
+    for tick in range(20):
+        ref.tick(1 / 60)
+        new.tick(1 / 60)
+        assert repr(ref.snapshot(True)) == repr(new.snapshot(True)), tick
+    assert plans == []
+
+
 @pytest.mark.parametrize("seed", range(3))
-def test_without_io_every_transition_takes_the_vectorised_path(seed):
+def test_without_io_every_transition_takes_the_vectorised_path(seed, planned):
     """With nothing to fire, no row is a sequence point for an event: every
     mover reversal and every door open, wait and close is committed by the
     vectorised step itself, and has to agree with the loop too."""
@@ -915,7 +965,7 @@ def test_the_spin_matches_the_scalar_arithmetic_bit_for_bit():
 
 
 @pytest.mark.perf
-def test_a_sequence_point_that_changes_no_later_row_does_not_replan_the_pass():
+def test_a_sequence_point_that_changes_no_later_row_does_not_replan_the_pass(planned):
     """Re-planning the rest of the pass after every sequence point cost ~0.3 ms
     a tick on the showcase map without ever changing a plan. Mover 0 reaches
     its end every tick (a sequence point) and its output only touches itself,
@@ -945,7 +995,7 @@ def test_a_sequence_point_that_changes_no_later_row_does_not_replan_the_pass():
 
 
 @pytest.mark.parametrize("with_movers", [True, False])
-def test_a_group_with_no_rows_plans_nothing(with_movers):
+def test_a_group_with_no_rows_plans_nothing(with_movers, planned):
     """Most maps have no doors, or no movers at all; an empty group's pass
     commits nothing, so it must not build a plan every tick. The movers that
     do exist still agree with the reference loop."""

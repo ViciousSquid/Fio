@@ -167,6 +167,14 @@ class _Group:
     #: Public state keys, in the order the engine creates them.
     KEYS: tuple = ()
 
+    #: Below this many rows a group walks its rows one by one through
+    #: :meth:`_one` -- the loop's own arithmetic, which the vectorised pass
+    #: reproduces bit for bit -- instead of planning: the plan is some
+    #: forty NumPy calls whatever the row count, which with a handful of
+    #: rows costs several times the rows themselves. Set per group from
+    #: ``tests/performance/test_mover_threshold_benchmark.py``.
+    WALK_ROWS_BELOW = 0
+
     def __init__(self):
         self.source = None
         self.fallback = {}
@@ -359,6 +367,9 @@ class _Group:
         io = logic.io_manager
         ride = self._ride(logic)
         version = self.version
+        if len(self.index) < self.WALK_ROWS_BELOW:
+            self._walk_rows(logic, delta, table, io, ride, version)
+            return
         cursor = 0
         plan = self._plan(logic, cursor, delta, io)
         while True:
@@ -386,11 +397,32 @@ class _Group:
                     plan = self._plan(logic, cursor, delta, io)
 
 
+    def _walk_rows(self, logic, delta, table, io, ride, version):
+        """The pass for a small group: every taking-part row through
+        :meth:`_one`, in list order -- the loop the plan reproduces, so an
+        input a row fires reaches the later rows on this tick as it does
+        there (each row's part is decided when its turn comes)."""
+        for row in range(len(self.index)):
+            if not self._takes_part(row):
+                continue
+            ran = self._one(logic, row, delta, io, ride)
+            if self.version != version:
+                return          # an input rebuilt the rows (a level change)
+            if ran:
+                table.sync()
+                self.take_dirty()
+
 
 class LinearMovers(_Group):
     """Movers that travel back and forth along their direction (and spin)."""
 
     KEYS = ('progress', 'forward', '_direction_np')
+
+    #: Measured (CPython 3.13, NumPy 2.5.3, quiet cores): one tick of 1 / 2 /
+    #: 4 / 8 / 12 moving rows costs 10 / 18 / 31 / 63 / 92 us walked and 77 /
+    #: 82 / 86 / 80 / 82 us planned; the plan wins from 12 rows (32: 233 vs
+    #: 84 us).
+    WALK_ROWS_BELOW = 12
 
     def _build_columns(self, n):
         self.move_once = np.zeros(n, dtype=bool)
@@ -441,6 +473,10 @@ class LinearMovers(_Group):
             self.dir_valid[row] = False
 
     # -- planning ------------------------------------------------------------
+
+    def _takes_part(self, row):
+        """Whether *row* moves this tick: what :meth:`_plan` calls active."""
+        return bool(self.start_on[row]) and not self.move_once[row]
 
     def _plan(self, logic, start, delta, io):
         rows = np.arange(start, len(self.index))
@@ -578,6 +614,11 @@ class Doors(_Group):
     KEYS = ('progress', 'state', 'open_timer', 'speed', 'distance', 'direction',
             '_direction_np')
 
+    #: Measured as for LinearMovers: 1 / 2 / 4 / 8 / 12 cycling doors cost 14
+    #: / 22 / 37 / 69 / 109 us walked and 65 / 67 / 75 / 78 / 86 us planned;
+    #: the plan wins from 12 rows (32: 252 vs 109 us).
+    WALK_ROWS_BELOW = 12
+
     def _build_columns(self, n):
         self.code = np.zeros(n, dtype=np.int8)
         self.other_state = [None] * n
@@ -645,6 +686,11 @@ class Doors(_Group):
             self.raw_direction[row] = None
         elif key == '_direction_np':
             self.dir_valid[row] = False
+
+    def _takes_part(self, row):
+        """Whether *row* moves this tick: what :meth:`_plan` calls live."""
+        return bool(self.has_state[row]) and not (
+            self.code[row] == CLOSED and self.progress[row] == 0.0)
 
     def _plan(self, logic, start, delta, io):
         rows = np.arange(start, len(self.index))
