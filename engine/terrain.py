@@ -1,3 +1,4 @@
+import contextlib
 import os
 import numpy as np
 try:
@@ -341,6 +342,12 @@ class Terrain:
     LOD_RESOLUTIONS = [48, 32, 16, 8]
     LOD_HYSTERESIS_FRAMES = 10
     MAX_UPDATES_PER_FRAME = 2
+    #: Set by the 3D view: a callable returning a context manager that makes
+    #: its GL context current. Terrain's GL objects belong to that context, so
+    #: deleting them from the GUI thread (opening a map, the terrain editor)
+    #: must happen inside it; outside it the deletes reach whatever context Qt
+    #: last made current and corrupt the driver's state. ``None`` headless.
+    gl_context = None
     #: Milliseconds of chunk meshing a frame may spend before the rest waits
     #: for the next frame. One chunk is always built, so terrain keeps
     #: streaming however slow the machine; a second only fits on a fast one.
@@ -1027,10 +1034,19 @@ class Terrain:
             new[:len(old)] = old
             setattr(self, name, new)
 
+    def _gl_scope(self):
+        """Context manager making the terrain's GL context current, if known."""
+        provider = type(self).gl_context
+        return provider() if provider is not None else contextlib.nullcontext()
+
     def _free_gl(self, slots):
         """Delete the GL objects of freed table slots (a GL-thread call)."""
         if not len(slots):
             return
+        with self._gl_scope():
+            self._free_gl_slots(slots)
+
+    def _free_gl_slots(self, slots):
         self._sync_gl_columns()
         for slot in slots:
             if self._grass_vao[slot]:
@@ -2631,6 +2647,10 @@ class Terrain:
         self.grass_tex = self.rock_tex = self.sand_tex = self.snow_tex = 0
 
     def cleanup(self):
+        with self._gl_scope():
+            self._cleanup_gl()
+
+    def _cleanup_gl(self):
         self._free_gl(self.table.clear())
         if self.block_program:
             try:

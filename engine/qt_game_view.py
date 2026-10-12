@@ -1,3 +1,4 @@
+import contextlib
 import time
 import os
 import math
@@ -6,8 +7,8 @@ import numpy as np
 import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, pyqtSignal
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
+from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -980,6 +981,10 @@ class QtGameView(QOpenGLWidget):
 
 
     def initializeGL(self):
+        # Terrain deletes its GL objects from the GUI thread too (opening a
+        # map, the terrain editor); they must go to this view's context.
+        from engine.terrain import Terrain
+        Terrain.gl_context = self.gl_context
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = self.editor.config
         self._renderer_mode = DEFAULT_RENDERER
@@ -3138,6 +3143,28 @@ class QtGameView(QOpenGLWidget):
         finally:
             self.doneCurrent()
             self.update()
+
+    @contextlib.contextmanager
+    def gl_context(self):
+        """Make this view's GL context current for GL work outside paintGL.
+
+        Outside paintGL the current context is usually Qt's own compositing
+        context, which shares buffers and textures with this one but not VAOs:
+        GL calls made there free the wrong objects and corrupt driver state.
+        A no-op when this context is already current (inside paintGL), before
+        the context exists, or off the GUI thread, where makeCurrent is unsafe.
+        """
+        ctx = self.context()
+        if (ctx is None or not ctx.isValid()
+                or QOpenGLContext.currentContext() is ctx
+                or QThread.currentThread() is not self.thread()):
+            yield
+            return
+        self.makeCurrent()
+        try:
+            yield
+        finally:
+            self.doneCurrent()
 
     def get_primary_selection_pos(self):
         if not self.editor.primary_selection():
