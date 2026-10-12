@@ -207,7 +207,8 @@ def test_the_3d_view_draws_nothing_of_a_filtered_group(fio_session):
     """Every renderer gets fewer rows; here, the built-in one draws fewer pixels."""
     session = fio_session(level_data(
         brushes=[box_brush("crate", (0.0, 64.0, -200.0), (256.0, 256.0, 256.0))],
-        things=[make_thing(PlayerStart, "spawn", (0.0, 40.0, 300.0), angle=0.0)]),
+        # Angle 90: the camera loads at the spawn facing -Z, at the crate.
+        things=[make_thing(PlayerStart, "spawn", (0.0, 40.0, 300.0), angle=90.0)]),
         size=(160, 120))
     session.view.sysmon.set_active(False)
     session.publish()
