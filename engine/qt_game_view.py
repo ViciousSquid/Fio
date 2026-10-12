@@ -4360,7 +4360,7 @@ class QtGameView(QOpenGLWidget):
             self._toggle_splitscreen()
             return
         if self.play_mode and event.key() == Qt.Key_F12:
-            if self.editor.is_kiosk_mode:
+            if getattr(self.editor, 'is_kiosk_mode', False):
                 self.editor.exit_kiosk_mode(keep_play_mode=True)
             else:
                 self.editor.enter_kiosk_mode()

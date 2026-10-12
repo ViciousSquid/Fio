@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.load_key_bindings()
 
         self.unsaved_changes = False
+        self.is_kiosk_mode = False
         #: The world as Play started, when Stop is set to restore it.
         self._pre_play_world = None
         #: Set while the open level is the procedural generator's untouched
