@@ -47,15 +47,15 @@ def test_the_dead_render_toggles_are_gone(console):
 def test_r_wireframe_toggles_the_display_box(console):
     handler, window, _logged = console
     combo, view = window.display_mode_combobox, window.view_3d
-    assert combo.currentText() == "Solid Lit"
+    assert combo.currentText() == "Textured"
 
     handler.handle_command("r_wireframe")
     assert combo.currentText() == "Wireframe"
     assert view.brush_display_mode == "Wireframe"
 
     handler.handle_command("wireframe")
-    assert combo.currentText() == "Solid Lit"
-    assert view.brush_display_mode == "Solid Lit"
+    assert combo.currentText() == "Textured"
+    assert view.brush_display_mode == "Textured"
 
 
 def test_r_wireframe_off_returns_to_the_mode_it_replaced(console):
@@ -80,14 +80,14 @@ def test_the_display_box_and_r_wireframe_agree(console):
     combo = window.display_mode_combobox
     combo.setCurrentText("Wireframe")
     handler.handle_command("r_wireframe")
-    assert combo.currentText() == "Solid Lit"
-    assert window.view_3d.brush_display_mode == "Solid Lit"
+    assert combo.currentText() == "Textured"
+    assert window.view_3d.brush_display_mode == "Textured"
 
 
 def test_r_wireframe_rejects_a_bad_argument(console):
     handler, window, logged = console
     handler.handle_command("r_wireframe sideways")
-    assert window.display_mode_combobox.currentText() == "Solid Lit"
+    assert window.display_mode_combobox.currentText() == "Textured"
     assert logged[-1][0] == "Warning"
 
 

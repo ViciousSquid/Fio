@@ -1,11 +1,13 @@
 import contextlib
 import time
+import weakref
 import os
 import math
 from collections import deque
 import numpy as np
 import ctypes
 from typing import Optional
+from PyQt5 import sip
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
 from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
@@ -983,8 +985,12 @@ class QtGameView(QOpenGLWidget):
     def initializeGL(self):
         # Terrain deletes its GL objects from the GUI thread too (opening a
         # map, the terrain editor); they must go to this view's context.
+        # Held weakly: a class attribute outlives the view, and a bound method
+        # there would keep this view -- and its editor window -- alive after
+        # it closes, then hand the next view's terrain a deleted context.
         from engine.terrain import Terrain
-        Terrain.gl_context = self.gl_context
+        gl_context = weakref.WeakMethod(self.gl_context)
+        Terrain.gl_context = lambda: (gl_context() or contextlib.nullcontext)()
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = self.editor.config
         self._renderer_mode = DEFAULT_RENDERER
@@ -3169,9 +3175,10 @@ class QtGameView(QOpenGLWidget):
         context, which shares buffers and textures with this one but not VAOs:
         GL calls made there free the wrong objects and corrupt driver state.
         A no-op when this context is already current (inside paintGL), before
-        the context exists, or off the GUI thread, where makeCurrent is unsafe.
+        the context exists or after the view is deleted, or off the GUI
+        thread, where makeCurrent is unsafe.
         """
-        ctx = self.context()
+        ctx = None if sip.isdeleted(self) else self.context()
         if (ctx is None or not ctx.isValid()
                 or QOpenGLContext.currentContext() is ctx
                 or QThread.currentThread() is not self.thread()):
