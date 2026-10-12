@@ -12,6 +12,7 @@ from engine import render_table
 from engine import shaders
 from engine.render_keys import KeyLayout
 from ..core.diagnostics import timed_pass
+from ..core.uniform_rows import uniform_rows
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
@@ -522,6 +523,12 @@ class LightingMixin:
                 obj = self.load_model(model_path)
                 if obj and obj.is_loaded:
                     resolved_models.append((slot_value, obj))
+            # Each caster's model matrix, built once per light rather than
+            # once per cube face: the authored base with the live position.
+            model_slots = np.array([s for s, _ in resolved_models], dtype=np.intp)
+            model_bases = entity_table.model_base_matrix[model_slots]
+            model_bases[:, 12:15] = entity_table.pos[model_slots]
+            upload_base = uniform_rows('mat4', model_bases)
 
             cube_slots, geo_slots = self._prepare_shadow_instances(
                 table, in_brushes, depth_instanced is not None)
@@ -552,10 +559,10 @@ class LightingMixin:
                         lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
                 elif len(cube_slots):
                     cube_models, _ = self._frame_transforms(table, cube_slots)
+                    upload_model = uniform_rows('mat4', cube_models)
                     gl.glBindVertexArray(cube_vao)
                     for i in range(len(cube_slots)):
-                        gl.glUniformMatrix4fv(
-                            model_loc, 1, gl.GL_FALSE, cube_models[i])
+                        upload_model(model_loc, i)
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                         self.render_stats.shadow_draw_calls += 1
 
@@ -564,28 +571,21 @@ class LightingMixin:
                     geo_meshes = self._prepare_geo_meshes(table, geo_slots)
                     geo_models, _geo_normals = self._frame_transforms(
                         table, geo_slots)
+                    upload_model = uniform_rows('mat4', geo_models)
                     for geo_i, slot_value in enumerate(geo_slots):
                         mesh = geo_meshes.get(
                             int(table.geometry_id[int(slot_value)]))
                         if mesh is None:
                             continue
-                        gl.glUniformMatrix4fv(
-                            model_loc, 1, gl.GL_FALSE, geo_models[geo_i])
+                        upload_model(model_loc, geo_i)
                         gl.glBindVertexArray(mesh.vao)
                         gl.glDrawArrays(
                             gl.GL_TRIANGLES, 0, mesh.count)
                         self.render_stats.shadow_draw_calls += 1
                         gl.glBindVertexArray(cube_vao)
 
-                for slot_value, obj in resolved_models:
-                    slot_value = int(slot_value)
-                    base = np.asarray(
-                        entity_table.model_base_matrix[slot_value],
-                        dtype=np.float32).copy()
-                    base[12:15] = np.asarray(
-                        entity_table.pos[slot_value], dtype=np.float32)
-                    gl.glUniformMatrix4fv(
-                        model_loc, 1, gl.GL_FALSE, base)
+                for index, (slot_value, obj) in enumerate(resolved_models):
+                    upload_base(model_loc, index)
                     gl.glBindVertexArray(obj.vao)
                     if (getattr(obj, 'ebo', None) is not None
                             and getattr(obj, 'index_count', 0)):

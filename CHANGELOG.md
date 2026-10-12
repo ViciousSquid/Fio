@@ -336,6 +336,16 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Performance
 
+- Brush passes that draw one row at a time (lit, textured angled brushes,
+  glow, water, glass, fog, non-instanced shadow casters) send each row's
+  model/normal matrix and colour through the GL entry point directly, by
+  address, instead of through PyOpenGL's array handler: on the showcase the
+  ~28 uploads a frame take ~0.08 ms instead of ~0.34-0.40 ms. The
+  call is built from PyOpenGL's own function type and argument types, and the
+  first upload of each kind is read back and compared; on any mismatch that
+  kind falls back to PyOpenGL's wrapper. `FIO_GL_DEBUG=1` keeps the wrappers
+  (every call checked). Frames are pixel-identical. Exercised on Linux
+  x86-64 only: Windows on ARM64, macOS and Android have not run this path yet.
 - The player's hitscan tests every collision box as one NumPy query instead
   of a Python loop over every brush, per pellet. On BigWorld_streaming_test
   (3,604 brushes) a single-pellet shot takes ~0.2 ms instead of ~0.8-1.3 ms

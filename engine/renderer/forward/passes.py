@@ -16,7 +16,15 @@ from engine import shaders
 from engine.render_keys import runs_in_order, sort_into_runs
 from ..api import WATER_QUALITIES
 from ..core.diagnostics import timed_pass
+from ..core.uniform_rows import uniform_rows
 from .instancing import BRUSH_RUN_KEY, _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR
+
+# The lit pass's override colours as float32 rows, so they upload through the
+# same per-row path as the table's own colours (same float32 values the tuples
+# converted to).
+_OVERRIDE_COLOURS = np.array(
+    [_TRIGGER_COLOR, _SELECTED_COLOR, _SUBTRACT_COLOR], dtype=np.float32)
+_TRIGGER_ROW, _SELECTED_ROW, _SUBTRACT_ROW = 0, 1, 2
 
 
 class PassesMixin:
@@ -111,24 +119,30 @@ class PassesMixin:
         # meshes wind oppositely, so the culled face is switched alongside the
         # VAO below. No-op in the main pass.
         self._portal_begin_cull(is_geo=False)
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
+        upload_colour = uniform_rows('vec3', colours)
+        upload_override = uniform_rows('vec3', _OVERRIDE_COLOURS)
         for index in indices:
             slot = int(visible[index])
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            upload_model(model_loc, index)
             if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                      normals[index])
+                upload_normal(normal_mat_loc, index)
             row = int(bits[index])
             if row & render_table.CLASS_TRIGGER:
-                color, alpha = _TRIGGER_COLOR, 0.3
+                upload_override(color_loc, _TRIGGER_ROW)
+                alpha = 0.3
             elif slot == selected_slot:
-                color, alpha = _SELECTED_COLOR, 1.0
+                upload_override(color_loc, _SELECTED_ROW)
+                alpha = 1.0
             elif row & render_table.CLASS_SUBTRACT:
-                color, alpha = _SUBTRACT_COLOR, 1.0
+                upload_override(color_loc, _SUBTRACT_ROW)
+                alpha = 1.0
             else:
-                color, alpha = colours[index], 1.0
+                upload_colour(color_loc, index)
+                alpha = 1.0
             has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
 
-            gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
             # An angled brush draws from its own convex mesh, which is built
             # from the brush's plane set -- the one thing no column holds, and
@@ -181,11 +195,16 @@ class PassesMixin:
                       if geometry.any() else {})
         edge_vao = self._ensure_edge_vao()
         bound_vao = None
+        upload_model = uniform_rows('mat4', models)
+        upload_colour = uniform_rows('vec3', colours)
+        upload_override = uniform_rows('vec3', _OVERRIDE_COLOURS)
         for index, slot in enumerate(brushes):
             slot = int(slot)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
-            gl.glUniform3fv(color_loc, 1, _SELECTED_COLOR if slot == selected_slot
-                            else colours[index])
+            upload_model(model_loc, index)
+            if slot == selected_slot:
+                upload_override(color_loc, _SELECTED_ROW)
+            else:
+                upload_colour(color_loc, index)
             mesh = (geo_meshes.get(int(table.geometry_id[slot]))
                     if geometry[index] else None)
             vao, count = ((mesh.edge_vao, mesh.edge_count)
@@ -227,6 +246,7 @@ class PassesMixin:
         gl.glDepthMask(gl.GL_FALSE)
         cube_vao = self.vaos['cube']
         bound_vao = None
+        upload_model = uniform_rows('mat4', models)
         for index, slot in enumerate(brushes):
             mesh = (geo_meshes.get(int(table.geometry_id[int(slot)]))
                     if geometry[index] else None)
@@ -234,7 +254,7 @@ class PassesMixin:
             if vao != bound_vao:
                 gl.glBindVertexArray(vao)
                 bound_vao = vao
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            upload_model(model_loc, index)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, count)
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
@@ -426,6 +446,8 @@ class PassesMixin:
             gl.glBindVertexArray(self.vaos['cube'])
         else:
             last_row = -1
+            upload_model = uniform_rows('mat4', models)
+            upload_normal = uniform_rows('mat3', normals)
             for i in range(len(rows)):
                 tex_id = int(gl_tex[i])
                 if tex_id != current_tex:
@@ -434,10 +456,9 @@ class PassesMixin:
                     self.render_stats.batched_draws += 1
                 row = int(rows[i])
                 if row != last_row:
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
+                    upload_model(model_loc, row)
                     if normal_mat_loc > 0:
-                        gl.glUniformMatrix3fv(
-                            normal_mat_loc, 1, gl.GL_FALSE, normals[row])
+                        upload_normal(normal_mat_loc, row)
                     last_row = row
                 if tex_angle_loc != -1:
                     gl.glUniform1f(tex_angle_loc, float(angles[i]))
@@ -461,16 +482,17 @@ class PassesMixin:
             (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
         )
 
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
         for geo_i, slot_value in enumerate(geo_slots):
             gid = int(table.geometry_id[int(slot_value)])
             mesh = geo_meshes.get(gid)
             if mesh is None:
                 continue
             row = int(geo_rows[geo_i])
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
+            upload_model(model_loc, row)
             if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(
-                    normal_mat_loc, 1, gl.GL_FALSE, normals[row])
+                upload_normal(normal_mat_loc, row)
             gl.glBindVertexArray(mesh.vao)
 
             for run in mesh.runs:
@@ -543,12 +565,15 @@ class PassesMixin:
         geo_meshes = self._prepare_geo_meshes(table, brushes)
 
 
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
+        upload_colour = uniform_rows('vec3', colours)
         for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            upload_model(model_loc, index)
             if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[index])
-            gl.glUniform3fv(color_loc, 1, colours[index])
+                upload_normal(normal_mat_loc, index)
+            upload_colour(color_loc, index)
             has_geometry = bool(geometry[index])
             gl.glUniform1f(alpha_loc, 1.0)
             mesh = None
@@ -1691,12 +1716,14 @@ class PassesMixin:
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
+        upload_tint = uniform_rows('vec3', tints)
         for i, slot_value in enumerate(brushes):
             slot = int(slot_value)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            upload_model(model_loc, i)
             if normal_mat_loc >= 0:
-                gl.glUniformMatrix3fv(
-                    normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+                upload_normal(normal_mat_loc, i)
 
             opacity = float(params[i, 0])
             fresnel = float(params[i, 1])
@@ -1713,7 +1740,7 @@ class PassesMixin:
             gl.glUniform1f(distortion_loc, float(params[i, 4]))
             gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
             gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
-            gl.glUniform3fv(tint_loc, 1, tints[i])
+            upload_tint(tint_loc, i)
             gl.glUniform3f(
                 brush_size_loc,
                 float(sizes[i, 0]),
@@ -1916,12 +1943,15 @@ class PassesMixin:
         params = table.glass_params[brushes]
         geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
         geo_meshes = self._prepare_geo_meshes(table, brushes)
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
+        upload_colour = uniform_rows('vec3', colors)
         for i, slot_value in enumerate(brushes):
             slot = int(slot_value)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            upload_model(model_loc, i)
             if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
-            gl.glUniform3fv(water_color_loc, 1, colors[i])
+                upload_normal(normal_mat_loc, i)
+            upload_colour(water_color_loc, i)
             gl.glUniform1f(distortion_loc, float(params[i, 1]))
             gl.glUniform1f(fresnel_loc, float(params[i, 4]))
             gl.glUniform1f(opacity_loc, float(params[i, 0]))
@@ -1984,14 +2014,17 @@ class PassesMixin:
         params = table.fog_params[brushes]
         geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
         geo_meshes = self._prepare_geo_meshes(table, brushes)
+        upload_model = uniform_rows('mat4', models)
+        upload_inverse = uniform_rows('mat4', inv)
+        upload_colour = uniform_rows('vec3', colors)
         for i, slot_value in enumerate(brushes):
             slot = int(slot_value)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
-            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, inv[i])
-            gl.glUniform3fv(fog_color_loc, 1, colors[i])
+            upload_model(model_loc, i)
+            upload_inverse(inv_model_loc, i)
+            upload_colour(fog_color_loc, i)
             gl.glUniform1f(density_loc, float(params[i, 0]))
             gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
-            gl.glUniform3fv(object_color_loc, 1, colors[i])
+            upload_colour(object_color_loc, i)
             gl.glUniform1f(alpha_loc, 0.4)
             mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
             if mesh is not None:
