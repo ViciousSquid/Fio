@@ -53,6 +53,9 @@ def _level(textured=True):
 def _open(fio_session, level=None):
     session = fio_session(level or _level(), size=(240, 160))
     session.view.sysmon.set_active(False)
+    # The FPS counter's digits depend on how fast the machine draws, and
+    # these pictures are compared pixel for pixel.
+    session.view.editor.config.set("Display", "show_fps", "False")
     return session
 
 
