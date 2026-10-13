@@ -108,7 +108,10 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 - Ball: a new Prop preset (2D view context menu → **Ball**), a giant
   low-poly golf ball half the player's height (`assets/models/ball.obj`: an
   80-face flat-shaded geodesic sphere with 362 evenly laid dimples; rebuilt by
-  `tools/make_golf_ball.py`). It keeps
+  `tools/make_golf_ball.py`). `assets/models/ball_numbers.obj` is the same
+  ball with a number on every face, 1-80, opposite faces adding up to 81,
+  like a large die. Like any model it casts and receives shadows from
+  shadow-casting lights, its shadow following it as it rolls. It keeps
   its AABB collision but rolls: it turns by the distance it travels, loses
   only a little speed to the ground, and bounces off floors and walls by its
   **Bounciness**. Its **Mass** takes the bounce away, and from mass 10 a ball

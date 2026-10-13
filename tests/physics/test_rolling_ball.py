@@ -8,7 +8,7 @@ from engine.entity_table import _model_recipe, _model_transform_columns
 from engine.obj_loader import OBJLoader
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
-from engine.prop_entity import BALL_MODEL_PATH, Prop
+from engine.prop_entity import BALL_MODEL_PATH, BALL_NUMBERS_MODEL_PATH, Prop
 from engine.shaders import DEFAULT_SHADERS
 
 FRAME = 1.0 / 60.0
@@ -66,6 +66,19 @@ def test_ball_model_is_a_golf_ball_half_the_player_centred_and_textured():
     assert len(loader.faces) == 80
     radii = np.linalg.norm(vertices, axis=1)
     assert np.allclose(radii, 25.0, atol=1e-3)
+
+
+def test_the_numbered_ball_is_the_same_ball_with_a_cell_per_face():
+    plain, numbered = OBJLoader(), OBJLoader()
+    assert plain.load(BALL_MODEL_PATH) and numbered.load(BALL_NUMBERS_MODEL_PATH)
+    assert np.allclose(sorted(map(tuple, np.round(plain.vertices, 4))),
+                       sorted(map(tuple, np.round(numbered.vertices, 4))))
+    uvs = np.asarray(numbered.texcoords)
+    cells = {tuple(sorted(map(tuple, np.round(uvs[[c[1] for c in face['vertices']]], 5))))
+             for face in numbered.faces}
+    # Every face shows its own part of the atlas: its own number.
+    assert len(numbered.faces) == len(cells) == 80
+    assert ((uvs >= 0.0) & (uvs <= 1.0)).all()
 
 
 def test_ball_defaults_are_a_rolling_solid_physics_prop():

@@ -1,4 +1,4 @@
-# Fio golf ball: a white dimpled texture, so a Prop's tint sets its colour.
+# Fio golf ball: a white texture, so a Prop's tint sets its colour.
 newmtl ball
 Ka 0.2 0.2 0.2
 Kd 1.0 1.0 1.0

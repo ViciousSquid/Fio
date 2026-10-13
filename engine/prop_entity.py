@@ -25,6 +25,8 @@ except ImportError:  # standalone player / Android: no PyQt5
 
 DEFAULT_MODEL_PATH = 'assets/models/Oil_Drum.obj'
 BALL_MODEL_PATH = 'assets/models/ball.obj'
+#: The same ball with a number on every face, like a large die.
+BALL_NUMBERS_MODEL_PATH = 'assets/models/ball_numbers.obj'
 
 KEY_SPRITES = {
     'blue_key': 'assets/sprites/bluekey.png',
