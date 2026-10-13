@@ -2,6 +2,7 @@ import math
 import glm
 import numpy as np
 
+from . import rolling
 from .change_journal import touch
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
@@ -1012,6 +1013,7 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
+        self._clear_rolling()
         self._dirty = False
         self._static_cells = {}
         self._static_query_cache = {}
@@ -1044,10 +1046,26 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
+        self._clear_rolling()
         self._static_cells.clear()
         self._static_query_cache.clear()
         self._reported_cell = None
         self._dirty = False
+
+    def _clear_rolling(self):
+        #: Rolls as a ball (see engine.rolling).
+        self._rolls = np.empty(0, dtype=np.bool_)
+        #: Fraction of impact speed kept on a bounce: bounciness faded by mass.
+        self._bounce = np.empty(0, dtype=np.float32)
+        #: Rolling bodies' orientation, (w, x, y, z); identity for the rest.
+        self._orientation = np.empty((0, 4), dtype=np.float64)
+        # Set at pack time. A world with no ball and nothing bouncy -- most
+        # maps -- never enters the rolling or bounce code.
+        self._any_rolls = False
+        self._any_bounce = False
+        #: Set when a heavy ball pins the player against a wall; the logic
+        #: thread applies the damage and clears it.
+        self.player_crushed = False
 
     @staticmethod
     def _shape_from_brush(entity, brush):
@@ -1101,6 +1119,10 @@ class PhysicsWorld:
             np.asarray(props.get('drop_angular_velocity', [0.0, 0.0, 0.0]), dtype=np.float32),
             not bool(props.get('no_collision', True)),
             bool(props.get('physics_enabled', False)),
+            bool(props.get('rolls', False)),
+            float(rolling.restitution(_float(props.get('bounciness'), 0.0),
+                                      _float(props.get('mass'), 1.0)))
+            if props.get('bounciness') else 0.0,
         )
         self._dirty = True
         return body
@@ -1126,12 +1148,16 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(n, dtype=np.bool_)
         self._awake = np.zeros(n, dtype=np.bool_)
         self._kinematic = np.zeros(n, dtype=np.bool_)
+        self._rolls = np.zeros(n, dtype=np.bool_)
+        self._bounce = np.zeros(n, dtype=np.float32)
+        self._orientation = np.zeros((n, 4), dtype=np.float64)
+        self._orientation[:, 0] = 1.0
 
         for i, entity in enumerate(self._entities):
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
-                angular_velocity, solid, physics_enabled,
+                angular_velocity, solid, physics_enabled, rolls, bounce,
             ) = body._initial
             self._indices[id(entity)] = i
             self._position[i] = position
@@ -1144,8 +1170,25 @@ class PhysicsWorld:
             self._angular_velocity[i] = angular_velocity
             self._solid[i] = solid
             self._physics_enabled[i] = physics_enabled
+            self._rolls[i] = rolls
+            self._bounce[i] = bounce
+            if rolls:
+                # A ball's turn comes from its rolling, not a fixed spin.
+                self._angular_velocity[i] = 0.0
+                self._orientation[i] = self._entity_orientation(entity)
 
+        self._any_rolls = bool(self._rolls.any())
+        self._any_bounce = bool(self._bounce.any())
         self._dirty = False
+
+    @staticmethod
+    def _entity_orientation(entity):
+        props = getattr(entity, 'properties', None)
+        rotation = props.get('rotation') if isinstance(props, dict) else None
+        try:
+            return rolling.quat_from_rotation(rotation)[0]
+        except (TypeError, ValueError):
+            return np.array([1.0, 0.0, 0.0, 0.0])
 
     def get_body(self, entity):
         self._pack()
@@ -1167,6 +1210,9 @@ class PhysicsWorld:
         )
 
         self._kinematic[index] = value
+        if self._any_rolls and self._rolls[index]:
+            # Carrying turns a model with the player; roll on from there.
+            self._orientation[index] = self._entity_orientation(entity)
         if value:
             self._velocity[index] = 0.0
             self._awake[index] = False
@@ -1322,6 +1368,62 @@ class PhysicsWorld:
                 props['rotation'] = rotation
                 touch(entity)
 
+    def _heavy_balls_push(self, player, ppos, player_half, center, rows):
+        """Heavy balls overlapping the player shove the player out of the way.
+
+        The player goes out along whichever horizontal axis overlaps least, and
+        a ball rolling into the player carries them along at its own speed. If
+        that leaves the player inside a wall, the ball has pinned them there:
+        :attr:`player_crushed`.
+        """
+        for i in rows:
+            dx = float(ppos[0] - center[i, 0])
+            dz = float(ppos[2] - center[i, 2])
+            overlap_x = float(player_half[0] + self._half[i, 0]) - abs(dx)
+            overlap_z = float(player_half[2] + self._half[i, 2]) - abs(dz)
+            axis, delta, out = ((0, dx, overlap_x) if overlap_x <= overlap_z
+                                else (2, dz, overlap_z))
+            direction = 1.0 if delta >= 0.0 else -1.0
+            ppos[axis] += direction * (out + 0.5)
+            ball_speed = float(self._velocity[i, axis])
+            if ball_speed * direction > 0.0:
+                if axis == 0:
+                    player.velocity.x = ball_speed
+                else:
+                    player.velocity.z = ball_speed
+                if (ball_speed * direction > rolling.CRUSH_SPEED
+                        and self._player_in_wall(ppos, player_half)):
+                    self.player_crushed = True
+        player.pos = glm.vec3(float(ppos[0]), float(ppos[1]), float(ppos[2]))
+
+    def _player_in_wall(self, ppos, player_half):
+        """Whether the player's box, short of its feet and head, is in a wall."""
+        cell_size = float(self.spatial_grid.cell_size)
+        aabbs = self._candidate_aabbs(int(math.floor(float(ppos[0]) / cell_size)),
+                                      int(math.floor(float(ppos[2]) / cell_size)))
+        if aabbs is None:
+            return False
+        # Trimmed top and bottom so the floor stood on and a low ceiling are
+        # not walls.
+        lo = np.array([ppos[0] - player_half[0], ppos[1] - player_half[1] + 8.0,
+                       ppos[2] - player_half[2]], dtype=np.float32)
+        hi = np.array([ppos[0] + player_half[0], ppos[1] + player_half[1] - 8.0,
+                       ppos[2] + player_half[2]], dtype=np.float32)
+        return bool(np.any(np.all((aabbs[:, 3:] > lo) & (aabbs[:, :3] < hi), axis=1)))
+
+    def _roll(self, rows, dt):
+        """Turn rolling bodies by how far they rolled this step."""
+        radius = np.min(self._half[rows], axis=1)
+        orientation = rolling.roll(
+            self._orientation[rows], self._velocity[rows], radius, dt)
+        self._orientation[rows] = orientation
+        for i, rotation in zip(rows, rolling.rotation_from_quat(orientation).tolist()):
+            entity = self._entities[int(i)]
+            props = getattr(entity, 'properties', None)
+            if isinstance(props, dict):
+                props['rotation'] = rotation
+                touch(entity)
+
     def _sync_entities(self, indices=None):
         # Position only. Rotation is integrated (angular * dt) in step();
         # applying angular velocity here as well spun bodies ~61x too fast.
@@ -1457,7 +1559,13 @@ class PhysicsWorld:
         if np.any(collision):
             hit_indices = indices[collision]
             self._position[hit_indices, axis] = old_position[hit_indices, axis]
-            self._velocity[hit_indices, axis] = 0.0
+            if self._any_bounce:
+                # Bounce off the wall if bouncy enough.
+                hit_velocity = self._velocity[hit_indices, axis]
+                self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * rolling.bounce_speed(
+                    np.abs(hit_velocity), self._bounce[hit_indices])
+            else:
+                self._velocity[hit_indices, axis] = 0.0
 
     def _batch_floor(self, previous_bottom=None):
         """Find the floor beneath each active dynamic body.
@@ -1721,6 +1829,12 @@ class PhysicsWorld:
                 (body_min[:, 2] < player_max[2])
             )
             pushable = active & self._solid & ~self._kinematic & overlap
+            if self._any_rolls:
+                heavy = pushable & self._rolls & (self._mass >= rolling.HEAVY_MASS)
+                if np.any(heavy):
+                    pushable &= ~heavy
+                    self._heavy_balls_push(player, ppos, player_half, center,
+                                           np.flatnonzero(heavy))
             speed = float(np.hypot(player_velocity[0], player_velocity[2]))
             if speed >= 0.01 and np.any(pushable):
                 dx = center[:, 0] - ppos[0]
@@ -1790,15 +1904,27 @@ class PhysicsWorld:
                     - self._offset[landed, 1]
                     + self._half[landed, 1]
                 )
-                self._velocity[landed, 1] = 0.0
+                if self._any_bounce:
+                    # Bounce back up if bouncy enough.
+                    self._velocity[landed, 1] = rolling.bounce_speed(
+                        np.maximum(-self._velocity[landed, 1], 0.0),
+                        self._bounce[landed])
+                else:
+                    self._velocity[landed, 1] = 0.0
 
                 # Treat friction as a surface coefficient rather than a tiny
-                # per-frame damping term. Apply it only while grounded.
+                # per-frame damping term. Apply it only while grounded. A
+                # rolling ball loses only a little of its speed to the ground.
                 friction_accel = (
                     self._friction[landed]
                     * np.float32(max(0.0, float(self.friction_scale)))
                     * np.float32(abs(float(self.gravity)))
                 )
+                if self._any_rolls:
+                    friction_accel = friction_accel * np.where(
+                        self._rolls[landed],
+                        np.float32(rolling.ROLLING_FRICTION_SCALE),
+                        np.float32(1.0))
                 ground_speed = np.hypot(
                     self._velocity[landed, 0],
                     self._velocity[landed, 2],
@@ -1815,12 +1941,22 @@ class PhysicsWorld:
             if np.any(angular):
                 self._integrate_rotation(angular, dt)
 
+            if self._any_rolls:
+                rolling_rows = np.flatnonzero(
+                    moving & self._rolls
+                    & ((self._velocity[:, 0] != 0.0) | (self._velocity[:, 2] != 0.0)))
+                if rolling_rows.size:
+                    self._roll(rolling_rows, dt)
+
             speed = np.max(np.abs(self._velocity), axis=1)
             sleeping = (
                 self.sleep_enabled
                 & moving
                 & (speed < self.REST_SPEED)
             )
+            if self._any_bounce:
+                # A bounce is momentarily still at the top of its arc.
+                sleeping &= landed
             if np.any(sleeping):
                 self._velocity[sleeping] = 0.0
                 rest_indices = np.flatnonzero(sleeping)
@@ -1833,6 +1969,13 @@ class PhysicsWorld:
 
             self._sync_entities(np.flatnonzero(moving))
 
+
+
+def _float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def world_gravity(world=None):

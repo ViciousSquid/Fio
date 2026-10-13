@@ -24,6 +24,7 @@ except ImportError:  # standalone player / Android: no PyQt5
 
 
 DEFAULT_MODEL_PATH = 'assets/models/Oil_Drum.obj'
+BALL_MODEL_PATH = 'assets/models/ball.obj'
 
 KEY_SPRITES = {
     'blue_key': 'assets/sprites/bluekey.png',
@@ -151,6 +152,24 @@ LEGACY_MODEL_DEFAULTS = {
 }
 
 
+#: What a Ball starts as: a solid physics Prop showing a low-poly golf ball, 50
+#: units across (half the player's height), that rolls and bounces
+#: (engine.rolling). ``tint`` multiplies the model's colour, so the white ball
+#: takes any colour.
+#: Its collision is still the model's AABB.
+BALL_PROP_DEFAULTS = {
+    'render_mode': 'model',
+    'model_path': BALL_MODEL_PATH,
+    'physics_enabled': True,
+    'no_collision': False,
+    'collision_shape': 'aabb',
+    'carry_enabled': True,
+    'rolls': True,
+    'bounciness': 0.5,
+    'tint': [1.0, 1.0, 1.0],
+}
+
+
 def legacy_model_properties(properties):
     """A pre-Prop ``Model`` record's properties, read as a Prop's.
 
@@ -257,6 +276,15 @@ class Prop(_ThingBase):
         props = dict(MODEL_PROP_DEFAULTS)
         props.update(properties or {})
         props['model_path'] = str(model_path).replace('\\', '/')
+        return cls(pos=list(pos) if pos is not None else [0, 0, 0],
+                   properties=props)
+
+    @classmethod
+    def for_ball(cls, pos=None, properties=None):
+        """A Ball: a Prop with :data:`BALL_PROP_DEFAULTS`."""
+        props = {key: list(value) if isinstance(value, list) else value
+                 for key, value in BALL_PROP_DEFAULTS.items()}
+        props.update(properties or {})
         return cls(pos=list(pos) if pos is not None else [0, 0, 0],
                    properties=props)
 

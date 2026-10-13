@@ -426,12 +426,15 @@ in vec3 Normal;
 in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
+uniform vec4 model_tint;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
+    // A model's tint; all zeros (the default) leaves the texture as it is.
+    texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);
 
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.1) + uAmbient) * texColor.rgb;
@@ -2203,11 +2206,14 @@ in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
+uniform vec4 model_tint;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
+    // A model's tint; all zeros (the default) leaves the texture as it is.
+    texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.12) + uAmbient) * texColor.rgb;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {

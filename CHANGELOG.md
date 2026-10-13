@@ -105,6 +105,19 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### New
 
+- Ball: a new Prop preset (2D view context menu → **Ball**), a giant
+  low-poly golf ball half the player's height (`assets/models/ball.obj`: an
+  80-face flat-shaded geodesic sphere with 362 evenly laid dimples; rebuilt by
+  `tools/make_golf_ball.py`). It keeps
+  its AABB collision but rolls: it turns by the distance it travels, loses
+  only a little speed to the ground, and bounces off floors and walls by its
+  **Bounciness**. Its **Mass** takes the bounce away, and from mass 10 a ball
+  cannot be pushed by the player -- it shoves the player aside instead, and
+  crushes a player it pins against a wall (unless god mode is on). **Rolls**
+  and **Bounciness** are on every Prop's Physics tab. Maps with no ball pay
+  nothing for any of it.
+- Tint: model Props have a **Tint** colour that multiplies the model's
+  colour, textured or not; white leaves it as it is.
 - Cutscenes: a Cutscene Wizard (Tools menu and toolbar), JSON cutscenes under
   `cutscenes/` played by a LogicCamera, with camera keyframes, temporary
   actors, timed I/O events and preview.

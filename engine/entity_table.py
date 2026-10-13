@@ -363,22 +363,44 @@ def _entity_class_bits(thing) -> int:
     return bits
 
 
+def _model_tint(props):
+    """A Prop's ``tint`` as 0..1 floats, or None for no tint (or white).
+
+    Stored as 0..1 floats; a colour with any component above 1 is read as
+    0..255.
+    """
+    tint = props.get('tint')
+    try:
+        rgb = [float(tint[0]), float(tint[1]), float(tint[2])]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if any(c > 1.0 for c in rgb):
+        rgb = [c / 255.0 for c in rgb]
+    rgb = tuple(min(1.0, max(0.0, c)) for c in rgb)
+    return None if rgb == (1.0, 1.0, 1.0) else rgb
+
+
 def _model_recipe(thing):
-    """Return the cold model draw recipe for one entity, or ``None``."""
+    """Return the cold model draw recipe for one entity, or ``None``.
+
+    ``(model_path, manual_texture, colour, tint)``: *colour* is the manual
+    texture's flat-shaded fallback, *tint* multiplies whatever is drawn.
+    """
     props = _props_of(thing)
     model_path = props.get('model_path')
     if not model_path:
         return None
     model_path = str(model_path)
+    tint = _model_tint(props)
     manual_texture = props.get('texture')
     if not manual_texture:
-        return (model_path, None, None)
+        return (model_path, None, None, tint)
     colour = props.get('color', [0.8, 0.8, 0.8])
     try:
         colour = (float(colour[0]), float(colour[1]), float(colour[2]))
     except (TypeError, ValueError, IndexError):
         colour = (0.8, 0.8, 0.8)
-    return (model_path, str(manual_texture), colour)
+    return (model_path, str(manual_texture), colour, tint)
 
 
 def _model_transform_columns(thing):

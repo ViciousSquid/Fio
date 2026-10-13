@@ -2041,6 +2041,8 @@ class PropertyEditor(QWidget):
             self.add_vector3_widget(form, thing, 'scale')
             rotation_before = form.rowCount()
             self.add_vector3_widget(form, thing, 'rotation')
+            tint_before = form.rowCount()
+            self._add_tint_widget(form, thing)
 
             if is_prop:
                 sprite_widget = QWidget(w)
@@ -2103,6 +2105,7 @@ class PropertyEditor(QWidget):
                 model_path_row = form.getWidgetPosition(model_path_widget)[0]
                 scale_row = scale_before
                 rotation_row = rotation_before
+                tint_row = tint_before
                 sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
                 sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
                 self._prop_render_form = form
@@ -2148,13 +2151,13 @@ class PropertyEditor(QWidget):
                             spin.blockSignals(True)
                             spin.setValue(value)
                             spin.blockSignals(False)
-                    for row in (model_path_row, scale_row, rotation_row):
+                    for row in (model_path_row, scale_row, rotation_row, tint_row):
                         self._set_form_row_visible(form, row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
                         self._set_form_row_visible(form, row, not is_model)
 
                 mode_combo.currentTextChanged.connect(set_representation)
-                for row in (model_path_row, scale_row, rotation_row):
+                for row in (model_path_row, scale_row, rotation_row, tint_row):
                     self._set_form_row_visible(form, row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
                     self._set_form_row_visible(form, row, not model_mode)
@@ -2429,6 +2432,36 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Friction:", friction_spin)
         self._widgets['prop_friction_spin'] = friction_spin
 
+        rolls_cb = _make_checkbox(
+            "Rolls like a ball",
+            bool(thing.properties.get('rolls', False)),
+            lambda checked: self.update_object_prop('rolls', bool(checked)),
+            _Style.CHECKBOX,
+        )
+        rolls_cb.setToolTip(
+            "Turn as a ball rolling along the ground, losing far less speed "
+            "to friction than a sliding prop. Collision stays the AABB. From "
+            "mass 10 the player cannot push it; it pushes the player."
+        )
+        physics_form.addRow("", rolls_cb)
+        self._widgets['prop_rolls_cb'] = rolls_cb
+
+        bounciness = min(1.0, max(0.0, float(thing.properties.get('bounciness', 0.0) or 0.0)))
+        bounciness_spin = QDoubleSpinBox()
+        bounciness_spin.setRange(0.0, 1.0)
+        bounciness_spin.setDecimals(2)
+        bounciness_spin.setSingleStep(0.05)
+        bounciness_spin.setValue(bounciness)
+        bounciness_spin.setToolTip(
+            "Share of its speed the prop keeps when it hits the floor or a "
+            "wall. Mass takes it away: from mass 10 it does not bounce at all."
+        )
+        bounciness_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('bounciness', float(value))
+        )
+        physics_form.addRow("Bounciness:", bounciness_spin)
+        self._widgets['prop_bounciness_spin'] = bounciness_spin
+
         shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
         shape_labels = {
             'auto': 'Automatic',
@@ -2471,7 +2504,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=9,
+            count=11,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
@@ -5231,6 +5264,46 @@ class PropertyEditor(QWidget):
         update_swatch()
         h.addWidget(swatch)
         form_layout.addRow(label, widget)
+
+    def _add_tint_widget(self, form_layout, thing):
+        """A model's Tint: a swatch that multiplies the model's colour.
+
+        Stored as 0..1 floats; white (the default) leaves the model as it is.
+        """
+        widget = QWidget()
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
+
+        def current():
+            tint = thing.properties.get('tint') or [1.0, 1.0, 1.0]
+            try:
+                rgb = [float(tint[0]), float(tint[1]), float(tint[2])]
+            except (TypeError, ValueError, IndexError):
+                return [1.0, 1.0, 1.0]
+            if any(c > 1.0 for c in rgb):
+                rgb = [c / 255.0 for c in rgb]
+            return rgb
+
+        def set_tint(rgb):
+            self.update_object_prop('tint', rgb)
+            self._update_color_button(swatch, rgb)
+
+        def pick():
+            r, g, b = (int(round(c * 255)) for c in current())
+            color = QColorDialog.getColor(QColor(r, g, b), self, "Choose Tint")
+            if color.isValid():
+                set_tint([color.redF(), color.greenF(), color.blueF()])
+
+        swatch = self._color_button(current(), pick, size=(140, 28))
+        swatch.setToolTip("Multiplies the model's colour. White leaves it as it is.")
+        reset = QPushButton("Reset")
+        reset.setToolTip("No tint (white)")
+        reset.clicked.connect(lambda: set_tint([1.0, 1.0, 1.0]))
+        h.addWidget(swatch)
+        h.addWidget(reset)
+        h.addStretch()
+        form_layout.addRow("Tint:", widget)
+        self._widgets['prop_tint_button'] = swatch
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])
