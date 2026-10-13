@@ -425,6 +425,26 @@ class Terrain:
         # once by the editor and the resulting colour/coverage becomes part
         # of the terrain data itself.
         self.texture_paint_maps: Dict[Tuple[int, int], np.ndarray] = {}
+        # Placed texture stamps. Each record (id, texture, x, z, radius,
+        # angle, feather, opacity) is also baked into texture_paint_maps, which
+        # stays what renders and what the game loads; the records let the
+        # editor select a stamp and rebake its chunks when it moves.
+        # texture_paint_base is the paint no stamp record owns (maps painted
+        # before stamps were kept), composited under the stamps.
+        self.paint_stamps: List[dict] = []
+        self.texture_paint_base: Dict[Tuple[int, int], np.ndarray] = {}
+        # Editor-only: selected stamps draw tinted from _paint_display, which
+        # overrides texture_paint_maps for the chunks they touch.
+        self.selected_stamp_ids: set = set()
+        self._paint_display: Dict[Tuple[int, int], np.ndarray] = {}
+        self._stamp_dirty_chunks: set = set()
+        self._paint_image_cache: Dict[str, Optional[np.ndarray]] = {}
+        # Stamp lookup index (see _stamp_index); None until first needed.
+        self._stamp_rows: Optional[Dict[str, int]] = None
+        self._stamp_ranges: List[Tuple[int, int, int, int]] = []
+        self._stamp_range_arr: Optional[np.ndarray] = None
+        self._stamp_index_key = None
+        self._base_serial_cache: Optional[list] = None
         self._paint_map_versions: Dict[Tuple[int, int], int] = {}
         self._paint_version_counter = 0
         self._paint_pages: List[int] = []
@@ -2417,18 +2437,36 @@ class Terrain:
         bottom = c01 * (1.0 - fx) + c11 * fx
         return (top * (1.0 - fy) + bottom * fy) / 255.0
 
+    def _paint_image(self, texture):
+        """The RGBA image for *texture*, loaded once per terrain."""
+        if texture not in self._paint_image_cache:
+            if len(self._paint_image_cache) >= 64:
+                self._paint_image_cache.clear()
+            self._paint_image_cache[texture] = self._load_texture_rgba(texture)
+        return self._paint_image_cache[texture]
+
     def _bake_texture_rect(self, bounds, texture, angle=0.0,
-                           feather=0.0, opacity=1.0):
-        """Bake one source image directly into terrain's per-chunk albedo."""
+                           feather=0.0, opacity=1.0, target=None,
+                           only=None, tint=None):
+        """Bake one source image directly into terrain's per-chunk albedo.
+
+        *target* is the chunk dict written (default: texture_paint_maps,
+        whose arrays are replaced rather than written in place, since
+        texture_paint_base may share them). *only* limits the bake to a set of
+        chunk keys; *tint* is ``(rgb, amount)`` mixed into the source colour.
+        """
         try:
             min_x, min_z, max_x, max_z = [float(v) for v in bounds]
         except (TypeError, ValueError):
             return False
         if max_x <= min_x or max_z <= min_z:
             return False
-        image = self._load_texture_rgba(texture)
+        image = self._paint_image(texture)
         if image is None:
             return False
+        copy_on_write = target is None
+        if target is None:
+            target = self.texture_paint_maps
 
         min_cx = int(math.floor((min_x - self.offset_x) / self.chunk_size))
         max_cx = int(math.floor((max_x - self.offset_x) / self.chunk_size))
@@ -2456,6 +2494,8 @@ class Terrain:
             if ix1 < ix0:
                 continue
             for cz in range(min_cz, max_cz + 1):
+                if only is not None and (cx, cz) not in only:
+                    continue
                 chunk_min_z = self.offset_z + cz * self.chunk_size
                 iz0 = max(0, int(math.floor((min_z - chunk_min_z) / cell)) - 1)
                 iz1 = min(res - 1, int(math.floor((max_z - chunk_min_z) / cell)) + 1)
@@ -2490,15 +2530,21 @@ class Terrain:
                 uv_x = 0.5 + qx * 0.5
                 uv_z = 0.5 + qz * 0.5
                 sampled = self._sample_paint_image(image, uv_x, uv_z)
+                if tint is not None:
+                    rgb, mix = tint
+                    sampled[..., :3] = (sampled[..., :3] * (1.0 - mix)
+                                        + np.asarray(rgb, np.float32) * mix)
                 src_a = sampled[..., 3] * amount
                 if not np.any(src_a > 1e-6):
                     continue
 
                 key = (int(cx), int(cz))
-                paint = self.texture_paint_maps.get(key)
+                paint = target.get(key)
                 if paint is None:
                     paint = np.zeros((res, res, 4), dtype=np.uint8)
-                    self.texture_paint_maps[key] = paint
+                elif copy_on_write:
+                    paint = paint.copy()
+                target[key] = paint
                 dst = paint[ix0:ix1 + 1, iz0:iz1 + 1].astype(np.float32) / 255.0
                 dst_a = dst[..., 3]
                 out_a = src_a + dst_a * (1.0 - src_a)
@@ -2523,12 +2569,281 @@ class Terrain:
         if radius <= 0.0 or not str(texture).strip():
             return False
         radius = abs(radius)
-        return self._bake_texture_rect(
-            (float(world_x) - radius, float(world_z) - radius,
-             float(world_x) + radius, float(world_z) + radius),
-            str(texture), angle=float(angle),
+        bounds = (float(world_x) - radius, float(world_z) - radius,
+                  float(world_x) + radius, float(world_z) + radius)
+        if not self.paint_stamps:
+            changed = self._bake_texture_rect(
+                bounds, str(texture), angle=float(angle),
+                feather=radius * float(np.clip(feather, 0.0, 1.0)),
+                opacity=opacity)
+            if changed:
+                self.texture_paint_base = dict(self.texture_paint_maps)
+                self._base_serial_cache = None
+            return changed
+        # Free paint lives in the base layer, under the placed stamps.
+        changed = self._bake_texture_rect(
+            bounds, str(texture), angle=float(angle),
             feather=radius * float(np.clip(feather, 0.0, 1.0)),
-            opacity=opacity)
+            opacity=opacity, target=self.texture_paint_base)
+        if changed:
+            self._base_serial_cache = None
+            self._recompose_paint(self._chunks_in_bounds(bounds))
+        return changed
+
+    # -- Placed stamps -------------------------------------------------------
+
+    #: Colour mixed into selected stamps, and how strongly.
+    STAMP_SELECT_TINT = ((1.0, 0.5, 0.0), 0.45)
+
+    @staticmethod
+    def make_paint_stamp(world_x, world_z, radius, texture, feather=0.25,
+                         opacity=1.0, angle=0.0, stamp_id=None):
+        """A stamp record, or None if it cannot be placed."""
+        import uuid
+        try:
+            record = {
+                'id': str(stamp_id) if stamp_id else uuid.uuid4().hex,
+                'texture': str(texture).replace('\\', '/').strip(),
+                'x': float(world_x),
+                'z': float(world_z),
+                'radius': abs(float(radius)),
+                'angle': float(angle),
+                'feather': float(np.clip(float(feather), 0.0, 1.0)),
+                'opacity': float(np.clip(float(opacity), 0.0, 1.0)),
+            }
+        except (TypeError, ValueError):
+            return None
+        numbers = (record['x'], record['z'], record['radius'], record['angle'])
+        if (not record['texture'] or record['radius'] <= 0.0
+                or not all(math.isfinite(v) for v in numbers)):
+            return None
+        return record
+
+    @staticmethod
+    def _stamp_bounds(stamp):
+        r = stamp['radius']
+        return (stamp['x'] - r, stamp['z'] - r, stamp['x'] + r, stamp['z'] + r)
+
+    def _chunks_in_bounds(self, bounds):
+        min_x, min_z, max_x, max_z = bounds
+        cs = self.chunk_size
+        return {(cx, cz)
+                for cx in range(int(math.floor((min_x - self.offset_x) / cs)),
+                                int(math.floor((max_x - self.offset_x) / cs)) + 1)
+                for cz in range(int(math.floor((min_z - self.offset_z) / cs)),
+                                int(math.floor((max_z - self.offset_z) / cs)) + 1)}
+
+    def _stamp_chunks(self, stamp):
+        return self._chunks_in_bounds(self._stamp_bounds(stamp))
+
+    #: From this many stamps a NumPy mask beats a Python scan for finding the
+    #: stamps over a chunk (measured crossover ~150; ~7 us fixed NumPy cost).
+    STAMP_VECTOR_MIN = 128
+
+    def _stamp_range(self, stamp):
+        """Inclusive chunk range (cx0, cx1, cz0, cz1) a stamp covers."""
+        r, cs = stamp['radius'], self.chunk_size
+        return (int(math.floor((stamp['x'] - r - self.offset_x) / cs)),
+                int(math.floor((stamp['x'] + r - self.offset_x) / cs)),
+                int(math.floor((stamp['z'] - r - self.offset_z) / cs)),
+                int(math.floor((stamp['z'] + r - self.offset_z) / cs)))
+
+    def _stamp_index(self):
+        """Id -> row map, kept with each stamp's chunk range.
+
+        Rebuilt after stamps are added, replaced or reloaded, or the chunk
+        grid changes; moves update their rows in place.
+        """
+        key = (self.chunk_size, self.offset_x, self.offset_z)
+        if self._stamp_rows is None or self._stamp_index_key != key:
+            stamps = self.paint_stamps
+            self._stamp_rows = {s['id']: i for i, s in enumerate(stamps)}
+            self._stamp_ranges = [self._stamp_range(s) for s in stamps]
+            self._stamp_range_arr = (
+                np.array(self._stamp_ranges, dtype=np.int64)
+                if len(stamps) >= self.STAMP_VECTOR_MIN else None)
+            self._stamp_index_key = key
+        return self._stamp_rows
+
+    def _invalidate_stamp_index(self):
+        self._stamp_rows = None
+
+    def _stamps_over(self, key):
+        """Rows of the stamps over chunk *key*, in placement order."""
+        self._stamp_index()
+        cx, cz = key
+        arr = self._stamp_range_arr
+        if arr is not None:
+            return np.flatnonzero((arr[:, 0] <= cx) & (arr[:, 1] >= cx)
+                                  & (arr[:, 2] <= cz) & (arr[:, 3] >= cz)).tolist()
+        return [i for i, (x0, x1, z0, z1) in enumerate(self._stamp_ranges)
+                if x0 <= cx <= x1 and z0 <= cz <= z1]
+
+    @staticmethod
+    def _range_keys(rng):
+        x0, x1, z0, z1 = rng
+        return {(cx, cz) for cx in range(x0, x1 + 1) for cz in range(z0, z1 + 1)}
+
+    def _selected_stamp_keys(self, ids):
+        rows = self._stamp_index()
+        keys = set()
+        for stamp_id in ids:
+            row = rows.get(stamp_id)
+            if row is not None:
+                keys |= self._range_keys(self._stamp_ranges[row])
+        return keys
+
+    def _bake_stamp(self, stamp, target, only, tint=None):
+        return self._bake_texture_rect(
+            self._stamp_bounds(stamp), stamp['texture'],
+            angle=stamp['angle'], feather=stamp['radius'] * stamp['feather'],
+            opacity=stamp['opacity'], target=target, only=only, tint=tint)
+
+    def _compose_paint_chunk(self, key, tint_ids=()):
+        """Base paint plus every stamp over chunk *key*, in placement order."""
+        res = self.TERRAIN_PAINT_RESOLUTION
+        base = self.texture_paint_base.get(key)
+        out = {key: (base.copy() if base is not None
+                     else np.zeros((res, res, 4), dtype=np.uint8))}
+        only = {key}
+        stamps = self.paint_stamps
+        for row in self._stamps_over(key):
+            stamp = stamps[row]
+            tint = self.STAMP_SELECT_TINT if stamp['id'] in tint_ids else None
+            self._bake_stamp(stamp, out, only, tint)
+        paint = out[key]
+        return paint if np.any(paint[..., 3]) else None
+
+    def _refresh_paint_display(self, keys):
+        """Rebuild the tinted overrides for *keys* and mark them for upload."""
+        selected = self.selected_stamp_ids
+        tinted = self._selected_stamp_keys(selected) if selected else set()
+        res = self.TERRAIN_PAINT_RESOLUTION
+        for key in keys:
+            if key in tinted or key in self._stamp_dirty_chunks:
+                paint = self._compose_paint_chunk(key, selected)
+                if paint is None:
+                    paint = np.zeros((res, res, 4), dtype=np.uint8)
+                self._paint_display[key] = paint
+            else:
+                self._paint_display.pop(key, None)
+            if key in self._paint_display or key in self.texture_paint_maps:
+                self._touch_texture_paint(key)
+            else:
+                # No paint left: version 0 turns paint off for the chunk.
+                self._paint_map_versions.pop(key, None)
+
+    def _recompose_paint(self, keys, defer=False):
+        """Rebake chunks *keys* from the base paint and the placed stamps.
+
+        With *defer* only the editor display is updated (for live drags);
+        :meth:`finish_stamp_edit` then rebakes the stored paint once.
+        """
+        keys = set(keys)
+        if defer:
+            self._stamp_dirty_chunks |= keys
+        else:
+            for key in keys:
+                paint = self._compose_paint_chunk(key)
+                if paint is None:
+                    self.texture_paint_maps.pop(key, None)
+                else:
+                    self.texture_paint_maps[key] = paint
+                self._stamp_dirty_chunks.discard(key)
+        self._refresh_paint_display(keys)
+
+    def finish_stamp_edit(self):
+        """Rebake the stored paint for chunks changed by deferred edits."""
+        if self._stamp_dirty_chunks:
+            self._recompose_paint(set(self._stamp_dirty_chunks))
+
+    def add_paint_stamp(self, world_x, world_z, radius, texture,
+                        feather=0.25, opacity=1.0, angle=0.0):
+        """Place a stamp and bake it; returns the record or None."""
+        stamp = self.make_paint_stamp(world_x, world_z, radius, texture,
+                                      feather, opacity, angle)
+        if stamp is None or self._paint_image(stamp['texture']) is None:
+            return None
+        self.paint_stamps.append(stamp)
+        self._invalidate_stamp_index()
+        self._recompose_paint(self._stamp_chunks(stamp))
+        return stamp
+
+    def paint_stamp_at(self, world_x, world_z):
+        """Id of the topmost stamp covering (world_x, world_z), or None."""
+        for stamp in reversed(self.paint_stamps):
+            if math.hypot(world_x - stamp['x'], world_z - stamp['z']) <= stamp['radius']:
+                return stamp['id']
+        return None
+
+    def set_selected_stamps(self, ids):
+        """Select stamps by id; selected stamps draw tinted in the editor."""
+        rows = self._stamp_index()
+        ids = {i for i in ids if i in rows}
+        if ids == self.selected_stamp_ids:
+            return
+        changed = ids ^ self.selected_stamp_ids
+        self.selected_stamp_ids = ids
+        self._refresh_paint_display(self._selected_stamp_keys(changed))
+
+    def move_paint_stamps(self, ids, dx, dz, defer=False):
+        """Move stamps by (dx, dz) and rebake the chunks they leave and enter."""
+        rows = self._stamp_index()
+        ranges, arr = self._stamp_ranges, self._stamp_range_arr
+        keys = set()
+        for stamp_id in ids:
+            row = rows.get(stamp_id)
+            if row is None:
+                continue
+            stamp = self.paint_stamps[row]
+            stamp['x'] += float(dx)
+            stamp['z'] += float(dz)
+            new_range = self._stamp_range(stamp)
+            if new_range != ranges[row]:
+                keys |= self._range_keys(ranges[row])
+                ranges[row] = new_range
+                if arr is not None:
+                    arr[row] = new_range
+            keys |= self._range_keys(new_range)
+        if keys:
+            self._recompose_paint(keys, defer=defer)
+        return bool(keys)
+
+    def merge_paint_stamps(self, records):
+        """Add or update stamps by id; returns how many changed.
+
+        Idempotent: a record identical to the stamp already placed under its
+        id changes nothing, so merging the same records twice never
+        duplicates a stamp.
+        """
+        by_id = {s['id']: i for i, s in enumerate(self.paint_stamps)}
+        keys = set()
+        changed = 0
+        for raw in records or []:
+            if not isinstance(raw, dict):
+                continue
+            stamp = self.make_paint_stamp(
+                raw.get('x'), raw.get('z'), raw.get('radius'),
+                raw.get('texture', ''), raw.get('feather', 0.25),
+                raw.get('opacity', 1.0), raw.get('angle', 0.0),
+                stamp_id=raw.get('id'))
+            if stamp is None:
+                continue
+            index = by_id.get(stamp['id'])
+            if index is None:
+                by_id[stamp['id']] = len(self.paint_stamps)
+                self.paint_stamps.append(stamp)
+            elif self.paint_stamps[index] == stamp:
+                continue
+            else:
+                keys |= self._stamp_chunks(self.paint_stamps[index])
+                self.paint_stamps[index] = stamp
+            keys |= self._stamp_chunks(stamp)
+            changed += 1
+        if keys:
+            self._invalidate_stamp_index()
+            self._recompose_paint(keys)
+        return changed
 
     def stamp_texture_at(self, world_x, world_z, radius, texture,
                          feather=0.25, opacity=1.0, angle=0.0):
@@ -2538,8 +2853,15 @@ class Terrain:
             feather=feather, opacity=opacity, angle=angle)
 
     def clear_texture_paint(self):
-        """Erase all baked terrain texture paint."""
+        """Erase all baked terrain texture paint and placed stamps."""
         self.texture_paint_maps = {}
+        self.texture_paint_base = {}
+        self.paint_stamps = []
+        self.selected_stamp_ids = set()
+        self._paint_display = {}
+        self._stamp_dirty_chunks = set()
+        self._invalidate_stamp_index()
+        self._base_serial_cache = None
         self._paint_map_versions = {}
         self._paint_version_counter += 1
         self._paint_gpu_version[:] = 0
@@ -2573,7 +2895,9 @@ class Terrain:
         table = self.table
         self._sync_gl_columns()
         coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
-        paint = self.texture_paint_maps.get(coord)
+        paint = self._paint_display.get(coord)
+        if paint is None:
+            paint = self.texture_paint_maps.get(coord)
         if paint is None:
             self._paint_gpu_version[slot] = 0
             return
@@ -2591,10 +2915,11 @@ class Terrain:
             gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
         self._paint_gpu_version[slot] = self._paint_map_versions.get(coord, 0)
 
-    def _serialize_texture_paint(self):
+    def _serialize_texture_paint(self, maps=None):
         import base64, zlib
         entries = []
-        for (cx, cz), paint in sorted(self.texture_paint_maps.items()):
+        maps = self.texture_paint_maps if maps is None else maps
+        for (cx, cz), paint in sorted(maps.items()):
             if paint is None or paint.shape != (
                     self.TERRAIN_PAINT_RESOLUTION,
                     self.TERRAIN_PAINT_RESOLUTION, 4):
@@ -2609,10 +2934,15 @@ class Terrain:
         return entries
 
     def _restore_texture_paint(self, entries):
-        import base64, zlib
-        self.texture_paint_maps = {}
         self._paint_map_versions = {}
         self._paint_version_counter = 0
+        self.texture_paint_maps = self._decode_texture_paint(entries)
+        for key in self.texture_paint_maps:
+            self._touch_texture_paint(key)
+
+    def _decode_texture_paint(self, entries):
+        import base64, zlib
+        maps = {}
         res = self.TERRAIN_PAINT_RESOLUTION
         expected = res * res * 4
         for entry in entries or []:
@@ -2628,11 +2958,10 @@ class Terrain:
                     continue
                 paint = np.frombuffer(raw, dtype=np.uint8).copy().reshape(
                     res, res, 4)
-                key = (int(coord[0]), int(coord[1]))
-                self.texture_paint_maps[key] = paint
-                self._touch_texture_paint(key)
+                maps[(int(coord[0]), int(coord[1]))] = paint
             except (TypeError, ValueError, OSError, zlib.error):
                 continue
+        return maps
 
     def release_renderer_resources(self):
         """Drop every GL name the renderer gave this terrain.
@@ -2720,10 +3049,21 @@ class Terrain:
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
         if self.csg_subtractions:
             data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
+        self.finish_stamp_edit()
         texture_paint = self._serialize_texture_paint()
         if texture_paint:
             data['texture_paint_resolution'] = self.TERRAIN_PAINT_RESOLUTION
             data['texture_paint'] = texture_paint
+        if self.paint_stamps:
+            data['paint_stamps'] = [dict(stamp) for stamp in self.paint_stamps]
+            # The base layer rarely changes; to_dict runs on every sculpt
+            # step, so it is compressed once and reused.
+            if self._base_serial_cache is None:
+                self._base_serial_cache = self._serialize_texture_paint(
+                    self.texture_paint_base)
+            base = self._base_serial_cache
+            if base:
+                data['texture_paint_base'] = base
 
         # Heightmap settings (image data is NOT saved — only the path is
         # stored by the editor so the user can re-load it)
@@ -2825,6 +3165,30 @@ class Terrain:
                     opacity=float(stamp.get('opacity', 1.0)))
             except (TypeError, ValueError):
                 continue
+
+        # Placed stamps. Their baked result is already in texture_paint; the
+        # records only make them editable. A map without records keeps all
+        # of its paint as the base layer.
+        self.paint_stamps = []
+        for raw in data.get('paint_stamps', []) or []:
+            if isinstance(raw, dict):
+                stamp = self.make_paint_stamp(
+                    raw.get('x'), raw.get('z'), raw.get('radius'),
+                    raw.get('texture', ''), raw.get('feather', 0.25),
+                    raw.get('opacity', 1.0), raw.get('angle', 0.0),
+                    stamp_id=raw.get('id'))
+                if stamp is not None:
+                    self.paint_stamps.append(stamp)
+        if self.paint_stamps:
+            self.texture_paint_base = self._decode_texture_paint(
+                data.get('texture_paint_base', []))
+        else:
+            self.texture_paint_base = dict(self.texture_paint_maps)
+        self.selected_stamp_ids = set()
+        self._paint_display = {}
+        self._stamp_dirty_chunks = set()
+        self._invalidate_stamp_index()
+        self._base_serial_cache = None
 
         # Sculpt offsets
         self.sculpt_offsets = {}

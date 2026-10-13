@@ -1,124 +1,158 @@
-"""Terrain .stamp export/import: merging must be idempotent."""
+"""Placed terrain stamps and .stamp files.
+
+A stamp is a record (texture, X/Z position, radius...) that is also baked
+into the terrain paint. The editor can select, move and nudge stamps; a
+.stamp file carries only the records, never terrain height.
+"""
 
 import json
 
 import numpy as np
 import pytest
 
-from engine import terrain_stamp
-from engine.terrain import Terrain
+pytest.importorskip("PyQt5", reason="stamp textures are loaded with QImage")
+
+from engine import terrain_stamp                              # noqa: E402
+from engine.terrain import Terrain                            # noqa: E402
 
 
-def _paint(terrain, key, value, region=(slice(10, 20), slice(30, 40))):
-    res = terrain.TERRAIN_PAINT_RESOLUTION
-    paint = terrain.texture_paint_maps.get(key)
-    if paint is None:
-        paint = np.zeros((res, res, 4), dtype=np.uint8)
-        terrain.texture_paint_maps[key] = paint
-    paint[region] = value
+@pytest.fixture
+def texture(tmp_path):
+    from PyQt5.QtGui import QColor, QImage
+    image = QImage(16, 16, QImage.Format_RGBA8888)
+    image.fill(QColor(200, 100, 50, 255))
+    path = str(tmp_path / "rock.png")
+    assert image.save(path)
+    return path
 
 
-def _authored_terrain():
-    terrain = Terrain(seed=3)
+def _texel(terrain, x, z, maps=None):
+    """RGBA of the paint texel under world (x, z)."""
+    maps = terrain.texture_paint_maps if maps is None else maps
+    cx = int(np.floor((x - terrain.offset_x) / terrain.chunk_size))
+    cz = int(np.floor((z - terrain.offset_z) / terrain.chunk_size))
+    cell = terrain.chunk_size / terrain.TERRAIN_PAINT_RESOLUTION
+    ix = int((x - terrain.offset_x - cx * terrain.chunk_size) // cell)
+    iz = int((z - terrain.offset_z - cz * terrain.chunk_size) // cell)
+    paint = maps.get((cx, cz))
+    return (0, 0, 0, 0) if paint is None else tuple(int(v) for v in paint[ix, iz])
+
+
+def test_a_placed_stamp_is_baked_and_recorded(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 20.0, 16.0, texture, feather=0.0)
+    assert stamp is not None and terrain.paint_stamps == [stamp]
+    assert _texel(terrain, 10.0, 20.0) == (200, 100, 50, 255)
+    assert terrain.paint_stamp_at(12.0, 22.0) == stamp["id"]
+    assert terrain.paint_stamp_at(100.0, 100.0) is None
+
+
+def test_moving_a_stamp_rebakes_both_places(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    terrain.move_paint_stamps({stamp["id"]}, 300.0, 0.0)   # into another chunk
+    assert _texel(terrain, 10.0, 10.0)[3] == 0
+    assert _texel(terrain, 310.0, 10.0) == (200, 100, 50, 255)
+
+
+def test_a_drag_updates_the_display_then_the_stored_paint(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    terrain.set_selected_stamps({stamp["id"]})
+    terrain.move_paint_stamps({stamp["id"]}, 40.0, 0.0, defer=True)
+    # Shown at the new place straight away; stored paint follows on finish.
+    assert _texel(terrain, 50.0, 10.0, terrain._paint_display)[3] == 255
+    terrain.finish_stamp_edit()
+    assert _texel(terrain, 50.0, 10.0)[3] == 255
+    assert _texel(terrain, 10.0, 10.0)[3] == 0
+
+
+def test_selection_tints_the_display_but_never_the_saved_paint(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    terrain.set_selected_stamps({stamp["id"]})
+    shown = _texel(terrain, 10.0, 10.0, terrain._paint_display)
+    assert shown != (200, 100, 50, 255) and shown[3] == 255
+    assert _texel(terrain, 10.0, 10.0) == (200, 100, 50, 255)
+
+    reloaded = Terrain(seed=1)
+    reloaded.from_dict(terrain.to_dict())
+    assert _texel(reloaded, 10.0, 10.0) == (200, 100, 50, 255)
+
+    terrain.set_selected_stamps(())
+    assert not terrain._paint_display
+
+
+def test_stamps_survive_a_map_round_trip_and_stay_editable(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    reloaded = Terrain(seed=1)
+    reloaded.from_dict(terrain.to_dict())
+    assert reloaded.paint_stamps == [stamp]
+    reloaded.move_paint_stamps({stamp["id"]}, 0.0, 40.0)
+    assert _texel(reloaded, 10.0, 10.0)[3] == 0
+    assert _texel(reloaded, 10.0, 50.0)[3] == 255
+
+
+def test_old_paint_stays_under_moved_stamps(texture):
+    terrain = Terrain(seed=1)
+    terrain.paint_texture_at(10.0, 10.0, 8.0, texture, feather=0.0)   # free paint
+    reloaded = Terrain(seed=1)
+    reloaded.from_dict(terrain.to_dict())
+    stamp = reloaded.add_paint_stamp(60.0, 10.0, 8.0, texture, feather=0.0)
+    reloaded.move_paint_stamps({stamp["id"]}, 0.0, 40.0)
+    assert _texel(reloaded, 10.0, 10.0)[3] == 255
+    assert _texel(reloaded, 60.0, 10.0)[3] == 0
+
+
+def test_stamp_file_holds_positions_only(texture, tmp_path):
+    terrain = Terrain(seed=1)
     terrain.apply_sculpt_at(10.0, 10.0, 32.0, 5.0)
-    _paint(terrain, (0, 0), (200, 100, 50, 255))
-    _paint(terrain, (1, -1), (10, 20, 30, 128))
-    terrain.csg_subtractions.append([-8.0, 0.0, -8.0, 8.0, 50.0, 8.0])
-    return terrain
-
-
-def _snapshot(terrain):
-    return (dict(terrain.sculpt_offsets),
-            {k: v.copy() for k, v in terrain.texture_paint_maps.items()},
-            [list(c) for c in terrain.csg_subtractions])
-
-
-def _assert_same(a, b):
-    assert a[0] == b[0]
-    assert a[1].keys() == b[1].keys()
-    for key in a[1]:
-        assert np.array_equal(a[1][key], b[1][key])
-    assert a[2] == b[2]
-
-
-def test_round_trip_restores_cleared_work(tmp_path):
-    terrain = _authored_terrain()
-    before = _snapshot(terrain)
+    terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
     path = tmp_path / "level.stamp"
     terrain_stamp.save_stamp_file(terrain, str(path))
-    assert json.loads(path.read_text())["format"] == terrain_stamp.STAMP_FORMAT
-
-    terrain.clear_sculpt()
-    terrain.clear_texture_paint()
-    terrain.csg_subtractions.clear()
-
-    result = terrain_stamp.apply_stamp_file(terrain, str(path))
-    assert result["sculpt_cells"] > 0
-    assert result["paint_chunks"] == 2
-    assert result["csg_cuts"] == 1
-    _assert_same(_snapshot(terrain), before)
+    data = json.loads(path.read_text())
+    assert data["format"] == terrain_stamp.STAMP_FORMAT
+    assert set(data) == {"format", "version", "stamps"}
+    assert set(data["stamps"][0]) == {
+        "id", "texture", "x", "z", "radius", "angle", "feather", "opacity"}
 
 
-def test_applying_same_stamp_twice_does_not_duplicate():
-    terrain = _authored_terrain()
-    stamp = terrain_stamp.export_stamp(terrain)
-    before = _snapshot(terrain)
+def test_importing_onto_changed_terrain_bakes_the_stamps(texture, tmp_path):
+    terrain = Terrain(seed=1)
+    terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    terrain.add_paint_stamp(300.0, -40.0, 12.0, texture, feather=0.0)
+    path = tmp_path / "level.stamp"
+    terrain_stamp.save_stamp_file(terrain, str(path))
 
-    # The terrain still carries the stamped work: nothing changes.
-    assert terrain_stamp.apply_stamp(terrain, stamp) == {
-        "sculpt_cells": 0, "paint_chunks": 0, "csg_cuts": 0}
-    assert terrain_stamp.apply_stamp(terrain, stamp) == {
-        "sculpt_cells": 0, "paint_chunks": 0, "csg_cuts": 0}
-    _assert_same(_snapshot(terrain), before)
-
-
-def test_merge_keeps_work_outside_the_stamp():
-    terrain = _authored_terrain()
-    stamp = terrain_stamp.export_stamp(terrain)
-    stamped = _snapshot(terrain)
-
-    terrain.clear_sculpt()
-    terrain.clear_texture_paint()
-    # New work authored after the export, away from the stamped areas.
-    terrain.apply_sculpt_at(2000.0, 2000.0, 16.0, 3.0)
-    _paint(terrain, (0, 0), (1, 2, 3, 255), region=(slice(100, 110), slice(100, 110)))
-    new_sculpt = dict(terrain.sculpt_offsets)
-
-    terrain_stamp.apply_stamp(terrain, stamp)
-    terrain_stamp.apply_stamp(terrain, stamp)
-
-    for key, val in stamped[0].items():
-        assert terrain.sculpt_offsets[key] == val
-    for key, val in new_sculpt.items():
-        assert terrain.sculpt_offsets[key] == val
-    paint = terrain.texture_paint_maps[(0, 0)]
-    assert np.array_equal(paint[10:20, 30:40], stamped[1][(0, 0)][10:20, 30:40])
-    assert (paint[100:110, 100:110] == (1, 2, 3, 255)).all()
+    changed = Terrain(seed=99)             # a different, re-generated map
+    changed.apply_sculpt_at(10.0, 10.0, 64.0, 40.0)
+    sculpt = dict(changed.sculpt_offsets)
+    assert terrain_stamp.apply_stamp_file(changed, str(path)) == 2
+    assert _texel(changed, 10.0, 10.0) == (200, 100, 50, 255)
+    assert _texel(changed, 300.0, -40.0) == (200, 100, 50, 255)
+    assert changed.sculpt_offsets == sculpt          # height untouched
 
 
-def test_stamp_resamples_onto_shifted_terrain_grid():
-    terrain = _authored_terrain()
-    stamp = terrain_stamp.export_stamp(terrain)
+def test_applying_the_same_stamp_file_twice_does_not_duplicate(texture, tmp_path):
+    terrain = Terrain(seed=1)
+    terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.5, opacity=0.5)
+    path = tmp_path / "level.stamp"
+    terrain_stamp.save_stamp_file(terrain, str(path))
+    paint = {k: v.copy() for k, v in terrain.texture_paint_maps.items()}
 
-    target = Terrain(seed=9)
-    target.offset_x = terrain.chunk_size * 0.5
-    target.sculpt_grid_resolution = 8.0
-    terrain_stamp.apply_stamp(target, stamp)
-    again = _snapshot(target)
-    assert terrain_stamp.apply_stamp(target, stamp) == {
-        "sculpt_cells": 0, "paint_chunks": 0, "csg_cuts": 0}
-    _assert_same(_snapshot(target), again)
+    assert terrain_stamp.apply_stamp_file(terrain, str(path)) == 0
+    assert terrain_stamp.apply_stamp_file(terrain, str(path)) == 0
+    assert len(terrain.paint_stamps) == 1
+    for key, value in paint.items():
+        assert np.array_equal(terrain.texture_paint_maps[key], value)
 
-    # Paint lands at the same world position on the shifted grid.
-    cell = terrain.chunk_size / terrain.TERRAIN_PAINT_RESOLUTION
-    wx = terrain.offset_x + 15.5 * cell
-    wz = terrain.offset_z + 35.5 * cell
-    cx = int(np.floor((wx - target.offset_x) / target.chunk_size))
-    cz = int(np.floor((wz - target.offset_z) / target.chunk_size))
-    ix = int((wx - target.offset_x - cx * target.chunk_size) // cell)
-    iz = int((wz - target.offset_z - cz * target.chunk_size) // cell)
-    assert tuple(target.texture_paint_maps[(cx, cz)][ix, iz]) == (200, 100, 50, 255)
-    assert target.sculpt_offsets
+    # A stamp moved since the export goes back to the file's position.
+    stamp_id = terrain.paint_stamps[0]["id"]
+    terrain.move_paint_stamps({stamp_id}, 100.0, 0.0)
+    assert terrain_stamp.apply_stamp_file(terrain, str(path)) == 1
+    assert len(terrain.paint_stamps) == 1
+    assert terrain.paint_stamps[0]["x"] == 10.0
 
 
 def test_rejects_non_stamp_files(tmp_path):
@@ -137,3 +171,24 @@ def test_default_stamp_path_follows_map_name(tmp_path):
         tmp_path / "maps" / "forest.stamp")
     assert terrain_stamp.default_stamp_path(None, str(tmp_path)).endswith(
         "untitled.stamp")
+
+
+def test_vector_and_scalar_stamp_lookups_agree(texture):
+    import random
+    rng = random.Random(4)
+    records = [Terrain.make_paint_stamp(rng.uniform(-900, 900), rng.uniform(-900, 900),
+                                        rng.uniform(4, 300), texture)
+               for _ in range(Terrain.STAMP_VECTOR_MIN + 40)]
+    big = Terrain(seed=1)
+    big.paint_stamps = records
+    big._invalidate_stamp_index()
+    big._stamp_index()
+    assert big._stamp_range_arr is not None              # NumPy path
+    for key in [(cx, cz) for cx in range(-5, 5) for cz in range(-5, 5)]:
+        scalar = [i for i, (x0, x1, z0, z1) in enumerate(big._stamp_ranges)
+                  if x0 <= key[0] <= x1 and z0 <= key[1] <= z1]
+        assert big._stamps_over(key) == scalar
+
+    # Moves keep the vector index in step with the records.
+    big.move_paint_stamps({records[3]["id"]}, 512.0, -256.0, defer=True)
+    assert tuple(big._stamp_range_arr[3]) == big._stamp_range(records[3])

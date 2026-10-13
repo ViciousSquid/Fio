@@ -1007,7 +1007,8 @@ class TerrainEditorPanel(QWidget):
 
         stamp_hint = QLabel(
             "Left-click to bake the texture selected in the Asset Browser "
-            "directly into the terrain."
+            "directly into the terrain. Shift-click a stamp to select it, then "
+            "drag it or nudge it with the arrow keys."
         )
         stamp_hint.setWordWrap(True)
         stamp_hint.setStyleSheet("color: #aaa; font-style: italic;")
@@ -1892,6 +1893,9 @@ class TerrainEditorPanel(QWidget):
         """Switch between the sculpt and stamp tools."""
         mode = "stamp" if mode == "stamp" else "sculpt"
         self.paint_tool_mode = mode
+        view_3d = self.editor.view_3d if self.editor else None
+        if mode != "stamp" and view_3d is not None:
+            view_3d.clear_stamp_selection()
 
         for name, button in self.paint_tool_buttons.items():
             button.setChecked(name == mode)
@@ -2029,11 +2033,11 @@ class TerrainEditorPanel(QWidget):
         return terrain_stamp.default_stamp_path(map_path, fallback)
 
     def export_stamp(self):
-        """Save the terrain's sculpt, texture paint and cuts to a .stamp file."""
-        if not terrain_stamp.has_authored_work(self.terrain):
+        """Save the terrain's placed stamps to a .stamp file."""
+        if not self.terrain.paint_stamps:
             QMessageBox.information(
                 self, "Export Stamp",
-                "This terrain has no sculpting or texture paint to export.")
+                "This terrain has no placed stamps to export.")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Stamp", self._default_stamp_path(),
@@ -2051,7 +2055,7 @@ class TerrainEditorPanel(QWidget):
             self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}")
 
     def import_stamp(self):
-        """Merge a .stamp file's authored work into the current terrain."""
+        """Merge a .stamp file's stamps into the current terrain."""
         default = self._default_stamp_path()
         start = default if os.path.exists(default) else os.path.dirname(default)
         path, _ = QFileDialog.getOpenFileName(
@@ -2072,11 +2076,11 @@ class TerrainEditorPanel(QWidget):
             editor.save_state()
         self.show_progress("Applying stamp…")
         try:
-            result = terrain_stamp.apply_stamp(self.terrain, stamp)
+            changed = terrain_stamp.apply_stamp(self.terrain, stamp)
         finally:
             self.hide_progress()
 
-        if not any(result.values()):
+        if not changed:
             if editor:
                 editor.state.discard_last_checkpoint()
                 editor.show_toast("Stamp already applied — nothing changed")
@@ -2086,7 +2090,8 @@ class TerrainEditorPanel(QWidget):
         self._update_sculpt_info()
         self.terrain_changed.emit()
         if editor and editor.show_toast:
-            editor.show_toast(f"Stamp {os.path.basename(path)} applied")
+            editor.show_toast(
+                f"{os.path.basename(path)}: {changed} stamp(s) placed")
 
     def request_close(self):
         """Close the panel and disable its 3D brush."""
