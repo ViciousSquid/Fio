@@ -387,19 +387,25 @@ def test_a_prop_at_the_heaviest_mass_cannot_be_picked_up(real_logic, mass):
     assert 'OnCarried' not in _event_names(events)
 
 
-def test_the_ball_is_held_clear_of_the_face(real_logic):
-    from engine.prop_entity import BALL_MODEL_PATH
-    ball = Prop.for_model(BALL_MODEL_PATH, pos=[0.0, 40.0, 70.0])
-    logic, session, _ = _carry_world(real_logic, ball, 50.0)
+@pytest.mark.parametrize('scale', [1.0, 2.0, 3.0])
+def test_a_carried_ball_keeps_the_same_gap_at_any_scale(real_logic, scale):
+    """carry_distance is the gap to the near side, so scale cannot bring a
+    held ball into the player's face."""
+    from engine.prop_entity import BALL_NUMBERS_MODEL_PATH
+    ball = Prop.for_model(BALL_NUMBERS_MODEL_PATH, pos=[0.0, 40.0, 70.0],
+                          properties={'scale': [scale] * 3})
+    logic, session, _ = _carry_world(real_logic, ball, 50.0 * scale)
     session.tick(1 / 60, use_pressed=True)
     session.tick(1 / 60, use_pressed=False)
     assert session.held is ball
-    near_side = glm.length(glm.vec3(*ball.pos) - _eye(logic)) - 25.0
-    assert near_side >= 50.0
+    to_centre = glm.length(glm.vec3(*ball.pos) - _eye(logic))
+    # The near side is carry_distance out (the 6-unit drop of carry_offset
+    # aside), whatever the size.
+    assert to_centre - 25.0 * scale == pytest.approx(55.0, abs=0.5)
 
 
 def test_a_scaled_up_carried_body_never_fills_the_view(real_logic):
-    """Whatever carry_distance says, the near side stays a gap from the eye."""
+    """However small carry_distance is, the near side keeps a gap."""
     prop = Prop(pos=[0.0, 40.0, 60.0], properties={
         'carry_enabled': True, 'physics_enabled': True, 'no_collision': False,
         'carry_distance': 10.0})

@@ -46,7 +46,7 @@ class PropSession:
     SPRITE_CAMERA_FACING = -10000.0
     RESPAWN_FADE_DURATION = 2.0
     #: The least gap kept between the eye and the near side of a carried
-    #: body: however it is scaled, a held body never fills the view.
+    #: body, however small its carry_distance.
     MIN_CARRY_GAP = 30.0
 
     def __init__(self, logic):
@@ -720,8 +720,14 @@ class PropSession:
         if self._held_measured is not prop:
             self._held_extent = self._carry_extent(prop)
             self._held_measured = prop
-        distance = max(float(p.get("carry_distance", 55.0)),
-                       self._held_extent + self.MIN_CARRY_GAP)
+        # carry_distance is the gap from the eye to the held body's near side:
+        # its own half-width goes on top, so a body is held as clear of the
+        # face at any size or scale. Without a physics body there is no size
+        # to measure, and it is the distance to the Prop's origin.
+        gap = float(p.get("carry_distance", 55.0))
+        if self._held_extent > 0.0:
+            gap = max(gap, self.MIN_CARRY_GAP)
+        distance = gap + self._held_extent
 
         prop.pos = [
             eye[0] + forward[0] * distance + float(offset[0]),

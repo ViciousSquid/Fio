@@ -241,10 +241,12 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   fall (an ordinary map is all NEAR; with Big World, further tiers wait to be
   touched). Bodies already resting stay asleep, so no OnRest fires at start.
 - Carrying: a Prop at the heaviest mass (10, where the player cannot push it
-  either) cannot be picked up, whatever its Carry setting. A carried body is
-  held at least its own half-width plus a 30-unit gap from the eye, so a
-  scaled-up one never fills the view; the Ball presets hold the ball with its
-  near side 55 units out.
+  either) cannot be picked up, whatever its Carry setting. A Prop with a
+  physics body is held with its near side `carry_distance` from the eye
+  (55 by default, at least 30): its own half-width, at its scale, goes on
+  top, so a ball is held as clear of the face at scale 1, 2 or 3. Such a
+  Prop is held further out than before -- an Oil Barrel's centre sits about
+  78 out instead of 55. A Prop without a physics body is held as before.
 - Play start builds the Prop registry once; `PropSession.start()` ran twice
   and the second rebuild found every Prop already adopted (audit F-09). No
   behaviour change.

@@ -171,8 +171,7 @@ OIL_BARREL_SETTINGS = {
 }
 #: A Ball: a solid physics Prop showing a low-poly golf ball 50 units across
 #: (half the player's height) that rolls and bounces (engine.physics). Its
-#: collision is the model's AABB. ``tint`` colours the white ball. Carried, it
-#: is held with its near side 55 units out, clear of the player's face.
+#: collision is the model's AABB. ``tint`` colours the white ball.
 BALL_SETTINGS = {
     'model_path': BALL_MODEL_PATH,
     'physics_enabled': True,
@@ -182,14 +181,13 @@ BALL_SETTINGS = {
     'rolls': True,
     'bounciness': 0.5,
     'scale': [1.0, 1.0, 1.0],
-    'carry_distance': 80.0,
+    'carry_distance': PROP_DEFAULTS['carry_distance'],
 }
-#: The numbered Ball is a Ball at twice the size, held as far out again.
+#: The numbered Ball is a Ball at twice the size.
 BALL_NUMBERS_SETTINGS = {
     **BALL_SETTINGS,
     'model_path': BALL_NUMBERS_MODEL_PATH,
     'scale': [2.0, 2.0, 2.0],
-    'carry_distance': 105.0,
 }
 #: The Presets list of the Prop panel, in order.
 MODEL_PRESETS = {
