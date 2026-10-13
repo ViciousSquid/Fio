@@ -1619,25 +1619,47 @@ class PhysicsWorld:
         on a floor is left alone, even against a low wall it overlaps: in
         motion a floor top above the bottom is a wall, not a floor.
         """
-        raycast = getattr(self.spatial_grid, 'raycast_down', None)
-        if raycast is None or not self._entities:
+        rows = np.flatnonzero(self._physics_enabled & self._solid)
+        if rows.size == 0:
             return
-        for i in np.flatnonzero(self._physics_enabled & self._solid):
-            centre = self._position[i] + self._offset[i]
-            bottom = float(centre[1] - self._half[i, 1])
+        centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
+        bottom = centre[:, 1] - self._half[rows, 1].astype(np.float64)
+        # One query for every body: the floor under its centre, and whatever
+        # it already stands on.
+        xs = np.concatenate((centre[:, 0], centre[:, 0]))
+        zs = np.concatenate((centre[:, 2], centre[:, 2]))
+        ys = np.concatenate((centre[:, 1], bottom + 1.0))
+        # Grouped only where it pays: below the measured crossover a raycast
+        # per point is cheaper than assembling the grouped query.
+        if (rows.size >= self.FLOOR_BATCH_MIN_BODIES
+                and self._can_group_floor_queries()):
+            tops = self._floor_tops(xs, zs, ys)
+        else:
+            tops = self._floor_tops_scalar(xs, zs, ys)
+        if tops is None:
+            return
+        floor, support = tops[:rows.size], tops[rows.size:]
+        lift = (floor > bottom) & (floor <= centre[:, 1]) & (support < bottom - 1.0)
+        if np.any(lift):
+            lifted = rows[lift]
+            self._position[lifted, 1] += (floor[lift] - bottom[lift]).astype(np.float32)
+            self._sync_entities(lifted)
+
+    def _floor_tops_scalar(self, xs, zs, ys):
+        """:meth:`_floor_tops` one ``raycast_down`` at a time: for few points,
+        or a grid that traces its own way (a test double); None without one."""
+        raycast = getattr(self.spatial_grid, 'raycast_down', None)
+        if raycast is None:
+            return None
+        tops = np.full(xs.size, -np.inf)
+        for k in range(xs.size):
             try:
-                floor = raycast(float(centre[0]), float(centre[2]), float(centre[1]))
+                floor = raycast(float(xs[k]), float(zs[k]), float(ys[k]))
             except Exception:
-                continue
-            if floor is None or not bottom < float(floor) <= float(centre[1]):
-                continue
-            try:
-                support = raycast(float(centre[0]), float(centre[2]), bottom + 1.0)
-            except Exception:
-                support = None
-            if support is None or float(support) < bottom - 1.0:
-                self._position[i, 1] += np.float32(float(floor) - bottom)
-                self._entities[int(i)].pos = self._position[i].tolist()
+                floor = None
+            if floor is not None:
+                tops[k] = float(floor)
+        return tops
 
     def _candidate_aabbs(self, cell_x, cell_z):
         key = (cell_x, cell_z)
@@ -1831,11 +1853,24 @@ class PhysicsWorld:
         px, pz, bottom = self._support_offsets(indices)
         ray_y = np.maximum(bottom, previous_bottom[indices].astype(np.float64)) + 1.0
 
-        samples = px.size
-        flat_x = px.ravel()
-        flat_z = pz.ravel()
-        flat_y = np.repeat(ray_y, px.shape[1])
+        best = self._floor_tops(px.ravel(), pz.ravel(), np.repeat(ray_y, px.shape[1]))
 
+        per_body = best.reshape(px.shape).max(axis=1)
+        hit = per_body > -np.inf
+        if hit.any():
+            floors[indices[hit]] = per_body[hit].astype(np.float32)
+        return floors
+
+    def _floor_tops(self, flat_x, flat_z, flat_y):
+        """The highest brush top at or below each point (x, z, y), or -inf.
+
+        What ``SpatialGrid.raycast_down`` answers for one point, for many at
+        once: the points are grouped by grid cell and each cell's brushes are
+        tested against all its points in one broadcast, so the Python work is
+        one step per distinct cell. Only for a stock grid
+        (:meth:`_can_group_floor_queries`).
+        """
+        samples = flat_x.size
         cell_size = float(self.spatial_grid.cell_size)
         cx = np.floor(flat_x / cell_size).astype(np.int64)
         cz = np.floor(flat_z / cell_size).astype(np.int64)
@@ -1874,12 +1909,7 @@ class PhysicsWorld:
             if not inside.any():
                 continue
             best[sel] = np.where(inside, top_y[None, :], -np.inf).max(axis=1)
-
-        per_body = best.reshape(px.shape).max(axis=1)
-        hit = per_body > -np.inf
-        if hit.any():
-            floors[indices[hit]] = per_body[hit].astype(np.float32)
-        return floors
+        return best
 
     @staticmethod
     def _cell_bounds(brushes):
