@@ -67,9 +67,25 @@ def resolve_speaker_sound(value, root):
 
 
 def list_speaker_audio(root, folder):
-    """Audio files under ``assets/<folder>``, as ``assets/<folder>/...`` paths."""
+    """Audio paths under assets/<folder>, using its archive when present.
+
+    A .fiopak is authoritative when present, matching runtime loading: loose
+    files are the fallback only when the archive does not exist.
+    """
     if folder not in SPEAKER_AUDIO_FOLDERS:
         return []
+    archive_path = os.path.join(root, "assets", f"{folder}.fiopak")
+    if os.path.isfile(archive_path):
+        from engine.audio_archives import list_archive_audio
+        import zipfile
+        try:
+            return list_archive_audio(
+                archive_path, f"assets/{folder}", AUDIO_EXTENSIONS
+            )
+        except (OSError, zipfile.BadZipFile) as exc:
+            print(f"[Audio] Cannot list {folder}.fiopak: {exc}")
+            return []
+
     base = os.path.join(root, "assets", folder)
     found = []
     for dirpath, _dirnames, filenames in os.walk(base):
@@ -78,4 +94,4 @@ def list_speaker_audio(root, folder):
                 rel = os.path.relpath(os.path.join(dirpath, name), root).replace("\\", "/")
                 if speaker_sound_path(rel) == rel:
                     found.append(rel)
-    return sorted(found, key=str.lower)
+    return sorted(found, key=str.casefold)

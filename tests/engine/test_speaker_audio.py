@@ -1,6 +1,7 @@
 """Speakers play only from assets/sounds and assets/music."""
 
 import os
+import zipfile
 
 import pytest
 
@@ -60,3 +61,31 @@ def test_listing_walks_subfolders_and_skips_other_files(tmp_path):
 def test_only_files_from_the_music_folder_are_music(value, music):
     from engine.speaker_audio import is_music
     assert is_music(value) is music
+
+
+
+def test_archive_listing_is_authoritative_and_includes_subfolders(tmp_path):
+    assets = tmp_path / "assets"
+    (assets / "sounds" / "loose").mkdir(parents=True)
+    (assets / "sounds" / "loose.wav").write_bytes(b"loose")
+    with zipfile.ZipFile(assets / "sounds.fiopak", "w") as archive:
+        archive.writestr("assets/sounds/hit.wav", b"archive")
+        archive.writestr("assets/sounds/ui/click.ogg", b"archive")
+        archive.writestr("assets/music/theme.mp3", b"wrong root")
+        archive.writestr("assets/sounds/../outside.wav", b"unsafe")
+
+    assert list_speaker_audio(str(tmp_path), "sounds") == [
+        "assets/sounds/hit.wav", "assets/sounds/ui/click.ogg",
+    ]
+
+
+def test_music_archive_listing_uses_music_prefix(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    with zipfile.ZipFile(assets / "music.fiopak", "w") as archive:
+        archive.writestr("assets/music/theme.mp3", b"music")
+        archive.writestr("assets/sounds/effect.wav", b"wrong root")
+
+    assert list_speaker_audio(str(tmp_path), "music") == [
+        "assets/music/theme.mp3",
+    ]

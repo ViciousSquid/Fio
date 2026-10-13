@@ -12,7 +12,8 @@ from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
 from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
-from engine.speaker_audio import AUDIO_EXTENSIONS, SPEAKER_AUDIO_FOLDERS, speaker_sound_path
+from engine.speaker_audio import (AUDIO_EXTENSIONS, SPEAKER_AUDIO_FOLDERS,
+                                  list_speaker_audio, speaker_sound_path)
 
 
 def render_obj_thumbnail(filepath, width, height):
@@ -733,13 +734,23 @@ class AssetBrowserTab(QWidget):
         self._watched_asset_dirs.discard(path)
         self._watch_asset_directory(path)
 
+        if self.is_audio_tab and self.editor is not None:
+            assets_dir = os.path.abspath(os.path.join(self.editor.root_dir, "assets"))
+            if assets_dir == path:
+                self.load_directory(self.root_path)
+                return
         if os.path.abspath(self.current_asset_folder) == path:
             self.load_directory(path)
 
     def load_directory(self, path):
+        archive_path = self._active_audio_archive()
+        if archive_path:
+            path = self.root_path
         self.current_asset_folder = path
         self._watch_asset_directory(self.root_path)
         self._watch_asset_directory(path)
+        if self.is_audio_tab and self.editor is not None:
+            self._watch_asset_directory(os.path.join(self.editor.root_dir, "assets"))
         # Clear existing items
         for i in reversed(range(self.grid_layout.count())): 
             self.grid_layout.itemAt(i).widget().setParent(None)
@@ -747,7 +758,35 @@ class AssetBrowserTab(QWidget):
         self.selected_item = None
         self.update_buttons_enabled()
 
-        if not os.path.exists(path): 
+        if archive_path:
+            self.tree_toggle_btn.setChecked(False)
+            self.tree_toggle_btn.setEnabled(False)
+            self.tree_toggle_btn.setToolTip(
+                "Archive audio is listed across subfolders; the folder tree is unavailable."
+            )
+            self.tree_frame.setVisible(False)
+            project_root = os.path.abspath(self.editor.root_dir)
+            prefix = f"assets/{self.audio_mode}/"
+            try:
+                members = list_speaker_audio(project_root, self.audio_mode)
+            except Exception as exc:
+                print(f"[AssetBrowser] Could not list {self.audio_mode}.fiopak: {exc}")
+                members = []
+            for member in members:
+                try:
+                    relative = member[len(prefix):]
+                    full_path = os.path.join(project_root, *member.split("/"))
+                    item = AssetItem(relative, full_path, self, is_audio=True)
+                    self.items.append(item)
+                except Exception as exc:
+                    print(f"[AssetBrowser] Skipped '{member}': {exc}")
+            self.relayout_grid(force=True)
+            return
+
+        if self.is_audio_tab:
+            self.tree_toggle_btn.setEnabled(True)
+            self.tree_toggle_btn.setToolTip("Toggle Folder Panel")
+        if not os.path.exists(path):
             return
 
         try:
@@ -787,6 +826,16 @@ class AssetBrowserTab(QWidget):
             self.assign_btn.setEnabled(self.selected_item is not None)
 
     # -- Audio tab ---------------------------------------------------------
+
+    def _active_audio_archive(self):
+        """Return the active sounds/music archive path, if one exists."""
+        if not self.is_audio_tab or self.editor is None:
+            return None
+        project_root = getattr(self.editor, "root_dir", None)
+        if not project_root:
+            return None
+        path = os.path.join(project_root, "assets", f"{self.audio_mode}.fiopak")
+        return path if os.path.isfile(path) else None
 
     def _update_audio_header(self):
         label = "Sounds" if self.audio_mode == 'sounds' else "Music"
