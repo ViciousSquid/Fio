@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .physics import world_gravity
+from .physics import PhysicsWorld, world_gravity
 from .change_journal import touch
 from .spatial import CellIndex, cell_of_point
 
@@ -45,6 +45,9 @@ class PropSession:
     DROP_TERMINAL_VELOCITY = 2400.0
     SPRITE_CAMERA_FACING = -10000.0
     RESPAWN_FADE_DURATION = 2.0
+    #: The least gap kept between the eye and the near side of a carried
+    #: body: however it is scaled, a held body never fills the view.
+    MIN_CARRY_GAP = 30.0
 
     def __init__(self, logic):
         self.logic = logic
@@ -61,6 +64,10 @@ class PropSession:
         self._max_reach = self.DEFAULT_CARRY_REACH
         self.drop_interceptor = None
         self._falling = {}
+        #: The held Prop's horizontal half-width (from its physics body), and
+        #: which Prop it was measured for.
+        self._held_extent = 0.0
+        self._held_measured = None
 
     @staticmethod
     def is_prop(thing):
@@ -277,6 +284,8 @@ class PropSession:
                 continue
             if p.get("collect_collected", False):
                 continue
+            if self._too_heavy(p):
+                continue
 
             dx = float(prop.pos[0]) - eye[0]
             dy = float(prop.pos[1]) - eye[1]
@@ -311,6 +320,25 @@ class PropSession:
             if self.physics is not None:
                 self.physics.set_kinematic(best, True)
             self._fire(best, "OnCarried")
+
+    @staticmethod
+    def _too_heavy(properties):
+        """A Prop at the heaviest mass is never picked up, whatever its Carry
+        setting says: it is the mass at which the player cannot push it
+        either (PhysicsWorld.HEAVY_MASS)."""
+        try:
+            return float(properties.get("mass", 1.0)) >= PhysicsWorld.HEAVY_MASS
+        except (TypeError, ValueError):
+            return False
+
+    def _carry_extent(self, prop):
+        """How far the held Prop reaches toward the eye from its centre: its
+        physics body's horizontal half-width, or 0 without a body."""
+        body = self.physics.get_body(prop) if self.physics is not None else None
+        if body is None:
+            return 0.0
+        half = body.half_extents
+        return max(float(half[0]), float(half[2]))
 
     def _collectable(self, prop):
         p = prop.properties
@@ -689,7 +717,11 @@ class PropSession:
         prop = self.held
         p = prop.properties
         offset = p.get("carry_offset", [0.0, -6.0, 0.0])
-        distance = float(p.get("carry_distance", 55.0))
+        if self._held_measured is not prop:
+            self._held_extent = self._carry_extent(prop)
+            self._held_measured = prop
+        distance = max(float(p.get("carry_distance", 55.0)),
+                       self._held_extent + self.MIN_CARRY_GAP)
 
         prop.pos = [
             eye[0] + forward[0] * distance + float(offset[0]),

@@ -340,3 +340,29 @@ def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
         assert calls == []
     else:
         assert len(calls) == 2 * count
+
+
+# -- play start ----------------------------------------------------------------
+
+def test_a_floating_ball_falls_as_play_starts():
+    world, ball = _ball_world(pos=(0.0, 200.0, 0.0))
+    _run(world, 120)
+    assert ball.pos[1] == pytest.approx(25.0)
+
+
+def test_only_the_near_tier_wakes_as_play_starts():
+    from engine.spatial import SIM_TIER_KEY, TIER_ACTIVE
+    world, ball = _ball_world(pos=(0.0, 200.0, 0.0))
+    # Classified after the world is built, as Big World's play_start does.
+    ball.properties[SIM_TIER_KEY] = TIER_ACTIVE
+    _run(world, 60)
+    assert ball.pos[1] == pytest.approx(200.0)
+
+
+def test_a_resting_body_is_left_asleep_as_play_starts():
+    world, ball = _ball_world(pos=(0.0, 25.0, 0.0))
+    rested = []
+    world.set_rest_callback(ball, rested.append)
+    _run(world, 30)
+    assert not world.get_body(ball).awake
+    assert rested == []

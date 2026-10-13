@@ -236,6 +236,15 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   the moment it is touched; it starts on the floor. The player can no longer
   push a body into a wall (a body already in one can still be pushed out),
   and stops at a body a wall holds; nothing rises into a ceiling.
+- Physics bodies placed in the air no longer hang there until touched: as
+  play starts, bodies in the NEAR simulation tier with nothing under them
+  fall (an ordinary map is all NEAR; with Big World, further tiers wait to be
+  touched). Bodies already resting stay asleep, so no OnRest fires at start.
+- Carrying: a Prop at the heaviest mass (10, where the player cannot push it
+  either) cannot be picked up, whatever its Carry setting. A carried body is
+  held at least its own half-width plus a 30-unit gap from the eye, so a
+  scaled-up one never fills the view; the Ball presets hold the ball with its
+  near side 55 units out.
 - Play start builds the Prop registry once; `PropSession.start()` ran twice
   and the second rebuild found every Prop already adopted (audit F-09). No
   behaviour change.

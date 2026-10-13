@@ -4,7 +4,8 @@ import numpy as np
 
 from .change_journal import touch
 from .constants import is_water_brush, brush_aabb_bounds
-from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
+from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
+                      cells_of_points, tier_of)
 
 
 #: Quake 2's sv_gravity, in units per second squared, pulling down.
@@ -1181,6 +1182,8 @@ class PhysicsWorld:
         #: Set when a heavy body pins the player against a wall; the logic
         #: thread applies the damage and clears it.
         self.player_crushed = False
+        #: Set by rebuild(): the first step wakes floating NEAR bodies.
+        self._wake_floating_pending = False
 
     @staticmethod
     def _shape_from_brush(entity, brush):
@@ -1606,6 +1609,36 @@ class PhysicsWorld:
         self._pack()
         self._rebuild_static_cells()
         self._settle_sunk_bodies()
+        # Waking what floats waits for the first step: simulation tiers are
+        # stamped after the world is built (Big World's play_start).
+        self._wake_floating_pending = True
+
+    def _wake_floating_near_bodies(self):
+        """Wake every body in the NEAR simulation tier with nothing under it.
+
+        Bodies start asleep and wake when touched, so one placed in the air
+        hung there until then. Only what floats is woken -- a body already
+        resting stays asleep, rather than settling straight back and firing
+        OnRest as play starts -- and only NEAR: a body further out keeps until
+        it is touched. An unclassified world is all NEAR.
+        """
+        candidates = self._physics_enabled & self._solid & ~self._kinematic & ~self._awake
+        rows = np.flatnonzero(candidates)
+        if rows.size == 0:
+            return
+        near = np.fromiter(
+            (tier_of(self._entities[int(i)]) == TIER_NEAR
+             and not getattr(self._entities[int(i)], 'properties', {}).get('disabled', False)
+             for i in rows), dtype=np.bool_, count=rows.size)
+        rows = rows[near]
+        if rows.size == 0:
+            return
+        centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
+        bottom = centre[:, 1] - self._half[rows, 1].astype(np.float64)
+        support = self._floor_tops_at(centre[:, 0], centre[:, 2], bottom + 1.0)
+        if support is None:
+            return
+        self._awake[rows[support < bottom - 1.0]] = True
 
     def _settle_sunk_bodies(self):
         """Lift each body that starts sunk into a floor up onto its surface.
@@ -1629,13 +1662,7 @@ class PhysicsWorld:
         xs = np.concatenate((centre[:, 0], centre[:, 0]))
         zs = np.concatenate((centre[:, 2], centre[:, 2]))
         ys = np.concatenate((centre[:, 1], bottom + 1.0))
-        # Grouped only where it pays: below the measured crossover a raycast
-        # per point is cheaper than assembling the grouped query.
-        if (rows.size >= self.FLOOR_BATCH_MIN_BODIES
-                and self._can_group_floor_queries()):
-            tops = self._floor_tops(xs, zs, ys)
-        else:
-            tops = self._floor_tops_scalar(xs, zs, ys)
+        tops = self._floor_tops_at(xs, zs, ys)
         if tops is None:
             return
         floor, support = tops[:rows.size], tops[rows.size:]
@@ -1644,6 +1671,15 @@ class PhysicsWorld:
             lifted = rows[lift]
             self._position[lifted, 1] += (floor[lift] - bottom[lift]).astype(np.float32)
             self._sync_entities(lifted)
+
+    def _floor_tops_at(self, xs, zs, ys):
+        """The highest floor top at or below each point, or -inf; None without
+        a grid that can answer. Grouped only where it pays: below the measured
+        crossover (FLOOR_BATCH_MIN_BODIES) a raycast per point is cheaper than
+        assembling the grouped query."""
+        if xs.size >= self.FLOOR_BATCH_MIN_BODIES and self._can_group_floor_queries():
+            return self._floor_tops(xs, zs, ys)
+        return self._floor_tops_scalar(xs, zs, ys)
 
     def _floor_tops_scalar(self, xs, zs, ys):
         """:meth:`_floor_tops` one ``raycast_down`` at a time: for few points,
@@ -2008,6 +2044,9 @@ class PhysicsWorld:
         self._pack()
         if not self._entities:
             return
+        if self._wake_floating_pending:
+            self._wake_floating_pending = False
+            self._wake_floating_near_bodies()
 
         base_dt = float(delta) or 1.0 / 60.0
         scale = max(0.0, float(self.time_scale))
