@@ -57,7 +57,8 @@
 | `shaders.py` | Shader sources and light limits. |
 | `soa.py` | Growth helpers for the dense arrays. |
 | `spatial.py` | World cell maths and the cell index. |
-| `speaker_audio.py` | Rules for which files a Speaker may play (`assets/sounds`, `assets/music`). |
+| `audio_archives.py` | Safe audio discovery and reads from ZIP-based `.fiopak` archives. |
+| `speaker_audio.py` | Rules for which files a Speaker may play (`assets/sounds`, `assets/music`), from disk or archives. |
 | `sprite_layers.py` | Entity sprites as layers of one texture array. |
 | `sysmon.py` | The system monitor overlay. |
 | `terrain.py` | Terrain generation, meshes, drawing and height queries. |
