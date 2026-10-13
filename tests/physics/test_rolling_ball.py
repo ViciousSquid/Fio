@@ -1,12 +1,12 @@
-"""The Ball: a rolling, bouncing, tintable Prop (engine.rolling)."""
+"""The Ball: a rolling, bouncing, tintable Prop, simulated by PhysicsWorld."""
 import glm
 import numpy as np
 import pytest
 
-from engine import rolling
 from engine.entity_table import _model_recipe, _model_transform_columns
 from engine.obj_loader import OBJLoader
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics import (PhysicsWorld, SpatialGrid, quat_from_rotation,
+                            rotation_from_quat)
 from engine.player import Player
 from engine.prop_entity import BALL_MODEL_PATH, BALL_NUMBERS_MODEL_PATH, Prop
 from engine.shaders import DEFAULT_SHADERS
@@ -28,7 +28,7 @@ def _ball_world(pos=(0.0, 25.0, 0.0), statics=None, **props):
     grid = SpatialGrid(cell_size=512.0)
     grid.populate(statics or [_floor()])
     world = PhysicsWorld(grid)
-    ball = Prop.for_ball(pos=list(pos), properties=props)
+    ball = Prop.for_model(BALL_MODEL_PATH, pos=list(pos), properties=props)
     world.rebuild([{
         'pos': list(pos), 'size': [50.0, 50.0, 50.0],
         '_physics_body': True, '_physics_entity': ball,
@@ -81,8 +81,8 @@ def test_the_numbered_ball_is_the_same_ball_with_a_cell_per_face():
     assert ((uvs >= 0.0) & (uvs <= 1.0)).all()
 
 
-def test_ball_defaults_are_a_rolling_solid_physics_prop():
-    ball = Prop.for_ball(pos=[1, 2, 3])
+def test_a_ball_model_brings_the_ball_settings():
+    ball = Prop.for_model(BALL_MODEL_PATH, pos=[1, 2, 3])
     p = ball.properties
     assert p['render_mode'] == 'model' and p['model_path'] == BALL_MODEL_PATH
     assert p['physics_enabled'] and not p['no_collision']
@@ -94,10 +94,10 @@ def test_ball_defaults_are_a_rolling_solid_physics_prop():
 # -- tint ----------------------------------------------------------------------
 
 def test_tint_rides_in_the_model_recipe_and_white_is_no_tint():
-    assert _model_recipe(Prop.for_ball())[3] is None
-    red = Prop.for_ball(properties={'tint': [1.0, 0.0, 0.0]})
+    assert _model_recipe(Prop.for_model(BALL_MODEL_PATH))[3] is None
+    red = Prop.for_model(BALL_MODEL_PATH, properties={'tint': [1.0, 0.0, 0.0]})
     assert _model_recipe(red) == (BALL_MODEL_PATH, None, None, (1.0, 0.0, 0.0))
-    bytes_tint = Prop.for_ball(properties={'tint': [255, 128, 0]})
+    bytes_tint = Prop.for_model(BALL_MODEL_PATH, properties={'tint': [255, 128, 0]})
     assert _model_recipe(bytes_tint)[3] == pytest.approx((1.0, 128 / 255, 0.0))
 
 
@@ -115,7 +115,7 @@ def test_quaternion_round_trip_matches_how_models_are_drawn():
     rng = np.random.default_rng(3)
     rotations = rng.uniform(-170.0, 170.0, size=(20, 3))
     rotations[:, 0] = rng.uniform(-85.0, 85.0, size=20)
-    back = rolling.rotation_from_quat(rolling.quat_from_rotation(rotations))
+    back = rotation_from_quat(quat_from_rotation(rotations))
     for before, after in zip(rotations, back):
         a = Prop(properties={'model_path': BALL_MODEL_PATH, 'rotation': list(before)})
         b = Prop(properties={'model_path': BALL_MODEL_PATH, 'rotation': list(after)})
@@ -133,7 +133,7 @@ def test_a_ball_turns_by_the_distance_it_rolls():
     rolled = ball.pos[0] - start_x
     # Rolling along +X turns the ball about -Z by distance / radius.
     expected = -np.degrees(rolled / 25.0)
-    quat = rolling.quat_from_rotation(ball.properties['rotation'])[0]
+    quat = quat_from_rotation(ball.properties['rotation'])[0]
     angle = np.degrees(2.0 * np.arctan2(np.linalg.norm(quat[1:]), quat[0]))
     assert angle == pytest.approx(abs(expected), rel=0.02)
     assert np.sign(quat[3]) == np.sign(expected)
@@ -173,11 +173,11 @@ def test_a_light_ball_bounces_lower_each_time_then_rests():
 def test_mass_takes_the_bounce_away():
     light, _, _ = _bounce_peaks(1.0)
     medium, _, _ = _bounce_peaks(5.0)
-    heavy, final, _ = _bounce_peaks(rolling.HEAVY_MASS)
+    heavy, final, _ = _bounce_peaks(PhysicsWorld.HEAVY_MASS)
     assert medium[0] < light[0]
     assert heavy == [] and final == pytest.approx(25.0)
-    assert rolling.restitution(0.6, rolling.HEAVY_MASS) == 0.0
-    assert rolling.restitution(0.6, 1000.0) == 0.0
+    assert PhysicsWorld.restitution(0.6, PhysicsWorld.HEAVY_MASS) == 0.0
+    assert PhysicsWorld.restitution(0.6, 1000.0) == 0.0
 
 
 # -- the player ----------------------------------------------------------------
@@ -191,8 +191,10 @@ def test_the_player_pushes_a_light_ball():
     assert ball.pos[0] > 60.0
 
 
-def test_a_heavy_ball_is_not_pushed_it_blocks_the_player():
-    world, ball = _ball_world(pos=(40.0, 25.0, 0.0), mass=rolling.HEAVY_MASS)
+@pytest.mark.parametrize('rolls', [True, False], ids=['ball', 'any-body'])
+def test_a_heavy_body_is_not_pushed_it_blocks_the_player(rolls):
+    world, ball = _ball_world(pos=(40.0, 25.0, 0.0), mass=PhysicsWorld.HEAVY_MASS,
+                              rolls=rolls)
     player = _player(-30.0, 120.0)
     for _ in range(30):
         player.pos.x += player.velocity.x * FRAME
@@ -239,15 +241,79 @@ def test_only_a_moving_heavy_ball_crushes(mass, speed):
 
 # -- cost ------------------------------------------------------------------------
 
-def test_a_world_without_a_ball_never_enters_the_rolling_code(monkeypatch):
+def test_a_world_with_nothing_rolling_bouncy_or_heavy_skips_that_code(monkeypatch):
     world, crate = _ball_world(rolls=False, bounciness=0.0)
-    assert not world._any_rolls and not world._any_bounce
+    assert not (world._any_rolls or world._any_bounce or world._any_heavy)
 
     def fail(*args, **kwargs):
-        raise AssertionError('rolling code ran without a ball')
+        raise AssertionError('rolling, bounce or heavy-body code ran')
 
     monkeypatch.setattr(world, '_roll', fail)
-    monkeypatch.setattr(world, '_heavy_balls_push', fail)
-    monkeypatch.setattr(rolling, 'bounce_speed', fail)
+    monkeypatch.setattr(world, '_push_player_out', fail)
+    monkeypatch.setattr(world, '_bounce_speed', fail)
     world.wake(crate, [300.0, 0.0, 0.0])
     _run(world, 30, _player(-200.0, 100.0))
+
+
+# -- staying out of the walls --------------------------------------------------
+
+def _static_overlap(world, ball):
+    body = world.get_body(ball)
+    centre = np.asarray(ball.pos) + np.asarray(body.offset)
+    lo, hi = centre - np.asarray(body.half_extents), centre + np.asarray(body.half_extents)
+    for brushes in world.spatial_grid.cells.values():
+        for brush in brushes:
+            b_lo = np.asarray(brush['pos']) - np.asarray(brush['size']) / 2
+            b_hi = np.asarray(brush['pos']) + np.asarray(brush['size']) / 2
+            if np.all(hi > b_lo + 1e-3) and np.all(lo < b_hi - 1e-3):
+                return True
+    return False
+
+
+def test_a_ball_placed_sunk_in_the_floor_starts_on_it():
+    # Placed by its centre at floor height, as the editor does: half sunk.
+    world, ball = _ball_world(pos=(0.0, 0.0, 0.0))
+    assert ball.pos[1] == pytest.approx(25.0)
+    world.wake(ball, [200.0, 0.0, 0.0])
+    _run(world, 60)
+    assert ball.pos[1] == pytest.approx(25.0)
+
+
+@pytest.mark.parametrize('rolls', [True, False], ids=['ball', 'any-body'])
+def test_the_player_cannot_push_a_body_into_a_wall(rolls):
+    # Wall face at x = 100; the body starts against it. The same rule holds
+    # for every physics body, rolling or not.
+    world, ball = _ball_world(pos=(74.0, 25.0, 0.0), statics=[_floor(), _wall()],
+                              rolls=rolls)
+    player = _player(30.0, 200.0)
+    for _ in range(40):
+        player.pos.x += player.velocity.x * FRAME
+        world.step(FRAME, player)
+        assert not _static_overlap(world, ball)
+        # Stopped at the ball rather than walking into it.
+        assert player.pos.x <= ball.pos[0] - 50.0 + 1.0
+
+
+def test_a_bouncing_ball_does_not_rise_into_a_ceiling():
+    ceiling = {'pos': [0.0, 120.0, 0.0], 'size': [400.0, 20.0, 400.0], 'is_trigger': False}
+    world, ball = _ball_world(pos=(0.0, 25.0, 0.0), statics=[_floor(), ceiling],
+                              bounciness=0.9)
+    world.wake(ball, [0.0, 900.0, 0.0])
+    for _ in range(120):
+        world.step(FRAME)
+        assert not _static_overlap(world, ball)
+    assert ball.pos[1] + 25.0 <= 110.0 + 1e-3
+
+
+def test_the_numbered_ball_is_a_ball_at_twice_the_size():
+    ball = Prop.for_model(BALL_NUMBERS_MODEL_PATH)
+    p = ball.properties
+    assert p['rolls'] and p['physics_enabled'] and not p['no_collision']
+    assert p['scale'] == [2.0, 2.0, 2.0]
+
+
+def test_the_numbered_ball_is_a_ball_at_twice_the_size():
+    ball = Prop.for_model(BALL_NUMBERS_MODEL_PATH)
+    p = ball.properties
+    assert p['rolls'] and p['physics_enabled'] and not p['no_collision']
+    assert p['scale'] == [2.0, 2.0, 2.0]

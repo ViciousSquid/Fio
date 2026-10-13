@@ -2,7 +2,6 @@ import math
 import glm
 import numpy as np
 
-from . import rolling
 from .change_journal import touch
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
@@ -823,6 +822,86 @@ class SpatialGrid:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Body orientation
+# ---------------------------------------------------------------------------
+# A body that rolls (``rolls``) turns by the distance it travels. Its
+# orientation is a unit quaternion -- (w, x, y, z), float64 so minutes of
+# rolling keep it unit length -- because rolls in different directions compose
+# as rotations, which adding Euler angles does not. It becomes the entity's
+# ``rotation`` (Fio's Y-X-Z Euler degrees) only to be drawn.
+
+def _quat_multiply(a, b):
+    aw, ax, ay, az = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+    bw, bx, by, bz = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
+    return np.stack((
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ), axis=1)
+
+
+def _axis_quat(axis, radians):
+    q = np.zeros((radians.shape[0], 4), dtype=np.float64)
+    q[:, 0] = np.cos(radians * 0.5)
+    q[:, 1 + axis] = np.sin(radians * 0.5)
+    return q
+
+
+def quat_from_rotation(rotation):
+    """Quaternions for Fio ``rotation`` rows ``[x, y, z]`` in degrees.
+
+    Fio draws a model with ``Ry(y) * Rx(x) * Rz(z)`` (see
+    ``engine.entity_table._model_transform_columns``); this is that product.
+    """
+    r = np.radians(np.asarray(rotation, dtype=np.float64).reshape(-1, 3))
+    return _quat_multiply(_quat_multiply(_axis_quat(1, r[:, 1]),
+                                         _axis_quat(0, r[:, 0])),
+                          _axis_quat(2, r[:, 2]))
+
+
+def rotation_from_quat(q):
+    """Fio ``rotation`` rows (Y-X-Z Euler degrees) for (N, 4) quaternions."""
+    q = np.asarray(q, dtype=np.float64).reshape(-1, 4)
+    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    r12 = 2.0 * (y * z - w * x)
+    pitch = np.arcsin(np.clip(-r12, -1.0, 1.0))
+    yaw = np.arctan2(2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y))
+    roll = np.arctan2(2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z))
+    # Looking straight up or down, the Y and Z turns are one turn: all yaw.
+    locked = np.abs(r12) > 0.999999
+    if np.any(locked):
+        yaw[locked] = np.arctan2(-2.0 * (x * z - w * y)[locked],
+                                 (1.0 - 2.0 * (y * y + z * z))[locked])
+        roll[locked] = 0.0
+    return np.degrees(np.stack((pitch, yaw, roll), axis=1))
+
+
+def _rolled(q, velocity, radius, dt):
+    """Quaternions *q* turned as bodies of *radius* roll at *velocity* for *dt*.
+
+    Rolling without slipping turns a body ``|v_horizontal| * dt / r`` radians
+    about ``(vz, 0, -vx)``, the horizontal axis square to its motion -- its
+    spin is read from its speed, so there is no spin to simulate.
+    """
+    vx = velocity[:, 0].astype(np.float64)
+    vz = velocity[:, 2].astype(np.float64)
+    speed = np.hypot(vx, vz)
+    moving = speed > 1e-9
+    half = 0.5 * speed * float(dt) / np.maximum(radius.astype(np.float64), 1e-6)
+    s = np.sin(half) / np.where(moving, speed, 1.0)
+    turn = np.zeros((q.shape[0], 4), dtype=np.float64)
+    turn[:, 0] = np.cos(half)
+    turn[:, 1] = vz * s
+    turn[:, 3] = -vx * s
+    turn[~moving] = (1.0, 0.0, 0.0, 0.0)
+    # The axis is fixed in the world, so the turn is applied on the left.
+    out = _quat_multiply(turn, q)
+    out /= np.linalg.norm(out, axis=1, keepdims=True)
+    return out
+
+
 class PhysicsBody:
     """Lightweight handle for one row in the engine's batched physics state."""
 
@@ -987,6 +1066,41 @@ class PhysicsWorld:
     MAX_STEP = np.float32(0.05)
     REST_SPEED = np.float32(1.0)
 
+    #: The share of its ``friction`` a body that ``rolls`` loses to the ground:
+    #: rolling loses far less speed than sliding.
+    ROLLING_FRICTION_SCALE = 0.05
+    #: Mass at and above which a body is heavy: it does not bounce, and the
+    #: player cannot push it -- it pushes the player instead, and crushes a
+    #: player it drives into a wall. A body of mass 1 or less bounces by its
+    #: full ``bounciness``; between the two the bounce fades linearly.
+    HEAVY_MASS = 10.0
+    #: A rebound slower than this (units per second) is not a bounce: the
+    #: body settles instead of chattering on the floor.
+    MIN_BOUNCE_SPEED = 60.0
+    #: A heavy body moving into the player faster than this (units per
+    #: second) crushes them if it pins them against a wall.
+    CRUSH_SPEED = 5.0
+    #: Damage a crushing body does: enough to kill through any armour. God
+    #: mode still stops it, as it stops all player damage.
+    CRUSH_DAMAGE = 100000
+
+    @classmethod
+    def restitution(cls, bounciness, mass):
+        """The share of impact speed a body keeps when it bounces.
+
+        *bounciness* (0..1) is what the author asked for; *mass* takes it away,
+        to nothing at :data:`HEAVY_MASS`. Scalars or arrays.
+        """
+        bounciness = np.clip(np.asarray(bounciness, dtype=np.float32), 0.0, 1.0)
+        mass = np.asarray(mass, dtype=np.float32)
+        weight = np.clip((cls.HEAVY_MASS - mass) / (cls.HEAVY_MASS - 1.0), 0.0, 1.0)
+        return (bounciness * weight).astype(np.float32)
+
+    def _bounce_speed(self, impact_speed, coefficient):
+        """Rebound speed for an impact, or 0 where it is too slow to bounce."""
+        rebound = np.asarray(impact_speed, dtype=np.float32) * coefficient
+        return np.where(rebound > self.MIN_BOUNCE_SPEED, rebound, 0.0).astype(np.float32)
+
     # Runtime physics controls. Entity-authored mass/friction/damping remain
     # intact; these values provide global tuning/debug controls for play mode.
     DEFAULT_TIME_SCALE = np.float32(1.0)
@@ -1053,17 +1167,18 @@ class PhysicsWorld:
         self._dirty = False
 
     def _clear_rolling(self):
-        #: Rolls as a ball (see engine.rolling).
+        #: Turns by the distance it travels (``rolls``).
         self._rolls = np.empty(0, dtype=np.bool_)
         #: Fraction of impact speed kept on a bounce: bounciness faded by mass.
         self._bounce = np.empty(0, dtype=np.float32)
         #: Rolling bodies' orientation, (w, x, y, z); identity for the rest.
         self._orientation = np.empty((0, 4), dtype=np.float64)
-        # Set at pack time. A world with no ball and nothing bouncy -- most
-        # maps -- never enters the rolling or bounce code.
+        # Set at pack time: a world with nothing rolling, bouncy or heavy --
+        # most maps -- never enters that code.
         self._any_rolls = False
         self._any_bounce = False
-        #: Set when a heavy ball pins the player against a wall; the logic
+        self._any_heavy = False
+        #: Set when a heavy body pins the player against a wall; the logic
         #: thread applies the damage and clears it.
         self.player_crushed = False
 
@@ -1120,8 +1235,8 @@ class PhysicsWorld:
             not bool(props.get('no_collision', True)),
             bool(props.get('physics_enabled', False)),
             bool(props.get('rolls', False)),
-            float(rolling.restitution(_float(props.get('bounciness'), 0.0),
-                                      _float(props.get('mass'), 1.0)))
+            float(self.restitution(_float(props.get('bounciness'), 0.0),
+                                   _float(props.get('mass'), 1.0)))
             if props.get('bounciness') else 0.0,
         )
         self._dirty = True
@@ -1173,12 +1288,14 @@ class PhysicsWorld:
             self._rolls[i] = rolls
             self._bounce[i] = bounce
             if rolls:
-                # A ball's turn comes from its rolling, not a fixed spin.
+                # A rolling body's turn comes from its rolling, not a fixed spin.
                 self._angular_velocity[i] = 0.0
                 self._orientation[i] = self._entity_orientation(entity)
 
         self._any_rolls = bool(self._rolls.any())
         self._any_bounce = bool(self._bounce.any())
+        self._any_heavy = bool(np.any(
+            self._physics_enabled & self._solid & (self._mass >= self.HEAVY_MASS)))
         self._dirty = False
 
     @staticmethod
@@ -1186,7 +1303,7 @@ class PhysicsWorld:
         props = getattr(entity, 'properties', None)
         rotation = props.get('rotation') if isinstance(props, dict) else None
         try:
-            return rolling.quat_from_rotation(rotation)[0]
+            return quat_from_rotation(rotation)[0]
         except (TypeError, ValueError):
             return np.array([1.0, 0.0, 0.0, 0.0])
 
@@ -1368,13 +1485,23 @@ class PhysicsWorld:
                 props['rotation'] = rotation
                 touch(entity)
 
-    def _heavy_balls_push(self, player, ppos, player_half, center, rows):
-        """Heavy balls overlapping the player shove the player out of the way.
+    def _bodies_block_player(self, player, ppos, player_half, rows):
+        """Move the player out of the bodies in *rows* they still overlap."""
+        center = self._position + self._offset
+        overlap = rows & np.all(
+            (center + self._half > ppos - player_half)
+            & (center - self._half < ppos + player_half), axis=1)
+        if np.any(overlap):
+            self._push_player_out(player, ppos, player_half, center,
+                                  np.flatnonzero(overlap), carry=False)
+
+    def _push_player_out(self, player, ppos, player_half, center, rows, carry=True):
+        """Bodies in *rows* overlapping the player shove the player out.
 
         The player goes out along whichever horizontal axis overlaps least, and
-        a ball rolling into the player carries them along at its own speed. If
-        that leaves the player inside a wall, the ball has pinned them there:
-        :attr:`player_crushed`.
+        a body moving into the player carries them along at its own speed. If
+        that leaves the player inside a wall, the body has pinned them there:
+        :attr:`player_crushed`. Without *carry* the player is only stopped.
         """
         for i in rows:
             dx = float(ppos[0] - center[i, 0])
@@ -1385,13 +1512,13 @@ class PhysicsWorld:
                                 else (2, dz, overlap_z))
             direction = 1.0 if delta >= 0.0 else -1.0
             ppos[axis] += direction * (out + 0.5)
-            ball_speed = float(self._velocity[i, axis])
-            if ball_speed * direction > 0.0:
+            body_speed = float(self._velocity[i, axis])
+            if carry and body_speed * direction > 0.0:
                 if axis == 0:
-                    player.velocity.x = ball_speed
+                    player.velocity.x = body_speed
                 else:
-                    player.velocity.z = ball_speed
-                if (ball_speed * direction > rolling.CRUSH_SPEED
+                    player.velocity.z = body_speed
+                if (body_speed * direction > self.CRUSH_SPEED
                         and self._player_in_wall(ppos, player_half)):
                     self.player_crushed = True
         player.pos = glm.vec3(float(ppos[0]), float(ppos[1]), float(ppos[2]))
@@ -1414,10 +1541,10 @@ class PhysicsWorld:
     def _roll(self, rows, dt):
         """Turn rolling bodies by how far they rolled this step."""
         radius = np.min(self._half[rows], axis=1)
-        orientation = rolling.roll(
+        orientation = _rolled(
             self._orientation[rows], self._velocity[rows], radius, dt)
         self._orientation[rows] = orientation
-        for i, rotation in zip(rows, rolling.rotation_from_quat(orientation).tolist()):
+        for i, rotation in zip(rows, rotation_from_quat(orientation).tolist()):
             entity = self._entities[int(i)]
             props = getattr(entity, 'properties', None)
             if isinstance(props, dict):
@@ -1478,6 +1605,39 @@ class PhysicsWorld:
 
         self._pack()
         self._rebuild_static_cells()
+        self._settle_sunk_bodies()
+
+    def _settle_sunk_bodies(self):
+        """Lift each body that starts sunk into a floor up onto its surface.
+
+        A body finds its floor by casting down from just above its bottom, so
+        a floor it starts inside is never seen, and it drops through the
+        moment it wakes. A model whose origin is its centre -- a ball placed at
+        floor height -- starts half inside the floor. Once per rebuild, a body
+        resting on nothing whose centre stands over a floor top between its
+        bottom and its centre is raised to rest on it. A body already standing
+        on a floor is left alone, even against a low wall it overlaps: in
+        motion a floor top above the bottom is a wall, not a floor.
+        """
+        raycast = getattr(self.spatial_grid, 'raycast_down', None)
+        if raycast is None or not self._entities:
+            return
+        for i in np.flatnonzero(self._physics_enabled & self._solid):
+            centre = self._position[i] + self._offset[i]
+            bottom = float(centre[1] - self._half[i, 1])
+            try:
+                floor = raycast(float(centre[0]), float(centre[2]), float(centre[1]))
+            except Exception:
+                continue
+            if floor is None or not bottom < float(floor) <= float(centre[1]):
+                continue
+            try:
+                support = raycast(float(centre[0]), float(centre[2]), bottom + 1.0)
+            except Exception:
+                support = None
+            if support is None or float(support) < bottom - 1.0:
+                self._position[i, 1] += np.float32(float(floor) - bottom)
+                self._entities[int(i)].pos = self._position[i].tolist()
 
     def _candidate_aabbs(self, cell_x, cell_z):
         key = (cell_x, cell_z)
@@ -1505,14 +1665,27 @@ class PhysicsWorld:
         self._static_query_cache[key] = result
         return result
 
-    def _batch_static_collision(self, axis, old_position):
-        """Resolve one horizontal axis with vectorised AABB tests per cell group."""
+    def _batch_static_collision(self, axis, old_position, rows=None, pushed_from=None):
+        """Resolve one axis with vectorised AABB tests per cell group.
+
+        A body that ends up in a wall goes back to *old_position* on this axis
+        and stops, or bounces off by its bounciness. *rows* limits the test to
+        some bodies: the vertical axis is tested only for bodies on their way
+        up, so nothing rises into a ceiling.
+
+        *pushed_from* is where the player's push this step started each body
+        from (NaN where it did not push it): a push into a wall is undone with
+        the rest of the move -- unless the body was already in a wall before
+        it, when it may still be pushed out.
+        """
         active = (
             self._physics_enabled
             & self._awake
             & ~self._kinematic
             & self._solid
         )
+        if rows is not None:
+            active &= rows
         indices = np.flatnonzero(active)
         if indices.size == 0:
             return
@@ -1527,6 +1700,8 @@ class PhysicsWorld:
         )
 
         collision = np.zeros(indices.size, dtype=np.bool_)
+        # Pushed bodies that were clear of every wall before the push.
+        clear_before_push = np.zeros(indices.size, dtype=np.bool_)
 
         for group_id, key in enumerate(unique_cells):
             local_indices = np.flatnonzero(inverse == group_id)
@@ -1556,13 +1731,28 @@ class PhysicsWorld:
 
             collision[local_indices] |= hit
 
+            if pushed_from is not None:
+                was_pushed = hit & ~np.isnan(pushed_from[bi, 0])
+                if np.any(was_pushed):
+                    pmin = pushed_from[bi] + self._offset[bi] - half
+                    pmax = pushed_from[bi] + self._offset[bi] + half
+                    before = (
+                        (pmax[:, None, :] > cmin[None, :, :])
+                        & (pmin[:, None, :] < cmax[None, :, :])
+                    ).all(axis=2).any(axis=1)
+                    clear_before_push[local_indices] |= was_pushed & ~before
+
         if np.any(collision):
             hit_indices = indices[collision]
-            self._position[hit_indices, axis] = old_position[hit_indices, axis]
+            target = old_position[hit_indices, axis]
+            if pushed_from is not None:
+                undo = clear_before_push[collision]
+                target = np.where(undo, pushed_from[hit_indices, axis], target)
+            self._position[hit_indices, axis] = target
             if self._any_bounce:
                 # Bounce off the wall if bouncy enough.
                 hit_velocity = self._velocity[hit_indices, axis]
-                self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * rolling.bounce_speed(
+                self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * self._bounce_speed(
                     np.abs(hit_velocity), self._bounce[hit_indices])
             else:
                 self._velocity[hit_indices, axis] = 0.0
@@ -1795,6 +1985,10 @@ class PhysicsWorld:
         active = self._physics_enabled & ~self._kinematic
         active &= ~self._disabled_mask(active)
 
+        # Where the player's push started each body it pushed (NaN for the
+        # rest): a push into a wall is undone with the rest of the move.
+        pushed_from = None
+        pushed = None
         if player is not None:
             ppos = np.asarray(getattr(player, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32)
             ph = getattr(player, '_half', None)
@@ -1829,12 +2023,13 @@ class PhysicsWorld:
                 (body_min[:, 2] < player_max[2])
             )
             pushable = active & self._solid & ~self._kinematic & overlap
-            if self._any_rolls:
-                heavy = pushable & self._rolls & (self._mass >= rolling.HEAVY_MASS)
+            if self._any_heavy:
+                # The player cannot push a heavy body: it pushes the player.
+                heavy = pushable & (self._mass >= self.HEAVY_MASS)
                 if np.any(heavy):
                     pushable &= ~heavy
-                    self._heavy_balls_push(player, ppos, player_half, center,
-                                           np.flatnonzero(heavy))
+                    self._push_player_out(player, ppos, player_half, center,
+                                          np.flatnonzero(heavy))
             speed = float(np.hypot(player_velocity[0], player_velocity[2]))
             if speed >= 0.01 and np.any(pushable):
                 dx = center[:, 0] - ppos[0]
@@ -1849,6 +2044,8 @@ class PhysicsWorld:
                 x_dir = np.where(dx >= 0.0, 1.0, -1.0).astype(np.float32)
                 z_dir = np.where(dz >= 0.0, 1.0, -1.0).astype(np.float32)
 
+                pushed_from = np.full_like(self._position, np.nan)
+                pushed_from[pushable] = self._position[pushable]
                 self._position[x_indices, 0] += x_dir[x_indices] * (overlap_x[x_indices] + 0.5)
                 self._position[z_indices, 2] += z_dir[z_indices] * (overlap_z[z_indices] + 0.5)
 
@@ -1861,6 +2058,7 @@ class PhysicsWorld:
                     target_z[z_indices], np.abs(self._velocity[z_indices, 2])
                 )
                 self._awake[pushable] = True
+                pushed = pushable
 
         moving = active & self._awake
         if np.any(moving):
@@ -1886,12 +2084,16 @@ class PhysicsWorld:
             previous_bottom = old_center[:, 1] - self._half[:, 1]
 
             self._position[moving, 0] += self._velocity[moving, 0] * dt
-            self._batch_static_collision(0, old_position)
+            self._batch_static_collision(0, old_position, pushed_from=pushed_from)
 
             self._position[moving, 2] += self._velocity[moving, 2] * dt
-            self._batch_static_collision(2, old_position)
+            self._batch_static_collision(2, old_position, pushed_from=pushed_from)
 
             self._position[moving, 1] += self._velocity[moving, 1] * dt
+            rising = moving & (self._velocity[:, 1] > 0.0)
+            if np.any(rising):
+                # Nothing rises into a ceiling.
+                self._batch_static_collision(1, old_position, rising)
             floors = self._batch_floor(previous_bottom)
             new_center = self._position + self._offset
             new_bottom = new_center[:, 1] - self._half[:, 1]
@@ -1906,7 +2108,7 @@ class PhysicsWorld:
                 )
                 if self._any_bounce:
                     # Bounce back up if bouncy enough.
-                    self._velocity[landed, 1] = rolling.bounce_speed(
+                    self._velocity[landed, 1] = self._bounce_speed(
                         np.maximum(-self._velocity[landed, 1], 0.0),
                         self._bounce[landed])
                 else:
@@ -1914,7 +2116,7 @@ class PhysicsWorld:
 
                 # Treat friction as a surface coefficient rather than a tiny
                 # per-frame damping term. Apply it only while grounded. A
-                # rolling ball loses only a little of its speed to the ground.
+                # rolling body loses only a little of its speed to the ground.
                 friction_accel = (
                     self._friction[landed]
                     * np.float32(max(0.0, float(self.friction_scale)))
@@ -1923,7 +2125,7 @@ class PhysicsWorld:
                 if self._any_rolls:
                     friction_accel = friction_accel * np.where(
                         self._rolls[landed],
-                        np.float32(rolling.ROLLING_FRICTION_SCALE),
+                        np.float32(self.ROLLING_FRICTION_SCALE),
                         np.float32(1.0))
                 ground_speed = np.hypot(
                     self._velocity[landed, 0],
@@ -1968,6 +2170,10 @@ class PhysicsWorld:
                         callback(body.entity)
 
             self._sync_entities(np.flatnonzero(moving))
+
+        if pushed is not None and player is not None:
+            # A body the player pushed but a wall held: the player stops at it.
+            self._bodies_block_player(player, ppos, player_half, pushed)
 
 
 

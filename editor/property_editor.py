@@ -10,7 +10,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
 from engine.items import ITEM_IDS
-from engine.prop_entity import normalise_collect_type
+from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
+                                 normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState, PlayerStart, LevelChanger)
@@ -2130,9 +2131,6 @@ class PropertyEditor(QWidget):
                             type(thing), 'DEFAULT_MODEL_PATH', '')
                         if not thing.properties.get('model_path') and default_model:
                             self.update_object_prop('model_path', default_model)
-                            model_path_edit = model_path_widget.findChild(QLineEdit)
-                            if model_path_edit is not None:
-                                model_path_edit.setText(default_model)
                     else:
                         # Restore the Prop's resolved visual asset rather than a
                         # generic placeholder: weapon -> gun1, key -> its key,
@@ -2361,7 +2359,9 @@ class PropertyEditor(QWidget):
         mass_spin.setSingleStep(0.1)
         mass_spin.setValue(mass)
         mass_spin.setToolTip(
-            "Mass used by pushing and other Prop physics. Higher values are harder to move."
+            "Mass used by pushing and other Prop physics. Higher values are harder "
+            "to move and bounce lower. From mass 10 the player cannot push it: "
+            "it pushes the player, and crushes a player it pins to a wall."
         )
         mass_spin.valueChanged.connect(
             lambda value: self.update_object_prop('mass', value)
@@ -2440,8 +2440,7 @@ class PropertyEditor(QWidget):
         )
         rolls_cb.setToolTip(
             "Turn as a ball rolling along the ground, losing far less speed "
-            "to friction than a sliding prop. Collision stays the AABB. From "
-            "mass 10 the player cannot push it; it pushes the player."
+            "to friction than a sliding prop. Collision stays the AABB."
         )
         physics_form.addRow("", rolls_cb)
         self._widgets['prop_rolls_cb'] = rolls_cb
@@ -5147,17 +5146,47 @@ class PropertyEditor(QWidget):
         self.editor.mark_as_modified()
 
     def add_model_path_widget(self, layout, thing):
+        """Presets: the built-in models by name, and Browse... for any other.
+
+        A model that brings settings with it (``engine.prop_entity``'s
+        :func:`model_settings` -- the Ball, the numbered Ball, the Oil Barrel)
+        applies them when chosen either way, and the panel is rebuilt to show
+        them. Another model is listed by its file name.
+        """
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
-        path_edit = QLineEdit(thing.properties.get('model_path', ''))
-        path_edit.setReadOnly(True)
-        btn = QPushButton("...")
-        btn.setFixedWidth(30)
+        combo = QComboBox()
+        combo.addItems(list(MODEL_PRESETS))
+        current = thing.properties.get('model_path', '') or ''
+        preset = model_preset_name(current) if current else 'Oil Barrel'
+        if preset is None:
+            combo.addItem(os.path.basename(current.replace('\\', '/')))
+            combo.setCurrentIndex(combo.count() - 1)
+        else:
+            combo.setCurrentText(preset)
+        combo.setToolTip(current or MODEL_PRESETS['Oil Barrel']['model_path'])
+        btn = QPushButton("Browse...")
+        btn.setToolTip("Load another model (.obj or .glb)")
 
-        def pick():
+        def choose(model_path):
+            settings = model_settings(model_path) or {'model_path': model_path}
+            settings['model_path'] = model_path
+            for key, value in settings.items():
+                self.update_object_prop(key, value)
+            # Scale, physics and the rest may have changed with the model:
+            # rebuild once this signal has returned.
+            QTimer.singleShot(0, lambda: self.current_object is thing
+                              and self.set_object(thing, force=True))
+
+        def on_preset(index):
+            name = combo.itemText(index)
+            if name in MODEL_PRESETS:
+                choose(MODEL_PRESETS[name]['model_path'])
+
+        def browse():
             fp, _ = QFileDialog.getOpenFileName(
-                self, "Select OBJ Model", "assets/models", "Model Files (*.obj *.glb)"
+                self, "Select Model", "assets/models", "Model Files (*.obj *.glb)"
             )
             if fp:
                 try:
@@ -5166,13 +5195,15 @@ class PropertyEditor(QWidget):
                     rel = fp
                 if not rel.startswith(".."):
                     rel = os.path.join("assets", rel) if not rel.startswith("assets") else rel
-                self.update_object_prop('model_path', rel)
-                path_edit.setText(rel)
+                choose(rel.replace("\\", "/"))
 
-        btn.clicked.connect(pick)
-        h.addWidget(path_edit)
+        combo.activated.connect(on_preset)
+        btn.clicked.connect(browse)
+        h.addWidget(combo, 1)
         h.addWidget(btn)
-        layout.addRow("Model Path:", widget)
+        layout.addRow("Presets:", widget)
+        self._widgets['prop_model_preset_combo'] = combo
+        self._widgets['prop_model_browse_button'] = btn
         return widget
 
     def add_vector3_widget(self, layout, thing, key):

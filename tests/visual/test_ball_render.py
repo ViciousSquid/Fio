@@ -57,11 +57,11 @@ def _render(renderer, context, brushes, things, camera=None):
 
 
 def _scene(*tints, xs=None):
-    from engine.prop_entity import Prop
+    from engine.prop_entity import BALL_MODEL_PATH, Prop
     brushes, things = glh.lit_cube_scene(shadows=False)
     floor = [b for b in brushes if b.get("name") != "cube"]
     xs = xs or [0.0] * len(tints)
-    balls = [Prop.for_ball(pos=[x, 25.0, 0.0], properties={
+    balls = [Prop.for_model(BALL_MODEL_PATH, pos=[x, 25.0, 0.0], properties={
         "tint": tint, "scale": [3.0, 3.0, 3.0]}) for x, tint in zip(xs, tints)]
     return floor, things + balls
 
@@ -118,7 +118,7 @@ def _patch(image, point, camera, half=4):
 
 def _shadow_scene(light_pos, ball_x=0.0, occluder=False, model=None, shadows=True):
     from editor.things import Light
-    from engine.prop_entity import Prop
+    from engine.prop_entity import BALL_MODEL_PATH, Prop
     from tests.helpers.worlds import box_brush, make_thing
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
@@ -127,8 +127,7 @@ def _shadow_scene(light_pos, ball_x=0.0, occluder=False, model=None, shadows=Tru
     light = make_thing(Light, "lamp", light_pos, color=[255, 255, 255],
                        intensity=2.0, radius=1400.0, state="on",
                        casts_shadows=shadows)
-    properties = {"model_path": model} if model else {}
-    ball = Prop.for_ball(pos=[ball_x, 25.0, 0.0], properties=properties)
+    ball = Prop.for_model(model or BALL_MODEL_PATH, pos=[ball_x, 25.0, 0.0])
     return brushes, [light, ball]
 
 

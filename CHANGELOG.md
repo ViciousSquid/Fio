@@ -105,19 +105,26 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### New
 
-- Ball: a new Prop preset (2D view context menu → **Ball**), a giant
-  low-poly golf ball half the player's height (`assets/models/ball.obj`: an
-  80-face flat-shaded geodesic sphere with 362 evenly laid dimples; rebuilt by
-  `tools/make_golf_ball.py`). `assets/models/ball_numbers.obj` is the same
-  ball with a number on every face, 1-80, opposite faces adding up to 81,
-  like a large die. Like any model it casts and receives shadows from
-  shadow-casting lights, its shadow following it as it rolls. It keeps
-  its AABB collision but rolls: it turns by the distance it travels, loses
-  only a little speed to the ground, and bounces off floors and walls by its
-  **Bounciness**. Its **Mass** takes the bounce away, and from mass 10 a ball
-  cannot be pushed by the player -- it shoves the player aside instead, and
-  crushes a player it pins against a wall (unless god mode is on). **Rolls**
-  and **Bounciness** are on every Prop's Physics tab. Maps with no ball pay
+- Model presets: a model Prop's **Model Path** is now **Presets:** -- Oil
+  Barrel (the default) or Ball -- with **Browse...** for any other model.
+  Choosing a model that has settings applies them too, from the list, by
+  Browse... or from the Asset Browser.
+- Ball: a giant low-poly golf ball half the player's height
+  (`assets/models/ball.obj`: an 80-face flat-shaded geodesic sphere with 362
+  evenly laid dimples; rebuilt by `tools/make_golf_ball.py`), set up as a
+  solid physics Prop that rolls and bounces. `assets/models/ball_numbers.obj`
+  is the same ball with a number on every face, 1-80, opposite faces adding
+  up to 81, like a large die; it is always chosen at scale 2. Like any model
+  it casts and receives shadows from shadow-casting lights, its shadow
+  following it as it rolls. Choosing the Oil Barrel takes the ball settings
+  back off.
+- Physics bodies: new **Rolls** and **Bounciness** settings on every Prop's
+  Physics tab, part of the one PhysicsWorld. A rolling body keeps its AABB but
+  turns by the distance it travels and loses only a little speed to the
+  ground; a bouncy one bounces off floors, walls and ceilings, its **Mass**
+  taking the bounce away. From mass 10 a body cannot be pushed by the player:
+  it pushes the player aside, and crushes a player it pins against a wall
+  (unless god mode is on). Maps with nothing rolling, bouncy or heavy pay
   nothing for any of it.
 - Tint: model Props have a **Tint** colour that multiplies the model's
   colour, textured or not; white leaves it as it is.
@@ -224,6 +231,11 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Fixes
 
+- Physics bodies: a body placed partly sunk into a floor -- a model whose
+  origin is its centre, placed at floor height -- no longer drops through it
+  the moment it is touched; it starts on the floor. The player can no longer
+  push a body into a wall (a body already in one can still be pushed out),
+  and stops at a body a wall holds; nothing rises into a ceiling.
 - Play start builds the Prop registry once; `PropSession.start()` ran twice
   and the second rebuild found every Prop already adopted (audit F-09). No
   behaviour change.

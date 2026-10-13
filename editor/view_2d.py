@@ -3751,7 +3751,6 @@ class View2D(QWidget):
         add_effect_action = menu.addAction("Effect")
         add_player_start_action = menu.addAction("PlayerStart")
         add_prop_action = menu.addAction("Prop")
-        add_ball_action = menu.addAction("Ball")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
         add_logic_spawner_action = menu.addAction("Spawner")
@@ -3850,8 +3849,6 @@ class View2D(QWidget):
             new_thing = PlayerStart(pos=pos_3d)
         elif action == add_prop_action:
             new_thing = Prop(pos=pos_3d)
-        elif action == add_ball_action:
-            new_thing = Prop.for_ball(pos=pos_3d)
         elif action == add_speaker_action: 
             new_thing = Speaker(pos=pos_3d)
         elif action == add_levelchanger_action:

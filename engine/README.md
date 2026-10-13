@@ -53,7 +53,6 @@
 | `render_cull.py` | Distance culling over dense positions. |
 | `render_keys.py` | Packs draw state into sortable keys and finds equal-key runs. |
 | `render_table.py` | Dense table of brushes for rendering. |
-| `rolling.py` | Rolling Props (balls): turning by distance rolled, bounce, mass. |
 | `savegame.py` | Play-session save and load (`.fiosave`). |
 | `shaders.py` | Shader sources and light limits. |
 | `soa.py` | Growth helpers for the dense arrays. |
