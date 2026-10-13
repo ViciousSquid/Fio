@@ -891,6 +891,10 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.KeyPress:
             key = event.key()
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # Selected terrain stamps take the arrows while the stamp
+                # brush is active.
+                if self._nudge_terrain_stamps(event):
+                    return True
                 # Only nudge if we have a selected object and not in play mode
                 selected = self.primary_selection()
                 if selected and not self.view_3d.play_mode:
@@ -902,6 +906,53 @@ class MainWindow(QMainWindow):
                         return True  # Event consumed, don't propagate further
 
         return super().eventFilter(obj, event)
+
+    def _nudge_terrain_stamps(self, event):
+        """Move the selected terrain stamps with the arrow keys.
+
+        Follows brush nudging in the Top view: one grid step (16 units with
+        the grid hidden), five with Shift, the first stamp snapped to the grid,
+        up/down along -Z/+Z. A run of key repeats is one undo step.
+        """
+        view_3d = self.view_3d
+        terrain = self.terrain
+        if (view_3d is None or view_3d.play_mode or terrain is None
+                or not view_3d.terrain_sculpt_active
+                or not terrain.selected_stamp_ids):
+            return False
+        current_view = self.right_tabs.currentWidget() if hasattr(self, 'right_tabs') else None
+        grid_visible = getattr(current_view, 'grid_visible', True)
+        grid = getattr(current_view, 'grid_size', None) or getattr(view_3d, 'grid_size', 16)
+        step = grid if grid_visible else 16
+        if event.modifiers() & Qt.ShiftModifier:
+            step *= 5
+        dx, dz = {Qt.Key_Left: (-step, 0), Qt.Key_Right: (step, 0),
+                  Qt.Key_Up: (0, -step), Qt.Key_Down: (0, step)}[event.key()]
+        primary = next(s for s in terrain.paint_stamps
+                       if s['id'] in terrain.selected_stamp_ids)
+        if grid_visible and grid:
+            dx = round((primary['x'] + dx) / grid) * grid - primary['x']
+            dz = round((primary['z'] + dz) / grid) * grid - primary['z']
+
+        timer = getattr(self, '_stamp_nudge_timer', None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._finish_stamp_nudge)
+            self._stamp_nudge_timer = timer
+        if not timer.isActive():
+            self.state.terrain_data = terrain.to_dict()
+            self.save_state()
+        terrain.move_paint_stamps(terrain.selected_stamp_ids, dx, dz, defer=True)
+        timer.start(350)
+        view_3d.update()
+        return True
+
+    def _finish_stamp_nudge(self):
+        if self.terrain is not None:
+            self.terrain.finish_stamp_edit()
+            self.state.terrain_data = self.terrain.to_dict()
+            self.view_3d.update()
 
     def toggle_asset_browser(self):
         """Toggles the visibility of the Asset Browser dock."""
@@ -2780,7 +2831,13 @@ class MainWindow(QMainWindow):
         current_stamps = [dict(stamp) for stamp in getattr(
             terrain, 'texture_stamps', []) if isinstance(stamp, dict)]
 
-        if current_csg == wanted_csg and current_stamps == wanted_stamps:
+        wanted_paint_stamps = [dict(stamp) for stamp in terrain_data.get('paint_stamps', [])
+                               if isinstance(stamp, dict)]
+        current_paint_stamps = [dict(stamp) for stamp in getattr(terrain, 'paint_stamps', [])]
+        if (current_csg == wanted_csg and current_stamps == wanted_stamps
+                and current_paint_stamps == wanted_paint_stamps
+                and getattr(terrain, '_serialize_texture_paint', list)()
+                == list(terrain_data.get('texture_paint', []))):
             return
 
         terrain.from_dict(terrain_data)

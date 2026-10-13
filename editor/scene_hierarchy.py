@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
 import re
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent
 
 from engine.change_journal import touch
 
@@ -166,7 +166,10 @@ class SceneHierarchy(QWidget):
         self.lock_icon = QIcon("assets/lock.png")
         self.hidden_icon = QIcon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
-        self.tree.itemDoubleClicked.connect(self.handle_double_click)
+        # Double-clicks are read off the viewport, not itemDoubleClicked: the
+        # first click of a double-click changes the selection, which rebuilds
+        # the tree, so Qt never pairs the two clicks on one item.
+        self.tree.viewport().installEventFilter(self)
 
         # Enable extended selection (shift-click, ctrl-click)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -1061,11 +1064,25 @@ class SceneHierarchy(QWidget):
             for axis in range(3))
         self.main_window.focus_on_bounds(mid, max(radius, spread * 0.5))
 
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.MouseButtonDblClick
+                and event.button() == Qt.LeftButton
+                and obj is self.tree.viewport()):
+            item = self.tree.itemAt(event.pos())
+            if item is not None and self.handle_double_click(item, 0):
+                return True
+        return super().eventFilter(obj, event)
+
     def handle_double_click(self, item, column):
-        """Double-clicking the terrain item opens the terrain editor."""
+        """Double-clicking the terrain item opens the terrain editor.
+
+        Same as its context menu's Edit Terrain. Returns True when handled.
+        """
         data = item.data(0, Qt.UserRole)
         if data and data[0] == 'terrain':
             self.main_window.open_terrain_editor()
+            return True
+        return False
 
     def set_brush_colour(self, brush_dict, colour_name, checked):
         """Set brush colour (method name uses British spelling, but internal dict key remains 'color')"""

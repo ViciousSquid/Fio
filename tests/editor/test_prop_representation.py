@@ -106,19 +106,75 @@ def test_switching_back_to_billboard_restores_the_default_sprite(panel):
     assert prop.properties['sprite_size'] == [32.0, 32.0]
 
 
-def test_the_model_path_field_shows_the_default(panel):
-    """The panel must not claim an empty path while the Prop has one."""
-    from PyQt5.QtWidgets import QLineEdit
-
+def test_the_presets_list_shows_the_default(panel):
+    """The panel must not show another model while the Prop has the default."""
     prop = Prop(pos=[0, 0, 0])
     combo = representation_combo(panel, prop)
     combo.setCurrentText('Model')
 
-    shown = [w.text() for w in panel.findChildren(QLineEdit)
-             if w.text() == Prop.DEFAULT_MODEL_PATH]
-    assert shown, (
-        "the Model Path field is empty although the Prop now has %r"
-        % Prop.DEFAULT_MODEL_PATH)
+    presets = panel._widgets['prop_model_preset_combo']
+    assert prop.properties['model_path'] == Prop.DEFAULT_MODEL_PATH
+    assert presets.currentText() == 'Oil Barrel'
+
+
+def _choose_preset(panel, prop, name):
+    representation_combo(panel, prop)
+    presets = panel._widgets['prop_model_preset_combo']
+    presets.setCurrentText(name)
+    presets.activated.emit(presets.currentIndex())
+
+
+def test_choosing_the_ball_preset_applies_the_ball_settings(panel):
+    prop = Prop.for_model(Prop.DEFAULT_MODEL_PATH, pos=[0, 0, 0])
+    _choose_preset(panel, prop, 'Ball')
+
+    p = prop.properties
+    assert p['model_path'] == 'assets/models/ball.obj'
+    assert p['rolls'] and p['physics_enabled'] and not p['no_collision']
+    assert p['collision_shape'] == 'aabb' and p['bounciness'] > 0.0
+
+
+def test_choosing_the_oil_barrel_takes_back_the_ball_settings(panel):
+    prop = Prop.for_model('assets/models/ball.obj', pos=[0, 0, 0])
+    _choose_preset(panel, prop, 'Oil Barrel')
+
+    p = prop.properties
+    assert p['model_path'] == Prop.DEFAULT_MODEL_PATH
+    assert not p['rolls'] and p['bounciness'] == 0.0
+    assert p['scale'] == [1.0, 1.0, 1.0]
+
+
+def test_browsing_to_the_numbered_ball_applies_the_ball_settings_at_scale_2(
+        panel, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+
+    prop = Prop.for_model(Prop.DEFAULT_MODEL_PATH, pos=[0, 0, 0])
+    representation_combo(panel, prop)
+    picked = os.path.join(ROOT, 'assets', 'models', 'ball_numbers.obj')
+    monkeypatch.setattr(QFileDialog, 'getOpenFileName',
+                        staticmethod(lambda *a, **k: (picked, '')))
+    panel._widgets['prop_model_browse_button'].click()
+
+    p = prop.properties
+    assert p['model_path'] == 'assets/models/ball_numbers.obj'
+    assert p['rolls'] and p['physics_enabled']
+    assert p['scale'] == [2.0, 2.0, 2.0]
+
+
+def test_browsing_to_another_model_changes_only_the_model(panel, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+
+    prop = Prop.for_model(Prop.DEFAULT_MODEL_PATH, pos=[0, 0, 0])
+    before = dict(prop.properties)
+    representation_combo(panel, prop)
+    picked = os.path.join(ROOT, 'assets', 'models', 'prop_book.obj')
+    monkeypatch.setattr(QFileDialog, 'getOpenFileName',
+                        staticmethod(lambda *a, **k: (picked, '')))
+    panel._widgets['prop_model_browse_button'].click()
+
+    changed = {k for k in prop.properties if prop.properties[k] != before.get(k)}
+    assert changed == {'model_path'}
+    assert prop.properties['model_path'] == 'assets/models/prop_book.obj'
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +248,7 @@ def test_an_authored_collision_box_still_applies_to_a_sprite_prop():
 
 #: The rows Representation shows and hides. All of them must sit below it, or
 #: choosing a mode moves the control that was just clicked.
-TOGGLED_ROWS = ("Model Path:", "Scale:", "Rotation:",
+TOGGLED_ROWS = ("Presets:", "Scale:", "Rotation:", "Tint:",
                 "Sprite Path:", "Sprite Size:")
 
 

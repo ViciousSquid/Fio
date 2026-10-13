@@ -1,0 +1,6 @@
+# Fio golf ball: a white texture, so a Prop's tint sets its colour.
+newmtl ball
+Ka 0.2 0.2 0.2
+Kd 1.0 1.0 1.0
+Ks 0.0 0.0 0.0
+map_Kd ball_texture.png

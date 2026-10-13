@@ -353,3 +353,65 @@ def test_play_start_builds_the_prop_registry_once(real_logic, monkeypatch):
         assert session.held is None
     finally:
         logic.session_runtime.apply_play_mode(False)
+
+
+# ---------------------------------------------------------------------------
+# What can be carried, and how far out
+# ---------------------------------------------------------------------------
+
+def _carry_world(real_logic, prop, size):
+    grid = _floor_grid()
+    physics = PhysicsWorld(grid)
+    physics.rebuild([{'pos': list(prop.pos), 'size': [size] * 3,
+                      '_physics_body': True, '_physics_entity': prop,
+                      '_collision_mode': 'aabb'}])
+    return real_logic([prop], grid=grid, physics=physics)
+
+
+def _eye(logic):
+    player = logic.player_runtime.player
+    return glm.vec3(player.pos.x,
+                    player.pos.y + float(getattr(player, 'view_height',
+                                                 getattr(player, 'camera_height', 40.0))),
+                    player.pos.z)
+
+
+@pytest.mark.parametrize('mass', [PhysicsWorld.HEAVY_MASS, 1000.0])
+def test_a_prop_at_the_heaviest_mass_cannot_be_picked_up(real_logic, mass):
+    prop = Prop(pos=[0.0, 40.0, 60.0], properties={
+        'carry_enabled': True, 'physics_enabled': True, 'no_collision': False,
+        'mass': mass})
+    logic, session, events = _carry_world(real_logic, prop, 32.0)
+    session.tick(1 / 60, use_pressed=True)
+    assert session.held is None
+    assert 'OnCarried' not in _event_names(events)
+
+
+@pytest.mark.parametrize('scale', [1.0, 2.0, 3.0])
+def test_a_carried_ball_keeps_the_same_gap_at_any_scale(real_logic, scale):
+    """carry_distance is the gap to the near side, so scale cannot bring a
+    held ball into the player's face."""
+    from engine.prop_entity import BALL_NUMBERS_MODEL_PATH
+    ball = Prop.for_model(BALL_NUMBERS_MODEL_PATH, pos=[0.0, 40.0, 70.0],
+                          properties={'scale': [scale] * 3})
+    logic, session, _ = _carry_world(real_logic, ball, 50.0 * scale)
+    session.tick(1 / 60, use_pressed=True)
+    session.tick(1 / 60, use_pressed=False)
+    assert session.held is ball
+    to_centre = glm.length(glm.vec3(*ball.pos) - _eye(logic))
+    # The near side is carry_distance out (the 6-unit drop of carry_offset
+    # aside), whatever the size.
+    assert to_centre - 25.0 * scale == pytest.approx(55.0, abs=0.5)
+
+
+def test_a_scaled_up_carried_body_never_fills_the_view(real_logic):
+    """However small carry_distance is, the near side keeps a gap."""
+    prop = Prop(pos=[0.0, 40.0, 60.0], properties={
+        'carry_enabled': True, 'physics_enabled': True, 'no_collision': False,
+        'carry_distance': 10.0})
+    logic, session, _ = _carry_world(real_logic, prop, 150.0)
+    session.tick(1 / 60, use_pressed=True)
+    session.tick(1 / 60, use_pressed=False)
+    assert session.held is prop
+    near_side = glm.length(glm.vec3(*prop.pos) - _eye(logic)) - 75.0
+    assert near_side >= PropSession.MIN_CARRY_GAP - 7.0   # carry_offset is 6 down

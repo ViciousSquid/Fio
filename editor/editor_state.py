@@ -813,12 +813,26 @@ class EditorState:
                     and entry.get('data')
                 ]
 
+        terrain_paint_stamps = []
+        terrain_paint_base = []
+        if isinstance(self.terrain_data, dict):
+            terrain_paint_stamps = [
+                dict(stamp) for stamp in self.terrain_data.get('paint_stamps', [])
+                if isinstance(stamp, dict)
+            ]
+            terrain_paint_base = [
+                dict(entry) for entry in self.terrain_data.get('texture_paint_base', [])
+                if isinstance(entry, dict)
+            ]
+
         return json.dumps({
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
             'terrain_texture_paint': terrain_texture_paint,
+            'terrain_paint_stamps': terrain_paint_stamps,
+            'terrain_texture_paint_base': terrain_paint_base,
             'items': self.item_definitions.to_level_data(),
         }, separators=(',', ':'), check_circular=False)
 
@@ -959,6 +973,16 @@ class EditorState:
                 self.terrain_data['texture_paint'] = [dict(entry) for entry in paint]
             else:
                 self.terrain_data.pop('texture_paint', None)
+
+        # Placed stamps and the paint under them travel with the paint.
+        for key, field in (('terrain_paint_stamps', 'paint_stamps'),
+                           ('terrain_texture_paint_base', 'texture_paint_base')):
+            if key in state and isinstance(self.terrain_data, dict):
+                values = state.get(key) or []
+                if values:
+                    self.terrain_data[field] = [dict(v) for v in values]
+                else:
+                    self.terrain_data.pop(field, None)
 
     def undo(self):
         """Step back one operation, making the current scene redoable.

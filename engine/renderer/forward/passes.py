@@ -19,6 +19,27 @@ from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
 from .instancing import BRUSH_RUN_KEY, _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR
 
+
+def _tinted(colour, tint):
+    """A flat model colour multiplied by the Prop's tint (None: unchanged)."""
+    if not tint:
+        return tuple(colour)
+    return (colour[0] * tint[0], colour[1] * tint[1], colour[2] * tint[2])
+
+
+def _set_model_tint(uniforms, tint):
+    """Set a textured model shader's tint, or clear it for the next draw.
+
+    Brushes draw with the same program and never set it, so a model that sets
+    a tint clears it again once drawn.
+    """
+    location = uniforms['model_tint']
+    if location != -1:
+        if tint:
+            gl.glUniform4f(location, tint[0], tint[1], tint[2], 1.0)
+        else:
+            gl.glUniform4f(location, 0.0, 0.0, 0.0, 0.0)
+
 # The lit pass's override colours as float32 rows, so they upload through the
 # same per-row path as the table's own colours (same float32 values the tuples
 # converted to).
@@ -744,7 +765,7 @@ class PassesMixin:
             recipe_id = int(recipe_ids[order[start]])
             if recipe_id < 0 or recipe_id >= len(recipes):
                 continue
-            model_path, manual_texture, override_color = recipes[recipe_id]
+            model_path, manual_texture, override_color, tint = recipes[recipe_id]
             obj = self.load_model(model_path)
             if not obj or not obj.is_loaded:
                 continue
@@ -773,10 +794,14 @@ class PassesMixin:
                     self._model_texture_id(manual_texture, manual=True))
                 gl.glUniform1f(u['alpha'], 1.0)
                 if shader_kind != 'textured':
-                    colour = override_color or (0.8, 0.8, 0.8)
+                    colour = _tinted(override_color or (0.8, 0.8, 0.8), tint)
                     gl.glUniform3fv(u['object_color'], 1, colour)
+                elif tint:
+                    _set_model_tint(u, tint)
                 gl.glDrawArraysInstanced(
                     gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
+                if tint and shader_kind == 'textured':
+                    _set_model_tint(u, None)
                 self.render_stats.draw_calls += 1
                 self.render_stats.batched_draws += 1
                 continue
@@ -792,7 +817,7 @@ class PassesMixin:
                     continue
                 u = self.uniforms[shader_name]
                 if shader_kind == 'lit':
-                    gl.glUniform3fv(u['object_color'], 1, (0.8, 0.8, 0.8))
+                    gl.glUniform3fv(u['object_color'], 1, _tinted((0.8, 0.8, 0.8), tint))
                     gl.glUniform1f(u['alpha'], 1.0)
                 gl.glDrawArraysInstanced(
                     gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
@@ -820,8 +845,10 @@ class PassesMixin:
                     gl.glBindTexture(
                         gl.GL_TEXTURE_2D,
                         self._model_texture_id(use_texture, material, manual=False))
+                    if tint:
+                        _set_model_tint(u, tint)
                 else:
-                    colour = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                    colour = _tinted(material.get('color', [0.8, 0.8, 0.8]), tint)
                     gl.glUniform3fv(u['object_color'], 1, colour)
                 gl.glUniform1f(u['alpha'], 1.0)
                 if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
@@ -831,6 +858,8 @@ class PassesMixin:
                 else:
                     gl.glDrawArraysInstanced(
                         gl.GL_TRIANGLES, group['start'], group['count'], len(run_slots))
+                if tint and shader_kind == 'textured':
+                    _set_model_tint(u, None)
                 self.render_stats.draw_calls += 1
                 self.render_stats.batched_draws += 1
 
@@ -855,7 +884,7 @@ class PassesMixin:
         if recipe_id < 0 or recipe_id >= len(recipes):
             return 0
 
-        model_path, manual_texture, override_color = recipes[recipe_id]
+        model_path, manual_texture, override_color, tint = recipes[recipe_id]
         obj = self.load_model(model_path)
         if not obj or not obj.is_loaded:
             return 0
@@ -879,7 +908,8 @@ class PassesMixin:
                     self._model_texture_id(manual_texture, manual=True))
             else:
                 gl.glUniform3fv(
-                    u['object_color'], 1, override_color or (0.8, 0.8, 0.8))
+                    u['object_color'], 1,
+                    _tinted(override_color or (0.8, 0.8, 0.8), tint))
                 gl.glUniform1f(u['alpha'], 1.0)
             groups_to_draw = (None,)
         elif groups:
@@ -924,8 +954,10 @@ class PassesMixin:
                     gl.GL_TEXTURE_2D,
                     self._model_texture_id(
                         use_texture, material, manual=manual_texture is not None))
+                if tint:
+                    _set_model_tint(u, tint)
             else:
-                color = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                color = _tinted(material.get('color', [0.8, 0.8, 0.8]), tint)
                 gl.glUniform3fv(u['object_color'], 1, color)
                 gl.glUniform1f(u['alpha'], 1.0)
 
@@ -946,6 +978,8 @@ class PassesMixin:
             else:
                 gl.glDrawArrays(
                     gl.GL_TRIANGLES, group['start'], group['count'])
+            if tint and shader_kind == 'textured':
+                _set_model_tint(u, None)
             self.render_stats.draw_calls += 1
             draws += 1
 

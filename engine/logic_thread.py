@@ -606,6 +606,10 @@ class LogicThread(threading.Thread):
         physics_world = self.session_runtime.physics_world
         if physics_world is not None:
             physics_world.step(delta, self.player_runtime.player)
+            if getattr(physics_world, 'player_crushed', False):
+                # A heavy body pinned the player against a wall.
+                physics_world.player_crushed = False
+                self.trigger_runtime._apply_player_damage(physics_world.CRUSH_DAMAGE)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
             self.prop_runtime.sync_physics_positions()

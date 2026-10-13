@@ -293,6 +293,8 @@ class QtGameView(QOpenGLWidget):
         self.terrain_sculpt_radius = 50.0
         self.terrain_sculpt_strength = 20.0
         self.terrain_sculpt_feather = 0.25
+        # A press on a placed stamp: {'last': (x, z), 'moved', 'toggle_off'}.
+        self._stamp_drag = None
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
@@ -3230,6 +3232,9 @@ class QtGameView(QOpenGLWidget):
         active = bool(active)
         self.terrain_sculpt_active = active
         self.terrain_sculpt_painting = False
+        if not active:
+            self._end_stamp_drag()
+            self.clear_stamp_selection()
         if active:
             self.setCursor(Qt.CrossCursor)
         else:
@@ -3336,6 +3341,75 @@ class QtGameView(QOpenGLWidget):
         )
         painter.restore()
 
+    # -- Placed texture stamps: select, drag, nudge ---------------------------
+
+    def clear_stamp_selection(self):
+        terrain = getattr(self.editor, 'terrain', None)
+        if terrain is not None and terrain.selected_stamp_ids:
+            terrain.set_selected_stamps(())
+            self.update()
+            return True
+        return False
+
+    def _press_terrain_stamp(self, event):
+        """Shift-click selects a stamp; pressing a selected one starts a drag.
+
+        Returns True when the press was a stamp edit, False when it should
+        place a new stamp.
+        """
+        terrain = self.editor.terrain
+        hit = self._terrain_brush_hit
+        if terrain is None or hit is None:
+            return False
+        stamp_id = terrain.paint_stamp_at(hit[0], hit[2])
+        selected = set(terrain.selected_stamp_ids)
+        if event.modifiers() & Qt.ShiftModifier:
+            if stamp_id is None:
+                self.clear_stamp_selection()
+                return True
+            toggle_off = stamp_id if stamp_id in selected else None
+            if toggle_off is None:
+                terrain.set_selected_stamps(selected | {stamp_id})
+        elif stamp_id is not None and stamp_id in selected:
+            toggle_off = None
+        else:
+            return False
+        self._stamp_drag = {'last': (hit[0], hit[2]), 'moved': False,
+                            'toggle_off': toggle_off}
+        self.update()
+        return True
+
+    def _drag_terrain_stamps(self, mx, my):
+        drag = self._stamp_drag
+        terrain = self.editor.terrain
+        hit = self.raycast_terrain(mx, my)
+        if drag is None or terrain is None or hit is None:
+            return
+        dx, dz = hit[0] - drag['last'][0], hit[2] - drag['last'][1]
+        if not drag['moved']:
+            if math.hypot(dx, dz) < 0.5:
+                return
+            # The whole drag is one undo step.
+            self.editor.state.terrain_data = terrain.to_dict()
+            self.editor.save_state()
+            drag['moved'] = True
+        terrain.move_paint_stamps(terrain.selected_stamp_ids, dx, dz, defer=True)
+        drag['last'] = (hit[0], hit[2])
+        self.update()
+
+    def _end_stamp_drag(self):
+        drag, self._stamp_drag = self._stamp_drag, None
+        terrain = getattr(self.editor, 'terrain', None)
+        if drag is None or terrain is None:
+            return
+        if drag['moved']:
+            terrain.finish_stamp_edit()
+            self.editor.state.terrain_data = terrain.to_dict()
+        elif drag['toggle_off'] is not None:
+            terrain.set_selected_stamps(
+                terrain.selected_stamp_ids - {drag['toggle_off']})
+        self.update()
+
     def _apply_sculpt_at_mouse(self, mx: int, my: int):
         hit = self.raycast_terrain(mx, my)
         if hit is None:
@@ -3367,11 +3441,12 @@ class QtGameView(QOpenGLWidget):
             self.editor.state.terrain_data = terrain.to_dict()
             self.editor.save_state()
 
-            added = terrain.paint_texture_at(
+            terrain.set_selected_stamps(())
+            added = terrain.add_paint_stamp(
                 wx, wz, radius, texture_name,
                 feather=self.terrain_sculpt_feather,
             )
-            if not added:
+            if added is None:
                 self.editor.state.discard_last_checkpoint()
                 self.editor.show_toast("Terrain texture paint was not applied", is_error=True)
                 return
@@ -3764,6 +3839,8 @@ class QtGameView(QOpenGLWidget):
         if self.terrain_sculpt_active and not self.play_mode and event.button() == Qt.LeftButton:
             self._terrain_brush_mouse_pos = event.pos()
             self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
+            if self.terrain_sculpt_mode == 'stamp' and self._press_terrain_stamp(event):
+                return
             self._apply_sculpt_at_mouse(event.x(), event.y())
             return
         if not self.play_mode and self.floating_windows.handle_mouse_press(event):
@@ -3890,6 +3967,12 @@ class QtGameView(QOpenGLWidget):
                 if self._begin_face_mode_drag(event.pos()):
                     return
                 self._face_mode_press = None
+        if (self._stamp_drag is not None and self.terrain_sculpt_active
+                and not self.play_mode and event.buttons() & Qt.LeftButton):
+            self._terrain_brush_mouse_pos = event.pos()
+            self._terrain_brush_hit = self.raycast_terrain(event.x(), event.y())
+            self._drag_terrain_stamps(event.x(), event.y())
+            return
         if (self.terrain_sculpt_active and not self.play_mode
                 and not (event.buttons() & Qt.RightButton)):
             self._terrain_brush_mouse_pos = event.pos()
@@ -3955,6 +4038,9 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and self.pause_menu is not None:
             if self._pause_window is not None:
                 self._pause_window.handle_mouse_release(event)
+            return
+        if event.button() == Qt.LeftButton and self._stamp_drag is not None:
+            self._end_stamp_drag()
             return
         controller = self._components()
         if (event.button() == Qt.LeftButton and controller is not None and
@@ -4330,6 +4416,8 @@ class QtGameView(QOpenGLWidget):
         # Sculpt mode owns Escape while active. Do this before normal
         # editor/play-mode escape handling.
         if event.key() == Qt.Key_Escape and self.terrain_sculpt_active and not self.play_mode:
+            if self.clear_stamp_selection():
+                return
             self.set_terrain_sculpt_active(False)
             self.setFocus()
             return

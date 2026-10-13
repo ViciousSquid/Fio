@@ -10,7 +10,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
 from engine.items import ITEM_IDS
-from engine.prop_entity import normalise_collect_type
+from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
+                                 normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState, PlayerStart, LevelChanger)
@@ -2041,6 +2042,8 @@ class PropertyEditor(QWidget):
             self.add_vector3_widget(form, thing, 'scale')
             rotation_before = form.rowCount()
             self.add_vector3_widget(form, thing, 'rotation')
+            tint_before = form.rowCount()
+            self._add_tint_widget(form, thing)
 
             if is_prop:
                 sprite_widget = QWidget(w)
@@ -2103,6 +2106,7 @@ class PropertyEditor(QWidget):
                 model_path_row = form.getWidgetPosition(model_path_widget)[0]
                 scale_row = scale_before
                 rotation_row = rotation_before
+                tint_row = tint_before
                 sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
                 sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
                 self._prop_render_form = form
@@ -2127,9 +2131,6 @@ class PropertyEditor(QWidget):
                             type(thing), 'DEFAULT_MODEL_PATH', '')
                         if not thing.properties.get('model_path') and default_model:
                             self.update_object_prop('model_path', default_model)
-                            model_path_edit = model_path_widget.findChild(QLineEdit)
-                            if model_path_edit is not None:
-                                model_path_edit.setText(default_model)
                     else:
                         # Restore the Prop's resolved visual asset rather than a
                         # generic placeholder: weapon -> gun1, key -> its key,
@@ -2148,13 +2149,13 @@ class PropertyEditor(QWidget):
                             spin.blockSignals(True)
                             spin.setValue(value)
                             spin.blockSignals(False)
-                    for row in (model_path_row, scale_row, rotation_row):
+                    for row in (model_path_row, scale_row, rotation_row, tint_row):
                         self._set_form_row_visible(form, row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
                         self._set_form_row_visible(form, row, not is_model)
 
                 mode_combo.currentTextChanged.connect(set_representation)
-                for row in (model_path_row, scale_row, rotation_row):
+                for row in (model_path_row, scale_row, rotation_row, tint_row):
                     self._set_form_row_visible(form, row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
                     self._set_form_row_visible(form, row, not model_mode)
@@ -2358,7 +2359,9 @@ class PropertyEditor(QWidget):
         mass_spin.setSingleStep(0.1)
         mass_spin.setValue(mass)
         mass_spin.setToolTip(
-            "Mass used by pushing and other Prop physics. Higher values are harder to move."
+            "Mass used by pushing and other Prop physics. Higher values are harder "
+            "to move and bounce lower. From mass 10 the player cannot push it: "
+            "it pushes the player, and crushes a player it pins to a wall."
         )
         mass_spin.valueChanged.connect(
             lambda value: self.update_object_prop('mass', value)
@@ -2429,6 +2432,35 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Friction:", friction_spin)
         self._widgets['prop_friction_spin'] = friction_spin
 
+        rolls_cb = _make_checkbox(
+            "Rolls like a ball",
+            bool(thing.properties.get('rolls', False)),
+            lambda checked: self.update_object_prop('rolls', bool(checked)),
+            _Style.CHECKBOX,
+        )
+        rolls_cb.setToolTip(
+            "Turn as a ball rolling along the ground, losing far less speed "
+            "to friction than a sliding prop. Collision stays the AABB."
+        )
+        physics_form.addRow("", rolls_cb)
+        self._widgets['prop_rolls_cb'] = rolls_cb
+
+        bounciness = min(1.0, max(0.0, float(thing.properties.get('bounciness', 0.0) or 0.0)))
+        bounciness_spin = QDoubleSpinBox()
+        bounciness_spin.setRange(0.0, 1.0)
+        bounciness_spin.setDecimals(2)
+        bounciness_spin.setSingleStep(0.05)
+        bounciness_spin.setValue(bounciness)
+        bounciness_spin.setToolTip(
+            "Share of its speed the prop keeps when it hits the floor or a "
+            "wall. Mass takes it away: from mass 10 it does not bounce at all."
+        )
+        bounciness_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('bounciness', float(value))
+        )
+        physics_form.addRow("Bounciness:", bounciness_spin)
+        self._widgets['prop_bounciness_spin'] = bounciness_spin
+
         shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
         shape_labels = {
             'auto': 'Automatic',
@@ -2471,7 +2503,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=9,
+            count=11,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
@@ -5114,17 +5146,47 @@ class PropertyEditor(QWidget):
         self.editor.mark_as_modified()
 
     def add_model_path_widget(self, layout, thing):
+        """Presets: the built-in models by name, and Browse... for any other.
+
+        A model that brings settings with it (``engine.prop_entity``'s
+        :func:`model_settings` -- the Ball, the numbered Ball, the Oil Barrel)
+        applies them when chosen either way, and the panel is rebuilt to show
+        them. Another model is listed by its file name.
+        """
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
-        path_edit = QLineEdit(thing.properties.get('model_path', ''))
-        path_edit.setReadOnly(True)
-        btn = QPushButton("...")
-        btn.setFixedWidth(30)
+        combo = QComboBox()
+        combo.addItems(list(MODEL_PRESETS))
+        current = thing.properties.get('model_path', '') or ''
+        preset = model_preset_name(current) if current else 'Oil Barrel'
+        if preset is None:
+            combo.addItem(os.path.basename(current.replace('\\', '/')))
+            combo.setCurrentIndex(combo.count() - 1)
+        else:
+            combo.setCurrentText(preset)
+        combo.setToolTip(current or MODEL_PRESETS['Oil Barrel']['model_path'])
+        btn = QPushButton("Browse...")
+        btn.setToolTip("Load another model (.obj or .glb)")
 
-        def pick():
+        def choose(model_path):
+            settings = model_settings(model_path) or {'model_path': model_path}
+            settings['model_path'] = model_path
+            for key, value in settings.items():
+                self.update_object_prop(key, value)
+            # Scale, physics and the rest may have changed with the model:
+            # rebuild once this signal has returned.
+            QTimer.singleShot(0, lambda: self.current_object is thing
+                              and self.set_object(thing, force=True))
+
+        def on_preset(index):
+            name = combo.itemText(index)
+            if name in MODEL_PRESETS:
+                choose(MODEL_PRESETS[name]['model_path'])
+
+        def browse():
             fp, _ = QFileDialog.getOpenFileName(
-                self, "Select OBJ Model", "assets/models", "Model Files (*.obj *.glb)"
+                self, "Select Model", "assets/models", "Model Files (*.obj *.glb)"
             )
             if fp:
                 try:
@@ -5133,13 +5195,15 @@ class PropertyEditor(QWidget):
                     rel = fp
                 if not rel.startswith(".."):
                     rel = os.path.join("assets", rel) if not rel.startswith("assets") else rel
-                self.update_object_prop('model_path', rel)
-                path_edit.setText(rel)
+                choose(rel.replace("\\", "/"))
 
-        btn.clicked.connect(pick)
-        h.addWidget(path_edit)
+        combo.activated.connect(on_preset)
+        btn.clicked.connect(browse)
+        h.addWidget(combo, 1)
         h.addWidget(btn)
-        layout.addRow("Model Path:", widget)
+        layout.addRow("Presets:", widget)
+        self._widgets['prop_model_preset_combo'] = combo
+        self._widgets['prop_model_browse_button'] = btn
         return widget
 
     def add_vector3_widget(self, layout, thing, key):
@@ -5231,6 +5295,46 @@ class PropertyEditor(QWidget):
         update_swatch()
         h.addWidget(swatch)
         form_layout.addRow(label, widget)
+
+    def _add_tint_widget(self, form_layout, thing):
+        """A model's Tint: a swatch that multiplies the model's colour.
+
+        Stored as 0..1 floats; white (the default) leaves the model as it is.
+        """
+        widget = QWidget()
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
+
+        def current():
+            tint = thing.properties.get('tint') or [1.0, 1.0, 1.0]
+            try:
+                rgb = [float(tint[0]), float(tint[1]), float(tint[2])]
+            except (TypeError, ValueError, IndexError):
+                return [1.0, 1.0, 1.0]
+            if any(c > 1.0 for c in rgb):
+                rgb = [c / 255.0 for c in rgb]
+            return rgb
+
+        def set_tint(rgb):
+            self.update_object_prop('tint', rgb)
+            self._update_color_button(swatch, rgb)
+
+        def pick():
+            r, g, b = (int(round(c * 255)) for c in current())
+            color = QColorDialog.getColor(QColor(r, g, b), self, "Choose Tint")
+            if color.isValid():
+                set_tint([color.redF(), color.greenF(), color.blueF()])
+
+        swatch = self._color_button(current(), pick, size=(140, 28))
+        swatch.setToolTip("Multiplies the model's colour. White leaves it as it is.")
+        reset = QPushButton("Reset")
+        reset.setToolTip("No tint (white)")
+        reset.clicked.connect(lambda: set_tint([1.0, 1.0, 1.0]))
+        h.addWidget(swatch)
+        h.addWidget(reset)
+        h.addStretch()
+        form_layout.addRow("Tint:", widget)
+        self._widgets['prop_tint_button'] = swatch
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])

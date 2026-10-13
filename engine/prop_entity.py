@@ -24,6 +24,9 @@ except ImportError:  # standalone player / Android: no PyQt5
 
 
 DEFAULT_MODEL_PATH = 'assets/models/Oil_Drum.obj'
+BALL_MODEL_PATH = 'assets/models/ball.obj'
+#: The same ball with a number on every face, like a large die.
+BALL_NUMBERS_MODEL_PATH = 'assets/models/ball_numbers.obj'
 
 KEY_SPRITES = {
     'blue_key': 'assets/sprites/bluekey.png',
@@ -151,6 +154,75 @@ LEGACY_MODEL_DEFAULTS = {
 }
 
 
+#: The settings a model brings with it. Choosing one of these models for a
+#: Prop -- from the Presets list, by Browse..., or from the Asset Browser --
+#: applies its settings too; any other model changes only the model path.
+#:
+#: The Oil Barrel is the default model. It takes back what a Ball sets that
+#: only makes sense for a ball, and leaves physics, solidity and carrying as
+#: the author has them.
+OIL_BARREL_SETTINGS = {
+    'model_path': DEFAULT_MODEL_PATH,
+    'collision_shape': 'auto',
+    'rolls': False,
+    'bounciness': 0.0,
+    'scale': [1.0, 1.0, 1.0],
+    'carry_distance': PROP_DEFAULTS['carry_distance'],
+}
+#: A Ball: a solid physics Prop showing a low-poly golf ball 50 units across
+#: (half the player's height) that rolls and bounces (engine.physics). Its
+#: collision is the model's AABB. ``tint`` colours the white ball.
+BALL_SETTINGS = {
+    'model_path': BALL_MODEL_PATH,
+    'physics_enabled': True,
+    'no_collision': False,
+    'collision_shape': 'aabb',
+    'carry_enabled': True,
+    'rolls': True,
+    'bounciness': 0.5,
+    'scale': [1.0, 1.0, 1.0],
+    'carry_distance': PROP_DEFAULTS['carry_distance'],
+}
+#: The numbered Ball is a Ball at twice the size.
+BALL_NUMBERS_SETTINGS = {
+    **BALL_SETTINGS,
+    'model_path': BALL_NUMBERS_MODEL_PATH,
+    'scale': [2.0, 2.0, 2.0],
+}
+#: The Presets list of the Prop panel, in order.
+MODEL_PRESETS = {
+    'Oil Barrel': OIL_BARREL_SETTINGS,
+    'Ball': BALL_SETTINGS,
+}
+_MODEL_SETTINGS = {settings['model_path']: settings for settings in (
+    OIL_BARREL_SETTINGS, BALL_SETTINGS, BALL_NUMBERS_SETTINGS)}
+
+
+def _model_key(model_path):
+    """*model_path* as the settings are keyed: forward slashes, from assets/."""
+    path = str(model_path or '').replace('\\', '/')
+    marker = path.rfind('assets/models/')
+    return path[marker:] if marker >= 0 else path
+
+
+def model_settings(model_path):
+    """A copy of the settings *model_path* brings with it, or None."""
+    settings = _MODEL_SETTINGS.get(_model_key(model_path))
+    if settings is None:
+        return None
+    return {key: list(value) if isinstance(value, list) else value
+            for key, value in settings.items()}
+
+
+def model_preset_name(model_path):
+    """The Presets entry showing *model_path*, or None for another model."""
+    key = _model_key(model_path)
+    for name, settings in MODEL_PRESETS.items():
+        if settings['model_path'] == key:
+            return name
+    return None
+
+
 def legacy_model_properties(properties):
     """A pre-Prop ``Model`` record's properties, read as a Prop's.
 
@@ -252,9 +324,12 @@ class Prop(_ThingBase):
         The one way a model enters a world from the editor -- the Asset
         Browser and the 2D view's Add Model both come here -- so a model is
         always a Prop, never a separate kind of entity. Like any Prop it is
-        neither carryable nor solid until the author says so.
+        neither carryable nor solid until the author says so -- unless the
+        model brings settings with it (:func:`model_settings`): a Ball is a
+        rolling physics Prop wherever it is placed from.
         """
         props = dict(MODEL_PROP_DEFAULTS)
+        props.update(model_settings(model_path) or {})
         props.update(properties or {})
         props['model_path'] = str(model_path).replace('\\', '/')
         return cls(pos=list(pos) if pos is not None else [0, 0, 0],
