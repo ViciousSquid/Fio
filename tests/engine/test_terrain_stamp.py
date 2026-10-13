@@ -192,3 +192,49 @@ def test_vector_and_scalar_stamp_lookups_agree(texture):
     # Moves keep the vector index in step with the records.
     big.move_paint_stamps({records[3]["id"]}, 512.0, -256.0, defer=True)
     assert tuple(big._stamp_range_arr[3]) == big._stamp_range(records[3])
+
+
+@pytest.mark.perf
+def test_a_stamp_click_recompresses_only_the_chunks_it_touched(texture, monkeypatch):
+    import zlib
+    terrain = Terrain(seed=1)
+    for i in range(12):
+        terrain.add_paint_stamp(i * 300.0, 0.0, 8.0, texture, feather=0.0)
+    terrain.to_dict()                                   # warm the cache
+
+    calls = []
+    real = zlib.compress
+    monkeypatch.setattr(zlib, "compress", lambda *a: calls.append(1) or real(*a))
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    data = terrain.to_dict()
+    assert len(calls) == len(terrain._stamp_chunks(stamp)) == 1
+    terrain.to_dict()
+    assert len(calls) == 1                              # nothing changed
+
+    reloaded = Terrain(seed=1)
+    reloaded.from_dict(data)
+    assert _texel(reloaded, 10.0, 10.0) == (200, 100, 50, 255)
+    assert len(reloaded.paint_stamps) == 13
+
+
+def test_cached_terrain_data_follows_every_change(texture):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
+    terrain.apply_sculpt_at(0.0, 0.0, 16.0, 2.0)
+    terrain.heightmap_data = np.zeros((4, 4), np.float32)
+    first = terrain.to_dict()
+
+    terrain.move_paint_stamps({stamp["id"]}, 300.0, 0.0)
+    terrain.apply_sculpt_at(500.0, 500.0, 16.0, 2.0)
+    terrain.heightmap_data = np.ones((4, 4), np.float32)
+    second = terrain.to_dict()
+    assert second["texture_paint"] != first["texture_paint"]
+    assert len(second["sculpt_offsets"]) > len(first["sculpt_offsets"])
+    assert second["heightmap_blob"] != first["heightmap_blob"]
+
+    reloaded = Terrain(seed=1)
+    reloaded.from_dict(second)
+    assert _texel(reloaded, 10.0, 10.0)[3] == 0
+    assert _texel(reloaded, 310.0, 10.0) == (200, 100, 50, 255)
+    assert reloaded.sculpt_offsets == terrain.sculpt_offsets
+    assert float(reloaded.heightmap_data.max()) == 1.0

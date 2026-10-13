@@ -444,7 +444,15 @@ class Terrain:
         self._stamp_ranges: List[Tuple[int, int, int, int]] = []
         self._stamp_range_arr: Optional[np.ndarray] = None
         self._stamp_index_key = None
-        self._base_serial_cache: Optional[list] = None
+        # to_dict runs for every sculpt step and stamp click; these hold the
+        # serialised form of data that has not changed since the last call.
+        # Paint chunks: {coord: (array, entry)} per paint dict, valid while
+        # the chunk's array is the same object (arrays are never written in
+        # place, see _bake_texture_rect).
+        self._paint_serial_cache: Dict[Tuple[int, int], tuple] = {}
+        self._base_serial_cache: Dict[Tuple[int, int], tuple] = {}
+        self._sculpt_serial_cache: tuple = (None, None)
+        self._heightmap_blob_cache: tuple = (None, None)
         self._paint_map_versions: Dict[Tuple[int, int], int] = {}
         self._paint_version_counter = 0
         self._paint_pages: List[int] = []
@@ -2464,7 +2472,10 @@ class Terrain:
         image = self._paint_image(texture)
         if image is None:
             return False
-        copy_on_write = target is None
+        # The stored paint dicts may share arrays (texture_paint_base starts
+        # as a copy of the map's paint) and their serialisation is cached by
+        # array, so their arrays are replaced, never written in place.
+        copy_on_write = target is None or target is self.texture_paint_base
         if target is None:
             target = self.texture_paint_maps
 
@@ -2556,8 +2567,12 @@ class Terrain:
                 ) / out_a[valid, None]
                 dst[..., :3] = out_rgb
                 dst[..., 3] = out_a
-                paint[ix0:ix1 + 1, iz0:iz1 + 1] = np.clip(
-                    dst * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                out = np.clip(dst * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                # A texel whose alpha rounds to 0 carries no colour: chunks with
+                # no alpha are not saved, so colour there would not survive a
+                # reload and a rebake after it would differ.
+                out[out[..., 3] == 0, :3] = 0
+                paint[ix0:ix1 + 1, iz0:iz1 + 1] = out
                 self._touch_texture_paint(key)
                 changed = True
         return changed
@@ -2578,7 +2593,6 @@ class Terrain:
                 opacity=opacity)
             if changed:
                 self.texture_paint_base = dict(self.texture_paint_maps)
-                self._base_serial_cache = None
             return changed
         # Free paint lives in the base layer, under the placed stamps.
         changed = self._bake_texture_rect(
@@ -2586,7 +2600,6 @@ class Terrain:
             feather=radius * float(np.clip(feather, 0.0, 1.0)),
             opacity=opacity, target=self.texture_paint_base)
         if changed:
-            self._base_serial_cache = None
             self._recompose_paint(self._chunks_in_bounds(bounds))
         return changed
 
@@ -2764,9 +2777,29 @@ class Terrain:
                                       feather, opacity, angle)
         if stamp is None or self._paint_image(stamp['texture']) is None:
             return None
+        self.finish_stamp_edit()
         self.paint_stamps.append(stamp)
-        self._invalidate_stamp_index()
-        self._recompose_paint(self._stamp_chunks(stamp))
+        rows = self._stamp_rows
+        if rows is not None and self._stamp_index_key == (
+                self.chunk_size, self.offset_x, self.offset_z):
+            # Extend the index instead of rebuilding it.
+            rng = self._stamp_range(stamp)
+            rows[stamp['id']] = len(self.paint_stamps) - 1
+            self._stamp_ranges.append(rng)
+            arr = self._stamp_range_arr
+            if arr is not None:
+                self._stamp_range_arr = np.vstack(
+                    (arr, np.array(rng, dtype=np.int64)))
+            elif len(self.paint_stamps) >= self.STAMP_VECTOR_MIN:
+                self._invalidate_stamp_index()
+        else:
+            self._invalidate_stamp_index()
+        # A new stamp goes on top of everything already baked, so it is baked
+        # straight onto the current paint rather than recomposing its chunks.
+        self._bake_stamp(stamp, None, None)
+        display = self._stamp_chunks(stamp) & self._paint_display.keys()
+        if display:
+            self._bake_stamp(stamp, self._paint_display, display)
         return stamp
 
     def paint_stamp_at(self, world_x, world_z):
@@ -2861,7 +2894,6 @@ class Terrain:
         self._paint_display = {}
         self._stamp_dirty_chunks = set()
         self._invalidate_stamp_index()
-        self._base_serial_cache = None
         self._paint_map_versions = {}
         self._paint_version_counter += 1
         self._paint_gpu_version[:] = 0
@@ -2916,21 +2948,39 @@ class Terrain:
         self._paint_gpu_version[slot] = self._paint_map_versions.get(coord, 0)
 
     def _serialize_texture_paint(self, maps=None):
+        """Paint chunks as compressed entries, reusing unchanged chunks.
+
+        A chunk is compressed once and its entry reused until its array is
+        replaced, so a stamp click re-compresses only the chunks it touched.
+        """
         import base64, zlib
+        if maps is None:
+            maps = self.texture_paint_maps
+        is_base = maps is self.texture_paint_base and maps is not self.texture_paint_maps
+        cache = self._base_serial_cache if is_base else self._paint_serial_cache
+        res = self.TERRAIN_PAINT_RESOLUTION
+        fresh = {}
         entries = []
-        maps = self.texture_paint_maps if maps is None else maps
         for (cx, cz), paint in sorted(maps.items()):
-            if paint is None or paint.shape != (
-                    self.TERRAIN_PAINT_RESOLUTION,
-                    self.TERRAIN_PAINT_RESOLUTION, 4):
-                continue
-            if not np.any(paint[..., 3]):
-                continue
-            payload = zlib.compress(np.ascontiguousarray(paint).tobytes(), 6)
-            entries.append({
-                'coord': [int(cx), int(cz)],
-                'data': base64.b64encode(payload).decode('ascii'),
-            })
+            hit = cache.get((cx, cz))
+            if hit is not None and hit[0] is paint:
+                entry = hit[1]
+            elif (paint is None or paint.shape != (res, res, 4)
+                    or not np.any(paint[..., 3])):
+                entry = None
+            else:
+                payload = zlib.compress(np.ascontiguousarray(paint).tobytes(), 6)
+                entry = {
+                    'coord': [int(cx), int(cz)],
+                    'data': base64.b64encode(payload).decode('ascii'),
+                }
+            fresh[(cx, cz)] = (paint, entry)
+            if entry is not None:
+                entries.append({'coord': list(entry['coord']), 'data': entry['data']})
+        if is_base:
+            self._base_serial_cache = fresh
+        else:
+            self._paint_serial_cache = fresh
         return entries
 
     def _restore_texture_paint(self, entries):
@@ -3045,7 +3095,13 @@ class Terrain:
         }
         # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
         if self.sculpt_offsets:
-            data['sculpt_offsets'] = [[gx, gz, val] for (gx, gz), val in self.sculpt_offsets.items()]
+            # Rebuilt only when the sculpt changes (same key as _dense_sculpt).
+            offsets = self.sculpt_offsets
+            key = (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+            if self._sculpt_serial_cache[0] != key:
+                self._sculpt_serial_cache = (
+                    key, [[gx, gz, val] for (gx, gz), val in offsets.items()])
+            data['sculpt_offsets'] = list(self._sculpt_serial_cache[1])
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
         if self.csg_subtractions:
             data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
@@ -3056,22 +3112,23 @@ class Terrain:
             data['texture_paint'] = texture_paint
         if self.paint_stamps:
             data['paint_stamps'] = [dict(stamp) for stamp in self.paint_stamps]
-            # The base layer rarely changes; to_dict runs on every sculpt
-            # step, so it is compressed once and reused.
-            if self._base_serial_cache is None:
-                self._base_serial_cache = self._serialize_texture_paint(
-                    self.texture_paint_base)
-            base = self._base_serial_cache
+            base = self._serialize_texture_paint(self.texture_paint_base)
             if base:
                 data['texture_paint_base'] = base
 
         # Heightmap settings (image data is NOT saved — only the path is
         # stored by the editor so the user can re-load it)
         if self.heightmap_data is not None:
-            import base64, io
-            buf = io.BytesIO()
-            np.save(buf, self.heightmap_data)
-            data['heightmap_blob'] = base64.b64encode(buf.getvalue()).decode('ascii')
+            # The heightmap is replaced, never edited in place, so its blob
+            # is encoded once per array.
+            if self._heightmap_blob_cache[0] is not self.heightmap_data:
+                import base64, io
+                buf = io.BytesIO()
+                np.save(buf, self.heightmap_data)
+                self._heightmap_blob_cache = (
+                    self.heightmap_data,
+                    base64.b64encode(buf.getvalue()).decode('ascii'))
+            data['heightmap_blob'] = self._heightmap_blob_cache[1]
             data['heightmap_strength'] = self.heightmap_strength
             data['heightmap_blend'] = self.heightmap_blend
         return data
@@ -3188,7 +3245,6 @@ class Terrain:
         self._paint_display = {}
         self._stamp_dirty_chunks = set()
         self._invalidate_stamp_index()
-        self._base_serial_cache = None
 
         # Sculpt offsets
         self.sculpt_offsets = {}
