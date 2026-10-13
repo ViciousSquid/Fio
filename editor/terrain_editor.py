@@ -3,7 +3,8 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QComboBox, QPushButton, QGroupBox, QFormLayout, QSlider, QCheckBox,
     QTabWidget, QWidget, QFrame, QGridLayout, QScrollArea, QSizePolicy,
-    QColorDialog, QMessageBox, QProgressDialog, QApplication
+    QColorDialog, QMessageBox, QProgressDialog, QApplication, QMenu,
+    QFileDialog, QTabBar
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
@@ -12,6 +13,7 @@ from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES
                             DEFAULT_GRASS_ENABLED,
                             biome_key_for_name)
 from engine import terrain_style
+from engine import terrain_stamp
 
 
 class GradientPreview(QWidget):
@@ -888,6 +890,7 @@ class TerrainEditorPanel(QWidget):
             btn.clicked.connect(lambda _checked, m=mode: self.set_paint_tool_mode(m))
             mode_row.addWidget(btn)
             self.paint_tool_buttons[mode] = btn
+
         shared_layout.addLayout(mode_row)
 
         brush_size_row = QHBoxLayout()
@@ -1047,6 +1050,26 @@ class TerrainEditorPanel(QWidget):
 
         self._sculpt_stamp_tab_index = tabs.addTab(sculpt_tab, "Sculpt/Stamp")
         tabs.currentChanged.connect(self._on_terrain_tab_changed)
+
+        # Stamp file menu, shown beside the Sculpt/Stamp tab while it is
+        # active: saves the authored sculpt/paint layers to <map>.stamp so
+        # they can be merged back after the base map changes.
+        self.stamp_file_button = QPushButton("\U0001F4BE", tabs.tabBar())
+        self.stamp_file_button.setToolTip("Import / export stamp file")
+        self.stamp_file_button.setCursor(Qt.PointingHandCursor)
+        self.stamp_file_button.setFixedSize(34, 30)
+        self.stamp_file_button.setStyleSheet(
+            f"QPushButton {{ padding: 0px; min-height: 0px; border: none;"
+            f" background: transparent; font-size: {self._base_font_size + 5}pt; }}"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 40); }"
+            "QPushButton::menu-indicator { image: none; width: 0px; }"
+        )
+        stamp_file_menu = QMenu(self.stamp_file_button)
+        stamp_file_menu.addAction("Import stamp…", self.import_stamp)
+        stamp_file_menu.addAction("Export stamp…", self.export_stamp)
+        self.stamp_file_button.setMenu(stamp_file_menu)
+        self.stamp_file_button.hide()
+        self._sync_stamp_file_button()
 
         # The tab widget must itself be inserted into the content layout.
         # Without this, all of the tab pages exist but QTabWidget is never
@@ -1881,7 +1904,24 @@ class TerrainEditorPanel(QWidget):
 
     def _on_terrain_tab_changed(self, _index):
         """Enable the terrain brush only while Sculpt/Stamp is the active tab."""
+        self._sync_stamp_file_button()
         self._sync_terrain_brush_activation()
+
+    def _sync_stamp_file_button(self):
+        """Attach the stamp file button to the Sculpt/Stamp tab while active."""
+        tabs = getattr(self, '_terrain_tabs', None)
+        button = getattr(self, 'stamp_file_button', None)
+        if tabs is None or button is None:
+            return
+        index = self._sculpt_stamp_tab_index
+        active = tabs.currentIndex() == index
+        tab_bar = tabs.tabBar()
+        if active and tab_bar.tabButton(index, QTabBar.RightSide) is not button:
+            tab_bar.setTabButton(index, QTabBar.RightSide, button)
+        elif not active and tab_bar.tabButton(index, QTabBar.RightSide) is button:
+            # setTabButton hides the widget it replaces; it stays owned by
+            # the tab bar for the next time the tab is selected.
+            tab_bar.setTabButton(index, QTabBar.RightSide, None)
 
     def _sync_terrain_brush_activation(self):
         view_3d = self.editor.view_3d if self.editor else None
@@ -1977,6 +2017,76 @@ class TerrainEditorPanel(QWidget):
         self.terrain_changed.emit()
         if self.editor and self.editor.show_toast:
             self.editor.show_toast("Terrain texture paint cleared")
+
+    def _default_stamp_path(self):
+        editor = self.editor
+        map_path = getattr(editor, 'file_path', None) if editor else None
+        fallback = ''
+        if editor is not None and getattr(editor, 'root_dir', None):
+            fallback = os.path.join(editor.root_dir, 'maps')
+            if not os.path.isdir(fallback):
+                fallback = editor.root_dir
+        return terrain_stamp.default_stamp_path(map_path, fallback)
+
+    def export_stamp(self):
+        """Save the terrain's sculpt, texture paint and cuts to a .stamp file."""
+        if not terrain_stamp.has_authored_work(self.terrain):
+            QMessageBox.information(
+                self, "Export Stamp",
+                "This terrain has no sculpting or texture paint to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Stamp", self._default_stamp_path(),
+            "Terrain Stamps (*.stamp);;All Files (*)")
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += terrain_stamp.STAMP_EXTENSION
+        try:
+            terrain_stamp.save_stamp_file(self.terrain, path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export Stamp", f"Could not save stamp:\n{exc}")
+            return
+        if self.editor and self.editor.show_toast:
+            self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}")
+
+    def import_stamp(self):
+        """Merge a .stamp file's authored work into the current terrain."""
+        default = self._default_stamp_path()
+        start = default if os.path.exists(default) else os.path.dirname(default)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Stamp", start,
+            "Terrain Stamps (*.stamp);;All Files (*)")
+        if not path:
+            return
+        try:
+            stamp = terrain_stamp.load_stamp_file(path)
+        except terrain_stamp.StampError as exc:
+            QMessageBox.warning(self, "Import Stamp", str(exc))
+            return
+
+        editor = self.editor
+        if editor:
+            # One import is one undo step.
+            editor.state.terrain_data = self.terrain.to_dict()
+            editor.save_state()
+        self.show_progress("Applying stamp…")
+        try:
+            result = terrain_stamp.apply_stamp(self.terrain, stamp)
+        finally:
+            self.hide_progress()
+
+        if not any(result.values()):
+            if editor:
+                editor.state.discard_last_checkpoint()
+                editor.show_toast("Stamp already applied — nothing changed")
+            return
+        if editor:
+            editor.state.terrain_data = self.terrain.to_dict()
+        self._update_sculpt_info()
+        self.terrain_changed.emit()
+        if editor and editor.show_toast:
+            editor.show_toast(f"Stamp {os.path.basename(path)} applied")
 
     def request_close(self):
         """Close the panel and disable its 3D brush."""
