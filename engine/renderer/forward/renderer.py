@@ -146,6 +146,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
+        #: Whether ``_light_ubo`` is bound to ``LIGHT_UBO_BINDING``; see
+        #: :meth:`_ensure_light_ubo`.
+        self._light_ubo_bound = False
         self._light_ubo_dtype = self.LIGHT_UBO_DTYPE
         self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
@@ -287,6 +290,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
+        self._light_ubo_bound = False
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
@@ -618,6 +622,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._light_ubo = None
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
+            self._light_ubo_bound = False
         # Instance streams: one buffer and one vertex array per pass.
         for vao in (self._brush_instance_vao, self._sprite_instance_vao,
                     self._effect_instance_vao):

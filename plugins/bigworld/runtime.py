@@ -585,6 +585,60 @@ class BigWorldSession:
         self._tier_pos = (px, pz)
         return delta.changed or bool(moved and moved.changed)
 
+    def sync_world(self):
+        """Register what the game added to the scene; unregister what it removed.
+
+        Called at the engine's world-cache rebuild boundary (the ``world_rebuilt``
+        event), which every spawn and despawn already goes through. Creatures
+        materialised from spawn points and travellers stepping off the journey
+        board arrive *after* :meth:`start` indexed the world, and until now
+        were never filed: no cell, no parking, no tier -- every one of them
+        fully simulated however far away it stood.
+
+        A new entity is parked or kept resident by its cell, and stamped with
+        that cell's tier, exactly as if it had been there when the session
+        started. One that left the scene is unfiled and handed back without
+        this session's markers on it. Returns the manager's
+        :class:`~plugins.bigworld.manager.SyncDelta`, or None while stopped.
+        """
+        if not self._started:
+            return None
+        pos = self._player_pos()
+        delta = self.manager.sync_things(
+            self.logic.editor_state.things,
+            player_pos=pos if self.streaming else None)
+        if not delta.changed:
+            return delta
+        for thing in delta.unregistered:
+            parked = (self._parked_things.pop(id(thing), None) is not None
+                      or self._parked_lights.pop(id(thing), None) is not None)
+            if parked:
+                self._restore_thing(thing)
+            props = getattr(thing, "properties", None)
+            if isinstance(props, dict):
+                for key in self.TRANSIENT_KEYS:
+                    props.pop(key, None)
+        if not self.streaming:
+            return delta
+
+        entities = []
+        for thing in delta.registered:
+            if self.manager.registered(thing) and thing in self.manager.persistent_things:
+                thing.properties["bw_active"] = True
+                self.tiers.pin([thing])
+            elif self.manager._is_light(thing):
+                if not self.manager.is_thing_active(thing):
+                    self._set_light_active(thing, False)
+            elif not self.manager.is_thing_active(thing):
+                self._set_thing_active(thing, False)
+            else:
+                entities.append(thing)
+        self._apply_delta(delta)
+        if pos is not None and delta.entering_cells:
+            self.tiers.update(self.manager, *_xz(pos))
+        self.tiers.place(self.manager, entities)
+        return delta
+
     def _apply_delta(self, delta) -> None:
         """Switch the world on/off for one activation delta.
 

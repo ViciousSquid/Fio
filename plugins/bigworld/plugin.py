@@ -90,6 +90,7 @@ class BigWorldPlugin(FioPlugin):
         # publish the session as a service other plugins/tools can query.
         self._host = host
         host.on("render.overlay", self._on_overlay)
+        host.on("world_rebuilt", self._on_world_rebuilt)
 
     # -- opt-in test --------------------------------------------------------
     @classmethod
@@ -193,6 +194,19 @@ class BigWorldPlugin(FioPlugin):
         session = self._sessions.get(logic)
         if session is not None:
             session.tick()
+
+    def _on_world_rebuilt(self, ev):
+        """Keep the session's registry in step with the scene.
+
+        The engine emits ``world_rebuilt`` from its entity-cache rebuild, the
+        boundary every spawn and despawn passes through. Only a running session
+        has anything to reconcile, so an ordinary map does nothing here and
+        imports nothing.
+        """
+        session = self._sessions.get(ev.get("logic"))
+        sync = getattr(session, "sync_world", None)
+        if sync is not None:
+            sync()
 
     # -- debug overlay ------------------------------------------------------
     def _on_overlay(self, ev):

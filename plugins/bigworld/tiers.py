@@ -323,6 +323,24 @@ class TierClassifier:
                 self._stamp(thing, tier, delta)
         return delta
 
+    def place(self, manager, things: Iterable) -> None:
+        """Stamp entities that have just joined the index with their cell's tier.
+
+        :meth:`update` stamps the entities of cells whose tier *changed*, so an
+        entity filed into a cell that already holds its tier would be left
+        unstamped -- and read ``NEAR`` wherever it stood. The session calls this
+        for exactly the entities it has just registered; a cell that is not
+        tiered yet is left to the next :meth:`update`, which sees it as new.
+        """
+        if not self.authoritative:
+            return
+        delta = TierDelta()
+        for thing in things:
+            coord = manager._thing_cell.get(manager.thing_uuid(thing))
+            tier = self._cell_tier.get(coord) if coord is not None else None
+            if tier is not None:
+                self._stamp(thing, tier, delta)
+
     def _stamp(self, obj, tier: int, delta: TierDelta) -> None:
         """Write *tier* onto *obj*, recording it only if it actually changed."""
         props = _props(obj)
