@@ -151,6 +151,8 @@ class MainWindow(QMainWindow):
         self.root_dir = root_dir
         self.root_dir = os.path.abspath(root_dir) 
         self.assets_root = os.path.join(self.root_dir, 'assets')
+        from engine.asset_archives import prepare_asset_archives
+        prepare_asset_archives(self.root_dir)
         self.debug_console = None
         self.key_bindings = {}
 

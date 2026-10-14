@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5", reason="stamp textures are loaded with QImage")
+pytestmark = pytest.mark.qt
 
 from engine.terrain import Terrain                            # noqa: E402
 
@@ -151,17 +152,22 @@ def _random_stamp_args(rng, textures):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", range(6))
-def test_engine_matches_the_oracle_through_random_edits(seed, textures, monkeypatch):
+def test_engine_matches_the_oracle_through_random_edits(seed, textures):
     rng = random.Random(seed)
-    if seed % 2:
-        # Odd seeds take the vector lookup path with only a few stamps.
-        monkeypatch.setattr(Terrain, "STAMP_VECTOR_MIN", 3)
     terrain = Terrain(seed=seed)
     if seed % 3 == 0:
         # A map painted before stamps were records: its paint is the base.
         old = Terrain(seed=seed)
         old.paint_texture_at(40.0, -30.0, 90.0, textures[1], feather=0.3)
         terrain.from_dict(old.to_dict())
+
+    if seed % 2:
+        # Exercise the real vector threshold with real stamp records, rather
+        # than changing a production constant to simulate a dense map.
+        for i in range(Terrain.STAMP_VECTOR_MIN):
+            terrain.add_paint_stamp(-600.0 + (i % 16) * 80.0,
+                                    -300.0 + (i // 16) * 80.0,
+                                    3.0, textures[0])
 
     for step in range(40):
         ids = [s["id"] for s in terrain.paint_stamps]

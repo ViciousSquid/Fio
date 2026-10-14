@@ -146,7 +146,7 @@ class LightingMixin:
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("light upload requires (LightTable, slots)")
         table, slots = lights
-        key = ('dense', id(table), table.generation, count, tuple(int(x) for x in slots[:count]))
+        key = ('dense', id(table), table.generation, count, tuple(slots[:count].tolist()))
         if self._light_ubo_key == key:
             return
 
@@ -201,15 +201,11 @@ class LightingMixin:
         cap = self._shader_light_cap(shader_name)
         num_lights = min(len(slots), cap)
 
-        self._ensure_light_ubo(num_lights)
-        gl.glBindBufferBase(
-            gl.GL_UNIFORM_BUFFER,
-            shaders.LIGHT_UBO_BINDING,
-            self._light_ubo,
-        )
+        # _upload_light_ubo ensures and binds the buffer, including cache hits.
+        # Repeating that here sent two extra glBindBufferBase calls per pass.
         self._frame_lights_uploaded[shader_name] = (
             id(table), table.generation,
-            tuple(int(x) for x in slots[:cap]))
+            tuple(slots[:cap].tolist()))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
         # One upload serves every pass: the buffer holds the frame's light
         # prefix up to MAX_LIGHTS, and each shader reads its own first

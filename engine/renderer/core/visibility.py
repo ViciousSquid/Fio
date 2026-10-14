@@ -172,10 +172,17 @@ class VisibilityMixin:
         local = np.full(len(slots), np.inf, dtype=np.float64)
         known = (recipe_ids >= 0) & (recipe_ids < len(recipe_radii))
         local[known] = recipe_radii[recipe_ids[known]]
-        basis = table.model_base_matrix[slots].astype(np.float64)
-        axes = np.stack([basis[:, 0:3], basis[:, 4:7], basis[:, 8:11]], axis=1)
-        scale = np.sqrt((axes ** 2).sum(axis=2)).max(axis=1)
+        scale = self._model_axis_scale(table.model_base_matrix[slots])
         return local * scale
+
+    @staticmethod
+    def _model_axis_scale(matrices):
+        """Longest model axis, without repacking the table's padded columns."""
+        basis = np.asarray(matrices, dtype=np.float64)
+        # The table already stores the three padded columns contiguously.
+        # A strided view avoids stacking/copying them on every cull.
+        axes = basis[:, :12].reshape(-1, 3, 4)[:, :, :3]
+        return np.sqrt((axes ** 2).sum(axis=2)).max(axis=1)
 
     def _cull_entity_rows(self, table, slots, planes, models=False):
         """Keep the entity rows whose bounding sphere meets the frustum.
@@ -199,6 +206,7 @@ class VisibilityMixin:
         """Six normalized frustum planes (a,b,c,d) from a view-projection matrix
         ``m`` (column-major, m[col][row]).  A point is inside when
         a*x+b*y+c*z+d >= 0 for every plane."""
+        m = tuple(tuple(m[col]) for col in range(4))
         def norm(a, b, c, d):
             l = math.sqrt(a * a + b * b + c * c)
             if l < 1e-8:
@@ -341,7 +349,7 @@ class VisibilityMixin:
         if not len(slots):
             return slots, ()
         recipe_ids = table.model_recipe_id[slots]
-        positions = table.pos[slots]
+        positions = positions[indices]
         transforms = table.model_base_matrix[slots]
         signature = (
             slots.tobytes(),

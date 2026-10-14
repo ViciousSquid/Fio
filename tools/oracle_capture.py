@@ -100,7 +100,11 @@ def _capture(tree, out, maps, args):
     origin = entity_table._CLOCK_ORIGIN
 
     def relative(name, value):
-        return value - origin if name == "effect_spawn_time" else value
+        # Zero is the sentinel for rows without an effect clock. Subtracting
+        # each process's origin from it manufactured differences between
+        # otherwise identical captures.
+        return (np.where(value != 0.0, value - origin, value)
+                if name == "effect_spawn_time" else value)
 
     def columns(table):
         found = {}

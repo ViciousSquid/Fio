@@ -854,12 +854,12 @@ highp vec2 viewToUV(highp vec3 p) {
 
 // Screen-space reflection: march the reflected ray through the copied depth
 // buffer and return the scene colour it hits (rgb) and a confidence (a).
-// 20 linear steps with a growing stride, then a short binary refinement.
+// 10 linear steps with a growing stride, then a short binary refinement.
 vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
     highp float stride = max(2.0, -originView.z * 0.02);
     highp vec3 p = originView;
     highp vec3 prev = p;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 10; i++) {
         prev = p;
         p += dirView * stride;
         stride *= 1.22;
@@ -890,7 +890,7 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
             if (hz - hi.z > thickness) return vec4(0.0);
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
                       * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
-            float fade = edge.x * edge.y * (1.0 - smoothstep(14.0, 20.0, float(i)));
+            float fade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
             return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
         }
     }

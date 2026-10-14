@@ -19,6 +19,18 @@ MAPS = sorted(glob.glob(os.path.join(ROOT, "maps", "*.json")))
 REFERENCE_ROOTS = ("assets/", "cutscenes/")
 
 
+def _reference_exists(value):
+    # The runtime reads audio directly from the category archive when present.
+    # Use the actual reader (including CRC checks), not a loose-file-only test.
+    parts = value.split('/')
+    if len(parts) >= 3 and parts[0] == 'assets' and parts[1] in ('sounds', 'music'):
+        archive = os.path.join(ROOT, 'assets', parts[1] + '.fiopak')
+        if os.path.isfile(archive):
+            from engine.audio_archives import read_archive_audio
+            return read_archive_audio(archive, value, 'assets/' + parts[1]) is not None
+    return os.path.isfile(os.path.join(ROOT, *parts))
+
+
 def _strings(node):
     if isinstance(node, dict):
         for value in node.values():
@@ -54,7 +66,7 @@ def test_referenced_files_exist(path):
         value for value in references
         if value.startswith(REFERENCE_ROOTS)
         and os.path.splitext(value)[1]
-        and not os.path.isfile(os.path.join(ROOT, *value.split("/")))
+        and not _reference_exists(value)
     )
     assert not missing, f"{os.path.basename(path)} references missing files: {missing}"
 

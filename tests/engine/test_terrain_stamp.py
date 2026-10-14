@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5", reason="stamp textures are loaded with QImage")
+pytestmark = pytest.mark.qt
 
 from engine import terrain_stamp                              # noqa: E402
 from engine.terrain import Terrain                            # noqa: E402
