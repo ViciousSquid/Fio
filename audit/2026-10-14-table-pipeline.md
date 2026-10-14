@@ -126,9 +126,10 @@ Both commands together select every test, including benchmarks. Graphics runs
 use a separate identical filesystem snapshot when run concurrently, so editor
 settings writes cannot interfere between processes.
 
-Final results: **5,471 editor/core tests passed and 214 GL tests passed**,
-including benchmarks: **5,685 passed, zero failures, zero skips**. After the
-archive completeness check added PPM model textures and the 3D noise data,
+Final merged results: **5,475 editor/core tests passed and 214 GL tests passed**,
+including benchmarks: **5,689 passed, zero failures, zero skips**. The initial
+audit passed all 5,685 tests before the merge's four additional regression
+cases. After the archive completeness check added PPM model textures and the 3D noise data,
 all 13 archive/startup tests passed again. Every one of the 187 packaged
 payloads matches its loose original byte for byte.
 

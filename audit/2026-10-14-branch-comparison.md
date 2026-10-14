@@ -98,8 +98,23 @@ the shared height setting. No runtime owner methods are replaced.
 The unchanged Claude checkout also passed its 182 existing BigWorld,
 terrain-appearance and light-budget tests selected for this comparison.
 
-All **214 GL tests passed** on the merged tree. The full core/editor suite
-is recorded after completion.
+The merged source commit is `5d80d8b4d128125e93d9706718c1ed9f2c9f52e9`,
+with the original Codex and Claude commits as its two parents. The complete
+test matrix passed: **5,475 core/editor tests and 214 GL tests**, including
+benchmarks, for **5,689 passed, zero failures and zero skips**. Core/editor
+validation took 719.74 seconds; GL validation took 171.41 seconds.
+
+The commands were:
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest -m 'not gl' --run-benchmarks -q -ra
+LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=xcb xvfb-run -a \
+    python -m pytest -m gl --run-benchmarks -q -ra
+```
+
+GL ran on an identical source snapshot to avoid concurrent editor settings
+writes. Together the commands select all 5,689 collected tests. Subsequent
+changes record these results in documentation only.
 
 Debug Tables and independent table, draw-call and pixel captures match
 before and after merging: **2,416 byte-identical records, zero differences**
