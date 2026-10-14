@@ -6,14 +6,13 @@ import glm
 import numpy as np
 import pytest
 
-from engine.logic_render import LogicRender
-from engine.renderer.core.visibility import VisibilityMixin
-
 pytestmark = pytest.mark.qt
 
 
 @pytest.mark.parametrize('count', [0, 1, 8, 32, 256, 4096])
 def test_model_radius_views_match_the_original_packed_axes_bit_for_bit(count):
+    from engine.renderer.core.visibility import VisibilityMixin
+
     rng = np.random.default_rng(4321)
     matrices = rng.normal(size=(count, 16)).astype(np.float32)
     slots = np.arange(count, dtype=np.int32)[::-1]
@@ -27,6 +26,9 @@ def test_model_radius_views_match_the_original_packed_axes_bit_for_bit(count):
 
 
 def test_frustum_column_reads_preserve_scalar_arithmetic_bits():
+    from engine.logic_render import LogicRender
+    from engine.renderer.core.visibility import VisibilityMixin
+
     rng = np.random.default_rng(817)
     logic = LogicRender(None)
     for matrix in [glm.mat4(0), glm.mat4(1)] + [glm.mat4(*rng.normal(size=16)) for _ in range(100)]:

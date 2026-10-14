@@ -1,7 +1,10 @@
 from typing import List, Tuple, Optional
 import os
 import numpy as np
-import OpenGL.GL as gl
+
+# OBJLoader parses CPU data without a graphics runtime. Only OBJ's GPU
+# resource methods need PyOpenGL; keep the shared module cached once loaded.
+gl = None
 
 
 # Models arrive inside shared maps and .fiopak packages; an OBJ or MTL beyond
@@ -406,6 +409,9 @@ class OBJ:
 
     def _build_gl_buffers(self, loader: OBJLoader):
         """Build OpenGL VAO/VBO from parsed OBJ data."""
+        global gl
+        if gl is None:
+            import OpenGL.GL as gl
         import ctypes
         
         # Fan-triangulate every face into corner index triples, noting each
@@ -493,6 +499,9 @@ class OBJ:
     
     def cleanup(self):
         """Release OpenGL resources."""
+        global gl
+        if (self.vbo or self.vao) and gl is None:
+            import OpenGL.GL as gl
         if self.vbo:
             gl.glDeleteBuffers(1, [self.vbo])
             self.vbo = None
