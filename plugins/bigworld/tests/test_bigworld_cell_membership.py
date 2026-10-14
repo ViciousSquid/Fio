@@ -27,7 +27,7 @@ from editor.editor_state import EditorState
 from editor.things import Thing as FioThing
 from engine.logic_thread import LogicThread
 from engine.threaded_game_state import ThreadedGameState
-from engine.spatial import TIER_DORMANT, TIER_NEAR, cell_of_point, tier_of  # noqa: E402
+from engine.spatial import TIER_ACTIVE, TIER_DORMANT, TIER_NEAR, cell_of_point, tier_of  # noqa: E402
 from plugins.bigworld.manager import BigWorldManager                 # noqa: E402
 from plugins.bigworld.runtime import BigWorldSession                 # noqa: E402
 
@@ -100,6 +100,60 @@ def test_an_entity_is_filed_under_exactly_one_cell():
     mgr.index_world([], [mon])
     assert cells_holding(mgr, mon) == [(0, 0)]
     assert sum(cell.things.count(mon) for cell in mgr.cells.values()) == 1
+
+
+def test_world_rebuild_registers_runtime_spawns_and_forgets_departed_entities():
+    from plugins.bigworld.entities import BigWorldSettings
+
+    settings = BigWorldSettings(pos=[0, 0, 0], properties={
+        'activation_radius': 2048.0, 'deactivation_radius': 2304.0,
+        'sim_near_radius': 512.0, 'terrain_fill': False,
+    })
+    existing = make_thing(1400, 100, 'existing')
+    logic = make_logic(things=[settings, existing])
+    plugin = logic.plugins.find_plugin('bigworld')
+    assert plugin is not None
+    logic.plugins.set_enabled(plugin, True)
+    plugin.on_play_start(logic)
+    runtime = plugin._sessions[logic]
+    try:
+        active = make_thing(1400, 100, 'runtime-active')
+        active.properties.pop('id')  # A runtime producer may leave ids unstamped.
+        near = make_thing(100, 100, 'runtime-near')
+        far = make_thing(50000, 100, 'runtime-far')
+        logic.editor_state.things.extend([active, near, far])
+        logic.world_runtime.build_entity_caches()
+
+        assert active.properties['id']
+        assert all(runtime.manager.registered(t) for t in (active, near, far))
+        assert tier_of(active) == tier_of(existing) == TIER_ACTIVE
+        assert tier_of(near) == TIER_NEAR
+        assert tier_of(far) == TIER_DORMANT
+        assert far.properties['hidden'] is True
+
+        logic.editor_state.things.remove(far)
+        logic.world_runtime.build_entity_caches()
+        assert not runtime.manager.registered(far)
+        assert cells_holding(runtime.manager, far) == []
+        assert not any(key in far.properties for key in runtime.TRANSIENT_KEYS)
+    finally:
+        plugin.on_play_stop(logic)
+
+
+def test_a_moving_light_is_refiled_without_losing_active_membership():
+    from editor.things import Light
+
+    light = Light(pos=[100, 0, 100], properties={'id': 'moving-light', 'radius': 64})
+    manager = BigWorldManager(activation_radius=1024, deactivation_radius=1152)
+    manager.index_world([], [light])
+    manager.update([0, 0, 0], force=True)
+    assert manager.is_thing_active(light)
+    light.pos = [800, 0, 100]
+    delta = manager.refile_moved_things([0, 0, 0])
+    assert delta.changed
+    assert sorted(c for c, cell in manager.cells.items() if light in cell.lights) == [(1, 0)]
+    assert manager.is_thing_active(light)
+    assert manager.active_lights() == [light]
 
 
 def test_a_brush_is_filed_from_every_cell_it_spans_and_stored_once():

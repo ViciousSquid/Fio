@@ -97,6 +97,22 @@ class ActivationDelta:
                 f"light +{len(self.lights_entering)}/-{len(self.lights_leaving)}>")
 
 
+class SyncDelta(ActivationDelta):
+    """What one :meth:`BigWorldManager.sync_things` changed.
+
+    The residency lists of an :class:`ActivationDelta`, plus ``registered`` --
+    the objects newly filed, active or not -- and ``unregistered``, the objects
+    that left the scene and were unfiled.
+    """
+
+    __slots__ = ("registered", "unregistered")
+
+    def __init__(self):
+        super().__init__()
+        self.registered: List = []
+        self.unregistered: List = []
+
+
 class BigWorldManager:
     """Indexes a world into cells and streams the active set as the player moves."""
 
@@ -121,6 +137,14 @@ class BigWorldManager:
         self._light_by_id: Dict[str, object] = {}
         # Entities that ignore streaming entirely (world managers, global scripts).
         self.persistent_things: List = []
+        self._persistent_by_id: Dict[str, object] = {}
+        # UUID -> the cells a light is filed under, the anchor cell its position
+        # was in and the radius it was filed with. A carried torch or a spell's
+        # glow moves, so its filing has to be able to follow it like an
+        # entity's does (see refile_moved_things).
+        self._light_cells: Dict[str, Tuple[CellCoord, ...]] = {}
+        self._light_anchor: Dict[str, CellCoord] = {}
+        self._light_radius: Dict[str, float] = {}
         # UUID -> the cell a point entity is currently filed under. A brush is
         # filed by its footprint and never moves; an entity walks, and where it
         # is filed has to be able to follow it (see refile_moved_things).
@@ -205,7 +229,11 @@ class BigWorldManager:
         self._thing_by_id.clear()
         self._light_by_id.clear()
         self.persistent_things = []
+        self._persistent_by_id.clear()
         self._thing_cell.clear()
+        self._light_cells.clear()
+        self._light_anchor.clear()
+        self._light_radius.clear()
         self.active_cells.clear()
         self._brush_active_ref.clear()
         self._thing_active_ref.clear()
@@ -241,29 +269,155 @@ class BigWorldManager:
     def add_thing(self, thing) -> None:
         """Index one entity: a persistent global, a light, or a point entity."""
         uuid = self.thing_uuid(thing)
-        if self._is_persistent(thing):
-            self.persistent_things.append(thing)
-            return
-        pos = getattr(thing, "pos", None)
-        if pos is None:
+        if self._is_persistent(thing) or getattr(thing, "pos", None) is None:
             # No position and not marked persistent: treat as global so it is
             # never silently frozen (fail safe — see §10 "do not assume every
             # entity can safely be unloaded").
             self.persistent_things.append(thing)
+            self._persistent_by_id[uuid] = thing
             return
+        pos = thing.pos
 
         if self._is_light(thing):
             self._light_by_id[uuid] = thing
             radius = float(getattr(thing, "properties", {}).get("radius", self.cell_size))
-            min_x, max_x = pos[0] - radius, pos[0] + radius
-            min_z, max_z = pos[2] - radius, pos[2] + radius
-            for coord in cells_for_aabb(min_x, min_z, max_x, max_z, self.cell_size):
+            coords = self._light_coords(pos, radius)
+            self._light_cells[uuid] = coords
+            self._light_anchor[uuid] = cell_of_point(pos[0], pos[2], self.cell_size)
+            self._light_radius[uuid] = radius
+            for coord in coords:
                 self._cell(coord).lights.append(thing)
         else:
             self._thing_by_id[uuid] = thing
             coord = cell_of_point(pos[0], pos[2], self.cell_size)
             self._thing_cell[uuid] = coord
             self._cell(coord).things.append(thing)
+
+    def _light_coords(self, pos, radius: float) -> Tuple[CellCoord, ...]:
+        """The cells a light of *radius* at *pos* reaches."""
+        x, z = float(pos[0]), float(pos[2])
+        return tuple(cells_for_aabb(x - radius, z - radius, x + radius,
+                                    z + radius, self.cell_size))
+
+    def registered(self, thing) -> bool:
+        """Whether *thing* itself (not merely its UUID) is in the index."""
+        uuid = self.thing_uuid(thing)
+        return any(index.get(uuid) is thing for index in (
+            self._thing_by_id, self._light_by_id, self._persistent_by_id))
+
+    # ------------------------------------------------------------------
+    # Keeping the index in step with the scene
+    # ------------------------------------------------------------------
+
+    def sync_things(self, things, player_pos=None) -> "SyncDelta":
+        """Reconcile the entity index with the scene's live entity list.
+
+        :meth:`index_world` runs once, when the session starts, so anything the
+        game creates afterwards -- creatures materialised from spawn points,
+        travellers stepping off the journey board, torches lit at dusk -- was
+        never filed: it had no cell, so no crossing could park it and no tier
+        was ever stamped on it, and an unstamped entity reads ``NEAR``. Every
+        one of them was fully simulated wherever it stood. Things the game
+        removed stayed filed instead, held by their cells and serialised into
+        the save by the next cell commit.
+
+        The engine rebuilds its entity caches whenever the scene's membership
+        changes, and this is called at that boundary: entities that are not in
+        the index are filed, ones that left the scene are unfiled, and an object
+        that replaced another under the same UUID takes its place. That pass is
+        ``O(entities)``, the same order as the rebuild that triggers it, and it
+        never runs per frame.
+
+        A newly filed entity is admitted exactly as one that walked into a cell
+        is (:meth:`refile_moved_things`): it joins the active set if its cell is
+        active, and a cell that held nothing until now is activated if it lies
+        inside the activation radius of *player_pos*. Returns a
+        :class:`SyncDelta`; its residency lists are the net transitions, for the
+        caller to apply exactly as it applies a residency delta.
+        """
+        delta = SyncDelta()
+        live: Dict[str, object] = {}
+        for thing in things or ():
+            live[self.thing_uuid(thing)] = thing
+
+        for index in (self._thing_by_id, self._light_by_id, self._persistent_by_id):
+            for uuid, thing in list(index.items()):
+                if live.get(uuid) is not thing:
+                    self._unfile(uuid, thing, delta)
+
+        reach = None
+        if player_pos is not None:
+            px, pz = float(player_pos[0]), float(player_pos[2])
+            reach = (px, pz, self.activation_radius * self.activation_radius)
+        for uuid, thing in live.items():
+            if self.registered(thing):
+                continue
+            self.add_thing(thing)
+            delta.registered.append(thing)
+            delta.changed = True
+            if uuid in self._persistent_by_id:
+                continue
+            if uuid in self._light_by_id:
+                self._admit(thing, self._light_cells[uuid], self._light_active_ref,
+                            self._active_light_ids, delta.lights_entering,
+                            delta, reach)
+            else:
+                self._admit(thing, (self._thing_cell[uuid],), self._thing_active_ref,
+                            self._active_thing_ids, delta.things_entering,
+                            delta, reach)
+        return delta
+
+    def _admit(self, thing, coords, refs, active_ids, entering, delta, reach) -> None:
+        """Give a newly filed object the references its cells hold for it."""
+        for coord in coords:
+            if coord in self.active_cells:
+                entering.extend(self._ref_up([thing], refs, active_ids,
+                                             self.thing_uuid))
+            elif reach is not None and cell_distance_sq(
+                    coord[0], coord[1], reach[0], reach[1],
+                    self.cell_size) <= reach[2]:
+                self.load_cell(*coord)
+                b, t, l = self.activate_cell(*coord)
+                delta.entering_cells.append(coord)
+                delta.brushes_entering.extend(b)
+                delta.things_entering.extend(t)
+                delta.lights_entering.extend(l)
+
+    def _unfile(self, uuid: str, thing, delta: "SyncDelta") -> None:
+        """Forget one object that is no longer in the scene."""
+        if self._persistent_by_id.get(uuid) is thing:
+            del self._persistent_by_id[uuid]
+            try:
+                self.persistent_things.remove(thing)
+            except ValueError:
+                pass
+        elif self._light_by_id.get(uuid) is thing:
+            del self._light_by_id[uuid]
+            for coord in self._light_cells.pop(uuid, ()):
+                self._drop_from(self.cells.get(coord), "lights", thing)
+            self._light_anchor.pop(uuid, None)
+            self._light_radius.pop(uuid, None)
+            self._light_active_ref.pop(uuid, None)
+            self._active_light_ids.discard(uuid)
+        elif self._thing_by_id.get(uuid) is thing:
+            del self._thing_by_id[uuid]
+            self._drop_from(self.cells.get(self._thing_cell.pop(uuid, None)),
+                            "things", thing)
+            self._thing_active_ref.pop(uuid, None)
+            self._active_thing_ids.discard(uuid)
+        else:
+            return
+        delta.unregistered.append(thing)
+        delta.changed = True
+
+    @staticmethod
+    def _drop_from(cell, bucket: str, obj) -> None:
+        if cell is None:
+            return
+        try:
+            getattr(cell, bucket).remove(obj)
+        except ValueError:
+            pass
 
     # ------------------------------------------------------------------
     # Streaming API (state transitions; future disk streaming slots in here)
@@ -416,6 +570,46 @@ class BigWorldManager:
                 gone = self._ref_down([thing], self._thing_active_ref,
                                       self._active_thing_ids, self.thing_uuid)
                 delta.things_leaving.extend(gone)
+
+        # Lights move too: a carried torch, a spell's glow. A light is filed by
+        # its reach, so it is re-filed when its centre changes cell, keeping the
+        # radius it was filed with -- a flickering flame changes its radius every
+        # frame, and that is no reason to churn its filing.
+        for uuid in list(self._active_light_ids):
+            light = self._light_by_id.get(uuid)
+            pos = getattr(light, "pos", None)
+            if pos is None:
+                continue
+            anchor = cell_of_point(float(pos[0]), float(pos[2]), self.cell_size)
+            if anchor == self._light_anchor.get(uuid):
+                continue
+            self._light_anchor[uuid] = anchor
+            old = self._light_cells.get(uuid, ())
+            new = self._light_coords(pos, self._light_radius.get(uuid, self.cell_size))
+            self._light_cells[uuid] = new
+            gained = [c for c in new if c not in old]
+            lost = [c for c in old if c not in new]
+            if not gained and not lost:
+                continue
+            delta.changed = True
+            for coord in gained:
+                self._cell(coord).lights.append(light)
+                if coord in self.active_cells:
+                    self._ref_up([light], self._light_active_ref,
+                                 self._active_light_ids, self.thing_uuid)
+                elif cell_distance_sq(coord[0], coord[1], px, pz,
+                                      self.cell_size) <= r2:
+                    b, t, l = self.activate_cell(*coord)
+                    delta.entering_cells.append(coord)
+                    delta.brushes_entering.extend(b)
+                    delta.things_entering.extend(t)
+                    delta.lights_entering.extend(l)
+            for coord in lost:
+                self._drop_from(self.cells.get(coord), "lights", light)
+                if coord in self.active_cells:
+                    delta.lights_leaving.extend(self._ref_down(
+                        [light], self._light_active_ref,
+                        self._active_light_ids, self.thing_uuid))
         return delta
 
     @staticmethod
@@ -568,3 +762,7 @@ class BigWorldManager:
             "total_lights": len(self._light_by_id),
             "persistent_entities": len(self.persistent_things),
         }
+
+    def unregistered_things(self, things) -> List:
+        """The entities of *things* the index does not hold (debug / audits)."""
+        return [t for t in things or () if not self.registered(t)]

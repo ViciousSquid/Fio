@@ -48,6 +48,14 @@ class LogicWorld:
         """Build lookup and hot-path entity indexes for the current world."""
         logic = self.logic
 
+        # Every entity is addressed by its UUID from here on -- the id cache
+        # below, and the world-streaming registry that listens for this
+        # rebuild -- so one spawned without an id is given one now, by the
+        # module that owns the world.
+        ensure_ids = getattr(logic.editor_state, "ensure_entity_ids", None)
+        if ensure_ids is not None:
+            ensure_ids()
+
         self.name_cache = {}
         self.id_cache = {}
 
@@ -112,6 +120,13 @@ class LogicWorld:
             logic.collision_runtime.mark_dirty()
 
         logic.portal_runtime.rebuild_links()
+
+        # The scene's membership just changed (or a session just started):
+        # let a world-streaming layer register the entities it has not seen
+        # and forget the ones that left, at this same boundary.
+        emit = getattr(logic, "_plugin_emit", None)
+        if emit is not None:
+            emit("world_rebuilt")
 
     def find_entity_by_name(self, name: str):
         """Resolve an entity by name against the live world/session cache."""

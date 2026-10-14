@@ -104,6 +104,19 @@ def terrain_with_grass():
     return t
 
 
+def test_configured_blade_height_reaches_the_live_shader(context):
+    import OpenGL.GL as gl
+    from tests.visual.test_terrain_textures import player_view, render
+    terrain = terrain_with_grass()
+    terrain.set_grass(True, height=17.5)
+    eye, target = player_view(terrain)
+    render(context, terrain, eye, target)
+    value = np.zeros(1, dtype=np.float32)
+    gl.glGetUniformfv(terrain.grass_shader_program,
+                      terrain.grass_uniforms['uBladeHeight'], value)
+    assert value[0] == 17.5
+
+
 def test_a_grassy_frame_leaves_face_culling_as_it_found_it(context):
     import OpenGL.GL as gl
     from tests.visual.test_terrain_textures import player_view, render

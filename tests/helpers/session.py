@@ -69,6 +69,11 @@ class FioTestSession:
             assert self.window.load_level_file(os.path.join(REPO_ROOT, level)), level
         else:
             assert self.window._load_level(level), "level was refused"
+        # Keyboard shortcuts require an active top-level window. show() alone
+        # does not activate it on X11; sending keys to an inactive QWidget is
+        # not the input a user can deliver to the editor.
+        self.window.activateWindow()
+        self.view.setFocus()
         self.app.processEvents()
 
     # -- the live objects -------------------------------------------------

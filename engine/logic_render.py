@@ -45,7 +45,8 @@ class LogicRender:
         self._hud_cinematic_fade_started = None
 
     def extract_frustum_planes(self, proj_view: glm.mat4):
-        m = proj_view
+        # Read each GLM column once; the scalar arithmetic stays unchanged.
+        m = tuple(tuple(proj_view[col]) for col in range(4))
         planes = []
         planes.append(
             self.normalize_plane(

@@ -19,6 +19,13 @@ from . import shaders
 from . import terrain_style
 from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
 
+# Old maps keep their exact scatter/cap below the previous density ceiling.
+LEGACY_GRASS_DENSITY_MAX = 0.06
+MAX_GRASS_DENSITY = 0.24
+GRASS_MAX_DENSITY = MAX_GRASS_DENSITY
+DEFAULT_GRASS_HEIGHT = 5.0
+GRASS_HEIGHT_LIMITS = (0.1, 256.0)
+
 
 def grass_vertex_count(segments: int) -> int:
     """Vertices per blade instance: (segments - 1) quads plus the tip."""
@@ -481,7 +488,7 @@ class Terrain:
         self.GRASS_MAX_PER_CHUNK = 4096          # tufts per chunk
         self.GRASS_BLADES_PER_TUFT = 5
         self.GRASS_TUFT_RADIUS = 2.5             # world units
-        self.GRASS_BLADE_HEIGHT = 5.0            # world units at size 1.0
+        self.GRASS_BLADE_HEIGHT = DEFAULT_GRASS_HEIGHT  # world units at size 1.0
         self.GRASS_BLADE_WIDTH = 0.35            # half width at the root
         self.GRASS_MAX_DISTANCE = 3072.0
         # Chunks nearer than this draw detailed blades; blades morph onto the
@@ -875,9 +882,21 @@ class Terrain:
             self.invalidate_height_range()
             self.table.mark_all_dirty()
 
+    @property
+    def grass_height(self) -> float:
+        """Authored blade height, sharing the existing shader-height setting."""
+        return self.GRASS_BLADE_HEIGHT
+
+    @grass_height.setter
+    def grass_height(self, height: float) -> None:
+        value = float(height)
+        self.GRASS_BLADE_HEIGHT = (float(np.clip(value, *GRASS_HEIGHT_LIMITS))
+                                   if math.isfinite(value) else DEFAULT_GRASS_HEIGHT)
+
     def set_grass(self, enabled: bool, density: Optional[float] = None,
                   color: Optional[Tuple[float, float, float]] = None,
-                  tip_color=None, height_range=None):
+                  tip_color=None, height_range=None,
+                  height: Optional[float] = None):
         """Configure terrain grass; geometry is rebuilt lazily on the GL thread.
 
         ``color`` is the blade colour, or ``'ground'`` for blades that take
@@ -887,6 +906,8 @@ class Terrain:
         sun-bleached shade of the blade colour. Colours alone need no rebuild.
         ``height_range`` is ``(lowest, highest)`` as fractions of the
         terrain's height range; ``'auto'`` follows the grass texture layer.
+        ``height`` is blade height in world units (default 5); it changes
+        only a shader uniform, so existing instance records need no rebuild.
         """
         rebuild = (bool(enabled) != self.grass_enabled or density is not None
                    or height_range is not None)
@@ -897,7 +918,9 @@ class Terrain:
             self.grass_height_range = (min(lo, hi), max(lo, hi))
         self.grass_enabled = bool(enabled)
         if density is not None:
-            self.grass_density = float(np.clip(density, 0.0, 0.06))
+            self.grass_density = float(np.clip(density, 0.0, MAX_GRASS_DENSITY))
+        if height is not None:
+            self.grass_height = height
         if isinstance(color, str) and color == 'ground':
             # Blades take the colour of the ground they grow on (the default).
             # Their ground colours are baked at build time and may be stale
@@ -1470,8 +1493,11 @@ class Terrain:
         """
         table = self.table
         size = float(table.size[slot])
+        limit = self.GRASS_MAX_PER_CHUNK
+        if self.grass_density > LEGACY_GRASS_DENSITY_MAX:
+            limit = int(limit * (self.grass_density / LEGACY_GRASS_DENSITY_MAX))
         tufts = min(
-            self.GRASS_MAX_PER_CHUNK,
+            limit,
             int(max(0.0, self.grass_density) * size * size)
         )
         if tufts <= 0:
@@ -1637,7 +1663,7 @@ class Terrain:
         gl.glUniform1f(u['uLodEnd'], self.GRASS_LOD_DISTANCE)
         gl.glUniform1f(u['uFadeStart'], min(self.GRASS_FADE_START, self.GRASS_MAX_DISTANCE))
         gl.glUniform1f(u['uFadeEnd'], self.GRASS_MAX_DISTANCE)
-        gl.glUniform1f(u['uBladeHeight'], self.GRASS_BLADE_HEIGHT)
+        gl.glUniform1f(u['uBladeHeight'], self.grass_height)
         gl.glUniform1f(u['uBladeWidth'], self.GRASS_BLADE_WIDTH)
 
         if env_uniforms:
@@ -3084,6 +3110,7 @@ class Terrain:
             'flat_mode': self.flat_mode,
             'grass_enabled': self.grass_enabled,
             'grass_density': self.grass_density,
+            'grass_height': self.grass_height,
             'grass_color': list(self.grass_color),
             'grass_color_custom': self.grass_color_custom,
             'grass_tip_color': (list(self.grass_tip_color)
@@ -3179,7 +3206,8 @@ class Terrain:
         self.use_textures = data.get('use_textures', False)
         self.flat_mode = data.get('flat_mode', False)
         self.grass_enabled = data.get('grass_enabled', False)
-        self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, 0.06))
+        self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, MAX_GRASS_DENSITY))
+        self.set_grass(self.grass_enabled, height=data.get('grass_height', DEFAULT_GRASS_HEIGHT))
         saved_grass_color = data.get('grass_color')
         if saved_grass_color is not None and len(saved_grass_color) >= 3:
             self.grass_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_grass_color[:3])

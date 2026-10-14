@@ -66,6 +66,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         #: Mesh bounding radius per interned model recipe (entity frustum cull).
         self._model_radius_recipes_seen = None
         self._model_radius_by_recipe = np.zeros(0, dtype=np.float64)
+        self._model_radius_pending = ()
         # Decoded animated Effect GIF frames, indexed by dense variant.
         # FIRE and ORB share this normal-instanced billboard path.
         self.effect_fire_frames = {}

@@ -1550,38 +1550,16 @@ def _pos_of(thing):
     return (0.0, 0.0, 0.0)
 
 
-def classify_slots(table, slots, hidden, is_play, show_sprites):
-    """Split entity slots into the model pass and the sprite pass, numerically.
+# Only these authored bits decide the draw kind. Other uint16 flags (lights,
+# portal cull exemptions, etc.) do not enlarge the lookup domain.
+_CLASSIFY_BITS = (ENT_SKIP | ENT_EFFECT | ENT_ALWAYS_SPRITE | ENT_HAS_MODEL |
+                  ENT_MODE_MODEL | ENT_MODE_BILLBOARD | ENT_HAS_SPRITE |
+                  ENT_ENTITY_SPRITE | ENT_PROP)
 
-    The array form of ``_sort_objects``' Thing half.  That loop asked every
-    visible entity what it was, once per frame, to reach a verdict that only
-    changes when the entity is edited; the projection resolved the inputs into
-    :attr:`EntityTable.class_bits`, so the same split is a handful of masks.
 
-    *hidden* is the live flag, indexed by slot -- not gathered for *slots*,
-    because the caller holds the whole-table mask :meth:`EntityTable.begin_frame`
-    returned.
-
-    The chain being reproduced, in its original order:
-
-    1. a PathNode, or a non-Thing, is skipped;
-    2. a Portal, or a monster snapshot, is a sprite;
-    3. a visible model (``model_path``, ``render_mode == 'model'``, not hidden)
-       goes to the model pass;
-    4. otherwise the entity's *kind* decides -- the
-       entity-sprite classes, then billboard-with-a-sprite, then ordinary --
-       with a Prop drawn only as a billboard, a model-but-hidden entity drawn
-       nowhere, and an ordinary entity drawn only while editing or with
-       show-sprites on.
-
-    Returns ``(model_slots, sprite_slots)`` as slot arrays.  No entity is
-    materialised here.
-    """
-    if not len(slots):
-        return slots, slots
-
-    bits = table.class_bits[slots]
-    is_hidden = np.asarray(hidden)[slots]
+def _render_kind_words(bits, is_hidden, show_ordinary):
+    """Cold construction of the original classification truth table."""
+    is_hidden = np.bool_(is_hidden)
 
     skip = (bits & ENT_SKIP) != 0
     effect = (bits & ENT_EFFECT) != 0
@@ -1612,6 +1590,69 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
         # `elif model_path and render_mode == 'model'` draws nothing: that is
         # the hidden model, already excluded from `model` above.
         | (others & ~entity_sprite & ~(has_model & mode_model)
-           & (kind_sprite | (not is_play or show_sprites)))
+           & (kind_sprite | (show_ordinary)))
     )
-    return slots[model], slots[sprite | (~skip & always_sprite)]
+    return model.astype(np.uint8) | ((sprite | (~skip & always_sprite)).astype(np.uint8) << 1)
+
+
+# 64 KiB: ordinary-sprite policy x live hidden flag x classification word.
+# One native lookup replaces the per-frame chain of temporary mask arrays.
+_CLASSIFY_WORDS = np.arange(1 << _CLASSIFY_BITS.bit_length(), dtype=np.uint16)
+_RENDER_KIND = np.stack([
+    np.stack([_render_kind_words(_CLASSIFY_WORDS, hidden, show)
+              for hidden in (False, True)])
+    for show in (False, True)])
+_RENDER_KIND.flags.writeable = False
+del _CLASSIFY_WORDS
+
+
+def classify_slots(table, slots, hidden, is_play, show_sprites):
+    """Split entity slots into the model pass and the sprite pass, numerically.
+
+    The array form of ``_sort_objects``' Thing half.  That loop asked every
+    visible entity what it was, once per frame, to reach a verdict that only
+    changes when the entity is edited; the projection resolved the inputs into
+    :attr:`EntityTable.class_bits`, so the same split is a handful of masks.
+
+    *hidden* is the live flag, indexed by slot -- not gathered for *slots*,
+    because the caller holds the whole-table mask :meth:`EntityTable.begin_frame`
+    returned.
+
+    The chain being reproduced, in its original order:
+
+    1. a PathNode, or a non-Thing, is skipped;
+    2. a Portal, or a monster snapshot, is a sprite;
+    3. a visible model (``model_path``, ``render_mode == 'model'``, not hidden)
+       goes to the model pass;
+    4. otherwise the entity's *kind* decides -- the
+       entity-sprite classes, then billboard-with-a-sprite, then ordinary --
+       with a Prop drawn only as a billboard, a model-but-hidden entity drawn
+       nowhere, and an ordinary entity drawn only while editing or with
+       show-sprites on.
+
+    Returns ``(model_slots, sprite_slots)`` as slot arrays. No entity is
+    materialised here. At large N a read-only numeric truth table resolves
+    the classification in one gather; up to eight rows use scalar lookup.
+    """
+    if not len(slots):
+        return slots, slots
+
+    policy = int(bool(not is_play or show_sprites))
+    if len(slots) <= 8:
+        # Measured crossover: scalar lookup avoids the fixed array setup at
+        # small N (1.8 us at N=1; 5.3 us at N=8, versus 6-9 us batched).
+        models, sprites = [], []
+        for slot in slots:
+            kind = int(_RENDER_KIND[policy, int(hidden[slot]),
+                                   int(table.class_bits[slot]) & _CLASSIFY_BITS])
+            if kind & 1:
+                models.append(slot)
+            if kind & 2:
+                sprites.append(slot)
+        return (np.asarray(models, dtype=slots.dtype),
+                np.asarray(sprites, dtype=slots.dtype))
+
+    bits = table.class_bits[slots] & _CLASSIFY_BITS
+    kinds = _RENDER_KIND[policy,
+                         np.asarray(hidden)[slots].astype(np.uint8), bits]
+    return slots[(kinds & 1) != 0], slots[(kinds & 2) != 0]

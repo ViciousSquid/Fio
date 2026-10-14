@@ -11,9 +11,13 @@ from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
 from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES,
                             DEFAULT_GRASS_ENABLED,
+                            GRASS_MAX_DENSITY, GRASS_HEIGHT_LIMITS,
                             biome_key_for_name)
 from engine import terrain_style
 from engine import terrain_stamp
+
+GRASS_DENSITY_STEP = 0.0001
+GRASS_DEFAULT_DENSITY = 0.02
 
 
 class GradientPreview(QWidget):
@@ -496,11 +500,28 @@ class TerrainEditorPanel(QWidget):
         self.grass_checkbox.toggled.connect(self.on_grass_changed)
         grass_layout.addRow(self.grass_checkbox)
 
+        self.grass_blade_height_spin = QDoubleSpinBox()
+        self.grass_height_spin = self.grass_blade_height_spin
+        self.grass_blade_height_spin.setRange(*GRASS_HEIGHT_LIMITS)
+        self.grass_blade_height_spin.setDecimals(2)
+        self.grass_blade_height_spin.setSingleStep(0.5)
+        self.grass_blade_height_spin.setSuffix(" units")
+        self.grass_blade_height_spin.setValue(self.terrain.GRASS_BLADE_HEIGHT)
+        self.grass_blade_height_spin.setToolTip(
+            "Blade height in world units; individual blades keep their natural size variation")
+        self.grass_blade_height_spin.valueChanged.connect(self.on_grass_blade_height_changed)
+        grass_layout.addRow("Height:", self.grass_blade_height_spin)
+
         self.grass_density_slider = QSlider(Qt.Horizontal)
-        self.grass_density_slider.setRange(0, 100)
+        self.grass_density_slider.setRange(
+            0, int(round(GRASS_MAX_DENSITY / GRASS_DENSITY_STEP)))
         self.grass_density_slider.setSingleStep(1)
+        self.grass_density_slider.setPageStep(20)
+        self.grass_density_slider.setToolTip(
+            "Grass tufts per area; 100% is the default density")
         self.grass_density_slider.valueChanged.connect(self.on_grass_density_changed)
-        self.grass_density_value = QLabel("20%")
+        self.grass_density_value = QLabel("100%")
+        self.grass_density_value.setMinimumWidth(44)
         density_row = QHBoxLayout()
         density_row.addWidget(self.grass_density_slider, 1)
         density_row.addWidget(self.grass_density_value)
@@ -840,8 +861,7 @@ class TerrainEditorPanel(QWidget):
         self.hm_strength_spin.setRange(1, 2000)
         self.hm_strength_spin.setSingleStep(10)
         self.grass_checkbox.setChecked(self.terrain.grass_enabled)
-        self.grass_density_slider.setValue(int(round(self.terrain.grass_density / 0.06 * 100.0)))
-        self.grass_density_value.setText(f"{self.grass_density_slider.value()}%")
+        self._sync_grass_density_ui(self.terrain.grass_density)
         self._update_grass_color_preview()
 
         self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
@@ -1407,11 +1427,8 @@ class TerrainEditorPanel(QWidget):
         # Checkboxes
         self.solid_checkbox.setChecked(self.terrain.solid)
         self.grass_checkbox.setChecked(getattr(self.terrain, 'grass_enabled', False))
-        grass_density = getattr(self.terrain, 'grass_density', 0.02)
-        self.grass_density_slider.setValue(
-            int(round(max(0.0, min(0.06, grass_density)) / 0.06 * 100.0))
-        )
-        self.grass_density_value.setText(f"{self.grass_density_slider.value()}%")
+        self.grass_blade_height_spin.setValue(self.terrain.GRASS_BLADE_HEIGHT)
+        self._sync_grass_density_ui(getattr(self.terrain, 'grass_density', 0.02))
         self._update_grass_color_preview()
         self.flat_checkbox.setChecked(self.terrain.flat_mode)
         
@@ -1538,12 +1555,28 @@ class TerrainEditorPanel(QWidget):
         self.terrain.set_grass(enabled=enabled)
         self.terrain_changed.emit()
 
+    def _sync_grass_density_ui(self, density):
+        """Show the saved density without changing its authored value."""
+        density = max(0.0, min(GRASS_MAX_DENSITY, float(density)))
+        self.grass_density_slider.setValue(int(round(density / GRASS_DENSITY_STEP)))
+        self._label_grass_density(density)
+
+    def _label_grass_density(self, density):
+        self.grass_density_value.setText(f"{density / GRASS_DEFAULT_DENSITY * 100.0:.0f}%")
+
     def on_grass_density_changed(self, value):
-        self.grass_density_value.setText(f"{value}%")
+        density = value * GRASS_DENSITY_STEP
+        self._label_grass_density(density)
         if self._building_ui:
             return
         self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
-                               density=(value / 100.0) * 0.06)
+                               density=density)
+        self.terrain_changed.emit()
+
+    def on_grass_blade_height_changed(self, value):
+        if self._building_ui:
+            return
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(), height=value)
         self.terrain_changed.emit()
 
     def choose_grass_color(self):

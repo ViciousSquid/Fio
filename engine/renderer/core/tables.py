@@ -5,6 +5,7 @@ size resolution, sprite recipe resolution and model bounding radii. Instance
 buffer layouts are technique-specific and live with each renderer.
 """
 
+import math
 import numpy as np
 
 from engine import render_table
@@ -174,20 +175,26 @@ class TablesMixin:
         if recipes is not self._model_radius_recipes_seen:
             # As for sprites: park the other buffer's radii, do not re-measure
             # every mesh each time the buffers alternate.
-            (self._model_radius_recipes_seen,
-             self._model_radius_by_recipe) = _swap_recipe_cache(
+            (self._model_radius_recipes_seen, self._model_radius_by_recipe,
+             self._model_radius_pending) = _swap_recipe_cache(
                 self.__dict__.setdefault('_model_radius_parked', {}),
-                (self._model_radius_recipes_seen, self._model_radius_by_recipe),
-                recipes, (np.zeros(0, dtype=np.float64),))
+                (self._model_radius_recipes_seen, self._model_radius_by_recipe,
+                 self._model_radius_pending),
+                recipes, (np.zeros(0, dtype=np.float64), ()))
         radii = self._model_radius_by_recipe
         if len(radii) < len(recipes):
+            self._model_radius_pending += tuple(range(len(radii), len(recipes)))
             grown = np.full(len(recipes), np.inf, dtype=np.float64)
             grown[:len(radii)] = radii
             self._model_radius_by_recipe = radii = grown
-        for recipe_id in np.flatnonzero(np.isinf(radii)):
-            obj = self.load_model(recipes[int(recipe_id)][0])
+        if not self._model_radius_pending:
+            return radii
+        pending = []
+        for recipe_id in self._model_radius_pending:
+            obj = self.load_model(recipes[recipe_id][0])
             vertices = getattr(obj, 'cpu_vertices', None) if obj else None
             if obj is None or not getattr(obj, 'is_loaded', False):
+                pending.append(recipe_id)
                 continue
             if vertices is None or not len(vertices):
                 radii[recipe_id] = 0.0
@@ -195,6 +202,9 @@ class TablesMixin:
             radii[recipe_id] = float(np.sqrt(
                 (np.asarray(vertices, dtype=np.float64)[:, :3] ** 2)
                 .sum(axis=1).max()))
+            if math.isinf(radii[recipe_id]):
+                pending.append(recipe_id)
+        self._model_radius_pending = tuple(pending)
         return radii
 
     @staticmethod
