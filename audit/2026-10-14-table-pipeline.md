@@ -26,7 +26,8 @@ Measured on GIL-enabled CPython 3.14.8, Linux x86-64 and Mesa llvmpipe.
   Above 512 rows the original column gathers win and are retained.
 - Light slot keys convert the numerical array in one native operation.
   Duplicate UBO setup/binding is removed: the real upload function still
-  ensures and binds the buffer, including cache hits.
+  ensures the buffer, including cache hits. The subsequent Claude merge
+  also retains its indexed binding once per frame rather than per lit pass.
 - Collected change-journal subscribers release pending notification and
   position dictionaries immediately. Live subscribers retain their original
   notification behavior; repeated Play/Stop no longer retains the dead data.
@@ -97,6 +98,12 @@ and persists as `grass_height`. Old maps keep the 5-unit default. Density's
 maximum is now 0.24, four times its former 0.06 limit. The per-chunk tuft cap
 scales above the old ceiling, reaching 16,384 tufts at the new maximum; old
 density settings retain their old scatter and cap.
+
+The Claude merge adds 0.0001-step density controls and the `grass_height`
+interface, sharing one value with the existing shader-height setting. Its
+runtime entity registry and moving-light fixes are also included. See
+`2026-10-14-branch-comparison.md` for the direct branch comparison, merge
+resolutions and additional validation.
 
 Separate editor, sprites, textures, models, fonts and music archives are
 created alongside the existing sounds archive. Startup restores missing

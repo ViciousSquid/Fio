@@ -114,9 +114,20 @@ class LightingMixin:
         self._ensure_light_ubo(self.MAX_LIGHTS)
 
     def _ensure_light_ubo(self, capacity):
+        """Make the shared light UBO hold *capacity* lights, bound to its slot.
+
+        The indexed binding is context state and names the buffer object, not
+        its store: respecifying the store (growth here, orphaning in
+        :meth:`_upload_light_ubo`) leaves it in place. So the buffer is bound
+        to ``LIGHT_UBO_BINDING`` once per frame at most -- the frame start
+        clears ``_light_ubo_bound`` in case anything else touched the slot --
+        rather than once or twice in every lit pass, which re-issued the same
+        binding three times per shader per frame.
+        """
         capacity = max(1, int(capacity))
         if self._light_ubo is None:
             self._light_ubo = gl.glGenBuffers(1)
+            self._light_ubo_bound = False
         if capacity > self._light_ubo_capacity:
             self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
             self._light_ubo_data = np.zeros(self._light_ubo_capacity,
@@ -128,11 +139,13 @@ class LightingMixin:
                 None,
                 gl.GL_DYNAMIC_DRAW,
             )
-        gl.glBindBufferBase(
-            gl.GL_UNIFORM_BUFFER,
-            shaders.LIGHT_UBO_BINDING,
-            self._light_ubo,
-        )
+        if not getattr(self, '_light_ubo_bound', False):
+            gl.glBindBufferBase(
+                gl.GL_UNIFORM_BUFFER,
+                shaders.LIGHT_UBO_BINDING,
+                self._light_ubo,
+            )
+            self._light_ubo_bound = True
 
     def _upload_light_ubo(self, lights, count):
         """Pack the active light slice once and upload it to the shared UBO."""
@@ -201,8 +214,7 @@ class LightingMixin:
         cap = self._shader_light_cap(shader_name)
         num_lights = min(len(slots), cap)
 
-        # _upload_light_ubo ensures and binds the buffer, including cache hits.
-        # Repeating that here sent two extra glBindBufferBase calls per pass.
+        # _upload_light_ubo below makes sure the buffer exists and is bound.
         self._frame_lights_uploaded[shader_name] = (
             id(table), table.generation,
             tuple(slots[:cap].tolist()))

@@ -18,17 +18,49 @@ def test_grass_controls_update_the_terrain_and_survive_save_load(qt_app):
         changed = []
         panel.terrain_changed.connect(lambda: changed.append(True))
         panel.grass_blade_height_spin.setValue(12.5)
-        panel.grass_density_slider.setValue(50)
+        panel.grass_density_slider.setValue(1200)
         assert terrain.GRASS_BLADE_HEIGHT == 12.5
-        assert terrain.grass_density == 0.12
+        assert terrain.grass_density == 1200 * 0.0001
         assert len(changed) == 2
         loaded = Terrain(seed=1)
         loaded.from_dict(terrain.to_dict())
         assert loaded.GRASS_BLADE_HEIGHT == 12.5
-        assert loaded.grass_density == 0.12
+        assert loaded.grass_density == terrain.grass_density
     finally:
         panel.close()
         panel.deleteLater()
+
+
+def test_density_slider_keeps_fine_steps_across_the_full_range(qt_app):
+    from editor.terrain_editor import TerrainEditorPanel
+    from engine.terrain import Terrain
+    terrain = Terrain(seed=11)
+    terrain.set_grass(True, density=0.023)
+    panel = TerrainEditorPanel(terrain)
+    try:
+        assert panel.grass_density_slider.value() == 230
+        assert terrain.grass_density == 0.023
+        assert panel.grass_density_value.text() == '115%'
+        panel.grass_density_slider.setValue(231)
+        assert terrain.grass_density == pytest.approx(0.0231)
+        panel.grass_density_slider.setValue(panel.grass_density_slider.maximum())
+        assert terrain.grass_density == pytest.approx(0.24)
+        assert panel.grass_density_value.text() == '1200%'
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
+def test_authored_height_and_existing_shader_height_share_one_value():
+    from engine.terrain import Terrain
+    terrain = Terrain(seed=11)
+    terrain.grass_height = 12.5
+    assert terrain.GRASS_BLADE_HEIGHT == 12.5
+    terrain.GRASS_BLADE_HEIGHT = 17.5
+    assert terrain.grass_height == 17.5
+    loaded = Terrain(seed=11)
+    loaded.from_dict(terrain.to_dict())
+    assert loaded.grass_height == loaded.GRASS_BLADE_HEIGHT == 17.5
 
 
 def test_height_needs_no_instance_rebuild_and_density_invalidates_instances():
