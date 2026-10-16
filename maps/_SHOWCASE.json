@@ -3151,18 +3151,7 @@
             ],
             "trigger_poll_interval": 0.5,
             "trigger_action": "teleport",
-            "target_node": "end",
-            "io_connections": [
-                {
-                    "output": "OnTrigger",
-                    "target": "endboss_spawner",
-                    "input": "Spawn",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "5624a859-8adb-477a-91bc-baee37e70903"
-                }
-            ]
+            "target_node": "end"
         },
         {
             "pos": [
@@ -4112,9 +4101,9 @@
         {
             "type": "playerstart",
             "pos": [
-                -128,
-                176,
-                304
+                -160.0,
+                176.0,
+                352.0
             ],
             "properties": {
                 "type": "playerstart",
@@ -4123,7 +4112,9 @@
                 "angle": 90,
                 "io_enabled": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "primary": true,
+                "creation_index": 0
             },
             "io_connections": [
                 {
@@ -4134,6 +4125,15 @@
                     "delay": 0.0,
                     "fire_once": false,
                     "target_id": "d844f28e-ab97-4e88-ae45-c7e9a35d7f8a"
+                },
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "Ball",
+                    "input": "Hide",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "05ea04fb-15a4-40c4-9d8a-18c4f9baf891"
                 }
             ]
         },
@@ -5359,7 +5359,17 @@
                 "parent_local_pos": null,
                 "parent_local_yaw": 0.0
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnEnabled",
+                    "target": "Ball",
+                    "input": "Show",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "05ea04fb-15a4-40c4-9d8a-18c4f9baf891"
+                }
+            ]
         },
         {
             "type": "path_node",
@@ -5523,29 +5533,6 @@
             "io_connections": []
         },
         {
-            "type": "logic_spawner",
-            "pos": [
-                -64.0,
-                144.0,
-                320.0
-            ],
-            "properties": {
-                "type": "logic_spawner",
-                "io_enabled": true,
-                "name": "endboss_spawner",
-                "id": "5624a859-8adb-477a-91bc-baee37e70903",
-                "spawn_type": "Monster",
-                "target_node": "",
-                "max_spawn": 1,
-                "spawn_properties": {
-                    "random": false,
-                    "monster_type": "human",
-                    "variant": ""
-                }
-            },
-            "io_connections": []
-        },
-        {
             "type": "prop",
             "pos": [
                 -96.0,
@@ -5643,6 +5630,148 @@
                     0.0,
                     0.0
                 ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1760.0,
+                0.0,
+                704.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_6",
+                "id": "43ef8111-18a2-45c3-b68b-dc87d00ae52d",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/gun2.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun2",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -224.0,
+                176.0,
+                480.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Ball",
+                "id": "05ea04fb-15a4-40c4-9d8a-18c4f9baf891",
+                "model_path": "assets/models/ball_numbers.obj",
+                "render_mode": "model",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": true,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": true,
+                "no_collision": false,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    3.0,
+                    3.0,
+                    3.0
+                ],
+                "rolls": true,
+                "bounciness": 0.5
             },
             "io_connections": []
         }
