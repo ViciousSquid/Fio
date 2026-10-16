@@ -391,34 +391,33 @@ class QtGameView(QOpenGLWidget):
             print("[Audio] Sound system unavailable — mixer could not be initialized")
             return
 
-        from engine.audio_archives import list_archive_audio, read_archive_audio
+        from engine.audio_archives import AudioArchiveReader
 
         sound_archive = os.path.join(os.getcwd(), "assets", "sounds.fiopak")
         if os.path.isfile(sound_archive):
             try:
-                members = list_archive_audio(sound_archive, "assets/sounds")
+                with AudioArchiveReader(sound_archive, "assets/sounds") as reader:
+                    members = reader.members()
+                    print("[Audio] Preloading sounds from sounds.fiopak...")
+                    count = 0
+                    for member in members:
+                        try:
+                            data = reader.read(member)
+                        except (OSError, zipfile.BadZipFile) as exc:
+                            print(f"[Audio] Cannot read {member}: {exc}")
+                            continue
+                        if data is None:
+                            continue
+                        relative = member[len("assets/sounds/"):]
+                        keys = [member]
+                        # Bare names remain aliases only for top-level sounds.
+                        if "/" not in relative:
+                            keys.append(relative)
+                        if self._load_sound_bytes_to_cache(keys, data):
+                            count += 1
             except (OSError, zipfile.BadZipFile) as exc:
                 print(f"[Audio] Cannot read sounds.fiopak: {exc}")
                 return
-
-            print("[Audio] Preloading sounds from sounds.fiopak...")
-            count = 0
-            for member in members:
-                try:
-                    data = read_archive_audio(sound_archive, member, "assets/sounds")
-                except (OSError, zipfile.BadZipFile) as exc:
-                    print(f"[Audio] Cannot read {member}: {exc}")
-                    continue
-                if data is None:
-                    continue
-                relative = member[len("assets/sounds/"):]
-                keys = [member]
-                # Preserve legacy bare-filename lookup for files directly under
-                # assets/sounds; nested paths use their full project-relative key.
-                if "/" not in relative:
-                    keys.append(relative)
-                if self._load_sound_bytes_to_cache(keys, data):
-                    count += 1
             print(f"[Audio] Preloaded {count} sound files from sounds.fiopak.")
             return
 

@@ -61,13 +61,11 @@ class PerlinNoise:
         else: return -x - y
     
     def _grad(self, hash_arr, x, y):
-        h = hash_arr & 3
-        result = np.zeros_like(x)
-        result[h == 0] = (x + y)[h == 0]
-        result[h == 1] = (-x + y)[h == 1]
-        result[h == 2] = (x - y)[h == 2]
-        result[h == 3] = (-x - y)[h == 3]
-        return result
+        # The low two bits independently select each coordinate's sign.
+        # Avoid four full sums and four pairs of fancy-indexed arrays.
+        gx = np.where(hash_arr & 1, -x, x)
+        gy = np.where(hash_arr & 2, -y, y)
+        return (gx + gy).astype(x.dtype, copy=False)
     
     def noise2d_scalar(self, x: float, y: float) -> float:
         xi = int(math.floor(x)) & 255
@@ -115,10 +113,12 @@ class PerlinNoise:
         return total / max_value
     
     def noise2d_batch(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        xi = np.floor(x).astype(np.int32) & 255
-        yi = np.floor(y).astype(np.int32) & 255
-        xf = x - np.floor(x)
-        yf = y - np.floor(y)
+        floor_x = np.floor(x)
+        floor_y = np.floor(y)
+        xi = floor_x.astype(np.int32) & 255
+        yi = floor_y.astype(np.int32) & 255
+        xf = x - floor_x
+        yf = y - floor_y
         u = self._fade(xf)
         v = self._fade(yf)
         aa = self.perm[self.perm[xi] + yi]
@@ -1180,18 +1180,17 @@ class Terrain:
             return np.full((len(heights), 3), 0.5, dtype=np.float32)
         h = np.clip(normalized_heights, 0.0, 1.0)
         result = np.zeros((len(h), 3), dtype=np.float32)
-        # FIX: allocate t once outside the loop; reset in-place each iteration
-        t = np.zeros(len(h), dtype=np.float32)
         for i in range(len(colors) - 1):
             h0, c0 = colors[i]
             h1, c1 = colors[i + 1]
             mask = (h >= h0) & (h <= h1)
             if not np.any(mask): continue
-            t[:] = 0.0
             if h1 > h0:
-                t[mask] = (h[mask] - h0) / (h1 - h0)
+                t = np.asarray((h[mask] - h0) / (h1 - h0), dtype=np.float32)
+            else:
+                t = np.zeros(np.count_nonzero(mask), dtype=np.float32)
             for j in range(3):
-                result[mask, j] = c0[j] + t[mask] * (c1[j] - c0[j])
+                result[mask, j] = c0[j] + t * (c1[j] - c0[j])
         last_h, last_c = colors[-1]
         above_mask = h > last_h
         if np.any(above_mask):
@@ -2321,14 +2320,17 @@ class Terrain:
                 raise ValueError(f"Could not load image: {image_path}")
             img = img.convertToFormat(QImage.Format_Grayscale8)
             w, h = img.width(), img.height()
+            stride = img.bytesPerLine()
             ptr = img.bits()
-            ptr.setsize(w * h)
-            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, w))
-            self.heightmap_data = arr.astype(np.float32) / 255.0
-            self.mark_all_dirty()
-            return
-        img = Image.open(image_path).convert('L')
-        arr = np.array(img, dtype=np.float32) / 255.0
+            ptr.setsize(stride * h)
+            # Qt pads grayscale rows to four bytes; padding is not a pixel.
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, stride))[:, :w]
+            arr = arr.astype(np.float32)
+        else:
+            with Image.open(image_path) as source:
+                arr = np.array(source.convert('L'), dtype=np.float32)
+        # This array is owned here. Normalize without a second full float copy.
+        arr /= 255.0
         self.heightmap_data = arr
         self.mark_all_dirty()
 

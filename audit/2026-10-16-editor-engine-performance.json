@@ -1,0 +1,1499 @@
+{
+  "base": "CANARY 69f6fc85b38fcda092e09e8296f2ccca20d8fa88, with the preceding ray-query changes present in both variants",
+  "environment": {
+    "python": "CPython 3.14.8 GIL-enabled",
+    "numpy": "2.5.3",
+    "platform": "Debian 13 x86_64",
+    "graphics": "Mesa llvmpipe under Xvfb",
+    "LP_NUM_THREADS": 2
+  },
+  "method": {
+    "editor": "real MainWindow/View2D; 640x480 QImage, all brushes visible, median of 5; startup includes cProfile and imports",
+    "terrain_kernels": "original frozen/current functions; best of 7 interleaved batches of 50; exact output assertions",
+    "frames": "unprofiled production bench_compare; 120 frames/map plus 30 warm-up; before/after/after/before serial order; means of the two run medians",
+    "before_restore": "original pre-pass methods installed at runtime from saved source; no checkout/source resets; ray implementation unchanged",
+    "fixed_frames": "60 frames/map plus 15 warm-up; benchmark-only one chunk build/frame, no time budget; viewport, chunk and triangle counts match",
+    "editor_interleaved": "same MainWindow; median of 5 alternating current/reference strategies (list membership, original QPointF projection, quadratic identity deduplication); common modern draw wrapper retained"
+  },
+  "limitations": [
+    "Shared cloud host and software rasterization introduce substantial timing variation; whole-frame results show no consistent overall FPS win.",
+    "Normal terrain residency is time-budgeted, so identical input ticks do not guarantee identical per-frame build work.",
+    "Fixed-build runs logged an existing terrain shader Link failure (0) during map transition in both before and after variants; the heightfield/block draw paths still ran. Do not present that transition as newly fixed.",
+    "Editor startup and map loading were inspected but no startup/loader optimization is claimed."
+  ],
+  "editor": {
+    "before": {
+      "startup_ms": 1262.899,
+      "results": [
+        {
+          "brushes": 64,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 1.202
+        },
+        {
+          "brushes": 64,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 0.119
+        },
+        {
+          "brushes": 64,
+          "selected": 32,
+          "operation": "draw",
+          "median_ms": 1.343
+        },
+        {
+          "brushes": 64,
+          "selected": 32,
+          "operation": "snapshot",
+          "median_ms": 0.177
+        },
+        {
+          "brushes": 1024,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 15.838
+        },
+        {
+          "brushes": 1024,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 1.226
+        },
+        {
+          "brushes": 1024,
+          "selected": 512,
+          "operation": "draw",
+          "median_ms": 28.263
+        },
+        {
+          "brushes": 1024,
+          "selected": 512,
+          "operation": "snapshot",
+          "median_ms": 4.748
+        },
+        {
+          "brushes": 4096,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 71.405
+        },
+        {
+          "brushes": 4096,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 4.777
+        },
+        {
+          "brushes": 4096,
+          "selected": 2048,
+          "operation": "draw",
+          "median_ms": 255.768
+        },
+        {
+          "brushes": 4096,
+          "selected": 2048,
+          "operation": "snapshot",
+          "median_ms": 56.697
+        }
+      ]
+    },
+    "after": {
+      "startup_ms": 3138.217,
+      "results": [
+        {
+          "brushes": 64,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 1.713
+        },
+        {
+          "brushes": 64,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 0.144
+        },
+        {
+          "brushes": 64,
+          "selected": 32,
+          "operation": "draw",
+          "median_ms": 2.295
+        },
+        {
+          "brushes": 64,
+          "selected": 32,
+          "operation": "snapshot",
+          "median_ms": 0.26
+        },
+        {
+          "brushes": 1024,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 22.643
+        },
+        {
+          "brushes": 1024,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 1.964
+        },
+        {
+          "brushes": 1024,
+          "selected": 512,
+          "operation": "draw",
+          "median_ms": 23.404
+        },
+        {
+          "brushes": 1024,
+          "selected": 512,
+          "operation": "snapshot",
+          "median_ms": 5.091
+        },
+        {
+          "brushes": 4096,
+          "selected": 0,
+          "operation": "draw",
+          "median_ms": 113.533
+        },
+        {
+          "brushes": 4096,
+          "selected": 0,
+          "operation": "snapshot",
+          "median_ms": 9.789
+        },
+        {
+          "brushes": 4096,
+          "selected": 2048,
+          "operation": "draw",
+          "median_ms": 92.751
+        },
+        {
+          "brushes": 4096,
+          "selected": 2048,
+          "operation": "snapshot",
+          "median_ms": 13.409
+        }
+      ]
+    }
+  },
+  "editor_pixels": "All six before/after QImage artifacts are byte-identical",
+  "terrain_kernels": [
+    {
+      "operation": "noise",
+      "dtype": "float32",
+      "count": 64,
+      "before_us": 89.63,
+      "after_us": 52.24,
+      "speedup": "1.72x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float32",
+      "count": 64,
+      "before_us": 114.09,
+      "after_us": 90.34,
+      "speedup": "1.26x"
+    },
+    {
+      "operation": "noise",
+      "dtype": "float32",
+      "count": 1024,
+      "before_us": 306.64,
+      "after_us": 116.4,
+      "speedup": "2.63x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float32",
+      "count": 1024,
+      "before_us": 261.23,
+      "after_us": 192.85,
+      "speedup": "1.35x"
+    },
+    {
+      "operation": "noise",
+      "dtype": "float32",
+      "count": 16384,
+      "before_us": 4095.68,
+      "after_us": 1776.48,
+      "speedup": "2.31x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float32",
+      "count": 16384,
+      "before_us": 3300.8,
+      "after_us": 1997.73,
+      "speedup": "1.65x"
+    },
+    {
+      "operation": "noise",
+      "dtype": "float64",
+      "count": 64,
+      "before_us": 88.12,
+      "after_us": 50.58,
+      "speedup": "1.74x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float64",
+      "count": 64,
+      "before_us": 108.59,
+      "after_us": 94.49,
+      "speedup": "1.15x"
+    },
+    {
+      "operation": "noise",
+      "dtype": "float64",
+      "count": 1024,
+      "before_us": 320.75,
+      "after_us": 143.19,
+      "speedup": "2.24x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float64",
+      "count": 1024,
+      "before_us": 234.38,
+      "after_us": 181.27,
+      "speedup": "1.29x"
+    },
+    {
+      "operation": "noise",
+      "dtype": "float64",
+      "count": 16384,
+      "before_us": 4473.43,
+      "after_us": 2269.51,
+      "speedup": "1.97x"
+    },
+    {
+      "operation": "palette",
+      "dtype": "float64",
+      "count": 16384,
+      "before_us": 3418.12,
+      "after_us": 2155.38,
+      "speedup": "1.59x"
+    }
+  ],
+  "frame_summary": [
+    {
+      "map": "maps/_SHOWCASE.json",
+      "before": {
+        "load_ms": 29.7,
+        "enter_play_ms": 30.65,
+        "logic_ms_median": 0.538,
+        "ai_ms_median": 0.158,
+        "paint_ms_median": 31.188,
+        "paint_cpu_ms_median": 10.191
+      },
+      "after": {
+        "load_ms": 25.35,
+        "enter_play_ms": 39.2,
+        "logic_ms_median": 0.661,
+        "ai_ms_median": 0.2,
+        "paint_ms_median": 33.136,
+        "paint_cpu_ms_median": 12.741
+      }
+    },
+    {
+      "map": "maps/MonsterTest.json",
+      "before": {
+        "load_ms": 8.75,
+        "enter_play_ms": 4.25,
+        "logic_ms_median": 0.622,
+        "ai_ms_median": 0.881,
+        "paint_ms_median": 21.445,
+        "paint_cpu_ms_median": 4.832
+      },
+      "after": {
+        "load_ms": 14.65,
+        "enter_play_ms": 18.05,
+        "logic_ms_median": 1.409,
+        "ai_ms_median": 2.251,
+        "paint_ms_median": 32.194,
+        "paint_cpu_ms_median": 12.047
+      }
+    },
+    {
+      "map": "maps/Terrain_Test_medium.json",
+      "before": {
+        "load_ms": 33.9,
+        "enter_play_ms": 4.65,
+        "logic_ms_median": 0.238,
+        "ai_ms_median": 0.01,
+        "paint_ms_median": 21.265,
+        "paint_cpu_ms_median": 12.835
+      },
+      "after": {
+        "load_ms": 71.6,
+        "enter_play_ms": 5.2,
+        "logic_ms_median": 0.288,
+        "ai_ms_median": 0.012,
+        "paint_ms_median": 25.235,
+        "paint_cpu_ms_median": 10.384
+      }
+    },
+    {
+      "map": "maps/Portal_Test.json",
+      "before": {
+        "load_ms": 8.1,
+        "enter_play_ms": 2.65,
+        "logic_ms_median": 0.385,
+        "ai_ms_median": 0.01,
+        "paint_ms_median": 19.646,
+        "paint_cpu_ms_median": 8.011
+      },
+      "after": {
+        "load_ms": 8.45,
+        "enter_play_ms": 2.9,
+        "logic_ms_median": 0.422,
+        "ai_ms_median": 0.012,
+        "paint_ms_median": 24.589,
+        "paint_cpu_ms_median": 8.587
+      }
+    },
+    {
+      "map": "maps/Office_Corridor.json",
+      "before": {
+        "load_ms": 5.5,
+        "enter_play_ms": 3.45,
+        "logic_ms_median": 0.333,
+        "ai_ms_median": 0.009,
+        "paint_ms_median": 14.345,
+        "paint_cpu_ms_median": 2.827
+      },
+      "after": {
+        "load_ms": 7.5,
+        "enter_play_ms": 3.65,
+        "logic_ms_median": 0.376,
+        "ai_ms_median": 0.011,
+        "paint_ms_median": 18.121,
+        "paint_cpu_ms_median": 2.984
+      }
+    },
+    {
+      "map": "maps/BigWorld_streaming_test.json",
+      "before": {
+        "load_ms": 187.8,
+        "enter_play_ms": 116.75,
+        "logic_ms_median": 1.156,
+        "ai_ms_median": 0.247,
+        "paint_ms_median": 133.056,
+        "paint_cpu_ms_median": 122.407
+      },
+      "after": {
+        "load_ms": 188.7,
+        "enter_play_ms": 112.95,
+        "logic_ms_median": 1.168,
+        "ai_ms_median": 0.255,
+        "paint_ms_median": 136.343,
+        "paint_cpu_ms_median": 124.194
+      }
+    }
+  ],
+  "frame_runs": {
+    "before": [
+      [
+        {
+          "map": "maps/_SHOWCASE.json",
+          "frames": 120,
+          "load_ms": 39.7,
+          "enter_play_ms": 40.6,
+          "logic_ms_median": 0.625,
+          "logic_ms_p95": 2.246,
+          "ai_ms_median": 0.167,
+          "ai_ms_p95": 0.407,
+          "paint_ms_median": 37.261,
+          "paint_ms_p95": 96.238,
+          "paint_cpu_ms_median": 10.572,
+          "pass_ms_mean": {
+            "effects": 0.898,
+            "fire effects": 0.843,
+            "fog": 0.479,
+            "glass": 2.393,
+            "glow brushes": 0.302,
+            "grid": 0.005,
+            "lit brushes": 1.078,
+            "models": 0.707,
+            "portals (incl. their views)": 0.148,
+            "shadow maps": 0.397,
+            "sprites": 0.687,
+            "textured brushes": 2.996,
+            "water": 31.919
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 45,
+          "brushes": 85
+        },
+        {
+          "map": "maps/MonsterTest.json",
+          "frames": 120,
+          "load_ms": 8.4,
+          "enter_play_ms": 4.5,
+          "logic_ms_median": 0.659,
+          "logic_ms_p95": 2.718,
+          "ai_ms_median": 1.015,
+          "ai_ms_p95": 2.479,
+          "paint_ms_median": 26.454,
+          "paint_ms_p95": 45.214,
+          "paint_cpu_ms_median": 5.171,
+          "pass_ms_mean": {
+            "fog": 0.248,
+            "glass": 0.002,
+            "grid": 0.003,
+            "lit brushes": 0.929,
+            "sprites": 3.153,
+            "textured brushes": 2.266,
+            "water": 6.673
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 19,
+          "brushes": 81
+        },
+        {
+          "map": "maps/Terrain_Test_medium.json",
+          "frames": 120,
+          "load_ms": 40.1,
+          "enter_play_ms": 8.0,
+          "logic_ms_median": 0.245,
+          "logic_ms_p95": 0.565,
+          "ai_ms_median": 0.01,
+          "ai_ms_p95": 0.015,
+          "paint_ms_median": 20.26,
+          "paint_ms_p95": 35.919,
+          "paint_cpu_ms_median": 13.522,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.003,
+            "lit brushes": 0.004,
+            "terrain": 11.112,
+            "textured brushes": 0.005,
+            "water": 0.002
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 3,
+          "brushes": 0
+        },
+        {
+          "map": "maps/Portal_Test.json",
+          "frames": 120,
+          "load_ms": 8.1,
+          "enter_play_ms": 3.2,
+          "logic_ms_median": 0.399,
+          "logic_ms_p95": 1.08,
+          "ai_ms_median": 0.01,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 18.464,
+          "paint_ms_p95": 28.383,
+          "paint_cpu_ms_median": 8.641,
+          "pass_ms_mean": {
+            "fog": 0.003,
+            "glass": 0.007,
+            "grid": 0.003,
+            "lit brushes": 3.62,
+            "portals (incl. their views)": 6.662,
+            "sprites": 0.369,
+            "textured brushes": 0.868,
+            "water": 0.006
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 8,
+          "brushes": 15
+        },
+        {
+          "map": "maps/Office_Corridor.json",
+          "frames": 120,
+          "load_ms": 6.1,
+          "enter_play_ms": 3.8,
+          "logic_ms_median": 0.324,
+          "logic_ms_p95": 0.546,
+          "ai_ms_median": 0.008,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 12.031,
+          "paint_ms_p95": 18.221,
+          "paint_cpu_ms_median": 3.057,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.003,
+            "lit brushes": 0.546,
+            "textured brushes": 1.315,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 9,
+          "brushes": 27
+        },
+        {
+          "map": "maps/BigWorld_streaming_test.json",
+          "frames": 120,
+          "load_ms": 206.9,
+          "enter_play_ms": 145.0,
+          "logic_ms_median": 1.287,
+          "logic_ms_p95": 3.621,
+          "ai_ms_median": 0.273,
+          "ai_ms_p95": 1.519,
+          "paint_ms_median": 155.531,
+          "paint_ms_p95": 224.472,
+          "paint_cpu_ms_median": 144.376,
+          "pass_ms_mean": {
+            "fog": 0.002,
+            "glass": 0.004,
+            "grid": 0.005,
+            "lit brushes": 1.439,
+            "sprites": 0.566,
+            "terrain": 140.253,
+            "textured brushes": 0.006,
+            "water": 0.005
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 44,
+          "brushes": 3604
+        }
+      ],
+      [
+        {
+          "map": "maps/_SHOWCASE.json",
+          "frames": 120,
+          "load_ms": 19.7,
+          "enter_play_ms": 20.7,
+          "logic_ms_median": 0.451,
+          "logic_ms_p95": 1.705,
+          "ai_ms_median": 0.148,
+          "ai_ms_p95": 0.765,
+          "paint_ms_median": 25.114,
+          "paint_ms_p95": 41.94,
+          "paint_cpu_ms_median": 9.811,
+          "pass_ms_mean": {
+            "effects": 0.706,
+            "fire effects": 0.655,
+            "fog": 0.495,
+            "glass": 1.267,
+            "glow brushes": 0.301,
+            "grid": 0.006,
+            "lit brushes": 1.122,
+            "models": 0.52,
+            "portals (incl. their views)": 0.077,
+            "shadow maps": 0.396,
+            "sprites": 0.326,
+            "textured brushes": 2.663,
+            "water": 17.249
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 45,
+          "brushes": 85,
+          "viewport": [
+            456,
+            472
+          ]
+        },
+        {
+          "map": "maps/MonsterTest.json",
+          "frames": 120,
+          "load_ms": 9.1,
+          "enter_play_ms": 4.0,
+          "logic_ms_median": 0.585,
+          "logic_ms_p95": 1.326,
+          "ai_ms_median": 0.748,
+          "ai_ms_p95": 1.881,
+          "paint_ms_median": 16.436,
+          "paint_ms_p95": 28.401,
+          "paint_cpu_ms_median": 4.493,
+          "pass_ms_mean": {
+            "fog": 0.199,
+            "glass": 0.003,
+            "grid": 0.003,
+            "lit brushes": 0.713,
+            "sprites": 1.298,
+            "textured brushes": 2.128,
+            "water": 3.697
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 19,
+          "brushes": 81,
+          "viewport": [
+            456,
+            472
+          ]
+        },
+        {
+          "map": "maps/Terrain_Test_medium.json",
+          "frames": 120,
+          "load_ms": 27.7,
+          "enter_play_ms": 1.3,
+          "logic_ms_median": 0.232,
+          "logic_ms_p95": 0.492,
+          "ai_ms_median": 0.011,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 22.27,
+          "paint_ms_p95": 31.231,
+          "paint_cpu_ms_median": 12.147,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.003,
+            "lit brushes": 0.003,
+            "terrain": 10.149,
+            "textured brushes": 0.002,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 3,
+          "brushes": 0,
+          "viewport": [
+            456,
+            472
+          ]
+        },
+        {
+          "map": "maps/Portal_Test.json",
+          "frames": 120,
+          "load_ms": 8.1,
+          "enter_play_ms": 2.1,
+          "logic_ms_median": 0.371,
+          "logic_ms_p95": 0.613,
+          "ai_ms_median": 0.011,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 20.828,
+          "paint_ms_p95": 26.08,
+          "paint_cpu_ms_median": 7.382,
+          "pass_ms_mean": {
+            "fog": 0.004,
+            "glass": 0.005,
+            "grid": 0.003,
+            "lit brushes": 2.861,
+            "portals (incl. their views)": 5.172,
+            "sprites": 0.326,
+            "textured brushes": 0.749,
+            "water": 0.008
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 8,
+          "brushes": 15,
+          "viewport": [
+            456,
+            472
+          ]
+        },
+        {
+          "map": "maps/Office_Corridor.json",
+          "frames": 120,
+          "load_ms": 4.9,
+          "enter_play_ms": 3.1,
+          "logic_ms_median": 0.342,
+          "logic_ms_p95": 0.64,
+          "ai_ms_median": 0.01,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 16.658,
+          "paint_ms_p95": 21.325,
+          "paint_cpu_ms_median": 2.597,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.002,
+            "lit brushes": 0.475,
+            "textured brushes": 1.297,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 9,
+          "brushes": 27,
+          "viewport": [
+            456,
+            472
+          ]
+        },
+        {
+          "map": "maps/BigWorld_streaming_test.json",
+          "frames": 120,
+          "load_ms": 168.7,
+          "enter_play_ms": 88.5,
+          "logic_ms_median": 1.026,
+          "logic_ms_p95": 1.637,
+          "ai_ms_median": 0.221,
+          "ai_ms_p95": 0.435,
+          "paint_ms_median": 110.582,
+          "paint_ms_p95": 127.222,
+          "paint_cpu_ms_median": 100.439,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.002,
+            "grid": 0.004,
+            "lit brushes": 0.941,
+            "sprites": 0.317,
+            "terrain": 96.025,
+            "textured brushes": 0.004,
+            "water": 0.003
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 44,
+          "brushes": 3604,
+          "viewport": [
+            456,
+            472
+          ]
+        }
+      ]
+    ],
+    "after": [
+      [
+        {
+          "map": "maps/_SHOWCASE.json",
+          "frames": 120,
+          "load_ms": 35.9,
+          "enter_play_ms": 58.0,
+          "logic_ms_median": 0.938,
+          "logic_ms_p95": 7.956,
+          "ai_ms_median": 0.263,
+          "ai_ms_p95": 2.625,
+          "paint_ms_median": 43.609,
+          "paint_ms_p95": 328.23,
+          "paint_cpu_ms_median": 18.392,
+          "pass_ms_mean": {
+            "effects": 1.822,
+            "fire effects": 1.69,
+            "fog": 3.811,
+            "glass": 2.997,
+            "glow brushes": 0.611,
+            "grid": 0.064,
+            "lit brushes": 5.419,
+            "models": 4.175,
+            "portals (incl. their views)": 0.211,
+            "shadow maps": 0.791,
+            "sprites": 1.952,
+            "textured brushes": 10.62,
+            "water": 52.434
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 45,
+          "brushes": 85
+        },
+        {
+          "map": "maps/MonsterTest.json",
+          "frames": 120,
+          "load_ms": 21.0,
+          "enter_play_ms": 32.3,
+          "logic_ms_median": 2.319,
+          "logic_ms_p95": 7.109,
+          "ai_ms_median": 3.83,
+          "ai_ms_p95": 13.474,
+          "paint_ms_median": 48.062,
+          "paint_ms_p95": 73.297,
+          "paint_cpu_ms_median": 20.389,
+          "pass_ms_mean": {
+            "fog": 0.92,
+            "glass": 0.002,
+            "grid": 0.009,
+            "lit brushes": 2.885,
+            "sprites": 6.052,
+            "textured brushes": 8.11,
+            "water": 8.82
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 19,
+          "brushes": 81
+        },
+        {
+          "map": "maps/Terrain_Test_medium.json",
+          "frames": 120,
+          "load_ms": 113.8,
+          "enter_play_ms": 9.0,
+          "logic_ms_median": 0.321,
+          "logic_ms_p95": 1.204,
+          "ai_ms_median": 0.012,
+          "ai_ms_p95": 0.014,
+          "paint_ms_median": 27.375,
+          "paint_ms_p95": 65.16,
+          "paint_cpu_ms_median": 9.627,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.005,
+            "lit brushes": 0.004,
+            "terrain": 18.14,
+            "textured brushes": 0.007,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 3,
+          "brushes": 0
+        },
+        {
+          "map": "maps/Portal_Test.json",
+          "frames": 120,
+          "load_ms": 8.5,
+          "enter_play_ms": 2.9,
+          "logic_ms_median": 0.443,
+          "logic_ms_p95": 0.677,
+          "ai_ms_median": 0.012,
+          "ai_ms_p95": 0.014,
+          "paint_ms_median": 25.64,
+          "paint_ms_p95": 38.734,
+          "paint_cpu_ms_median": 8.09,
+          "pass_ms_mean": {
+            "fog": 0.003,
+            "glass": 0.004,
+            "grid": 0.004,
+            "lit brushes": 4.172,
+            "portals (incl. their views)": 6.683,
+            "sprites": 0.327,
+            "textured brushes": 0.82,
+            "water": 0.005
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 8,
+          "brushes": 15
+        },
+        {
+          "map": "maps/Office_Corridor.json",
+          "frames": 120,
+          "load_ms": 7.4,
+          "enter_play_ms": 4.7,
+          "logic_ms_median": 0.341,
+          "logic_ms_p95": 0.477,
+          "ai_ms_median": 0.011,
+          "ai_ms_p95": 0.012,
+          "paint_ms_median": 18.369,
+          "paint_ms_p95": 28.028,
+          "paint_cpu_ms_median": 2.646,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.004,
+            "lit brushes": 0.434,
+            "textured brushes": 1.829,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 9,
+          "brushes": 27
+        },
+        {
+          "map": "maps/BigWorld_streaming_test.json",
+          "frames": 120,
+          "load_ms": 181.5,
+          "enter_play_ms": 99.4,
+          "logic_ms_median": 1.035,
+          "logic_ms_p95": 1.673,
+          "ai_ms_median": 0.255,
+          "ai_ms_p95": 0.52,
+          "paint_ms_median": 114.342,
+          "paint_ms_p95": 130.629,
+          "paint_cpu_ms_median": 100.643,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.004,
+            "lit brushes": 1.0,
+            "sprites": 0.335,
+            "terrain": 95.792,
+            "textured brushes": 0.003,
+            "water": 0.003
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 44,
+          "brushes": 3604
+        }
+      ],
+      [
+        {
+          "map": "maps/_SHOWCASE.json",
+          "frames": 120,
+          "load_ms": 14.8,
+          "enter_play_ms": 20.4,
+          "logic_ms_median": 0.384,
+          "logic_ms_p95": 0.564,
+          "ai_ms_median": 0.136,
+          "ai_ms_p95": 0.282,
+          "paint_ms_median": 22.664,
+          "paint_ms_p95": 27.488,
+          "paint_cpu_ms_median": 7.089,
+          "pass_ms_mean": {
+            "effects": 0.455,
+            "fire effects": 0.433,
+            "fog": 0.286,
+            "glass": 1.048,
+            "glow brushes": 0.187,
+            "grid": 0.003,
+            "lit brushes": 0.628,
+            "models": 0.329,
+            "portals (incl. their views)": 0.04,
+            "shadow maps": 0.24,
+            "sprites": 0.173,
+            "textured brushes": 1.789,
+            "water": 15.529
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 45,
+          "brushes": 85
+        },
+        {
+          "map": "maps/MonsterTest.json",
+          "frames": 120,
+          "load_ms": 8.3,
+          "enter_play_ms": 3.8,
+          "logic_ms_median": 0.5,
+          "logic_ms_p95": 0.774,
+          "ai_ms_median": 0.671,
+          "ai_ms_p95": 1.262,
+          "paint_ms_median": 16.326,
+          "paint_ms_p95": 20.622,
+          "paint_cpu_ms_median": 3.706,
+          "pass_ms_mean": {
+            "fog": 0.152,
+            "glass": 0.001,
+            "grid": 0.004,
+            "lit brushes": 0.507,
+            "sprites": 1.138,
+            "textured brushes": 1.555,
+            "water": 3.843
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 19,
+          "brushes": 81
+        },
+        {
+          "map": "maps/Terrain_Test_medium.json",
+          "frames": 120,
+          "load_ms": 29.4,
+          "enter_play_ms": 1.4,
+          "logic_ms_median": 0.256,
+          "logic_ms_p95": 0.939,
+          "ai_ms_median": 0.012,
+          "ai_ms_p95": 0.016,
+          "paint_ms_median": 23.094,
+          "paint_ms_p95": 45.689,
+          "paint_cpu_ms_median": 11.142,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.003,
+            "lit brushes": 0.005,
+            "terrain": 10.263,
+            "textured brushes": 0.003,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 3,
+          "brushes": 0
+        },
+        {
+          "map": "maps/Portal_Test.json",
+          "frames": 120,
+          "load_ms": 8.4,
+          "enter_play_ms": 2.9,
+          "logic_ms_median": 0.401,
+          "logic_ms_p95": 0.949,
+          "ai_ms_median": 0.012,
+          "ai_ms_p95": 0.014,
+          "paint_ms_median": 23.538,
+          "paint_ms_p95": 34.213,
+          "paint_cpu_ms_median": 9.084,
+          "pass_ms_mean": {
+            "fog": 0.004,
+            "glass": 0.005,
+            "grid": 0.003,
+            "lit brushes": 3.532,
+            "portals (incl. their views)": 6.593,
+            "sprites": 0.397,
+            "textured brushes": 0.876,
+            "water": 0.009
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 8,
+          "brushes": 15
+        },
+        {
+          "map": "maps/Office_Corridor.json",
+          "frames": 120,
+          "load_ms": 7.6,
+          "enter_play_ms": 2.6,
+          "logic_ms_median": 0.411,
+          "logic_ms_p95": 2.811,
+          "ai_ms_median": 0.012,
+          "ai_ms_p95": 0.064,
+          "paint_ms_median": 17.873,
+          "paint_ms_p95": 40.448,
+          "paint_cpu_ms_median": 3.323,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.018,
+            "lit brushes": 0.779,
+            "textured brushes": 2.207,
+            "water": 0.001
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 9,
+          "brushes": 27
+        },
+        {
+          "map": "maps/BigWorld_streaming_test.json",
+          "frames": 120,
+          "load_ms": 195.9,
+          "enter_play_ms": 126.5,
+          "logic_ms_median": 1.302,
+          "logic_ms_p95": 4.327,
+          "ai_ms_median": 0.254,
+          "ai_ms_p95": 1.722,
+          "paint_ms_median": 158.343,
+          "paint_ms_p95": 216.745,
+          "paint_cpu_ms_median": 147.744,
+          "pass_ms_mean": {
+            "fog": 0.001,
+            "glass": 0.001,
+            "grid": 0.007,
+            "lit brushes": 1.587,
+            "sprites": 0.506,
+            "terrain": 141.653,
+            "textured brushes": 0.008,
+            "water": 0.002
+          },
+          "threads": [
+            "MainThread"
+          ],
+          "things": 44,
+          "brushes": 3604
+        }
+      ]
+    ]
+  },
+  "fixed_frames": {
+    "before": [
+      {
+        "map": "maps/Terrain_Test_medium.json",
+        "frames": 60,
+        "load_ms": 158.0,
+        "enter_play_ms": 2.3,
+        "logic_ms_median": 0.221,
+        "logic_ms_p95": 0.314,
+        "ai_ms_median": 0.009,
+        "ai_ms_p95": 0.014,
+        "paint_ms_median": 22.941,
+        "paint_ms_p95": 26.057,
+        "paint_cpu_ms_median": 12.75,
+        "pass_ms_mean": {
+          "fog": 0.001,
+          "glass": 0.001,
+          "grid": 0.003,
+          "lit brushes": 0.003,
+          "terrain": 11.385,
+          "textured brushes": 0.002,
+          "water": 0.003
+        },
+        "threads": [
+          "MainThread"
+        ],
+        "things": 3,
+        "brushes": 0,
+        "viewport": [
+          456,
+          472
+        ],
+        "terrain": {
+          "built_chunks": 78,
+          "visible_chunks": 20,
+          "triangles": 19128,
+          "max_updates_per_frame": 1
+        }
+      },
+      {
+        "map": "maps/BigWorld_streaming_test.json",
+        "frames": 60,
+        "load_ms": 171.9,
+        "enter_play_ms": 93.3,
+        "logic_ms_median": 1.0,
+        "logic_ms_p95": 1.693,
+        "ai_ms_median": 0.216,
+        "ai_ms_p95": 0.331,
+        "paint_ms_median": 70.481,
+        "paint_ms_p95": 100.619,
+        "paint_cpu_ms_median": 55.793,
+        "pass_ms_mean": {
+          "fog": 0.002,
+          "glass": 0.001,
+          "grid": 0.003,
+          "lit brushes": 0.793,
+          "sprites": 0.248,
+          "terrain": 53.94,
+          "textured brushes": 0.004,
+          "water": 0.002
+        },
+        "threads": [
+          "MainThread"
+        ],
+        "things": 44,
+        "brushes": 3604,
+        "viewport": [
+          456,
+          472
+        ],
+        "terrain": {
+          "built_chunks": 77,
+          "visible_chunks": 60,
+          "triangles": 276480,
+          "max_updates_per_frame": 1
+        }
+      }
+    ],
+    "after": [
+      {
+        "map": "maps/Terrain_Test_medium.json",
+        "frames": 60,
+        "load_ms": 81.1,
+        "enter_play_ms": 2.6,
+        "logic_ms_median": 0.239,
+        "logic_ms_p95": 0.589,
+        "ai_ms_median": 0.01,
+        "ai_ms_p95": 0.046,
+        "paint_ms_median": 21.637,
+        "paint_ms_p95": 39.215,
+        "paint_cpu_ms_median": 14.437,
+        "pass_ms_mean": {
+          "fog": 0.001,
+          "glass": 0.005,
+          "grid": 0.003,
+          "lit brushes": 0.003,
+          "terrain": 13.787,
+          "textured brushes": 0.002,
+          "water": 0.001
+        },
+        "threads": [
+          "MainThread"
+        ],
+        "things": 3,
+        "brushes": 0,
+        "viewport": [
+          456,
+          472
+        ],
+        "terrain": {
+          "built_chunks": 78,
+          "visible_chunks": 20,
+          "triangles": 19128,
+          "max_updates_per_frame": 1
+        }
+      },
+      {
+        "map": "maps/BigWorld_streaming_test.json",
+        "frames": 60,
+        "load_ms": 192.6,
+        "enter_play_ms": 122.6,
+        "logic_ms_median": 1.287,
+        "logic_ms_p95": 1.925,
+        "ai_ms_median": 0.249,
+        "ai_ms_p95": 0.905,
+        "paint_ms_median": 86.211,
+        "paint_ms_p95": 126.975,
+        "paint_cpu_ms_median": 75.165,
+        "pass_ms_mean": {
+          "fog": 0.005,
+          "glass": 0.001,
+          "grid": 0.012,
+          "lit brushes": 1.129,
+          "sprites": 0.417,
+          "terrain": 72.976,
+          "textured brushes": 0.003,
+          "water": 0.006
+        },
+        "threads": [
+          "MainThread"
+        ],
+        "things": 44,
+        "brushes": 3604,
+        "viewport": [
+          456,
+          472
+        ],
+        "terrain": {
+          "built_chunks": 77,
+          "visible_chunks": 60,
+          "triangles": 276480,
+          "max_updates_per_frame": 1
+        }
+      }
+    ]
+  },
+  "editor_pixel_checks": [
+    {
+      "image": "draw_1024_0.png",
+      "sha256": "110290837a448c1915a85074b3481e3a6ac48a7614537b432483f9d5bcceb79e",
+      "equal": true
+    },
+    {
+      "image": "draw_1024_512.png",
+      "sha256": "52765687d0081fc3e0aac8edc1fb6100da1d23911d0f7f0e2f7dd9d87f603c4a",
+      "equal": true
+    },
+    {
+      "image": "draw_4096_0.png",
+      "sha256": "fbce6cea1b03eb04ff44b354125ffcefd985a959f242617adc55c9388b1abc3f",
+      "equal": true
+    },
+    {
+      "image": "draw_4096_2048.png",
+      "sha256": "9a02c55136e7ffe46e5e5c174c61172131c4ea3f537611fee5f1ba85f6c46ac0",
+      "equal": true
+    },
+    {
+      "image": "draw_64_0.png",
+      "sha256": "df9888f8a7753529049d99373e2c1d5ca8f9db8ea131ce542fe387fdff413405",
+      "equal": true
+    },
+    {
+      "image": "draw_64_32.png",
+      "sha256": "d4d6dd56b6489c6f3e9d2233e7127469497f16d3c4df72f96ba4468001bdd04f",
+      "equal": true
+    }
+  ],
+  "editor_selection_only": {
+    "startup_ms": 2094.341,
+    "results": [
+      {
+        "brushes": 64,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 1.349
+      },
+      {
+        "brushes": 64,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 0.118
+      },
+      {
+        "brushes": 64,
+        "selected": 32,
+        "operation": "draw",
+        "median_ms": 2.253
+      },
+      {
+        "brushes": 64,
+        "selected": 32,
+        "operation": "snapshot",
+        "median_ms": 0.19
+      },
+      {
+        "brushes": 1024,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 18.466
+      },
+      {
+        "brushes": 1024,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 1.401
+      },
+      {
+        "brushes": 1024,
+        "selected": 512,
+        "operation": "draw",
+        "median_ms": 19.621
+      },
+      {
+        "brushes": 1024,
+        "selected": 512,
+        "operation": "snapshot",
+        "median_ms": 1.89
+      },
+      {
+        "brushes": 4096,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 68.831
+      },
+      {
+        "brushes": 4096,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 5.245
+      },
+      {
+        "brushes": 4096,
+        "selected": 2048,
+        "operation": "draw",
+        "median_ms": 79.183
+      },
+      {
+        "brushes": 4096,
+        "selected": 2048,
+        "operation": "snapshot",
+        "median_ms": 7.172
+      }
+    ]
+  },
+  "editor_interleaved": {
+    "startup_ms": 1583.518,
+    "results": [
+      {
+        "brushes": 64,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 1.158,
+        "reference_ms": 1.24,
+        "speedup": 1.071
+      },
+      {
+        "brushes": 64,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 0.104,
+        "reference_ms": 0.106,
+        "speedup": 1.019
+      },
+      {
+        "brushes": 64,
+        "selected": 32,
+        "operation": "draw",
+        "median_ms": 1.291,
+        "reference_ms": 1.628,
+        "speedup": 1.261
+      },
+      {
+        "brushes": 64,
+        "selected": 32,
+        "operation": "snapshot",
+        "median_ms": 0.134,
+        "reference_ms": 0.148,
+        "speedup": 1.104
+      },
+      {
+        "brushes": 1024,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 12.771,
+        "reference_ms": 15.451,
+        "speedup": 1.21
+      },
+      {
+        "brushes": 1024,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 1.13,
+        "reference_ms": 1.111,
+        "speedup": 0.983
+      },
+      {
+        "brushes": 1024,
+        "selected": 512,
+        "operation": "draw",
+        "median_ms": 14.262,
+        "reference_ms": 32.041,
+        "speedup": 2.247
+      },
+      {
+        "brushes": 1024,
+        "selected": 512,
+        "operation": "snapshot",
+        "median_ms": 1.517,
+        "reference_ms": 4.128,
+        "speedup": 2.721
+      },
+      {
+        "brushes": 4096,
+        "selected": 0,
+        "operation": "draw",
+        "median_ms": 51.536,
+        "reference_ms": 60.822,
+        "speedup": 1.18
+      },
+      {
+        "brushes": 4096,
+        "selected": 0,
+        "operation": "snapshot",
+        "median_ms": 5.352,
+        "reference_ms": 4.855,
+        "speedup": 0.907
+      },
+      {
+        "brushes": 4096,
+        "selected": 2048,
+        "operation": "draw",
+        "median_ms": 58.475,
+        "reference_ms": 281.282,
+        "speedup": 4.81
+      },
+      {
+        "brushes": 4096,
+        "selected": 2048,
+        "operation": "snapshot",
+        "median_ms": 5.763,
+        "reference_ms": 58.117,
+        "speedup": 10.085
+      }
+    ]
+  },
+  "validation": {
+    "baseline_selected": {
+      "passed": 137
+    },
+    "broad_cpu_editor": {
+      "passed": 2128,
+      "skipped": 25,
+      "deselected": 20,
+      "skip_reason": "optional pyflakes not installed"
+    },
+    "renderer_visual": {
+      "passed": 746,
+      "note": "Engine/renderer code final; final 2D-only projection refinement separately covered by editor tests."
+    },
+    "terrain_kernel_benchmark": {
+      "passed": 2,
+      "cases": 12
+    },
+    "final_projection_tests": {
+      "passed": 269,
+      "deselected": 1,
+      "reason": "gl case excluded; targeted editor/undo suites rerun after final projection refinement"
+    }
+  }
+}

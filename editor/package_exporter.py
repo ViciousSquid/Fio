@@ -4,6 +4,8 @@ import json
 import zipfile
 from typing import Dict, List, Optional, Set
 
+from engine.fileio import atomic_output
+
 
 class PackageExporter:
     """
@@ -50,7 +52,6 @@ class PackageExporter:
         """
         import traceback
 
-        temporary = None
         try:
             root = self.root_dir
             if not os.path.isdir(root):
@@ -117,19 +118,15 @@ class PackageExporter:
                 asset_entries.setdefault(arcname, src_path)
 
             # ---- 4. Assemble next to the destination, then swap it in ----
-            out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
-            temporary = os.path.join(
-                out_dir, ".%s.tmp" % os.path.basename(output_path))
-            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr('metadata.json', json.dumps(manifest, indent=2))
-                for map_file, archive_path in map_archive_paths.items():
-                    zf.write(map_file, archive_path)
-                for arcname, src_path in sorted(cutscene_entries.items()):
-                    zf.write(src_path, arcname)
-                for arcname, src_path in sorted(asset_entries.items()):
-                    zf.write(src_path, arcname)
-            os.replace(temporary, output_path)
-            temporary = None
+            with atomic_output(output_path, binary=True) as handle:
+                with zipfile.ZipFile(handle, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr('metadata.json', json.dumps(manifest, indent=2))
+                    for map_file, archive_path in map_archive_paths.items():
+                        zf.write(map_file, archive_path)
+                    for arcname, src_path in sorted(cutscene_entries.items()):
+                        zf.write(src_path, arcname)
+                    for arcname, src_path in sorted(asset_entries.items()):
+                        zf.write(src_path, arcname)
 
             metadata['map_path'] = manifest['map_path']
             return True, list(self.errors)
@@ -141,12 +138,6 @@ class PackageExporter:
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.critical(parent_widget, "Export Error", error_msg)
             return False, self.errors
-        finally:
-            if temporary is not None and os.path.exists(temporary):
-                try:
-                    os.remove(temporary)
-                except OSError:
-                    pass
 
     # ------------------------------------------------------------------
     # Discovery

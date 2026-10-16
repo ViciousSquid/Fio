@@ -519,11 +519,13 @@ def build_block_mesh(world_x: float, world_z: float, size: float, cell: float,
     if hy.size:
         cols = colors_fn(hy.astype(np.float32))
         up = np.array([0.0, 1.0, 0.0])
-        corners = [(hx0, hz0), (hx1, hz0), (hx0, hz1),
-                   (hx1, hz0), (hx1, hz1), (hx0, hz1)]
+        ux0, ux1, uz0, uz1 = (a / tiling for a in (hx0, hx1, hz0, hz1))
+        corners = [(hx0, hy, hz0), (hx1, hy, hz0), (hx0, hy, hz1),
+                   (hx1, hy, hz0), (hx1, hy, hz1), (hx0, hy, hz1)]
         parts.append(_quad_vertices(
-            [np.stack([a, hy, b], -1) for a, b in corners], up, cols,
-            [np.stack([a / tiling, b / tiling], -1) for a, b in corners]))
+            corners, up, cols,
+            [(ux0, uz0), (ux1, uz0), (ux0, uz1),
+             (ux1, uz0), (ux1, uz1), (ux0, uz1)]))
 
     # Walls. (neighbour slice, outward normal, wall edge as two xz points)
     sides = [
@@ -543,31 +545,41 @@ def build_block_mesh(world_x: float, world_z: float, size: float, cell: float,
         cols = colors_fn(top.astype(np.float32))
         along_a = (pax + paz) / tiling
         along_b = (pbx + pbz) / tiling
-        corners = [(pax, bottom, paz, along_a), (pbx, bottom, pbz, along_b),
-                   (pax, top, paz, along_a), (pbx, bottom, pbz, along_b),
-                   (pbx, top, pbz, along_b), (pax, top, paz, along_a)]
+        uv_bottom, uv_top = bottom / tiling, top / tiling
+        corners = [(pax, bottom, paz), (pbx, bottom, pbz),
+                   (pax, top, paz), (pbx, bottom, pbz),
+                   (pbx, top, pbz), (pax, top, paz)]
         parts.append(_quad_vertices(
-            [np.stack([cx_, cy_, cz_], -1) for cx_, cy_, cz_, _ in corners],
-            np.array(normal), cols,
-            [np.stack([u, cy_ / tiling], -1) for _, cy_, _, u in corners]))
+            corners, np.array(normal), cols,
+            [(along_a, uv_bottom), (along_b, uv_bottom),
+             (along_a, uv_top), (along_b, uv_bottom),
+             (along_b, uv_top), (along_a, uv_top)]))
 
     if not parts:
         return np.zeros((0, 14), dtype=np.float32), 0.0, 0.0
-    verts = np.concatenate(parts, axis=0)
+    # A flat interior chunk has only tops; its freshly allocated face buffer
+    # already has the final layout and need not be copied by concatenate.
+    verts = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
     ys = verts[:, 1]
     return verts, float(ys.min()), float(ys.max())
 
 
 def _quad_vertices(positions, normal, colors, uvs) -> np.ndarray:
-    """Interleave six-vertex quads: positions/uvs are lists of (n, k) arrays."""
-    n = positions[0].shape[0]
-    out = np.zeros((n, 6, 14), dtype=np.float32)
+    """Interleave component arrays directly, without temporary position/UV stacks."""
+    n = len(positions[0][0])
+    out = np.empty((n, 6, 14), dtype=np.float32)
+    out[:, :, 3:6] = normal
+    out[:, :, 11:14] = normal
+    # Preserve the original accepted colour broadcasting, then repeat each
+    # face's colour. Copy now: callbacks may reuse their output buffer later.
+    out[:, 0, 6:9] = colors
+    out[:, :, 6:9] = out[:, :1, 6:9]
     for i in range(6):
-        out[:, i, 0:3] = positions[i]
-        out[:, i, 3:6] = normal
-        out[:, i, 6:9] = colors
-        out[:, i, 9:11] = uvs[i]
-        out[:, i, 11:14] = normal
+        out[:, i, 0] = positions[i][0]
+        out[:, i, 1] = positions[i][1]
+        out[:, i, 2] = positions[i][2]
+        out[:, i, 9] = uvs[i][0]
+        out[:, i, 10] = uvs[i][1]
     return out.reshape(-1, 14)
 
 

@@ -35,7 +35,7 @@ _EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {}, {})
 
 #: Cell coordinates packed into one int64 so a batch of queries can find its
 #: cells with one ``searchsorted``. Coordinates are offset to be non-negative;
-#: 2**20 cells of 512 units either side of the origin is far beyond any map.
+#: Cells outside this range use exact coordinate lookups instead of packing.
 _CELL_OFFSET = 1 << 20
 _CELL_STRIDE = 1 << 21
 
@@ -56,23 +56,37 @@ class _CellRows:
     which is what the per-brush queries do.
     """
 
-    __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes')
+    __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
+                 '_unpacked_cells')
 
     def __init__(self, cells):
-        order = sorted(cells.items(), key=lambda kv: int(_cell_keys(kv[0][0], kv[0][1])))
+        # Packing is unique only inside the documented coordinate range.  A
+        # distant cell must not alias a nearer bucket, or overflow int64 while
+        # a grid is populated.  Such worlds keep exact Python-integer keys.
+        packable = all(-_CELL_OFFSET <= cx < _CELL_OFFSET
+                       and -_CELL_OFFSET <= cz < _CELL_OFFSET
+                       for cx, cz in cells)
+        order = (sorted(cells.items(),
+                        key=lambda kv: int(_cell_keys(kv[0][0], kv[0][1])))
+                 if packable else cells.items())
+        self._unpacked_cells = None if packable else {}
         row_of = {}
         brushes = []
         keys = []
         starts = [0]
         rows = []
         for (cx, cz), bucket in order:
-            keys.append(int(_cell_keys(cx, cz)))
+            if packable:
+                keys.append(int(_cell_keys(cx, cz)))
+            first = len(rows)
             for brush in bucket:
                 row = row_of.get(id(brush))
                 if row is None:
                     row = row_of[id(brush)] = len(brushes)
                     brushes.append(brush)
                 rows.append(row)
+            if not packable:
+                self._unpacked_cells[(cx, cz)] = tuple(rows[first:])
             starts.append(len(rows))
         self.keys = np.asarray(keys, dtype=np.int64)
         self.starts = np.asarray(starts, dtype=np.int64)
@@ -103,9 +117,15 @@ class _CellRows:
     def pairs(self, cx, cz):
         """``(query, row)`` for every brush filed in each query's cell."""
         count = len(cx)
-        if not len(self.keys) or not count:
+        if not len(self.rows) or not count:
             empty = np.empty(0, dtype=np.int64)
             return empty, empty
+        if (self._unpacked_cells is not None
+                or not (-_CELL_OFFSET <= cx.min()
+                        and cx.max() < _CELL_OFFSET
+                        and -_CELL_OFFSET <= cz.min()
+                        and cz.max() < _CELL_OFFSET)):
+            return self._pairs_unpacked(cx, cz)
         keys = _cell_keys(cx, cz)
         at = np.searchsorted(self.keys, keys)
         clipped = np.minimum(at, len(self.keys) - 1)
@@ -117,6 +137,33 @@ class _CellRows:
         within = np.arange(total, dtype=np.int64) - np.repeat(
             np.cumsum(counts) - counts, counts)
         return query, self.rows[np.repeat(first, counts) + within]
+
+    def _pairs_unpacked(self, cx, cz):
+        """Rare large-coordinate queries, retaining query and bucket order."""
+        query = []
+        rows = []
+        exact = self._unpacked_cells
+        for index, (x, z) in enumerate(zip(cx, cz)):
+            if ((isinstance(x, (float, np.floating)) and not math.isfinite(x))
+                    or (isinstance(z, (float, np.floating)) and not math.isfinite(z))):
+                continue
+            coord = (int(x), int(z))
+            if exact is not None:
+                bucket = exact.get(coord, ())
+            elif (-_CELL_OFFSET <= coord[0] < _CELL_OFFSET
+                  and -_CELL_OFFSET <= coord[1] < _CELL_OFFSET):
+                key = ((coord[0] + _CELL_OFFSET) * _CELL_STRIDE
+                       + coord[1] + _CELL_OFFSET)
+                at = int(np.searchsorted(self.keys, key))
+                if at == len(self.keys) or self.keys[at] != key:
+                    continue
+                bucket = self.rows[self.starts[at]:self.starts[at + 1]]
+            else:
+                continue
+            query.extend([index] * len(bucket))
+            rows.extend(bucket)
+        return (np.asarray(query, dtype=np.int64),
+                np.asarray(rows, dtype=np.int64))
 
 
 _EMPTY_CELL_ROWS = _CellRows({})

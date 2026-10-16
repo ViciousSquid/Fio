@@ -54,6 +54,38 @@ void main() {
 FLOATS_PER_VERTEX = 14
 
 
+def reference_noise_gradient(hash_arr, x, y):
+    """The original four-mask Perlin gradient, retained for CPU parity."""
+    h = hash_arr & 3
+    result = np.zeros_like(x)
+    result[h == 0] = (x + y)[h == 0]
+    result[h == 1] = (-x + y)[h == 1]
+    result[h == 2] = (x - y)[h == 2]
+    result[h == 3] = (-x - y)[h == 3]
+    return result
+
+
+def reference_noise_batch(noise, x, y):
+    """Original coordinate rounding and gradient evaluation for one octave."""
+    xi = np.floor(x).astype(np.int32) & 255
+    yi = np.floor(y).astype(np.int32) & 255
+    xf = x - np.floor(x)
+    yf = y - np.floor(y)
+    u = noise._fade(xf)
+    v = noise._fade(yf)
+    aa = noise.perm[noise.perm[xi] + yi]
+    ab = noise.perm[noise.perm[xi] + yi + 1]
+    ba = noise.perm[noise.perm[xi + 1] + yi]
+    bb = noise.perm[noise.perm[xi + 1] + yi + 1]
+    g_aa = reference_noise_gradient(aa, xf, yf)
+    g_ba = reference_noise_gradient(ba, xf - 1, yf)
+    g_ab = reference_noise_gradient(ab, xf, yf - 1)
+    g_bb = reference_noise_gradient(bb, xf - 1, yf - 1)
+    x1 = g_aa + u * (g_ba - g_aa)
+    x2 = g_ab + u * (g_bb - g_ab)
+    return x1 + v * (x2 - x1)
+
+
 # ---------------------------------------------------------------------------
 # CPU mesh (was Terrain._generate_chunk_mesh / Terrain._get_colors_batch)
 # ---------------------------------------------------------------------------
