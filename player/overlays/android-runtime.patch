@@ -395,3 +395,16 @@
      return isinstance(thing, Portal)
  
  
+--- a/engine/logic_combat.py
++++ b/engine/logic_combat.py
+@@ -328,6 +328,10 @@
+         disc = b * b - 4 * a * c
+         real = disc >= 0
+         t = (-b - np.sqrt(np.where(real, disc, 0.0))) / (2.0 * a)
++        # A point-blank shot can originate inside the target sphere. Its
++        # entry root is behind the eye; count the current point as the hit.
++        far_t = (-b + np.sqrt(np.where(real, disc, 0.0))) / (2.0 * a)
++        t = np.where((c[None, :] <= 0) & (far_t >= 0), 0.0, t)
+         walls = np.asarray(wall_dists, dtype=np.float64)[:, None]
+         valid = real & (0 <= t) & (t <= reach) & (t < walls)
+         if not valid.any():

@@ -66,3 +66,16 @@ class APKTests(unittest.TestCase):
         struct.pack_into("<Q", header, 80, 4096)
         with self.assertRaisesRegex(ValueError, "PT_LOAD"):
             check_elf(header, "bad.so")
+
+    def test_rejects_accidentally_bundled_showcase_world(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'test.apk'
+            self.build_apk(path, elf())
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w:gz') as private:
+                entry = tarfile.TarInfo('player/_SHOWCASE.fiopak')
+                private.addfile(entry)
+            with zipfile.ZipFile(path, 'a') as apk:
+                apk.writestr('assets/private.tar', data.getvalue())
+            with self.assertRaisesRegex(ValueError, 'must import world assets'):
+                check_apk(path)

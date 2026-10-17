@@ -75,55 +75,65 @@ def build_brush_mesh(map_data: dict) -> Tuple["np.ndarray", int]:
     return out.reshape(-1), row
 
 
-def build_textured_batches(
-    map_data: dict, texel: float = DEFAULT_TEXEL
-) -> Dict[str, "np.ndarray"]:
-    """Group brush faces by texture into interleaved (pos3, normal3, uv2) arrays.
+def build_textured_batches(map_data: dict, texel=None, texture_size=None):
+    """Use the desktop Surface Inspector mapping: Fit/Natural, rotate, scale, shift."""
+    from engine.brush_geometry import get_convex, face_uv_projection, face_uses_natural_scale
+    batches = {}
+    texture_size = texture_size or (lambda name: (128, 128))
 
-    Returns ``{texture_name: vertices}``. Faces with no texture assigned land
-    under the empty-string key ``""`` (drawn untextured by the renderer). UVs
-    tile every ``texel`` world units so textures keep a constant real-world size
-    regardless of face dimensions (Radiant-style), and repeat via GL_REPEAT.
-    """
-    batches: Dict[str, list] = {}
-    for b in map_data.get("brushes", []):
-        if not _is_renderable(b):
+    def emit(brush, name, points, normal, uv, extent, meta, tag=None):
+        # Caulk never draws; nodraw is an editor-only surface.
+        if str(name).replace('\\', '/').rsplit('/', 1)[-1].lower() in ('caulk', 'caulk.jpg', 'nodraw.jpg'):
+            return
+        scale = meta.get('uv_scale')
+        natural = face_uses_natural_scale(brush, tag, meta)
+        if natural or (scale is None and brush.get('texture_tiling')):
+            tw, th = texture_size(name)
+            scale = (extent[0] / max(1, tw), extent[1] / max(1, th))
+        elif scale is None:
+            scale = (extent[0] / texel, extent[1] / texel) if texel else (1, 1)
+        angle = math.radians(float(meta.get('uv_angle', 0)))
+        c, sn = math.cos(angle), math.sin(angle)
+        shift = meta.get('uv_shift') or (0, 0)
+        output = batches.setdefault(name or '', [])
+        for j in range(1, len(points) - 1):
+            for index in (0, j, j + 1):
+                u, v = uv[index][0] - .5, uv[index][1] - .5
+                u, v = (u*c-v*sn+.5)*scale[0]+shift[0], (u*sn+v*c+.5)*scale[1]+shift[1]
+                output.extend((*points[index], *normal, u, v))
+
+    for brush in map_data.get('brushes', []):
+        if not _is_renderable(brush):
             continue
-        if b.get("geometry", {}).get("planes"):
-            from engine.brush_geometry import get_convex, face_uv_projection
-            convex = get_convex(b)
+        if brush.get('geometry', {}).get('planes'):
+            convex = get_convex(brush)
             for face in convex.faces:
-                ring = convex.verts[face["indices"]]
-                us, vs, (u0, eu), (v0, ev) = face_uv_projection(ring, face)
-                uv_scale = face.get("uv_scale") or (1, 1)
-                group = batches.setdefault(face.get("texture") or "", [])
-                for j in range(1, len(ring) - 1):
-                    for index in (0, j, j + 1):
-                        group.extend((*ring[index], *face["normal"],
-                                      (us[index] - u0) / (texel or eu) * float(uv_scale[0]),
-                                      (vs[index] - v0) / (texel or ev) * float(uv_scale[1])))
+                points = convex.verts[face['indices']]
+                us, vs, (u0, eu), (v0, ev) = face_uv_projection(points, face)
+                plane = convex.planes[face['plane']]
+                uv = list(zip((us-u0)/eu, (vs-v0)/ev))
+                emit(brush, face.get('texture') or '', points, face['normal'], uv,
+                     (eu, ev), plane, face.get('face'))
             continue
-        cx, cy, cz = (float(v) for v in b["pos"])
-        size = [abs(float(v)) for v in b["size"]]
-        sx, sy, sz = (float(v) for v in b["size"])
-        textures = b.get("textures") if isinstance(b.get("textures"), dict) else {}
-
-        for fi, (normal, corners) in enumerate(_FACES):
-            texname = textures.get(_FACE_KEYS[fi]) or ""
-            ua, va = _FACE_UV_AXES[fi]
-            span_u = size[ua] / texel if texel else 1.0
-            span_v = size[va] / texel if texel else 1.0
-            group = batches.setdefault(texname, [])
-            for a, bi, c in ((0, 1, 2), (0, 2, 3)):
-                for idx in (a, bi, c):
-                    ox, oy, oz = corners[idx]
-                    group.extend((
-                        cx + ox * sx, cy + oy * sy, cz + oz * sz,
-                        normal[0], normal[1], normal[2],
-                        (corners[idx][ua] + 0.5) * span_u,
-                        (corners[idx][va] + 0.5) * span_v,
-                    ))
-    return {name: np.asarray(v, dtype=np.float32) for name, v in batches.items() if v}
+        size = np.asarray(brush['size'], dtype=float)
+        center = np.asarray(brush['pos'], dtype=float)
+        for index, (normal, corners) in enumerate(_FACES):
+            tag = _FACE_KEYS[index]
+            name = (brush.get('textures') or {}).get(tag) or ''
+            corners = np.asarray(corners)
+            # These are the UV bases of the existing desktop cube VAO.
+            if index < 2:
+                uv = corners[:, (0, 1)] + .5
+            elif index < 4:
+                uv = np.column_stack((corners[:, 1]+.5, .5-corners[:, 2]))
+            else:
+                uv = np.column_stack((corners[:, 0]+.5, .5-corners[:, 2]))
+            ua, va = _FACE_UV_AXES[index]
+            meta = {key: (brush.get(key) or {}).get(tag) for key in ('uv_scale', 'uv_angle', 'uv_shift', 'uv_natural')}
+            meta['uv_angle'] = meta['uv_angle'] or 0
+            emit(brush, name, center+corners*size, normal, uv,
+                 (abs(size[ua]), abs(size[va])), meta, tag)
+    return {name: np.asarray(values, dtype=np.float32) for name, values in batches.items() if values}
 
 
 def extract_lights(map_data: dict, limit: int = 8) -> List[Dict]:

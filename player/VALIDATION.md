@@ -16,7 +16,7 @@ behavior, plugins and desktop workflows remain unchanged.
 Android adapts a private build copy using `player/overlays/android-runtime.patch`.
 The hook copies existing runtime definitions from the editor, removes Qt startup
 dependencies in that copy and supplies compatibility aliases. A receipt records
-15 input source hashes and staging verifies the originals remain unchanged.
+16 input source hashes and staging verifies the originals remain unchanged.
 These adapters are never applied to the desktop checkout.
 
 The exporter now preserves map hierarchy, scans current asset references,
@@ -27,14 +27,14 @@ therefore detects missing world files instead of resolving them from desktop
 resources. One regression test deletes its project before reading every
 exported model/material/texture/sprite back from the world archive.
 
-## Current checks
+## Original movement/lifecycle acceptance
 
 | Check | Result |
 | --- | --- |
 | Actual desktop editor + export dialog | PASS; no export warnings |
 | `_SHOWCASE.fiopak` | 24,095,077 bytes; SHA-256 `28cf3f6ccc452f6122222bf892a42fd9461e5e29763e71e639cece0719efa80f` |
 | Strict world asset verification and engine tick | PASS; 1 map, 31 referenced assets |
-| Isolated Android runtime tests | 113 passed |
+| Isolated Android runtime tests | 127 passed |
 | Desktop exporter/package/player-start regression tests | 37 passed |
 | Mesa GLES 3 | PASS: pixels, texture/model loading, terrain, level transitions, HUD/menu and context recreation |
 | Development harness OpenGL 3.3 Core | Same checks passed; existing desktop renderer unchanged |
@@ -71,6 +71,70 @@ The committed `player/_SHOWCASE.fiopak` is that exact tested archive; it is
 excluded from the APK payload so testing exercises normal document import.
 The local phone kit is `fio-pixel-test-kit-v5.zip`. Older root APKs, v4 kit and
 broad shared-source report are superseded.
+
+## Rendering and combat follow-up
+
+The first native gate demonstrated loading, movement and resume. It did not
+establish complete lighting, effects or weapon HUD correctness. The owner's
+subsequent reports exposed omissions in the mobile renderer:
+
+- Brush UVs previously forced one repeat per 128 world units and ignored authored
+  Fit/Natural, scale, rotation and shift. Box bases and convex plane metadata now
+  follow the desktop Surface Inspector mapping. Caulk/nodraw faces are omitted.
+- Lighting previously kept only the first eight lights, omitted Effect lights,
+  used a different ambient term and rendered no shadows. The player now consumes
+  engine EntityTable projections, up to 32 contributing lights, engine ambient,
+  and four point-light shadow maps in a GLES depth atlas.
+- GIFs previously stayed on their first frame, and Effect entities had no draw
+  batch. FIRE, ORB, CUSTOM and explosion sprites now consume engine effect state.
+  GIFs preserve full resolution, frame durations, composition and transparency,
+  retaining at most four decoded frames per animation rather than all frames.
+- Weapon HUD and muzzle flash were never painted. The held item now comes from
+  the authoritative combat state after real pickups, using packaged HUD assets.
+- A ray starting inside a monster's hit sphere could reject its negative entry
+  root. The APK-private combat adapter treats that as an immediate hit while
+  retaining wall occlusion, weapon damage, ammunition and cooldown rules.
+- Brush back faces, transformed AABB frustum tests, the XZ centre-distance cull,
+  projection far plane and radial fog now follow existing engine rules. The
+  literal engine fog shader block is reused, including density/color/ambient;
+  terrain receives the same values. UI and alpha geometry keep their proper
+  separate draw state.
+- Lights farther than 4096 units from the player are removed before light/shadow
+  selection. In cutscenes the cutoff follows the camera and retains lights whose
+  influence can still reach geometry visible through fog.
+- Buildozer's case-sensitive nested filename handling could include the committed
+  uppercase `_SHOWCASE.fiopak` despite its exclusion pattern. Staging explicitly
+  removes that fixture; APK inspection now rejects a bundled showcase/fallback.
+
+Current host results: **127 player tests passed**. Real Mesa GLES and OpenGL Core
+pixel checks passed for brush back faces, distance culling, radial/density fog,
+active point-light shadow occlusion and animated Effect geometry. Existing
+texture/model, terrain, level-transition, HUD/menu and context-loss checks passed.
+These are host GPU checks. The committed `_SHOWCASE` also loaded in the new
+host GLES pass with no missing images (19 lights, one shadow light, five effect
+batches). The 98-frame 384x512 fire GIF matched sampled engine-decoded frames
+exactly; its retained RGBA cache was 3 MiB versus 73.5 MiB for every frame.
+
+The rebuilt APK passed real native diagnostic-world import, immediate weapon
+pickup/HUD, 17-light/two-effect projection and point-blank firing: four 25-damage
+pistol hits took the monster from 100 health to zero/dead. Captures show the
+pistol, fire/orb and authored texture grid. Native movement retry passed in the same process/world: **193.57 horizontal
+units forward and 91.27 reverse progress**, with neutral input after each gesture.
+The original short-gesture attempt failed its movement threshold; that failure
+is retained in native-v3. The host tool now scales gestures fully and waits for
+a new, post-gesture neutral report, retaining the same 16/8-unit thresholds.
+The Pixel has still not been ADB tested.
+
+New APKs and hashes are in `/workspace/artifacts/android-render-fixes`, and
+combat evidence is in `android-render-fixes-native-v3`, and the passing movement
+retry is in `android-render-fixes-movement-v4`. The first retry was
+blocked by an Android external-storage-provider background ANR; restarting the
+picker/provider and disabling the disposable emulator's cached-app freezer
+allowed normal automated filename selection. No phone settings were changed.
+The installed APK hash and private runtime receipt match the rebuilt APK.
+
+No `engine/**` or `editor/**` file changed in this follow-up. The private build
+adapter includes the combat correction; desktop behavior remains unchanged.
 
 ## Native debug findings
 
@@ -114,10 +178,10 @@ The unsigned release APK cannot be installed until signed by its owner.
 
 ## Remaining limits
 
-Android portal virtual views and advanced desktop water/glass/fog/effect passes
+Android portal virtual views and advanced desktop water/glass passes
 are not implemented. Shared gameplay does not imply complete visual parity.
 Plugins must be installed with the APK; worlds cannot carry executable Python
-plugins. Native PyOpenGL pixel-store probes have logged nonfatal invalid-enum
-warnings despite passing strict host GLES checks. Pixel acceptance, sustained
+plugins. Earlier native PyOpenGL pixel-store probes logged nonfatal invalid-enum
+warnings; image uploads now bypass those desktop-only probes with raw GL calls. Pixel acceptance, sustained
 lifecycle/performance testing and all native desktop release builds remain
 unverified. No claim of complete cross-device certification is made.

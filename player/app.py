@@ -148,10 +148,10 @@ class FioPlayerApp:
         if self.renderer:
             state = self._render_state()
             self.renderer.render(state)
-            if self.config.show_touch_controls and self.host and not self._paused:
-                self.renderer.render_overlay(self.host.touch, inp, self.host.width, self.host.height)
             state["control_buttons"] = tuple((b.action, b.cx, b.cy) for b in self.host.touch.buttons) if self.config.show_touch_controls else ()
             self.renderer.render_ui(state, self.host.width, self.host.height, self.world is not None)
+            if self.config.show_touch_controls and self.host and not self._paused:
+                self.renderer.render_overlay(self.host.touch, inp, self.host.width, self.host.height)
         if self._validation and self.world:
             self._validation_elapsed += dt
             if self._validation_elapsed >= 1.:
@@ -166,6 +166,17 @@ class FioPlayerApp:
                     'position': [float(v) for v in self.world.player.pos],
                     'brushes': len(self.world.brushes),
                     'entities': len(self.world.state.things),
+                    'weapon': self.world.logic.combat_runtime.active_weapon,
+                    'weapon_hud': (self.world.hud_state['held'].hud_sprite
+                                   if self.world.hud_state['held'] else ''),
+                    'monsters': [{'name': t.properties.get('name'),
+                                  'health': t.properties.get('health'),
+                                  'dead': bool(t.properties.get('dead'))}
+                                 for t in self.world.state.things
+                                 if str(t.properties.get('type','')).lower() == 'monster'],
+                    'render': self.renderer.frame_stats if self.renderer else {},
+                    'missing_images': sorted(self.renderer._images.missing)
+                                      if self.renderer and self.renderer._images else [],
                 }), flush=True)
 
     def _open_dialog(self):
@@ -193,7 +204,7 @@ class FioPlayerApp:
         if self.world:
             eye, direction, up, fov = self.world.camera()
             from .render import glmath
-            state.update(cam_pos=eye, view=glmath.look_at(eye, eye + direction, up), fov=fov, world=self.world)
+            state.update(game_hud=self.world.hud_state, cam_pos=eye, view=glmath.look_at(eye, eye + direction, up), fov=fov, world=self.world)
         return state
 
     def _on_resize(self, width, height):

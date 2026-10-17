@@ -17,7 +17,7 @@ def batches(path, package):
             material = loader.materials.get(face['material'], {})
             texture = material.get('texture') or ''
             if texture:
-                texture = posixpath.join(material.get('mtl_dir', posixpath.dirname(path)), texture).replace('\\', '/')
+                texture = posixpath.normpath(posixpath.join(material.get('mtl_dir', posixpath.dirname(path)), texture).replace('\\', '/'))
             tint = (*material.get('color', (1, 1, 1)), material.get('alpha', 1))
             output = groups.setdefault((texture, tint), [])
             corners = face['vertices']

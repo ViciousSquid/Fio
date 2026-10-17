@@ -47,10 +47,21 @@ Android app uses the new player renderer in production.
 Android uses the existing engine's movement/collision, combat, AI, entity I/O,
 moving brushes, cutscenes and linked-level simulation. Fixed ticks and AI run
 on the app thread and pause in the background. The renderer supports textured
-box/convex brushes, sprites, OBJ/GLB models, point lights and terrain. Audio,
-health/ammo HUD, touch controls, pause menus and context recreation are included.
-Portal virtual views and advanced desktop water/glass/fog/effect rendering
+box/convex brushes with authored UV mapping, animated sprites/effects, OBJ/GLB
+models, point lights and terrain. Audio, held-weapon/muzzle-flash and health/ammo
+HUD, touch controls, pause menus and context recreation are included.
+Portal virtual views and advanced desktop water/glass rendering
 remain absent; Android does not yet have full desktop visual parity.
+
+Brush back faces are culled; models and transparent billboards stay double-sided
+as in the desktop renderer. Camera distance/frustum culling and radial fog use
+the existing engine's `ViewDistance`, frustum helpers and fog shader block.
+The default distance is 4096 units; fog starts at 60% and is opaque at 92%.
+Terrain receives the same environment values. HUD and touch controls stay clear.
+Lights beyond 4096 units from the player are excluded before selecting up to
+32 lights and four point-light shadow maps. During cutscenes the cutoff follows
+the camera; a light stays while its radius can still illuminate visible geometry
+in front of opaque fog, avoiding a visible switch-off at the cutoff.
 
 The desktop exporter preserves linked-map paths, reads loose files and category
 archives (loose files override archive entries), scans current asset properties,
@@ -72,6 +83,7 @@ then test the same private runtime used by the APK:
 
 ```sh
 python -m player.tools.contract_fixture /tmp/universal.fiopak
+python -m player.tools.export_playback_fixture /tmp/_ANDROID_PLAYBACK.fiopak
 QT_QPA_PLATFORM=offscreen python -m player.tools.export_showcase /tmp/_SHOWCASE.fiopak
 python -m player.tools.stage_runtime /tmp/fio-android-runtime
 cd /tmp/fio-android-runtime
@@ -88,6 +100,19 @@ The desktop-export automation uses the real editor, loader and export dialog;
 only the destination file chooser is automated. Mesa EGL/GLES is required for
 the graphics check. `--desktop` tests the development harness with OpenGL Core;
 it does not replace desktop Fio.
+
+The GPU smoke check asserts rendered pixels for back-face/distance culling,
+linear/density fog, real point-light shadow occlusion and animated effects.
+Pass `--evidence /tmp/fio-render-images` to save those images. The additional
+native gameplay check uses a desktop-exported diagnostic world with an immediate
+gun pickup, point-blank monster, more than eight lights and animated effects:
+
+```sh
+python -m player.tools.test_playback player/fio-player-arm64-debug.apk /tmp/_ANDROID_PLAYBACK.fiopak --output fio-playback-results
+```
+
+This supplements the real `_SHOWCASE` import/movement check. Inspect the saved
+HUD/effect and firing screenshots as well as the reported health/death result.
 
 ## APK builds and signing
 

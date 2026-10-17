@@ -154,6 +154,19 @@ class DeviceTest:
                     pass
         return result
 
+    def wait_for_new_report(self, pid, since):
+        """A slow emulator may render fewer than one report per gesture."""
+        deadline = time.monotonic() + 30 * self.timeout_scale
+        while time.monotonic() < deadline:
+            reports = self.reports(pid)
+            if (reports and reports[-1]['_time'] > since
+                    and not any(abs(v) > .05 for v in reports[-1].get('movement_input', (0, 0)))):
+                return reports
+            if not self.adb('shell', 'pidof', PACKAGE, check=False).strip():
+                raise RuntimeError('Fio exited while waiting for movement evidence')
+            time.sleep(2)
+        raise RuntimeError('Fio stopped producing world reports during movement')
+
     def run(self, apk, world, *, skip_install=False):
         devices = self.adb('get-state').strip()
         if devices != 'device':
@@ -169,6 +182,9 @@ class DeviceTest:
             time.sleep(2)
         if not skip_install:
             print('Installing debug APK. Existing Fio private files are preserved; a signing-key conflict fails installation.', flush=True)
+            # Stop an already rendering Fio first; it otherwise competes with
+            # package installation on CPU-only emulators.
+            self.adb('shell', 'am', 'force-stop', PACKAGE)
             self.adb('install', '--no-streaming', '-r', str(Path(apk).resolve()))
             print('Debug APK installed.', flush=True)
         self.adb('push', str(Path(world).resolve()), '/sdcard/Download/' + Path(world).name)
@@ -229,12 +245,12 @@ class DeviceTest:
         # Slow software emulators need a longer real hold to deliver several
         # rendered frames; no engine simulation is mocked or advanced here.
         x, y = int(width * .17), int(height * .76)
-        hold_ms = int(3000 * min(self.timeout_scale, 5))
+        hold_ms = int(3000 * self.timeout_scale)
         for _ in range(2):
             self.adb('shell', 'input', 'touchscreen', 'swipe', x, y, x, int(height * .53), hold_ms)
-        time.sleep(3)
+        forward_ended = float(self.adb('shell', 'date', '+%s').strip())
+        forward = self.wait_for_new_report(pid, forward_ended)
         self.screenshot('after-forward.png')
-        forward = self.reports(pid)
         forward_reports = [r for r in forward if r['_time'] > before[-1]['_time']]
         if not forward_reports:
             raise RuntimeError('Fio stopped producing world reports during movement')
@@ -246,9 +262,9 @@ class DeviceTest:
         # platform motion or a late scripted push masquerading as touch input.
         for _ in range(2):
             self.adb('shell', 'input', 'touchscreen', 'swipe', x, y, x, int(height * .95), hold_ms)
-        time.sleep(3)
+        reverse_ended = float(self.adb('shell', 'date', '+%s').strip())
+        after = self.wait_for_new_report(pid, reverse_ended)
         self.screenshot('after-movement.png')
-        after = self.reports(pid)
         if not after or after[-1]['_time'] <= forward[-1]['_time']:
             raise RuntimeError('Fio stopped producing world reports during reverse movement')
         middle, end = forward[-1]['position'], after[-1]['position']

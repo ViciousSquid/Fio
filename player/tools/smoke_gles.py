@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--desktop', action='store_true')
     parser.add_argument('--fixture', required=True, help='World exported by the desktop exporter')
+    parser.add_argument('--evidence', help='Directory for rendering pixel-check images')
     args = parser.parse_args()
     desktop = args.desktop
     import numpy as np
@@ -72,7 +73,7 @@ def main():
                     renderer.resize(128, 128)
                 renderer.render(state)
                 pixel = np.frombuffer(GL.glReadPixels(64, 64, 1, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8)
-                assert pixel[0] > 50 and pixel[1] < 10 and pixel[2] < 10, pixel
+                assert abs(int(pixel[0])-26) <= 2 and pixel[1] < 2 and pixel[2] < 2, pixel  # desktop ambient is 0.1
                 assert GL.glGetError() == GL.GL_NO_ERROR
                 from player.input.touch import TouchControls
                 from player.input.state import InputState
@@ -83,6 +84,8 @@ def main():
                 renderer.render_ui({'hud': 'Health 100', 'paused': False}, 128, 128)
                 assert GL.glGetError() == GL.GL_NO_ERROR
             assert np.ptp(empty) > 20, "Reference view was blank"
+        from player.tools.check_rendering import run
+        run(renderer, args.evidence)
         from player.world import PlayerWorld
         from player.render import glmath
         world = PlayerWorld({'terrain_data': {'enabled': True, 'solid': True, 'use_textures': False,
@@ -90,8 +93,8 @@ def main():
                              'brushes': [], 'things': []})
         try:
             renderer.load_scene(world.data, world=world)
-            terrain_state = {'cam_pos': (128, 10000, 128),
-                             'view': glmath.look_at((128, 10000, 128), (128, 0, 128), (0, 0, -1))}
+            terrain_state = {'cam_pos': (128, 1000, 128),
+                             'view': glmath.look_at((128, 1000, 128), (128, 0, 128), (0, 0, -1))}
             for _ in range(5):
                 renderer.render(terrain_state)
             assert world.terrain.total_triangles > 0, 'Terrain drew no geometry'

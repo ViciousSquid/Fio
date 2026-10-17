@@ -39,6 +39,12 @@ def check_apk(path, *, abi='arm64-v8a') -> int:
     checked = 0
     bundled = 0
     with zipfile.ZipFile(path) as apk, open(path, "rb") as raw:
+        if 'assets/private.tar' in apk.namelist():
+            with apk.open('assets/private.tar') as private:
+                with tarfile.open(fileobj=private, mode='r|*') as bundle:
+                    for member in bundle:
+                        if member.name.lstrip('./') in ('player/_SHOWCASE.fiopak', 'player/builtin.fiopak'):
+                            raise ValueError(f'APK must import world assets, not bundle {member.name}')
         for entry in apk.infolist():
             if not entry.filename.startswith("lib/") or not entry.filename.endswith(".so"):
                 continue

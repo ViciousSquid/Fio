@@ -29,6 +29,7 @@ class RecordedDevice(DeviceTest):
         idle = [at(0, 1), at(0, 2), at(0, 3)]
         forward = idle + [at(100, 4), at(120, 5)]
         self.recordings = iter([idle, forward, forward + [at(final_x, 6)]])
+        self.gesture_end_times = iter([3.5, 5.5])
 
     def reports(self, pid):
         return next(self.recordings)
@@ -43,7 +44,21 @@ class RecordedDevice(DeviceTest):
         return 640, 360
 
     def adb(self, *args, **kwargs):
+        if args == ('shell', 'date', '+%s'):
+            return str(next(self.gesture_end_times))
         return 'recorded test device'
+
+
+def test_movement_evidence_waits_until_gesture_has_ended(tmp_path, monkeypatch):
+    monkeypatch.setattr('player.tools.test_device.time.sleep', lambda _: None)
+    device = RecordedDevice(tmp_path, final_x=60)
+    snapshots = iter([
+        [dict(report(0), _time=3)],  # Old report from before the gesture.
+        [dict(report(100), _time=5, movement_input=[0, 1])],  # Still held.
+        [dict(report(120), _time=6, movement_input=[0, 0])],
+    ])
+    device.reports = lambda _: next(snapshots)
+    assert device.wait_for_new_report('123', 4)[-1]['position'][0] == 120
 
 
 def test_passive_motion_in_one_direction_does_not_pass_touch_acceptance(tmp_path, monkeypatch):

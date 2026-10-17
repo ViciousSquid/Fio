@@ -30,12 +30,21 @@ class GLESRenderer:
         self._lights = []
         self._embedded = {}
         self._draw_sources = {}
+        self._bounds = {}
         self._tints = {}
         self._terrain = None
+        self._projection = None
+        self._images = None
+        self._texture_frames = {}
+        self._animated_surfaces = set()
         self._context_lost = False
         self._ui_key = None
         self._ui_texture = self._ui_vao = self._ui_vbo = None
         self.overlay = OverlayRenderer()
+        self.shadows = None
+        from engine.logic_render import LogicRender
+        self._fallback_runtime = LogicRender(None)
+        self.frame_stats = {}
 
     # ------------------------------------------------------------------
     # GL lifecycle
@@ -68,6 +77,7 @@ class GLESRenderer:
         # Object names from a lost context must never be reused or deleted.
         self._batches = []
         self._textures = {}
+        self._texture_frames = {}
         self._tints = {}
         print(f"[GLES] compiled {len(self.programs)} shader programs: "
               f"{sorted(self.programs)}")
@@ -76,6 +86,8 @@ class GLESRenderer:
         gl.glClearColor(0.06, 0.07, 0.09, 1.0)
         self._build_reference_triangle()
         self.overlay.on_gl_ready(self.programs)
+        from .shadows import ShadowAtlas
+        self.shadows = ShadowAtlas(self.gles)
 
         if self._scene is not None:
             self._upload_scene()
@@ -139,6 +151,11 @@ class GLESRenderer:
     def render(self, render_state=None) -> None:
         gl = _gl()
         gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_CULL_FACE)
+        if self._scene is not None:
+            distance = self._render_runtime().view_distance
+            color = distance.fog_color if distance.fog_enabled else (0.06, 0.07, 0.09)
+            gl.glClearColor(*color, 1.)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         if self._scene is not None:
             self.render_scene(render_state)
@@ -156,8 +173,14 @@ class GLESRenderer:
         """Build brush batches and upload their ZIP-backed textures."""
         if self._terrain and (world is None or self._terrain is not world.terrain):
             self._release_terrain()
+        from .projection import EntityProjection
+        self._projection = EntityProjection() if world else None
         self._scene = {"map": map_data, "package": package, "world": world}
         self._upload_scene()
+
+    def _render_runtime(self):
+        world = self._scene.get('world') if self._scene else None
+        return world.logic.render_runtime if world else self._fallback_runtime
 
     def _release_terrain(self):
         if self._terrain:
@@ -178,10 +201,13 @@ class GLESRenderer:
         for texture in self._textures.values():
             gl.glDeleteTextures([texture])
         self._batches, self._textures, self._draw_sources, self._tints = [], {}, {}, {}
+        self._bounds = {}
         self._scene = None
 
     def close(self):
         self.clear_scene()
+        if self.shadows:
+            self.shadows.close()
         gl = _gl()
         for vao in (self._triangle_vao, self._ui_vao, self.overlay._disc_vao):
             if vao:
@@ -197,11 +223,14 @@ class GLESRenderer:
 
     def _add_batches(self, batches, source=None):
         import ctypes
+        import numpy as np
         gl = _gl()
         for name, vertices in batches.items():
             tint = (1, 1, 1, 1)
             if isinstance(name, tuple):
                 name, tint = name
+            if source is None or source[0] in ('brush', 'model'):
+                self._animated_surfaces.add(name)
             vao = gl.glGenVertexArrays(1)
             vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(vao)
@@ -212,6 +241,9 @@ class GLESRenderer:
                 gl.glEnableVertexAttribArray(attribute)
             self._batches.append((vao, vbo, self._load_texture(name), vertices.size // 8))
             self._tints[vao] = tint
+            positions = vertices.reshape(-1, 8)[:, :3]
+            low, high = positions.min(0), positions.max(0)
+            self._bounds[vao] = ((low+high)*.5, (high-low)*.5)
             if source:
                 self._draw_sources[vao] = source
 
@@ -226,30 +258,42 @@ class GLESRenderer:
             gl.glDeleteTextures([texture])
         self._batches, self._textures, self._draw_sources, self._embedded = [], {}, {}, {}
         self._tints = {}
+        self._bounds = {}
+        if self.shadows:
+            self.shadows.key = None
+        self._texture_frames = {}
+        self._animated_surfaces = set()
+        from .assets import Images
+        self._images = Images(self._scene.get('package'), self._embedded)
         world = self._scene.get('world')
         data = world.render_map() if world else self._scene['map']
         self._lights = extract_lights(data)
-        static = []
+        # Retain each brush's identity so distance/frustum culling can reject it
+        # before drawing, including doors and movers at their live positions.
         for brush in data.get('brushes', []):
-            if brush.get('is_mover') or brush.get('is_door'):
-                self._add_batches(build_textured_batches({'brushes': [brush]}),
-                                  ('brush', brush, tuple(brush['pos'])))
-            else:
-                static.append(brush)
-        self._add_batches(build_textured_batches({'brushes': static}))
+            self._add_batches(build_textured_batches({'brushes': [brush]}, texture_size=self._images.size),
+                              ('brush', brush, tuple(brush['pos'])))
         if world:
             from .models import batches as model_batches
-            from engine.prop_entity import Prop
-            for thing in world.state.things:
-                if isinstance(thing, Prop) and thing.properties.get('render_mode') == 'model':
+            from engine.entity_table import classify_slots
+            table = self._projection.update(world)
+            models, sprites = classify_slots(table, table.all_slots, table.hidden, True, False)
+            model_ids, sprite_ids = set(map(int, models)), set(map(int, sprites))
+            for row, thing in enumerate(world.state.things):
+                if row in model_ids:
                     groups, embedded = model_batches(thing.properties['model_path'], self._scene['package'])
                     self._embedded.update(embedded)
+                    manual = thing.properties.get('texture')
+                    tint = thing.properties.get('tint', (1, 1, 1))
+                    tint = tuple(float(v)/255 if max(tint)>1 else float(v) for v in tint)
+                    groups = {(manual or texture, tuple(color[i]*tint[i] for i in range(3))+(color[3],)): vertices
+                              for (texture, color), vertices in groups.items()}
                     self._add_batches(groups, ('model', thing, None))
-                elif hasattr(thing, 'get_sprite_path'):
+                elif row in sprite_ids or row in table.effect_slots:
                     import numpy as np
                     quad = np.asarray([[x, y, 0, 0, 0, 1, x + .5, y + .5]
                                        for x, y in ((-.5, -.5), (.5, -.5), (.5, .5), (-.5, -.5), (.5, .5), (-.5, .5))], dtype=np.float32).reshape(-1)
-                    self._add_batches({'': quad}, ('sprite', thing, None))
+                    self._add_batches({'': quad}, ('effect' if row in table.effect_slots else 'sprite', thing, row))
             if world.terrain:
                 self._prepare_terrain(world)
             self._entity_ids = tuple(id(t) for t in world.state.things)
@@ -281,34 +325,60 @@ class GLESRenderer:
         if not self._terrain.shader_program:
             raise RuntimeError('Terrain shaders could not be compiled')
 
-    def _load_texture(self, name):
-        import io
+    def _load_texture(self, name, clock=None, loop=True, phase=0):
         from PIL import Image
-
+        from .assets import upload_rgba
         gl = _gl()
-        if name in self._textures:
+        frame, image = self._images.frame(name, clock, loop, phase)
+        if name in self._textures and self._texture_frames.get(name) == frame:
             return self._textures[name]
-        image = Image.new("RGBA", (1, 1), (210, 210, 210, 255))
-        package = self._scene.get("package")
-        raw = self._embedded.get(name) or (package.read_asset(name) if package and name else None)
-        if raw:
-            with Image.open(io.BytesIO(raw)) as source:
-                source.load()
-                image = source.convert("RGBA")
         limit = min(2048, int(gl.glGetIntegerv(gl.GL_MAX_TEXTURE_SIZE)))
+        image = image.copy()
         image.thumbnail((limit, limit))
         image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        texture = gl.glGenTextures(1)
+        update = name in self._textures
+        texture = self._textures.get(name) or gl.glGenTextures(1)
         gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, image.width, image.height,
-                        0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, image.tobytes())
+        upload_rgba(gl, image, update=update)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
         gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         self._textures[name] = texture
+        self._texture_frames[name] = frame
         return texture
+
+    def _sprite_image(self, table, row):
+        recipe = table.sprite_recipes()[int(table.sprite_key_id[row])]
+        package = self._scene.get('package')
+        for _, filename, folder, _ in recipe or ():
+            if filename:
+                name = 'assets/'+folder.strip('/')+'/'+filename
+                if package and package.has_asset(name):
+                    return name
+        item = table.things[row]
+        return item.get_sprite_path() if hasattr(item, 'get_sprite_path') else ''
+
+    def _effect_texture(self, table, row):
+        from .projection import effect_image
+        name, elapsed, phase = effect_image(table, row)
+        if int(table.effect_type[row]) != 1:
+            return self._load_texture(name, elapsed, bool(table.effect_custom_loop[row]), phase), 1., (1,1,1,1)
+        import math
+        t = max(0., min(1., float(table.effect_elapsed[row])/max(.001,float(table.effect_lifetime[row]))))
+        index = min(15, int(t*16))
+        key = name+'#explosion'+str(index)
+        if key not in self._images.cache:
+            atlas = self._images.frames(name)[0][0]
+            w, h = atlas.width//5, atlas.height//4
+            x, y = (index%5)*w, (index//5)*h
+            self._images.cache[key] = ([atlas.crop((x,y,x+w,y+h))], [.1])
+        q = max(0., min(1., t/.28)); growth = 1+2*q*q*(3-2*q)
+        fade = max(0., min(1., (t-.7)/.3)); alpha = 1-fade*fade*(3-2*fade)
+        strength = float(table.effect_params[row,1])*(1+math.exp(-t*t*48)*2.2)
+        tint = tuple((.65+.35*float(c))*strength for c in table.effect_color[row])+(alpha,)
+        return self._load_texture(key, 0), growth, tint
 
     def render_scene(self, render_state) -> None:
         import math
@@ -323,27 +393,64 @@ class GLESRenderer:
             if changes is OVERFLOW or any(oid in brush_ids and flags & STATE for oid, flags in changes.items()) or tuple(id(t) for t in world.state.things) != self._entity_ids:
                 self._upload_scene()
             from .scene import extract_lights
-            self._lights = extract_lights(world.render_map())
+            from .projection import lights
+            table = self._projection.update(world)
+            distance = world.logic.render_runtime.view_distance
+            horizon = distance.visual_horizon
+            if not distance.fog_enabled:
+                # With no radial fog, the far-plane corners are the furthest
+                # visible points, including wide landscape aspect ratios.
+                tangent = math.tan(math.radians(state.get('fov',70))*.5)
+                horizon = distance.far_plane * math.sqrt(1+tangent*tangent*(1+(self.width/self.height)**2))
+            self._lights = lights(table, state.get('cam_pos', (0,0,0)),
+                                  player_position=world.player.pos,
+                                  cutscene=bool(world.logic.cutscene_runtime.state),
+                                  visible_horizon=horizon)
+        from .visibility import CameraVisibility, environment
+        runtime = self._render_runtime()
+        distance = runtime.view_distance
         gl = _gl()
+        shadow_indices = self.shadows.prepare(self._lights, self._batches, self._draw_sources, self.width, self.height)
         prog = self.programs["world"]
         gl.glUseProgram(prog)
+        self.shadows.bind(prog, shadow_indices)
         gl.glUniform1i(gl.glGetUniformLocation(prog, 'unlit'), 0)
         eye = np.asarray(state.get("cam_pos", (0, 64, 0)), dtype=np.float32)
         front = glmath.front_from_angles(state.get("cam_yaw", -90), state.get("cam_pitch", 0))
-        _set_mat4(gl, prog, "view", state.get("view", glmath.look_at(eye, eye + front)))
-        _set_mat4(gl, prog, "projection", glmath.perspective(
-            math.radians(state.get("fov", 70)), self.width / self.height, 0.5, 100000.0))
+        view = state.get("view", glmath.look_at(eye, eye + front))
+        projection = glmath.perspective(math.radians(state.get("fov", 70)),
+                                        self.width/self.height, .5, distance.far_plane)
+        visibility = CameraVisibility(runtime, view, projection, eye)
+        env = environment(distance, eye)
+        _set_environment(gl, prog, env)
+        _set_mat4(gl, prog, "view", view)
+        _set_mat4(gl, prog, "projection", projection)
+        drawn = culled = 0
         gl.glUniform1i(gl.glGetUniformLocation(prog, "lightCount"), len(self._lights))
         for i, light in enumerate(self._lights):
             _set_vec3(gl, prog, f"lightPos[{i}]", light["pos"])
             _set_vec3(gl, prog, f"lightColor[{i}]", light["color"])
             _set_float(gl, prog, f"lightRadius[{i}]", light["radius"])
             _set_float(gl, prog, f"lightIntensity[{i}]", light["intensity"])
+        # Animated brush textures retain one GL name; replace only the due frame.
+        for name in self._animated_surfaces:
+            self._load_texture(name)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(gl.glGetUniformLocation(prog, "diffuse"), 0)
-        for vao, vbo, texture, count in self._batches:
+        ordered = sorted(self._batches, key=lambda b: (self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect'),
+                         -sum((float(self._draw_sources[b[0]][1].pos[i])-eye[i])**2 for i in range(3)) if self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect') else 0))
+        for vao, vbo, texture, count in ordered:
             source = self._draw_sources.get(vao)
             model = glmath.identity()
+            tint = self._tints[vao]
+            transparent = bool(source and source[0] in ('sprite', 'effect'))
+            gl.glUniform1i(gl.glGetUniformLocation(prog, 'unlit'), int(transparent))
+            gl.glDepthMask(not transparent)
+            if transparent:
+                gl.glEnable(gl.GL_BLEND)
+                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            else:
+                gl.glDisable(gl.GL_BLEND)
             if source:
                 kind, item, origin = source
                 if kind == 'brush':
@@ -353,29 +460,65 @@ class GLESRenderer:
                 else:
                     if item.properties.get('hidden') or getattr(item, 'collected', False):
                         continue
-                    if kind == 'sprite':
-                        item._asset_source = self._scene.get('package')
-                        texture = self._load_texture(item.get_sprite_path())
-                        width, height = item.properties.get('sprite_size', (
-                            item.properties.get('sprite_width', 64), item.properties.get('sprite_height', 64)))
+                    if kind in ('sprite', 'effect'):
+                        row = origin
+                        width, height = table.sprite_size[row]
+                        position = np.array(table.pos[row], dtype=float)
+                        if kind == 'effect':
+                            if not table.effect_alive[row]:
+                                continue
+                            texture, growth, tint = self._effect_texture(table, row)
+                            width, height = width*growth, height*growth
+                            if int(table.effect_type[row]) == 1:
+                                position[1] += height*.5
+                        else:
+                            texture = self._load_texture(self._sprite_image(table, row))
+                            tint = (1,1,1,float(table.render_alpha[row]))
                         view = state.get('view', glmath.look_at(eye, eye + front))
-                        model[:3, 0] = view[0, :3] * width
-                        model[:3, 1] = view[1, :3] * height
-                        model[:3, 2] = np.cross(view[0, :3], view[1, :3])
-                        model[:3, 3] = item.pos
+                        yaw = float(table.sprite_fixed_yaw[row])
+                        right, up = view[0,:3], view[1,:3]
+                        if yaw > -9999:
+                            right, up = np.array((math.cos(yaw),0,-math.sin(yaw))), np.array((0,1,0))
+                        model[:3, 0] = right * width
+                        model[:3, 1] = up * height
+                        model[:3, 2] = np.cross(right, up)
+                        model[:3, 3] = position
                     else:
                         model = glmath.entity_matrix(item.pos, item.properties)
+            position = (source[1]['pos'] if source[0] == 'brush' else source[1].pos) if source else self._bounds[vao][0]
+            if not visibility.visible(self._bounds[vao], model, position):
+                culled += 1
+                continue
+            # Our generated brush triangles have outward CCW winding. Desktop's
+            # legacy cube VAO uses the opposite winding; both reject inner faces.
+            if source and source[0] == 'brush':
+                gl.glEnable(gl.GL_CULL_FACE)
+                gl.glFrontFace(gl.GL_CCW)
+                gl.glCullFace(gl.GL_BACK)
+            else:
+                # Desktop models and alpha billboards are deliberately double-sided.
+                gl.glDisable(gl.GL_CULL_FACE)
+            drawn += 1
             _set_mat4(gl, prog, 'model', model)
-            gl.glUniform4f(gl.glGetUniformLocation(prog, 'tint'), *self._tints[vao])
+            gl.glUniform4f(gl.glGetUniformLocation(prog, 'tint'), *tint)
             gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
             gl.glBindVertexArray(vao)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, count)
+        self.frame_stats = {'drawn_batches': drawn, 'culled_batches': culled,
+                            'view_distance': distance.effective_distance,
+                            'fog_start': env['uFogStart'], 'fog_end': env['uFogEnd'],
+                            'lights': len(self._lights), 'shadow_lights': len(shadow_indices),
+                            'effect_batches': sum(1 for source in self._draw_sources.values()
+                                                  if source[0] == 'effect')}
+        gl.glDepthMask(True)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         if world and world.terrain:
             import glm
             view = state.get('view', glmath.look_at(eye, eye + front))
-            projection = glmath.perspective(math.radians(state.get('fov', 70)), self.width / self.height, .5, 100000.)
-            world.terrain.update_and_render(glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye))
+            world.terrain.update_and_render(glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye),
+                                            frustum_planes=visibility.planes, env_uniforms=env)
 
     def render_ui(self, state, width, height, has_world=True):
         import ctypes
@@ -384,7 +527,7 @@ class GLESRenderer:
         from ..menu import buttons
 
         gl = _gl()
-        key = (state.get('hud', ''), state.get('paused', False), width, height, has_world, state.get('control_buttons', ()))
+        key = (tuple(state.get('game_hud', {}).items()), state.get('hud', ''), state.get('paused', False), width, height, has_world, state.get('control_buttons', ()))
         if key != self._ui_key:
             self._ui_key = key
             image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -399,8 +542,10 @@ class GLESRenderer:
                                            fill=(45, 65, 90, 255), outline=(140, 160, 180, 255), width=2)
                     draw.text((x + w / 2, y + h / 2), label, font=font, anchor='mm', fill='white')
             else:
-                draw.multiline_text((18, 14), state.get('hud', ''), font=font, fill='white',
-                                    stroke_width=1, stroke_fill=(0, 0, 0, 240))
+                from .hud import paint
+                paint(image, state, self._images)
+                if not state.get('game_hud'):
+                    draw.multiline_text((18, 14), state.get('hud', ''), font=font, fill='white')
                 for action, x, y in state.get('control_buttons', ()):
                     draw.text((x * width, y * height), action.title(), font=font, anchor='mm',
                               fill='white', stroke_width=1, stroke_fill='black')
@@ -408,8 +553,8 @@ class GLESRenderer:
                 gl.glDeleteTextures([self._ui_texture])
             self._ui_texture = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_2D, self._ui_texture)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
-                            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, image.tobytes())
+            from .assets import upload_rgba
+            upload_rgba(gl, image)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
         if self._ui_vao is None:
@@ -429,6 +574,8 @@ class GLESRenderer:
         _set_mat4(gl, prog, 'view', glmath.identity())
         _set_mat4(gl, prog, 'projection', glmath.ortho(0, width, height, 0))
         gl.glUniform1i(gl.glGetUniformLocation(prog, 'unlit'), 1)
+        gl.glUniform1i(gl.glGetUniformLocation(prog, 'uFogEnabled'), 0)
+        gl.glDisable(gl.GL_CULL_FACE)
         gl.glUniform4f(gl.glGetUniformLocation(prog, 'tint'), 1, 1, 1, 1)
         gl.glUniform1i(gl.glGetUniformLocation(prog, 'lightCount'), 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
@@ -468,3 +615,13 @@ def _set_float(gl, prog, name, value) -> None:
     loc = gl.glGetUniformLocation(prog, name)
     if loc != -1:
         gl.glUniform1f(loc, float(value))
+
+
+def _set_environment(gl, program, values):
+    for name, value in values.items():
+        if isinstance(value, int):
+            gl.glUniform1i(gl.glGetUniformLocation(program, name), value)
+        elif isinstance(value, float):
+            _set_float(gl, program, name, value)
+        else:
+            _set_vec3(gl, program, name, value)

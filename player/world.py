@@ -124,6 +124,19 @@ class PlayerWorld:
         return {'brushes': self.brushes, 'things': [{'type': t.properties.get('type'), 'pos': list(t.pos), 'properties': t.properties} for t in self.state.things]}
 
     @property
+    def hud_state(self):
+        import time
+        combat = self.logic.combat_runtime
+        held = combat.items.resolve(combat.active_weapon) if combat.active_weapon else None
+        return dict(held=held, health=self.logic.player_runtime.player_health,
+                    armor=self.logic.player_runtime.player_armor, ammo=combat.player_ammo,
+                    ready=combat.shot_ready(time.perf_counter()),
+                    flash=time.perf_counter()-combat._last_player_shot_time < .1,
+                    cinematic=bool(self.logic.cutscene_runtime.state),
+                    overhead=self.logic.camera.is_overhead(),
+                    prompt=self.logic.interaction_runtime.current_hud_message)
+
+    @property
     def hud(self):
         runtime = self.logic.player_runtime
         prompt = self.logic.interaction_runtime.current_hud_message
