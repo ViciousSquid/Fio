@@ -4,13 +4,10 @@
 #     cd player && buildozer -v android debug
 # The resulting APK lands in player/bin/.
 #
-# For a Google Play release build (signed AAB), set the (android.release)
-# options below and run:  buildozer -v android release
+# Build an unsigned release APK with: buildozer -v android release
+# See player/SIGNING.md to configure CI signing or sign it locally.
 #
-# NOTE ON NATIVE DEPS: numpy and pyopengl have maintained p4a recipes. PyGLM is
-# C++ and has no upstream recipe yet — see player/README.md ("Native dependency
-# strategy") for the two supported paths (a local PyGLM recipe, or the pure-glm
-# math shim). Keep `requirements` in sync with whichever path you choose.
+# Local recipes pin pygame-ce and build PyGLM for the shared engine runtime.
 
 [app]
 title = Fio Player
@@ -24,62 +21,54 @@ package.domain = org.vicioussquid.fio
 # games run on-device. A .fiopak never carries plugin code; one that tries is
 # refused by player/fiopak.py.
 source.dir = ..
-source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl,ttf,otf
-source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak,python_runtime.py
+source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,gltf,bin,mtl,ttf,otf,gif,mp3,flac
 # Exclude the desktop-only editor and its heavy PyQt5 dependency. The repo-root
-# main.py IS the entry point (it detects Android and launches the player), so it
-# is intentionally NOT excluded.
-source.exclude_dirs = editor, tools, maps, .git, player/tests, player/bin
-source.exclude_patterns = editor/*, settings.ini, Dockerfile, docker-compose.yml
+# main.py in the PRIVATE BUILD COPY is replaced by android_entrypoint.py.
+# The repository's desktop main.py is left unchanged.
+# World assets stream from .fiopak. Shipping the entire desktop assets tree
+# makes p4a extract editor resources and duplicate model/audio packs at launch.
+# The icon/presplash below are copied separately as Android build resources.
+source.exclude_dirs = assets, packages, editor, tools, maps, tests, audit, docs, wiki, .git, .github, player/tests, player/bin, player/.buildozer, player/p4a-recipes
+source.exclude_patterns = editor/*, settings.ini, Dockerfile, docker-compose.yml, player/_SHOWCASE.fiopak
 
-version = 0.1.0
+version = 3.0.0
 
 # Runtime dependencies. hostpython3/python3 come from p4a.
 #   pygame  -> SDL2 window, GLES surface, touch (FINGER*), controllers, audio
-#   numpy   -> vector/matrix math and geometry batching (has a p4a recipe)
+#   numpy   -> p4a fetches Git tags, including the leading v
 #   pyopengl-> GL ES entry points
 #   pillow  -> texture decoding from streamed asset bytes
-requirements = python3,numpy==2.5.3,pygame-ce==2.5.8,pyopengl,pillow
+requirements = python3,numpy==v2.5.3,pygame-ce==2.5.8,pyopengl==3.1.10,pillow==11.3.0,pyglm==2.8.3,pyjnius,android
 
 orientation = landscape
 fullscreen = 1
 
-# Entry point: python-for-android runs `main.py` at source.dir (the repo root).
-# That file detects ANDROID_ARGUMENT and calls player.main.main(), so the player
-# launches on device while the same file still opens the editor on desktop.
+# The hook installs the APK-only entry point and engine compatibility adapters.
 android.entrypoint = org.kivy.android.PythonActivity
+p4a.hook = ./android_hooks.py
 
 # --- CPython 3.14 Android toolchain ---
 # Pin the stable p4a release used for the Fio Android baseline. The pygame-ce
 # recipe is supplied locally because the upstream recipe is not pinned to the
 # exact desktop baseline version.
 p4a.branch = master
-p4a.commit = 58d2114
+p4a.commit = 58d21141f17c889bf8585f5665921d72028f8831
 p4a.local_recipes = ./p4a-recipes
 android.ndk = 29
 
 # --- Android platform ---
-# minapi 24 = Android 7.0; GLES 3.x is universal by then. NOTE: buildozer does
+# Android 7.0+, with a GPU/driver supporting OpenGL ES 3.0. Buildozer does
 # NOT strip inline comments from value lines, so keep comments on their own line.
 android.api = 36
+android.release_artifact = apk
+android.accept_sdk_license = False
 android.minapi = 24
 android.ndk_api = 24
 # arm64-v8a covers essentially all modern phones and keeps CI fast. Add
 # armeabi-v7a for older-device reach (roughly doubles build time).
 android.archs = arm64-v8a
-android.allow_backup = 1
-
-# NOTE: android.features (a manifest <uses-feature> hint) is intentionally not
-# set — the pinned p4a v2023.09.16 does not accept p4a's --feature flag. Game
-# controllers still work without advertising the feature; add it back only if
-# you later move to a newer p4a that supports --feature.
-
-# NOTE: android.manifest_placeholders is intentionally not set. p4a injects its
-# value straight into a Groovy map in build.gradle, and the pinned p4a expects
-# `key:value` (colon), not `key=value` — a stray entry there fails gradle
-# evaluation ("Could not set unknown property"). The GLES 3.x <uses-feature>
-# Play-Store hint isn't referenced by the manifest anyway; add it later via a
-# proper manifest entry if you need Play filtering.
+android.allow_backup = 0
+p4a.bootstrap = sdl2
 
 # --- Presentation ---
 presplash.filename = %(source.dir)s/assets/splash.png

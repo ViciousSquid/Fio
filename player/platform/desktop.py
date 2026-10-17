@@ -1,9 +1,4 @@
-"""Desktop development host (pygame / SDL2, OpenGL ES context).
-
-This is the on-desktop harness for developing the mobile player. It requests an
-**OpenGL ES** context from SDL2 so the exact same translated shaders and GL-ES
-call patterns run here as on the device — the whole point being that "works on
-my laptop" means "works on the phone".
+"""Desktop package host (pygame / SDL2, OpenGL 3.3 Core context).
 
 pygame is imported lazily so the rest of the ``player`` package (loader, shader
 translation, input model) stays importable — and unit-testable — on machines
@@ -53,6 +48,7 @@ class DesktopHost(PlatformHost):
         self._surface = None
         self._joysticks: list = []
         self._mouse_look = False
+        self.ui_events = []
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -67,16 +63,22 @@ class DesktopHost(PlatformHost):
 
         self._configure_gl_attributes()
         flags = pygame.OPENGL | pygame.DOUBLEBUF
+        size = (self.config.width, self.config.height)
         if self.config.fullscreen:
             flags |= pygame.FULLSCREEN
+        elif self.config.borderless:
+            flags |= pygame.NOFRAME
+            size = pygame.display.get_desktop_sizes()[0]
         self._surface = pygame.display.set_mode(
-            (self.config.width, self.config.height), flags
+            size, flags,
+            vsync=int(self.config.vsync),
         )
         pygame.display.set_caption(self.config.title)
         self.width, self.height = self._surface.get_size()
 
         self.lifecycle.on_surface_created()
         self.callbacks.on_gl_ready(self)
+        self.lifecycle.consume_gl_reload()
         self.callbacks.on_resize(self.width, self.height)
 
         self._open_gamepads()
@@ -88,18 +90,11 @@ class DesktopHost(PlatformHost):
 
     def _configure_gl_attributes(self) -> None:
         pg = self._pg
-        A = pg.GL_CONTEXT_MAJOR_VERSION
-        pg.display.gl_set_attribute(pg.GL_CONTEXT_MAJOR_VERSION, self.config.gles_major)
-        pg.display.gl_set_attribute(pg.GL_CONTEXT_MINOR_VERSION, self.config.gles_minor)
-        # Request an ES profile so desktop mirrors the device dialect.
-        try:
-            pg.display.gl_set_attribute(
-                pg.GL_CONTEXT_PROFILE_MASK, pg.GL_CONTEXT_PROFILE_ES
-            )
-        except Exception:
-            # Some SDL builds lack ES profiles; fall back to core so the harness
-            # still runs (shaders are ES-source but GL will accept them).
-            pass
+        # All desktop releases retain the engine's GL 3.3 Core contract.
+        pg.display.gl_set_attribute(pg.GL_CONTEXT_MAJOR_VERSION, 3)
+        pg.display.gl_set_attribute(pg.GL_CONTEXT_MINOR_VERSION, 3)
+        pg.display.gl_set_attribute(pg.GL_CONTEXT_PROFILE_MASK, pg.GL_CONTEXT_PROFILE_CORE)
+        pg.display.gl_set_attribute(pg.GL_CONTEXT_FLAGS, pg.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG)
         pg.display.gl_set_attribute(pg.GL_DEPTH_SIZE, self.config.depth_bits)
         pg.display.gl_set_attribute(pg.GL_STENCIL_SIZE, self.config.stencil_bits)
         pg.display.gl_set_attribute(pg.GL_DOUBLEBUFFER, 1)
@@ -111,7 +106,7 @@ class DesktopHost(PlatformHost):
         last = time.perf_counter()
         while self._running and self.lifecycle.is_alive:
             now = time.perf_counter()
-            dt = now - last
+            dt = min(now - last, 0.1)
             last = now
 
             self.input_state.begin_frame()
@@ -124,6 +119,7 @@ class DesktopHost(PlatformHost):
                 self.callbacks.on_gl_ready(self)
 
             if self.lifecycle.should_simulate:
+                self._before_frame()
                 self.callbacks.on_frame(dt, self.input_state)
 
             if self.lifecycle.should_render:
@@ -133,10 +129,20 @@ class DesktopHost(PlatformHost):
                 time.sleep(0.05)
 
             # Soft frame cap when vsync is unavailable.
-            if not self.config.vsync:
-                slack = target_dt - (time.perf_counter() - now)
-                if slack > 0:
-                    time.sleep(slack)
+            slack = target_dt - (time.perf_counter() - now)
+            if slack > 0:
+                time.sleep(slack)
+
+    def set_mouse_captured(self, captured):
+        if self._pg is not None and self._mouse_look != captured:
+            self._mouse_look = captured
+            self._pg.event.set_grab(captured)
+            self._pg.mouse.set_visible(not captured)
+            self._pg.mouse.get_rel()
+
+    def _before_frame(self):
+        """Process platform work after the foreground GL context is ready."""
+        pass
 
     def swap_buffers(self) -> None:
         self._pg.display.flip()
@@ -154,6 +160,8 @@ class DesktopHost(PlatformHost):
         focus_gained = getattr(pg, "WINDOWFOCUSGAINED", -1)
         for event in pg.event.get():
             et = event.type
+            if et == getattr(pg, "FINGERDOWN", -1):
+                self.ui_events.append((event.x * self.width, event.y * self.height))
             if et == pg.QUIT:
                 self.request_quit()
             elif et == pg.VIDEORESIZE:
@@ -162,6 +170,8 @@ class DesktopHost(PlatformHost):
                 self._pause()
             elif et == focus_gained:
                 self._resume()
+            elif et in (getattr(pg, 'JOYDEVICEADDED', -1), getattr(pg, 'JOYDEVICEREMOVED', -1)):
+                self._open_gamepads()
             elif et in (getattr(pg, "FINGERDOWN", -1), getattr(pg, "FINGERMOTION", -1)):
                 self._pointers[event.finger_id] = (
                     event.x * self.width,
@@ -170,12 +180,12 @@ class DesktopHost(PlatformHost):
             elif et == getattr(pg, "FINGERUP", -1):
                 self._pointers.pop(event.finger_id, None)
             elif et == pg.MOUSEBUTTONDOWN and event.button == 1:
-                self._mouse_look = True
-            elif et == pg.MOUSEBUTTONUP and event.button == 1:
-                self._mouse_look = False
+                self.ui_events.append(event.pos)
+
             elif et == pg.MOUSEMOTION and self._mouse_look:
                 dx, dy = event.rel
-                self.input_state.add_look(dx * 0.15, -dy * 0.15)
+                self.input_state.look_delta_x += dx * .15
+                self.input_state.look_delta_y -= dy * .15
 
     def _read_keyboard_mouse(self) -> None:
         pg = self._pg
@@ -207,6 +217,7 @@ class DesktopHost(PlatformHost):
             js = pg.joystick.Joystick(i)
             js.init()
             self._joysticks.append(js)
+        print(f"[Input] controllers: {[js.get_name() for js in self._joysticks]}", flush=True)
 
     def _read_gamepads(self) -> None:
         if not self._joysticks:
@@ -254,6 +265,7 @@ class DesktopHost(PlatformHost):
         if self.lifecycle.should_simulate:
             self.lifecycle.on_pause()
             self.touch.reset()
+            self._pointers.clear()
             self.callbacks.on_pause()
 
     def _resume(self) -> None:

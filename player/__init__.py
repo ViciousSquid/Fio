@@ -11,13 +11,13 @@ windowing, input and graphics-API layers are player-specific.
 
 Public surface
 --------------
-- :mod:`player.fiopak`        streaming ``.fiopak`` package reader
+- :mod:`player.runtime.fiopak`        streaming ``.fiopak`` package reader
 - :mod:`player.gles_shaders`  desktop GLSL 3.30 -> OpenGL ES 3.x translation
 - :mod:`player.input`         touch + gamepad -> normalized input state
 - :mod:`player.platform`      host abstraction, lifecycle, adaptive resolution
 - :mod:`player.app`           the composed player application
 """
 
-__version__ = "0.1.0"
+__version__ = "3.0.0"
 
 __all__ = ["__version__"]

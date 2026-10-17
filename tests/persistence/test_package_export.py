@@ -171,7 +171,7 @@ def test_absolute_references_cannot_leave_the_project(project, tmp_path):
 
     assert ok
     with zipfile.ZipFile(out) as zf:
-        assert sorted(zf.namelist()) == ["maps/start.json", "metadata.json"]
+        assert sorted(zf.namelist()) == ["assets/sounds/beep.wav", "maps/start.json", "metadata.json"]
         assert b"do not ship" not in [zf.read(n) for n in zf.namelist()]
     assert sum("outside the project" in e for e in errors) == 2, errors
 
@@ -209,7 +209,7 @@ def test_map_name_collisions_get_distinct_archive_paths(project, tmp_path):
 
     assert ok, errors
     with FioPackage.open(str(out)) as pak:
-        assert pak.list_maps() == ["maps/start.json", "maps/start_1.json"]
+        assert pak.list_maps() == ["maps/start.json", "maps/sub/start.json"]
         assert pak.start_map_path() == "maps/start.json"
 
 
@@ -289,3 +289,55 @@ def test_a_missing_cutscene_is_reported(project, tmp_path):
     assert ok
     assert any("Missing cutscene" in e and "gone.json" in e for e in errors), errors
 
+
+def test_archived_model_companions_and_new_asset_properties_are_self_contained(project, tmp_path):
+    """No installed project resources are needed to read the exported world."""
+    with zipfile.ZipFile(project / 'assets/models.fiopak', 'w') as assets:
+        assets.writestr('assets/models/demo/mesh.obj', 'mtllib mesh.mtl\nv 0 0 0\n')
+        assets.writestr('assets/models/demo/mesh.mtl', 'newmtl m\nmap_Kd ../../textures/model.png\n')
+    with zipfile.ZipFile(project / 'assets/textures.fiopak', 'w') as assets:
+        assets.writestr('assets/textures/model.png', b'archived texture')
+    with zipfile.ZipFile(project / 'assets/sprites.fiopak', 'w') as assets:
+        assets.writestr('assets/sprites/custom.png', b'custom sprite')
+    (project / 'assets/textures/model.png').write_bytes(b'loose override')
+    current = _write_json(project / 'maps/start.json', _level([
+        {'type': 'Prop', 'properties': {'model_path': 'assets/models/demo/mesh.obj',
+                                      'world_sprite': 'assets/sprites/custom.png'}}]))
+    out = tmp_path / 'world.fiopak'
+    ok, errors = _export(project, current, out)
+    assert ok and not errors, errors
+    # Remove the project completely: every required byte must be in the ZIP.
+    import shutil
+    shutil.rmtree(project)
+    from player.runtime.fiopak import FioPackage as AndroidPackage
+    with AndroidPackage.open(out) as world:
+        assert world.read_asset('assets/models/demo/mesh.obj').startswith(b'mtllib')
+        assert world.read_asset('assets/models/demo/mesh.mtl').startswith(b'newmtl')
+        assert world.read_asset('assets/textures/model.png') == b'loose override'
+        assert world.read_asset('assets/sprites/custom.png') == b'custom sprite'
+
+def test_gltf_external_buffers_and_images_follow_the_model(project, tmp_path):
+    model = {'asset': {'version': '2.0'}, 'buffers': [{'uri': 'mesh.bin'}],
+             'images': [{'uri': '../../textures/floor.png'}]}
+    _write_json(project / 'assets/models/nested/mesh.gltf', model)
+    (project / 'assets/models/nested/mesh.bin').write_bytes(b'vertices')
+    current = _write_json(project / 'maps/start.json', _level([
+        {'type': 'Prop', 'properties': {'model_path': 'assets/models/nested/mesh.gltf'}}]))
+    out = tmp_path / 'world.fiopak'
+    ok, errors = _export(project, current, out)
+    assert ok and not errors, errors
+    with zipfile.ZipFile(out) as package:
+        assert package.read('assets/models/nested/mesh.bin') == b'vertices'
+        assert package.read('assets/textures/floor.png') == b'floor'
+
+def test_player_world_carries_implicit_gameplay_assets_without_a_monster(project, tmp_path):
+    with zipfile.ZipFile(project / 'assets/sprites.fiopak', 'w') as assets:
+        assets.writestr('assets/sprites/pickup.png', b'engine default')
+    current = _write_json(project / 'maps/start.json', _level([
+        {'type': 'PlayerStart', 'properties': {}}]))
+    out = tmp_path / 'world.fiopak'
+    ok, errors = _export(project, current, out)
+    assert ok and not errors, errors
+    with zipfile.ZipFile(out) as package:
+        assert package.read('assets/sprites/pickup.png') == b'engine default'
+        assert package.read('assets/sounds/beep.wav') == b'beep'

@@ -1,19 +1,8 @@
-"""Turn a parsed Fio map into GPU-ready geometry (Milestone 3).
+"""Build ES vertex batches for box and authored convex brushes.
 
-This is the first real slice of the engine-render bridge: it converts a map's
-``brushes`` into a single interleaved vertex buffer of lit boxes, and pulls the
-``light`` entities out of ``things`` so the ``lit`` shader can shade them.
-
-It is deliberately small and dependency-light (numpy only) so it is unit-testable
-off-device. It does not yet handle textures, non-box brush shapes, portals,
-water/glass shaders, or models — those are later milestones. The output feeds
-:class:`player.render.renderer.GLESRenderer`, which owns the GL upload/draw.
-
-Vertex layout (matches the ``lit`` shader's attributes):
-    location 0: position (vec3, world space)
-    location 1: normal   (vec3, world space)
-Stride is 6 floats; brush vertices are baked into world space so the draw uses
-an identity model matrix.
+Textures come from the world package; clipped surfaces use the engine's shared
+convex geometry. Vertex layout is position3, normal3, uv2. The older untextured
+builder is retained for callers and tests.
 """
 
 from __future__ import annotations
@@ -99,6 +88,20 @@ def build_textured_batches(
     batches: Dict[str, list] = {}
     for b in map_data.get("brushes", []):
         if not _is_renderable(b):
+            continue
+        if b.get("geometry", {}).get("planes"):
+            from engine.brush_geometry import get_convex, face_uv_projection
+            convex = get_convex(b)
+            for face in convex.faces:
+                ring = convex.verts[face["indices"]]
+                us, vs, (u0, eu), (v0, ev) = face_uv_projection(ring, face)
+                uv_scale = face.get("uv_scale") or (1, 1)
+                group = batches.setdefault(face.get("texture") or "", [])
+                for j in range(1, len(ring) - 1):
+                    for index in (0, j, j + 1):
+                        group.extend((*ring[index], *face["normal"],
+                                      (us[index] - u0) / (texel or eu) * float(uv_scale[0]),
+                                      (vs[index] - v0) / (texel or ev) * float(uv_scale[1])))
             continue
         cx, cy, cz = (float(v) for v in b["pos"])
         size = [abs(float(v)) for v in b["size"]]

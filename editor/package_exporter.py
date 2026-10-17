@@ -52,6 +52,7 @@ class PackageExporter:
         """
         import traceback
 
+        asset_sources = None
         try:
             root = self.root_dir
             if not os.path.isdir(root):
@@ -77,7 +78,11 @@ class PackageExporter:
             used = set()
             for map_file in [current_map_abs] + sorted(all_maps - {current_map_abs}):
                 name, ext = os.path.splitext(os.path.basename(map_file))
-                archive_path = f"maps/{name}{ext}"
+                # Keep map hierarchy so identically named linked levels
+                # resolve exactly as their authored references do.
+                maps_root = os.path.join(root, 'maps')
+                archive_path = (os.path.relpath(map_file, root).replace('\\', '/')
+                                if self._inside(map_file, maps_root) else f"maps/{name}{ext}")
                 counter = 1
                 while archive_path in used:
                     archive_path = f"maps/{name}_{counter}{ext}"
@@ -109,13 +114,35 @@ class PackageExporter:
                     if cutscene is not None:
                         referenced_assets |= self._cutscene_asset_references(cutscene)
 
-            asset_entries: Dict[str, str] = {}   # arcname -> source
-            for asset_name in sorted(referenced_assets):
-                src_path = self._resolve_asset(asset_name)
-                if src_path is None:
+            from player.runtime.package_assets import ProjectAssets, companion_assets
+            sources = asset_sources = ProjectAssets(root)
+            asset_entries = {}
+            # Built-in gameplay sprites/audio are implicit references (monster
+            # states, weapons, water sounds). Carry them with the world too.
+            pending = list(referenced_assets)
+            entity_types = {str(t.get('type', '')).replace('_', '').lower()
+                            for map_file in map_archive_paths
+                            for t in (self._read_map(map_file) or {}).get('things', [])}
+            # Engine defaults and cutscene-spawned entities need these even
+            # when no Monster/Prop is present in the serialized map.
+            prefixes = (['assets/sprites/', 'assets/textures/effects/', 'assets/sounds/']
+                        if entity_types else [])
+            if any((self._read_map(m) or {}).get('terrain_data') for m in map_archive_paths):
+                prefixes += ['assets/textures/']
+            pending.extend(name for name in sources.sources if name.startswith(tuple(prefixes)))
+            while pending:
+                reference = pending.pop()
+                name = sources.resolve(reference)
+                if name is None:
+                    kind = 'Skipped asset outside the project' if (
+                        os.path.isabs(reference) or '..' in reference.replace('\\', '/').split('/')) else 'Missing asset'
+                    self.errors.append(f"{kind}: {reference}")
                     continue
-                arcname = os.path.relpath(src_path, root).replace('\\', '/')
-                asset_entries.setdefault(arcname, src_path)
+                if name in asset_entries:
+                    continue
+                raw = sources.read(name)
+                asset_entries[name] = sources.sources[name]
+                pending.extend(companion_assets(name, raw))
 
             # ---- 4. Assemble next to the destination, then swap it in ----
             with atomic_output(output_path, binary=True) as handle:
@@ -125,8 +152,11 @@ class PackageExporter:
                         zf.write(map_file, archive_path)
                     for arcname, src_path in sorted(cutscene_entries.items()):
                         zf.write(src_path, arcname)
-                    for arcname, src_path in sorted(asset_entries.items()):
-                        zf.write(src_path, arcname)
+                    for arcname, source in sorted(asset_entries.items()):
+                        if isinstance(source, tuple):
+                            zf.writestr(arcname, sources.read(arcname))
+                        else:
+                            zf.write(source, arcname)
 
             metadata['map_path'] = manifest['map_path']
             return True, list(self.errors)
@@ -138,6 +168,9 @@ class PackageExporter:
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.critical(parent_widget, "Export Error", error_msg)
             return False, self.errors
+        finally:
+            if asset_sources is not None:
+                asset_sources.close()
 
     # ------------------------------------------------------------------
     # Discovery
@@ -157,26 +190,8 @@ class PackageExporter:
 
     def _asset_references(self, data: dict) -> Set[str]:
         """Every asset name a map's brushes and things refer to."""
-        refs: Set[str] = set()
-        for brush in data.get('brushes', []) or []:
-            if not isinstance(brush, dict):
-                continue
-            textures = brush.get('textures')
-            if isinstance(textures, dict):
-                refs.update(t for t in textures.values() if t and isinstance(t, str))
-
-        for thing in data.get('things', []) or []:
-            if not isinstance(thing, dict):
-                continue
-            props = thing.get('properties')
-            if not isinstance(props, dict):
-                continue
-            for asset_keys in self.ASSET_KEYS.values():
-                for key in asset_keys:
-                    val = props.get(key)
-                    if val and isinstance(val, str):
-                        refs.add(val)
-        return refs
+        from player.runtime.package_assets import map_assets
+        return map_assets(data)
 
     def _cutscene_references(self, data: dict) -> Set[str]:
         """Every cutscene file a map's entities name."""

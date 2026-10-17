@@ -1,14 +1,11 @@
 """Tiny numpy-backed matrix helpers for the player's own rendering.
 
-The engine uses PyGLM, which has no python-for-android recipe (see
-``player/README.md``). The player's *own* GL needs — a view/projection matrix, a
-2D orthographic overlay, per-widget translate/scale — are small, so we express
-them with numpy (which *does* have a p4a recipe) and keep PyGLM out of the
-mobile render path until the full engine simulation is ported.
+The shared simulation uses the real PyGLM binding, built by our local Android
+recipe. The player renderer uses NumPy arrays for interleaved buffers and
+explicit matrix uploads on both desktop OpenGL and Android GLES.
 
-Matrices are returned as row-major ``float32`` 4x4 arrays. Upload them with
-``glUniformMatrix4fv(loc, 1, GL_TRUE, mat)`` — the ``GL_TRUE`` transpose flag
-tells GL to read our row-major data as its expected column-major layout.
+Matrices are row-major float32 arrays. Upload ``column_major(mat)`` with
+``transpose=GL_FALSE``: OpenGL ES forbids transposed matrix uploads.
 """
 
 from __future__ import annotations
@@ -77,7 +74,7 @@ def mul(*mats: "np.ndarray") -> "np.ndarray":
 # agree with the engine's conventions exactly or a map would look different in
 # the player than in the editor: Y is up, yaw/pitch are degrees, and yaw -90
 # looks down -Z.  These reproduce ``glm::perspective`` and ``glm::lookAt`` in
-# row-major float32, like everything else here (upload with GL_TRUE).
+# row-major float32, like everything else here (upload with column_major and GL_FALSE).
 
 
 def perspective(fovy: float, aspect: float, near: float, far: float) -> "np.ndarray":
@@ -145,3 +142,22 @@ def front_from_angles(yaw: float, pitch: float) -> "np.ndarray":
     if length < 1e-8:
         return np.array([0.0, 0.0, -1.0], dtype=np.float32)
     return front / length
+
+
+def column_major(mat):
+    """Contiguous column-major data for an ES-compatible matrix upload."""
+    return np.ascontiguousarray(np.asarray(mat, dtype=np.float32).T)
+
+
+def entity_matrix(position, properties):
+    rotation = properties.get('rotation', (0, 0, 0))
+    pitch, yaw, roll = (math.radians(float(v)) for v in rotation)
+    cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
+    rx = identity()
+    rx[1:3, 1:3] = ((cp, -sp), (sp, cp))
+    ry = identity()
+    ry[0, 0], ry[0, 2], ry[2, 0], ry[2, 2] = cy, sy, -sy, cy
+    size = properties.get('scale', (1, 1, 1))
+    if isinstance(size, (float, int)):
+        size = (size, size, size)
+    return mul(translate(*position), ry, rx, rotate_z(roll), scale(*size))

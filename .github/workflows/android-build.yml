@@ -1,0 +1,246 @@
+name: Android Player Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'player/**'
+      - 'engine/**'
+      - 'plugins/**'
+      - 'editor/*.py'
+      - 'assets/**'
+      - 'maps/**'
+      - 'cutscenes/**'
+      - 'main.py'
+      - 'python_runtime.py'
+      - '.github/workflows/android-build.yml'
+  pull_request:
+    paths:
+      - 'player/**'
+      - 'engine/**'
+      - 'plugins/**'
+      - 'editor/*.py'
+      - 'assets/**'
+      - 'maps/**'
+      - 'cutscenes/**'
+      - 'main.py'
+      - 'python_runtime.py'
+      - '.github/workflows/android-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-player-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r requirements.txt pytest
+      - name: Mesa and patch tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patch libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri
+      - name: Existing desktop package compatibility
+        run: python -m pytest tests/persistence/test_package_export.py tests/persistence/test_package_plugins.py tests/engine/test_player_start_rules.py -q
+      - name: Export worlds with the desktop exporter
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYOPENGL_PLATFORM: egl
+          SDL_AUDIODRIVER: dummy
+        run: |
+          python -m player.tools.contract_fixture universal.fiopak
+          python -m player.tools.export_showcase _SHOWCASE.fiopak
+      - name: Stage and test the Android-private engine
+        env:
+          PYOPENGL_PLATFORM: egl
+          SDL_AUDIODRIVER: dummy
+        run: |
+          python -m player.tools.stage_runtime "$RUNNER_TEMP/fio-android-runtime"
+          cd "$RUNNER_TEMP/fio-android-runtime"
+          python -m pytest player/tests -q
+          python -m player.tools.verify_package "$GITHUB_WORKSPACE/universal.fiopak"
+          python -m player.tools.verify_package "$GITHUB_WORKSPACE/_SHOWCASE.fiopak"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-showcase-world
+          path: _SHOWCASE.fiopak
+          if-no-files-found: error
+      - name: Mesa desktop OpenGL and Android GLES checks
+        env:
+          PYOPENGL_PLATFORM: egl
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          cd "$RUNNER_TEMP/fio-android-runtime"
+          python -m player.tools.smoke_gles --desktop --fixture "$GITHUB_WORKSPACE/universal.fiopak"
+          python -m player.tools.smoke_gles --fixture "$GITHUB_WORKSPACE/universal.fiopak"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: universal-fiopak-contract
+          path: universal.fiopak
+          if-no-files-found: error
+
+  apk:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      APP_ANDROID_ACCEPT_SDK_LICENSE: 'True'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # Host tooling; the pinned p4a recipe supplies Android CPython 3.14.
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake ninja-build ccache zlib1g-dev libffi-dev libssl-dev gettext autopoint zip unzip patch
+          python -m pip install buildozer==1.6.0 legacy-cgi setuptools 'cython==0.29.37'
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.buildozer
+            player/.buildozer
+          key: android-arm64-${{ runner.os }}-${{ hashFiles('player/buildozer.spec', 'player/p4a-recipes/**') }}
+      - uses: actions/cache@v5
+        with:
+          path: ~/.android/debug.keystore
+          key: fio-android-debug-keystore-v1
+      - name: Build debug APK
+        working-directory: player
+        run: buildozer -v android debug
+      - name: Stage and validate debug APK
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          apks = list(Path('player/bin').glob('*debug*.apk'))
+          assert len(apks) == 1, apks
+          Path('artifacts/debug').mkdir(parents=True)
+          shutil.copy2(apks[0], 'artifacts/debug/fio-player-debug.apk')
+          PY
+          python -m player.tools.check_apk artifacts/debug/*.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-player-debug-apk
+          path: artifacts/debug/*.apk
+          if-no-files-found: error
+      - name: Build release APK
+        # Native dependency outputs from the debug build are reused. No signing
+        # credentials are passed to Buildozer, which can dump its environment.
+        working-directory: player
+        run: buildozer -v android release
+      - name: Stage release APK and locate Android signing tools
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import shutil
+          apks = list(Path('player/bin').glob('*release*.apk'))
+          assert len(apks) == 1, apks
+          Path('artifacts/release').mkdir(parents=True)
+          shutil.copy2(apks[0], 'artifacts/release/fio-player-release-unsigned.apk')
+          roots = Path.home() / '.buildozer/android/platform/android-sdk/build-tools'
+          tools = sorted(roots.glob('*/apksigner'), key=lambda p: tuple(int(x) for x in p.parent.name.split('.') if x.isdigit()))
+          assert tools, 'Android signing tools were not installed'
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'FIO_ANDROID_BUILD_TOOLS={tools[-1].parent}\n')
+          PY
+          python -m player.tools.check_apk artifacts/release/*.apk
+      - name: Sign release APK when repository signing secrets are configured
+        id: sign
+        if: github.event_name != 'pull_request'
+        env:
+          FIO_ANDROID_KEYSTORE_BASE64: ${{ secrets.FIO_ANDROID_KEYSTORE_BASE64 }}
+          FIO_ANDROID_KEY_ALIAS: ${{ secrets.FIO_ANDROID_KEY_ALIAS }}
+          FIO_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FIO_ANDROID_KEYSTORE_PASSWORD }}
+          FIO_ANDROID_KEY_PASSWORD: ${{ secrets.FIO_ANDROID_KEY_PASSWORD }}
+        run: >-
+          python -m player.tools.sign_apk
+          artifacts/release/fio-player-release-unsigned.apk
+          artifacts/release/fio-player-release.apk
+      - name: Validate final release APK
+        run: python -m player.tools.check_apk artifacts/release/*.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-player-release-${{ steps.sign.outputs.mode || 'unsigned' }}-apk
+          path: artifacts/release/*.apk
+          if-no-files-found: error
+
+  emulator:
+    name: Android showcase load and movement
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      APP_ANDROID_ACCEPT_SDK_LICENSE: 'True'
+      APP_ANDROID_ARCHS: x86_64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake ninja-build ccache zlib1g-dev libffi-dev libssl-dev gettext autopoint zip unzip patch
+          python -m pip install buildozer==1.6.0 legacy-cgi setuptools 'cython==0.29.37'
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.buildozer
+            player/.buildozer
+          key: android-x86_64-${{ runner.os }}-${{ hashFiles('player/buildozer.spec', 'player/p4a-recipes/**') }}
+      - name: Build emulator debug APK
+        working-directory: player
+        run: buildozer -v android debug
+      - name: Validate emulator native libraries
+        run: python -m player.tools.check_apk --abi x86_64 player/bin/*debug*.apk
+      - name: Release build memory before starting Android
+        working-directory: player/.buildozer/android/platform/build-x86_64/dists/fioplayer
+        run: ./gradlew --stop
+      - uses: actions/download-artifact@v7
+        with:
+          name: desktop-showcase-world
+          path: acceptance-world
+      - name: Enable emulator hardware acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Install APK, open showcase and move with touch input
+        # Pin the upstream v2 action identity rather than a moving branch.
+        uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
+        with:
+          api-level: 36
+          # The minimal ATD image omits the document picker used by Fio.
+          target: default
+          arch: x86_64
+          profile: pixel
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader -feature -Vulkan -memory 3072 -cores 2 -camera-back none -camera-front none
+          script: python -m player.tools.test_device player/bin/*debug*.apk acceptance-world/_SHOWCASE.fiopak --output fio-device-results
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-showcase-device-evidence
+          path: fio-device-results/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-player-emulator-debug-apk
+          path: player/bin/*debug*.apk
+          if-no-files-found: error

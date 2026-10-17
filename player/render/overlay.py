@@ -159,4 +159,4 @@ class OverlayRenderer:
         gl = _gl()
         loc = gl.glGetUniformLocation(self._program, name)
         if loc != -1:
-            gl.glUniformMatrix4fv(loc, 1, gl.GL_TRUE, mat)
+            gl.glUniformMatrix4fv(loc, 1, gl.GL_FALSE, glmath.column_major(mat))

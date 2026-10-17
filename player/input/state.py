@@ -67,6 +67,8 @@ class InputState:
     move_y: float = 0.0
     look_x: float = 0.0
     look_y: float = 0.0
+    look_delta_x: float = 0.0
+    look_delta_y: float = 0.0
 
     # current-frame held set + previous-frame held set -> derived edges
     _down: Dict[str, bool] = field(default_factory=dict)
@@ -77,6 +79,7 @@ class InputState:
 
         Call once at the top of each frame before any source writes into it.
         """
+        self.look_delta_x = self.look_delta_y = 0.0
         self._prev_down = dict(self._down)
         self._down = {a: False for a in ALL_ACTIONS}
         self.move_x = self.move_y = 0.0
