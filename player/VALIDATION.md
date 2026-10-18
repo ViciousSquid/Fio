@@ -201,6 +201,13 @@ filename. Assertions and screenshot capture then passed in the same process.
 This retry covers rendering/startup/import, not a new movement or full lifecycle
 run. Evidence: `android-nodraw/native-v3/result.json` and `native-rendering.png`.
 
+A real malformed archive also produced the corrected native error dialog:
+title, bad-ZIP message, **Close** and **Save error report** were visible. The
+assistant scrolled the file into the picker viewport after the automated
+offscreen-row selection failed. Close was tapped; writing a report through the
+save picker was not tested. Android Back left the app on this emulator, so the
+README directs users to the on-screen Pause button for the in-app menu.
+
 ## Native debug findings
 
 Reviewed defects included desktop-only Qt startup imports, omitted PyGLM/C++

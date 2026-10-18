@@ -23,7 +23,7 @@ Complete desktop visual parity is still a work in progress.
 | Processor | 64-bit ARM with the `arm64-v8a` ABI for the phone APK; 32-bit ARM is not included |
 | Graphics | OpenGL ES 3.0 or newer and a working device GLES driver |
 | Display and input | Landscape display with multitouch; the app runs fullscreen |
-| Storage | Space for the installed app and imported worlds; allow up to two copies of a world during replacement/import |
+| Storage | Space for the installed app, original archives and up to two private copies of a world during replacement/import |
 | Memory | Depends on world geometry, decoded textures, models and effects; no fixed RAM minimum has been benchmarked |
 | Package access | Android's system document picker must be available; broad storage permission is unnecessary |
 
@@ -71,7 +71,7 @@ an internet connection or USB debugging.
 | FIRE | Fire the held weapon |
 | JUMP / CROUCH / SPRINT | Use the corresponding movement action |
 | USE | Interact |
-| Pause button or Android Back | Open the pause menu |
+| Pause button | Open the pause menu |
 | Resume / Open world / Exit | Continue, choose another archive, or leave the player |
 
 Simulation pauses while the app is backgrounded. After returning, use **Resume**
