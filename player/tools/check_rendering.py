@@ -43,7 +43,7 @@ def run(renderer, evidence=None):
     data = io.BytesIO()
     Image.new('RGBA',(2,2),'red').save(data,format='PNG')
     for depth in (100,760,950):
-        brush = {'pos':[0,0,-depth], 'size':[depth,depth,1], 'textures':{'south':'red.png'}}
+        brush = {'pos':[0,0,-depth], 'size':[depth,depth,1], 'textures':{'north':'red.png'}}
         with package({'brushes':[brush]}, {'assets/textures/red.png':data.getvalue()}) as archive:
             renderer.load_scene(archive.load_start_map(),archive)
             renderer.render(state)
@@ -59,6 +59,22 @@ def run(renderer, evidence=None):
         f = distance.fog_factor(759.5)
         np.testing.assert_allclose(pixels()[64,64,:3],(np.array((.1,.1,.1))*(1-f)+np.array(distance.fog_color)*f)*255,atol=2)
     distance.fog_density = 0
+    # A nodraw face must reveal the background, even when its brush's other
+    # faces remain visible. Exercise both box and authored convex geometry.
+    from engine.brush_geometry import box_to_geometry
+    for convex in (False, True):
+        for texture in ('nodraw', r'assets\textures\NoDraw.PNG'):
+            brush = {'pos':[0,0,-100], 'size':[100,100,10], 'textures':{'north':texture}}
+            if convex:
+                box_to_geometry(brush)
+                # Authored convex plane tags use the engine's orientation.
+                for plane in brush['geometry']['planes']:
+                    plane['texture'] = texture if plane['n'] == [0,0,1] else ''
+            with package({'brushes':[brush]}) as archive:
+                renderer.load_scene(archive.load_start_map(),archive)
+                renderer.render(state)
+                np.testing.assert_allclose(pixels()[64,64,:3],np.array(distance.fog_color)*255,atol=1)
+                save(f'nodraw-{"convex" if convex else "box"}.png',pixels())
     # A huge brush still protrudes into the frustum, but its centre is past
     # the engine's XZ distance cap. Verify it never reaches a draw call.
     with package({'brushes':[{'pos':[0,0,-1100], 'size':[2000,2000,1000]}]}) as archive:
@@ -74,6 +90,55 @@ def run(renderer, evidence=None):
         save('backfaces-culled.png',pixels())
     distance.distance = 4096
     distance.fog_color = (.1,.1,.15)
+
+    # The canonical desktop ambient and the last light in its full budget
+    # must reach actual pixels, rather than just appearing in CPU light lists.
+    wall = {'pos':[0,0,-200], 'size':[400,400,10]}
+    world = PlayerWorld({'brushes':[wall], 'things':[]})
+    try:
+        renderer.load_scene(world.data,world=world)
+        world.logic.render_runtime.view_distance.ambient = (.2,.05,.1)
+        renderer.render(state)
+        np.testing.assert_allclose(pixels()[64,64,:3],np.array((.3,.15,.2))*255,atol=2)
+        save('desktop-ambient.png',pixels())
+    finally:
+        world.close()
+    from engine.shaders import MAX_LIGHTS
+    things = [{'type':'Light','pos':[0,0,0], 'properties':{'radius':1}} for _ in range(MAX_LIGHTS-1)]
+    things += [{'type':'Light','pos':[0,0,-100], 'properties':{'radius':500}}]
+    world = PlayerWorld({'brushes':[wall], 'things':things})
+    try:
+        renderer.load_scene(world.data,world=world)
+        renderer.render(state)
+        assert renderer.frame_stats['lights'] == MAX_LIGHTS
+        np.testing.assert_allclose(pixels()[64,64,:3],(.1+(1-95/500)**2)*255,atol=2)
+        save('desktop-light-budget.png',pixels())
+    finally:
+        world.close()
+
+    # A receiving plane must not shadow itself into darkness. Use a grazing
+    # light so the desktop slope bias, not just a flat frontal case, is tested.
+    world = PlayerWorld({'brushes':[wall], 'things':[{'type':'Light','pos':[-80,80,-150],
+                         'properties':{'radius':500,'casts_shadows':True}}]})
+    try:
+        renderer.load_scene(world.data,world=world)
+        renderer.render(state);shadowed = pixels()
+        world.state.things[0].properties['casts_shadows'] = False
+        renderer.render(state);unshadowed = pixels()
+        np.testing.assert_allclose(shadowed[32:96,32:96],unshadowed[32:96,32:96],atol=2)
+        save('desktop-shadow-bias.png',shadowed)
+    finally:
+        world.close()
+
+    for inside in (False,True):
+        fog = {'pos':[0,0,0 if inside else -100], 'size':[100,100,100],
+               'shader':'Fog', 'fog_density':2, 'fog_color':[.5,.6,.7]}
+        with package({'brushes':[wall,fog]}) as archive:
+            renderer.load_scene(archive.load_start_map(),archive)
+            renderer.render(state)
+            assert renderer.frame_stats['fog_volumes'] == 1
+            assert np.max(np.abs(pixels()[64,64,:3].astype(float)-25.5)) > 3, 'Local fog volume never blended over the wall'
+            save('local-fog-'+('inside' if inside else 'outside')+'.png',pixels())
 
     # Real point-light depth atlas, including an occluder whose shadow lies
     # outside its camera silhouette on the receiving wall.
@@ -94,6 +159,23 @@ def run(renderer, evidence=None):
         delta = unshadowed[:,:,:3].astype(int)-shadowed[:,:,:3].astype(int)
         assert np.count_nonzero(delta.max(2)>20)>30, 'Depth atlas cast no visible shadow'
         save('point-light-no-shadow.png',unshadowed)
+    finally:
+        world.close()
+
+    # An ORB must light nearby geometry as well as draw its animated sprite.
+    # Keep its sprite off-centre so it cannot satisfy the lighting assertion.
+    data = {'brushes':[wall], 'things':[{'type':'Effect','pos':[80,0,-100],
+            'properties':{'effect_type':'ORB','width':2,'height':2,
+                          'light_radius':500,'light_intensity':2,'light_enabled':False}}]}
+    world = PlayerWorld(data)
+    try:
+        renderer.load_scene(data,world=world)
+        renderer.render(state);dark = pixels()
+        world.state.things[0].properties['light_enabled'] = True
+        renderer.render(state);lit = pixels()
+        gain = lit[64,64,:3].astype(int)-dark[64,64,:3].astype(int)
+        assert gain[2] > 30 and gain[2] > gain[0]+20, ('ORB cast no blue light on the wall',gain)
+        save('effect-light-off.png',dark);save('effect-light-on.png',lit)
     finally:
         world.close()
 
@@ -123,4 +205,4 @@ def run(renderer, evidence=None):
         finally:
             world.close()
     assert GL.glGetError()==GL.GL_NO_ERROR
-    print('PASS: GPU back-face/distance culling, engine radial/density fog, point-light shadows, animated effect')
+    print('PASS: GPU nodraw faces, desktop ambient/light budget/shadow bias, local fog, effect lighting, back-face/distance culling, radial/density fog, point-light shadows, animated effect')

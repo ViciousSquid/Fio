@@ -1,6 +1,6 @@
-"""Small ES 3.0 world pass; no desktop-only shadow/sampler requirements."""
-
-from engine.shaders import FOG_GLSL
+"""Desktop lighting and shadow formulas, with an ES-compatible atlas lookup."""
+from engine.shaders import DEFAULT_SHADERS, SHADOW_GLSL, MAX_SHADOW_LIGHTS, light_ubo_source
+from player.gles_shaders import translate
 
 VERTEX = """#version 300 es
 precision highp float;
@@ -21,27 +21,13 @@ void main() {
 }
 """
 
-FRAGMENT = """#version 300 es
-precision highp float;
-in vec3 worldPos;
-in vec3 worldNormal;
-in vec2 texCoord;
-uniform sampler2D diffuse;
-uniform vec4 tint;
-uniform bool unlit;
-
-uniform int lightCount;
-uniform vec3 lightPos[32];
-uniform vec3 lightColor[32];
-uniform float lightRadius[32];
-uniform float lightIntensity[32];
-uniform int lightShadow[32];
-uniform sampler2D shadowAtlas;
-out vec4 fragColor;
-""" + FOG_GLSL + """
-float visibility(int light, vec3 delta) {
-    if(lightShadow[light]<0) return 1.0;
-    vec3 a=abs(delta);float face;vec2 uv;float d;
+# Preserve the desktop PCF loop, radial depth and slope bias. Only the cube
+# lookup changes to an atlas, which needs one sampler on every GLES 3 GPU.
+_ATLAS_SAMPLE = """
+uniform highp sampler2D shadowAtlas;
+uniform float shadowTileSize;
+highp float _sampleShadowCube(int idx, highp vec3 delta) {
+    vec3 a=abs(delta); float face; vec2 uv; float d;
     if(a.x>=a.y && a.x>=a.z) {
         d=a.x;face=delta.x>0.0?0.0:1.0;uv=vec2(delta.x>0.0?-delta.z:delta.z,-delta.y)/d;
     } else if(a.y>=a.z) {
@@ -49,25 +35,18 @@ float visibility(int light, vec3 delta) {
     } else {
         d=a.z;face=delta.z>0.0?4.0:5.0;uv=vec2(delta.z>0.0?delta.x:-delta.x,-delta.y)/d;
     }
-    float farPlane=max(lightRadius[light],1.0);
-    float depth=farPlane/(farPlane-.5)-(farPlane*.5)/((farPlane-.5)*max(d,.001));
-    uv=clamp(uv*.5+.5,vec2(.002),vec2(.998));
-    uv=(vec2(face,float(lightShadow[light]))+uv)/vec2(6.0,4.0);
-    return depth-.001>texture(shadowAtlas,uv).r ? 0.0 : 1.0;
-}
-void main() {
-    vec4 albedo = texture(diffuse, texCoord) * tint;
-    if (albedo.a < 0.1) discard;
-    vec3 n = normalize(worldNormal);
-    vec3 illumination = vec3(0.1) + uAmbient;
-    for (int i=0; i<32; ++i) {
-        if (i >= lightCount) break;
-        vec3 delta = lightPos[i] - worldPos;
-        float distanceToLight = length(delta);
-        float falloff = max(0.0, 1.0 - distanceToLight / max(lightRadius[i], 0.001));
-        illumination += visibility(i, worldPos-lightPos[i]) * lightColor[i] * lightIntensity[i] * falloff * falloff
-            * max(dot(n, delta / max(distanceToLight, 0.001)), 0.0);
-    }
-    fragColor = vec4(applyFog(albedo.rgb * (unlit ? vec3(1.0) : illumination), worldPos), albedo.a);
+    uv=clamp(uv*.5+.5,vec2(.5/shadowTileSize),vec2(1.0-.5/shadowTileSize));
+    uv=(vec2(face,float(idx))+uv)/vec2(6.0,""" + str(float(MAX_SHADOW_LIGHTS)) + """);
+    return texture(shadowAtlas,uv).r;
 }
 """
+_shadow = _ATLAS_SAMPLE + SHADOW_GLSL[SHADOW_GLSL.index('// idx'):]
+_fragment = DEFAULT_SHADERS['textured.frag'].replace(SHADOW_GLSL, _shadow)
+_fragment = _fragment.replace('uniform vec4 model_tint;', 'uniform vec4 tint;\nuniform bool unlit;')
+_fragment = _fragment.replace('texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);',
+                            'texColor *= tint;\n    if (unlit) { FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a); return; }')
+for _old, _new in (('FragPos','worldPos'), ('Normal','worldNormal'),
+                  ('TexCoords','texCoord'), ('texture_diffuse','diffuse'),
+                  ('active_lights','lightCount')):
+    _fragment = _fragment.replace(_old, _new)
+FRAGMENT = translate(light_ubo_source(_fragment), 'fragment').replace('precision mediump float;', 'precision highp float;')

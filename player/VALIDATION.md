@@ -16,7 +16,8 @@ behavior, plugins and desktop workflows remain unchanged.
 Android adapts a private build copy using `player/overlays/android-runtime.patch`.
 The hook copies existing runtime definitions from the editor, removes Qt startup
 dependencies in that copy and supplies compatibility aliases. A receipt records
-16 input source hashes and staging verifies the originals remain unchanged.
+17 input hashes (including the shared fog noise resource) and staging verifies
+the originals remain unchanged.
 These adapters are never applied to the desktop checkout.
 
 The exporter now preserves map hierarchy, scans current asset references,
@@ -135,6 +136,50 @@ The installed APK hash and private runtime receipt match the rebuilt APK.
 
 No `engine/**` or `editor/**` file changed in this follow-up. The private build
 adapter includes the combat correction; desktop behavior remains unchanged.
+
+## Nodraw surface follow-up
+
+Android omits faces whose texture basename is `nodraw` or `caulk`, with or
+without an image extension, regardless of case or slash direction. This applies
+to box faces and authored convex planes. Only the marked faces are omitted;
+the brush's collision bounds and materials remain intact. Omitted geometry
+also stays out of the player's shadow batches. Similar names such as
+`nodraw_bricks.jpg` continue to render.
+
+The isolated player suite passes **141 tests**. Mesa GLES pixel checks verify
+that bare and path-qualified nodraw surfaces reveal the background for both
+box and convex geometry; existing rendering smoke checks also pass. ARM64 debug
+and unsigned release APKs were rebuilt and checked for 16 KiB native-library
+alignment. This follow-up has not been tested on the Pixel. No engine or editor
+source changed.
+
+## Lighting parity follow-up
+
+The player now derives its world fragment shader from the canonical desktop
+`textured.frag`, adapting the interface and shadow lookup for GLES. Ambient,
+diffuse falloff, radial shadow depth, slope bias and 20-sample PCF use desktop
+formulas. A std140 UBO supports the same 64-light budget without exceeding the
+minimum GLES fragment-uniform capacity. The atlas supports eight shadow lights
+at 384 px per face, reducing resolution on GPUs limited to 2048 px textures.
+The 4096-unit light cutoff and cutscene camera exception remain intact.
+
+The previous player reversed north/south box materials and omitted local fog
+volumes. Both are corrected. Fog reuses the desktop shader and the same noise
+bytes, copied into the private APK tree from `assets/noise_3d.bin`; world image,
+model and audio assets still stream from the package. Desktop files are unchanged.
+
+Real host GLES pixel checks cover the 64th light, authored ambient colour,
+grazing-angle self-shadow rejection, actual occlusion, local fog viewed inside
+and outside, and an ORB lighting nearby geometry while its sprite stays away
+from the sampled pixel. The OpenGL Core development harness runs the same checks.
+
+At the same exported `_SHOWCASE` spawn-room camera and a fixed effect flicker
+phase, the unchanged desktop ForwardRenderer and GLES player both produce
+**RGB (33, 50, 71)** at the sampled floor point. Full-scene and static-light
+diagnostic images are labelled separately; independently timed animated captures
+cannot establish pixel-exact parity. These are host GPU comparisons, not new
+Pixel captures. Complete visual parity, phone driver behaviour and performance
+remain unverified; the feature limits below still apply.
 
 ## Native debug findings
 

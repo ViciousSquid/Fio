@@ -56,7 +56,7 @@ def main():
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("metadata.json", json.dumps({"map_path": "maps/test.json"}))
             zf.writestr("maps/test.json", json.dumps({"brushes": [
-                {"pos": [0, 0, -5], "size": [3, 3, 1], "textures": {"south": "red.png"}}
+                {"pos": [0, 0, -5], "size": [3, 3, 1], "textures": {"north": "red.png"}}
             ]}))
             zf.writestr("assets/textures/red.png", texture.getvalue())
         with FioPackage.from_bytes(archive.getvalue()) as package:

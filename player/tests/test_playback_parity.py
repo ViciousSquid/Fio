@@ -2,6 +2,7 @@
 import io
 import math
 import numpy as np
+import pytest
 from PIL import Image
 from player.render.scene import build_textured_batches
 from player.render.assets import Images
@@ -38,6 +39,66 @@ def test_nodraw_and_caulk_do_not_cover_the_world():
     batches=build_textured_batches({'brushes':[brush]})
     assert 'nodraw.jpg' not in batches and 'caulk.jpg' not in batches
     assert batches[''].size//8==24
+
+
+@pytest.mark.parametrize('texture', ['nodraw', 'nodraw.jpg', 'NODRAW.PNG',
+                                   'assets/textures/nodraw.webp', r'textures\NoDraw.JPG'])
+@pytest.mark.parametrize('convex', [False, True])
+def test_nodraw_skips_only_the_marked_face_without_loading_its_texture(texture, convex):
+    from engine.brush_geometry import box_to_geometry
+    from player.render.scene import build_brush_mesh
+    brush = {'pos':[0,0,0], 'size':[64,64,64], 'textures':{'south':texture, 'north':'nodraw_bricks.jpg'},
+             'uv_natural':{'south':True, 'north':True}}
+    hidden_normal = [0,0,-1]
+    if convex:
+        box_to_geometry(brush)
+        plane = next(p for p in brush['geometry']['planes'] if p.get('texture') == texture)
+        hidden_normal = plane['n']
+        plane['uv_natural'] = True
+    loaded = []
+    batches = build_textured_batches({'brushes':[brush]}, texel=128,
+                                     texture_size=lambda name: loaded.append(name) or (64,64))
+    assert texture not in batches and texture not in loaded
+    assert sum(vertices.size//8 for vertices in batches.values()) == 30
+    assert batches['nodraw_bricks.jpg'].size//8 == 6
+    normals = np.concatenate(list(batches.values())).reshape(-1,8)[:,3:6]
+    assert not np.any(np.all(normals == hidden_normal, axis=1))
+    # Rendering must leave collision bounds and authored materials intact.
+    assert brush['pos'] == [0,0,0] and brush['size'] == [64,64,64]
+    assert brush['textures']['south'] == texture
+    if not convex:
+        vertices, count = build_brush_mesh({'brushes':[brush]})
+        assert count == 30 and vertices.size == count*6
+
+
+@pytest.mark.parametrize('convex', [False, True])
+def test_all_nodraw_brush_emits_no_draw_or_shadow_geometry(convex):
+    from engine.brush_geometry import box_to_geometry
+    brush = {'pos':[0,0,0], 'size':[64,64,64],
+             'textures':dict.fromkeys(('south','north','east','west','top','down'), 'nodraw')}
+    if convex:
+        box_to_geometry(brush)
+    assert build_textured_batches({'brushes':[brush]}) == {}
+
+
+def test_box_face_materials_match_authored_desktop_plane_normals():
+    from engine.brush_geometry import box_planes
+    textures = {tag:tag+'.png' for tag in ('south','north','east','west','top','down')}
+    brush = {'pos':[0,0,0], 'size':[64,96,128], 'textures':textures}
+    batches = build_textured_batches({'brushes':[brush]})
+    for plane in box_planes(brush['pos'],brush['size'],textures):
+        vertices = batches[plane['texture']].reshape(-1,8)
+        np.testing.assert_allclose(vertices[:,3:6],np.tile(plane['n'],(6,1)))
+        np.testing.assert_allclose(vertices[:,:3] @ plane['n'],plane['d'])
+
+
+def test_mobile_light_capacity_matches_desktop_instead_of_truncating_at_32():
+    from engine.shaders import MAX_LIGHTS
+    world = PlayerWorld(level([{'type':'Light','pos':[i,100,0]} for i in range(MAX_LIGHTS)]))
+    try:
+        assert len(lights(EntityProjection().update(world),(0,100,0))) == MAX_LIGHTS
+    finally:
+        world.close()
 
 
 def test_projection_includes_all_showcase_light_families_and_hides_disabled():

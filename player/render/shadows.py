@@ -1,9 +1,10 @@
-"""GLES 3 point-light shadows in a depth atlas (one sampler, four lights)."""
+"""Desktop radial point-light depth in a GLES atlas (one sampler)."""
 import math
 import numpy as np
 from . import glmath
 from .gles_context import compile_program
 from .renderer import _set_mat4
+from engine.shaders import MAX_SHADOW_LIGHTS
 
 VERTEX = '''#version 300 es
 precision highp float;
@@ -11,27 +12,35 @@ layout(location=0) in vec3 position;
 uniform mat4 model;
 uniform mat4 lightView;
 uniform mat4 lightProjection;
-void main(){gl_Position=lightProjection*lightView*model*vec4(position,1.0);}
+out vec3 worldPos;
+void main(){worldPos=vec3(model*vec4(position,1.0));gl_Position=lightProjection*lightView*vec4(worldPos,1.0);}
 '''
 FRAGMENT = '''#version 300 es
 precision highp float;
-void main(){}
+in vec3 worldPos;
+uniform vec3 lightPos;
+uniform float far_plane;
+void main(){gl_FragDepth=length(worldPos-lightPos)/far_plane;}
 '''
 
 
 class ShadowAtlas:
-    TILE = 256
+    TILE = 384
     def __init__(self, gles=True):
         from .renderer import _gl
         from ..gles_shaders import for_desktop
         self.gl = _gl()
+        self.TILE = min(self.TILE, int(self.gl.glGetIntegerv(self.gl.GL_MAX_TEXTURE_SIZE))//MAX_SHADOW_LIGHTS)
         self.program = compile_program(VERTEX if gles else for_desktop(VERTEX), FRAGMENT if gles else for_desktop(FRAGMENT))
         self.texture = self.fbo = None
         self.key = None
+        self.eye = (0,0,0)
 
     def prepare(self, lights, batches, sources, width, height):
         gl = self.gl
-        selected = [i for i, light in enumerate(lights) if light.get('casts_shadows')][:4]
+        selected = [i for i, light in enumerate(lights) if light.get('casts_shadows')]
+        selected.sort(key=lambda i: sum((float(lights[i]['pos'][a])-float(self.eye[a]))**2 for a in range(3)))
+        selected = selected[:MAX_SHADOW_LIGHTS]
         indices = {light: row for row,light in enumerate(selected)}
         if not selected:
             return indices
@@ -39,7 +48,7 @@ class ShadowAtlas:
             from OpenGL.raw.GL.VERSION.GL_1_1 import glTexImage2D
             self.texture = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture)
-            glTexImage2D(gl.GL_TEXTURE_2D,0,gl.GL_DEPTH_COMPONENT24,6*self.TILE,4*self.TILE,0,gl.GL_DEPTH_COMPONENT,gl.GL_UNSIGNED_INT,None)
+            glTexImage2D(gl.GL_TEXTURE_2D,0,gl.GL_DEPTH_COMPONENT24,6*self.TILE,MAX_SHADOW_LIGHTS*self.TILE,0,gl.GL_DEPTH_COMPONENT,gl.GL_UNSIGNED_INT,None)
             for name,value in ((gl.GL_TEXTURE_MIN_FILTER,gl.GL_NEAREST),(gl.GL_TEXTURE_MAG_FILTER,gl.GL_NEAREST),(gl.GL_TEXTURE_WRAP_S,gl.GL_CLAMP_TO_EDGE),(gl.GL_TEXTURE_WRAP_T,gl.GL_CLAMP_TO_EDGE)):
                 gl.glTexParameteri(gl.GL_TEXTURE_2D,name,value)
             self.fbo=gl.glGenFramebuffers(1)
@@ -75,7 +84,11 @@ class ShadowAtlas:
                 faces=(((1,0,0),(0,-1,0)),((-1,0,0),(0,-1,0)),((0,1,0),(0,0,1)),((0,-1,0),(0,0,-1)),((0,0,1),(0,-1,0)),((0,0,-1),(0,-1,0)))
                 for index,row in indices.items():
                     light=lights[index];eye=np.asarray(light['pos'],dtype=float)
-                    _set_mat4(gl,self.program,'lightProjection',glmath.perspective(math.pi/2,1,.5,max(1,light['radius'])))
+                    gl.glUniform3f(gl.glGetUniformLocation(self.program,'lightPos'),*eye)
+                    gl.glUniform1f(gl.glGetUniformLocation(self.program,'far_plane'),max(1,light['radius']))
+                    far_plane=max(1,float(light['radius']))
+                    near_plane=max(far_plane*.002,1.)
+                    _set_mat4(gl,self.program,'lightProjection',glmath.perspective(math.pi/2,1,near_plane,max(far_plane,near_plane+.001)))
                     for face,(direction,up) in enumerate(faces):
                         gl.glViewport(face*self.TILE,row*self.TILE,self.TILE,self.TILE)
                         _set_mat4(gl,self.program,'lightView',glmath.look_at(eye,eye+direction,up))
@@ -93,8 +106,7 @@ class ShadowAtlas:
         gl=self.gl
         gl.glActiveTexture(gl.GL_TEXTURE1);gl.glBindTexture(gl.GL_TEXTURE_2D,self.texture or 0)
         gl.glUniform1i(gl.glGetUniformLocation(program,'shadowAtlas'),1)
-        for index in range(32):
-            gl.glUniform1i(gl.glGetUniformLocation(program,f'lightShadow[{index}]'),indices.get(index,-1))
+        gl.glUniform1f(gl.glGetUniformLocation(program,'shadowTileSize'),self.TILE)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def close(self):

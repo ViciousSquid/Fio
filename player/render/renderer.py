@@ -42,6 +42,8 @@ class GLESRenderer:
         self._ui_texture = self._ui_vao = self._ui_vbo = None
         self.overlay = OverlayRenderer()
         self.shadows = None
+        self.light_buffer = None
+        self.fog_volumes = None
         from engine.logic_render import LogicRender
         self._fallback_runtime = LogicRender(None)
         self.frame_stats = {}
@@ -88,6 +90,10 @@ class GLESRenderer:
         self.overlay.on_gl_ready(self.programs)
         from .shadows import ShadowAtlas
         self.shadows = ShadowAtlas(self.gles)
+        from .lighting import LightBuffer
+        self.light_buffer = LightBuffer(gl, self.programs['world'])
+        from .fog import FogVolumes
+        self.fog_volumes = FogVolumes(gl, self.gles)
 
         if self._scene is not None:
             self._upload_scene()
@@ -208,6 +214,10 @@ class GLESRenderer:
         self.clear_scene()
         if self.shadows:
             self.shadows.close()
+        if self.light_buffer:
+            self.light_buffer.close()
+        if self.fog_volumes:
+            self.fog_volumes.close()
         gl = _gl()
         for vao in (self._triangle_vao, self._ui_vao, self.overlay._disc_vao):
             if vao:
@@ -410,6 +420,7 @@ class GLESRenderer:
         runtime = self._render_runtime()
         distance = runtime.view_distance
         gl = _gl()
+        self.shadows.eye = state.get('cam_pos', (0,0,0))
         shadow_indices = self.shadows.prepare(self._lights, self._batches, self._draw_sources, self.width, self.height)
         prog = self.programs["world"]
         gl.glUseProgram(prog)
@@ -427,11 +438,7 @@ class GLESRenderer:
         _set_mat4(gl, prog, "projection", projection)
         drawn = culled = 0
         gl.glUniform1i(gl.glGetUniformLocation(prog, "lightCount"), len(self._lights))
-        for i, light in enumerate(self._lights):
-            _set_vec3(gl, prog, f"lightPos[{i}]", light["pos"])
-            _set_vec3(gl, prog, f"lightColor[{i}]", light["color"])
-            _set_float(gl, prog, f"lightRadius[{i}]", light["radius"])
-            _set_float(gl, prog, f"lightIntensity[{i}]", light["intensity"])
+        self.light_buffer.upload(self._lights, shadow_indices)
         # Animated brush textures retain one GL name; replace only the due frame.
         for name in self._animated_surfaces:
             self._load_texture(name)
@@ -519,6 +526,10 @@ class GLESRenderer:
             view = state.get('view', glmath.look_at(eye, eye + front))
             world.terrain.update_and_render(glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye),
                                             frustum_planes=visibility.planes, env_uniforms=env)
+        import time
+        brushes = world.brushes if world else self._scene['map'].get('brushes',[])
+        self.frame_stats['fog_volumes'] = self.fog_volumes.render(
+            brushes, view, projection, eye, visibility, time.perf_counter()-self._start_time)
 
     def render_ui(self, state, width, height, has_world=True):
         import ctypes

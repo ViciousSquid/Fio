@@ -1,6 +1,7 @@
 """Read desktop entity projections rather than inventing mobile entity rules."""
 import time
 from engine.entity_table import EntityTable
+from engine.shaders import MAX_LIGHTS
 
 
 class EntityProjection:
@@ -16,7 +17,7 @@ class EntityProjection:
 MAX_LIGHT_DISTANCE = 4096.0
 
 
-def lights(table, eye, limit=32, *, player_position=None, cutscene=False,
+def lights(table, eye, limit=MAX_LIGHTS, *, player_position=None, cutscene=False,
            visible_horizon=MAX_LIGHT_DISTANCE):
     # All light families, including Effect flicker/explosion flashes, use the
     # authoritative engine projection. Select nearby influence only at the cap.

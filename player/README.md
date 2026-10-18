@@ -59,7 +59,12 @@ the existing engine's `ViewDistance`, frustum helpers and fog shader block.
 The default distance is 4096 units; fog starts at 60% and is opaque at 92%.
 Terrain receives the same environment values. HUD and touch controls stay clear.
 Lights beyond 4096 units from the player are excluded before selecting up to
-32 lights and four point-light shadow maps. During cutscenes the cutoff follows
+the desktop budget of 64 lights and eight point-light shadow maps. The world
+shader reuses desktop lighting, radial shadow depth, slope bias and 20-sample
+shadow filtering; a uniform buffer keeps the light data within GLES 3 limits.
+Local fog volumes use the desktop shader and the same built-in noise texture.
+North/south materials and `nodraw` faces follow the desktop face convention.
+During cutscenes the cutoff follows
 the camera; a light stays while its radius can still illuminate visible geometry
 in front of opaque fog, avoiding a visible switch-off at the cutoff.
 

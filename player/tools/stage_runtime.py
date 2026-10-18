@@ -79,6 +79,8 @@ def prepare_runtime(private, project=None):
         '        return Prop\n'
         '    raise AttributeError(name)\n')
     copy_source('player/android_entrypoint.py', 'main.py')
+    # Renderer-owned noise must match desktop without depending on loose assets.
+    copy_source('assets/noise_3d.bin', 'player/runtime/noise_3d.bin')
     for source, digest in sources.items():
         if hashlib.sha256((project / source).read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Project source changed during staging: {source}')

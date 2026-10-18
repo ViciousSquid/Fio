@@ -29,17 +29,23 @@ VERTS_PER_BRUSH = 36  # 6 faces * 2 triangles * 3 verts
 # Per-face metadata, index-aligned with _FACES:
 #   * the map's texture key for that face
 #   * (u_axis, v_axis) — which size components span the face, for UV tiling
-_FACE_KEYS = ("south", "north", "east", "west", "top", "down")
+_FACE_KEYS = ("north", "south", "east", "west", "top", "down")
 _FACE_UV_AXES = ((0, 1), (0, 1), (2, 1), (2, 1), (0, 2), (0, 2))
 
 FLOATS_PER_VERTEX_TEX = 8       # pos3 + normal3 + uv2
 DEFAULT_TEXEL = 128.0           # world units per texture repeat
 
 
+def _is_visible_surface(texture) -> bool:
+    # Reserved surface names may be bare, packaged paths or image filenames.
+    basename = str(texture or '').replace('\\', '/').rsplit('/', 1)[-1].lower()
+    return basename.rsplit('.', 1)[0] not in ('nodraw', 'caulk')
+
+
 def _is_renderable(brush: dict) -> bool:
     if not isinstance(brush, dict):
         return False
-    if brush.get("hidden") or brush.get("is_fog"):
+    if brush.get("hidden") or brush.get("is_fog") or brush.get('shader') == 'Fog':
         return False
     # Non-solid, non-visual trigger volumes are skipped.
     if brush.get("is_trigger") and not (brush.get("is_door") or brush.get("is_mover")):
@@ -59,7 +65,9 @@ def build_brush_mesh(map_data: dict) -> Tuple["np.ndarray", int]:
     for b in brushes:
         cx, cy, cz = (float(v) for v in b["pos"])
         sx, sy, sz = (float(v) for v in b["size"])
-        for normal, corners in _FACES:
+        for tag, (normal, corners) in zip(_FACE_KEYS, _FACES):
+            if not _is_visible_surface((b.get('textures') or {}).get(tag)):
+                continue
             # Two triangles per quad: (0,1,2) and (0,2,3).
             for a, bi, c in ((0, 1, 2), (0, 2, 3)):
                 for idx in (a, bi, c):
@@ -72,7 +80,7 @@ def build_brush_mesh(map_data: dict) -> Tuple["np.ndarray", int]:
                     out[row, 5] = normal[2]
                     row += 1
 
-    return out.reshape(-1), row
+    return out[:row].reshape(-1), row
 
 
 def build_textured_batches(map_data: dict, texel=None, texture_size=None):
@@ -82,8 +90,8 @@ def build_textured_batches(map_data: dict, texel=None, texture_size=None):
     texture_size = texture_size or (lambda name: (128, 128))
 
     def emit(brush, name, points, normal, uv, extent, meta, tag=None):
-        # Caulk never draws; nodraw is an editor-only surface.
-        if str(name).replace('\\', '/').rsplit('/', 1)[-1].lower() in ('caulk', 'caulk.jpg', 'nodraw.jpg'):
+        # Omit geometry entirely, including from the shared shadow batches.
+        if not _is_visible_surface(name):
             return
         scale = meta.get('uv_scale')
         natural = face_uses_natural_scale(brush, tag, meta)
