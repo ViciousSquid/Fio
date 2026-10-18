@@ -1,8 +1,8 @@
 # Fio Android Player
 
 Create a world in desktop Fio, export a self-contained `.fiopak`, and open it in
-the Android player. A world can contain one level or linked levels. The archive
-format is shared with the existing Windows x64/ARM64, macOS and Linux desktop
+the Android player. A world can contain one level or linked levels. The [archive
+format](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive) is shared with the existing Windows x64/ARM64, macOS and Linux desktop
 releases; Android reads its assets directly from the ZIP archive.
 
 - [Installable ARM64 debug APK](fio-player-arm64-debug.apk)
