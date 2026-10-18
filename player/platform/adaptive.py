@@ -67,9 +67,11 @@ class AdaptiveResolution:
         if self._avg_frame_ms > target_ms * 1.10:
             self.scale = max(self.min_scale, self.scale - self.step)
             self._cooldown = 8
-        elif self._avg_frame_ms < target_ms * 0.80 and self.scale < self.max_scale:
+        elif self._avg_frame_ms < target_ms * 1.02 and self.scale < self.max_scale:
             self.scale = min(self.max_scale, self.scale + self.step)
-            self._cooldown = 20  # rise slowly, drop quickly
+            # Capped/vsynced hosts cannot report frames faster than the cap.
+            # Probe for headroom slowly once cadence settles at the target.
+            self._cooldown = 60  # rise slowly, drop quickly
         return self.scale
 
     def render_size(self, panel_w: int, panel_h: int) -> "tuple[int, int]":

@@ -34,6 +34,8 @@ from .state import (
     ACTION_FIRE,
     ACTION_USE,
     ACTION_PAUSE,
+    ACTION_CROUCH,
+    ACTION_SPRINT,
 )
 
 
@@ -103,6 +105,8 @@ class TouchControls:
             TouchButton(ACTION_FIRE, cx=0.90, cy=0.82, radius=0.085),
             TouchButton(ACTION_JUMP, cx=0.76, cy=0.88, radius=0.075),
             TouchButton(ACTION_USE, cx=0.88, cy=0.62, radius=0.065),
+            TouchButton(ACTION_CROUCH, cx=0.64, cy=0.88, radius=0.06),
+            TouchButton(ACTION_SPRINT, cx=0.07, cy=0.48, radius=0.06),
             TouchButton(ACTION_PAUSE, cx=0.95, cy=0.07, radius=0.045),
         ]
 

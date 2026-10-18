@@ -217,3 +217,40 @@ def test_the_game_view_loads_a_sound_effect_from_sounds_fiopak(
         "shot.wav": b"archive-sound",
         "assets/sounds/shot.wav": b"archive-sound",
     }
+
+
+def test_preload_reuses_archive_skips_bad_sound_and_preserves_aliases(
+        main_window, project, monkeypatch):
+    from engine import audio_archives
+
+    view = main_window.view_3d
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(view, '_ensure_pygame_mixer', lambda: True)
+    monkeypatch.setattr(audio_archives, 'MAX_AUDIO_BYTES', 8)
+    path = project / 'assets/sounds.fiopak'
+    with zipfile.ZipFile(path, 'w') as archive:
+        archive.writestr('assets/sounds/a-too-large.wav', b'x' * 9)
+        archive.writestr('assets/sounds/shot.wav', b'shot')
+        archive.writestr('assets/sounds/ui/click.ogg', b'click')
+        archive.writestr('assets/music/wrong.wav', b'wrong')
+    loaded = {}
+    opened = []
+    original = zipfile.ZipFile
+
+    def track(*args, **kwargs):
+        archive = original(*args, **kwargs)
+        opened.append(archive)
+        return archive
+
+    def load_bytes(names, data):
+        loaded.update({name: data for name in names})
+        return True
+
+    monkeypatch.setattr(audio_archives.zipfile, 'ZipFile', track)
+    monkeypatch.setattr(view, '_load_sound_bytes_to_cache', load_bytes)
+    view._init_sound_system()
+    assert loaded == {
+        'assets/sounds/shot.wav': b'shot', 'shot.wav': b'shot',
+        'assets/sounds/ui/click.ogg': b'click',
+    }
+    assert len(opened) == 1 and opened[0].fp is None

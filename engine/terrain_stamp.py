@@ -15,6 +15,8 @@ import json
 import os
 from typing import Optional
 
+from .fileio import write_json_atomic
+
 STAMP_FORMAT = "terrain_stamp"
 STAMP_VERSION = 1
 STAMP_EXTENSION = ".stamp"
@@ -47,10 +49,7 @@ def export_stamp(terrain) -> dict:
 def save_stamp_file(terrain, path: str) -> dict:
     """Write the terrain's placed stamps to ``path``; returns the file dict."""
     data = export_stamp(terrain)
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=1)
-    os.replace(tmp_path, path)
+    write_json_atomic(path, data, indent=1)
     return data
 
 

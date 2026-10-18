@@ -131,8 +131,8 @@ def test_an_accessor_running_past_its_buffer_is_truncated(tmp_path):
     gltf, blob, positions, _, _ = _quad()
     gltf["accessors"][0]["count"] = 10_000_000
     prim = _load(tmp_path, gltf, blob).meshes[0]["primitives"][0]
-    # Only whole elements inside the blob are read (the index data after the
-    # vertices still decodes as a few extra positions, as before).
+    # Only whole elements inside both the vertex buffer view and the backing
+    # blob are read; the following index data cannot become extra positions.
     assert len(prim["positions"]) < 10
     np.testing.assert_array_equal(prim["positions"][:4], positions)
 

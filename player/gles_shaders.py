@@ -34,6 +34,13 @@ from typing import Dict, Iterable, Tuple
 
 GLES_VERSION_DIRECTIVE = "#version 300 es"
 
+
+def for_desktop(source: str) -> str:
+    """Use the same player pass with desktop OpenGL 3.3 Core Profile."""
+    source = source.replace("#version 300 es", "#version 330 core")
+    source = re.sub(r"precision\s+(?:lowp|mediump|highp)\s+\w+\s*;", "", source)
+    return re.sub(r"\b(?:lowp|mediump|highp)\s+", "", source)
+
 # Matches a desktop version line: "#version 330", "#version 330 core", etc.
 _VERSION_RE = re.compile(r"^[ \t]*#version[ \t]+\d+(?:[ \t]+\w+)?[ \t]*$", re.MULTILINE)
 

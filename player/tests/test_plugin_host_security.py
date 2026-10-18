@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from player.fiopak import FioPackage, PackageError
+from player.runtime.fiopak import FioPackage, PackageError
 from player.plugin_host import PlayerPluginHost
 
 

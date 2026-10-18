@@ -8,6 +8,7 @@ import re
 from PyQt5.QtCore import Qt, QTimer, QEvent
 
 from engine.change_journal import touch
+from editor.selection import SelectionLookup
 
 
 try:
@@ -35,6 +36,7 @@ class SceneHierarchy(QWidget):
         self.main_window = main_window
         self.sort_mode = self.SORT_DEFAULT
         self._highlighted_item = None
+        self._highlight_backgrounds = None
         self._highlight_timer = QTimer(self)
         self._highlight_timer.setSingleShot(True)
         self._highlight_timer.timeout.connect(self._clear_highlight)
@@ -366,10 +368,14 @@ class SceneHierarchy(QWidget):
                 except (IndexError, TypeError):
                     obj = None
                 matched = obj is not None and id(obj) in self._search_matches
+                background = (QBrush(QColor("#4a4320")) if matched
+                              else QBrush(Qt.transparent))
+                if item is self._highlighted_item:
+                    # A search can change before the temporary highlight's
+                    # timer expires. Its cleanup must keep the new styling.
+                    self._highlight_backgrounds = (background, background)
                 for column in (0, 1):
-                    item.setBackground(column,
-                                       QBrush(QColor("#4a4320")) if matched
-                                       else QBrush(Qt.transparent))
+                    item.setBackground(column, background)
 
     def _add_visgroup_menu(self, menu, objects):
         """The Visgroup submenu: put the clicked objects in a visgroup, take
@@ -503,15 +509,29 @@ class SceneHierarchy(QWidget):
         return terrain_data is not None
 
     def refresh_list(self):
-        self.tree.blockSignals(True)
+        # A failed rebuild must not leave selection notifications disabled,
+        # and callers may already have blocked signals for a larger operation.
+        was_blocked = self.tree.blockSignals(True)
+        try:
+            self._rebuild_items()
+        finally:
+            self.tree.blockSignals(was_blocked)
+
+        # Scroll after restoring signals, as in the original refresh path.
+        first_selected = self.tree.selectedItems()
+        if first_selected:
+            self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
+
+    def _rebuild_items(self):
         self.tree.clear()
         
         # Clear any pending highlight since items are being rebuilt
         self._highlighted_item = None
+        self._highlight_backgrounds = None
         self._highlight_timer.stop()
         
         # Get selected objects list for multi-selection support
-        selected_objects = self.main_window.state.selected_objects
+        selected_objects = SelectionLookup(self.main_window.state.selected_objects)
         
         # Define font for headers
         header_font = QFont()
@@ -636,13 +656,6 @@ class SceneHierarchy(QWidget):
         if self._search_matches:
             self._apply_search_styling()
 
-        self.tree.blockSignals(False)
-
-        # Scroll to the first selected item
-        first_selected = self.tree.selectedItems()
-        if first_selected:
-            self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
-
     def highlight_item(self, obj):
         """Highlight an object in the hierarchy without selecting it.
         Used for locked objects when locked_not_selectable_2d is enabled."""
@@ -676,7 +689,8 @@ class SceneHierarchy(QWidget):
             # Scroll to and highlight the item
             self.tree.scrollToItem(target_item)
             self._highlighted_item = target_item
-            self._original_background = target_item.background(0)
+            self._highlight_backgrounds = (target_item.background(0),
+                                          target_item.background(1))
             
             # Set highlight background (cyan/teal color)
             highlight_brush = QBrush(QColor("#00CED1"))
@@ -693,13 +707,14 @@ class SceneHierarchy(QWidget):
                 # Check if item still exists by accessing a property
                 # This will raise RuntimeError if the C++ object was deleted
                 _ = self._highlighted_item.text(0)
-                # Reset to transparent/default
-                self._highlighted_item.setBackground(0, QBrush())
-                self._highlighted_item.setBackground(1, QBrush())
+                # Keep search styling and any distinct column backgrounds.
+                for column, background in enumerate(self._highlight_backgrounds):
+                    self._highlighted_item.setBackground(column, background)
             except RuntimeError:
                 # Item was deleted (tree was refreshed), just ignore
                 pass
             self._highlighted_item = None
+            self._highlight_backgrounds = None
 
     def scroll_to_item(self, obj):
         """Scroll to an object in the hierarchy."""

@@ -1,0 +1,410 @@
+--- a/engine/logic_thread.py
++++ b/engine/logic_thread.py
+@@ -185,8 +185,9 @@
+         ),
+     }
+ 
+-    def __init__(self, game_state: ThreadedGameState, editor_state):
++    def __init__(self, game_state: ThreadedGameState, editor_state, *, threaded_ai=True):
+         super().__init__(daemon=True)
++        self.threaded_ai = threaded_ai
+         # Serialises the simulation with everything that rebuilds or reads the
+         # world from another thread.  The run loop holds it for each frame's
+         # ticks and render-state projection; entering or leaving play mode and
+--- a/engine/logic_session.py
++++ b/engine/logic_session.py
+@@ -450,6 +450,8 @@
+     def start_monster_ai(self):
+         logic = self.logic
+         self.stop_monster_ai()
++        if not getattr(logic, "threaded_ai", True):
++            return
+         self.monster_ai_thread = MonsterAIThread(
+             logic,
+             logic.monster_ai,
+--- a/engine/logic_player.py
++++ b/engine/logic_player.py
+@@ -79,6 +79,10 @@
+             move_dir.x += 1
+         if KEY_D in keys:
+             move_dir.x -= 1
++
++        analog = getattr(logic.game_state, 'get_movement_axes', lambda: None)()
++        if analog is not None:
++            move_dir.x, move_dir.z = analog
+ 
+         jump = KEY_SPACE in keys
+         crouch = KEY_C in keys
+--- a/engine/threaded_game_state.py
++++ b/engine/threaded_game_state.py
+@@ -267,6 +267,7 @@
+         # Input state
+         self._keys_lock = threading.Lock()
+         self._keys = set()
++        self._movement_axes = None
+         self._mouse_lock = threading.Lock()
+         self._mouse_delta = (0.0, 0.0)
+         
+@@ -446,6 +447,14 @@
+         with self._keys_lock:
+             return self._keys.copy()
+             
++    def set_movement_axes(self, x, z):
++        with self._keys_lock:
++            self._movement_axes = (max(-1., min(1., x)), max(-1., min(1., z)))
++
++    def get_movement_axes(self):
++        with self._keys_lock:
++            return self._movement_axes
++
+     def set_mouse_delta(self, dx, dy):
+         with self._mouse_lock:
+             self._mouse_delta = (self._mouse_delta[0] + dx, self._mouse_delta[1] + dy)
+--- a/engine/cutscene_runtime.py
++++ b/engine/cutscene_runtime.py
+@@ -59,6 +59,21 @@
+         return None
+ 
+     def _load_cutscene_file(self, filename):
++        package = getattr(self.logic, "package", None)
++        if package is not None:
++            import posixpath
++            name = posixpath.normpath(str(filename).replace("\\", "/"))
++            if name.startswith("cutscenes/"):
++                name = name[len("cutscenes/"):]
++            if name.startswith(("../", "/")) or ":" in name:
++                return None
++            if not name.lower().endswith(".json"):
++                name += ".json"
++            raw = package.read_text("cutscenes/" + name)
++            if raw is None:
++                return None
++            data = json.loads(raw)
++            return data if isinstance(data, dict) and isinstance(data.get("camera"), list) else None
+         path = self._cutscene_file_path(filename)
+         if path is None:
+             debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
+--- a/engine/glb_loader.py
++++ b/engine/glb_loader.py
+@@ -122,6 +122,14 @@
+             print(f"[GLBLoader] Failed to load: {filepath}")
+             return False
+ 
++        return self.load_bytes(data, filepath)
++
++    def load_bytes(self, data: bytes, source="", read_asset=None) -> bool:
++        """Parse a streamed model; external buffers use the same asset source."""
++        if len(data) > MAX_GLB_FILE_BYTES:
++            return False
++        self._filepath_hint = source
++        self._asset_reader = read_asset
+         try:
+             self._parse_glb(data)
+             self._parse_json_structure()
+@@ -210,7 +218,8 @@
+             else:
+                 # External file reference, relative to the model.
+                 ext_path = os.path.join(os.path.dirname(self._filepath_hint or ''), uri)
+-                self.buffers.append(_read_bounded(ext_path) or b'')
++                reader = getattr(self, "_asset_reader", None)
++                self.buffers.append((reader(ext_path) if reader else _read_bounded(ext_path)) or b'')
+ 
+     def _parse_materials(self):
+         """Extract material properties (PBR, textures, colors)."""
+--- a/engine/obj_loader.py
++++ b/engine/obj_loader.py
+@@ -122,7 +122,11 @@
+         if text is None:
+             print(f"[OBJLoader] Failed to load: {filepath}")
+             return False
+-        
++        return self.load_text(text, filepath)
++
++    def load_text(self, text: str, filepath="", read_text=None) -> bool:
++        """Parse archive-backed OBJ/MTL text without materializing files."""
++        self._text_reader = read_text
+         lines = text.splitlines()
+         current_material = None
+         mtl_lib_name = None
+@@ -198,7 +202,8 @@
+         mtl_path = os.path.normpath(os.path.join(obj_dir, normalized_name))
+         mtl_dir = os.path.dirname(mtl_path)
+         
+-        mtl_text = _read_text(mtl_path)
++        reader = getattr(self, "_text_reader", None)
++        mtl_text = reader(mtl_path) if reader else _read_text(mtl_path)
+         if mtl_text is None:
+             print(f"[OBJLoader] MTL not found: {mtl_path}")
+             self._discover_base_color_texture(obj_path)
+--- a/engine/logic_collision.py
++++ b/engine/logic_collision.py
+@@ -439,7 +439,8 @@
+         full_path = os.path.join('assets', 'models', model_path)
+         if not os.path.exists(full_path):
+             full_path = model_path
+-        if not os.path.exists(full_path):
++        package = getattr(logic, 'package', None)
++        if not package and not os.path.exists(full_path):
+             return None
+ 
+         ext = os.path.splitext(model_path)[1].lower()
+@@ -452,7 +453,10 @@
+ 
+             loader = GLBLoader()
+             loader._filepath_hint = full_path
+-            if not loader.load(full_path):
++            from player.runtime.model_source import load_model
++            if package:
++                loader = load_model(model_path, package)
++            if loader is None or (not package and not loader.load(full_path)):
+                 debug_log("Collision", f"GLBLoader failed to load {model_path}")
+                 return None
+ 
+@@ -532,7 +536,8 @@
+         full_path = os.path.join('assets', 'models', model_path)
+         if not os.path.exists(full_path):
+             full_path = model_path
+-        if not os.path.exists(full_path):
++        package = getattr(logic, 'package', None)
++        if not package and not os.path.exists(full_path):
+             return None
+ 
+         ext = os.path.splitext(model_path)[1].lower()
+@@ -541,7 +546,10 @@
+                 from .glb_loader import GLBLoader
+                 loader = GLBLoader()
+                 loader._filepath_hint = full_path
+-                if loader.load(full_path):
++                from player.runtime.model_source import load_model
++                if package:
++                    loader = load_model(model_path, package)
++                if loader is not None and (package or loader.load(full_path)):
+                     verts = loader.get_flattened_vertices()
+                 else:
+                     verts = None
+@@ -550,7 +558,10 @@
+                 # OpenGL-backed OBJ model on the logic thread.
+                 from .obj_loader import OBJLoader
+                 loader = OBJLoader()
+-                if loader.load(full_path):
++                from player.runtime.model_source import load_model
++                if package:
++                    loader = load_model(model_path, package)
++                if loader is not None and (package or loader.load(full_path)):
+                     source_vertices = np.asarray(loader.vertices, dtype=np.float32)
+                     if source_vertices.size == 0:
+                         verts = None
+--- a/engine/terrain.py
++++ b/engine/terrain.py
+@@ -388,7 +388,8 @@
+     # remains in terrain-space so enlarging the mesh cannot flatten it.
+     DEFAULT_CHUNK_SIZE = 256.0
+     
+-    def __init__(self, texture_manager=None, seed: int = 42):
++    def __init__(self, texture_manager=None, seed: int = 42, *, shader_compiler=None, defer_gl=False):
++        self.shader_compiler = shader_compiler
+         self.seed = seed
+         self.noise = PerlinNoise(seed)
+         self.features = TerrainFeatures(self.noise, seed)
+@@ -557,7 +558,8 @@
+         self._failed_programs = set()
+         if texture_manager:
+             self.load_terrain_textures(texture_manager)
+-        self._init_shader()
++        if not defer_gl:
++            self._init_shader()
+     
+     def _compile_program(self, vertex_name):
+         """Compile the terrain fragment shader against *vertex_name*.
+@@ -572,11 +574,14 @@
+             return 0
+         try:
+             vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
+-            fragment_code = shaders.light_ubo_source(
+-                shaders.DEFAULT_SHADERS['terrain.frag'])
+-            vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
+-            fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
+-            program = compileProgram(vertex_shader, fragment_shader, validate=False)
++            fragment_code = shaders.DEFAULT_SHADERS['terrain.frag']
++            if self.shader_compiler:
++                program = self.shader_compiler(vertex_code, fragment_code)
++            else:
++                fragment_code = shaders.light_ubo_source(fragment_code)
++                vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
++                fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
++                program = compileProgram(vertex_shader, fragment_shader, validate=False)
+             if not program:
+                 print("ERROR: Failed to compile terrain shader program!")
+                 self._failed_programs.add(vertex_name)
+@@ -609,10 +614,13 @@
+         try:
+             vertex_code = shaders.DEFAULT_SHADERS['grass.vert']
+             fragment_code = shaders.DEFAULT_SHADERS['grass.frag']
+-            vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
+-            fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
+-            self.grass_shader_program = compileProgram(
+-                vertex_shader, fragment_shader, validate=False)
++            if self.shader_compiler:
++                self.grass_shader_program = self.shader_compiler(vertex_code, fragment_code)
++            else:
++                vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
++                fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
++                self.grass_shader_program = compileProgram(
++                    vertex_shader, fragment_shader, validate=False)
+         except Exception as e:
+             msg = str(e)
+             if ("glCreateShader" in msg or "undefined alternate function" in msg
+--- a/engine/entities.py
++++ b/engine/entities.py
+@@ -18,8 +18,6 @@
+     corners as _portal_corners,
+     contains_point as _portal_contains_point,
+ )
+-from PyQt5.QtGui import QPixmap
+-from PyQt5.QtCore import Qt
+ import ast
+ import posixpath
+ 
+@@ -198,6 +196,7 @@
+         Gets the QPixmap for this class, loading it from disk and caching it
+         the first time it's requested.
+         """
++        from PyQt5.QtGui import QPixmap
+         class_name = cls.__name__
+         if class_name in cls._pixmap_cache:
+             return cls._pixmap_cache[class_name]
+@@ -229,6 +228,7 @@
+ 
+     def get_icon_pixmap(self):
+         """Return a 60×60 icon for 2D views. Default implementation returns scaled instance pixmap."""
++        from PyQt5.QtCore import Qt
+         pixmap = self.get_instance_pixmap()
+         if pixmap and not pixmap.isNull():
+             # Scale to 60×60 for consistent icon size in 2D view
+@@ -248,6 +248,7 @@
+         Returns None when the file is missing or unreadable. Shared by any
+         entity whose 2D icon comes from an authored path rather than its class.
+         """
++        from PyQt5.QtGui import QPixmap
+         cache_key = ('sprite_path', sprite_path)
+         if cache_key in self._pixmap_cache:
+             return self._pixmap_cache[cache_key]
+@@ -771,6 +772,17 @@
+         is_dead     = self.properties.get('dead', False)
+         is_shooting = self.properties.get('is_shooting', False)
+ 
++        source = getattr(self, '_asset_source', None)
++        if source is not None:
++            state = 'dead' if is_dead else 'shoot' if is_shooting else 'idle'
++            custom = self.properties.get('custom_' + state, '')
++            base = f'assets/sprites/monsters/{mtype}'
++            candidates = [custom]
++            if variant and variant != '<None>':
++                candidates.append(f'{base}/{variant}/{state}.png')
++            candidates += [f'{base}/{state}.png', f'{base}/idle.png']
++            return next((p for p in candidates if p and source.has_asset(p)), f'{base}/idle.png')
++
+         project_root = Monster._get_project_root()
+         default_idle, default_dead, default_shoot = Monster._get_default_paths(mtype, variant)
+ 
+@@ -786,6 +798,7 @@
+ 
+     def get_instance_pixmap(self):
+         """Return the icon matching this gate's current logic type."""
++        from PyQt5.QtGui import QPixmap
+         logic_type = str(
+             self.properties.get('logic_type', 'AND')
+         ).strip().lower()
+@@ -821,6 +834,7 @@
+ 
+     def get_icon_pixmap(self):
+         """Return a generic small monster icon for 2D views."""
++        from PyQt5.QtGui import QPixmap
+         icon_path = "assets/sprites/monster.png"   # 60×60 icon
+         try:
+             script_dir = os.path.dirname(os.path.abspath(__file__))
+@@ -917,6 +931,7 @@
+         self.properties.setdefault('initial_state', 'off')
+ 
+     def get_instance_pixmap(self):
++        from PyQt5.QtGui import QPixmap
+         l_type = self.properties.get('logic_type', 'and').lower()
+         expected_path = f"assets/sprites/logic_{l_type}.png"
+         
+@@ -2066,7 +2081,7 @@
+ # Core primitives that the headless player also needs (currently Prop) live in
+ # engine/, subclassing this module's Thing when the editor tier is present.
+ # They cannot be imported at the top of this file (they import it), so they are
+-# loaded on first use: by name via __getattr__ (``from editor.things import
++# loaded on first use: by name via __getattr__ (``from engine.entities import
+ # Prop``), and before map deserialization via _load_core_entity_types() so the
+ # subclass walk in Thing.from_dict can resolve their type tokens.
+ 
+--- a/engine/io_handlers.py
++++ b/engine/io_handlers.py
+@@ -29,7 +29,7 @@
+             print(message)
+ 
+ try:
+-    from editor.things import ENTITY_TYPES
++    from engine.entities import ENTITY_TYPES
+ except ImportError:
+     ENTITY_TYPES = {}
+ 
+@@ -775,7 +775,7 @@
+         try:
+             from .io_system import count_incoming_connections
+         except ImportError:                              # pragma: no cover
+-            from editor.io_system import count_incoming_connections
++            from engine.io_system import count_incoming_connections
+         return count_incoming_connections(
+             logic.editor_state.brushes, logic.editor_state.things,
+             target_name=entity.properties.get('name', ''),
+@@ -1121,6 +1121,12 @@
+     # ==========================================================================
+     
+     def levelchanger_changelevel(entity, param, logic):
++        callback = getattr(logic, "request_level_change", None)
++        if callback is not None:
++            target, spawn = entity.destination(param)
++            if target:
++                callback(target, spawn)
++            return
+         # We route to change_level() because it is more robust
+         if hasattr(entity, 'change_level'):
+             entity.change_level(param)
+--- a/engine/io_system.py
++++ b/engine/io_system.py
+@@ -729,7 +729,7 @@
+ 
+         # Fallback to the class-level persistent registry
+         try:
+-            from editor.things import LogicState
++            from engine.entities import LogicState
+             store = LogicState._persistent_registry.get(store_name)
+             if store is not None:
+                 return store.get(key, default)
+--- a/engine/portal_links.py
++++ b/engine/portal_links.py
+@@ -20,7 +20,7 @@
+ 
+ 
+ def _is_portal(thing):
+-    from editor.things import Portal
++    from engine.entities import Portal
+     return isinstance(thing, Portal)
+ 
+ 
+--- a/engine/logic_combat.py
++++ b/engine/logic_combat.py
+@@ -328,6 +328,10 @@
+         disc = b * b - 4 * a * c
+         real = disc >= 0
+         t = (-b - np.sqrt(np.where(real, disc, 0.0))) / (2.0 * a)
++        # A point-blank shot can originate inside the target sphere. Its
++        # entry root is behind the eye; count the current point as the hit.
++        far_t = (-b + np.sqrt(np.where(real, disc, 0.0))) / (2.0 * a)
++        t = np.where((c[None, :] <= 0) & (far_t >= 0), 0.0, t)
+         walls = np.asarray(wall_dists, dtype=np.float64)[:, None]
+         valid = real & (0 <= t) & (t <= reach) & (t < walls)
+         if not valid.any():

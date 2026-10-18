@@ -7,7 +7,7 @@ Drives the production path rather than a synthetic scene:
     -> ThreadedGameState.try_swap -> QtGameView.paintGL -> OpenGL
 
 The logic thread is stopped after start-up and stepped by hand, one fixed tick
-per frame, so every run does exactly the same simulation work and the numbers
+per frame, so runs have matching scripted input and tick counts and the numbers
 compare across commits (and across branches: only the public surface that has
 been stable since 2.5.10 is used).  A scripted input walks, turns and fires.
 
@@ -16,6 +16,10 @@ selects llvmpipe).  Usage::
 
     xvfb-run -a python tools/bench_compare.py [--frames N] [--json out.json]
         [--profile] [--memory] [map.json ...]
+
+``--terrain-updates 1`` fixes the chunk-build limit and lifts its wall-clock
+budget for comparable terrain workloads. Default runs retain normal streaming
+budgets; viewport and terrain chunk/triangle counts are recorded with timings.
 
 Runs with main.py's PyOpenGL settings (no per-call glGetError; FIO_GL_DEBUG=1
 keeps it).  Reported per map: load ms, enter-play ms, per-frame logic and paint ms
@@ -209,7 +213,17 @@ class Bench:
             "threads": sorted(t.name for t in __import__("threading").enumerate()),
             "things": len(window.state.things),
             "brushes": len(window.state.brushes),
+            "viewport": [view.width(), view.height()],
         }
+        terrain = getattr(window, 'terrain', None)
+        if terrain is not None:
+            table = terrain.table
+            result['terrain'] = {
+                'built_chunks': int(table.built[table.live_slots()].sum()),
+                'visible_chunks': int(terrain.visible_chunks),
+                'triangles': int(terrain.total_triangles),
+                'max_updates_per_frame': int(terrain.MAX_UPDATES_PER_FRAME),
+            }
         if memory:
             result["traced_growth_kb"] = round((mem_after - mem_before) / 1024.0, 1)
             result["traced_peak_kb"] = round((mem_peak - mem_before) / 1024.0, 1)
@@ -236,7 +250,12 @@ def main(argv=None):
     parser.add_argument("--dump", help="directory to write .pstats files to")
     parser.add_argument("--top", type=int, default=0,
                         help="print the N hottest functions per phase")
+    parser.add_argument("--terrain-updates", type=int,
+                        help="fixed chunk-build limit per frame, ignoring the wall-clock "
+                             "budget, for comparable terrain workloads (benchmark only)")
     args = parser.parse_args(argv)
+    if args.terrain_updates is not None and args.terrain_updates < 1:
+        parser.error('--terrain-updates must be positive')
 
     os.chdir(ROOT)
     sys.path.insert(0, ROOT)
@@ -261,6 +280,10 @@ def main(argv=None):
 def _run(args):
     from PyQt5.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    if args.terrain_updates is not None:
+        from engine.terrain import Terrain
+        Terrain.MAX_UPDATES_PER_FRAME = args.terrain_updates
+        Terrain.UPDATE_BUDGET_MS = float('inf')
     bench = Bench(app)
     results = []
     for path in args.maps:

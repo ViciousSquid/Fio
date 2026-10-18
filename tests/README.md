@@ -1,8 +1,10 @@
 # Fio test suite
 
-One suite, four tiers, selected by marker. Everything is run with `pytest` from
-the repository root; `pytest.ini` already points it at the three roots that hold
-tests (`tests/`, `plugins/`, `player/`), so no path arguments are needed.
+The desktop suite has four tiers, selected by marker. Run `pytest` from the
+repository root; `pytest.ini` selects `tests/` and `plugins/`.
+The Android player suite runs separately against its staged private runtime,
+as required by its engine adapters. Android CI runs every `player/tests` test
+there; see [player development instructions](../player/README.md#development-and-verification).
 
 ```bash
 pip install -r requirements.txt pytest
@@ -31,7 +33,7 @@ runs Qt offscreen and the `gl` tests skip with a reason; under a display
 
 ## The tiers
 
-**Unmarked — the headless core.** Runs on Python, NumPy and PyGLM alone: no
+**Unmarked — the headless core.** Runs on Python, NumPy, PyGLM, pygame-ce and Pillow: no
 PyQt5, no PyOpenGL, no display, no GPU. Geometry, the spatial index, the I/O
 system, the logic dispatcher, the plugin API, Big World, persistence and the
 threading invariants all live here. This is the tier CI runs first, and the one

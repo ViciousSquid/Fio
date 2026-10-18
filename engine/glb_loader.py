@@ -379,8 +379,8 @@ class GLBLoader:
 
         Float accessors come back as float32, integer ones as int32. Index
         accessors are flattened to 1-D. Elements that would run past the end
-        of the buffer are dropped, as is an accessor with a negative offset or
-        stride.
+        of their buffer view or buffer are dropped, as is an accessor with an
+        invalid offset, view length or stride.
         """
         accessor_idx = _non_negative_int(accessor_idx)
         if accessor_idx is None or accessor_idx >= len(self.accessors):
@@ -398,9 +398,10 @@ class GLBLoader:
 
         buf = self.buffers[buf_idx]
         bv_offset = _non_negative_int(bv.get('byteOffset', 0))
+        bv_length = _non_negative_int(bv.get('byteLength'))
         acc_offset = _non_negative_int(acc.get('byteOffset', 0))
         count = _non_negative_int(acc.get('count', 0))
-        if bv_offset is None or acc_offset is None or count is None:
+        if bv_offset is None or bv_length is None or acc_offset is None or count is None:
             return None
         byte_offset = bv_offset + acc_offset
 
@@ -414,9 +415,16 @@ class GLBLoader:
             return None
         if stride == 0:
             stride = elem_size
+        elif stride < elem_size:
+            # Overlapping elements are invalid glTF and can amplify a bounded
+            # file into a much larger decoded allocation (for example MAT4
+            # elements advancing by only one byte).
+            return None
 
-        # Whole elements that fit in the buffer.
-        available = len(buf) - byte_offset - elem_size
+        # A view may share a buffer with unrelated vertices, indices or images.
+        # Even a malformed count must not decode the following view's bytes.
+        view_end = min(len(buf), bv_offset + bv_length)
+        available = view_end - byte_offset - elem_size
         if available < 0 or count == 0:
             return None
         count = min(count, available // stride + 1)
@@ -576,21 +584,25 @@ class GLB:
 
                 # Indices
                 if idx is not None and len(idx) > 0:
+                    group_start = total_indices
                     index_blocks.append(idx + vertex_offset)
                     prim_index_count = len(idx)
                     total_indices += prim_index_count
                     self.has_indices = True
+                    indexed = True
                 else:
                     # Non-indexed: sequential
+                    group_start = vertex_offset
                     prim_index_count = prim_vertex_count
+                    indexed = False
 
                 # Register group for material-based rendering
                 self.groups.append({
                     'material': mat_name or 'default',
-                    'start': total_indices - prim_index_count if self.has_indices else vertex_offset,
+                    'start': group_start,
                     'count': prim_index_count,
                     'mode': mode,
-                    'indexed': self.has_indices and idx is not None,
+                    'indexed': indexed,
                 })
 
                 vertex_offset += prim_vertex_count

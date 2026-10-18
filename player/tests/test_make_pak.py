@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from player.fiopak import FioPackage
+from player.runtime.fiopak import FioPackage
 from player.tools import make_pak
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

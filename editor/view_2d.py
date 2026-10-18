@@ -11,6 +11,7 @@ from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
+from editor.selection import SelectionLookup
 
 # How close (in screen pixels) the cursor has to be before a press grabs a
 # component handle or a brush side.  Converted to world units with the view's
@@ -1785,6 +1786,11 @@ class View2D(QWidget):
         # Computed once: when several objects are selected the unified group box
         # owns the handles, so individual brushes must not draw their own.
         group_active = self._group_manip_active()
+        selected = SelectionLookup(self.editor.state.selected_objects)
+        primary = self.editor.primary_selection()
+        transform = (self.width() / 2, self.height() / 2,
+                     self.pan_offset.x(), self.pan_offset.y(), self.zoom_factor,
+                     self.view_type in ('front', 'side'))
 
         for brush in self.editor.state.brushes:
             # CULL brush if not visible
@@ -1792,7 +1798,7 @@ class View2D(QWidget):
                 continue
                 
             # Check if brush is in selected_objects list (for multi-select support)
-            is_selected = brush in self.editor.state.selected_objects or brush is self.editor.primary_selection()
+            is_selected = brush in selected or brush is primary
             is_trigger = brush.get('is_trigger', False)
             is_subtractive = brush.get('operation') == 'subtract'
             is_locked = brush.get('lock', False)
@@ -1842,11 +1848,8 @@ class View2D(QWidget):
             pos = brush['pos']
             size = brush['size']
             
-            w_pos = QPointF(pos[axis1_idx] - size[axis1_idx]/2, pos[axis2_idx] - size[axis2_idx]/2)
-            w_size = QPointF(size[axis1_idx], size[axis2_idx])
-            p1 = self.world_to_screen(w_pos)
-            p2 = self.world_to_screen(w_pos + w_size)
-            screen_rect = QRectF(p1, p2).normalized()
+            screen_rect = self._brush_screen_rect(
+                pos, size, axis1_idx, axis2_idx, transform)
 
             # Angled (clipped) brushes draw their true convex outline; plain box
             # brushes draw the fast bounding rectangle.  screen_rect is still
@@ -1926,6 +1929,23 @@ class View2D(QWidget):
                 self.draw_resize_handles(painter, screen_rect)
 
             self.draw_brush_color_tag(painter, brush, screen_rect)
+
+    @staticmethod
+    def _brush_screen_rect(pos, size, axis1, axis2, transform):
+        """Project a box with this draw's fixed viewport/pan/zoom values.
+
+        Preserve the old QPointF rounding: convert the minimum corner and
+        size separately, then add them, rather than computing pos + size/2.
+        """
+        cx, cy, pan_x, pan_y, zoom, invert_y = transform
+        x = float(pos[axis1] - size[axis1] / 2)
+        y = float(pos[axis2] - size[axis2] / 2)
+        x2, y2 = x + float(size[axis1]), y + float(size[axis2])
+        sx1, sx2 = cx + (x - pan_x) * zoom, cx + (x2 - pan_x) * zoom
+        dy1, dy2 = (y - pan_y) * zoom, (y2 - pan_y) * zoom
+        if invert_y:
+            return QRectF(QPointF(sx1, cy - dy1), QPointF(sx2, cy - dy2)).normalized()
+        return QRectF(QPointF(sx1, cy + dy1), QPointF(sx2, cy + dy2)).normalized()
 
     def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
         """Draw a wide colored arrow radiating from the glow brush's light emission face."""
@@ -2244,6 +2264,8 @@ class View2D(QWidget):
         ax_map = {'x': 0, 'y': 1, 'z': 2}
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
+        selected = SelectionLookup(self.editor.state.selected_objects)
+        primary = self.editor.primary_selection()
         
         for thing in self.editor.state.things:
             # Skip hidden things
@@ -2415,7 +2437,7 @@ class View2D(QWidget):
             # 4. Overlays (selection highlight + color tag)
             if draw_rect:
                 self.draw_thing_color_tag(painter, thing, draw_rect)
-                is_selected = thing in self.editor.state.selected_objects or thing == self.editor.primary_selection()
+                is_selected = thing in selected or thing == primary
                 if is_selected:
                     painter.setPen(QPen(QColor(255, 255, 0), 2, Qt.DotLine))
                     painter.setBrush(Qt.NoBrush)

@@ -22,8 +22,12 @@ class HostConfig:
     depth_bits: int = 24
     stencil_bits: int = 8        # portals need a stencil buffer
     fullscreen: bool = False
+    borderless: bool = False
     vsync: bool = True
     show_touch_controls: bool = True   # draw the on-screen virtual controls
+    quality: str = 'auto'             # mobile on Android, reference on desktop
+    render_scale: float | None = None
+    adaptive_resolution: bool | None = None
 
 
 @dataclass

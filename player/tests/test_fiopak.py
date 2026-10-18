@@ -6,7 +6,7 @@ import struct
 import unittest
 import zipfile
 
-from player.fiopak import (
+from player.runtime.fiopak import (
     FioPackage,
     MAX_ASSET_ENTRY_BYTES,
     MAX_DOCUMENT_BYTES,

@@ -752,8 +752,11 @@ class EditorState:
     def _selection_list(self):
         """Return the authoritative current selection without duplicates."""
         selection = []
+        seen = set()
         for obj in self.selected_objects:
-            if not any(obj is existing for existing in selection):
+            identity = id(obj)
+            if identity not in seen:
+                seen.add(identity)
                 selection.append(obj)
         return selection
 

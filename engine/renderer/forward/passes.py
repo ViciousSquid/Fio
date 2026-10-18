@@ -1852,16 +1852,18 @@ class PassesMixin:
         if width <= 0 or height <= 0:
             return None
 
-        if not self._glass_scene_texture:
+        created = not self._glass_scene_texture
+        if created:
             self._glass_scene_texture = int(gl.glGenTextures(1))
 
         unit = gl.GL_TEXTURE0 + self._glass_scene_texture_unit
         gl.glActiveTexture(unit)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        if created:
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
 
         if self._glass_scene_size != (width, height):
             gl.glTexImage2D(
