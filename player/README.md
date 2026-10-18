@@ -1,137 +1,189 @@
 # Fio Android Player
 
-The SDL2/OpenGL ES 3 player runs Fio worlds exported as `.fiopak` ZIP archives.
-Android builds use CPython 3.14, target API 36 and require Android 7.0+ with
-OpenGL ES 3.0. The phone APK targets ARM64; CI also builds x86_64 for testing.
+Create a world in desktop Fio, export a self-contained `.fiopak`, and open it in
+the Android player. A world can contain one level or linked levels. The archive
+format is shared with the existing Windows x64/ARM64, macOS and Linux desktop
+releases; Android reads its assets directly from the ZIP archive.
 
-Installable ARM64 debug APK: [`fio-player-arm64-debug.apk`](fio-player-arm64-debug.apk).
-This is a test build; the Pixel 8a/Android 17 still needs device validation.
+- [Installable ARM64 debug APK](fio-player-arm64-debug.apk)
+- [Desktop-exported `_SHOWCASE.fiopak`](./_SHOWCASE.fiopak)
+- [Release signing instructions](SIGNING.md)
+- [Validation results and outstanding checks](VALIDATION.md)
 
-The repository includes `player/_SHOWCASE.fiopak`, the actual desktop export
-used for Android acceptance. Transfer that file to the phone and import it;
-the example is excluded from the APK payload.
+The committed APK is a signed **debug/test build**. `_SHOWCASE.fiopak` is a
+separate download and is excluded from the APK. The current renderer has host
+GLES coverage, but the Pixel 8a running Android 17 has not been device-tested.
+Complete desktop visual parity is still a work in progress.
 
-## Desktop → Android
+## Android system requirements
 
-1. Save the world in desktop Fio and choose **Export Game Package...**. Resolve
-   missing-asset warnings before transferring the `.fiopak`.
-2. Install the debug APK, launch Fio Player and select the package using
-   Android's system document picker. Broad storage permission is unnecessary.
-3. Walk with the left stick, look with the right side, and use the labeled
-   action buttons. Android Back or the pause button opens Resume/Open world/Exit.
+| Component | Requirement |
+| --- | --- |
+| Operating system | Android 7.0 / API 24 or newer: the configured minimum, not a tested certification for every Android version |
+| Processor | 64-bit ARM with the `arm64-v8a` ABI for the phone APK; 32-bit ARM is not included |
+| Graphics | OpenGL ES 3.0 or newer and a working device GLES driver |
+| Display and input | Landscape display with multitouch; the app runs fullscreen |
+| Storage | Space for the installed app and imported worlds; allow up to two copies of a world during replacement/import |
+| Memory | Depends on world geometry, decoded textures, models and effects; no fixed RAM minimum has been benchmarked |
+| Package access | Android's system document picker must be available; broad storage permission is unnecessary |
 
-Imports are copied to private storage (1 GiB limit). Assets then stream from
-ZIP entries rather than being extracted as loose files. A bundled
-`player/game.fiopak` or development `FIO_PACKAGE` path is also supported.
+A recent ARM64 device with **4 GB or more RAM and at least 1 GB free storage**
+is a practical starting recommendation, not a measured minimum or a performance
+guarantee. Large worlds require more. The current phone APK is about 33 MiB
+before Android installs and unpacks its runtime.
 
-## Desktop source remains unchanged
+The separate **x86_64 debug APK** is for Android emulator testing. The phone APK
+does not run on an x86_64 emulator. All packaged native libraries are checked
+for 16 KiB page compatibility. That packaging check does not certify a phone's
+graphics driver or performance.
 
-The Android build reads the existing CANARY engine, entities, I/O and plugins.
-`android_hooks.py` adapts only Buildozer's private application copy using
-`overlays/android-runtime.patch`. Runtime entity modules are copied from the
-editor into that private engine, with lightweight compatibility imports and
-no Qt dependency. `runtime-build.json` records the original source hashes.
-The build fails if the overlay no longer matches the checked-out engine.
-The repository's engine, desktop entry point, plugins and desktop CI remain
-unchanged. The only editor change is `editor/package_exporter.py`, which now
-collects a complete portable world archive; its package tests are updated too.
+Android 16 / API 36 has been exercised on the cloud's x86_64 software emulator.
+Android 7.0 is the build minimum; the owner's Pixel 8a / Android 17 remains an
+outstanding acceptance target. The app targets API 36. Python and its runtime
+dependencies ship inside the APK; users do not install Python, Qt or ADB to play.
 
-The legacy `player/fiopak.py`, which the desktop editor imports, stays unchanged.
-The Android reader is separate in `player/runtime/fiopak.py`. Existing desktop
-OpenGL 3.3 Core rendering, package extraction and fullscreen kiosk/settings
-behavior therefore remain with the existing desktop implementation. Only the
-Android app uses the new player renderer in production.
+## Install and open a world
 
-## Compatibility and limits
+1. Download the ARM64 debug APK to the phone and open it. If Android asks,
+   allow the browser or Files app to install from that source.
+2. Copy `_SHOWCASE.fiopak`, or your own exported world, to the phone or another
+   location accessible through Android's document picker.
+3. Launch Fio Player, choose **Open world**, and select the `.fiopak`.
+4. Wait for import and loading to finish. `_SHOWCASE` begins with a cutscene;
+   movement becomes available when gameplay resumes.
 
-Android uses the existing engine's movement/collision, combat, AI, entity I/O,
-moving brushes, cutscenes and linked-level simulation. Fixed ticks and AI run
-on the app thread and pause in the background. The renderer supports textured
-box/convex brushes with authored UV mapping, animated sprites/effects, OBJ/GLB
-models, point lights and terrain. Audio, held-weapon/muzzle-flash and health/ammo
-HUD, touch controls, pause menus and context recreation are included.
-Portal virtual views and advanced desktop water/glass rendering
-remain absent; Android does not yet have full desktop visual parity.
+Imports are copied to the app's private storage, with a **1 GiB package-size
+limit**. Required assets are then read from ZIP entries; they are not unpacked
+as a loose asset tree. The imported copy remains available to the running app
+after the picker closes. Uninstalling the app removes its private files, so
+keep the original world archive somewhere outside the app.
 
-Brush back faces are culled; models and transparent billboards stay double-sided
-as in the desktop renderer. Camera distance/frustum culling and radial fog use
-the existing engine's `ViewDistance`, frustum helpers and fog shader block.
-The default distance is 4096 units; fog starts at 60% and is opaque at 92%.
-Terrain receives the same environment values. HUD and touch controls stay clear.
-Lights beyond 4096 units from the player are excluded before selecting up to
-the desktop budget of 64 lights and eight point-light shadow maps. The world
-shader reuses desktop lighting, radial shadow depth, slope bias and 20-sample
-shadow filtering; a uniform buffer keeps the light data within GLES 3 limits.
-Local fog volumes use the desktop shader and the same built-in noise texture.
-North/south materials and `nodraw` faces follow the desktop face convention.
-During cutscenes the cutoff follows
-the camera; a light stays while its radius can still illuminate visible geometry
-in front of opaque fog, avoiding a visible switch-off at the cutoff.
+The Android player provides playback; authoring and package export take place
+in desktop Fio. Playing a self-contained, transferred world does not require
+an internet connection or USB debugging.
 
-The desktop exporter preserves linked-map paths, reads loose files and category
-archives (loose files override archive entries), scans current asset properties,
-and follows OBJ/MTL and glTF external buffers/textures. Stock gameplay sprites,
-effects and audio required implicitly by the engine are carried in the world
-archive too. Android streams those bytes directly from the same `.fiopak`;
-there is no installed-stock-asset fallback hiding missing package content.
-The format remains the ZIP/metadata format accepted by existing desktop Fio.
+### Controls
 
-Packages cannot supply executable Python plugins. Required plugins must already
-be installed with the APK. Python errors can be exported through Android's
-native document picker; crashes before Python starts require logcat.
+| Control | Action |
+| --- | --- |
+| Drag on the left side | Move using the floating movement stick |
+| Drag on the right side, away from buttons | Look around |
+| FIRE | Fire the held weapon |
+| JUMP / CROUCH / SPRINT | Use the corresponding movement action |
+| USE | Interact |
+| Pause button or Android Back | Open the pause menu |
+| Resume / Open world / Exit | Continue, choose another archive, or leave the player |
 
-## Development checks
+Simulation pauses while the app is backgrounded. After returning, use **Resume**
+if the pause menu is displayed. Fullscreen presentation is the Android default;
+the existing desktop renderer and its kiosk/window settings remain unchanged.
 
-Use CPython 3.14 with the normal GIL build and install `requirements.txt` plus
-pytest. From the repository root, export fixtures using the exporter,
-then test the same private runtime used by the APK:
+## Export portable worlds from desktop Fio
+
+1. Save the starting level and any linked levels in the project.
+2. Choose **Export Game Package...** in desktop Fio.
+3. Resolve missing-map, cutscene or asset warnings before distributing the
+   resulting `.fiopak`.
+4. Transfer the same archive to the Android player or an existing desktop Fio
+   release. No Android-specific texture conversion is required.
+
+The exporter preserves linked-map paths, reads loose files and category archives
+(loose files take precedence), follows OBJ/MTL and glTF companions, and includes
+implicit stock gameplay sprites, effects and audio. Android has no installed
+stock-world-asset fallback to conceal missing package content.
+
+Required Python plugins must already be installed with the APK. Worlds cannot
+carry executable Python plugins. The Android reader currently limits a single
+asset entry to **128 MiB**, cumulative cached asset bytes to **512 MiB**, and a
+map/JSON document to **64 MiB**. These are reader limits, not RAM budgets:
+decoded images, meshes, simulation state and GPU allocations consume additional
+memory.
+
+## Current playback and rendering
+
+The player uses the existing engine's movement/collision, combat, AI, entity I/O,
+moving brushes, cutscenes and linked-level simulation. Fixed simulation ticks and
+AI run on the app thread. Playback includes audio, weapon and muzzle-flash HUD,
+health/ammo display, touch controls, pause menus and GL context recreation.
+
+Android renders through **OpenGL ES 3**. Existing desktop production rendering
+continues through **OpenGL 3.3 Core Profile**. The player supports textured box
+and convex brushes with authored UV transforms, animated sprites and effects,
+OBJ/GLB models, point lights and terrain.
+
+- `nodraw` and `caulk` faces emit no visible geometry. Bare names, image
+  extensions, packaged paths and case variants are recognized. Other faces
+  and the brush's collision bounds remain intact.
+- North/south materials follow the desktop face convention. Brush back faces
+  are culled; models and transparent billboards remain double-sided.
+- Camera distance/frustum culling and radial fog use the engine's existing
+  `ViewDistance` and frustum rules. The default distance is 4096 units; fog
+  begins at 60% and becomes opaque at 92%. Terrain receives the same environment
+  values; HUD and touch controls remain clear.
+- World lighting reuses desktop ambient, diffuse falloff, radial shadow depth,
+  slope bias and 20-sample shadow filtering. A uniform buffer supports the
+  desktop budget of **64 lights**. Up to **eight shadow lights** use 384-pixel
+  cube faces in an atlas, with reduced resolution on GPUs limited to smaller
+  textures. Local fog uses the desktop shader and shared noise resource.
+- Effect lights illuminate nearby geometry as well as drawing the effect's
+  animated sprite. The authoritative engine projection supplies their colour,
+  radius, enabled state and flicker.
+- Lights beyond 4096 units from the player are excluded before selection.
+  During cutscenes the cutoff follows the camera and retains lights whose
+  influence still reaches visible geometry in front of opaque fog.
+
+Portal virtual views and advanced desktop water/glass passes remain absent.
+Shared simulation and matching lighting formulas do not establish complete
+visual parity or equivalent performance on every device. See
+[VALIDATION.md](VALIDATION.md) for the scope of the evidence.
+
+## Build APKs with GitHub Actions
+
+The [Android Player Build workflow](../.github/workflows/android-build.yml) is
+configured to validate desktop package compatibility, export worlds, test the
+private Android runtime, run GLES/Core pixel checks, build ARM64 debug/release
+APKs, and build/test an x86_64 APK with real `_SHOWCASE` picker and touch input.
+Cloud-local checks and configured CI jobs are distinct; a workflow definition
+does not establish that a GitHub run succeeded.
+
+Matching pushes to `CANARY` trigger the workflow automatically. Open **Actions →
+Android Player Build**, select the latest `CANARY` run and inspect its jobs. After
+adding signing secrets, **Re-run all jobs** on that run builds with the current
+secret values.
+
+The current default branch, `3.0.0.1010`, does not contain this workflow. GitHub
+requires a workflow on the default branch for manual `workflow_dispatch`.
+Once it is available there, **Run workflow → CANARY**, or this CLI command,
+can start a new manual run:
 
 ```sh
-python -m player.tools.contract_fixture /tmp/universal.fiopak
-python -m player.tools.export_playback_fixture /tmp/_ANDROID_PLAYBACK.fiopak
-QT_QPA_PLATFORM=offscreen python -m player.tools.export_showcase /tmp/_SHOWCASE.fiopak
-python -m player.tools.stage_runtime /tmp/fio-android-runtime
-cd /tmp/fio-android-runtime
-python -m pytest player/tests -q
-python -m player.tools.verify_package /tmp/universal.fiopak
-python -m player.tools.verify_package /tmp/_SHOWCASE.fiopak
-PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --fixture /tmp/universal.fiopak
-python -m player.main /tmp/_SHOWCASE.fiopak
+gh workflow run android-build.yml --repo ViciousSquid/Fio --ref CANARY
 ```
 
-Choose a fresh staging directory for each source revision. Verification fails
-when referenced assets or model companions are absent from the world archive.
-The desktop-export automation uses the real editor, loader and export dialog;
-only the destination file chooser is automated. Mesa EGL/GLES is required for
-the graphics check. `--desktop` tests the development harness with OpenGL Core;
-it does not replace desktop Fio.
+Relevant artifacts are `fio-player-debug-apk`,
+`fio-player-release-signed-apk` or `fio-player-release-unsigned-apk`,
+`fio-player-emulator-debug-apk`, `desktop-showcase-world`, and
+`android-showcase-device-evidence`.
 
-The GPU smoke check asserts rendered pixels for back-face/distance culling,
-linear/density fog, real point-light shadow occlusion and animated effects.
-Pass `--evidence /tmp/fio-render-images` to save those images. The additional
-native gameplay check uses a desktop-exported diagnostic world with an immediate
-gun pickup, point-blank monster, more than eight lights and animated effects:
+Debug APKs are signed automatically and installable without release secrets.
+An **unsigned release APK must be signed before installation**. Production
+signing needs `FIO_ANDROID_KEYSTORE_BASE64`, `FIO_ANDROID_KEY_ALIAS`,
+`FIO_ANDROID_KEYSTORE_PASSWORD` and `FIO_ANDROID_KEY_PASSWORD`.
+Their presence and validity have not been verified from this cloud environment.
+Follow [SIGNING.md](SIGNING.md) to create or reuse a permanent key, configure
+secrets, sign locally, and verify the result. Keep the same signing identity for
+future updates. A release signature cannot replace an installed debug build
+signed with a different key.
 
-```sh
-python -m player.tools.test_playback player/fio-player-arm64-debug.apk /tmp/_ANDROID_PLAYBACK.fiopak --output fio-playback-results
-```
+**APK is the direct-download distribution format.** Google Play normally
+requires an AAB; the current workflow produces APKs.
 
-This supplements the real `_SHOWCASE` import/movement check. Inspect the saved
-HUD/effect and firing screenshots as well as the reported health/death result.
+### Build locally on Linux
 
-## APK builds and signing
-
-The **Android Player Build** GitHub workflow exports worlds, checks the isolated
-runtime, builds debug and release APKs, checks native 16 KiB compatibility and
-runs real showcase touch acceptance on an emulator. Download the debug APK for
-testing. Release signing is optional in CI; an unsigned release APK cannot be
-installed. See [SIGNING.md](SIGNING.md) for the four repository secrets,
-permanent keystore creation/backup and local signing instructions. APK is the
-appropriate format for direct downloads; Google Play normally requires AAB.
-
-On Linux install JDK 17+, build-essential, autoconf/automake/libtool, pkg-config,
-cmake, ninja, ccache, gettext/autopoint, patch, zip/unzip and development headers
-for zlib, libffi and OpenSSL. In a host Python 3.12 virtual environment:
+Install JDK 17 or newer, build-essential, autoconf, automake, libtool, pkg-config,
+cmake, ninja, ccache, gettext/autopoint, patch, zip/unzip, and development headers
+for zlib, libffi and OpenSSL. Use a host Python 3.12 virtual environment for the
+CI-equivalent Buildozer toolchain:
 
 ```sh
 python -m pip install buildozer==1.6.0 legacy-cgi setuptools 'cython==0.29.37'
@@ -140,25 +192,93 @@ APP_ANDROID_ACCEPT_SDK_LICENSE=True buildozer -v android debug
 APP_ANDROID_ACCEPT_SDK_LICENSE=True buildozer -v android release
 ```
 
-Pinned python-for-android supplies Android CPython 3.14. Local recipes package
-pygame-ce 2.5.8, PyGLM 2.8.3 and the required C++ runtime. The initial native
-build downloads several GB; incremental packaging reuses native libraries.
+Build an emulator APK separately with
+`APP_ANDROID_ARCHS=x86_64 APP_ANDROID_ACCEPT_SDK_LICENSE=True buildozer -v android debug`.
+Do not run builds sharing the same private staging tree concurrently.
 
-## Phone acceptance
+Outputs appear in `player/bin/`. The spec pins python-for-android, Android API
+36 and NDK 29. It supplies Android CPython 3.14, pygame-ce 2.5.8, PyGLM 2.8.3
+and the C++ runtime through the pinned/local recipes. First builds download
+several GB; subsequent builds reuse native dependencies.
 
-Connecting USB to your computer does not expose the phone to this cloud machine.
-Install Android Platform Tools locally, enable USB debugging, unlock the phone
-and accept its debugging key. With the supplied debug APK and desktop export:
+## Development and verification
+
+Use a normal-GIL CPython 3.14 environment with `requirements.txt` and pytest for
+host runtime checks. From the repository root:
+
+```sh
+python -m player.tools.contract_fixture /tmp/universal.fiopak
+python -m player.tools.export_playback_fixture /tmp/_ANDROID_PLAYBACK.fiopak
+QT_QPA_PLATFORM=offscreen python -m player.tools.export_showcase /tmp/_SHOWCASE.fiopak
+python -m player.tools.stage_runtime /tmp/fio-android-runtime
+```
+
+Choose a fresh staging directory for each revision. Run tests in that private
+tree so Android's adapters are exercised without changing desktop sources:
+
+```sh
+cd /tmp/fio-android-runtime
+python -m pytest player/tests -q
+python -m player.tools.verify_package /tmp/universal.fiopak
+python -m player.tools.verify_package /tmp/_SHOWCASE.fiopak
+PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --fixture /tmp/universal.fiopak --evidence /tmp/fio-gles-images
+PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --desktop --fixture /tmp/universal.fiopak
+python -m player.main /tmp/_SHOWCASE.fiopak
+```
+
+Mesa EGL/GLES is required for the graphics checks. The Core harness is a
+development check and does not replace desktop Fio. Pixel checks cover nodraw,
+back-face/distance culling, ambient colour, the 64th light, shadow bias and
+occlusion, local/radial/density fog, effect illumination, animation and context
+recreation. The showcase exporter automation uses the real desktop editor,
+loader and export dialog; it automates the destination chooser.
+
+Android imports the current engine, entities, I/O and plugins into Buildozer's
+private tree. `android_hooks.py` applies `overlays/android-runtime.patch` there
+and copies runtime entity modules without Qt startup dependencies.
+`runtime-build.json` records 17 unchanged source/resource input hashes; staging
+fails if the patch no longer matches. The repository's engine, desktop entry
+point, plugins and desktop CI remain unchanged. The authorized editor change
+is `editor/package_exporter.py` and its package regression coverage. The legacy
+desktop reader `player/fiopak.py` is unchanged; Android uses
+`player/runtime/fiopak.py`.
+
+For a deliberate single-world developer build, `player/game.fiopak` or a
+development `FIO_PACKAGE` path can supply a starting package. The committed
+universal player instead uses the system picker.
+
+## Phone testing and troubleshooting
+
+Connecting USB to your computer does not expose the phone to this cloud
+workspace. Install Android Platform Tools locally, enable USB debugging,
+unlock the phone and accept the computer's debugging key. From the repository
+root, with the APK and desktop export available:
 
 ```sh
 adb devices
-python -m player.tools.test_device fio-player-arm64-debug.apk _SHOWCASE.fiopak --output pixel-validation
+python -m player.tools.test_device player/fio-player-arm64-debug.apk player/_SHOWCASE.fiopak --output pixel-validation
 ```
 
-Use `--serial SERIAL` for multiple devices and `--adb PATH` if necessary. The
-script installs without clearing data, opens the picker, waits for a stable
-spawn after the cutscene and sends actual forward/reverse touch gestures. It
-saves screenshots, Fio logcat, package hash and a JSON result. It never uninstalls
-the app to work around signing conflicts. Pose logging requires its explicit
-validation intent and a debuggable APK; release builds ignore that flag.
-See [VALIDATION.md](VALIDATION.md) for results and remaining device checks.
+Use `--serial SERIAL` for multiple devices or `--adb PATH` for a specific ADB
+executable. The script installs without clearing data, opens the real picker,
+waits for a stable spawn after the cutscene, sends forward/reverse touch
+gestures, and saves screenshots, Fio logcat, the imported-world hash and JSON
+results. It does not uninstall the app to bypass a signing-key conflict.
+Validation logging requires an explicit test intent and a debuggable APK;
+release builds ignore that flag.
+
+For weapon pickup/HUD, effect and point-blank combat checks, run this separate
+desktop-exported diagnostic world from the repository root:
+
+```sh
+python -m player.tools.test_playback player/fio-player-arm64-debug.apk /tmp/_ANDROID_PLAYBACK.fiopak --output fio-playback-results
+```
+
+Inspect screenshots alongside the JSON results. Python failures can offer a
+native report-export dialog. For launch failures before Python starts, capture
+`adb logcat -b crash -d` and a full `adb logcat -d` immediately after reproducing
+the failure. Keep the APK/version, Android version and device model with the
+report. Missing assets should be resolved in the desktop export, and signature
+conflicts require the correct original signing key. See
+[VALIDATION.md](VALIDATION.md) for known defects, completed checks and remaining
+Pixel acceptance work.

@@ -88,10 +88,12 @@ def show_error(exc, documents=None):
         @run_on_ui_thread
         def show():
             builder = autoclass("android.app.AlertDialog$Builder")(documents.activity)
-            builder.setTitle("Fio Player error")
+            # Pyjnius needs an explicit Java String for CharSequence overloads.
+            text = autoclass("java.lang.String")
+            builder.setTitle(text("Fio Player error"))
             builder.setCancelable(False)
-            builder.setMessage(str(exc)[:2000])
-            builder.setPositiveButton("Save error report", documents.error_listener)
-            builder.setNegativeButton("Close", documents.error_listener)
+            builder.setMessage(text(str(exc)[:2000]))
+            builder.setPositiveButton(text("Save error report"), documents.error_listener)
+            builder.setNegativeButton(text("Close"), documents.error_listener)
             builder.show()
         show()

@@ -181,6 +181,26 @@ cannot establish pixel-exact parity. These are host GPU comparisons, not new
 Pixel captures. Complete visual parity, phone driver behaviour and performance
 remain unverified; the feature limits below still apply.
 
+The first native APK of this follow-up (`9a30f562`) failed on the emulator:
+SwiftShader counted the four-vec4-per-light UBO against a 256-vector fragment
+uniform limit (261 active vectors). Mesa had accepted it. The replacement packs
+radius into position.w and intensity into colour.w, retaining all 64 lights in
+three vec4 slots each. This stays below the GLES minimum of 224 vectors while
+preserving lighting values. Native error reporting also exposed a Pyjnius
+CharSequence overload failure; dialog strings now use explicit Java String
+objects. The failed native run is retained separately from the retry.
+
+The compact-buffer replacement passed native Android 16/API 36 x86_64 startup
+and real document-picker import. The installed APK SHA-256 matches the rebuilt
+emulator APK (`22559cb6…`), and the imported diagnostic world hash matches the
+desktop export. Its actual frame/report has **17 lights, one shadow light,
+two effects, gun1 weapon/HUD and no missing images**. Quickstep and System UI
+ANR dialogs on the software emulator blocked automatic picker inspection;
+the assistant dismissed those system dialogs and tapped the visible exact
+filename. Assertions and screenshot capture then passed in the same process.
+This retry covers rendering/startup/import, not a new movement or full lifecycle
+run. Evidence: `android-nodraw/native-v3/result.json` and `native-rendering.png`.
+
 ## Native debug findings
 
 Reviewed defects included desktop-only Qt startup imports, omitted PyGLM/C++

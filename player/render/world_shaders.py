@@ -49,4 +49,16 @@ for _old, _new in (('FragPos','worldPos'), ('Normal','worldNormal'),
                   ('TexCoords','texCoord'), ('texture_diffuse','diffuse'),
                   ('active_lights','lightCount')):
     _fragment = _fragment.replace(_old, _new)
-FRAGMENT = translate(light_ubo_source(_fragment), 'fragment').replace('precision mediump float;', 'precision highp float;')
+# Some Android GLES translators count block members against the 256-vector
+# default-uniform limit. Four vec4 slots per light fail there at 64 lights.
+# Pack radius/intensity into the unused position/colour components instead:
+# 192 slots retain every desktop value and fit even the ES minimum of 224.
+_fragment = light_ubo_source(_fragment)
+_fragment = _fragment.replace('highp vec4 position;', 'highp vec4 position_radius;')
+_fragment = _fragment.replace('vec4 color;', 'vec4 color_intensity;')
+_fragment = _fragment.replace('    vec4 params;       // x=intensity, y=radius\n', '')
+for _old, _new in (('.position.xyz','.position_radius.xyz'),
+                  ('.color.xyz','.color_intensity.xyz'),
+                  ('.params.x','.color_intensity.w'), ('.params.y','.position_radius.w')):
+    _fragment = _fragment.replace(_old,_new)
+FRAGMENT = translate(_fragment, 'fragment').replace('precision mediump float;', 'precision highp float;')
