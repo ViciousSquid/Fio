@@ -180,10 +180,16 @@ requires an AAB; the current workflow produces APKs.
 
 ### Build locally on Linux
 
-Install JDK 17 or newer, build-essential, autoconf, automake, libtool, pkg-config,
+Install JDK 17 or newer, build-essential, autoconf, automake, libtool, libltdl-dev, pkg-config,
 cmake, ninja, ccache, gettext/autopoint, patch, zip/unzip, and development headers
 for zlib, libffi and OpenSSL. Use a host Python 3.12 virtual environment for the
-CI-equivalent Buildozer toolchain:
+CI-equivalent Buildozer toolchain.
+
+On Ubuntu, `libltdl-dev` supplies the `LT_SYS_SYMBOL_USCORE` Autotools macro
+required when python-for-android builds libffi. `libffi-dev` alone does not
+supply it.
+
+Install the Python build tools and build from `player/`:
 
 ```sh
 python -m pip install buildozer==1.6.0 legacy-cgi setuptools 'cython==0.29.37'

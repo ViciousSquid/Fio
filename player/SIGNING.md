@@ -182,6 +182,10 @@ Matching `CANARY` pushes trigger **Android Player Build** automatically. Open
 four secrets are configured, use **Re-run all jobs** on that run. This rebuilds
 and signs using the current secret values without changing source code.
 
+A rerun uses the original run's commit. If a run failed because of a source or
+workflow defect, use the new push-triggered run containing the fix; adding
+signing secrets cannot repair a failure earlier in compilation.
+
 The repository's current default branch is `3.0.0.1010`; the Android workflow
 does not exist there. GitHub requires its workflow file on the default branch
 before **Run workflow** / `workflow_dispatch` is available. Use the push run or
