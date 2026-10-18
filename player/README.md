@@ -7,7 +7,6 @@ releases; Android reads its assets directly from the ZIP archive.
 
 - [Installable ARM64 debug APK](fio-player-arm64-debug.apk)
 - [Desktop-exported `_SHOWCASE.fiopak`](./_SHOWCASE.fiopak)
-- [Release signing instructions](SIGNING.md)
 - [Validation results and outstanding checks](VALIDATION.md)
 
 The committed APK is a signed **debug/test build**. `_SHOWCASE.fiopak` is a
