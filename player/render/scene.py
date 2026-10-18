@@ -47,6 +47,10 @@ def _is_renderable(brush: dict) -> bool:
         return False
     if brush.get("hidden") or brush.get("is_fog") or brush.get('shader') == 'Fog':
         return False
+    from engine.constants import is_water_brush
+    if is_water_brush(brush):
+        # Water's editor material is often TRIGGER; the water pass owns it.
+        return False
     # Non-solid, non-visual trigger volumes are skipped.
     if brush.get("is_trigger") and not (brush.get("is_door") or brush.get("is_mover")):
         return False

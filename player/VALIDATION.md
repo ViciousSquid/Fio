@@ -1,5 +1,30 @@
 # Android rebuild validation
 
+## Water rendering follow-up
+
+The `_SHOWCASE` water brush has `shader: Water` and `trigger.jpg` face
+materials. The player previously rendered it as an ordinary textured solid.
+Water now has a dedicated pass using the shared cheap water shader, with
+waves, refraction, sky reflection, authored tint/opacity, eight contributing
+lights and matching radial fog. It is excluded from solid/shadow batches.
+The original normal map is copied into the Android-private runtime; the
+staging receipt now records 18 unchanged shared inputs and 46 player modules.
+An 8×8 mobile surface grid bounds geometry cost. Scene colour is copied once
+only when water is visible, at the current adaptive world resolution.
+Depth-dependent effects and screen-space reflections are compiled out.
+Terrain renders before this capture; transparent sprites/effects follow water.
+
+Validation: **156 player tests passed**, including water classification and
+convex/plane mesh regressions. Reference GLES, mobile GLES and OpenGL Core
+pixel checks passed for TRIGGER-material water, animated surface changes,
+authored tint/opacity, underwater views, actual GL context recreation,
+hidden/distance rejection and the single scene capture. Pixel 8a performance
+and appearance still require device testing.
+The committed `_SHOWCASE.fiopak` also rendered its pool in a host GLES view:
+one water brush, a 428×192 world target, no missing images and no GL errors.
+The rebuilt APK contains the exact shared water normal map; its source receipt,
+signature and 16 KiB alignment checks pass. It retains the previous build's key.
+
 ## Mobile performance follow-up
 
 Android now selects mobile quality automatically: adaptive 0.67× world rendering
@@ -46,10 +71,10 @@ The new `player.tools.profile_render` completed a 120-frame mobile trace on
 Mesa llvmpipe with p50/p95 render completion times of 20.80/29.21 ms. Software
 timings vary with the host and do not predict physical-device performance.
 The optimised ARM64 debug APK has now been rebuilt and replaced at
-`player/fio-player-arm64-debug.apk` (33,066,670 bytes), SHA-256
-`95603d6cf69d1699493454f992b926d2526a5a585cd68b522b110b4eeb3642be`.
+`player/fio-player-arm64-debug.apk` (33,554,142 bytes), SHA-256
+`a25ef2bf643b92ee2ca71275c468671441fdd4e19d62539537bd78c7d04ddf72`.
 Its signature verifies, all 144 native libraries pass 16 KiB checks, ZIP
-alignment passes, and its receipt matches all 45 player runtime source hashes
+alignment passes, and its receipt matches all 46 player runtime source hashes
 in this checkout. The manifest reports ARM64, minimum API 24 and target API 36.
 The updated Android workflow verifies the same properties before replacing its
 runner-local player APK and uploading the APK plus a checksum file. Actionlint
@@ -59,7 +84,7 @@ Local native recipes retain FreeType 2.14.1 and OpenSSL 3.3.1 while fetching
 checksum-pinned upstream GitHub archives. FreeType's exact dlg submodule commit
 is pinned and its generated configure files are bootstrapped before compilation.
 
-This 2048-unit build retains the preceding optimised build's debug signer and
+This water build retains the preceding 2048-unit build's debug signer and
 can update that build in place. Its signer differs from the original committed
 APK, which requires preserving app data before uninstalling or re-signing with
 the original key. No device installation was

@@ -133,7 +133,17 @@ OBJ/GLB models, point lights and terrain.
   During cutscenes the cutoff follows the camera and retains lights whose
   influence still reaches visible geometry in front of opaque fog.
 
-Portal virtual views and advanced desktop water/glass passes remain absent.
+Water brushes use the shared water shader's cheap tier: animated waves,
+normal detail, refraction, sky Fresnel reflection, authored tint/opacity and
+up to eight contributing lights. Water is excluded from ordinary textured
+batches and shadow casters, so editor TRIGGER materials never appear on it.
+One scene-colour capture per visible water pass uses the current world target
+size; hidden or distant water requires no capture. A bounded surface grid
+keeps geometry costs low. Depth-based absorption, caustics and screen-space
+reflections are disabled in the player. The normal map is a renderer-owned
+resource copied into the private Android runtime, independent of map assets.
+
+Portal virtual views and advanced desktop glass passes remain absent.
 Shared simulation and matching lighting formulas do not establish complete
 visual parity or equivalent performance on every device. See
 [VALIDATION.md](VALIDATION.md) for the scope of the evidence.

@@ -54,6 +54,7 @@ class GLESRenderer:
         self.shadows = None
         self.light_buffer = None
         self.fog_volumes = None
+        self.water = None
         from engine.logic_render import LogicRender
         self._fallback_runtime = LogicRender(None)
         self._fallback_runtime.view_distance.distance = self.quality.view_distance
@@ -109,6 +110,9 @@ class GLESRenderer:
         self.light_buffer = LightBuffer(gl, self.programs['world'])
         from .fog import FogVolumes
         self.fog_volumes = FogVolumes(gl, self.gles, steps=self.quality.fog_steps)
+        from .water import WaterSurfaces
+        self.water = WaterSurfaces(gl, self.gles,
+                                   subdivisions=8 if self.quality.name == 'mobile' else 16)
 
         if self._scene is not None:
             self._upload_scene()
@@ -235,6 +239,8 @@ class GLESRenderer:
     def clear_scene(self):
         gl = _gl()
         self._release_terrain()
+        if self.water:
+            self.water.clear()
         for vao, vbo, _, _ in self._batches:
             gl.glDeleteVertexArrays(1, [vao])
             gl.glDeleteBuffers(1, [vbo])
@@ -257,6 +263,8 @@ class GLESRenderer:
             self.light_buffer.close()
         if self.fog_volumes:
             self.fog_volumes.close()
+        if self.water:
+            self.water.close()
         gl = _gl()
         for vao in (self._triangle_vao, self._ui_vao, self.overlay._disc_vao):
             if vao:
@@ -319,6 +327,7 @@ class GLESRenderer:
         world = self._scene.get('world')
         data = world.render_map() if world else self._scene['map']
         self._lights = extract_lights(data)
+        self.water.load(data.get('brushes', []))
         # Stationary materials share spatial batches; doors and movers retain
         # their identities, transforms and live culling bounds.
         from .scene import spatial_batches
@@ -500,11 +509,32 @@ class GLESRenderer:
                          -sum((float(self._draw_sources[b[0]][1].pos[i])-eye[i])**2 for i in range(3)) if self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect') else self._texture_names[b[0]]))
         last_state = last_lights = last_texture = None
         max_batch_lights = 0
+        surfaces_drawn = False
+        water_draws = 0
+
+        def draw_surfaces():
+            # Terrain belongs in the scene capture; transparent billboards
+            # follow water so foreground effects remain in front of it.
+            if world and world.terrain:
+                import glm
+                world.terrain.update_and_render(
+                    glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye),
+                    frustum_planes=visibility.planes, env_uniforms=env)
+            import time
+            return self.water.render(view, projection, eye, visibility, env, self._lights,
+                                     time.perf_counter()-self._start_time, self.width, self.height)
+
         for vao, vbo, texture, count in ordered:
             source = self._draw_sources.get(vao)
             model = glmath.identity()
             tint = self._tints[vao]
             transparent = bool(source and source[0] in ('sprite', 'effect'))
+            if transparent and not surfaces_drawn:
+                water_draws = draw_surfaces()
+                surfaces_drawn = True
+                gl.glUseProgram(prog)
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                last_state = last_lights = last_texture = None
             if source and source[0] != 'static':
                 kind, item, origin = source
                 if kind == 'brush':
@@ -595,7 +625,16 @@ class GLESRenderer:
                 last_texture = texture
             gl.glBindVertexArray(vao)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, count)
+        # Finish opaque state before the surface passes when there were no
+        # billboards to trigger them inside the ordered loop.
+        gl.glDepthMask(True)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+        if not surfaces_drawn:
+            water_draws = draw_surfaces()
         self.frame_stats = {'drawn_batches': drawn, 'culled_batches': culled,
+                            'water_brushes': water_draws,
                             'view_distance': distance.effective_distance,
                             'fog_start': env['uFogStart'], 'fog_end': env['uFogEnd'],
                             'lights': len(self._lights), 'shadow_lights': len(shadow_indices),
@@ -607,11 +646,6 @@ class GLESRenderer:
         gl.glDisable(gl.GL_BLEND)
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
-        if world and world.terrain:
-            import glm
-            view = state.get('view', glmath.look_at(eye, eye + front))
-            world.terrain.update_and_render(glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye),
-                                            frustum_planes=visibility.planes, env_uniforms=env)
         import time
         brushes = world.brushes if world else self._scene['map'].get('brushes',[])
         self.frame_stats['fog_volumes'] = self.fog_volumes.render(

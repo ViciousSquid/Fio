@@ -50,6 +50,17 @@ def main():
         renderer = GLESRenderer(gles=not desktop, quality=resolve(args.quality))
         renderer.on_gl_ready()
         renderer.resize(128, 128)
+
+        def recreate_context():
+            nonlocal context
+            EGL.eglMakeCurrent(display, EGL.EGL_NO_SURFACE, EGL.EGL_NO_SURFACE, EGL.EGL_NO_CONTEXT)
+            EGL.eglDestroyContext(display, context)
+            context = EGL.eglCreateContext(display, config, EGL.EGL_NO_CONTEXT,
+                                          context_attributes)
+            EGL.eglMakeCurrent(display, surface, surface, context)
+            renderer.on_gl_ready()
+            renderer.resize(128, 128)
+
         renderer.render()
         empty = np.frombuffer(GL.glReadPixels(0, 0, 128, 128, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8)
         texture = io.BytesIO()
@@ -66,13 +77,7 @@ def main():
             state = {"cam_pos": (0, 0, 0), "cam_yaw": -90, "cam_pitch": 0}
             for reload_context in (False, True):
                 if reload_context:
-                    EGL.eglMakeCurrent(display, EGL.EGL_NO_SURFACE, EGL.EGL_NO_SURFACE, EGL.EGL_NO_CONTEXT)
-                    EGL.eglDestroyContext(display, context)
-                    context = EGL.eglCreateContext(display, config, EGL.EGL_NO_CONTEXT,
-                        context_attributes)
-                    EGL.eglMakeCurrent(display, surface, surface, context)
-                    renderer.on_gl_ready()
-                    renderer.resize(128, 128)
+                    recreate_context()
                 renderer.render(state)
                 pixel = np.frombuffer(GL.glReadPixels(64, 64, 1, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE), dtype=np.uint8)
                 assert abs(int(pixel[0])-26) <= 2 and pixel[1] < 2 and pixel[2] < 2, pixel  # desktop ambient is 0.1
@@ -90,6 +95,8 @@ def main():
         run(renderer, args.evidence)
         from player.tools.check_mobile_rendering import run as check_mobile
         check_mobile(renderer)
+        from player.tools.check_water import run as check_water
+        check_water(renderer, args.evidence, recreate_context)
         from player.world import PlayerWorld
         from player.render import glmath
         world = PlayerWorld({'terrain_data': {'enabled': True, 'solid': True, 'use_textures': False,
