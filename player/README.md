@@ -61,22 +61,6 @@ The Android player provides playback; authoring and package export take place
 in desktop Fio. Playing a self-contained, transferred world does not require
 an internet connection or USB debugging.
 
-### Controls
-
-| Control | Action |
-| --- | --- |
-| Drag on the left side | Move using the floating movement stick |
-| Drag on the right side, away from buttons | Look around |
-| FIRE | Fire the held weapon |
-| JUMP / CROUCH / SPRINT | Use the corresponding movement action |
-| USE | Interact |
-| Pause button | Open the pause menu |
-| Resume / Open world / Exit | Continue, choose another archive, or leave the player |
-
-Simulation pauses while the app is backgrounded. After returning, use **Resume**
-if the pause menu is displayed. Fullscreen presentation is the Android default;
-the existing desktop renderer and its kiosk/window settings remain unchanged.
-
 ## Export portable worlds from desktop Fio
 
 1. Save the starting level and any linked levels in the project.
