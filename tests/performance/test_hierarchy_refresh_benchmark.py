@@ -11,7 +11,6 @@ The report gives the best of seven samples, without imposing a timing budget.
 
 import gc
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -36,12 +35,13 @@ def _selected_rows(panel):
 
 
 @pytest.mark.parametrize('distribution', ['brushes', 'mixed'])
-def test_report_hierarchy_refresh(qt_app, distribution):
-    state = SimpleNamespace(brushes=[], things=[], selected_objects=[],
-                            terrain_data=None)
-    host = SimpleNamespace(state=state)
-    host.set_selected_objects = lambda objects: setattr(state, 'selected_objects', objects)
-    panel = SceneHierarchy(host)
+def test_report_hierarchy_refresh(qt_app, main_window, distribution):
+    logic = main_window.view_3d.logic_thread
+    logic.stop()
+    if logic.is_alive():
+        logic.join(timeout=1)
+    state = main_window.state
+    panel = main_window.scene_hierarchy
     try:
         print('\ndistribution count selected original_ms current_ms old/new')
         for count in (64, 1024, 4096):
@@ -79,5 +79,4 @@ def test_report_hierarchy_refresh(qt_app, distribution):
                        before / after), flush=True)
     finally:
         panel.close()
-        panel.deleteLater()
         qt_app.processEvents()

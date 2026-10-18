@@ -1,7 +1,5 @@
 """Hierarchy rebuilding preserves selection and recovers from failed updates."""
 
-from types import SimpleNamespace
-
 import pytest
 
 pytest.importorskip('PyQt5', reason='the hierarchy is a Qt widget')
@@ -27,16 +25,14 @@ class EqualThing(HierarchyThing):
 
 
 @pytest.fixture
-def hierarchy(qt_app):
-    state = SimpleNamespace(brushes=[], things=[], selected_objects=[],
-                            terrain_data=None)
-    host = SimpleNamespace(state=state)
-    host.set_selected_objects = lambda objects: setattr(state, 'selected_objects', objects)
-    panel = SceneHierarchy(host)
-    yield panel
-    panel.close()
-    panel.deleteLater()
-    qt_app.processEvents()
+def hierarchy(main_window):
+    # Exercise the real editor ownership and selection callbacks. The test
+    # controls every mutation, so the background simulation is stopped first.
+    logic = main_window.view_3d.logic_thread
+    logic.stop()
+    if logic.is_alive():
+        logic.join(timeout=1)
+    return main_window.scene_hierarchy
 
 
 def hierarchy_rows(panel):

@@ -25,11 +25,12 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-#: The roots pytest.ini lists in `testpaths`.
-TEST_ROOTS = ("tests", "plugins", "player")
+#: Desktop/plugin tests plus the Android suite checked in its private runtime.
+#: player/tools/test_*.py are device CLI programs, not pytest modules.
+TEST_ROOTS = ("tests", "plugins", "player/tests")
 
 #: Directories pytest.ini excludes via `norecursedirs`.
-SKIP_DIRS = {".git", "build", "dist", "__pycache__", "assets", "maps"}
+SKIP_DIRS = {".git", ".buildozer", "build", "dist", "__pycache__", "assets", "maps"}
 
 
 def _test_modules():

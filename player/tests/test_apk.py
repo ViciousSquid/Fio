@@ -21,7 +21,7 @@ def elf(alignment=16384):
     return bytes(header)
 
 
-class APKTests(unittest.TestCase):
+class TestAPK(unittest.TestCase):
     def source_apk(self, path, sources, *, module=True):
         data = io.BytesIO()
         receipt = json.dumps({'desktop_sources_unchanged': True,

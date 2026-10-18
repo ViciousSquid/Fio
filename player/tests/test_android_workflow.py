@@ -19,7 +19,7 @@ from player.platform.base import HostConfig, FrameCallbacks
 from player.platform.desktop import DesktopHost
 
 
-class AndroidWorkflowTests(unittest.TestCase):
+class TestAndroidWorkflow(unittest.TestCase):
     def test_android_startup_keeps_activity_callbacks_unblocked(self):
         import os
         from unittest.mock import patch
