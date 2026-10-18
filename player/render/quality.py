@@ -19,7 +19,7 @@ REFERENCE = RenderQuality()
 MOBILE = RenderQuality(name='mobile', render_scale=.67, adaptive=True,
                        shadow_samples=8, fog_steps=8, lights_per_batch=8,
                        static_cell_size=512, animation_mipmaps=False,
-                       view_distance=2048.0)
+                       view_distance=1280.0)
 
 
 def resolve(name='reference'):

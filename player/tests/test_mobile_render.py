@@ -84,7 +84,7 @@ def test_mobile_horizon_applies_to_live_levels_and_fallback_culling_and_fog():
     from player.tests.test_visibility import camera
 
     bounds = np.zeros(3), np.ones(3)
-    for quality, horizon in ((MOBILE,2048.),(REFERENCE,4096.)):
+    for quality, horizon in ((MOBILE,1280.),(REFERENCE,4096.)):
         renderer = GLESRenderer(quality=quality)
         runtimes = [renderer._render_runtime()]
         # Each linked level receives the preset, including replacement worlds.
@@ -100,8 +100,8 @@ def test_mobile_horizon_applies_to_live_levels_and_fallback_culling_and_fog():
             env = environment(runtime.view_distance, (0,0,0))
             assert env['uFogStart'] == pytest.approx(horizon*.6)
             assert env['uFogEnd'] == pytest.approx(horizon*.92)
-            assert camera(runtime).visible(bounds, glmath.translate(0,0,-2000), (0,0,-2000))
-            assert camera(runtime).visible(bounds, glmath.translate(0,0,-2100), (0,0,-2100)) == (quality is REFERENCE)
+            assert camera(runtime).visible(bounds, glmath.translate(0,0,-1200), (0,0,-1200))
+            assert camera(runtime).visible(bounds, glmath.translate(0,0,-1300), (0,0,-1300)) == (quality is REFERENCE)
 
 
 def test_phase_shifted_gifs_decode_sequentially_and_keep_bounded_caches():

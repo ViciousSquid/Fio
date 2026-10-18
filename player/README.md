@@ -117,9 +117,10 @@ OBJ/GLB models, point lights and terrain.
 - North/south materials follow the desktop face convention. Brush back faces
   are culled; models and transparent billboards remain double-sided.
 - Camera distance/frustum culling and radial fog use the engine's existing
-  `ViewDistance` and frustum rules. Android mobile quality defaults to **2048
+  `ViewDistance` and frustum rules. Android mobile quality defaults to **1280
   units**; reference quality retains 4096 units. Automatic fog
-  begins at 60% and becomes opaque at 92%. Terrain receives the same environment
+  begins at 60% and becomes opaque at 92% (768–1177.6 units on mobile).
+  Terrain receives the same environment
   values; HUD and touch controls remain clear.
 - World lighting reuses desktop ambient, diffuse falloff and radial shadow depth.
   A uniform buffer retains **64 lights**, with up to **eight shadow lights**.

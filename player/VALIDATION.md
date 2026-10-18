@@ -1,5 +1,18 @@
 # Android rebuild validation
 
+## 1280-unit mobile horizon
+
+The Android mobile view distance is now **1280 units**, reduced from 2048.
+Distance culling and the projection far plane share this horizon on each level.
+Automatic fog starts at **768** units and ends at **1177.6** units, obscuring
+distant geometry before it is culled. Reference quality retains 4096 units.
+The horizon regression checks 1200-unit visibility, 1300-unit rejection,
+successive live levels, fallback rendering and matching automatic fog.
+All **156 player tests** and mobile GLES pixel checks passed with this limit,
+including water, fog, level transitions and context recreation.
+The 1280-unit APK was rebuilt and replaced; its source receipt, signature
+and 16 KiB alignment checks pass, with the same signer as the previous build.
+
 ## Water rendering follow-up
 
 The `_SHOWCASE` water brush has `shader: Water` and `trigger.jpg` face
@@ -30,9 +43,9 @@ signature and 16 KiB alignment checks pass. It retains the previous build's key.
 Android now selects mobile quality automatically: adaptive 0.67× world rendering
 with native-resolution UI, eight contributing lights per spatial batch, eight
 shadow taps, 256-pixel shadow faces and eight fog steps. The mobile view distance
-is now **2048 units**, reduced from 4096 after the Pixel 8a still showed low FPS.
+was reduced to **2048 units** from 4096 after the Pixel 8a still showed low FPS.
 Distance culling and the projection far plane use that horizon on every loaded
-level; automatic fog starts at 1228.8 and ends at 1884.16 units. Reference quality remains
+level; that iteration used fog from 1228.8 to 1884.16 units. Reference quality remains
 available in the player harness. Shared engine and editor files are unchanged.
 
 Both presets cache uniform locations and static shadow depth per light face,
@@ -71,8 +84,8 @@ The new `player.tools.profile_render` completed a 120-frame mobile trace on
 Mesa llvmpipe with p50/p95 render completion times of 20.80/29.21 ms. Software
 timings vary with the host and do not predict physical-device performance.
 The optimised ARM64 debug APK has now been rebuilt and replaced at
-`player/fio-player-arm64-debug.apk` (33,554,142 bytes), SHA-256
-`a25ef2bf643b92ee2ca71275c468671441fdd4e19d62539537bd78c7d04ddf72`.
+`player/fio-player-arm64-debug.apk` (33,554,166 bytes), SHA-256
+`70d65cd6f52a12ae5f5762fde1e4b67cb9e0a0a8edf2d78c9dbc1e22dcd68c62`.
 Its signature verifies, all 144 native libraries pass 16 KiB checks, ZIP
 alignment passes, and its receipt matches all 46 player runtime source hashes
 in this checkout. The manifest reports ARM64, minimum API 24 and target API 36.
@@ -84,7 +97,7 @@ Local native recipes retain FreeType 2.14.1 and OpenSSL 3.3.1 while fetching
 checksum-pinned upstream GitHub archives. FreeType's exact dlg submodule commit
 is pinned and its generated configure files are bootstrapped before compilation.
 
-This water build retains the preceding 2048-unit build's debug signer and
+This 1280-unit build retains the preceding water build's debug signer and
 can update that build in place. Its signer differs from the original committed
 APK, which requires preserving app data before uninstalling or re-signing with
 the original key. No device installation was
