@@ -6,6 +6,9 @@ also be ZIP-aligned to 16 KiB. This checks packaging, not device behavior.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+from pathlib import Path
 import struct
 import tarfile
 import zipfile
@@ -76,14 +79,49 @@ def check_apk(path, *, abi='arm64-v8a') -> int:
     return checked
 
 
+def check_sources(path, project):
+    """Reject stale APKs whose build input receipt differs from this checkout."""
+    from player.tools.stage_runtime import player_source_hashes
+    project = Path(project).resolve()
+    with zipfile.ZipFile(path) as apk, apk.open('assets/private.tar') as private:
+        names, receipt = set(), None
+        with tarfile.open(fileobj=private, mode='r|*') as bundle:
+            for member in bundle:
+                name = member.name.removeprefix('./')
+                names.add(name)
+                if name == 'player/runtime-build.json' and member.isfile():
+                    if receipt is not None or member.size > 1024*1024:
+                        raise ValueError('Invalid or duplicate player build receipt')
+                    receipt = json.loads(bundle.extractfile(member).read())
+    if not receipt or receipt.get('desktop_sources_unchanged') is not True:
+        raise ValueError('APK is missing a verified player build receipt')
+    expected = player_source_hashes(project)
+    if not expected or receipt.get('player_source_sha256') != expected:
+        raise ValueError('APK player sources do not match the checkout; rebuild the APK')
+    for source in expected:
+        if source not in names and str(Path(source).with_suffix('.pyc')) not in names:
+            raise ValueError(f'APK is missing recorded player module: {source}')
+    for source, digest in receipt.get('source_sha256', {}).items():
+        original = (project / source).resolve()
+        if not original.is_relative_to(project) or not original.is_file():
+            raise ValueError('Invalid shared-source path in APK build receipt')
+        if hashlib.sha256(original.read_bytes()).hexdigest() != digest:
+            raise ValueError(f'APK shared runtime source differs from checkout: {source}')
+    return len(expected)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", nargs="+")
     parser.add_argument('--abi', choices=('arm64-v8a', 'x86_64'), default='arm64-v8a')
+    parser.add_argument('--project', help='also verify packaged player sources match this checkout')
     args = parser.parse_args(argv)
     for path in args.apk:
         count = check_apk(path, abi=args.abi)
         print(f"PASS: {path}: {count} {args.abi} libraries support 16 KiB page alignment")
+        if args.project:
+            count = check_sources(path, args.project)
+            print(f'PASS: {path}: {count} player source hashes match the checkout')
 
 
 if __name__ == "__main__":

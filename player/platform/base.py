@@ -25,6 +25,9 @@ class HostConfig:
     borderless: bool = False
     vsync: bool = True
     show_touch_controls: bool = True   # draw the on-screen virtual controls
+    quality: str = 'auto'             # mobile on Android, reference on desktop
+    render_scale: float | None = None
+    adaptive_resolution: bool | None = None
 
 
 @dataclass

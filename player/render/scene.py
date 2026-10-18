@@ -144,6 +144,27 @@ def build_textured_batches(map_data: dict, texel=None, texture_size=None):
     return {name: np.asarray(values, dtype=np.float32) for name, values in batches.items() if values}
 
 
+def spatial_batches(brushes, cell_size, texture_size=None):
+    """Group stationary brush geometry by material within bounded world cells.
+
+    Movers and doors retain their own transforms and culling bounds.
+    """
+    cells = {}
+    moving = []
+    for brush in brushes:
+        if brush.get('is_mover') or brush.get('is_door') or not cell_size:
+            moving.append(brush)
+        elif _is_renderable(brush):
+            cell = tuple(math.floor(float(v)/cell_size) for v in brush['pos'])
+            cells.setdefault(cell, []).append(brush)
+    for group in cells.values():
+        yield (build_textured_batches({'brushes':group}, texture_size=texture_size),
+               ('static', np.asarray([brush['pos'] for brush in group],dtype=np.float32), None))
+    for brush in moving:
+        yield (build_textured_batches({'brushes':[brush]}, texture_size=texture_size),
+               ('brush', brush, tuple(brush['pos'])))
+
+
 def extract_lights(map_data: dict, limit: int = 8) -> List[Dict]:
     """Pull point lights out of the map's ``things`` (max ``limit``).
 

@@ -23,6 +23,15 @@ ENGINE_ADAPTERS = (
 )
 
 
+def player_source_hashes(project):
+    """Build receipt for player code, excluding tests and host/build tools."""
+    project = Path(project).resolve()
+    return {str(path.relative_to(project)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((project / 'player').rglob('*.py'))
+            if path.relative_to(project / 'player').parts[0]
+            not in ('tests', 'tools', 'p4a-recipes', '.buildozer', 'bin')}
+
+
 def prepare_runtime(private, project=None):
     project = Path(project or Path(__file__).resolve().parents[2]).resolve()
     private = Path(private).resolve()
@@ -84,7 +93,13 @@ def prepare_runtime(private, project=None):
     for source, digest in sources.items():
         if hashlib.sha256((project / source).read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Project source changed during staging: {source}')
-    receipt = {'desktop_sources_unchanged': True, 'source_sha256': sources}
+    player_sources = player_source_hashes(project)
+    for source, digest in player_sources.items():
+        staged = private / source
+        if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != digest:
+            raise RuntimeError(f'Private player source does not match the checkout: {source}')
+    receipt = {'desktop_sources_unchanged': True, 'source_sha256': sources,
+               'player_source_sha256': player_sources}
     (private / 'player').mkdir(exist_ok=True)
     (private / 'player/runtime-build.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt

@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 from . import glmath
+from .uniforms import location as uniform_location
 from ..input.state import (
     InputState,
     ACTION_JUMP,
@@ -146,10 +147,10 @@ class OverlayRenderer:
         model = glmath.mul(glmath.translate(cx, cy, 0.0),
                            glmath.scale(radius, radius, 1.0))
         self._set_mat4("model", model)
-        loc_c = gl.glGetUniformLocation(self._program, "color")
+        loc_c = uniform_location(gl, self._program, "color")
         if loc_c != -1:
             gl.glUniform3f(loc_c, float(color[0]), float(color[1]), float(color[2]))
-        loc_a = gl.glGetUniformLocation(self._program, "alpha")
+        loc_a = uniform_location(gl, self._program, "alpha")
         if loc_a != -1:
             gl.glUniform1f(loc_a, float(alpha))
         gl.glBindVertexArray(self._disc_vao)
@@ -157,6 +158,6 @@ class OverlayRenderer:
 
     def _set_mat4(self, name: str, mat) -> None:
         gl = _gl()
-        loc = gl.glGetUniformLocation(self._program, name)
+        loc = uniform_location(gl, self._program, name)
         if loc != -1:
             gl.glUniformMatrix4fv(loc, 1, gl.GL_FALSE, glmath.column_major(mat))

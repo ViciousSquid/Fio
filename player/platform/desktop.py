@@ -106,6 +106,7 @@ class DesktopHost(PlatformHost):
         last = time.perf_counter()
         while self._running and self.lifecycle.is_alive:
             now = time.perf_counter()
+            self.frame_time_ms = (now - last) * 1000
             dt = min(now - last, 0.1)
             last = now
 

@@ -1,5 +1,72 @@
 # Android rebuild validation
 
+## Mobile performance follow-up
+
+Android now selects mobile quality automatically: adaptive 0.67× world rendering
+with native-resolution UI, eight contributing lights per spatial batch, eight
+shadow taps, 256-pixel shadow faces and eight fog steps. The mobile view distance
+is now **2048 units**, reduced from 4096 after the Pixel 8a still showed low FPS.
+Distance culling and the projection far plane use that horizon on every loaded
+level; automatic fog starts at 1228.8 and ends at 1884.16 units. Reference quality remains
+available in the player harness. Shared engine and editor files are unchanged.
+
+Both presets cache uniform locations and static shadow depth per light face,
+cull casters against light influence/face frusta, and update only affected faces.
+Mobile batches stationary brush materials in spatial cells while retaining doors,
+movers and original brush distance bounds. Animation textures share a bounded
+frame cache, and GIF phases use independent sequential compositor cursors instead
+of repeatedly rewinding one decoder. Mobile animations skip mipmap generation.
+
+Host validation: **151 player tests passed**; reference GLES, mobile GLES and
+OpenGL Core pixel checks passed after the distance change. The new regression covers both
+presets, fallback rendering, successive live levels, distance culling, fog and
+the projection far plane. Added GPU checks exercise static/face shadow
+reuse, moving-caster depth removal, zero repeated uniform lookups, invisible
+animation rejection, phase texture reuse, scaled world/native HUD composition,
+resize and merged-brush distance boundaries. Existing shader, shadow occlusion,
+fog, animation and context-recreation assertions remain active.
+
+Before the 2048-unit distance change, the same committed `_SHOWCASE.fiopak` and
+initial 320×144 camera sequence produced these measurements:
+
+| Work per frame | Original CANARY | Mobile after this change |
+| --- | --- | --- |
+| Draw calls, initial frames 2–8 | 761–766 | 74–79 |
+| Shadow draws, initial frames 2–8 | 648 | 0 (cached faces) |
+| Uniform location lookups, initial frames 2–8 | 1024–1034 | 0 |
+| Animation mipmap generations, initial frames 2–8 | 5 | 0 |
+| Uploaded scene batches | 121 | 81 |
+
+The first mobile frame issues 139 draws, including 60 shadow draws, to populate
+the caches. All 19 selected lights remain candidates; each batch evaluates at
+most eight. The world target is 214×96 and the package has no missing images.
+These counts exclude HUD/controls and are host measurements, not Pixel FPS.
+
+The new `player.tools.profile_render` completed a 120-frame mobile trace on
+Mesa llvmpipe with p50/p95 render completion times of 20.80/29.21 ms. Software
+timings vary with the host and do not predict physical-device performance.
+The optimised ARM64 debug APK has now been rebuilt and replaced at
+`player/fio-player-arm64-debug.apk` (33,066,670 bytes), SHA-256
+`95603d6cf69d1699493454f992b926d2526a5a585cd68b522b110b4eeb3642be`.
+Its signature verifies, all 144 native libraries pass 16 KiB checks, ZIP
+alignment passes, and its receipt matches all 45 player runtime source hashes
+in this checkout. The manifest reports ARM64, minimum API 24 and target API 36.
+The updated Android workflow verifies the same properties before replacing its
+runner-local player APK and uploading the APK plus a checksum file. Actionlint
+passed; this cloud-local build does not establish a GitHub Actions run.
+
+Local native recipes retain FreeType 2.14.1 and OpenSSL 3.3.1 while fetching
+checksum-pinned upstream GitHub archives. FreeType's exact dlg submodule commit
+is pinned and its generated configure files are bootstrapped before compilation.
+
+This 2048-unit build retains the preceding optimised build's debug signer and
+can update that build in place. Its signer differs from the original committed
+APK, which requires preserving app data before uninstalling or re-signing with
+the original key. No device installation was
+performed; Pixel performance and thermal behaviour remain unverified.
+
+---
+
 Acceptance means: export `_SHOWCASE` using desktop Fio, load that exact
 self-contained `.fiopak` through the real Android APK's document picker and
 move forward and backward using real Android touch input. The Pixel 8a with

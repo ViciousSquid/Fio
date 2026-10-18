@@ -14,6 +14,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--desktop', action='store_true')
+    parser.add_argument('--quality', choices=('reference', 'mobile'), default='reference')
     parser.add_argument('--fixture', required=True, help='World exported by the desktop exporter')
     parser.add_argument('--evidence', help='Directory for rendering pixel-check images')
     args = parser.parse_args()
@@ -45,7 +46,8 @@ def main():
     EGL.eglMakeCurrent(display, surface, surface, context)
     try:
         print(GL.glGetString(GL.GL_VERSION).decode())
-        renderer = GLESRenderer(gles=not desktop)
+        from player.render.quality import resolve
+        renderer = GLESRenderer(gles=not desktop, quality=resolve(args.quality))
         renderer.on_gl_ready()
         renderer.resize(128, 128)
         renderer.render()
@@ -86,6 +88,8 @@ def main():
             assert np.ptp(empty) > 20, "Reference view was blank"
         from player.tools.check_rendering import run
         run(renderer, args.evidence)
+        from player.tools.check_mobile_rendering import run as check_mobile
+        check_mobile(renderer)
         from player.world import PlayerWorld
         from player.render import glmath
         world = PlayerWorld({'terrain_data': {'enabled': True, 'solid': True, 'use_textures': False,

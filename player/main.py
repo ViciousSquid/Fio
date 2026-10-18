@@ -49,7 +49,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     window.add_argument("--borderless", action="store_true", help="desktop-sized borderless window")
     parser.add_argument("--no-vsync", action="store_true")
     parser.add_argument("--touch-controls", action="store_true")
-    return parser.parse_args(argv)
+    parser.add_argument('--quality', choices=('auto', 'mobile', 'reference'), default='auto')
+    parser.add_argument('--render-scale', type=float, help='fixed world resolution scale (0.5–1); HUD stays native')
+    parser.add_argument('--no-adaptive-resolution', action='store_true')
+    args = parser.parse_args(argv)
+    if args.render_scale is not None and not .5 <= args.render_scale <= 1:
+        parser.error('--render-scale must be between 0.5 and 1')
+    return args
 
 
 def is_android():
@@ -83,6 +89,9 @@ def _main(argv=None) -> int:
         borderless=args.borderless and not is_android(),
         vsync=not args.no_vsync,
         show_touch_controls=is_android() or args.touch_controls,
+        quality=args.quality,
+        render_scale=args.render_scale,
+        adaptive_resolution=False if args.no_adaptive_resolution or args.render_scale is not None else None,
     )
 
     from .diagnostics import device_validation_requested

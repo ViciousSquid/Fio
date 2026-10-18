@@ -29,6 +29,7 @@ class FioPlayerApp:
         self._pending_open = None
         self._validation = validation
         self._validation_elapsed = 1.
+        self._quality_frames = 0
 
     def run(self, host=None):
         callbacks = FrameCallbacks(on_gl_ready=self._on_gl_ready, on_frame=self._on_frame,
@@ -54,9 +55,21 @@ class FioPlayerApp:
         return DesktopHost(self.config, callbacks)
 
     def _on_gl_ready(self, host):
+        self._quality_frames = 0
         from .render.renderer import GLESRenderer
         if self.renderer is None:
-            self.renderer = GLESRenderer(gles=is_android())
+            from dataclasses import replace
+            from .render.quality import resolve
+            name = self.config.quality
+            if name == 'auto':
+                name = 'mobile' if is_android() else 'reference'
+            quality = resolve(name)
+            if self.config.render_scale is not None:
+                quality = replace(quality, render_scale=self.config.render_scale)
+            if self.config.adaptive_resolution is not None:
+                quality = replace(quality, adaptive=self.config.adaptive_resolution)
+            self.renderer = GLESRenderer(gles=is_android(), quality=quality)
+            self.renderer.adaptive.target_fps = max(1, self.config.target_fps)
         self.renderer.on_gl_ready()
         self.renderer.resize(host.width, host.height)
         if self.package is not None and self.world is None:
@@ -118,8 +131,11 @@ class FioPlayerApp:
         self.cam_pitch = math.degrees(world.player.pitch)
         self.cam_pos = [world.player.pos.x, world.player.pos.y + world.player.view_height, world.player.pos.z]
         self._paused = False
+        self._quality_frames = 0
 
     def _on_frame(self, dt, inp):
+        import time
+        simulation_ms = 0.
         if inp.just_pressed(ACTION_PAUSE):
             self._paused = not self._paused
         if self.host:
@@ -137,7 +153,9 @@ class FioPlayerApp:
         if self.world and not self._paused:
             self.cam_yaw += inp.look_x * 120 * dt + inp.look_delta_x
             self.cam_pitch = max(-89, min(89, self.cam_pitch + inp.look_y * 120 * dt + inp.look_delta_y))
+            simulation_start = time.perf_counter()
             self.cam_pos = self.world.step(dt, inp, self.cam_yaw, self.cam_pitch)
+            simulation_ms = (time.perf_counter() - simulation_start) * 1000
             # Portal transit and cutscenes may change the authoritative pose.
             self.cam_yaw = 90 - math.degrees(self.world.player.angle)
             self.cam_pitch = math.degrees(self.world.player.pitch)
@@ -146,12 +164,21 @@ class FioPlayerApp:
             self.audio.pause(self._paused)
             self.audio.process(self.world.game_state.consume_sounds(), self.cam_pos, self.cam_yaw)
         if self.renderer:
+            frame_ms = getattr(self.host, 'frame_time_ms', dt*1000)
+            if self.renderer.quality.adaptive and self.world and not self._paused:
+                self._quality_frames += 1
+                # Exclude initial package/shader startup from quality decisions.
+                if self._quality_frames > 30:
+                    self.renderer.adaptive.submit_frame(frame_ms)
+            render_start = time.perf_counter()
             state = self._render_state()
             self.renderer.render(state)
             state["control_buttons"] = tuple((b.action, b.cx, b.cy) for b in self.host.touch.buttons) if self.config.show_touch_controls else ()
             self.renderer.render_ui(state, self.host.width, self.host.height, self.world is not None)
             if self.config.show_touch_controls and self.host and not self._paused:
                 self.renderer.render_overlay(self.host.touch, inp, self.host.width, self.host.height)
+            self.renderer.frame_stats.update(frame_ms=frame_ms, simulation_cpu_ms=simulation_ms,
+                render_submit_ms=(time.perf_counter()-render_start)*1000)
         if self._validation and self.world:
             self._validation_elapsed += dt
             if self._validation_elapsed >= 1.:
@@ -220,6 +247,7 @@ class FioPlayerApp:
 
     def _on_resume(self):
         self._paused = True
+        self._quality_frames = 0
 
     def _on_shutdown(self):
         if self.audio:

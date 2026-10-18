@@ -81,6 +81,7 @@ jobs:
           cd "$RUNNER_TEMP/fio-android-runtime"
           python -m player.tools.smoke_gles --desktop --fixture "$GITHUB_WORKSPACE/universal.fiopak"
           python -m player.tools.smoke_gles --fixture "$GITHUB_WORKSPACE/universal.fiopak"
+          python -m player.tools.smoke_gles --quality mobile --fixture "$GITHUB_WORKSPACE/universal.fiopak"
       - uses: actions/upload-artifact@v7
         with:
           name: universal-fiopak-contract
@@ -121,21 +122,41 @@ jobs:
       - name: Build debug APK
         working-directory: player
         run: buildozer -v android debug
-      - name: Stage and validate debug APK
+      - name: Verify and replace the player debug APK
         run: |
           python - <<'PY'
+          import hashlib
           from pathlib import Path
           import shutil
+          import subprocess
+          from player.tools.check_apk import check_apk, check_sources
           apks = list(Path('player/bin').glob('*debug*.apk'))
           assert len(apks) == 1, apks
+          source = apks[0]
+          native_count = check_apk(source)
+          source_count = check_sources(source, Path.cwd())
+          sdk = Path.home() / '.buildozer/android/platform/android-sdk/build-tools'
+          tools = sorted(sdk.glob('*/apksigner'), key=lambda p: tuple(int(x) for x in p.parent.name.split('.') if x.isdigit()))
+          assert tools, 'Android signing tools were not installed'
+          tools = tools[-1].parent
+          subprocess.run([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs', str(source)], check=True)
+          subprocess.run([str(tools / 'zipalign'), '-c', '-P', '16', '4', str(source)], check=True)
+          destination = Path('player/fio-player-arm64-debug.apk')
+          temporary = destination.with_suffix('.apk.tmp')
+          shutil.copy2(source, temporary)
+          temporary.replace(destination)
           Path('artifacts/debug').mkdir(parents=True)
-          shutil.copy2(apks[0], 'artifacts/debug/fio-player-debug.apk')
+          artifact = Path('artifacts/debug') / destination.name
+          shutil.copy2(destination, artifact)
+          digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+          artifact.with_suffix('.apk.sha256').write_text(f'{digest}  {artifact.name}\n')
+          print(f'Verified {native_count} native libraries and {source_count} player source hashes: {destination}')
+          print(f'SHA-256: {digest}')
           PY
-          python -m player.tools.check_apk artifacts/debug/*.apk
       - uses: actions/upload-artifact@v7
         with:
           name: fio-player-debug-apk
-          path: artifacts/debug/*.apk
+          path: artifacts/debug/*
           if-no-files-found: error
       - name: Build release APK
         # Native dependency outputs from the debug build are reused. No signing
@@ -158,7 +179,7 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'FIO_ANDROID_BUILD_TOOLS={tools[-1].parent}\n')
           PY
-          python -m player.tools.check_apk artifacts/release/*.apk
+          python -m player.tools.check_apk --project . artifacts/release/*.apk
       - name: Sign release APK when repository signing secrets are configured
         id: sign
         if: github.event_name != 'pull_request'

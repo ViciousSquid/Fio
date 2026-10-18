@@ -1,4 +1,6 @@
 import io
+import hashlib
+import json
 from pathlib import Path
 import struct
 import tarfile
@@ -6,7 +8,7 @@ import tempfile
 import unittest
 import zipfile
 
-from player.tools.check_apk import check_apk, check_elf
+from player.tools.check_apk import check_apk, check_elf, check_sources
 
 
 def elf(alignment=16384):
@@ -20,6 +22,43 @@ def elf(alignment=16384):
 
 
 class APKTests(unittest.TestCase):
+    def source_apk(self, path, sources, *, module=True):
+        data = io.BytesIO()
+        receipt = json.dumps({'desktop_sources_unchanged': True,
+                              'source_sha256': {}, 'player_source_sha256': sources}).encode()
+        with tarfile.open(fileobj=data, mode='w:gz') as bundle:
+            for name, raw in [('player/runtime-build.json', receipt),
+                              *([(name, b'compiled module') for name in sources] if module else [])]:
+                item = tarfile.TarInfo(name)
+                item.size = len(raw)
+                bundle.addfile(item, io.BytesIO(raw))
+        with zipfile.ZipFile(path, 'w') as apk:
+            apk.writestr('assets/private.tar', data.getvalue())
+
+    def test_player_source_receipt_rejects_a_stale_apk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            (project / 'player').mkdir()
+            source = project / 'player/mobile.py'
+            source.write_bytes(b'mobile = True\n')
+            path = project / 'test.apk'
+            self.source_apk(path, {'player/mobile.py': hashlib.sha256(source.read_bytes()).hexdigest()})
+            self.assertEqual(check_sources(path, project), 1)
+            source.write_bytes(b'mobile = False\n')
+            with self.assertRaisesRegex(ValueError, 'do not match'):
+                check_sources(path, project)
+
+    def test_player_receipt_cannot_claim_a_missing_module(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            (project / 'player').mkdir()
+            source = project / 'player/mobile.py'
+            source.write_bytes(b'mobile = True\n')
+            path = project / 'test.apk'
+            self.source_apk(path, {'player/mobile.py': hashlib.sha256(source.read_bytes()).hexdigest()}, module=False)
+            with self.assertRaisesRegex(ValueError, 'missing recorded player module'):
+                check_sources(path, project)
+
     def build_apk(self, path, extension, bootstrap=None, compressed=True):
         data = io.BytesIO()
         with tarfile.open(fileobj=data, mode="w:gz") as bundle:

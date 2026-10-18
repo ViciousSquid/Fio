@@ -1,21 +1,25 @@
-"""The desktop local fog-volume pass, translated to GLES without changing it."""
+"""Local fog volumes with a player-specific ray-march budget."""
 import ctypes
 from pathlib import Path
 import numpy as np
 from engine.render_table import RenderTable, model_matrices
 from engine.shaders import DEFAULT_SHADERS
 from player.gles_shaders import translate, for_desktop
+from .uniforms import location as uniform_location
+
 from .gles_context import compile_program
 from .scene import build_brush_mesh
 from .renderer import _set_mat4, _set_float, _set_vec3
 
 
 class FogVolumes:
-    def __init__(self, gl, gles=True):
+    def __init__(self, gl, gles=True, steps=16):
         self.gl = gl
         convert = translate if gles else lambda source, stage: for_desktop(source)
+        fragment = DEFAULT_SHADERS['fog_arm.frag'].replace('int   num_steps = 16;',
+                                                        f'int   num_steps = {steps};')
         self.program = compile_program(convert(DEFAULT_SHADERS['fog.vert'],'vertex'),
-                                       convert(DEFAULT_SHADERS['fog_arm.frag'],'fragment'))
+                                       convert(fragment,'fragment'))
         vertices, self.count = build_brush_mesh({'brushes':[{'pos':[0,0,0],'size':[1,1,1]}]})
         self.vao, self.vbo = gl.glGenVertexArrays(1), gl.glGenBuffers(1)
         gl.glBindVertexArray(self.vao);gl.glBindBuffer(gl.GL_ARRAY_BUFFER,self.vbo)
@@ -49,7 +53,7 @@ class FogVolumes:
         _set_mat4(gl,prog,'view',view);_set_mat4(gl,prog,'projection',projection)
         _set_vec3(gl,prog,'viewPos',eye);_set_float(gl,prog,'time',elapsed)
         gl.glActiveTexture(gl.GL_TEXTURE1);gl.glBindTexture(gl.GL_TEXTURE_3D,self.noise)
-        gl.glUniform1i(gl.glGetUniformLocation(prog,'noiseTexture'),1)
+        gl.glUniform1i(uniform_location(gl, prog,'noiseTexture'),1)
         gl.glEnable(gl.GL_BLEND);gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA)
         gl.glEnable(gl.GL_CULL_FACE);gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
         gl.glPolygonOffset(-1.,-1.);gl.glBindVertexArray(self.vao)

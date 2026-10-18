@@ -62,3 +62,24 @@ for _old, _new in (('.position.xyz','.position_radius.xyz'),
                   ('.params.x','.color_intensity.w'), ('.params.y','.position_radius.w')):
     _fragment = _fragment.replace(_old,_new)
 FRAGMENT = translate(_fragment, 'fragment').replace('precision mediump float;', 'precision highp float;')
+
+
+def fragment(quality):
+    """Keep lighting formulas, with player-specific loop budgets."""
+    source = FRAGMENT
+    if quality.shadow_samples != 20:
+        source = source.replace('s < 20;', f's < {quality.shadow_samples};')
+        # The first eight canonical taps are the symmetric cube corners.
+        source = source.replace('return shadow / 20.0;',
+                                f'return shadow / {quality.shadow_samples}.0;')
+        # Include two shadow texels in the mobile bias: its smaller atlas must
+        # still reject grazing-angle self-shadowing after depth quantisation.
+        source = source.replace('highp float bias = diskRadius + clamp(',
+                                'highp float bias = diskRadius + 2.0 * farPlane / shadowTileSize + clamp(')
+    if quality.lights_per_batch < 64:
+        source = source.replace('uniform int lightCount;',
+            f'uniform int lightCount;\nuniform int lightIndices[{quality.lights_per_batch}];')
+        source = source.replace('for(int i = 0; i < lightCount && i < 64; i++) {',
+            f'for(int localLight = 0; localLight < lightCount && localLight < {quality.lights_per_batch}; localLight++) {{\n'
+            '        int i = lightIndices[localLight];')
+    return source

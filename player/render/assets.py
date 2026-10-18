@@ -8,12 +8,13 @@ from engine.animated_texture import cumulative, frame_at, _frame_seconds
 
 
 class GifFrames:
-    """Keep the current full-resolution frame, rather than every decoded RGBA.
+    """Bounded frame cache and sequential cursors for phase-shifted instances.
 
     Showcase fire alone has 98 384x512 frames (~74 MiB if all are retained).
     Pillow composites sequential seeks, preserving GIF disposal/transparency.
     """
     def __init__(self, raw):
+        self.raw = raw
         self.source = Image.open(io.BytesIO(raw))
         self.size = self.source.size
         self.seconds = []
@@ -21,27 +22,35 @@ class GifFrames:
             self.source.seek(index)
             self.seconds.append(_frame_seconds(self.source))
         self.source.seek(0)
-        self.current = None
-        self.image = None
         self.recent = OrderedDict()
+        self.cursors = OrderedDict([(0., self.source)])
 
     def __len__(self):
         return len(self.seconds)
 
     def __getitem__(self, index):
+        return self.get_frame(index)
+
+    def get_frame(self, index, phase=0):
         if index in self.recent:
             self.recent.move_to_end(index)
             return self.recent[index]
-        if index != self.current:
-            self.source.seek(index)
-            self.image = self.source.convert('RGBA')
-            if self.image.size != self.size:
-                self.image = self.image.resize(self.size)
-            self.current = index
-            self.recent[index] = self.image
-            if len(self.recent) > 4:
-                self.recent.popitem(last=False)
-        return self.image
+        phase = float(phase) % 1.
+        if phase not in self.cursors:
+            self.cursors[phase] = Image.open(io.BytesIO(self.raw))
+            if len(self.cursors) > 8:
+                _, old = self.cursors.popitem(last=False)
+                old.close()
+        self.cursors.move_to_end(phase)
+        source = self.cursors[phase]
+        source.seek(index)
+        image = source.convert('RGBA')
+        if image.size != self.size:
+            image = image.resize(self.size)
+        self.recent[index] = image
+        if len(self.recent) > 4:
+            self.recent.popitem(last=False)
+        return image
 
 
 class Images:
@@ -77,12 +86,16 @@ class Images:
     def size(self, name):
         return self.frames(name)[0][0].size
 
-    def frame(self, name, clock=None, loop=True, phase=0):
+    def frame_info(self, name, clock=None, loop=True, phase=0):
         images, ends = self.frames(name)
         elapsed = time.perf_counter() - self.started if clock is None else max(0, clock)
         elapsed += phase * ends[-1]
         index = frame_at(ends, elapsed) if loop else (len(images)-1 if elapsed >= ends[-1] else frame_at(ends, elapsed))
-        return index, images[index]
+        return index, images
+
+    def frame(self, name, clock=None, loop=True, phase=0):
+        index, images = self.frame_info(name, clock, loop, phase)
+        return index, images.get_frame(index, phase) if isinstance(images,GifFrames) else images[index]
 
 
 def upload_rgba(gl, image, *, update=False):

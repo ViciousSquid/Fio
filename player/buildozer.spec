@@ -7,7 +7,8 @@
 # Build an unsigned release APK with: buildozer -v android release
 # See player/SIGNING.md to configure CI signing or sign it locally.
 #
-# Local recipes pin pygame-ce and build PyGLM for the shared engine runtime.
+# Local recipes pin pygame-ce, build PyGLM, and fetch checksum-verified upstream
+# FreeType/dlg and OpenSSL sources through GitHub for restricted cloud builds.
 
 [app]
 title = Fio Player

@@ -117,14 +117,15 @@ OBJ/GLB models, point lights and terrain.
 - North/south materials follow the desktop face convention. Brush back faces
   are culled; models and transparent billboards remain double-sided.
 - Camera distance/frustum culling and radial fog use the engine's existing
-  `ViewDistance` and frustum rules. The default distance is 4096 units; fog
+  `ViewDistance` and frustum rules. Android mobile quality defaults to **2048
+  units**; reference quality retains 4096 units. Automatic fog
   begins at 60% and becomes opaque at 92%. Terrain receives the same environment
   values; HUD and touch controls remain clear.
-- World lighting reuses desktop ambient, diffuse falloff, radial shadow depth,
-  slope bias and 20-sample shadow filtering. A uniform buffer supports the
-  desktop budget of **64 lights**. Up to **eight shadow lights** use 384-pixel
-  cube faces in an atlas, with reduced resolution on GPUs limited to smaller
-  textures. Local fog uses the desktop shader and shared noise resource.
+- World lighting reuses desktop ambient, diffuse falloff and radial shadow depth.
+  A uniform buffer retains **64 lights**, with up to **eight shadow lights**.
+  Android uses the mobile quality preset described below. Reference quality
+  retains 20-sample filtering, 384-pixel cube faces and 16 fog steps; smaller
+  GPUs can reduce the shadow face size. Both presets use the shared fog noise.
 - Effect lights illuminate nearby geometry as well as drawing the effect's
   animated sprite. The authoritative engine projection supplies their colour,
   radius, enabled state and flicker.
@@ -136,6 +137,45 @@ Portal virtual views and advanced desktop water/glass passes remain absent.
 Shared simulation and matching lighting formulas do not establish complete
 visual parity or equivalent performance on every device. See
 [VALIDATION.md](VALIDATION.md) for the scope of the evidence.
+
+### Mobile performance
+
+Android automatically selects `mobile` quality. It starts world rendering at
+**0.67× width and height** (about 45% of native pixels), adapts between 0.5× and
+1× against the frame cap, then upscales before drawing the **native-resolution
+HUD and touch controls**. Startup and background/resume frames are excluded
+from adaptation. Simulation remains at the existing 60 Hz fixed timestep.
+
+Mobile quality evaluates up to **eight contributing lights per spatial batch**,
+uses **eight shadow filter taps**, **256-pixel shadow faces**, and **eight local
+fog steps**. Authored lights, including effect lights and lights behind the
+camera, remain candidates when their influence reaches the batch. More than
+eight overlapping influences are ranked by estimated contribution. These
+budgets trade some lighting/fog detail for sustained rendering performance.
+
+Both presets cache uniform locations and per-face static shadow depth, update
+only affected shadow faces, and reject casters by light radius and face frustum.
+Mobile also combines stationary brushes by material within 512-unit cells;
+doors and movers keep separate transforms. Visible animation frames share a
+bounded GPU cache of eight textures across phase-shifted instances. Mobile
+animations use linear filtering without per-frame mipmap generation. Invisible
+effects are culled before image decoding/upload. A shared GIF retains four
+decoded RGBA frames and at most eight phase-specific compositor cursors, avoiding
+repeated backward seeks while keeping decoded memory independent of animation length.
+
+Compare presets in the staged development harness:
+
+```sh
+python -m player.main world.fiopak --quality mobile
+python -m player.main world.fiopak --quality reference
+python -m player.main world.fiopak --quality mobile --render-scale .5
+```
+
+`--render-scale` fixes the scale between 0.5 and 1; `--no-adaptive-resolution`
+keeps a preset's starting scale. `HostConfig` exposes the same overrides for
+Android builds. The existing validation intent reports frame interval, CPU
+simulation/submission time, internal resolution, light budget and shadow work.
+Submission time does not measure GPU completion.
 
 ## Build APKs with GitHub Actions
 
@@ -166,6 +206,11 @@ Relevant artifacts are `fio-player-debug-apk`,
 `android-showcase-device-evidence`.
 
 Debug APKs are signed automatically and installable without release secrets.
+The ARM64 debug artifact contains `fio-player-arm64-debug.apk` and its SHA-256
+file. Before publishing that artifact, CI verifies the signature, 16 KiB native
+alignment and packaged player source hashes, then replaces the checkout's
+`player/fio-player-arm64-debug.apk`. This replacement is local to the runner;
+the workflow does not commit binaries back to GitHub.
 An **unsigned release APK must be signed before installation**. Production
 signing needs `FIO_ANDROID_KEYSTORE_BASE64`, `FIO_ANDROID_KEY_ALIAS`,
 `FIO_ANDROID_KEYSTORE_PASSWORD` and `FIO_ANDROID_KEY_PASSWORD`.
@@ -207,6 +252,13 @@ Outputs appear in `player/bin/`. The spec pins python-for-android, Android API
 and the C++ runtime through the pinned/local recipes. First builds download
 several GB; subsequent builds reuse native dependencies.
 
+The local FreeType recipe uses the upstream 2.14.1 GitHub tag archive and its
+exact pinned `dlg` submodule revision, then generates the configure files that
+release source archives normally include. The OpenSSL recipe retains upstream
+p4a's 3.3.1 version and build flags while downloading its official GitHub release
+asset. All three archives have pinned SHA-256 checksums. This avoids additional
+GNU/OpenSSL download hosts in restricted cloud environments.
+
 ## Development and verification
 
 Use a normal-GIL CPython 3.14 environment with `requirements.txt` and pytest for
@@ -228,9 +280,21 @@ python -m pytest player/tests -q
 python -m player.tools.verify_package /tmp/universal.fiopak
 python -m player.tools.verify_package /tmp/_SHOWCASE.fiopak
 PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --fixture /tmp/universal.fiopak --evidence /tmp/fio-gles-images
+PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --quality mobile --fixture /tmp/universal.fiopak --evidence /tmp/fio-mobile-images
 PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless python -m player.tools.smoke_gles --desktop --fixture /tmp/universal.fiopak
 python -m player.main /tmp/_SHOWCASE.fiopak
 ```
+
+For repeatable off-device workload counts, run from the staged tree:
+
+```sh
+PYOPENGL_PLATFORM=egl EGL_PLATFORM=surfaceless SDL_AUDIODRIVER=dummy python -m player.tools.profile_render /tmp/_SHOWCASE.fiopak --quality mobile --frames 120 --output /tmp/fio-mobile-profile.json
+```
+
+The JSON records draw calls, uniform lookups, mipmap generations, shadow work,
+CPU simulation/submission time and render completion percentiles. Its completion
+fence is benchmark-only. Software Mesa timings are not Pixel FPS; use on-device
+traces to assess the same camera route and sustained frame-time percentiles.
 
 Mesa EGL/GLES is required for the graphics checks. The Core harness is a
 development check and does not replace desktop Fio. Pixel checks cover nodraw,
