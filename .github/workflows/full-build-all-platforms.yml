@@ -1,0 +1,747 @@
+name: FULL BUILD ALL PLATFORMS
+
+# One workflow for every desktop build: Windows x64, Windows ARM64 (native
+# runner, PyQt5-WinARM64 wheel, version marked "WinARM64"), macOS (app
+# bundle, ad-hoc signed) and Linux, then one GitHub release with all four.
+
+on:
+  workflow_dispatch:
+
+# Read-only by default: only the release job, which runs no third-party build
+# tooling, is given write access.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Required tests (exact build commit)
+    uses: ./.github/workflows/tests.yml
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install "nuitka==4.2.2" zstandard
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka `
+            --standalone `
+            --output-filename=Fio `
+            --assume-yes-for-downloads `
+            --plugin-enable=pyqt5 `
+            --include-qt-plugins=sensible,platforms,styles,imageformats `
+            --include-package=engine `
+            --include-package=editor `
+            --include-package=PIL `
+            --include-data-dir=assets=assets `
+            --include-package=plugins `
+            --include-package-data=plugins `
+            --include-data-dir=tools=tools `
+            --include-data-dir=maps=maps `
+            --include-data-dir=cutscenes=cutscenes `
+            --include-data-files=settings.ini=settings.ini `
+            --include-data-files=editor/version.txt=editor/version.txt `
+            --windows-icon-from-ico=assets/icon.ico `
+            --windows-console-mode=disable `
+            --output-dir=build `
+            main.py
+
+      - name: Validate executable exists
+        shell: pwsh
+        run: |
+          if (Test-Path "build/main.dist/Fio.exe") {
+            Write-Host "Build successful - Fio.exe found"
+          } else {
+            Write-Error "Build failed: Fio.exe not found"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-windows
+          path: build/main.dist/
+
+
+  build-windows-arm64:
+    name: Windows ARM64 / Python 3.14 / PyQt5-WinARM64 / Nuitka
+    runs-on: windows-11-vs2026-arm
+    env:
+      # Appended to editor/version.txt for this build only (as the ARM64
+      # branch's file reads: "version X.X.X.XXXX WinARM64").
+      ARM64_VERSION_SUFFIX: " WinARM64"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up native ARM64 Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: 'arm64'
+          cache: pip
+
+      - name: Verify native architecture
+        shell: pwsh
+        run: |
+          $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          $proc = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          Write-Host "OS architecture: $arch"
+          Write-Host "Process architecture: $proc"
+          if ($arch -ne 'Arm64' -or $proc -ne 'Arm64') {
+            throw "This job is not running natively on Windows ARM64."
+          }
+          $machine = python -c "import platform; print(platform.machine())"
+          Write-Host "Python machine: $machine"
+          if ($machine -ne 'ARM64') {
+            throw "Python is not a native ARM64 build: $machine"
+          }
+          if ((python -c "import struct; print(struct.calcsize('P') * 8)") -ne '64') {
+            throw "Python is not 64-bit."
+          }
+
+      - name: Locate Visual Studio ARM64 toolchain
+        shell: pwsh
+        run: |
+          $vswhere = (Get-Command 'vswhere.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if (-not $vswhere) {
+            $vswhereCandidates = @()
+            foreach ($base in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'), $env:ProgramFiles)) {
+              if ($base) {
+                $vswhereCandidates += (Join-Path $base 'Microsoft Visual Studio\Installer\vswhere.exe')
+              }
+            }
+            $vswhere = $vswhereCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+
+          $vs = $null
+          if ($vswhere) {
+            Write-Host "Using vswhere: $vswhere"
+            $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          } else {
+            Write-Host "vswhere.exe not found in PATH or standard Installer directories; checking Visual Studio installation roots."
+          }
+
+          if (-not $vs) {
+            $vsCandidates = @(
+              "$env:ProgramFiles\Microsoft Visual Studio\18\Enterprise",
+              "$env:ProgramFiles\Microsoft Visual Studio\17\Enterprise"
+            )
+            $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            if ($programFilesX86) {
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\Enterprise')
+              $vsCandidates += (Join-Path $programFilesX86 'Microsoft Visual Studio\2022\BuildTools')
+            }
+            $vs = $vsCandidates | Where-Object {
+              Test-Path -LiteralPath (Join-Path $_ 'VC\Auxiliary\Build\vcvarsall.bat')
+            } | Select-Object -First 1
+          }
+
+          if (-not $vs) {
+            throw "Visual Studio ARM64 C++ toolchain was not found. Checked vswhere and known Visual Studio installation roots."
+          }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (-not (Test-Path $vcvars)) {
+            throw "vcvarsall.bat not found at $vcvars"
+          }
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Visual Studio: $vs"
+          Write-Host "ARM64 environment script: $vcvars"
+
+      - name: Install ARM64 Python dependencies
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --upgrade pip
+          # Use the published native ARM64 wheel; do not compile Qt or PyQt5.
+          # --only-binary prevents silent source builds of dependencies.
+          python -m pip install --only-binary=:all: -r requirements.txt
+          python -m pip install "nuitka==4.2.2" zstandard
+          python -m pip check
+          python -m pip list
+
+      - name: Verify PyQt5 loads its own bundled Qt
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($dir in $env:PATH.Split([IO.Path]::PathSeparator)) {
+            if ($dir -and (Test-Path (Join-Path $dir "Qt5Core.dll"))) {
+              throw "Qt5Core.dll is reachable on PATH via $dir; the check would not be meaningful"
+            }
+          }
+          @'
+          import ctypes
+          from ctypes import wintypes
+          from pathlib import Path
+
+          import PyQt5
+          from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QLibraryInfo
+          from PyQt5.QtWidgets import QApplication
+
+          app = QApplication([])
+          bundled = (Path(PyQt5.__file__).parent / "Qt5").resolve()
+          kernel32 = ctypes.WinDLL("kernel32")
+          kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+          kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+          kernel32.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+          buffer = ctypes.create_unicode_buffer(32768)
+          handle = kernel32.GetModuleHandleW("Qt5Core.dll")
+          assert handle, "Qt5Core.dll is not loaded after QApplication initialisation"
+          kernel32.GetModuleFileNameW(handle, buffer, len(buffer))
+          qtcore = Path(buffer.value).resolve()
+          assert bundled in qtcore.parents, f"Qt5Core.dll loaded from {qtcore}, not {bundled}"
+          print("PyQt5", PYQT_VERSION_STR, "Qt", QT_VERSION_STR)
+          print("Qt5Core.dll:", qtcore)
+          print("Qt plugins:", QLibraryInfo.location(QLibraryInfo.PluginsPath))
+          print("Platform:", app.platformName())
+          '@ | Set-Content qt_check.py -Encoding utf8
+          python qt_check.py
+
+      - name: Verify volumetric fog source texture
+        shell: pwsh
+        run: |
+          $texture = Get-Item "assets/noise_3d.bin" -ErrorAction Stop
+          if ($texture.Length -ne 32768) {
+            throw "Required fog texture is $($texture.Length) bytes; expected 32768."
+          }
+          Write-Host "Fog texture source OK: $($texture.Length) bytes"
+
+      - name: Mark the version as the Windows ARM64 build
+        # Shown in Help -> About, the console banner and the start-up log.
+        # Only this job's checkout is changed; every other build, and the
+        # release's version check, read the committed file.
+        shell: pwsh
+        run: |
+          $path = "editor/version.txt"
+          $text = ([IO.File]::ReadAllText($path)).TrimEnd()
+          if ($text -notmatch '^version \d+(\.\d+)+$') {
+            throw "Unexpected editor/version.txt: '$text'"
+          }
+          [IO.File]::WriteAllText($path, "$text$env:ARM64_VERSION_SUFFIX`n")
+          Write-Host "editor/version.txt: $([IO.File]::ReadAllText($path).TrimEnd())"
+
+      - name: Build Fio with Nuitka
+        shell: cmd
+        run: |
+          call "%VCVARS%" arm64
+          python -m nuitka ^
+            --standalone ^
+            --output-filename=Fio ^
+            --assume-yes-for-downloads ^
+            --plugin-enable=pyqt5 ^
+            --include-qt-plugins=sensible,platforms,styles,imageformats ^
+            --include-package=engine ^
+            --include-package=editor ^
+            --include-package=PIL ^
+            --include-data-dir=assets=assets ^
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin ^
+            --include-package=plugins ^
+            --include-package-data=plugins ^
+            --include-data-dir=tools=tools ^
+            --include-data-dir=maps=maps ^
+            --include-data-dir=cutscenes=cutscenes ^
+            --include-data-files=settings.ini=settings.ini ^
+            --include-data-files=editor/version.txt=editor/version.txt ^
+            --windows-icon-from-ico=assets/icon.ico ^
+            --windows-console-mode=disable ^
+            --output-dir=build ^
+            main.py
+
+      - name: Validate ARM64 build
+        shell: pwsh
+        run: |
+          $dist = "build\main.dist"
+          $exe = Join-Path $dist "Fio.exe"
+          if (-not (Test-Path $exe)) { throw "Fio.exe not found" }
+
+          $qtcore = @(Get-ChildItem $dist -Recurse -Filter "Qt5Core.dll")
+          $qwindows = @(Get-ChildItem $dist -Recurse -Filter "qwindows.dll")
+          if (-not $qtcore) { throw "Qt5Core.dll was not included in the build" }
+          if (-not $qwindows) { throw "The qwindows platform plugin was not included in the build" }
+
+          $fog = Join-Path $dist "assets\noise_3d.bin"
+          if (-not (Test-Path $fog)) { throw "Packaged volumetric fog texture not found: $fog" }
+          if ((Get-Item $fog).Length -ne 32768) {
+            throw "Packaged volumetric fog texture has the wrong size."
+          }
+
+          $binaries = @(Get-Item $exe) + @(Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -in ".dll", ".pyd" })
+          foreach ($binary in $binaries) {
+            $dump = cmd /c ('call "' + $env:VCVARS + '" arm64 >nul && dumpbin /headers "' + $binary.FullName + '"')
+            if (-not ($dump -join [Environment]::NewLine).Contains("AA64 machine (ARM64)")) {
+              throw "$($binary.FullName) is not an ARM64 PE image"
+            }
+          }
+          Write-Host "Fio.exe: $((Get-Item $exe).Length) bytes; $($binaries.Count) native binaries, all ARM64"
+          Write-Host "Qt5Core.dll: $($qtcore[0].FullName)"
+          Write-Host "qwindows.dll: $($qwindows[0].FullName)"
+          Write-Host "Packaged volumetric fog texture: $((Get-Item $fog).Length) bytes"
+
+      - name: Validate packaged version marks ARM64
+        shell: pwsh
+        run: |
+          $packaged = ([IO.File]::ReadAllText("build/main.dist/editor/version.txt")).TrimEnd()
+          if (-not $packaged.EndsWith("ARM64")) {
+            throw "Packaged editor/version.txt does not end with ARM64: '$packaged'"
+          }
+          Write-Host "Packaged version: $packaged"
+
+      - name: Upload ARM64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: fio-windows-arm64
+          path: build/main.dist/
+
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install "nuitka==4.2.2" zstandard imageio
+
+      - name: Convert icon to .icns
+        run: |
+          mkdir -p build/icon.iconset
+
+          # Convert ico to png first if needed
+          if [ -f "assets/icon.ico" ]; then
+            sips -s format png assets/icon.ico --out build/icon.png
+          elif [ -f "assets/icon.png" ]; then
+            cp assets/icon.png build/icon.png
+          else
+            echo "No icon file found!"
+            exit 1
+          fi
+
+          # Generate all required sizes for .icns
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size build/icon.png --out build/icon.iconset/icon_${size}x${size}.png
+            sips -z $(($size*2)) $(($size*2)) build/icon.png --out build/icon.iconset/icon_${size}x${size}@2x.png
+          done
+
+          # Create .icns file
+          iconutil -c icns build/icon.iconset -o build/icon.icns
+
+          # Also create a 1024x1024 version for high-res
+          sips -z 1024 1024 build/icon.png --out build/icon_1024.png
+
+      - name: Read Fio version
+        run: |
+          FIO_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          test -n "$FIO_VERSION"
+          echo "FIO_VERSION=$FIO_VERSION" >> "$GITHUB_ENV"
+          echo "Building Fio $FIO_VERSION"
+
+      - name: Build with Nuitka (App Bundle)
+        run: |
+          python -m nuitka \
+            --standalone \
+            --macos-create-app-bundle \
+            --macos-app-name=Fio \
+            --macos-app-version="$FIO_VERSION" \
+            --output-filename=Fio \
+            --assume-yes-for-downloads \
+            --plugin-enable=pyqt5 \
+            --include-qt-plugins=sensible,platforms,imageformats \
+            --include-package=engine \
+            --include-package=plugins \
+            --include-package-data=plugins \
+            --include-package=editor \
+            --include-package=PIL \
+            --include-data-dir=assets=assets \
+            --include-data-dir=cutscenes=cutscenes \
+            --include-data-dir=tools=tools \
+            --include-data-dir=maps=maps \
+            --include-data-files=settings.ini=settings.ini \
+            --include-data-files=editor/version.txt=editor/version.txt \
+            --macos-app-icon=build/icon.icns \
+            --macos-disable-console \
+            --output-dir=build \
+            main.py
+
+      - name: Validate app bundle
+        run: |
+          if [ -f "build/main.app/Contents/MacOS/Fio" ]; then
+            echo "App bundle OK"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "build/main.app/Contents/Info.plist" | grep -Fx "$FIO_VERSION"
+          else
+            echo "App bundle broken"
+            exit 1
+          fi
+
+      - name: Inject Info.plist with proper icon configuration
+        run: |
+          plist_path="build/main.app/Contents/Info.plist"
+
+          # Backup original plist
+          cp "$plist_path" "$plist_path.bak"
+
+          # Set CFBundleIconFile
+          if /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile icon" "$plist_path"
+          else
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon" "$plist_path"
+          fi
+
+          # Set CFBundleIconName
+          if /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$plist_path"
+          else
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$plist_path"
+          fi
+
+          # Ensure CFBundleIdentifier is set properly
+          if ! /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist_path" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.fio.editor" "$plist_path"
+          fi
+
+          echo "Info.plist configured:"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path"
+
+      - name: Copy icon to bundle resources
+        run: |
+          # Copy icns to Resources folder with the name referenced in Info.plist
+          cp build/icon.icns "build/main.app/Contents/Resources/icon.icns"
+
+          # Also copy as AppIcon.icns (fallback for some macOS versions)
+          cp build/icon.icns "build/main.app/Contents/Resources/AppIcon.icns"
+
+          # Verify icon exists in Resources
+          ls -la "build/main.app/Contents/Resources/" | grep icns
+
+          echo "Icon files copied to bundle"
+
+      - name: Create qt.conf for proper plugin paths
+        run: |
+          mkdir -p build/main.app/Contents/Resources
+
+          cat > build/main.app/Contents/Resources/qt.conf << 'EOF'
+          [Paths]
+          Plugins = ../MacOS/PyQt5/Qt5/plugins
+          EOF
+
+          echo "qt.conf created"
+
+      - name: Set executable permissions
+        run: |
+          chmod +x build/main.app/Contents/MacOS/Fio
+          echo "Executable permissions set"
+
+      - name: Ad-hoc code sign the app bundle
+        run: |
+          # Remove any quarantine attributes from the build
+          xattr -cr build/main.app
+
+          # Ad-hoc sign all binaries and the bundle itself
+          # This prevents macOS Gatekeeper from reporting the app as "damaged"
+          find build/main.app -type f \( -name "*.dylib" -o -name "*.so" \) -exec codesign --force --sign - {} \;
+          codesign --force --deep --sign - build/main.app
+
+          # Verify the signature
+          codesign --verify --verbose build/main.app
+          echo "Ad-hoc code signing complete"
+
+      - name: Prepare app bundle for distribution
+        run: |
+          cd build
+
+          # Rename to final app name
+          mv main.app Fio.app
+
+          # Use ditto to create the zip — it preserves macOS metadata and
+          # resource forks that plain zip strips, avoiding Gatekeeper issues
+          ditto -c -k --sequesterRsrc --keepParent Fio.app Fio-macOS.zip
+
+          # Verify zip contents
+          unzip -l Fio-macOS.zip | head -20
+
+          cd ..
+
+      - name: Verify icon in final bundle
+        run: |
+          # Check that icon exists in the renamed bundle
+          if [ -f "build/Fio.app/Contents/Resources/icon.icns" ]; then
+            echo "✓ Icon found in final bundle"
+            file "build/Fio.app/Contents/Resources/icon.icns"
+          else
+            echo "✗ Icon missing from final bundle!"
+            exit 1
+          fi
+
+          # Verify Info.plist still has icon settings after rename
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "build/Fio.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "build/Fio.app/Contents/Info.plist"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-macos
+          path: build/Fio-macOS.zip
+
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-xinerama0 libxcb-cursor0 libglib2.0-0 patchelf
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install "nuitka==4.2.2" zstandard
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka \
+            --standalone \
+            --output-filename=Fio \
+            --assume-yes-for-downloads \
+            --plugin-enable=pyqt5 \
+            --include-qt-plugins=sensible,platforms,imageformats \
+            --include-package=engine \
+            --include-package=plugins \
+            --include-package-data=plugins \
+            --include-package=editor \
+            --include-package=PIL \
+            --include-data-dir=assets=assets \
+            --include-data-dir=cutscenes=cutscenes \
+            --include-data-dir=tools=tools \
+            --include-data-dir=maps=maps \
+            --include-data-files=settings.ini=settings.ini \
+            --include-data-files=editor/version.txt=editor/version.txt \
+            --output-dir=build \
+            main.py
+
+      - name: Create desktop entry and icon for Linux
+        run: |
+          # Create a .desktop file
+          mkdir -p build/main.dist/share/applications
+          mkdir -p build/main.dist/share/icons/hicolor/256x256/apps
+
+          # Copy icon if available
+          if [ -f "assets/icon.png" ]; then
+            cp assets/icon.png build/main.dist/share/icons/hicolor/256x256/apps/fio.png
+          elif [ -f "assets/icon.ico" ]; then
+            # Convert ico to png using ImageMagick or fallback
+            convert assets/icon.ico build/main.dist/share/icons/hicolor/256x256/apps/fio.png || true
+          fi
+
+          # Create desktop entry
+          cat > build/main.dist/fio.desktop << EOF
+          [Desktop Entry]
+          Name=Fio
+          Comment=Fio Game Editor
+          Exec=\$SELF/Fio
+          Icon=fio
+          Terminal=false
+          Type=Application
+          Categories=Development;IDE;
+          EOF
+
+          echo "Linux desktop integration prepared"
+
+      - name: Validate executable exists
+        run: |
+          if [ -f "build/main.dist/Fio" ]; then
+            echo "Build successful - Fio found"
+          else
+            echo "Build failed: executable not found"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fio-linux
+          path: build/main.dist/
+
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    needs:
+      - tests
+      - build-windows
+      - build-windows-arm64
+      - build-macos
+      - build-linux
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify editor/version.txt matches the release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH_VERSION="${GITHUB_REF_NAME%_Latest}"
+          FILE_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          if [[ "$FILE_VERSION" != "$BRANCH_VERSION" ]]; then
+            echo "ERROR: editor/version.txt says '$FILE_VERSION' but the branch is '$GITHUB_REF_NAME'."
+            echo "The binaries would report a different version from the release they ship in."
+            exit 1
+          fi
+          echo "Version $FILE_VERSION matches $GITHUB_REF_NAME"
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fio-windows
+          path: release/windows
+
+      - name: Download Windows ARM64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fio-windows-arm64
+          path: release/windows-arm64
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fio-macos
+          path: release/macos
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fio-linux
+          path: release/linux
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH="${GITHUB_REF_NAME}"
+
+          echo "Current branch: $BRANCH"
+
+          # Every release branch must use:
+          # X.X.X.XXXX_Latest
+          if [[ "$BRANCH" != *_Latest ]]; then
+            echo "ERROR: Release workflow must be run from a branch ending in _Latest."
+            echo "Current branch: $BRANCH"
+            exit 1
+          fi
+
+          # Remove the _Latest suffix.
+          VERSION="${BRANCH%_Latest}"
+
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: Could not determine release version from branch name."
+            exit 1
+          fi
+
+          echo "Release version: $VERSION"
+
+          # Ensure the version follows the expected:
+          # X.X.X.XXXX
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Branch name does not match the expected format:"
+            echo "       X.X.X.XXXX_Latest"
+            echo "Actual: $BRANCH"
+            exit 1
+          fi
+
+          mkdir -p release/assets
+
+          # Package Windows build.
+          echo "Packaging Windows..."
+          (
+            cd release/windows
+            zip -r "../assets/Fio_${VERSION}_Windows.zip" .
+          )
+
+          # Package Windows ARM64 build.
+          echo "Packaging Windows ARM64..."
+          (
+            cd release/windows-arm64
+            zip -r "../assets/Fio_${VERSION}_Windows_ARM64.zip" .
+          )
+
+          # Package Linux build.
+          echo "Packaging Linux..."
+          (
+            cd release/linux
+            zip -r "../assets/Fio_${VERSION}_linux.zip" .
+          )
+
+          # macOS was already packaged with ditto by the macOS job.
+          MAC_ZIP="$(find release/macos -type f -name 'Fio-macOS.zip' -print -quit)"
+
+          if [[ -z "$MAC_ZIP" ]]; then
+            echo "ERROR: Fio-macOS.zip not found."
+            echo "Contents of release/macos:"
+            find release/macos -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          echo "Packaging macOS..."
+          cp "$MAC_ZIP" "release/assets/Fio_${VERSION}_macOS.zip"
+
+          echo
+          echo "Final release assets:"
+          ls -lh release/assets
+
+          # Export version for the next step.
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Creating release $VERSION..."
+
+          gh release create "$VERSION" \
+            "release/assets/Fio_${VERSION}_Windows.zip" \
+            "release/assets/Fio_${VERSION}_Windows_ARM64.zip" \
+            "release/assets/Fio_${VERSION}_macOS.zip" \
+            "release/assets/Fio_${VERSION}_linux.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Fio $VERSION" \
+            --generate-notes
+
+          echo
+          echo "Release created successfully:"
+          echo "  Tag:    $VERSION"
+          echo "  Title:  Fio $VERSION"
+          echo
+          echo "Assets:"
+          ls -lh release/assets
