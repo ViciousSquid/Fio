@@ -103,6 +103,8 @@ class QtGameView(QOpenGLWidget):
         self.setFormat(fmt)
 
         self.editor = editor
+        #: Frames left whose GL errors are reported (see _report_gl_errors).
+        self._gl_error_checks_left = 3
         self.brush_display_mode = "Textured"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
         # set from the editor's "Camera" dropdown.
@@ -1055,9 +1057,14 @@ class QtGameView(QOpenGLWidget):
         gl_context = weakref.WeakMethod(self.gl_context)
         Terrain.gl_context = lambda: (gl_context() or contextlib.nullcontext)()
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
+        self._log_gl_context()
         config = self.editor.config
         self._renderer_mode = DEFAULT_RENDERER
         self.renderer = create_renderer(DEFAULT_RENDERER, config)
+        if not self.renderer.ready:
+            debug_log("Error", "3D view: the renderer's shaders did not build on "
+                               "this OpenGL driver, so the view stays empty; the "
+                               "compiler's message is in the terminal output.")
         self.set_cull_distance(self.cull_distance)
         self._preload_assets()
         self.load_all_sprite_textures()
@@ -1066,6 +1073,47 @@ class QtGameView(QOpenGLWidget):
         self._init_debug_resources()
         if hasattr(self, 'debug_console_window'):
             QTimer.singleShot(1000, self.debug_console_window.show)
+
+    def _log_gl_context(self):
+        """Name the OpenGL driver in the Debug Console.
+
+        A 3D view that clears and then draws nothing is a driver disagreeing
+        with the renderer, and the first thing a report of one needs is which
+        driver; it is not otherwise visible anywhere.
+        """
+        def _string(name):
+            try:
+                value = gl.glGetString(name)
+                return value.decode(errors='replace') if value else '?'
+            except Exception:
+                return '?'
+        debug_log("Info", f"OpenGL {_string(gl.GL_VERSION)} | "
+                          f"{_string(gl.GL_RENDERER)} | {_string(gl.GL_VENDOR)} | "
+                          f"3D view {self.width()}x{self.height()} "
+                          f"@{self.devicePixelRatioF():g}x")
+
+    _GL_ERROR_NAMES = {
+        0x0500: 'GL_INVALID_ENUM', 0x0501: 'GL_INVALID_VALUE',
+        0x0502: 'GL_INVALID_OPERATION', 0x0505: 'GL_OUT_OF_MEMORY',
+        0x0506: 'GL_INVALID_FRAMEBUFFER_OPERATION',
+    }
+
+    def _report_gl_errors(self):
+        """Log the GL errors the frame just drawn left behind.
+
+        PyOpenGL's per-call checks are off outside ``FIO_GL_DEBUG=1``, so a
+        driver that rejects a call does it silently and the frame comes out
+        empty. Asked for the first few frames only: glGetError stalls.
+        """
+        errors = []
+        for _ in range(8):
+            code = int(gl.glGetError())
+            if code == gl.GL_NO_ERROR:
+                break
+            errors.append(self._GL_ERROR_NAMES.get(code, hex(code)))
+        if errors:
+            debug_log("Error", "3D view: OpenGL reported " + ", ".join(errors)
+                      + " while drawing; run with FIO_GL_DEBUG=1 to find the call.")
 
     def _init_debug_resources(self):
         try:
@@ -1656,6 +1704,9 @@ class QtGameView(QOpenGLWidget):
                 self.game_state.release_render_state(render_state)
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
+        if self._gl_error_checks_left:
+            self._gl_error_checks_left -= 1
+            self._report_gl_errors()
 
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1

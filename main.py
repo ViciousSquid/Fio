@@ -194,6 +194,10 @@ if __name__ == "__main__":
     fmt.setSwapInterval(1 if vsync else 0)
 
     QSurfaceFormat.setDefaultFormat(fmt)
+
+    # Qt reads the UI scale only when the QApplication is created.
+    from editor.ui_scale import apply_ui_scale
+    apply_ui_scale(config)
     # ---------------------------------------------------------
 
     # Splash class defined AFTER Qt import

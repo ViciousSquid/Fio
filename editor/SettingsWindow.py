@@ -9,6 +9,7 @@ import sys
 import os
 
 from engine import shaders
+from editor.ui_scale import UI_SCALE_CHOICES, parse_ui_scale
 from engine.glasses import (
     DEFAULT_GLASSES, GLASSES_STYLES, glasses_path, normalize_glasses,
 )
@@ -195,6 +196,19 @@ class SettingsWindow(QDialog):
         self.font_size_spinbox.setRange(8, 24)
         font_layout.addWidget(self.font_size_spinbox)
         layout.addLayout(font_layout)
+
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("UI Scale:"))
+        self.ui_scale_combo = QComboBox()
+        self.ui_scale_combo.addItem("Auto", "auto")
+        for percent in UI_SCALE_CHOICES:
+            self.ui_scale_combo.addItem(f"{percent}%", str(percent))
+        self.ui_scale_combo.setToolTip(
+            "Size of toolbar buttons, panels and other controls; text keeps "
+            "the UI Font Size (restart required). Auto is 100%, except on "
+            "macOS where controls shrink to suit the screen.")
+        scale_layout.addWidget(self.ui_scale_combo)
+        layout.addLayout(scale_layout)
         
         self.vsync_checkbox = QCheckBox("Enable V-Sync")
         layout.addWidget(self.vsync_checkbox)
@@ -596,6 +610,12 @@ class SettingsWindow(QDialog):
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
+        ui_scale = parse_ui_scale(self.config.get('Display', 'ui_scale', fallback='auto'))
+        ui_scale_key = 'auto' if ui_scale is None else str(ui_scale)
+        if self.ui_scale_combo.findData(ui_scale_key) < 0:
+            # A hand-edited percentage that is not one of the presets.
+            self.ui_scale_combo.addItem(f"{ui_scale}%", ui_scale_key)
+        self.ui_scale_combo.setCurrentIndex(self.ui_scale_combo.findData(ui_scale_key))
         self.vsync_checkbox.setChecked(self.config.getboolean('Display', 'vsync', fallback=False))
         self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
@@ -718,6 +738,7 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'always_show_io_debug', str(self.always_show_io_debug_checkbox.isChecked()))
         self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
+        self.config.set('Display', 'ui_scale', self.ui_scale_combo.currentData())
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))
         self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
