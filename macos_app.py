@@ -136,3 +136,75 @@ def install_windows_layout_hints(app):
     if style is not None:
         app.setStyle(style)
     return style
+
+
+# -- Relative mouse (mouse look) -----------------------------------------------
+#
+# Mouse look used to re-centre the cursor with QCursor.setPos() and measure how
+# far it had moved. On macOS that re-centre is asynchronous -- Qt posts it as an
+# input event -- so the position read back could predate it, counting movement
+# twice or jumping. Games on macOS instead detach the cursor from the mouse
+# (CGAssociateMouseAndMouseCursorPosition) so it stays put, and read each
+# event's own movement (NSEvent deltaX/deltaY). Qt hands every NSEvent to
+# native event filters, which is where the movement is collected.
+
+#: NSEventType values that carry pointer movement: moved, left-, right- and
+#: other-mouse dragged.
+_MOVEMENT_EVENTS = frozenset((5, 6, 7, 27))
+
+
+def set_cursor_follows_mouse(follows):
+    """Attach (True) or detach (False) the cursor from mouse movement.
+
+    Detached, the cursor stays where it is while the mouse still produces
+    movement events. Returns False if CoreGraphics could not be called.
+    """
+    try:
+        cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        cg.CGAssociateMouseAndMouseCursorPosition.argtypes = [ctypes.c_bool]
+        cg.CGAssociateMouseAndMouseCursorPosition.restype = ctypes.c_int32
+        return cg.CGAssociateMouseAndMouseCursorPosition(bool(follows)) == 0
+    except Exception:
+        return False
+
+
+def mouse_movement_filter():
+    """A Qt native event filter summing mouse movement from every NSEvent.
+
+    ``take()`` returns the (dx, dy) in points since the last call and resets
+    it. Install with QCoreApplication.installNativeEventFilter and keep a
+    reference; returns None when the Objective-C runtime is unavailable.
+    """
+    from PyQt5.QtCore import QAbstractNativeEventFilter
+
+    try:
+        objc = _objc()
+        type_sel = objc.sel_registerName(b'type')
+        dx_sel = objc.sel_registerName(b'deltaX')
+        dy_sel = objc.sel_registerName(b'deltaY')
+        address = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        event_type = ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p)(address)
+        event_delta = ctypes.CFUNCTYPE(ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p)(address)
+    except Exception:
+        return None
+
+    class _MouseMovement(QAbstractNativeEventFilter):
+        def __init__(self):
+            super().__init__()
+            self.dx = 0.0
+            self.dy = 0.0
+
+        def nativeEventFilter(self, kind, message):
+            if bytes(kind) == b'mac_generic_NSEvent' and message:
+                event = int(message)
+                if event_type(event, type_sel) in _MOVEMENT_EVENTS:
+                    self.dx += event_delta(event, dx_sel)
+                    self.dy += event_delta(event, dy_sel)
+            return False, 0
+
+        def take(self):
+            dx, dy = self.dx, self.dy
+            self.dx = self.dy = 0.0
+            return dx, dy
+
+    return _MouseMovement()
