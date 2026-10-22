@@ -1,0 +1,27 @@
+name: macOS mouse look check (temporary)
+
+on:
+  push:
+    branches: ["claude/confident-thompson-dmrdpg"]
+
+permissions:
+  contents: read
+
+jobs:
+  mouse:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Relative mouse look, end to end
+        run: python .github/mac-diag/mouse_check.py 2>&1 | grep -v "^ALSA\|pygame" || true
+      - name: Full editor still starts
+        run: |
+          python main.py > editor.log 2>&1 &
+          PID=$!; sleep 30
+          if kill -0 $PID 2>/dev/null; then echo "EDITOR ALIVE"; kill $PID; else echo "EDITOR EXITED"; tail -30 editor.log; fi

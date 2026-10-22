@@ -1,9 +1,11 @@
+import atexit
 import contextlib
 import io
 import time
 import zipfile
 import weakref
 import os
+import sys
 import math
 from collections import deque
 import numpy as np
@@ -189,6 +191,17 @@ class QtGameView(QOpenGLWidget):
         #: Set when the cursor has just been sent to the centre (or the window
         #: was away): the next poll only re-centres (see _poll_mouse_look).
         self._skip_next_look_poll = True
+        #: macOS: the native filter summing mouse movement, and whether the
+        #: cursor is detached from the mouse (see _poll_mouse_look_macos).
+        self._mac_mouse = None
+        self._mac_cursor_detached = False
+        if sys.platform == 'darwin':
+            import macos_app
+            self._mac_mouse = macos_app.mouse_movement_filter()
+            if self._mac_mouse is not None:
+                QApplication.instance().installNativeEventFilter(self._mac_mouse)
+                # Never leave the system cursor detached after Fio exits.
+                atexit.register(macos_app.set_cursor_follows_mouse, True)
 
 
 
@@ -1237,6 +1250,7 @@ class QtGameView(QOpenGLWidget):
             self._thread_started = False
 
     def closeEvent(self, event):
+        self._attach_mac_cursor()
         self._stop_logic_thread()
         super().closeEvent(event)
 
@@ -4060,6 +4074,7 @@ class QtGameView(QOpenGLWidget):
 
     def _recentre_look_cursor(self):
         """Put the hidden mouse-look cursor in the middle of the view."""
+        self._attach_mac_cursor()
         centre = self.rect().center()
         self.last_mouse_pos = QPoint(centre)
         QCursor.setPos(self.mapToGlobal(centre))
@@ -4084,6 +4099,9 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
+        if self._mac_mouse is not None:
+            self._poll_mouse_look_macos()
+            return
         if not self._mouse_look_captured() or not self.window().isActiveWindow():
             self._skip_next_look_poll = True   # it may be anywhere on return
             return
@@ -4099,6 +4117,45 @@ class QtGameView(QOpenGLWidget):
         if dx or dy:
             self.game_state.set_mouse_delta(float(dx), float(dy))
             QCursor.setPos(centre)
+
+    def _attach_mac_cursor(self):
+        """macOS: let the mouse move the cursor again, if it was detached."""
+        if self._mac_cursor_detached:
+            import macos_app
+            macos_app.set_cursor_follows_mouse(True)
+            self._mac_cursor_detached = False
+
+    def _poll_mouse_look_macos(self):
+        """macOS mouse look: a detached cursor, turned by each event's own movement.
+
+        Re-centring the cursor every frame does not work here: QCursor.setPos()
+        lands asynchronously, so the position read back could predate it and
+        count movement twice or jump. Instead the cursor is put in the middle
+        of the view once and detached from the mouse -- it cannot wander out
+        of the view or show -- and the turn is the movement every NSEvent
+        reports (deltaX/deltaY), summed by the native event filter.
+        """
+        mouse = self._mac_mouse
+        if not self._mouse_look_captured() or not self.window().isActiveWindow():
+            self._attach_mac_cursor()
+            mouse.take()                       # movement made with the cursor free
+            self._skip_next_look_poll = True
+            return
+        if self._skip_next_look_poll:
+            # Capture starts: put the cursor in the middle, detach it once
+            # that move has landed, next frame.
+            self._skip_next_look_poll = False
+            QCursor.setPos(self.mapToGlobal(self.rect().center()))
+            mouse.take()
+            return
+        if not self._mac_cursor_detached:
+            import macos_app
+            self._mac_cursor_detached = macos_app.set_cursor_follows_mouse(False)
+            mouse.take()
+            return
+        dx, dy = mouse.take()
+        if dx or dy:
+            self.game_state.set_mouse_delta(dx, dy)
 
     def mouseMoveEvent(self, event):
         if not self.play_mode and self.floating_windows.handle_mouse_move(
