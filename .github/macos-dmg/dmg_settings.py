@@ -18,12 +18,12 @@ format = 'UDZO'          # zlib: opens on every macOS version Fio supports
 filesystem = 'HFS+'
 
 background = defines['background']       # noqa: F821
-window_rect = ((200, 120), (660, 400))   # matches make_background.WINDOW
-icon_size = 128
-text_size = 13
+window_rect = ((200, 120), (540, 320))   # matches make_background.WINDOW
+icon_size = 96
+text_size = 12
 icon_locations = {
-    app_name: (165, 175),                # matches make_background.APP_AT
-    'Applications': (495, 175),          # matches make_background.APPS_AT
+    app_name: (135, 135),                # matches make_background.APP_AT
+    'Applications': (405, 135),          # matches make_background.APPS_AT
 }
 
 show_status_bar = False
