@@ -27,6 +27,7 @@ from editor.things import Light, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.ui_scale import read_ui_scale_setting
+from editor.user_paths import settings_path, writable_dir
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
@@ -159,7 +160,9 @@ class MainWindow(QMainWindow):
 
         self.config = configparser.ConfigParser()
         self.config.optionxform = str          # preserve case of option names
-        self.config_path = 'settings.ini'
+        # The working directory's settings.ini (main.py runs from the install
+        # folder), or the per-user copy when that folder is read-only.
+        self.config_path = settings_path(os.getcwd())
         self.load_config()
         self.load_key_bindings()
 
@@ -544,7 +547,7 @@ class MainWindow(QMainWindow):
         """
         try:
             # Ensure maps directory exists
-            autosave_dir = os.path.join(self.root_dir, "maps")
+            autosave_dir = writable_dir(self.root_dir, "maps")
             if not os.path.exists(autosave_dir):
                 os.makedirs(autosave_dir)
                 

@@ -72,6 +72,10 @@ class ShaderLoader:
         self._ensure_defaults()
 
     def _ensure_defaults(self):
+        # A copy for reading and editing by hand; the renderer compiles from
+        # DEFAULT_SHADERS itself, so a read-only install simply goes without.
+        if not os.access(self.shader_dir, os.W_OK):
+            return
         for filename, source in DEFAULT_SHADERS.items():
             filepath = os.path.join(self.shader_dir, filename)
             try:
