@@ -186,9 +186,9 @@ class QtGameView(QOpenGLWidget):
 
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
-        #: Where the hidden cursor was last sent to re-centre it, until the
-        #: move lands (see _mouse_look_delta).
-        self._look_warp_target = None
+        #: Set when the cursor has just been sent to the centre (or the window
+        #: was away): the next poll only re-centres (see _poll_mouse_look).
+        self._skip_next_look_poll = True
 
 
 
@@ -1291,6 +1291,7 @@ class QtGameView(QOpenGLWidget):
             keys = (set() if self.console_overlay_active or self.pause_menu is not None
                     else self.editor.keys_pressed)
             self.game_state.set_keys(keys)
+            self._poll_mouse_look()
             # Update Player 2 input from arrow keys (if no gamepad)
             self._update_p2_keyboard_input()
             # Paint only a frame that is new. Repainting the one already on
@@ -4053,51 +4054,51 @@ class QtGameView(QOpenGLWidget):
                     return
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
-            self.last_mouse_pos = event.pos()
-            self._look_warp_target = None
+            self._recentre_look_cursor()
             self.setCursor(Qt.BlankCursor)
         super().mousePressEvent(event)
 
     def _recentre_look_cursor(self):
-        """Send the hidden mouse-look cursor back to the middle of the view.
-
-        Measurement carries on from where the cursor is now until the move
-        lands, which on macOS is later: Qt posts the move as an input event
-        rather than warping the pointer, so it is queued behind the moves
-        already waiting.
-        """
-        self.last_mouse_pos = self.mapFromGlobal(QCursor.pos())
-        self._look_warp_target = QPoint(self.rect().center())
-        QCursor.setPos(self.mapToGlobal(self._look_warp_target))
-
-    def _mouse_look_delta(self, pos):
-        """The look movement a mouse-move event at *pos* (view coordinates) carries.
-
-        Each event is measured from the one before it, never from the centre.
-        Measuring from the centre assumed every event came after the last
-        re-centre, true where the warp is immediate (Windows) and not on
-        macOS: there the moves queued before it -- many a frame from a
-        trackpad -- were each counted in full from the centre, adding up to a
-        multiple of the real movement. The cursor is re-centred only when it
-        strays; the event where that lands is recognised by being nearer the
-        centre than the previous event, and only the movement after it counts.
-        """
-        last = self.last_mouse_pos
-        target = self._look_warp_target
-        if target is not None and (pos - target).manhattanLength() < (pos - last).manhattanLength():
-            last = target                      # the re-centre has landed
-            self._look_warp_target = None
-        dx, dy = pos.x() - last.x(), pos.y() - last.y()
-        self.last_mouse_pos = QPoint(pos)
+        """Put the hidden mouse-look cursor in the middle of the view."""
         centre = self.rect().center()
-        reach = max(8, min(self.width(), self.height()) // 4)
-        if self._look_warp_target is None and (
-                abs(pos.x() - centre.x()) > reach or abs(pos.y() - centre.y()) > reach):
-            self._recentre_look_cursor()
-            # Measure on from this event, not from the live cursor, which
-            # may already be ahead of the events still queued.
-            self.last_mouse_pos = QPoint(pos)
-        return dx, dy
+        self.last_mouse_pos = QPoint(centre)
+        QCursor.setPos(self.mapToGlobal(centre))
+        self._skip_next_look_poll = True
+
+    def _mouse_look_captured(self):
+        """Whether mouse movement turns the camera, with the cursor held."""
+        if self.mouselook_active:
+            return True
+        return (self.play_mode and self.pause_menu is None
+                and not self.console_overlay_active and self._actor_pick is None)
+
+    def _poll_mouse_look(self):
+        """Turn by how far the cursor moved since the last frame; re-centre it.
+
+        Read from the live cursor once a frame, never from the positions in
+        mouse-move events. Re-centring with QCursor.setPos() is immediate on
+        Windows but on macOS lands behind the moves already queued (many a
+        frame from a trackpad), so measuring events against the centre
+        counted those moves several times over, and letting the cursor roam
+        between re-centres let a fast flick carry it out of the view, where
+        it showed and the view stopped seeing the mouse. Polled, the cursor
+        is back in the middle every frame and each movement counts once.
+        """
+        if not self._mouse_look_captured() or not self.window().isActiveWindow():
+            self._skip_next_look_poll = True   # it may be anywhere on return
+            return
+        centre = self.mapToGlobal(self.rect().center())
+        if self._skip_next_look_poll:
+            # The cursor was just sent here (or comes back from elsewhere):
+            # nothing it shows yet is movement.
+            self._skip_next_look_poll = False
+            QCursor.setPos(centre)
+            return
+        cursor = QCursor.pos()
+        dx, dy = cursor.x() - centre.x(), cursor.y() - centre.y()
+        if dx or dy:
+            self.game_state.set_mouse_delta(float(dx), float(dy))
+            QCursor.setPos(centre)
 
     def mouseMoveEvent(self, event):
         if not self.play_mode and self.floating_windows.handle_mouse_move(
@@ -4143,21 +4144,14 @@ class QtGameView(QOpenGLWidget):
                                    drag=bool(event.buttons() & Qt.LeftButton))
             return
         if self.mouselook_active:
-            dx, dy = self._mouse_look_delta(event.pos())
-            if self.logic_thread:
-                self.game_state.set_mouse_delta(float(dx), float(dy))
-            return
+            return              # turning is read once a frame: _poll_mouse_look
         if self.play_mode:
             if self.console_overlay_active:
                 return
             if self._actor_pick is not None:
                 self._update_actor_pick_hover(event.x(), event.y())
                 return
-            dx, dy = self._mouse_look_delta(event.pos())
-            if dx == 0 and dy == 0:
-                return
-            self.game_state.set_mouse_delta(float(dx), float(dy))
-            return
+            return              # turning is read once a frame: _poll_mouse_look
         if (self.terrain_sculpt_painting and self.terrain_sculpt_active
                 and self.terrain_sculpt_mode != 'stamp'):
             self._apply_sculpt_at_mouse(event.x(), event.y())
