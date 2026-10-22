@@ -92,7 +92,12 @@ def test_refresh_preserves_callers_signal_blocking(hierarchy, blocked):
     assert hierarchy.tree.signalsBlocked() is blocked
     assert not notifications
     hierarchy.tree.blockSignals(False)
-    hierarchy.tree.topLevelItem(0).child(0).setSelected(True)
+    # Select the row as a click does, through the view. Not with the item's
+    # own setSelected(): the selection notification rebuilds the tree
+    # synchronously (MainWindow.update_all_ui -> refresh_list), deleting the
+    # item while QTreeWidgetItem::setSelected still writes to it afterwards --
+    # a use-after-free that crashed this run intermittently.
+    hierarchy.tree.setCurrentItem(hierarchy.tree.topLevelItem(0).child(0))
     assert notifications == [True]
 
 
