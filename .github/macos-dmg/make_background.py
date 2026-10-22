@@ -17,10 +17,10 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-WINDOW = (660, 400)        # dmg_settings.window_rect size
-APP_AT = (165, 175)        # icon centres, as in dmg_settings.icon_locations
-APPS_AT = (495, 175)
-ICON = 128
+WINDOW = (540, 320)        # dmg_settings.window_rect size
+APP_AT = (135, 135)        # icon centres, as in dmg_settings.icon_locations
+APPS_AT = (405, 135)
+ICON = 96
 
 # Luminance 0.18: black text 4.6:1, white text 4.6:1.
 BACKGROUND = (116, 118, 121)
@@ -56,10 +56,10 @@ def draw(scale):
 
     # Arrow from the app's right edge to the Applications icon's left edge.
     y = APP_AT[1] * scale
-    x0 = (APP_AT[0] + ICON // 2 + 22) * scale
-    x1 = (APPS_AT[0] - ICON // 2 - 22) * scale
-    head = 20 * scale
-    shaft = 4 * scale
+    x0 = (APP_AT[0] + ICON // 2 + 18) * scale
+    x1 = (APPS_AT[0] - ICON // 2 - 18) * scale
+    head = 16 * scale
+    shaft = 3 * scale
     outline = [(x0, y - shaft), (x1 - head, y - shaft), (x1 - head, y - head * 0.75),
                (x1, y), (x1 - head, y + head * 0.75), (x1 - head, y + shaft),
                (x0, y + shaft)]
@@ -68,9 +68,9 @@ def draw(scale):
     d.polygon(outline, fill=ACCENT, outline=INK, width=2 * scale)
 
     text = 'Drag Fio onto Applications to install'
-    font = _font(18 * scale)
+    font = _font(15 * scale)
     tw = d.textlength(text, font=font)
-    x, y = (w - tw) / 2, 318 * scale
+    x, y = (w - tw) / 2, 252 * scale
     d.text((x, y + scale), text, fill=INK_SHADOW, font=font)
     d.text((x, y), text, fill=INK, font=font)
     return img

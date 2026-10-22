@@ -186,6 +186,9 @@ class QtGameView(QOpenGLWidget):
 
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
+        #: Where the hidden cursor was last sent to re-centre it, until the
+        #: move lands (see _mouse_look_delta).
+        self._look_warp_target = None
 
 
 
@@ -3071,9 +3074,7 @@ class QtGameView(QOpenGLWidget):
             self.splitscreen_mode = False
             self._last_player_start_pos = player_start_pos
             self._last_player_start_angle = player_start_angle
-            center_pos = self.mapToGlobal(self.rect().center())
-            QCursor.setPos(center_pos)
-            self.last_mouse_pos = self.mapFromGlobal(center_pos)
+            self._recentre_look_cursor()
             QApplication.setOverrideCursor(Qt.BlankCursor)
 
             # Convert editor angle (0° = east) to game angle (0° = north).
@@ -4053,8 +4054,50 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode and event.button() == Qt.RightButton:
             self.mouselook_active = True
             self.last_mouse_pos = event.pos()
+            self._look_warp_target = None
             self.setCursor(Qt.BlankCursor)
         super().mousePressEvent(event)
+
+    def _recentre_look_cursor(self):
+        """Send the hidden mouse-look cursor back to the middle of the view.
+
+        Measurement carries on from where the cursor is now until the move
+        lands, which on macOS is later: Qt posts the move as an input event
+        rather than warping the pointer, so it is queued behind the moves
+        already waiting.
+        """
+        self.last_mouse_pos = self.mapFromGlobal(QCursor.pos())
+        self._look_warp_target = QPoint(self.rect().center())
+        QCursor.setPos(self.mapToGlobal(self._look_warp_target))
+
+    def _mouse_look_delta(self, pos):
+        """The look movement a mouse-move event at *pos* (view coordinates) carries.
+
+        Each event is measured from the one before it, never from the centre.
+        Measuring from the centre assumed every event came after the last
+        re-centre, true where the warp is immediate (Windows) and not on
+        macOS: there the moves queued before it -- many a frame from a
+        trackpad -- were each counted in full from the centre, adding up to a
+        multiple of the real movement. The cursor is re-centred only when it
+        strays; the event where that lands is recognised by being nearer the
+        centre than the previous event, and only the movement after it counts.
+        """
+        last = self.last_mouse_pos
+        target = self._look_warp_target
+        if target is not None and (pos - target).manhattanLength() < (pos - last).manhattanLength():
+            last = target                      # the re-centre has landed
+            self._look_warp_target = None
+        dx, dy = pos.x() - last.x(), pos.y() - last.y()
+        self.last_mouse_pos = QPoint(pos)
+        centre = self.rect().center()
+        reach = max(8, min(self.width(), self.height()) // 4)
+        if self._look_warp_target is None and (
+                abs(pos.x() - centre.x()) > reach or abs(pos.y() - centre.y()) > reach):
+            self._recentre_look_cursor()
+            # Measure on from this event, not from the live cursor, which
+            # may already be ahead of the events still queued.
+            self.last_mouse_pos = QPoint(pos)
+        return dx, dy
 
     def mouseMoveEvent(self, event):
         if not self.play_mode and self.floating_windows.handle_mouse_move(
@@ -4100,12 +4143,9 @@ class QtGameView(QOpenGLWidget):
                                    drag=bool(event.buttons() & Qt.LeftButton))
             return
         if self.mouselook_active:
-            dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
+            dx, dy = self._mouse_look_delta(event.pos())
             if self.logic_thread:
                 self.game_state.set_mouse_delta(float(dx), float(dy))
-            center = self.mapToGlobal(self.rect().center())
-            QCursor.setPos(center)
-            self.last_mouse_pos = self.mapFromGlobal(center)
             return
         if self.play_mode:
             if self.console_overlay_active:
@@ -4113,14 +4153,10 @@ class QtGameView(QOpenGLWidget):
             if self._actor_pick is not None:
                 self._update_actor_pick_hover(event.x(), event.y())
                 return
-            cp = event.pos()
-            dx, dy = cp.x() - self.last_mouse_pos.x(), cp.y() - self.last_mouse_pos.y()
+            dx, dy = self._mouse_look_delta(event.pos())
             if dx == 0 and dy == 0:
                 return
             self.game_state.set_mouse_delta(float(dx), float(dy))
-            center = self.mapToGlobal(self.rect().center())
-            QCursor.setPos(center)
-            self.last_mouse_pos = self.mapFromGlobal(center)
             return
         if (self.terrain_sculpt_painting and self.terrain_sculpt_active
                 and self.terrain_sculpt_mode != 'stamp'):
@@ -4345,9 +4381,7 @@ class QtGameView(QOpenGLWidget):
         while QApplication.overrideCursor() is not None:
             QApplication.restoreOverrideCursor()
         QApplication.setOverrideCursor(Qt.BlankCursor)
-        center = self.mapToGlobal(self.rect().center())
-        QCursor.setPos(center)
-        self.last_mouse_pos = self.mapFromGlobal(center)
+        self._recentre_look_cursor()
 
     def _show_pick_cursor(self):
         while QApplication.overrideCursor() is not None:
