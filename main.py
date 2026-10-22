@@ -195,7 +195,8 @@ if __name__ == "__main__":
 
     import configparser
     config = configparser.ConfigParser()
-    config.read('settings.ini')
+    from editor.user_paths import settings_path
+    config.read(settings_path(root_directory))
     vsync = config.getboolean('Display', 'vsync', fallback=True)
     fmt.setSwapInterval(1 if vsync else 0)
 

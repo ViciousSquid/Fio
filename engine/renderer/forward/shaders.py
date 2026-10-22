@@ -145,13 +145,19 @@ class ShadersMixin:
         self._compile_instanced_effect_shader()
 
     def _compile_standard_shaders(self):
-        lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
+        # From the embedded sources, like every other program here. These two
+        # used to be read back from assets/shaders, which ShaderLoader only
+        # writes when the install folder is writable; a read-only Fio.app
+        # never had the files, so no 3D view was drawn there.
+        lit_shader = self.shader_loader.compile_from_source(
+            self._shader_source('lit.vert'), self._shader_source('lit.frag'))
         self.shaders['lit'] = lit_shader
         self.uniforms['lit'] = UniformCache(lit_shader)
         self._preload_lit_uniforms('lit')
         self.uniforms['lit'].preload(['normalMatrix'])
 
-        tex_shader = self.shader_loader.compile_shader_program('textured.vert', 'textured.frag')
+        tex_shader = self.shader_loader.compile_from_source(
+            self._shader_source('textured.vert'), self._shader_source('textured.frag'))
         self.shaders['textured'] = tex_shader
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')

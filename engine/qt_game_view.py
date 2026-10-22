@@ -1062,9 +1062,9 @@ class QtGameView(QOpenGLWidget):
         self._renderer_mode = DEFAULT_RENDERER
         self.renderer = create_renderer(DEFAULT_RENDERER, config)
         if not self.renderer.ready:
-            debug_log("Error", "3D view: the renderer's shaders did not build on "
-                               "this OpenGL driver, so the view stays empty; the "
-                               "compiler's message is in the terminal output.")
+            debug_log("Error", "3D view: the renderer's shaders did not build, so "
+                               "the view stays empty; the error is in the "
+                               "terminal output.")
         self.set_cull_distance(self.cull_distance)
         self._preload_assets()
         self.load_all_sprite_textures()
