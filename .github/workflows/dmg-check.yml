@@ -39,24 +39,34 @@ jobs:
             -D app=build/Fio.app -D background=build/dmg-background.tiff \
             "Fio" build/Fio-macOS.dmg
           hdiutil verify build/Fio-macOS.dmg
-      - name: Open it in Finder and capture the window
+      - name: Open it in Finder, in Light and then Dark mode
         run: |
-          hdiutil attach build/Fio-macOS.dmg
-          ls -la /Volumes/Fio /Volumes/Fio/.background 2>/dev/null || ls -la /Volumes/Fio
-          open /Volumes/Fio
-          sleep 8
-          screencapture -x shot.png
-          python - <<'PY'
-          import base64, io
+          cat > grab.py <<'PY'
+          import base64, io, sys
           from PIL import Image
-          im = Image.open('shot.png').convert('RGB')
+          im = Image.open(sys.argv[1]).convert('RGB')
           s = im.width / 1024
-          im = im.crop((int(150 * s), int(60 * s), int(910 * s), int(600 * s)))
-          im = im.resize((760, 540))
+          im = im.crop((int(150 * s), int(60 * s), int(910 * s), int(600 * s))).resize((760, 540))
           buf = io.BytesIO(); im.save(buf, 'JPEG', quality=80)
           data = base64.b64encode(buf.getvalue()).decode()
-          print('SHOT-BEGIN')
+          tag = sys.argv[2]
+          print(f'SHOT-BEGIN {tag}')
           for i in range(0, len(data), 1000):
-              print('SHOT ' + data[i:i + 1000])
-          print('SHOT-END', len(data))
+              print(f'SHOT {tag} ' + data[i:i + 1000])
+          print(f'SHOT-END {tag}', len(data))
           PY
+          set_dark() {
+            osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" \
+              || defaults write -g AppleInterfaceStyle Dark
+            echo "AppleInterfaceStyle: $(defaults read -g AppleInterfaceStyle 2>/dev/null || echo Light)"
+          }
+          set_dark false || true
+          hdiutil attach build/Fio-macOS.dmg
+          ls -la /Volumes/Fio
+          open /Volumes/Fio; sleep 8
+          screencapture -x light.png; python grab.py light.png light
+          osascript -e 'tell application "Finder" to close every window' || true
+          set_dark true
+          killall Finder || true; sleep 4
+          open /Volumes/Fio; sleep 8
+          screencapture -x dark.png; python grab.py dark.png dark
