@@ -42,18 +42,35 @@ jobs:
       - name: Open it in Finder, in Light and then Dark mode
         run: |
           cat > grab.py <<'PY'
-          import base64, io, sys
+          import sys
+          sys.path.insert(0, '.github/macos-dmg')
           from PIL import Image
+          import make_background as m
           im = Image.open(sys.argv[1]).convert('RGB')
-          s = im.width / 1024
-          im = im.crop((int(150 * s), int(60 * s), int(910 * s), int(600 * s))).resize((760, 540))
-          buf = io.BytesIO(); im.save(buf, 'JPEG', quality=80)
-          data = base64.b64encode(buf.getvalue()).decode()
           tag = sys.argv[2]
-          print(f'SHOT-BEGIN {tag}')
-          for i in range(0, len(data), 1000):
-              print(f'SHOT {tag} ' + data[i:i + 1000])
-          print(f'SHOT-END {tag}', len(data))
+          s = round(im.width / 1024)      # Retina capture -> 2
+          bg = m.BACKGROUND
+          px = im.load()
+          near = lambda c, t, d=4: all(abs(a - b) <= d for a, b in zip(c, t))
+          xs, ys = [], []
+          for y in range(0, im.height, 2):
+              for x in range(0, im.width, 2):
+                  if near(px[x, y], bg):
+                      xs.append(x); ys.append(y)
+          if not xs:
+              print(f'{tag}: DMG background not found on screen'); sys.exit(0)
+          left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
+          print(f'{tag}: DMG window content at {left},{top}..{right},{bottom} ({(right-left)//s}x{(bottom-top)//s} pt)')
+          print(f'{tag}: title bar colour {px[left + 40*s, max(0, top - 12*s)]}')
+          for name, (cx, cy) in (('Fio label', m.APP_AT), ('Applications label', m.APPS_AT)):
+              box = (left + (cx - 70) * s, top + (cy + 66) * s, left + (cx + 70) * s, top + (cy + 92) * s)
+              text = [c for c in im.crop(box).getdata() if not near(c, bg, 40)]
+              if not text:
+                  print(f'{tag}: {name}: no text found'); continue
+              text.sort(key=m._luminance)
+              darkest, lightest = text[0], text[-1]
+              ink = darkest if m.contrast(darkest, bg) > m.contrast(lightest, bg) else lightest
+              print(f'{tag}: {name}: {len(text)} text pixels, ink {ink}, contrast {m.contrast(ink, bg):.2f}:1')
           PY
           set_dark() {
             osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" \
