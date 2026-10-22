@@ -52,26 +52,30 @@ jobs:
           bg = m.BACKGROUND
           px = im.load()
           near = lambda c, t, d=4: all(abs(a - b) <= d for a, b in zip(c, t))
+          # The Finder window's bounds (points, top-left origin), from Finder.
+          wl, wt, wr, wb = (int(v) * s for v in sys.argv[3].split(','))
           xs, ys = [], []
-          for y in range(0, im.height, 2):
-              for x in range(0, im.width, 2):
+          for y in range(wt, wb, 2):
+              for x in range(wl, wr, 2):
                   if near(px[x, y], bg):
                       xs.append(x); ys.append(y)
           if not xs:
-              print(f'{tag}: DMG background not found on screen'); sys.exit(0)
+              print(f'{tag}: DMG background not found in the window'); sys.exit(0)
           left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
-          print(f'{tag}: DMG window content at {left},{top}..{right},{bottom} ({(right-left)//s}x{(bottom-top)//s} pt)')
+          print(f'{tag}: Finder window {sys.argv[3]}; background at {left},{top}..{right},{bottom} ({(right-left)//s}x{(bottom-top)//s} pt)')
           print(f'{tag}: title bar colour {px[left + 40*s, max(0, top - 12*s)]}')
           for name, (cx, cy) in (('Fio label', m.APP_AT), ('Applications label', m.APPS_AT)):
               box = (left + (cx - 70) * s, top + (cy + 66) * s, left + (cx + 70) * s, top + (cy + 92) * s)
               text = [c for c in im.crop(box).getdata() if not near(c, bg, 40)]
               if not text:
                   print(f'{tag}: {name}: no text found'); continue
-              text.sort(key=m._luminance)
-              darkest, lightest = text[0], text[-1]
-              ink = darkest if m.contrast(darkest, bg) > m.contrast(lightest, bg) else lightest
-              print(f'{tag}: {name}: {len(text)} text pixels, ink {ink}, contrast {m.contrast(ink, bg):.2f}:1')
+              ink = max(text, key=lambda c: m.contrast(c, bg))
+              kind = 'dark' if m._luminance(ink) < m._luminance(bg) else 'light'
+              print(f'{tag}: {name}: {len(text)} text pixels, {kind} ink {ink}, contrast {m.contrast(ink, bg):.2f}:1')
           PY
+          bounds() {
+            osascript -e 'tell application "Finder" to get bounds of front window' | tr -d ' '
+          }
           set_dark() {
             osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" \
               || defaults write -g AppleInterfaceStyle Dark
@@ -81,9 +85,9 @@ jobs:
           hdiutil attach build/Fio-macOS.dmg
           ls -la /Volumes/Fio
           open /Volumes/Fio; sleep 8
-          screencapture -x light.png; python grab.py light.png light
+          screencapture -x light.png; python grab.py light.png light "$(bounds)"
           osascript -e 'tell application "Finder" to close every window' || true
           set_dark true
           killall Finder || true; sleep 4
           open /Volumes/Fio; sleep 8
-          screencapture -x dark.png; python grab.py dark.png dark
+          screencapture -x dark.png; python grab.py dark.png dark "$(bounds)"
