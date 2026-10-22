@@ -46,14 +46,24 @@ _MAC_RESERVED_HEIGHT = 100
 #: Auto never shrinks controls below this.
 _AUTO_FLOOR = 65
 
+#: Entries written for a fixed percentage, one per screen: Qt assigns
+#: ``QT_SCREEN_SCALE_FACTORS`` entries to screens by position and ignores
+#: entries past the last screen.
+_MAX_SCREENS = 8
+
+#: Holds the ``QT_SCREEN_SCALE_FACTORS`` value Fio set itself.  A restart
+#: (Settings > Apply & Restart) inherits the environment; this tells that
+#: value apart from a user's own override, so the new setting is applied.
+_SET_BY_FIO = 'FIO_UI_SCALE_FACTORS'
+
 def parse_ui_scale(value):
     """``None`` for auto, else the percentage clamped to the allowed range."""
     text = str(value).strip().lower().rstrip('%')
     if text in ('', 'auto'):
         return None
     try:
-        percent = int(round(float(text)))
-    except ValueError:
+        percent = round(float(text))
+    except (ValueError, OverflowError):   # 'nan', 'inf' fall back to auto too
         return None
     return max(MIN_UI_SCALE, min(MAX_UI_SCALE, percent))
 
@@ -123,15 +133,29 @@ def resolve_ui_scale(setting, platform=None, screen_size=None):
     return percent / 100.0
 
 
+def read_ui_scale_setting(config):
+    """``[Display] ui_scale`` as written; raw, so ``85%`` is not interpolation."""
+    return config.get('Display', 'ui_scale', raw=True, fallback='auto')
+
+
 def apply_ui_scale(config):
     """Set ``QT_SCREEN_SCALE_FACTORS`` from *config*; call before the QApplication.
 
     Returns the factor in effect.  Nothing is set at 100%, or when either Qt
-    scaling variable is already in the environment.
+    scaling variable was already in the environment before Fio set one.  A
+    fixed percentage applies to every screen; auto is fitted to the main
+    screen and applies to it alone.
     """
+    ours = os.environ.pop(_SET_BY_FIO, None)
+    if ours is not None and os.environ.get('QT_SCREEN_SCALE_FACTORS') == ours:
+        del os.environ['QT_SCREEN_SCALE_FACTORS']
     if os.environ.get('QT_SCREEN_SCALE_FACTORS') or os.environ.get('QT_SCALE_FACTOR'):
         return 1.0
-    factor = resolve_ui_scale(config.get('Display', 'ui_scale', fallback='auto'))
+    setting = read_ui_scale_setting(config)
+    factor = resolve_ui_scale(setting)
     if abs(factor - 1.0) > 1e-6:
-        os.environ['QT_SCREEN_SCALE_FACTORS'] = f'{factor:g}'
+        screens = 1 if parse_ui_scale(setting) is None else _MAX_SCREENS
+        value = ';'.join([f'{factor:g}'] * screens)
+        os.environ['QT_SCREEN_SCALE_FACTORS'] = value
+        os.environ[_SET_BY_FIO] = value
     return factor

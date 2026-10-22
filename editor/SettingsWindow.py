@@ -9,7 +9,7 @@ import sys
 import os
 
 from engine import shaders
-from editor.ui_scale import UI_SCALE_CHOICES, parse_ui_scale
+from editor.ui_scale import UI_SCALE_CHOICES, parse_ui_scale, read_ui_scale_setting
 from engine.glasses import (
     DEFAULT_GLASSES, GLASSES_STYLES, glasses_path, normalize_glasses,
 )
@@ -610,7 +610,7 @@ class SettingsWindow(QDialog):
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
-        ui_scale = parse_ui_scale(self.config.get('Display', 'ui_scale', fallback='auto'))
+        ui_scale = parse_ui_scale(read_ui_scale_setting(self.config))
         ui_scale_key = 'auto' if ui_scale is None else str(ui_scale)
         if self.ui_scale_combo.findData(ui_scale_key) < 0:
             # A hand-edited percentage that is not one of the presets.
