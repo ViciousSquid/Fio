@@ -26,6 +26,7 @@ from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 from editor.things import Light, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
+from editor.ui_scale import read_ui_scale_setting
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
@@ -182,7 +183,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Fio")
         self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
         self.setGeometry(100, 100, 1600, 900)
-        self.setMinimumSize(1280, 800)
+        self._minimum_size_screen = None
+        self._cap_minimum_size()
         self.state = EditorState()
         # Checkpoints re-journal their objects once the editing event is done.
         self.state.post_event = lambda fn: QTimer.singleShot(0, fn)
@@ -728,6 +730,24 @@ class MainWindow(QMainWindow):
     def moveEvent(self, event):
         """Handle window move."""
         super().moveEvent(event)
+        if self.screen() is not self._minimum_size_screen:
+            self._cap_minimum_size()
+
+    def _cap_minimum_size(self):
+        """1280x800 minimum, but never more than this window's screen holds.
+
+        A laptop's desktop (in points on macOS, or at a reduced UI Scale) can
+        be smaller than 1280x800 once the menu bar and Dock are taken, and a
+        larger minimum pushes the window's edges and status bar off-screen.
+        Re-run when the window lands on another screen, including a saved
+        layout restoring it onto a smaller one.
+        """
+        screen = self.screen() or QApplication.primaryScreen()
+        self._minimum_size_screen = screen
+        available = screen.availableGeometry() if screen is not None else None
+        self.setMinimumSize(
+            min(1280, available.width()) if available else 1280,
+            min(800, available.height()) if available else 800)
 
     def toggle_debug_console(self):
         # --- Play mode: use the overlay instead of switching tabs ---
@@ -1991,6 +2011,7 @@ class MainWindow(QMainWindow):
     def show_settings_dialog(self):
         # Store old values to check for changes
         old_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
+        old_ui_scale = read_ui_scale_setting(self.config)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
         old_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
@@ -2040,6 +2061,9 @@ class MainWindow(QMainWindow):
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
             if old_dpi_setting != new_dpi_setting:
                 restart_required.append("High DPI scaling")
+
+            if read_ui_scale_setting(self.config) != old_ui_scale:
+                restart_required.append("UI scale")
                 
             new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
             if old_big_toolbar_buttons != new_big_toolbar_buttons:

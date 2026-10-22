@@ -832,9 +832,11 @@ def _select_in_hierarchy(host, kind, index):
     while found.value() is not None:
         item = found.value()
         if item.data(0, Qt.UserRole) == (kind, index):
-            hierarchy.tree.clearSelection()
-            item.setSelected(True)
-            return item
+            # As a click selects: the selection notification rebuilds the
+            # tree, so item.setSelected() would go on writing to an item the
+            # rebuild just deleted (see test_hierarchy_refresh).
+            hierarchy.tree.setCurrentItem(item)
+            return
         found += 1
     raise AssertionError(f"no hierarchy item for {(kind, index)}")
 

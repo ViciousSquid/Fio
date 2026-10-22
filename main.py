@@ -168,6 +168,12 @@ if __name__ == "__main__":
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception:
             pass
+    # The macOS menu bar names the app after the running bundle: Python's,
+    # for a source run. A built Fio.app is named by its own Info.plist.
+    if sys.platform == 'darwin' and not (
+            getattr(sys, 'frozen', False) or "__compiled__" in globals()):
+        from macos_app import set_process_app_name
+        set_process_app_name("Fio")
     # ---------------------------------------------------------
 
     # Version print
@@ -194,6 +200,10 @@ if __name__ == "__main__":
     fmt.setSwapInterval(1 if vsync else 0)
 
     QSurfaceFormat.setDefaultFormat(fmt)
+
+    # Qt reads the UI scale only when the QApplication is created.
+    from editor.ui_scale import apply_ui_scale
+    apply_ui_scale(config)
     # ---------------------------------------------------------
 
     # Splash class defined AFTER Qt import
@@ -237,6 +247,11 @@ if __name__ == "__main__":
 
     # Create app
     app = QApplication(sys.argv)
+    if sys.platform == 'darwin':
+        # Forms and tab bars laid out as on Windows, where the panels were
+        # designed; the Mac style centres them at their preferred widths.
+        from macos_app import install_windows_layout_hints
+        install_windows_layout_hints(app)
     # Without this PyQt5 aborts the process on any exception escaping a Qt
     # callback, losing the open map.
     from editor.debug_console import install_excepthook
@@ -271,17 +286,6 @@ if __name__ == "__main__":
     if 'app_icon' in locals():
         window.setWindowIcon(app_icon)
     
-    # For macOS, set the dock icon explicitly
-    if sys.platform == 'darwin':
-        try:
-            from Foundation import NSBundle
-            bundle = NSBundle.mainBundle()
-            icon_file = os.path.join(root_directory, 'assets', 'icon.icns')
-            if os.path.exists(icon_file):
-                bundle.setInfoDictionary_({'CFBundleIconFile': 'icon'})
-        except Exception:
-            pass
-
     splash.set_progress(100, "Ready.")
 
     window.showMaximized()
