@@ -479,6 +479,21 @@ jobs:
 
           cd ..
 
+      - name: Build installer disk image
+        run: |
+          # The window people expect from a Mac download: Fio.app beside a
+          # shortcut to Applications, and an arrow saying to drag one onto the
+          # other. An app dragged into Applications also stops being run from
+          # macOS's read-only "translocated" copy.
+          pip install "dmgbuild==1.6.7"
+          python .github/macos-dmg/make_background.py build/dmg-background
+          tiffutil -cathidpicheck build/dmg-background.png build/dmg-background@2x.png \
+            -out build/dmg-background.tiff
+          dmgbuild -s .github/macos-dmg/dmg_settings.py \
+            -D app=build/Fio.app -D background=build/dmg-background.tiff \
+            "Fio" build/Fio-macOS.dmg
+          hdiutil verify build/Fio-macOS.dmg
+
       - name: Verify icon in final bundle
         run: |
           # Check that icon exists in the renamed bundle
@@ -497,7 +512,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: fio-macos
-          path: build/Fio-macOS.zip
+          path: |
+            build/Fio-macOS.dmg
+            build/Fio-macOS.zip
 
 
   build-linux:
@@ -699,18 +716,18 @@ jobs:
             zip -r "../assets/Fio_${VERSION}_linux.zip" .
           )
 
-          # macOS was already packaged with ditto by the macOS job.
-          MAC_ZIP="$(find release/macos -type f -name 'Fio-macOS.zip' -print -quit)"
+          # macOS ships as the installer disk image the macOS job built.
+          MAC_DMG="$(find release/macos -type f -name 'Fio-macOS.dmg' -print -quit)"
 
-          if [[ -z "$MAC_ZIP" ]]; then
-            echo "ERROR: Fio-macOS.zip not found."
+          if [[ -z "$MAC_DMG" ]]; then
+            echo "ERROR: Fio-macOS.dmg not found."
             echo "Contents of release/macos:"
             find release/macos -maxdepth 3 -type f -print
             exit 1
           fi
 
           echo "Packaging macOS..."
-          cp "$MAC_ZIP" "release/assets/Fio_${VERSION}_macOS.zip"
+          cp "$MAC_DMG" "release/assets/Fio_${VERSION}_macOS.dmg"
 
           echo
           echo "Final release assets:"
@@ -731,7 +748,7 @@ jobs:
           gh release create "$VERSION" \
             "release/assets/Fio_${VERSION}_Windows.zip" \
             "release/assets/Fio_${VERSION}_Windows_ARM64.zip" \
-            "release/assets/Fio_${VERSION}_macOS.zip" \
+            "release/assets/Fio_${VERSION}_macOS.dmg" \
             "release/assets/Fio_${VERSION}_linux.zip" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

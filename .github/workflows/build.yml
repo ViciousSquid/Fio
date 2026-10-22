@@ -479,6 +479,21 @@ jobs:
 
           cd ..
 
+      - name: Build installer disk image
+        run: |
+          # The window people expect from a Mac download: Fio.app beside a
+          # shortcut to Applications, and an arrow saying to drag one onto the
+          # other. An app dragged into Applications also stops being run from
+          # macOS's read-only "translocated" copy.
+          pip install "dmgbuild==1.6.7"
+          python .github/macos-dmg/make_background.py build/dmg-background
+          tiffutil -cathidpicheck build/dmg-background.png build/dmg-background@2x.png \
+            -out build/dmg-background.tiff
+          dmgbuild -s .github/macos-dmg/dmg_settings.py \
+            -D app=build/Fio.app -D background=build/dmg-background.tiff \
+            "Fio" build/Fio-macOS.dmg
+          hdiutil verify build/Fio-macOS.dmg
+
       - name: Verify icon in final bundle
         run: |
           # Check that icon exists in the renamed bundle
@@ -497,7 +512,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: fio-macos
-          path: build/Fio-macOS.zip
+          path: |
+            build/Fio-macOS.dmg
+            build/Fio-macOS.zip
 
 
   build-linux:
