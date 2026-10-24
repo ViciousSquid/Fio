@@ -1,0 +1,23 @@
+{
+  "engine": "Blender 4.3.2 / Bullet rigid body",
+  "seed": 20261024,
+  "books": 384,
+  "gravity_m_s2": 9.81,
+  "spawn_height_metres": [
+    4.757673627441811,
+    5.893223979825925
+  ],
+  "simulation_seconds": 60,
+  "settling_hold_seconds": 6,
+  "fps": 24,
+  "substeps_per_frame": 8,
+  "solver_iterations": 35,
+  "max_translation_during_last_6s_m": 0.05841696798378712,
+  "moving_more_than_1cm_last_6s": 28,
+  "minimum_book_centre_height_m": 0.029522325843572617,
+  "receptacle_capacity": 408,
+  "fio_followup_simulation_seconds": 12,
+  "fio_final_6s_max_translation_units": 0.0,
+  "fio_max_correction_units": 7.707139372834842,
+  "fio_physics_body_count": 384
+}
