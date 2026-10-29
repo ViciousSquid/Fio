@@ -510,7 +510,8 @@ class SettingsWindow(QDialog):
             button = QToolButton()
             button.setCheckable(True)
             button.setToolTip(label)
-            button.setIcon(QIcon(QPixmap(glasses_path(style))))
+            from engine.asset_qt import asset_icon
+            button.setIcon(asset_icon(glasses_path(style)))
             button.setIconSize(QSize(150, 64))
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
             button.setMinimumSize(170, 84)
