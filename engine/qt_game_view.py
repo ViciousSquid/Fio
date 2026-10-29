@@ -187,6 +187,9 @@ class QtGameView(QOpenGLWidget):
         self._face_mode_press = None
 
         self.mouselook_active = False
+        #: Z latches editor mouse look; the held right button also drives it.
+        self.editor_freelook_active = False
+        self._editor_right_mouse_held = False
         self.last_mouse_pos = QPoint()
         #: Set when the cursor has just been sent to the centre (or the window
         #: was away): the next poll only re-centres (see _poll_mouse_look).
@@ -1250,6 +1253,8 @@ class QtGameView(QOpenGLWidget):
             self._thread_started = False
 
     def closeEvent(self, event):
+        if not self.play_mode:
+            self.stop_editor_mouselook()
         self._attach_mac_cursor()
         self._stop_logic_thread()
         super().closeEvent(event)
@@ -3081,6 +3086,8 @@ class QtGameView(QOpenGLWidget):
 
     def toggle_play_mode(self, player_start=None, physics_enabled=True):
         """Enter Play with the player at *player_start* (a PlayerStart), or leave it."""
+        if not self.play_mode:
+            self.stop_editor_mouselook()
         self.play_mode = not self.play_mode
         if self.play_mode:
             player_start_pos = player_start.pos
@@ -4067,9 +4074,8 @@ class QtGameView(QOpenGLWidget):
                     self.setCursor(Qt.ClosedHandCursor)
                     return
         if not self.play_mode and event.button() == Qt.RightButton:
-            self.mouselook_active = True
-            self._recentre_look_cursor()
-            self.setCursor(Qt.BlankCursor)
+            self._editor_right_mouse_held = True
+            self._sync_editor_mouselook()
         super().mousePressEvent(event)
 
     def _recentre_look_cursor(self):
@@ -4263,10 +4269,51 @@ class QtGameView(QOpenGLWidget):
             self.is_dragging_gizmo = False
             self.setCursor(Qt.ArrowCursor)
             self.editor.save_state()
-        if self.mouselook_active and event.button() == Qt.RightButton:
-            self.mouselook_active = False
-            self.setCursor(Qt.ArrowCursor)
+        if not self.play_mode and event.button() == Qt.RightButton:
+            self._editor_right_mouse_held = False
+            self._sync_editor_mouselook()
         super().mouseReleaseEvent(event)
+
+    def _sync_editor_mouselook(self):
+        """Editor mouse look is on while Z has latched it or right is held."""
+        active = self.editor_freelook_active or self._editor_right_mouse_held
+        if active and not self.mouselook_active:
+            self.mouselook_active = True
+            self._recentre_look_cursor()
+            self.game_state.consume_mouse_delta()
+            self.setCursor(Qt.BlankCursor)
+        elif not active and self.mouselook_active:
+            self.mouselook_active = False
+            self._attach_mac_cursor()
+            self.game_state.consume_mouse_delta()
+            self.setCursor(Qt.ArrowCursor)
+        # A latched look keeps the mouse even off the view: a click anywhere
+        # must not land in another widget while the cursor is hidden.
+        if active and self.mouseGrabber() is not self:
+            self.grabMouse()
+        elif not active and self.mouseGrabber() is self:
+            self.releaseMouse()
+
+    def set_editor_freelook(self, active):
+        """Latch editor mouse look independently of the held right button."""
+        if self.play_mode:
+            return
+        self.editor_freelook_active = bool(active)
+        if active:
+            self.setFocus(Qt.ShortcutFocusReason)
+        self._sync_editor_mouselook()
+
+    def stop_editor_mouselook(self):
+        self.editor_freelook_active = False
+        self._editor_right_mouse_held = False
+        self._sync_editor_mouselook()
+
+    def focusOutEvent(self, event):
+        if not self.play_mode and self.mouselook_active:
+            self.stop_editor_mouselook()
+            self.editor.keys_pressed.clear()
+            self.game_state.set_keys(set())
+        super().focusOutEvent(event)
 
     def leaveEvent(self, event):
         if self.terrain_sculpt_active and not self.play_mode:
@@ -4605,6 +4652,10 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        if not self.play_mode and event.key() == Qt.Key_Escape and self.mouselook_active:
+            self.stop_editor_mouselook()
+            event.accept()
+            return
         # An armed actor pick owns Escape: it cancels the pick, not Play Mode.
         if (event.key() == Qt.Key_Escape and self.play_mode
                 and self._actor_pick is not None):

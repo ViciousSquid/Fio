@@ -78,6 +78,7 @@ DECLARED = (
     ('Brush and texture', 'Shift+Enter', 'Apply the clip keeping both sides'),
 
     ('View', 'Arrow keys', 'Nudge the selection by one grid step'),
+    ('View', 'Z', 'Toggle freelook in the 3D editor (Esc releases the mouse)'),
     ('View', 'Ctrl+Tab', 'Cycle the 2D view between Top, Front and Side'),
     ('View', '`', 'Toggle the debug console'),
 
