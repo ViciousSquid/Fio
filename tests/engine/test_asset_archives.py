@@ -32,13 +32,19 @@ def test_startup_restores_exact_bytes_without_overwriting_loose_assets(tmp_path)
     assert sprite.stat().st_mtime_ns == mtime
 
 
-def test_audio_is_discovered_and_read_natively_without_extraction(tmp_path):
+@pytest.mark.parametrize('category, file_name', [
+    ('sounds', 'effect.wav'),
+    ('music', 'theme.ogg'),
+])
+def test_audio_is_discovered_and_read_natively_without_extraction(
+        tmp_path, category, file_name):
     from engine.audio_archives import read_archive_audio
-    write_archive(tmp_path, 'music', {'assets/music/theme.ogg': b'music'})
-    assert prepare_asset_archives(tmp_path) == ('music',)
-    assert not (tmp_path / 'assets/music').exists()
-    assert read_archive_audio(str(tmp_path / 'assets/music.fiopak'),
-                              'assets/music/theme.ogg', 'assets/music') == b'music'
+    member = f'assets/{category}/{file_name}'
+    write_archive(tmp_path, category, {member: b'audio'})
+    assert prepare_asset_archives(tmp_path) == (category,)
+    assert not (tmp_path / 'assets' / category).exists()
+    assert read_archive_audio(str(tmp_path / 'assets' / f'{category}.fiopak'),
+                              member, f'assets/{category}') == b'audio'
 
 
 @pytest.mark.parametrize('name', ['assets/../outside.png', '/assets/sprites/a.png',
