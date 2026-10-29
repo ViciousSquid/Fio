@@ -269,7 +269,8 @@ class MonsterCustomiseDialog(QDialog):
         # The 2D sprite can come from anywhere under assets/sprites/
         if slot == "sprite_2d":
             start_dir = os.path.join(_project_root(), "assets", "sprites")
-            os.makedirs(start_dir, exist_ok=True)
+            if not os.path.isdir(start_dir):
+                start_dir = os.path.join(_project_root(), 'assets')
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select 2D view sprite PNG  (any PNG inside assets/sprites/)",
@@ -286,7 +287,8 @@ class MonsterCustomiseDialog(QDialog):
             return
 
         start_dir = os.path.join(_project_root(), SPRITE_BASE)
-        os.makedirs(start_dir, exist_ok=True)
+        if not os.path.isdir(start_dir):
+            start_dir = os.path.join(_project_root(), 'assets')
 
         path, _ = QFileDialog.getOpenFileName(
             self,
