@@ -485,6 +485,12 @@ class Ui_MainWindow(object):
             QMenu::item:selected {
                 background-color: #F08000;
             }
+            /* Keep separators neutral even while a child submenu is open. */
+            QMenu::separator {
+                height: 1px;
+                background-color: #555;
+                margin: 6px 8px;
+            }
         """)
         
         MainWindow.file_menu = menubar.addMenu('File')
