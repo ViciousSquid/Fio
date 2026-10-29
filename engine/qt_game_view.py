@@ -413,6 +413,23 @@ class QtGameView(QOpenGLWidget):
             return
 
         from engine.audio_archives import AudioArchiveReader
+        from engine.asset_archives import (asset_bytes, asset_names,
+                                           mounted_game_package)
+
+        if mounted_game_package():
+            count = 0
+            for member in asset_names('assets/sounds/'):
+                if not member.lower().endswith(('.wav', '.ogg', '.mp3')):
+                    continue
+                payload = asset_bytes(member)
+                if payload is None:
+                    continue
+                relative = member[len('assets/sounds/'):]
+                keys = [member] + ([relative] if '/' not in relative else [])
+                if self._load_sound_bytes_to_cache(keys, payload):
+                    count += 1
+            print(f"[Audio] Preloaded {count} sounds from mounted game package.")
+            return
 
         sound_archive = os.path.join(os.getcwd(), "assets", "sounds.fiopak")
         if os.path.isfile(sound_archive):
@@ -521,6 +538,7 @@ class QtGameView(QOpenGLWidget):
         is authoritative; loose files are used only when that archive is absent.
         """
         from engine.audio_archives import read_archive_audio
+        from engine.asset_archives import asset_bytes, mounted_game_package
         from engine.speaker_audio import resolve_speaker_sound, speaker_sound_path
 
         rel = speaker_sound_path(name) if '/' in str(name).replace('\\', '/') else None
@@ -529,6 +547,10 @@ class QtGameView(QOpenGLWidget):
                 return self.sound_pool[rel]
             if not self._ensure_pygame_mixer():
                 return None
+            if mounted_game_package():
+                payload = asset_bytes(rel)
+                if payload is not None and self._load_sound_bytes_to_cache([rel], payload):
+                    return self.sound_pool[rel]
             folder = rel.split('/')[1]
             archive_path = os.path.join(os.getcwd(), "assets", f"{folder}.fiopak")
             if os.path.isfile(archive_path):
@@ -552,6 +574,11 @@ class QtGameView(QOpenGLWidget):
             return self.sound_pool[clean_name]
         if not self._ensure_pygame_mixer():
             return None
+        if mounted_game_package():
+            member = f"assets/sounds/{clean_name}"
+            payload = asset_bytes(member)
+            if payload is not None and self._load_sound_bytes_to_cache([clean_name, member], payload):
+                return self.sound_pool[clean_name]
         sound_archive = os.path.join(os.getcwd(), "assets", "sounds.fiopak")
         if os.path.isfile(sound_archive):
             member = f"assets/sounds/{clean_name}"
