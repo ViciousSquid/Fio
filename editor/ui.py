@@ -84,7 +84,9 @@ class RotatablePlayButton(QPushButton):
 
 #: Toolbar icon edge and Play button length, by Settings > Large Toolbar
 #: Buttons (``[Display] big_toolbar_buttons``).
-TOOLBAR_ICON_SIZES = {True: 45, False: 24}
+# Small: 24 * 1.10 = 26.4, rounded to a whole Qt logical pixel.
+# Both modes remain upper bounds in the adaptive toolbar fit.
+TOOLBAR_ICON_SIZES = {True: 45, False: 26}
 PLAY_BUTTON_LENGTHS = {True: 250, False: 110}
 
 
