@@ -1,7 +1,7 @@
 """A `.fiopak` must survive being played.
 
-Tools -> Play Game Package extracts a package to a temp directory and loads the
-map out of it. The archive itself is an input, never an output: `save_level`
+Tools -> Play Game Package streams a package without extracting and loads the
+map directly from ZIP. The archive itself is an input, never an output: `save_level`
 writes `self.file_path` with `json.dump`, so leaving `file_path` pointing at the
 package means one Ctrl+S replaces a ZIP -- the map, every texture, every model,
 every bundled plugin -- with a bare JSON file.
@@ -85,7 +85,11 @@ def test_playing_a_package_never_leaves_file_path_on_it(tmp_path, main_window):
         "file_path points at %r; save_level() would write that path"
         % window.file_path)
     assert open(pak, "rb").read() == before, "the archive itself was modified"
-    assert window._package_temp_dir is not None
+    from engine.asset_archives import asset_bytes, mounted_game_package
+    assert window._package_temp_dir is None
+    assert mounted_game_package() == os.path.realpath(pak)
+    assert asset_bytes("assets/sprites/pickup.png") == b"\\x89PNG not really"
+    assert not (tmp_path / "assets").exists()
     window._discard_package_temp_dir()
 
 
@@ -100,24 +104,41 @@ def test_the_manifest_start_map_is_the_one_loaded(tmp_path, main_window):
     window._discard_package_temp_dir()
 
 
-def test_the_extraction_is_a_temp_copy_released_by_the_next_package(
+def test_portable_packages_switch_without_creating_extraction_directories(
         tmp_path, main_window):
+    from engine.asset_archives import asset_bytes, mounted_game_package
     first = make_package(str(tmp_path / "first.fiopak"))
     second = make_package(str(tmp_path / "second.fiopak"))
     window = main_window
     _prepare_package_window(window)
 
     window.play_package_from_path(first)
-    first_dir = window._package_temp_dir
-    assert first_dir and os.path.isfile(
-        os.path.join(first_dir, "assets", "sprites", "pickup.png"))
-    assert not first_dir.startswith(str(tmp_path))
+    assert mounted_game_package() == os.path.realpath(first)
+    assert window._package_temp_dir is None
+    assert asset_bytes("assets/sprites/pickup.png") == b"\\x89PNG not really"
 
     window.play_package_from_path(second)
-    assert not os.path.exists(first_dir), "the previous extraction leaked"
-    second_dir = window._package_temp_dir
+    assert mounted_game_package() == os.path.realpath(second)
+    assert window._package_temp_dir is None
     window._discard_package_temp_dir()
-    assert not os.path.exists(second_dir)
+    assert mounted_game_package() is None
+    assert not (tmp_path / "assets").exists()
+
+
+def test_package_level_change_reads_map_without_extraction(tmp_path, main_window):
+    pak = _multi_map_package(str(tmp_path / "levels.fiopak"))
+    window = main_window
+    _prepare_package_window(window)
+    window.play_package_from_path(pak)
+    try:
+        assert window._package_map_path("maps/a_other.json") == "maps/a_other.json"
+        assert window._package_map_path("../escape.json") is None
+        assert window._load_package_map("maps/a_other.json")
+        assert [b.get("id") for b in window.state.brushes] == ["other-marker"]
+        assert window._package_temp_dir is None
+        assert not (tmp_path / "maps").exists()
+    finally:
+        window._discard_package_temp_dir()
 
 
 @pytest.mark.parametrize("entries", [
@@ -148,13 +169,10 @@ def test_a_hostile_package_is_refused_before_the_scene_changes(
     assert not (tmp_path / "escape.json").exists()
 
 
-def test_a_package_that_inflates_past_the_budget_is_not_extracted(
-        tmp_path, main_window, monkeypatch):
-    """A tiny archive of highly compressible data must not be written out
-    whole: extraction keeps to the player's asset budget."""
+def test_over_budget_package_is_refused_before_loading(tmp_path, main_window, monkeypatch):
+    """The package mount checks the total declared expansion before playback."""
     import player.fiopak as fiopak
-
-    # Shrink the budget so the test archive stays small on disk.
+    from engine.asset_archives import mounted_game_package
     monkeypatch.setattr(fiopak, "MAX_TOTAL_ASSET_BYTES", 1024 * 1024)
     pak = str(tmp_path / "bomb.fiopak")
     with zipfile.ZipFile(pak, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -162,22 +180,10 @@ def test_a_package_that_inflates_past_the_budget_is_not_extracted(
         z.writestr("maps/level.json", json.dumps({
             "version": 3, "brushes": [], "things": []}))
         for i in range(4):
-            z.writestr("assets/pad%d.bin" % i, b"\0" * (512 * 1024))
-
+            z.writestr("assets/pad%d.bin" % i, b"\\0" * (512 * 1024))
     window = main_window
     _prepare_package_window(window)
-    created = []
-    real_mkdtemp = __import__("tempfile").mkdtemp
-
-    def tracking_mkdtemp(*args, **kwargs):
-        path = real_mkdtemp(*args, **kwargs)
-        created.append(path)
-        return path
-
-    monkeypatch.setattr("tempfile.mkdtemp", tracking_mkdtemp)
-
     window.play_package_from_path(pak)
-
-    assert getattr(window, "_package_temp_dir", None) is None
-    assert created and not any(os.path.exists(p) for p in created), (
-        "an over-budget package was extracted (or its temp dir leaked)")
+    assert mounted_game_package() is None
+    assert window._package_temp_dir is None
+    assert not (tmp_path / "assets").exists()
