@@ -2600,7 +2600,8 @@ class PropertyEditor(QWidget):
             start = os.path.join(
                 project_root, "assets", "textures", "effects"
             )
-            os.makedirs(start, exist_ok=True)
+            if not os.path.isdir(start):
+                start = os.path.join(project_root, 'assets')
             fp, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Custom Effect GIF",
@@ -5027,7 +5028,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None or not isinstance(self.current_object, Prop):
             return
         start = os.path.join(_project_root(), 'assets', 'sprites')
-        os.makedirs(start, exist_ok=True)
+        if not os.path.isdir(start):
+            start = os.path.join(_project_root(), 'assets')
         fp, _ = QFileDialog.getOpenFileName(
             self,
             "Select Sprite Image",
