@@ -25,11 +25,16 @@ def patch_pygame_simd_target(setup_text: str, target_arch: str) -> str:
     if target_arch not in ("arm64-v8a", "x86_64"):
         raise ValueError(f"Unsupported Android pygame-ce ABI: {target_arch}")
     probe = "machine_name = platform.machine()"
-    if setup_text.count(probe) != 1:
+    target_probe = f"machine_name = {target_arch!r}"
+    # Buildozer reuses each architecture's extracted source tree for its
+    # debug and release builds. Reapplying the same target patch is safe.
+    if setup_text.count(target_probe) == 1 and probe not in setup_text:
+        return setup_text
+    if setup_text.count(probe) != 1 or target_probe in setup_text:
         raise RuntimeError(
             "pygame-ce 2.5.8 SIMD probe changed; update Android cross-build patch"
         )
-    return setup_text.replace(probe, f"machine_name = {target_arch!r}", 1)
+    return setup_text.replace(probe, target_probe, 1)
 
 
 class PygameCeRecipe(CompiledComponentsPythonRecipe):
