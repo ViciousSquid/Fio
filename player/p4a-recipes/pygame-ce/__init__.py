@@ -13,6 +13,25 @@ from pythonforandroid.recipe import CompiledComponentsPythonRecipe
 from pythonforandroid.toolchain import current_directory
 
 
+def patch_pygame_simd_target(setup_text: str, target_arch: str) -> str:
+    """Make pygame-ce's AVX2 selection use the Android target, not CI host.
+
+    pygame-ce 2.5.8 replaces CCompiler.spawn and uses platform.machine()
+    to decide whether to append -mavx2 to its SIMD object compilation.
+    The setup.py runs under an x86-64 host Python even for arm64-v8a.
+    Preserve the upstream fallback/stub sources, but never enable AVX2
+    instructions unless the *target* ABI is x86-64.
+    """
+    if target_arch not in ("arm64-v8a", "x86_64"):
+        raise ValueError(f"Unsupported Android pygame-ce ABI: {target_arch}")
+    probe = "machine_name = platform.machine()"
+    if setup_text.count(probe) != 1:
+        raise RuntimeError(
+            "pygame-ce 2.5.8 SIMD probe changed; update Android cross-build patch"
+        )
+    return setup_text.replace(probe, f"machine_name = {target_arch!r}", 1)
+
+
 class PygameCeRecipe(CompiledComponentsPythonRecipe):
     version = "2.5.8"
     url = "https://github.com/pygame-community/pygame-ce/archive/refs/tags/{version}.tar.gz"
@@ -60,6 +79,7 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
                 text = text.replace(marker,
                     '# Fio Android setuptools backend\nimport os, sys\n'
                     'sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n' + marker, 1)
+            text = patch_pygame_simd_target(text, arch.arch)
             setup_path.write_text(text)
             setup_template = open(
                 join("buildconfig", "Setup.Android.SDL2.in"),
