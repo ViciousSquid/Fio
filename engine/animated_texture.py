@@ -11,6 +11,9 @@ the previous one, so every frame is the whole picture).
 """
 
 import bisect
+import io
+
+from engine.asset_archives import asset_bytes
 
 #: Shortest frame time honoured: browsers treat 0-10 ms GIF delays as 100 ms
 #: for the same reason (a 0 delay would spin).
@@ -24,7 +27,10 @@ def is_animated_gif(path) -> bool:
         return False
     try:
         from PIL import Image
-        with Image.open(path) as image:
+        data = asset_bytes(path)
+        if data is None:
+            return False
+        with Image.open(io.BytesIO(data)) as image:
             return bool(getattr(image, "is_animated", False)) and image.n_frames > 1
     except Exception:
         return False
@@ -47,7 +53,10 @@ def decode_gif_frames(path):
     """
     from PIL import Image, ImageSequence
     images, seconds = [], []
-    with Image.open(path) as gif:
+    data = asset_bytes(path)
+    if data is None:
+        raise FileNotFoundError(path)
+    with Image.open(io.BytesIO(data)) as gif:
         for frame in ImageSequence.Iterator(gif):
             rgba = frame.convert("RGBA")
             if images and rgba.size != images[0].size:
