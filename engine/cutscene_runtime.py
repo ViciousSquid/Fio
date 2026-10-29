@@ -59,13 +59,21 @@ class CutsceneRuntime:
         return None
 
     def _load_cutscene_file(self, filename):
-        path = self._cutscene_file_path(filename)
-        if path is None:
-            debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
-            return None
+        from engine.asset_archives import package_document
+        raw = str(filename or "").replace('\\', '/')
+        # The package mount accepts only canonical cutscenes/ entries, and
+        # enforces a bounded read. No temporary cutscene JSON is written.
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            payload = package_document(raw)
+            if payload is not None:
+                data = json.loads(payload.decode('utf-8-sig'))
+            else:
+                path = self._cutscene_file_path(filename)
+                if path is None:
+                    debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
+                    return None
+                with open(path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
         except (OSError, ValueError, TypeError) as exc:
             debug_log("Cutscene", f"FAILED: '{filename}' could not be loaded: {exc}")
             return None
