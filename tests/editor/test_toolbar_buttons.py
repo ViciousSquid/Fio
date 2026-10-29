@@ -154,6 +154,37 @@ def test_the_grid_button_starts_on(toolbar):
     assert toolbar.grid_btn.isChecked()
 
 
+def test_grid_button_can_hide_and_restore_the_3d_grid(toolbar):
+    """Clicking the button twice must restore the rendered grid."""
+    button = toolbar.grid_btn
+    viewport = toolbar.view_3d
+    assert button.isChecked()
+    assert toolbar.grid_visible
+    assert viewport.grid_visible
+
+    button.click()
+    assert not button.isChecked()
+    assert not toolbar.grid_visible
+    assert not viewport.grid_visible
+
+    button.click()
+    assert button.isChecked()
+    assert toolbar.grid_visible
+    assert viewport.grid_visible
+
+
+def test_setting_grid_visibility_keeps_button_and_view_in_sync(toolbar):
+    """The G-key path uses toggle_grid, not a separate toolbar state setter."""
+    toolbar.toggle_grid(False)
+    assert not toolbar.grid_btn.isChecked()
+    assert not toolbar.view_3d.grid_visible
+
+    toolbar.toggle_grid(True)
+    assert toolbar.grid_btn.isChecked()
+    assert toolbar.grid_visible
+    assert toolbar.view_3d.grid_visible
+
+
 # ────────────────────────────
 # The base-tool group: Select / Brush / Vertex / Edge / Face
 # ────────────────────────────
