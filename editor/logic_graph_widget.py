@@ -1419,23 +1419,27 @@ class LogicGraphWindow(QWidget):
             lambda on: self.graph_scene.set_all_pins_expanded(on))
         tb_lay.addWidget(self._chk_pins)
 
-        btn_arrange = QPushButton("⇄ Arrange")
+        btn_arrange = QPushButton("Arrange")
+        btn_arrange.setIcon(QIcon("assets/ui/controls/move.svg"))
         btn_arrange.setToolTip("Lay the graph out left-to-right by signal flow")
         btn_arrange.setFixedWidth(120)
         btn_arrange.clicked.connect(self._arrange)
         tb_lay.addWidget(btn_arrange)
 
-        btn_refresh = QPushButton("↺ Reload")
+        btn_refresh = QPushButton("Reload")
+        btn_refresh.setIcon(QIcon("assets/ui/controls/refresh.svg"))
         btn_refresh.setToolTip("Reload nodes from scene")
         btn_refresh.setFixedWidth(150)
         btn_refresh.clicked.connect(self._reload)
 
-        btn_wizard = QPushButton("✨ Wizard…")
+        btn_wizard = QPushButton("Wizard…")
+        btn_wizard.setIcon(QIcon("assets/ui/controls/shader.svg"))
         btn_wizard.setToolTip("Open the Logic Wizard for guided setup")
         btn_wizard.setFixedWidth(300)
         btn_wizard.clicked.connect(self._open_wizard)
 
-        self._btn_apply = QPushButton("✔ Apply")
+        self._btn_apply = QPushButton("Apply")
+        self._btn_apply.setIcon(QIcon("assets/ui/controls/check.svg"))
         self._btn_apply.setToolTip(
             "Write graph connections back to entities (Ctrl+S)")
         self._btn_apply.setFixedWidth(300)
@@ -1524,7 +1528,7 @@ class LogicGraphWindow(QWidget):
             QWidget {
                 background: #1c1c20;
                 color: #ddd;
-                font-family: 'Segoe UI', Arial;
+                font-family: "Fio UI";
             }
             QPushButton {
                 background: #3a3a44;
@@ -1554,7 +1558,7 @@ class LogicGraphWindow(QWidget):
 
     def _on_changed(self):
         self._dirty = True
-        self._status.setText("Unsaved changes — press ✔ Apply to save.")
+        self._status.setText("Unsaved changes — press Apply to save.")
         self._btn_apply.setStyleSheet(
             "background:#3a3312; border:1px solid #a08020; color:#ffe080;")
 
@@ -1605,7 +1609,7 @@ class LogicGraphWindow(QWidget):
         wiz = LogicWizard(self.editor_state, self.graph_scene, parent=self)
         if wiz.exec_() == QDialog.Accepted:
             self._status.setText(
-                "Wizard applied connections. Press ✔ Apply to save.")
+                "Wizard applied connections. Press Apply to save.")
             self._on_changed()
 
     def closeEvent(self, event):

@@ -1,4 +1,4 @@
-"""macOS fit-ups: the menu-bar app name, and Windows layout conventions.
+"""macOS fit-ups: the menu-bar app name, and relative mouse look.
 
 The bold application name in the macOS menu bar is the main bundle's
 ``CFBundleName``.  A built Fio.app sets that in its Info.plist; ``python
@@ -10,13 +10,8 @@ Plain ctypes against the Objective-C runtime, so it needs no PyObjC.  It only
 ever writes to a dictionary that answers ``setObject:forKey:``: an Objective-C
 exception from a failed write would end the process, not raise here.
 
-Qt's macOS style also lays out forms and tab bars the Mac way: form fields stay
-at their preferred width and the whole form is centred, labels right-aligned,
-tabs centred.  The editor's panels were designed on Windows, where fields
-stretch across the panel and everything starts at the left, so on a Mac the
-Properties name box and "Targeted by" line came out as a short centred column.
-:func:`install_windows_layout_hints` keeps the native Mac look and answers just
-those layout questions the way Qt's Windows style does.
+Forms, tab bars and every other control are laid out as on Windows on every
+platform by :mod:`editor.desktop_style`.
 """
 
 import ctypes
@@ -91,51 +86,6 @@ def process_app_name():
         return text.decode() if text else None
     except Exception:
         return None
-
-
-#: Style hints that decide where forms and tab bars put things.  Everything
-#: else -- the look of every control -- stays the Mac style's.
-_LAYOUT_HINTS = (
-    'SH_FormLayoutFieldGrowthPolicy',
-    'SH_FormLayoutFormAlignment',
-    'SH_FormLayoutLabelAlignment',
-    'SH_FormLayoutWrapPolicy',
-    'SH_TabBar_Alignment',
-)
-
-
-def windows_layout_style():
-    """The native style, answering form and tab-bar layout hints as Windows.
-
-    None when Qt's Windows style is missing.  Needs a QApplication.
-    """
-    from PyQt5.QtWidgets import QProxyStyle, QStyle, QStyleFactory
-
-    reference = QStyleFactory.create('Windows')
-    if reference is None:
-        return None
-    hints = {getattr(QStyle, name): reference.styleHint(getattr(QStyle, name))
-             for name in _LAYOUT_HINTS}
-
-    class _WindowsLayoutHints(QProxyStyle):
-        def styleHint(self, hint, option=None, widget=None, returnData=None):
-            if hint in hints:
-                return hints[hint]
-            return super().styleHint(hint, option, widget, returnData)
-
-    # No base style given: the proxy wraps the platform's native style.
-    return _WindowsLayoutHints()
-
-
-def install_windows_layout_hints(app):
-    """Lay out forms and tab bars as on Windows; call before any widget exists.
-
-    Returns the installed style, or None when there was none to install.
-    """
-    style = windows_layout_style()
-    if style is not None:
-        app.setStyle(style)
-    return style
 
 
 # -- Relative mouse (mouse look) -----------------------------------------------

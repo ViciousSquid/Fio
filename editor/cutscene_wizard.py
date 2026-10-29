@@ -53,6 +53,14 @@ class CutsceneWizard(QtWidgets.QDialog):
         "skeleton", "wraith", "cow", "sheep", "hen",
     )
 
+    @staticmethod
+    def _scroll_page(page):
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setWidget(page)
+        return scroll
+
     def __init__(self, main_window, parent=None):
         super().__init__(parent or main_window)
         self.main_window = main_window
@@ -151,7 +159,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         setup_help.setMinimumHeight(55)
         setup_layout.addWidget(setup_help)
         setup_layout.addStretch(1)
-        tabs.addTab(setup_page, "Setup")
+        tabs.addTab(self._scroll_page(setup_page), "Setup")
 
         # -----------------------------------------------------------------
         # Actors + waypoints — the main authoring workflow.
@@ -248,7 +256,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         wv.addWidget(self.waypoint_list)
         actors_layout.addWidget(waypoint_box, 1)
 
-        tabs.addTab(actors_page, "Actors && Waypoints")
+        tabs.addTab(self._scroll_page(actors_page), "Actors && Waypoints")
 
         # -----------------------------------------------------------------
         # Camera
@@ -309,14 +317,21 @@ class CutsceneWizard(QtWidgets.QDialog):
         cv.addLayout(camera_buttons)
         self.camera_keys_list.currentRowChanged.connect(self._camera_keyframe_selected)
         camera_layout.addWidget(camera_box, 1)
-        tabs.addTab(camera_page, "Keyframes")
+        tabs.addTab(self._scroll_page(camera_page), "Keyframes")
 
         # -----------------------------------------------------------------
         # Events / dialogue. Advanced functionality remains available, but
         # it no longer makes the primary wizard vertically enormous.
         # -----------------------------------------------------------------
         events_page = QtWidgets.QWidget()
-        events_layout = QtWidgets.QVBoxLayout(events_page)
+        events_outer = QtWidgets.QVBoxLayout(events_page)
+        events_scroll = QtWidgets.QScrollArea(events_page)
+        events_scroll.setWidgetResizable(True)
+        events_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        events_content = QtWidgets.QWidget()
+        events_layout = QtWidgets.QVBoxLayout(events_content)
+        events_scroll.setWidget(events_content)
+        events_outer.addWidget(events_scroll)
         events_tabs = QtWidgets.QTabWidget()
         self._build_message_tab(events_tabs)
         self._build_io_tab(events_tabs)
@@ -397,9 +412,9 @@ class CutsceneWizard(QtWidgets.QDialog):
         playback_box = QtWidgets.QGroupBox("Preview")
         playback = QtWidgets.QHBoxLayout(playback_box)
         playback.setContentsMargins(8, 6, 8, 6)
-        self.rewind_button = QtWidgets.QPushButton("⏪ RW")
-        self.play_button = QtWidgets.QPushButton("▶ Play")
-        self.fast_forward_button = QtWidgets.QPushButton("FF ⏩")
+        self.rewind_button = QtWidgets.QPushButton("Rewind")
+        self.play_button = QtWidgets.QPushButton("Play")
+        self.fast_forward_button = QtWidgets.QPushButton("Fast Forward")
         self.play_button.setStyleSheet(
             "QPushButton { background: #238636; color: white; font-weight: bold; "
             "padding: 6px 18px; border-radius: 4px; }"
@@ -638,28 +653,28 @@ class CutsceneWizard(QtWidgets.QDialog):
             self._preview_time = 0.0
         self._preview_rate = 1.0
         self._preview_timer.start()
-        self.play_button.setText("⏸ Pause")
+        self.play_button.setText("Pause")
         self._preview_apply()
 
     def _preview_rewind(self):
         self._preview_start()
         self._preview_rate = -2.0
         self._preview_timer.start()
-        self.play_button.setText("▶ Play")
+        self.play_button.setText("Play")
         self._preview_apply()
 
     def _preview_fast_forward(self):
         self._preview_start()
         self._preview_rate = 2.0
         self._preview_timer.start()
-        self.play_button.setText("▶ Play")
+        self.play_button.setText("Play")
         self._preview_apply()
 
     def _preview_stop_and_restore(self):
         self._refresh_actor_objects_from_state()
         self._preview_timer.stop()
         self._preview_rate = 0.0
-        self.play_button.setText("▶ Play")
+        self.play_button.setText("Play")
         for aid, baseline in self._preview_actor_baseline.items():
             actor = self.actor_objects.get(aid)
             if actor is not None:

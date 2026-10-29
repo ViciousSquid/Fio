@@ -33,7 +33,7 @@ dark_stylesheet = """
     QWidget {
         background-color: #2b2b2b;
         color: #e0e0e0;
-        font-family: "Segoe UI", Arial, sans-serif;
+        font-family: "Fio UI";
     }
     QPushButton {
         background-color: #3c3f41;
@@ -99,6 +99,9 @@ dark_stylesheet = """
         padding: 8px 12px;
         border-right: 1px solid #555;
     }
+    QTabWidget::tab-bar {
+        alignment: left;
+    }
     QTabBar::tab:selected {
         background-color: #2b2b2b;
         border-bottom: 2px solid #007acc;
@@ -119,6 +122,9 @@ dark_stylesheet = """
         border: 1px solid #555;
     }
 """
+
+from editor_styles import CONTROL_STYLESHEET
+dark_stylesheet += CONTROL_STYLESHEET
 
 if __name__ == "__main__":
     require_supported_python()
@@ -246,13 +252,15 @@ if __name__ == "__main__":
         def finish(self, main_window):
             self.close()
 
+    from editor.desktop_style import prepare_qt, install_editor_style, set_editor_font_size
+    prepare_qt(config.getboolean('Display', 'high_dpi_scaling', fallback=True))
     # Create app
     app = QApplication(sys.argv)
-    if sys.platform == 'darwin':
-        # Forms and tab bars laid out as on Windows, where the panels were
-        # designed; the Mac style centres them at their preferred widths.
-        from macos_app import install_windows_layout_hints
-        install_windows_layout_hints(app)
+    # One Windows-based style, bundled fonts and icons on every platform, so
+    # the editor looks the same on Windows and macOS (editor/desktop_style.py).
+    install_editor_style(app)
+    # The user's font size, applied up front so the splash matches the editor.
+    set_editor_font_size(app, config.getint('Display', 'font_size', fallback=11))
     # Without this PyQt5 aborts the process on any exception escaping a Qt
     # callback, losing the open map.
     from editor.debug_console import install_excepthook

@@ -494,7 +494,7 @@ class DebugConsole(QWidget):
         # Console text area
         self.console = LogoTextBrowser(self._logo_path, self)
         self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas", self.font_size))
+        self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
         self.console.setStyleSheet("""
@@ -596,11 +596,11 @@ class DebugConsole(QWidget):
         input_layout.setContentsMargins(0, 0, 0, 0)
 
         prompt_label = QLabel("]")
-        prompt_label.setStyleSheet("color: #F08000; font-weight: bold; font-family: Consolas; font-size: 14px;")
+        prompt_label.setStyleSheet('color: #F08000; font-weight: bold; font-family: "IBM Plex Mono"; font-size: 14px;')
 
         self.command_input = CommandInput()
         self.command_input.setPlaceholderText("Enter command...")
-        self.command_input.setFont(QFont("Consolas", self.font_size))
+        self.command_input.setFont(QFont("IBM Plex Mono", self.font_size))
         self.command_input.setStyleSheet("""
             QLineEdit {
                 background-color: #1a1a1a;
@@ -662,8 +662,8 @@ class DebugConsole(QWidget):
     def _apply_font_size(self):
         """Apply the current font size to the console and reload all HTML."""
         self.font_size_label.setText(str(self.font_size))
-        self.console.setFont(QFont("Consolas", self.font_size))
-        self.command_input.setFont(QFont("Consolas", self.font_size))
+        self.console.setFont(QFont("IBM Plex Mono", self.font_size))
+        self.command_input.setFont(QFont("IBM Plex Mono", self.font_size))
         self._refresh_console()
 
     # ------------------------------------------------------------------

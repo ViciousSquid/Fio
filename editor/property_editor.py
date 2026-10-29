@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFrame, QDoubleSpinBox, QSizePolicy,
                              QTableWidget, QTableWidgetItem, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QIcon
 from PyQt5 import sip
 from engine.items import ITEM_IDS
 from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
@@ -281,7 +281,7 @@ class _Style:
               "QPushButton:hover { background-color: #7B4AB9; border: 2px solid #A875D6; } "
               "QPushButton:pressed { background-color: #5A2E96; }")
     ID_FIELD = ("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; "
-                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: monospace; } "
+                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: 'IBM Plex Mono'; } "
                 "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
 
     @staticmethod
@@ -962,19 +962,19 @@ class PropertyEditor(QWidget):
         self.tab_widget.addTab(self._create_general_tab(brush), "General")
 
         self.trigger_tab = self._create_trigger_tab(brush)
-        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, "🎯 Trigger")
+        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, QIcon("assets/ui/controls/target.svg"), "Trigger")
         self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
 
         self.mover_tab = self._create_mover_tab(brush)
-        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, "⚡ Mover")
+        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, QIcon("assets/ui/controls/move.svg"), "Mover")
         self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
 
         self.door_tab = self._create_door_tab(brush)
-        self.door_tab_index = self.tab_widget.addTab(self.door_tab, "🚪 Door")
+        self.door_tab_index = self.tab_widget.addTab(self.door_tab, QIcon("assets/ui/controls/door.svg"), "Door")
         self.tab_widget.setTabVisible(self.door_tab_index, is_door)
 
         self.shader_tab = self._create_shader_tab(brush)
-        self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, "✨ Shader")
+        self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, QIcon("assets/ui/controls/shader.svg"), "Shader")
         self.tab_widget.setTabVisible(self.shader_tab_index, shader_type not in ('<<None>', None, ''))
 
         self.tab_widget.addTab(self._create_appearance_tab(brush), "Appearance")
@@ -983,7 +983,7 @@ class PropertyEditor(QWidget):
         self.io_tab = None
         if IO_AVAILABLE and (is_trigger or is_mover or is_door):
             self.io_tab = self._create_io_tab_for_brush(brush)
-            self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
+            self.io_tab_index = self.tab_widget.addTab(self.io_tab, QIcon("assets/ui/controls/links.svg"), "I/O")
 
         layout.addWidget(self.tab_widget)
 
@@ -1002,7 +1002,7 @@ class PropertyEditor(QWidget):
         """
         placeholder = QWidget(self.tab_widget)
         QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
-        index = self.tab_widget.addTab(placeholder, "\u26a1 I/O")
+        index = self.tab_widget.addTab(placeholder, QIcon("assets/ui/controls/links.svg"), "I/O")
         tabs = self.tab_widget
 
         def fill(current, _tabs=tabs, _index=index, _holder=placeholder):
@@ -2167,7 +2167,7 @@ class PropertyEditor(QWidget):
             # Collision lives on the Prop's dedicated Physics tab.
 
             if IO_AVAILABLE:
-                note = QLabel("💡 Use the I/O tab for advanced targeting")
+                note = QLabel("Use the I/O tab for advanced targeting")
                 note.setStyleSheet(
                     "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }"
                 )
@@ -3781,7 +3781,7 @@ class PropertyEditor(QWidget):
         radius_spin = _make_spin(thing.properties.get('radius', 256.0), 1.0, 99999.0,
                                  suffix=" u", decimals=1, step=16.0)
         show_btn = QToolButton()
-        show_btn.setText("⊙")
+        show_btn.setIcon(QIcon("assets/ui/controls/target.svg"))
         show_btn.setCheckable(True)
         show_btn.setChecked(bool(thing.properties.get('show_radius', False)))
         show_btn.setStyleSheet("""
@@ -4155,7 +4155,8 @@ class PropertyEditor(QWidget):
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        refresh_btn = QPushButton("🔄 Refresh Live Values")
+        refresh_btn = QPushButton("Refresh Live Values")
+        refresh_btn.setIcon(QIcon("assets/ui/controls/refresh.svg"))
         refresh_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
                           border-radius: 3px; padding: 4px 8px; }
@@ -4284,8 +4285,10 @@ class PropertyEditor(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        add_btn = QPushButton("➕ Add Key")
-        rem_btn = QPushButton("➖ Remove Selected")
+        add_btn = QPushButton("Add Key")
+        add_btn.setIcon(QIcon("assets/ui/controls/plus.svg"))
+        rem_btn = QPushButton("Remove Selected")
+        rem_btn.setIcon(QIcon("assets/ui/controls/minus.svg"))
         for b in (add_btn, rem_btn):
             b.setStyleSheet("""
                 QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
@@ -4402,7 +4405,7 @@ class PropertyEditor(QWidget):
         sight_spin = _make_spin(thing.properties.get('sight', 512), 0, 9999, suffix=" u")
         sight_spin.setToolTip("Distance at which this monster detects the player")
         sight_btn = QToolButton()
-        sight_btn.setText("👁")
+        sight_btn.setIcon(QIcon("assets/ui/controls/eye.svg"))
         sight_btn.setCheckable(True)
         sight_btn.setChecked(getattr(self.editor, '_sight_preview_thing', None) is thing)
         sight_btn.setStyleSheet("""
@@ -4590,7 +4593,8 @@ class PropertyEditor(QWidget):
         tab_layout.addWidget(flags_group)
 
         # Customise button
-        cust_btn = QPushButton("🎨  Customise Sprites…")
+        cust_btn = QPushButton("Customise Sprites…")
+        cust_btn.setIcon(QIcon("assets/ui/controls/palette.svg"))
         cust_btn.setFixedWidth(350)
         cust_btn.setToolTip("Assign custom idle / shoot / dead PNGs and billboard size")
         cust_btn.setStyleSheet("""
@@ -4926,7 +4930,7 @@ class PropertyEditor(QWidget):
 
         collect_key_name = brush.get('door_key_name', '')
         if not collect_key_name:
-            link_lbl.setText("⚠ No key name set")
+            link_lbl.setText("Warning: No key name set")
             link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
             link_lbl.setVisible(True)
             if sel_btn:
@@ -4944,13 +4948,13 @@ class PropertyEditor(QWidget):
             name = self._linked_key_collect.properties.get('name', 'unnamed')
             pos = self._linked_key_collect.pos
             pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})" if pos else ""
-            link_lbl.setText(f"🔑 Linked to: {name} {pos_str}")
+            link_lbl.setText(f"Linked to: {name} {pos_str}")
             link_lbl.setStyleSheet("QLabel { color: #88FF88; padding: 4px; }")
             link_lbl.setVisible(True)
             if sel_btn:
                 sel_btn.setVisible(True)
         else:
-            link_lbl.setText(f"⚠ No key collection named '{collect_key_name}' found in map")
+            link_lbl.setText(f"Warning: No key collection named '{collect_key_name}' found in map")
             link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
             link_lbl.setVisible(True)
             if sel_btn:

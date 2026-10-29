@@ -55,9 +55,9 @@ class FloatingWindow:
         self.dragging = False
         self.drag_offset = QPoint(0, 0)
 
-        self.font = QFont("Arial", 9)
+        self.font = QFont("Fio UI", 9)
         self.font.setStyleHint(QFont.Monospace)
-        self.title_font = QFont("Arial", 9)
+        self.title_font = QFont("Fio UI", 9)
         self.title_font.setBold(True)
         self._fm = QFontMetrics(self.font)
 

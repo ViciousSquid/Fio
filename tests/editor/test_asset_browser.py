@@ -72,3 +72,20 @@ def test_asset_browser_uses_directory_watcher_not_polling_timer(qt_app, tmp_path
     # The existing resize timer is unrelated UI debouncing; it must not be
     # responsible for discovering filesystem changes.
     assert tab.resize_timer.isSingleShot()
+
+
+def test_thumbnail_rows_fit_the_viewport_including_layout_margins(qt_app, tmp_path):
+    for index in range(10):
+        _write_png(tmp_path / f'asset-{index}.png')
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
+    tab.resize(550, 500)
+    tab.show()
+    try:
+        assert _pump_until(qt_app, lambda: (
+            not tab.resize_timer.isActive()
+            and tab.scroll_area.horizontalScrollBar().maximum() == 0
+            and tab.grid_container.minimumSizeHint().width() <= tab.scroll_area.viewport().width()
+        ))
+    finally:
+        tab.close()
+        tab.deleteLater()

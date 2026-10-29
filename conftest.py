@@ -530,7 +530,10 @@ def qt_app():
     """
     pytest.importorskip("PyQt5", reason="PyQt5 is not installed")
     from PyQt5.QtWidgets import QApplication
+    from editor.desktop_style import prepare_qt, install_editor_style
+    prepare_qt()
     app = QApplication.instance() or QApplication([])
+    install_editor_style(app)
     yield app
 
 

@@ -769,7 +769,8 @@ class Ui_MainWindow(object):
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
 
         current_font = MainWindow.play_button.font()
-        current_font.setPointSizeF(current_font.pointSizeF() * 1.5)
+        # Keep enlarged editor text inside the fixed toolbar button too.
+        # The stylesheet supplies the Play action's bold emphasis.
         MainWindow.play_button.setFont(current_font)
         MainWindow.play_button.setStyleSheet("""
             QPushButton {

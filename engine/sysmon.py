@@ -75,7 +75,7 @@ class SysMon:
         self._fps = 0.0
 
         # Font & metrics
-        self.font = QFont("Arial", 9)
+        self.font = QFont("Fio UI", 9)
         self.font.setStyleHint(QFont.Monospace)
         self._font_metrics = QFontMetrics(self.font)
 

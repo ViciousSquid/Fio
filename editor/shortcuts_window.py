@@ -106,7 +106,7 @@ class ShortcutsWindow(QDialog):
 
         # Keys read far better set apart from their descriptions: a fixed
         # pitch lines the modifiers up down the column.
-        self._key_font = QFont('Consolas')
+        self._key_font = QFont('IBM Plex Mono')
         self._key_font.setStyleHint(QFont.Monospace)
         self._key_font.setPointSize(QFont().pointSize())
 
