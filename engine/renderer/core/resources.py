@@ -707,7 +707,7 @@ class ResourcesMixin:
 
         # 3. Try assets/models/ (legacy fallback)
         resolved = os.path.normpath(os.path.join('assets', 'models', texture_name))
-        if os.path.exists(resolved):
+        if asset_exists(resolved):
             return resolved
 
         # 4. Return as-is and let the loader handle errors
