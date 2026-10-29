@@ -5,15 +5,36 @@ same logical-pixel geometry on Windows and macOS. The large-mode dimensions
 are requested caps; smaller windows may produce smaller buttons.
 """
 
+import configparser
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="the toolbar is a Qt widget")
 
 from PyQt5.QtWidgets import QPushButton  # noqa: E402
 
-from editor.ui import PLAY_BUTTON_LENGTHS, TOOLBAR_ICON_SIZES  # noqa: E402
+from editor.ui import (  # noqa: E402
+    PLAY_BUTTON_LENGTHS, TOOLBAR_ICON_SIZES, fit_toolbar_metrics, toolbar_metrics,
+)
 
 pytestmark = pytest.mark.qt
+
+
+def test_small_icons_are_ten_percent_larger_without_changing_large_mode():
+    """24px * 1.10 rounds to 26 Qt logical pixels on both platforms."""
+    assert TOOLBAR_ICON_SIZES[False] == round(24 * 1.10) == 26
+    assert TOOLBAR_ICON_SIZES[True] == 45
+    assert PLAY_BUTTON_LENGTHS == {False: 110, True: 250}
+
+    config = configparser.ConfigParser()
+    config["Display"] = {"big_toolbar_buttons": "False"}
+    assert toolbar_metrics(config) == (26, 110)
+
+    # The extra two pixels must still fit a typical vertical editor toolbar.
+    icon, play = fit_toolbar_metrics(
+        config, available=900, buttons=15, separators=3, vertical=True,
+        spacing=4, margin=2, handle=8, separator_extent=8)
+    assert (icon, play) == (26, 110)
 
 
 def _set_big(window, big):
