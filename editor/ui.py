@@ -16,6 +16,7 @@ from engine.view_distance import (
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
+from editor.hierarchy_dock import SceneHierarchyDock
 from editor.debug_console import DebugConsole
 
 import math
@@ -359,23 +360,14 @@ class Ui_MainWindow(object):
         MainWindow.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
         MainWindow.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
-        # Scene Hierarchy Dock (Left)
-        #
-        # Keep a useful windowTitle for toggleViewAction() in View, but replace
-        # the visible dock title bar with a zero-height widget.  The hierarchy
-        # itself should start at the top instead of wasting a row on "Scene".
-        MainWindow.scene_hierarchy_dock = QDockWidget("Scene Hierarchy", MainWindow)
-        MainWindow.scene_hierarchy_dock.setObjectName("SceneDock")
-        MainWindow.scene_hierarchy_dock.setWidget(MainWindow.scene_hierarchy)
-        scene_title_bar = QWidget()
-        scene_title_bar.setFixedHeight(0)
-        scene_title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        MainWindow.scene_hierarchy_dock.setTitleBarWidget(scene_title_bar)
+        # Scene Hierarchy Dock (Left): a narrower hierarchy with an arrow that
+        # folds it into a left edge strip.
+        MainWindow.scene_hierarchy_dock = SceneHierarchyDock(MainWindow.scene_hierarchy, MainWindow)
         MainWindow.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.LeftDockWidgetArea, MainWindow.scene_hierarchy_dock)
-        
-        screen_width = QApplication.primaryScreen().geometry().width()
-        MainWindow.scene_hierarchy_dock.setMaximumWidth(int(screen_width * 0.10))
+        # Logical pixels: useful on Retina displays too, and freely resizable.
+        MainWindow.resizeDocks([MainWindow.scene_hierarchy_dock],
+                               [SceneHierarchyDock.DEFAULT_WIDTH], Qt.Horizontal)
 
         # 3D View Dock (Center/Right)
         MainWindow.view_3d_dock = QDockWidget("3D View", MainWindow)
@@ -472,6 +464,10 @@ class Ui_MainWindow(object):
         self.create_toolbars(MainWindow)  # Creates Play button
         self.create_tool_toolbar(MainWindow)  # Single top strip: tools + Play last
         self.create_status_bar(MainWindow)
+        # Apply the width after every dock exists, so the hierarchy starts at
+        # its default rather than expanding to its maximum while docks are added.
+        MainWindow.resizeDocks([MainWindow.scene_hierarchy_dock],
+                               [SceneHierarchyDock.DEFAULT_WIDTH], Qt.Horizontal)
 
     def create_menu_bar(self, MainWindow):
         menubar = MainWindow.menuBar()

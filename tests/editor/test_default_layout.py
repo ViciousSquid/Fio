@@ -59,12 +59,15 @@ def test_the_layout_resize_is_applied_by_the_real_ui_owner(main_window, qt_app):
     assert host.right_dock.width() / shared == pytest.approx(0.60, abs=0.01)
 
 
-def test_the_scene_hierarchy_keeps_its_zero_height_title_bar(main_window):
+def test_the_scene_hierarchy_has_a_compact_collapse_arrow(main_window, qt_app):
+    qt_app.processEvents()
     dock = main_window.scene_hierarchy_dock
     assert dock.windowTitle() == "Scene Hierarchy"
     title_bar = dock.titleBarWidget()
     assert title_bar is not None
-    assert title_bar.height() == 0
+    assert title_bar.height() == 28
+    assert dock.toggle_button.arrowType() == Qt.LeftArrow
+    assert dock.MIN_WIDTH <= dock.width() < 260
 
 # ────────────────────────────
 # The version gate
