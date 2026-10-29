@@ -72,7 +72,7 @@ import sys
 import types
 class NoDesktop(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in ('editor', 'PyQt5', 'load_throbber'):
+        if fullname.split('.')[0] in ('editor', 'PyQt5'):
             raise ModuleNotFoundError(fullname)
 sys.meta_path.insert(0, NoDesktop())
 os.environ['ANDROID_ARGUMENT'] = '/data/user/0/fio/files/app'
