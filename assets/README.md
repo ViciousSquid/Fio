@@ -12,13 +12,21 @@ Fio discovers these category archives in `assets/` at editor startup:
 | `music.fiopak` | `assets/music/` (currently no music tracks are shipped) |
 | `sounds.fiopak` | `assets/sounds/` |
 
-These are data-only ZIP archives with project-relative paths. Loose non-audio
-files stay as development overrides. Startup restores missing files, byte for
-byte, before constructing the splash or editor toolbar; existing files are
-never overwritten. An archive-only installation therefore needs writable
-asset directories. Sounds and music retain their existing archive-first native
-readers and are not extracted; repack their category after editing loose audio.
-Archives are not opened in rendering hot paths.
+These are data-only ZIP archives with project-relative paths. Fio validates
+their member indexes on startup and reads each file on demand without unpacking
+it into the project directory. All seven categories — including sprites,
+textures, models, fonts and editor icons — use archive-backed resource readers.
+Sound and music continue to use their dedicated direct archive readers.
+
+Loose files are intentional development overrides, and take precedence over
+the matching ZIP member. No existing loose files are deleted or overwritten.
+An archive-only installation does not need write access to its asset directories.
+Repack a category after changing loose files to update its archive. Existing
+texture/model/sprite caches still prevent archive reads on every rendered frame.
+
+Portable world `.fiopak` packages handled by the desktop editor's Play Package
+flow are separate from these seven category archives; that flow still uses a
+temporary extraction directory and is not covered by this mounting mechanism.
 
 Rebuild all categories from the repository root:
 
