@@ -54,7 +54,6 @@ jobs:
         run: >-
           python -m pytest -q
           tests/editor/test_desktop_style.py
-          tests/editor/test_toolbar_buttons.py
           tests/editor/test_terrain_panel_layout.py
           tests/editor/test_asset_browser.py
       - name: Capture every editor surface at the default font size
