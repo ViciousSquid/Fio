@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
                              QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
                              QLineEdit, QStyle)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
+from engine.asset_qt import asset_icon
 from PyQt5 import QtCore
 import re
 from PyQt5.QtCore import Qt, QTimer, QEvent
@@ -169,8 +170,8 @@ class SceneHierarchy(QWidget):
         self.tree.setIconSize(QtCore.QSize(44, 20))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_menu)
-        self.lock_icon = QIcon("assets/lock.png")
-        self.hidden_icon = QIcon("assets/hidden.png")
+        self.lock_icon = asset_icon("assets/lock.png")
+        self.hidden_icon = asset_icon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
         # Double-clicks are read off the viewport, not itemDoubleClicked: the
         # first click of a double-click changes the selection, which rebuilds
@@ -193,13 +194,13 @@ class SceneHierarchy(QWidget):
 
         # Load colour icons in rainbow order (ROYGIBV) with white last
         self.colour_icons = {
-            'red': QIcon("assets/circ_red.png"),
-            'orange': QIcon("assets/circ_orange.png"),
-            'yellow': QIcon("assets/circ_yellow.png"),
-            'green': QIcon("assets/circ_green.png"),
-            'blue': QIcon("assets/circ_blue.png"),
-            'pink': QIcon("assets/circ_pink.png"),
-            'white': QIcon("assets/circ_white.png"),
+            'red': asset_icon("assets/circ_red.png"),
+            'orange': asset_icon("assets/circ_orange.png"),
+            'yellow': asset_icon("assets/circ_yellow.png"),
+            'green': asset_icon("assets/circ_green.png"),
+            'blue': asset_icon("assets/circ_blue.png"),
+            'pink': asset_icon("assets/circ_pink.png"),
+            'white': asset_icon("assets/circ_white.png"),
         }
         self.colour_names = {
             "circ_red.png": "red",
