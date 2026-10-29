@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer, QFileSystemWatcher
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage, QImageReader
 from engine.glb_loader import render_glb_thumbnail
-from engine.asset_archives import asset_bytes, asset_exists, asset_names
+from engine.asset_archives import asset_bytes, asset_exists, asset_names, ensure_asset_directories
 from engine.asset_qt import asset_image, asset_icon, asset_pixmap
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
@@ -493,12 +493,10 @@ class AssetBrowserTab(QWidget):
         self.resize_timer.setSingleShot(True)
         self.resize_timer.timeout.connect(self.do_relayout)
 
-        # The Audio tab can browse a .fiopak directly. Do not create an
-        # otherwise absent sounds/ or music/ directory just by opening it.
-        if (not self.is_audio_tab
-                and not self._active_asset_archive()
-                and not os.path.exists(self.current_asset_folder)):
-            try: os.makedirs(self.current_asset_folder)
+        # Each category has an intentionally empty loose-file workspace even
+        # when an archive supplies the built-in members.
+        if not os.path.isdir(self.current_asset_folder):
+            try: os.makedirs(self.current_asset_folder, exist_ok=True)
             except OSError: pass
 
         # Main layout: action bar at top (below tabs), then splitter (tree + grid)
@@ -952,7 +950,11 @@ class AssetBrowserTab(QWidget):
             return
         self.audio_mode = mode
         self.root_path = self.audio_folders[mode]
-        # Switching to archive-backed audio must not materialise a loose folder.
+        # The folder is a writable workspace, not an extracted ZIP copy.
+        try:
+            os.makedirs(self.root_path, exist_ok=True)
+        except OSError:
+            pass
         self.dir_model.setRootPath(self.root_path)
         self.tree_view.setRootIndex(self.dir_model.index(self.root_path))
         self.home_btn.setText(f"🏠 {mode.capitalize()}")
@@ -1175,6 +1177,7 @@ class AssetBrowser(QWidget):
             self.textures_path = os.path.join(initial_path, "textures")
             
         self.models_path = os.path.join(self.assets_root, "models")
+        ensure_asset_directories(os.path.dirname(self.assets_root))
 
         # Determine maps and packages folders based on editor's root_dir if available
         if self.editor:
