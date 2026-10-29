@@ -21,7 +21,6 @@ _DATA_SUFFIXES = _ROOT_IMAGES | {
 MAX_ENTRY_BYTES = 256 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 10000
-_prepared = {}
 
 
 def category_member(member: str, category: str) -> bool:
@@ -62,7 +61,6 @@ def _entries(archive, category):
         if total > MAX_TOTAL_BYTES:
             raise ValueError('asset archive exceeds total size limit')
     return infos
-
 
 
 # Indexed archive members, per project root. Values are archive categories.
