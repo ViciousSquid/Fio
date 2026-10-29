@@ -299,24 +299,36 @@ class OBJLoader:
         stem = os.path.splitext(os.path.basename(obj_path))[0].lower()
         expected = f"{stem}_basecolor.png"
 
+        # This fallback runs only for OBJ files without an MTL. The model
+        # directory may not exist on disk when its contents live in .fiopak.
         candidates = []
         try:
             entries = os.listdir(obj_dir)
         except OSError:
             entries = []
-
         for entry in entries:
             entry_path = os.path.join(obj_dir, entry)
-            if os.path.isfile(entry_path) and entry.lower() == expected:
+            if asset_exists(entry_path) and entry.lower() == expected:
                 candidates.append(entry_path)
             elif os.path.isdir(entry_path):
                 try:
                     for child in os.listdir(entry_path):
                         child_path = os.path.join(entry_path, child)
-                        if os.path.isfile(child_path) and child.lower() == expected:
+                        if asset_exists(child_path) and child.lower() == expected:
                             candidates.append(child_path)
                 except OSError:
-                    continue
+                    pass
+
+        for name in asset_names('assets/models/'):
+            candidate = os.path.join(os.getcwd(), name)
+            try:
+                relative = os.path.relpath(candidate, obj_dir)
+            except ValueError:
+                continue
+            if (os.path.basename(candidate).lower() == expected
+                    and relative != '..' and not relative.startswith('..' + os.sep)
+                    and len(relative.split(os.sep)) <= 2):
+                candidates.append(candidate)
 
         if not candidates:
             return
