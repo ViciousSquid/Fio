@@ -32,6 +32,10 @@ def test_all_categories_mount_without_materialisation(tmp_path):
         write_archive(tmp_path, category, {member: data})
 
     assert prepare_asset_archives(tmp_path) == tuple(categories)
+    for category in ('sprites', 'textures', 'models', 'fonts', 'sounds', 'music'):
+        directory = tmp_path / 'assets' / category
+        assert directory.is_dir()
+        assert not any(directory.iterdir())
     for member, data in categories.values():
         path = tmp_path / member
         assert not path.exists()
@@ -39,6 +43,8 @@ def test_all_categories_mount_without_materialisation(tmp_path):
         assert asset_bytes(path) == data
         assert not path.exists()
     assert asset_names('assets/models/', tmp_path) == ['assets/models/tree.obj']
+    # Reading a ZIP member must not populate its matching loose directory.
+    assert not any((tmp_path / 'assets/models').iterdir())
 
 
 def test_loose_development_override_takes_precedence(tmp_path):
@@ -61,7 +67,8 @@ def test_audio_is_discovered_and_read_natively_without_extraction(
     member = f'assets/{category}/{file_name}'
     write_archive(tmp_path, category, {member: b'audio'})
     assert prepare_asset_archives(tmp_path) == (category,)
-    assert not (tmp_path / 'assets' / category).exists()
+    assert (tmp_path / 'assets' / category).is_dir()
+    assert not any((tmp_path / 'assets' / category).iterdir())
     assert read_archive_audio(str(tmp_path / 'assets' / f'{category}.fiopak'),
                               member, f'assets/{category}') == b'audio'
 
@@ -76,6 +83,7 @@ def test_invalid_archive_writes_nothing(tmp_path, name):
         'assets/sprites/ok.png': b'ok', name: b'bad',
     })
     prepare_asset_archives(tmp_path)
+    assert (tmp_path / 'assets/sprites').is_dir()
     assert not (tmp_path / 'assets/sprites/ok.png').exists()
     assert asset_bytes(tmp_path / 'assets/sprites/ok.png') is None
 
