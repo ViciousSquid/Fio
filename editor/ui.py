@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
 from PyQt5.QtGui import QIcon, QKeySequence, QPainter
+from engine.asset_qt import asset_icon
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -487,7 +488,7 @@ class Ui_MainWindow(object):
         # DEFINED BEFORE create_toolbars so it can be used there
         self.action_asset_browser = QAction(MainWindow)
         self.action_asset_browser.setObjectName("action_asset_browser")
-        self.action_asset_browser.setIcon(QIcon("assets/browser.png"))
+        self.action_asset_browser.setIcon(asset_icon("assets/browser.png"))
         self.action_asset_browser.setText("Asset Browser")
         self.action_asset_browser.setToolTip("Toggle Asset Browser")
         
@@ -536,14 +537,14 @@ class Ui_MainWindow(object):
         MainWindow.file_menu.addSeparator()
         MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
-        MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
+        MainWindow.undo_action = QAction(asset_icon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
         MainWindow.undo_action.setObjectName('undo_action')
         MainWindow.undo_action.setToolTip("Undo last action")
         MainWindow.undo_action.triggered.connect(MainWindow.undo)
         edit_menu.addAction(MainWindow.undo_action)
         
-        MainWindow.redo_action = QAction(QIcon("assets/b_redo.png"), 'Redo', MainWindow)
+        MainWindow.redo_action = QAction(asset_icon("assets/b_redo.png"), 'Redo', MainWindow)
         MainWindow.redo_action.setShortcut('Ctrl+Y')
         MainWindow.redo_action.setObjectName('redo_action')
         MainWindow.redo_action.setToolTip("Redo last action")
@@ -814,7 +815,7 @@ class Ui_MainWindow(object):
         icon_size_val, _length = toolbar_metrics(MainWindow.config)
 
         MainWindow.play_button = RotatablePlayButton(
-            QIcon("assets/b_test.png"), "Play", MainWindow)
+            asset_icon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
@@ -883,7 +884,7 @@ class Ui_MainWindow(object):
             """
             b = QPushButton()
             b.setProperty("toolbar_icon_button", True)
-            b.setIcon(QIcon(icon))
+            b.setIcon(asset_icon(icon))
             b.setIconSize(QSize(icon_size_val, icon_size_val))
             
             # Width: icon + 2px left/right borders + 2px padding
