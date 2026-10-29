@@ -98,6 +98,7 @@ class SceneHierarchy(QWidget):
         self.match_word_button.setToolTip("Match Whole Word")
         self.match_word_button.setStyleSheet("""
             QPushButton {
+                min-width: 0px;
                 background-color: #1b1b1f;
                 color: #888888;
                 border: none;
@@ -134,7 +135,7 @@ class SceneHierarchy(QWidget):
                 color: white;
                 border: none;
                 padding: 4px 8px;
-                text-align: center;
+                text-align: left;
             }
             QPushButton:hover {
                 background-color: #5a7a78;
@@ -153,15 +154,18 @@ class SceneHierarchy(QWidget):
         
         # Create tree widget
         self.tree = QTreeWidget()
+        self.tree.setUniformRowHeights(True)
+        self.tree.setIndentation(12)
         content_layout.addWidget(self.tree, stretch=2)
         
         # Configure tree widget
         self.tree.header().setVisible(False) 
+        self.tree.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.tree.setColumnCount(2)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.tree.setColumnWidth(1, 60)
+        self.tree.setColumnWidth(1, 48)
         self.tree.setIconSize(QtCore.QSize(44, 20))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_menu)
@@ -562,6 +566,7 @@ class SceneHierarchy(QWidget):
         # =====================================================================
         if self._has_terrain():
             terrain_header = QTreeWidgetItem(self.tree, ["Terrain", ""])
+            terrain_header.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             terrain_header.setFlags(terrain_header.flags() & ~Qt.ItemIsSelectable)
             terrain_header.setForeground(0, QBrush(QColor("white")))
             terrain_header.setBackground(0, header_brush)
@@ -571,6 +576,7 @@ class SceneHierarchy(QWidget):
 
             terrain_name = self._get_terrain_display_name()
             terrain_item = QTreeWidgetItem(terrain_header, [terrain_name, ""])
+            terrain_item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
 
@@ -580,6 +586,7 @@ class SceneHierarchy(QWidget):
 
         # Add Brushes Header with full-width background
         brushes_header = QTreeWidgetItem(self.tree, ["Brushes", ""])
+        brushes_header.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
         brushes_header.setFlags(brushes_header.flags() & ~Qt.ItemIsSelectable)
         brushes_header.setForeground(0, QBrush(QColor("white")))
         brushes_header.setBackground(0, header_brush)
@@ -591,6 +598,7 @@ class SceneHierarchy(QWidget):
         for i, brush_dict in self._get_sorted_brushes():
             item_text = self._get_brush_display_name(brush_dict, i)
             item = QTreeWidgetItem(brushes_header, [item_text, ""])
+            item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('brush', i))
             
             if brush_dict.get('hidden', False):
@@ -627,6 +635,7 @@ class SceneHierarchy(QWidget):
 
         # Add Things Header with full-width background
         things_header = QTreeWidgetItem(self.tree, ["Things", ""])
+        things_header.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
         things_header.setFlags(things_header.flags() & ~Qt.ItemIsSelectable)
         things_header.setForeground(0, QBrush(QColor("white")))
         things_header.setBackground(0, header_brush)
@@ -638,6 +647,7 @@ class SceneHierarchy(QWidget):
         for i, thing_obj in self._get_sorted_things():
             item_text = thing_obj.name if thing_obj.name else f'Thing {i+1}'
             item = QTreeWidgetItem(things_header, [item_text, ""])
+            item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('thing', i))
             
             # Check if hidden

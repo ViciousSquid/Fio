@@ -22,6 +22,7 @@ from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from engine.constants import water_high_quality
 from editor.tooltips import set_tooltips_enabled
+from editor.form_layout import configure_property_forms
 
 def item_choices(definitions):
     """``[(label, item id)]`` for every item slot, by its user-facing name.
@@ -254,12 +255,13 @@ except ImportError:
 # ────────────────────────────
 class _Style:
     TAB_BAR = """
+        QTabWidget::tab-bar { alignment: left; }
         QTabBar::tab:selected { background: #F08000; color: white; }
-        QTabBar::tab { background: #425f5d; color: #ccc; padding: 8px 16px; border: 1px solid #333; }
+        QTabBar::tab { background: #425f5d; color: #ccc; padding: 5px 10px; border: 1px solid #333; }
         QTabBar::tab:hover { background: #5a7a82; }
     """
     SCROLL_V = """
-        QScrollBar:vertical { width: 26px; background: #2b2b2b; border: none; margin: 0px; }
+        QScrollBar:vertical { width: 12px; background: #2b2b2b; border: none; margin: 0px; }
         QScrollBar::handle:vertical { background: #4b4d4d; min-height: 20px; border-radius: 4px; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
     """
@@ -270,13 +272,13 @@ class _Style:
     """
     HEADER = "QLabel {{ background-color: {color}; color: white; font-weight: bold; padding: 8px 12px; border-radius: 4px; font-size: 12px; }}"
     SECTION = "QLabel { color: #F08000; font-weight: bold; padding: 4px 0px; border-bottom: 1px solid #F08000; margin-top: 8px; }"
-    NAME_LBL = "QLabel { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; border-radius: 3px; }"
-    NAME_INP = ("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; "
+    NAME_LBL = "QLabel { color: #e0e0e0; font-weight: bold; padding: 3px 0; border: none; }"
+    NAME_INP = ("QLineEdit { background-color: #3c3f41; color: white; padding: 3px; "
                 "border: 2px solid #8B5AC2; border-radius: 3px; } "
                 "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
     TARGETED = ("QLabel { color: #00FF00; font-weight: bold; padding: 2px; "
                 "background-color: #1a3d1a; border: 1px solid #00AA00; border-radius: 3px; }")
-    ID_BTN = ("QPushButton { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px 8px; "
+    ID_BTN = ("QPushButton { background-color: #3c3f41; color: white; min-width: 0px; padding: 3px; "
               "border: 2px solid #8B5AC2; border-radius: 3px; } "
               "QPushButton:hover { background-color: #7B4AB9; border: 2px solid #A875D6; } "
               "QPushButton:pressed { background-color: #5A2E96; }")
@@ -988,6 +990,7 @@ class PropertyEditor(QWidget):
         layout.addWidget(self.tab_widget)
 
         layout.addStretch()
+        configure_property_forms(content)
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll
@@ -1009,7 +1012,9 @@ class PropertyEditor(QWidget):
             if current != _index or _holder.property('io_built'):
                 return
             _holder.setProperty('io_built', True)
-            _holder.layout().addWidget(builder())
+            inner = builder()
+            configure_property_forms(inner)
+            _holder.layout().addWidget(inner)
 
         tabs.currentChanged.connect(fill)
         if tabs.currentIndex() == index:
@@ -1944,6 +1949,7 @@ class PropertyEditor(QWidget):
 
         self.tab_widget = QTabWidget(content)
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+        self.tab_widget.setUsesScrollButtons(True)
 
         props_tab = self._create_thing_properties_tab(thing)
         self.tab_widget.addTab(props_tab, "Properties")
@@ -1988,12 +1994,14 @@ class PropertyEditor(QWidget):
                         debug_log("Plugins", f"custom tab build failed ({exc})")
                         return
                     if inner is not None:
+                        configure_property_forms(inner)
                         placeholder.layout().addWidget(inner)
 
                 self.tab_widget.currentChanged.connect(build_plugin_tab)
                 build_plugin_tab(self.tab_widget.currentIndex())
 
         layout.addStretch()
+        configure_property_forms(content)
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll

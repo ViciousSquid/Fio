@@ -1703,6 +1703,7 @@ class MainWindow(QMainWindow):
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
+                        min-width: 0px;
                     }
                     QPushButton:hover {
                         background-color: #D32F2F;
@@ -1722,6 +1723,7 @@ class MainWindow(QMainWindow):
                         border-radius: 3px;
                         padding: 5px 15px;
                         font-weight: bold;
+                        min-width: 0px;
                     }
                     QPushButton:hover {
                         background-color: #388E3C;

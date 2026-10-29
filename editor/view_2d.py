@@ -2256,6 +2256,20 @@ class View2D(QWidget):
         pad = PORTAL_GIZMO_PICK_PIXELS
         return rect.adjusted(-pad, -pad, pad, pad).contains(screen_pos)
 
+    @staticmethod
+    def _sprite_rect(pixmap, center):
+        """Bound editor markers to 32 logical pixels, preserving aspect ratio.
+
+        Drawing and picking share this rectangle, regardless of source image
+        dimensions, Retina backing resolution or view zoom.
+        """
+        width = pixmap.width() / pixmap.devicePixelRatioF()
+        height = pixmap.height() / pixmap.devicePixelRatioF()
+        scale = min(1.0, 32.0 / max(1.0, width, height))
+        width, height = width * scale, height * scale
+        return QRectF(center.x() - width / 2, center.y() - height / 2,
+                      width, height)
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -2381,19 +2395,8 @@ class View2D(QWidget):
                     pixmap = thing.get_instance_pixmap()
 
                 if pixmap:
-                    pixmap_size = pixmap.size()
-                    draw_rect = QRectF(s_pos.x() - pixmap_size.width() / 2,
-                                    s_pos.y() - pixmap_size.height() / 2,
-                                    pixmap_size.width(),
-                                    pixmap_size.height())
-                    painter.save()
-                    painter.translate(s_pos)
-                    target_rect = QRectF(-pixmap_size.width() / 2,
-                                        -pixmap_size.height() / 2,
-                                        pixmap_size.width(),
-                                        pixmap_size.height())
-                    painter.drawPixmap(target_rect.toRect(), pixmap)
-                    painter.restore()
+                    draw_rect = self._sprite_rect(pixmap, s_pos)
+                    painter.drawPixmap(draw_rect.toRect(), pixmap)
 
                 # 2b. The entity's label (a Monster's name; a PlayerStart's
                 # name and Primary) beneath its sprite.
@@ -2401,7 +2404,8 @@ class View2D(QWidget):
                 if label_lines:
                     self._draw_entity_label(painter, s_pos, label_lines,
                                             self._ENTITY_LABEL_COLOURS.get(
-                                                type(thing).__name__, QColor(255, 100, 100)))
+                                                type(thing).__name__, QColor(255, 100, 100)),
+                                            draw_rect)
 
                 # 3. Direction Arrow
                 angle_deg = None
@@ -2623,7 +2627,7 @@ class View2D(QWidget):
     #: label matches its direction arrow.
     _ENTITY_LABEL_COLOURS = {'PlayerStart': QColor(0, 255, 255)}
 
-    def _draw_entity_label(self, painter, s_pos, lines, colour):
+    def _draw_entity_label(self, painter, s_pos, lines, colour, sprite_rect=None):
         """Write *lines* under the sprite at screen point *s_pos*, top line first."""
         painter.save()
         painter.setPen(QPen(colour))
@@ -2633,8 +2637,9 @@ class View2D(QWidget):
         painter.setFont(font)
         line_height = painter.fontMetrics().height()
         # From the left edge of the sprite, with a DPI-aware gap.
-        text_x = s_pos.x() - 30
-        text_y = s_pos.y() + 30 + line_height + 2
+        text_x = sprite_rect.left() if sprite_rect is not None else s_pos.x() - 16
+        sprite_bottom = sprite_rect.bottom() if sprite_rect is not None else s_pos.y() + 16
+        text_y = sprite_bottom + line_height + 2
         for line in lines:
             painter.drawText(QPointF(text_x, text_y), line)
             text_y += line_height
@@ -3117,6 +3122,8 @@ class View2D(QWidget):
         painter.drawPolygon(QPolygonF([p2, p_arrow1, p_arrow2]))
     
     def _update_connection_animations(self):
+        if not self.isVisible() or not self.editor.show_logic_links:
+            return
         animation_speed = 0.05
         arrow_speed = 0.015  # Speed of traveling arrows
         arrow_spacing = 0.25  # Spacing between arrows (as fraction of line length)
@@ -4315,14 +4322,16 @@ class View2D(QWidget):
                     hit_half = 10
                 elif hasattr(thing, 'get_icon_pixmap'):
                     pixmap = thing.get_icon_pixmap()
-                    hit_half = max(pixmap.size().width(), pixmap.size().height()) / 2.0 if pixmap else 12
+                    hit_half = None if pixmap else 12
                 elif hasattr(thing, 'get_instance_pixmap'):
                     pixmap = thing.get_instance_pixmap()
-                    hit_half = max(pixmap.size().width(), pixmap.size().height()) / 2.0 if pixmap else 12
+                    hit_half = None if pixmap else 12
                 else:
                     hit_half = 12  # Default fallback
 
-                if abs(screen_pos.x() - s_pos.x()) <= hit_half and abs(screen_pos.y() - s_pos.y()) <= hit_half:
+                if hit_half is None:
+                    is_hit = self._sprite_rect(pixmap, s_pos).contains(screen_pos)
+                elif abs(screen_pos.x() - s_pos.x()) <= hit_half and abs(screen_pos.y() - s_pos.y()) <= hit_half:
                     is_hit = True
 
             if is_hit:
