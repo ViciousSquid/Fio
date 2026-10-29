@@ -68,6 +68,13 @@ dark_stylesheet = """
     QMenu::item:selected {
         background-color: #4b4d4d;
     }
+    /* Explicit separator painting avoids native-style highlight remnants
+       when a submenu opens (notably with Qt 5 on macOS). */
+    QMenu::separator {
+        height: 1px;
+        background-color: #555;
+        margin: 6px 8px;
+    }
     QDockWidget {
         titlebar-close-icon: url(assets/close.png);
         titlebar-normal-icon: url(assets/undock.png);
