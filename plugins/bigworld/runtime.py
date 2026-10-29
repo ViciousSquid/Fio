@@ -131,8 +131,12 @@ class BigWorldSession:
                  terrain_fill: bool = False,
                  terrain_infinite: bool = False,
                  terrain_stream_radius: float = 0.0,
-                 sim_near_radius: float = DEFAULT_NEAR_RADIUS):
+                 sim_near_radius: float = DEFAULT_NEAR_RADIUS,
+                 terrain_stream: bool = False):
         self.logic = logic
+        #: Stream the terrain's chunks around the camera within its authored
+        #: bounds (see the ``terrain_stream`` setting).
+        self.terrain_stream = bool(terrain_stream)
         #: The residency currently fitted to the camera, or None when the
         #: authored radii are in force: ``(activation, deactivation, limit)``.
         #: The screen's rectangle is :attr:`TierClassifier.near_rect`.
@@ -684,6 +688,8 @@ class BigWorldSession:
         thread via ``prune=False``.
         """
         if not self.terrain_fill:
+            if self.terrain_stream:
+                self._setup_terrain_stream()
             return
         terrain = self.logic.world_runtime.terrain
         if terrain is None:
@@ -709,6 +715,28 @@ class BigWorldSession:
             # Keep roughly a cell-radius of terrain resident around the player,
             # matched to how far brush/entity cells activate.
             radius = self.manager.activation_radius
+        terrain.set_streaming(True, radius)
+
+    def _setup_terrain_stream(self) -> None:
+        """Stream the terrain's chunks around the camera inside its authored
+        bounds (``terrain_stream``): the grid is not re-bounded, so anything
+        laid over the bounds -- a heightmap overlay -- stays where it was."""
+        terrain = self.logic.world_runtime.terrain
+        if terrain is None:
+            return
+        self._terrain = terrain
+        self._terrain_saved = {
+            "streaming": terrain.streaming,
+            "stream_radius": terrain.stream_radius,
+            "stream_evict_padding": terrain.stream_evict_padding,
+            "min_chunk_x": terrain.min_chunk_x,
+            "max_chunk_x": terrain.max_chunk_x,
+            "min_chunk_z": terrain.min_chunk_z,
+            "max_chunk_z": terrain.max_chunk_z,
+        }
+        radius = self._terrain_stream_radius_authored
+        if radius <= 0.0:
+            radius = self.manager.activation_radius + float(terrain.chunk_size)
         terrain.set_streaming(True, radius)
 
     def _restore_terrain(self) -> None:

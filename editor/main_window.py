@@ -1517,10 +1517,17 @@ class MainWindow(QMainWindow):
         box of everything the map contains), padded so terrain extends a little
         past the outermost object. Returns None when the map is empty.
         """
+        stream = self.state.editor_stream
+        cache_key = (self.state.world_epoch, pad, id(stream))
+        cached = getattr(self, '_editor_world_extent_cache', None)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         min_x = min_z = float('inf')
         max_x = max_z = float('-inf')
         found = False
-        for b in self.state.brushes:
+        # A camera-streamed map's whole world, unloaded cells included.
+        brushes = stream.records['brushes'].values() if stream else self.state.brushes
+        for b in brushes:
             pos = b.get('pos'); size = b.get('size') or [0, 0, 0]
             if not pos:
                 continue
@@ -1528,8 +1535,9 @@ class MainWindow(QMainWindow):
             min_x = min(min_x, pos[0] - hx); max_x = max(max_x, pos[0] + hx)
             min_z = min(min_z, pos[2] - hz); max_z = max(max_z, pos[2] + hz)
             found = True
-        for t in self.state.things:
-            pos = getattr(t, 'pos', None)
+        things = stream.records['things'].values() if stream else self.state.things
+        for t in things:
+            pos = t.get('pos') if isinstance(t, dict) else getattr(t, 'pos', None)
             if not pos:
                 continue
             min_x = min(min_x, pos[0]); max_x = max(max_x, pos[0])
@@ -1537,7 +1545,9 @@ class MainWindow(QMainWindow):
             found = True
         if not found:
             return None
-        return (min_x - pad, min_z - pad, max_x + pad, max_z + pad)
+        result = (min_x - pad, min_z - pad, max_x + pad, max_z + pad)
+        self._editor_world_extent_cache = (cache_key, result)
+        return result
 
     def _ensure_terrain(self):
         """Create a procedural Terrain if the map has none, and return it.
@@ -1662,6 +1672,9 @@ class MainWindow(QMainWindow):
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
+        checkbox = getattr(self, 'show_whole_world_checkbox', None)
+        if checkbox is not None:
+            checkbox.setEnabled(not self.view_3d.play_mode)
         if hasattr(self, 'play_button'):
             if self.view_3d.play_mode:
                 # Red for play mode
@@ -2562,6 +2575,8 @@ class MainWindow(QMainWindow):
             """)
 
         self._capture_pre_play_world()
+        # Play runs on the complete authored world, not the editor's cells.
+        self.state.materialize_editor_world()
         logic = self.view_3d.logic_thread
         if logic is not None:
             # A played package's cutscenes are looked up in the package.
@@ -2616,12 +2631,28 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
 
+    def set_show_whole_world(self, shown):
+        """Load every editor cell of a Big World map, or only those near the camera."""
+        if not self.config.has_section('Display'):
+            self.config.add_section('Display')
+        self.config.set('Display', 'show_whole_world', str(bool(shown)))
+        self.save_config()
+        if self.view_3d.play_mode:
+            return
+        if self.state.set_editor_whole_world(shown, self.view_3d.camera.pos):
+            self.update_all_ui()
+
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
             self._restore_pre_play_world()
+            stream = self.state.editor_stream
+            if stream is not None and stream.suspended:
+                # Back to the cells around the editor camera.
+                stream.suspended = False
+                self.state.stream_editor_camera(self.view_3d.camera.pos, force=True)
 
         self.ui.notification_label.setText("")
         self._restore_properties_tab()
@@ -4493,7 +4524,10 @@ class MainWindow(QMainWindow):
         # dirty), so a malformed map or one that fails to parse leaves the open
         # level as it was. Clearing first emptied the scene for any map that
         # got past the shape check.
-        self.state.load_from_data(level_data)
+        self.state.load_from_data(level_data, stream_editor=True)
+        self.state.set_editor_whole_world(
+            self.config.getboolean('Display', 'show_whole_world', fallback=True),
+            self.view_3d.camera.pos)
         self.state.mark_lighting_dirty()
 
         # Drop the previous map's terrain; this also clears terrain_data,
@@ -4509,6 +4543,9 @@ class MainWindow(QMainWindow):
                 from engine.terrain import Terrain
                 self.terrain = Terrain()
             self.terrain.from_dict(self.state.terrain_data)
+            if self.state.editor_stream is not None:
+                # Only the terrain around the camera, like the cells.
+                self.terrain.set_streaming(True, self.state.editor_stream.config['activation_radius'])
 
             if self.view_3d is not None and self.view_3d.logic_thread:
                 self.view_3d.logic_thread.world_runtime.terrain = self.terrain

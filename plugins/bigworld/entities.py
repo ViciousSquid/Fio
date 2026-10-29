@@ -111,5 +111,8 @@ class BigWorldSettings(Thing):
     def terrain_stream_radius(self) -> float:
         return float(self._get("terrain_stream_radius"))
 
+    def terrain_stream(self) -> bool:
+        return bool(self._get("terrain_stream"))
+
     def sim_near_radius(self) -> float:
         return float(self._get("sim_near_radius"))

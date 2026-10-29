@@ -174,6 +174,7 @@ class BigWorldPlugin(FioPlugin):
                 terrain_infinite=cfg["terrain_infinite"],
                 terrain_stream_radius=cfg["terrain_stream_radius"],
                 sim_near_radius=cfg["sim_near_radius"],
+                terrain_stream=cfg["terrain_stream"],
             )
             session.start()
         session._show_debug = cfg["show_cell_debug"]

@@ -76,6 +76,27 @@ Objects are indexed by their existing **stable UUIDs**. A brush spanning several
 
 ---
 
+## Editor camera streaming
+
+Big World maps open with **Show whole world** checked by default. The checkbox
+beside the status bar's **Display** dropdown remembers your choice. Clear it
+to limit live brushes and entities to cells around the 3D editor camera;
+check it to load every editor cell. The configured startup map still opens.
+
+While camera streaming is enabled, crossing a cell boundary loads nearby
+cells and releases distant objects, using the same 512-unit cells, activation
+radius and hysteresis as Play. Selected objects stay resident until the
+selection is released. Switching either way preserves edits and undo history.
+
+The existing JSON file is read once to build an index of serialized records;
+in camera streaming mode, distant records do not become live editor entities
+or renderer geometry.
+Edits are committed before objects leave residency. Save and undo include the
+whole authored world, including cells never visited. Play receives the complete
+authored world through its existing Big World lifecycle; Stop restores the
+chosen editor residency mode. The map's **Stream around editor camera** setting can disable
+this editor behavior when a full-world authoring pass is needed.
+
 # Quick start
 
 ## 1. Opt a map into Big World
@@ -694,6 +715,7 @@ The `BigWorldSettings` entity provides:
 | Property | Default | Description |
 |---|---:|---|
 | `enabled` | `true` | Enable Big World for this map. |
+| `editor_streaming` | `true` | Stream cells around the 3D editor camera while editing (with **Show whole world** cleared). |
 | `activation_radius` | `2048` | Radius within which cells become resident/active. |
 | `deactivation_radius` | `2304` | Radius beyond which active cells may be removed. Provides hysteresis. |
 | `sim_near_radius` | `1024` | Radius used for NEAR/full simulation fidelity. |
@@ -701,6 +723,7 @@ The `BigWorldSettings` entity provides:
 | `terrain_fill` | `false` | Expand procedural terrain to cover the streamed world. |
 | `terrain_infinite` | `false` | Continue generating terrain beyond authored bounds. Requires terrain fill. |
 | `terrain_stream_radius` | `0` | Terrain residency radius. `0` derives it from activation radius. |
+| `terrain_stream` | `false` | Stream an authored terrain's chunks around the camera inside its own bounds, without re-bounding it as terrain fill does. |
 | `disk_streaming` | `false` | Experimental mode that frees unloaded cell objects and restores them from a cell source. |
 
 The properties are registered through Fio's normal typed plugin property API, so they appear as normal editor properties rather than requiring custom UI.

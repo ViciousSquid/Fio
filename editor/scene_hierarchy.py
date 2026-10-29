@@ -255,6 +255,23 @@ class SceneHierarchy(QWidget):
             is_match = lambda text: needle in text
 
         matches = []
+        state = self.main_window.state
+        stream = state.editor_stream
+        if stream is not None and not stream.suspended:
+            # A camera-streamed Big World map: search every cell, loading
+            # only the objects that match.
+            stream.merge(state._serialize_brushes(), [t.to_dict() for t in state.things])
+            for kind, records in stream.records.items():
+                for identity, record in list(records.items()):
+                    props = record if kind == 'brushes' else record.get('properties', {})
+                    text = self._searchable_text(props, props.get('name', ''))
+                    if kind == 'things':
+                        text += ' ' + str(props.get('type', record.get('type', ''))).lower()
+                    if is_match(text):
+                        obj = state.find_entity_by_id(identity)
+                        if obj is not None:
+                            matches.append(obj)
+            return matches
         for index, brush in enumerate(self.main_window.state.brushes):
             name = self._get_brush_display_name(brush, index)
             if is_match(self._searchable_text(brush, name)):

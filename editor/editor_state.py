@@ -84,6 +84,9 @@ class EditorState:
         self._render_dirty_history = deque(maxlen=32)
         self.brushes = []
         self.things = []
+        #: Big World maps keep only the cells near the editor camera live
+        #: (plugins/bigworld/editor_streaming.py); None for every other map.
+        self.editor_stream = None
         # The multi-selection lives here rather than being bolted on by the
         # main window, so undo/redo and scene loads can keep it pointing at
         # objects that are actually in the scene.
@@ -365,6 +368,7 @@ class EditorState:
     def clear_scene(self):
         """Resets the scene to an empty state."""
         from plugins.manager import get_manager
+        self.editor_stream = None
         get_manager().disable_auto_enabled()
         self.brushes.clear()
         self.things.clear()
@@ -472,6 +476,11 @@ class EditorState:
                 if not bool(getattr(t, 'properties', {}).get('_cutscene_temporary'))
             ]
         }
+        if self.editor_stream is not None and not self.editor_stream.suspended:
+            self.editor_stream.merge(data['brushes'], data['things'])
+            data.update(self.editor_stream.all_data())
+            data['things'] = [r for r in data['things']
+                              if not r.get('properties', {}).get('_cutscene_temporary')]
 
         # When this map was first written. Set once and carried forward on every
         # later save, so it means "created" and not "saved most recently" — the
@@ -492,9 +501,9 @@ class EditorState:
         # Visgroups and the cordon (Visgroups & Cordon window), when used.
         filters = self.view_filters
         if filters.visgroups or filters.cordon.enabled:
-            live = {str(b.get('id')) for b in self.brushes if b.get('id')}
-            live |= {str(t.properties.get('id')) for t in self.things
-                     if t.properties.get('id')}
+            live = {str(b.get('id')) for b in data['brushes'] if b.get('id')}
+            live |= {str(t.get('properties', {}).get('id')) for t in data['things']
+                     if t.get('properties', {}).get('id')}
             data.update(filters.to_level_data(live))
 
         # Persist the scene hash so we can skip a rebake on reload
@@ -507,6 +516,73 @@ class EditorState:
             data['logic_graph'] = {'node_positions': graph_positions}
 
         return data
+
+    def stream_editor_camera(self, position, *, force=False):
+        """Publish camera-local cells; keep selected objects resident during edits."""
+        stream = self.editor_stream
+        if stream is None or stream.suspended or stream.whole_world:
+            return False
+        changed = stream.epoch != self.world_epoch
+        if not force and not changed and stream.same_cell(position):
+            return False
+        self.ensure_entity_ids()
+        stream.merge(self._serialize_brushes(), [t.to_dict() for t in self.things])
+        if changed:
+            from plugins.bigworld.config import config_from_properties
+            settings = next((t for t in self.things
+                             if t.properties.get('type') == 'bigworldsettings'), None)
+            cfg = config_from_properties(settings.properties) if settings else None
+            if cfg is None or not cfg['enabled'] or not cfg['editor_streaming']:
+                self.materialize_editor_world()
+                self.editor_stream = None
+                return True
+            stream.config = cfg
+            stream.manager.activation_radius = cfg['activation_radius']
+            stream.manager.deactivation_radius = cfg['deactivation_radius']
+            stream.reindex()
+        pinned = [self.get_entity_id(obj) for obj in self.selected_objects]
+        self._adopt_stream_records(stream.local_data(position, pinned=pinned))
+        stream.remember_resident(self)
+        return True
+
+    def _adopt_stream_records(self, records):
+        """Make exactly *records* live, reusing objects that already are."""
+        brushes = {b['id']: b for b in self.brushes}
+        things = {t.properties['id']: t for t in self.things}
+        new_brushes = [brushes[r['id']] if r['id'] in brushes else
+                       self._deserialize_brushes([r])[0] for r in records['brushes']]
+        new_things = []
+        for record in records['things']:
+            identity = record['properties']['id']
+            thing = things[identity] if identity in things else Thing.from_dict(record)
+            if thing is not None:
+                new_things.append(thing)
+        self.brushes, self.things = new_brushes, new_things
+        self._invalidate_entity_caches()
+
+    def materialize_editor_world(self):
+        """Hand the complete authored world to the existing Play lifecycle."""
+        stream = self.editor_stream
+        if stream is None or stream.suspended:
+            return
+        stream.merge(self._serialize_brushes(), [t.to_dict() for t in self.things])
+        self._adopt_stream_records(stream.all_data())
+        stream.suspended = True
+        stream.remember_resident(self)
+
+    def set_editor_whole_world(self, shown, position):
+        """Switch residency without replacing objects or adding undo entries."""
+        stream = self.editor_stream
+        if stream is None or stream.whole_world == bool(shown):
+            return False
+        if shown:
+            self.materialize_editor_world()
+            stream.suspended = False
+            stream.whole_world = True
+        else:
+            stream.whole_world = False
+            self.stream_editor_camera(position, force=True)
+        return True
 
     def _collect_logic_graph_positions(self):
         """The logic graph's node positions, for the map file.
@@ -625,18 +701,30 @@ class EditorState:
         """
         validate_level(level_data)
 
-    def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
+    def load_from_data(self, level_data, *, yield_hook=None, save_undo=True,
+                       stream_editor=False):
         """Populates the scene from a dictionary.
 
         ``yield_hook`` is an optional cooperative callback used by long-running
         imports. Normal editor loads remain unchanged.
+
+        ``stream_editor`` lets a Big World map keep only the cells around the
+        editor camera live (see :mod:`plugins.bigworld.editor_streaming`).
         """
         # Everything is parsed before the scene is touched: a malformed map
         # raises here and leaves the current scene exactly as it was, rather
         # than half of one map mixed with half of another.
         self.validate_level_data(level_data)
-        brushes_data = level_data.get('brushes') or []
-        things_data = level_data.get('things') or []
+        stream = None
+        if stream_editor and any(
+                str(r.get('type', r.get('properties', {}).get('type', '')))
+                .replace('_', '').lower() == 'bigworldsettings'
+                for r in level_data.get('things', [])):
+            from plugins.bigworld.editor_streaming import EditorCellStream
+            stream = EditorCellStream.for_level(level_data)
+        local = stream.local_data() if stream is not None else level_data
+        brushes_data = local.get('brushes') or []
+        things_data = local.get('things') or []
 
         new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook)
         new_things = []
@@ -666,6 +754,7 @@ class EditorState:
         # gives: a frame between the two must not rebuild the outgoing world.
         self.brushes = new_brushes
         self.things = new_things
+        self.editor_stream = stream
         self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
@@ -691,6 +780,13 @@ class EditorState:
 
         # ===== NEW: Reset class counters based on loaded entity names =====
         update_all_counters_from_entities(self.brushes + self.things)
+        if stream is not None:
+            # Names counted across the whole world, loaded cells or not.
+            from types import SimpleNamespace
+            update_all_counters_from_entities(
+                list(stream.records['brushes'].values()) + [
+                    SimpleNamespace(properties=r['properties'])
+                    for r in stream.records['things'].values()])
 
         self.selected_objects = []
         self.undo_stack.clear()
@@ -712,6 +808,9 @@ class EditorState:
 
         if save_undo:
             self.save_state()
+
+        if stream is not None:
+            stream.remember_resident(self)
 
     def _selection_identifiers(self):
         """Stable identifiers for the whole selection, for state restoration.
@@ -828,7 +927,7 @@ class EditorState:
                 if isinstance(entry, dict)
             ]
 
-        return json.dumps({
+        checkpoint = {
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
@@ -837,7 +936,15 @@ class EditorState:
             'terrain_paint_stamps': terrain_paint_stamps,
             'terrain_texture_paint_base': terrain_paint_base,
             'items': self.item_definitions.to_level_data(),
-        }, separators=(',', ':'), check_circular=False)
+        }
+        stream = self.editor_stream
+        if stream is not None and not stream.suspended:
+            # Distant cells are part of the authored world, and of its history.
+            stream.merge(self._serialize_brushes(), checkpoint['things'])
+            checkpoint.update(stream.all_data())
+            checkpoint['editor_camera'] = stream.position
+            checkpoint['editor_whole_world'] = stream.whole_world
+        return json.dumps(checkpoint, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
         """Checkpoint the scene *before* an operation changes it.
@@ -928,9 +1035,24 @@ class EditorState:
         map that was several seconds of logic-thread stall per undo or Stop.
         """
         state = json.loads(state_json)
+        stream = None
+        if 'editor_camera' in state:
+            from plugins.bigworld.editor_streaming import EditorCellStream
+            stream = EditorCellStream.for_level(state, state['editor_camera'])
+            if stream is not None:
+                pinned = [entry[2] for entry in state.get('selection', [])
+                          if isinstance(entry, (list, tuple)) and len(entry) > 2]
+                local = stream.local_data(pinned=pinned)
+                if state.get('editor_whole_world'):
+                    stream.whole_world = True
+                    local = stream.all_data()
+                state = dict(state, **local)
 
         # Restore brushes with I/O connections
         raw_brushes = state.get('brushes', [])
+        if stream is not None:
+            # Full saved records, not the compact undo form.
+            raw_brushes = self._deserialize_brushes(raw_brushes)
         new_brushes = []
         for brush_data in raw_brushes:
             brush = brush_data.copy()
@@ -954,7 +1076,10 @@ class EditorState:
                 new_things.append(thing)
         self.brushes = new_brushes
         self.things = new_things
+        self.editor_stream = stream
         self._invalidate_entity_caches()
+        if stream is not None:
+            stream.remember_resident(self)
 
         self._restore_selection(state['selection'])
         if 'items' in state:
@@ -1039,7 +1164,7 @@ class EditorState:
             if thing.properties.get('name') == name:
                 return thing
 
-        return None
+        return self._load_editor_record(name=name)
 
     def find_entity_by_id(self, entity_id: str):
         """Find an entity (brush or thing) by stable UUID."""
@@ -1054,6 +1179,40 @@ class EditorState:
             if thing.properties.get('id') == entity_id:
                 return thing
 
+        return self._load_editor_record(identity=entity_id)
+
+    def _load_editor_record(self, identity=None, name=None):
+        """Resolve an explicitly requested distant object without loading its region."""
+        stream = self.editor_stream
+        if stream is None or stream.suspended:
+            return None
+        for kind, records in stream.records.items():
+            if identity is not None:
+                record = records.get(identity)
+            else:
+                record = next((r for r in records.values() if (
+                    r.get('name') if kind == 'brushes' else
+                    r.get('properties', {}).get('name')) == name), None)
+            if record is None:
+                continue
+            record_identity = record.get('id') if kind == 'brushes' else record['properties']['id']
+            if record_identity in stream.resident[kind]:
+                # A resident record absent from the live lists was deleted
+                # (or renamed); lookup must not resurrect its previous copy.
+                continue
+            if kind == 'brushes':
+                obj = self._deserialize_brushes([record])[0]
+                self.brushes = self.brushes + [obj]
+                identity = obj['id']
+            else:
+                obj = Thing.from_dict(record)
+                if obj is None:
+                    return None
+                self.things = self.things + [obj]
+                identity = obj.properties['id']
+            stream.resident[kind].add(identity)
+            self._invalidate_entity_caches()
+            return obj
         return None
 
     def ensure_entity_ids(self):
@@ -1097,6 +1256,13 @@ class EditorState:
 
     def get_all_entity_names(self):
         """Get a list of all entity names in the scene."""
+        stream = self.editor_stream
+        if stream is not None and not stream.suspended:
+            stream.merge(self._serialize_brushes(), [t.to_dict() for t in self.things])
+            return [name for kind, records in stream.records.items()
+                    for record in records.values()
+                    if (name := (record.get('name') if kind == 'brushes' else
+                                 record.get('properties', {}).get('name')))]
         names = []
 
         for brush in self.brushes:

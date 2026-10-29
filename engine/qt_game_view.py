@@ -1293,6 +1293,9 @@ class QtGameView(QOpenGLWidget):
             self._console_input.setGeometry(0, height - 36, width, 36)
 
     def update_loop(self):
+        # A Big World map follows the editor camera from cell to cell.
+        if not self.play_mode and self.editor.state.stream_editor_camera(self.camera.pos):
+            self.editor.update_all_ui()
         current_time = time.perf_counter()
         delta = current_time - self.last_time
         self.last_time = current_time
