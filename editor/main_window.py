@@ -201,7 +201,8 @@ class MainWindow(QMainWindow):
         self.generate_level_signal.connect(self._on_generate_level_requested)
 
         self.setWindowTitle("Fio")
-        self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
+        from engine.asset_qt import asset_icon
+        self.setWindowIcon(asset_icon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
         self.setGeometry(100, 100, 1600, 900)
         self._minimum_size_screen = None
         self._cap_minimum_size()
@@ -3096,7 +3097,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container_widget)
 
         splash_label = QLabel()
-        pixmap = QPixmap('assets/splash.png')
+        from engine.asset_qt import asset_pixmap
+        pixmap = asset_pixmap('assets/splash.png')
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
