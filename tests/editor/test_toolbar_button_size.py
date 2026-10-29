@@ -38,7 +38,9 @@ def test_the_setting_resizes_every_toolbar_button_without_a_restart(main_window,
         assert b.iconSize().width() == icon
         assert (b.width(), b.height()) == (icon + 4, icon + 8)
     play = main_window.play_button
-    assert (play.width(), play.height()) == (PLAY_BUTTON_LENGTHS[big], icon + 16)
+    # Along the strip, which runs down the right edge by default.
+    assert max(play.width(), play.height()) == PLAY_BUTTON_LENGTHS[big]
+    assert min(play.width(), play.height()) == icon + 16
 
 
 def test_small_buttons_make_the_toolbar_smaller(main_window, qt_app):
@@ -53,4 +55,5 @@ def test_small_buttons_make_the_toolbar_smaller(main_window, qt_app):
 def test_play_and_stop_keep_the_set_length(main_window):
     _set_big(main_window, False)
     main_window.update_play_button_color()
-    assert main_window.play_button.width() == PLAY_BUTTON_LENGTHS[False]
+    play = main_window.play_button
+    assert max(play.width(), play.height()) == PLAY_BUTTON_LENGTHS[False]

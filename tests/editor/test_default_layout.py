@@ -2,7 +2,7 @@
 
 The layout is written to settings.ini on every close, so ``restoreState()``
 pins an install to the arrangement it first booted with.  These cover the
-40/60 split the editor lays out, and the version gate that lets a changed
+50/50 split the editor lays out, and the version gate that lets a changed
 default actually reach an install that has been opened before.
 """
 
@@ -28,35 +28,29 @@ pytestmark = pytest.mark.qt
 
 
 # ────────────────────────────
-# The 40/60 split
+# The 50/50 split
 # ────────────────────────────
 
 @pytest.mark.parametrize("width", [1280, 1600, 1920, 2560])
-def test_the_3d_view_gets_two_fifths_of_the_width(main_window, qt_app, width):
-    """The real MainWindow layout keeps the 3D/2D split at 40/60."""
+def test_the_3d_and_2d_views_share_the_width_equally(main_window, qt_app, width):
+    """The real MainWindow layout keeps the 3D/2D split at 50/50."""
     host = main_window
     host.resize(width, 980)
     host.show()
     qt_app.processEvents()
 
     shared = host.view_3d_dock.width() + host.right_dock.width()
-    assert host.view_3d_dock.width() / shared == pytest.approx(0.40, abs=0.01)
-    assert host.right_dock.width() / shared == pytest.approx(0.60, abs=0.01)
-
-
-def test_the_2d_views_are_the_wider_of_the_two(main_window, qt_app):
-    host = main_window
-    qt_app.processEvents()
-    assert host.right_dock.width() > host.view_3d_dock.width()
+    assert host.view_3d_dock.width() / shared == pytest.approx(0.50, abs=0.01)
+    assert host.right_dock.width() / shared == pytest.approx(0.50, abs=0.01)
 
 
 def test_the_layout_resize_is_applied_by_the_real_ui_owner(main_window, qt_app):
     host = main_window
-    host.resizeDocks([host.view_3d_dock, host.right_dock], [40, 60], Qt.Horizontal)
+    host.resizeDocks([host.view_3d_dock, host.right_dock], [50, 50], Qt.Horizontal)
     qt_app.processEvents()
     shared = host.view_3d_dock.width() + host.right_dock.width()
-    assert host.view_3d_dock.width() / shared == pytest.approx(0.40, abs=0.01)
-    assert host.right_dock.width() / shared == pytest.approx(0.60, abs=0.01)
+    assert host.view_3d_dock.width() / shared == pytest.approx(0.50, abs=0.01)
+    assert host.right_dock.width() / shared == pytest.approx(0.50, abs=0.01)
 
 
 def test_the_scene_hierarchy_has_a_compact_collapse_arrow(main_window, qt_app):
@@ -68,6 +62,27 @@ def test_the_scene_hierarchy_has_a_compact_collapse_arrow(main_window, qt_app):
     assert title_bar.height() == 28
     assert dock.toggle_button.arrowType() == Qt.LeftArrow
     assert dock.MIN_WIDTH <= dock.width() < 260
+
+def test_the_tool_strip_starts_down_the_right_edge(main_window, qt_app):
+    host = main_window
+    qt_app.processEvents()
+    assert host.toolBarArea(host.tool_toolbar) == Qt.RightToolBarArea
+    assert host.tool_toolbar.orientation() == Qt.Vertical
+    # The global 60px button minimum must not widen the rotated Play button.
+    icon = host._toolbar_icon_size
+    assert host.play_button.size().width() == icon + 16
+    assert host.play_button.height() > host.play_button.width()
+
+
+def test_the_asset_browser_takes_a_third_of_its_column(main_window, qt_app):
+    host = main_window
+    host.resize(1600, 980)
+    qt_app.processEvents()
+    column = host.view_3d_dock.height() + host.asset_browser_dock.height()
+    assert host.asset_browser_dock.height() / column == pytest.approx(1 / 3, abs=0.03)
+    # Level with the Properties/Console dock beside it.
+    assert abs(host.asset_browser_dock.y() - host.properties_dock.y()) <= 8
+
 
 # ────────────────────────────
 # The version gate
@@ -93,7 +108,7 @@ def test_a_current_layout_is_restored(main_window, qt_app):
     host = main_window
     config = _saved_layout(host, LAYOUT_VERSION)
     host.addDockWidget(Qt.TopDockWidgetArea, host.view_3d_dock)
-    assert host.toolBarArea(host.tool_toolbar) != Qt.RightToolBarArea
+    assert host.dockWidgetArea(host.view_3d_dock) == Qt.TopDockWidgetArea
     host.config = config
 
     host.load_layout()

@@ -98,7 +98,7 @@ def toolbar_metrics(config):
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
 #: every close, and restoreState() would otherwise win forever.
-LAYOUT_VERSION = 3
+LAYOUT_VERSION = 4
 
 
 
@@ -379,7 +379,7 @@ class Ui_MainWindow(object):
         # 2D Views Dock (Right, Tabbed)
         MainWindow.right_dock = QDockWidget("2D Views", MainWindow)
         MainWindow.right_dock.setObjectName("2DViewsDock")
-        MainWindow.right_dock.setMinimumWidth(610)
+        MainWindow.right_dock.setMinimumWidth(470)  # its three 150px view tabs
         MainWindow.right_tabs = QTabWidget()
         MainWindow.right_tabs.addTab(MainWindow.view_top, "Top (XZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
@@ -415,10 +415,11 @@ class Ui_MainWindow(object):
         MainWindow.splitDockWidget(MainWindow.view_3d_dock, MainWindow.right_dock, Qt.Horizontal)
         MainWindow.splitDockWidget(MainWindow.right_dock, MainWindow.properties_dock, Qt.Vertical)
 
-        # 3D view 40%, 2D views 60%.  resizeDocks reads these as proportions
-        # rather than pixels, so the split holds at any window size.
+        # 3D view and 2D views share the width equally.  resizeDocks reads
+        # these as proportions rather than pixels, so the split holds at any
+        # window size.
         MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock],
-                               [40, 60], Qt.Horizontal)
+                               [50, 50], Qt.Horizontal)
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
         # Tab Styling
@@ -451,8 +452,9 @@ class Ui_MainWindow(object):
 
         # REMOVED: The manual floating window resize/center logic
         
-        # NEW: Set initial height ratio (3D View tall, Browser short)
-        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.asset_browser_dock], [10000, 1], Qt.Vertical)
+        # Two thirds 3D view, one third browser: level with the 2D views and
+        # Properties/Console split beside it.
+        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.asset_browser_dock], [600, 300], Qt.Vertical)
 
         # --- 5. Actions Definition ---
         # DEFINED BEFORE create_toolbars so it can be used there
@@ -465,12 +467,14 @@ class Ui_MainWindow(object):
         # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
         self.create_toolbars(MainWindow)  # Creates Play button
-        self.create_tool_toolbar(MainWindow)  # Single top strip: tools + Play last
+        self.create_tool_toolbar(MainWindow)  # Right-hand tool strip: tools + Play last
         self.create_status_bar(MainWindow)
-        # Apply the width after every dock exists, so the hierarchy starts at
-        # its default rather than expanding to its maximum while docks are added.
+        # Apply widths after every dock exists, so the hierarchy starts at its
+        # default rather than expanding to its maximum while docks are added.
         MainWindow.resizeDocks([MainWindow.scene_hierarchy_dock],
                                [SceneHierarchyDock.DEFAULT_WIDTH], Qt.Horizontal)
+        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock],
+                               [50, 50], Qt.Horizontal)
 
     def create_menu_bar(self, MainWindow):
         menubar = MainWindow.menuBar()
@@ -794,15 +798,16 @@ class Ui_MainWindow(object):
         """)
 
     def create_tool_toolbar(self, MainWindow):
-        """Single tool strip along the top: all editing tools + Play last."""
+        """One tool strip, down the right edge by default (it can be dragged
+        to the top or bottom): all editing tools, then Play."""
         tool_toolbar = QToolBar("Tools")
         tool_toolbar.setObjectName("ToolToolbar")
         tool_toolbar.setMovable(True)
         tool_toolbar.setFloatable(True)
         tool_toolbar.setAllowedAreas(
             Qt.TopToolBarArea | Qt.BottomToolBarArea | Qt.RightToolBarArea)
-        tool_toolbar.setOrientation(Qt.Horizontal)
-        MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
+        tool_toolbar.setOrientation(Qt.Vertical)
+        MainWindow.addToolBar(Qt.RightToolBarArea, tool_toolbar)
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
 
