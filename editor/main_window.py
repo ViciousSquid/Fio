@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
             "Ctrl+Tab: Cycle 2D views",
             "Shift+Space: Clone, then click to place it",
             "H: Hide selected, Shift+H: Unhide all",
-            "Delete: Remove selected brush/object",
+            "Delete / Backspace: Remove selected brush/object",
             "Add Player Start before Play Mode",
             "Shift+Wheel on Light: Adjust radius",
             "Ctrl+Wheel on Light: Adjust intensity",
@@ -3925,8 +3925,8 @@ class MainWindow(QMainWindow):
                 self.show_toast("Nothing to paste", is_error=True)
             return
 
-        # Delete key
-        if self.primary_selection() and event.key() == Qt.Key_Delete:
+        # Delete / Backspace
+        if self.primary_selection() and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.save_state()
             for obj in list(self.state.selected_objects):
                 if isinstance(obj, dict):
