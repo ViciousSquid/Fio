@@ -4471,7 +4471,8 @@ class PropertyEditor(QWidget):
 
         def pick_proj():
             start = os.path.join(os.getcwd(), 'assets', 'sprites', 'monsters')
-            os.makedirs(start, exist_ok=True)
+            if not os.path.isdir(start):
+                start = os.path.join(os.getcwd(), 'assets')
             fp, _ = QFileDialog.getOpenFileName(self, "Select Projectile Sprite", start,
                                                 "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
             if fp:
