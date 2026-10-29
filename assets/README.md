@@ -18,15 +18,22 @@ it into the project directory. All seven categories — including sprites,
 textures, models, fonts and editor icons — use archive-backed resource readers.
 Sound and music continue to use their dedicated direct archive readers.
 
-Loose files are intentional development overrides, and take precedence over
-the matching ZIP member. No existing loose files are deleted or overwritten.
-An archive-only installation does not need write access to its asset directories.
-Repack a category after changing loose files to update its archive. Existing
-texture/model/sprite caches still prevent archive reads on every rendered frame.
+On startup, Fio creates the loose development directories `assets/sprites/`,
+`assets/textures/`, `assets/models/`, `assets/fonts/`, `assets/sounds/`
+and `assets/music/` if they do not already exist. They are **blank workspaces**:
+no archive members are copied into them. The `editor.fiopak` category stores
+root-level images in `assets/`, so it needs no separate `assets/editor/` folder.
 
-Portable world `.fiopak` packages handled by the desktop editor's Play Package
-flow are separate from these seven category archives; that flow still uses a
-temporary extraction directory and is not covered by this mounting mechanism.
+Loose files are intentional development overrides, and take precedence over
+matching category archive members. Existing files are never deleted or
+overwritten. Read-only installations can still mount and load their archives
+if directory creation is denied; adding loose content requires write access.
+Repack a category after changing loose files to update its archive. Existing
+texture/model/sprite caches prevent archive reads on every rendered frame.
+
+Portable world `.fiopak` packages launched through Play Game Package are
+also mounted and read without temporary extraction. A portable package's
+resource paths take priority during play, keeping its assets self-contained.
 
 Rebuild all categories from the repository root:
 
