@@ -94,6 +94,31 @@ def toolbar_metrics(config):
     return TOOLBAR_ICON_SIZES[big], PLAY_BUTTON_LENGTHS[big]
 
 
+def fit_toolbar_metrics(config, available, buttons, separators, vertical=True,
+                        spacing=4, margin=2, handle=8, separator_extent=8):
+    """Fit *every* tool and Play into one toolbar row/column.
+
+    Large buttons are an upper bound, not a promise of 45-pixel icons on a
+    small screen. Reserve the Play button and Qt's own inter-item spacing
+    before dividing the remaining height between ordinary tool buttons.
+    The extra slack covers the frame and style-specific layout rounding.
+    """
+    preferred_icon, preferred_play = toolbar_metrics(config)
+    buttons = max(1, int(buttons))
+    separators = max(0, int(separators))
+    # Every button and separator has a gap after it (conservative by one).
+    overhead = (buttons + separators + 1) * max(0, spacing)
+    overhead += 2 * max(0, margin) + max(0, handle)
+    overhead += separators * max(0, separator_extent) + 24
+    budget = max(0, int(available) - overhead)
+    button_padding = 8 if vertical else 4
+    # Keep Play tall enough for its rotated icon and label on short screens.
+    play_floor = 80 if vertical else 90
+    icon = max(1, min(preferred_icon, (budget - play_floor) // buttons - button_padding))
+    play_length = max(32, min(preferred_play, budget - buttons * (icon + button_padding)))
+    return icon, play_length
+
+
 #: Bumped whenever the default dock arrangement changes.  A layout saved by
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
@@ -828,6 +853,9 @@ class Ui_MainWindow(object):
         MainWindow.addToolBar(Qt.RightToolBarArea, tool_toolbar)
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
+        # A toolbar resize can change available room without a window resize
+        # (orientation, docking, macOS window geometry, status bar changes).
+        tool_toolbar.installEventFilter(MainWindow)
 
         icon_size_val, play_length = toolbar_metrics(MainWindow.config)
         # Read back by MainWindow.apply_toolbar_button_size when the setting
@@ -1054,7 +1082,13 @@ class Ui_MainWindow(object):
 
         MainWindow._sync_play_button = sync_play_button_orientation
         tool_toolbar.orientationChanged.connect(sync_play_button_orientation)
+        tool_toolbar.orientationChanged.connect(
+            lambda _orientation: MainWindow.apply_toolbar_button_size())
+        tool_toolbar.topLevelChanged.connect(
+            lambda _floating: MainWindow.apply_toolbar_button_size())
         sync_play_button_orientation(tool_toolbar.orientation())
+        # Set the initial fit before Qt records the default dock arrangement.
+        MainWindow.apply_toolbar_button_size()
 
         # Capture this exact arrangement once.  View > Reset Layout restores
         # this Qt state instead of trying to reconstruct a nested dock tree
