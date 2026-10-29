@@ -27,6 +27,7 @@ from editor.things import Light, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.ui_scale import read_ui_scale_setting
+from editor.held_keys import HeldKeyInputMethodFilter
 from editor.user_paths import settings_path, writable_dir
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
@@ -330,6 +331,9 @@ class MainWindow(QMainWindow):
         self.view_3d.installEventFilter(self)
         # Install event filter on self to catch arrow keys globally for nudging
         self.installEventFilter(self)
+        # Holding W to walk must not open macOS's accent picker over the game.
+        self._held_key_filter = HeldKeyInputMethodFilter(self)
+        QApplication.instance().installEventFilter(self._held_key_filter)
         
         # Show startup tooltip after window is shown
         QTimer.singleShot(1500, self._show_startup_tooltip)
