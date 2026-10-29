@@ -478,18 +478,12 @@ class Ui_MainWindow(object):
 
     def create_menu_bar(self, MainWindow):
         menubar = MainWindow.menuBar()
+        # Only style the menu-bar titles here. QMenu item styling belongs
+        # exclusively to the application stylesheet: applying both local and
+        # global rules to popups can leave stale selection paint on macOS.
         menubar.setStyleSheet("""
             QMenuBar::item:selected {
                 background-color: #F08000;
-            }
-            QMenu::item:selected {
-                background-color: #F08000;
-            }
-            /* Keep separators neutral even while a child submenu is open. */
-            QMenu::separator {
-                height: 1px;
-                background-color: #555;
-                margin: 6px 8px;
             }
         """)
         
