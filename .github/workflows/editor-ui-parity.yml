@@ -1,0 +1,146 @@
+name: Native Windows and macOS editor UI parity
+
+on:
+  push:
+    paths:
+      - '.github/workflows/editor-ui-parity.yml'
+      - 'tools/editor_ui_audit.py'
+      - 'tools/compare_editor_ui.py'
+      - 'editor/**'
+      - 'assets/fonts/editor/**'
+      - 'assets/ui/controls/**'
+      - 'main.py'
+      - 'editor_styles.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: ${{ matrix.platform }} / scale ${{ matrix.scale }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, macos]
+        scale: ['1', '2']
+        include:
+          - platform: windows
+            os: windows-latest
+            qt_platform: windows
+            opengl_platform: win32
+          - platform: macos
+            os: macos-latest
+            qt_platform: cocoa
+            opengl_platform: darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      QT_QPA_PLATFORM: ${{ matrix.qt_platform }}
+      QT_SCALE_FACTOR: ${{ matrix.scale }}
+      PYOPENGL_PLATFORM: ${{ matrix.opengl_platform }}
+      SDL_AUDIODRIVER: dummy
+      PYTHONUNBUFFERED: '1'
+      PYTHONHASHSEED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install the same desktop dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Verify shared fonts, left-aligned tabs and compact controls
+        run: >-
+          python -m pytest -q
+          tests/editor/test_desktop_style.py
+          tests/editor/test_terrain_panel_layout.py
+          tests/editor/test_asset_browser.py
+      - name: Capture every editor surface at the default font size
+        if: ${{ !cancelled() }}
+        id: capture_default
+        continue-on-error: true
+        run: >-
+          python tools/editor_ui_audit.py
+          --output artifacts/${{ matrix.platform }}-scale-${{ matrix.scale }}/font-11
+          --font-size 11
+      - name: Audit every surface with enlarged text
+        if: ${{ !cancelled() && steps.capture_default.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          python tools/editor_ui_audit.py
+          --output artifacts/${{ matrix.platform }}-scale-${{ matrix.scale }}/font-16
+          --font-size 16 --metrics-only
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: editor-ui-${{ matrix.platform }}-scale-${{ matrix.scale }}
+          path: |
+            artifacts/**/manifest.json
+            artifacts/**/*.png
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 6
+
+  compare:
+    name: Compare every tab, font and control
+    if: always()
+    needs: capture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: editor-ui-*
+          path: captures
+      - name: Build searchable side-by-side report and measured differences
+        run: python tools/compare_editor_ui.py --captures captures --output report
+      - name: Log the default editor window from each OS for review
+        if: always()
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          import base64, io, json
+          from pathlib import Path
+          from PIL import Image
+          # Artifact downloads can be unavailable to reviewers; the log is not.
+          for path in sorted(Path('captures').rglob('manifest.json')):
+              data = json.loads(path.read_text(encoding='utf-8'))
+              if data.get('font_size') != 11 or data.get('scale_factor') != '1':
+                  continue
+              frame = next((f for f in data['frames'] if f['id'].startswith('main/editor/') and f['image']), None)
+              if frame is None:
+                  continue
+              image = Image.open(path.parent / frame['image']).convert('RGB')
+              image.thumbnail((1200, 1200))
+              buffer = io.BytesIO()
+              image.save(buffer, 'JPEG', quality=60, optimize=True)
+              print('UI_PARITY_IMAGE', data['platform'], frame['id'],
+                    base64.b64encode(buffer.getvalue()).decode(), flush=True)
+          PY
+      - name: Write run summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          p = Path('report/summary.json')
+          if p.exists():
+              d = json.loads(p.read_text())
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write('# Native editor UI parity\n\n')
+                  f.write('Download **editor-ui-parity-report** and open `index.html`.\n\n')
+                  f.write('```json\n' + json.dumps(d, indent=2) + '\n```\n')
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: editor-ui-parity-report
+          path: report/
+          retention-days: 14
+          if-no-files-found: error
