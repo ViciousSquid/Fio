@@ -483,7 +483,9 @@ class AssetBrowserTab(QWidget):
         self.resize_timer.setSingleShot(True)
         self.resize_timer.timeout.connect(self.do_relayout)
 
-        if not os.path.exists(self.current_asset_folder):
+        # The Audio tab can browse a .fiopak directly. Do not create an
+        # otherwise absent sounds/ or music/ directory just by opening it.
+        if not self.is_audio_tab and not os.path.exists(self.current_asset_folder):
             try: os.makedirs(self.current_asset_folder)
             except OSError: pass
 
@@ -921,7 +923,7 @@ class AssetBrowserTab(QWidget):
             return
         self.audio_mode = mode
         self.root_path = self.audio_folders[mode]
-        os.makedirs(self.root_path, exist_ok=True)
+        # Switching to archive-backed audio must not materialise a loose folder.
         self.dir_model.setRootPath(self.root_path)
         self.tree_view.setRootIndex(self.dir_model.index(self.root_path))
         self.home_btn.setText(f"🏠 {mode.capitalize()}")
