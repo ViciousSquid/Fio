@@ -19,6 +19,7 @@ import struct
 import json
 import os
 import math
+from engine.asset_archives import asset_bytes
 import numpy as np
 import OpenGL.GL as gl
 from typing import List, Tuple, Optional, Dict, Any
@@ -44,10 +45,9 @@ def _read_bounded(path: str) -> Optional[bytes]:
     being read forever.
     """
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) > MAX_GLB_FILE_BYTES:
+        data = asset_bytes(path, max_bytes=MAX_GLB_FILE_BYTES)
+        if data is None:
             return None
-        with open(path, 'rb') as f:
-            data = f.read(MAX_GLB_FILE_BYTES + 1)
     except OSError:
         return None
     return data if len(data) <= MAX_GLB_FILE_BYTES else None
