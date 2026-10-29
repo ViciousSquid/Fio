@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_light_stream_import_does_not_load_opengl():
@@ -18,6 +19,6 @@ assert 'engine.renderer.core.base' not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-c", check], capture_output=True, text=True,
-        check=False,
+        check=False, cwd=Path(__file__).resolve().parents[2],
     )
     assert result.returncode == 0, result.stdout + result.stderr
