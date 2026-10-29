@@ -43,8 +43,10 @@ def test_archive_only_assets_start_editor_without_extraction(
 
         for category in ('sprites', 'textures', 'models', 'fonts',
                          'sounds', 'music'):
-            # No category is materialised by editor startup or reading.
-            assert not (assets / category).exists()
+            # Each workspace exists but no archive member is unpacked.
+            folder = assets / category
+            assert folder.is_dir()
+            assert not any(folder.iterdir())
         assert asset_bytes(assets / 'noise_3d.bin') == (
             root / 'assets/noise_3d.bin').read_bytes()
         assert not (assets / 'noise_3d.bin').exists()
