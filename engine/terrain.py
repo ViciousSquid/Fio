@@ -2315,7 +2315,8 @@ class Terrain:
         except ImportError:
             # Fallback to Qt
             from PyQt5.QtGui import QImage
-            img = QImage(image_path)
+            from engine.asset_qt import asset_image
+            img = asset_image(image_path)
             if img.isNull():
                 raise ValueError(f"Could not load image: {image_path}")
             img = img.convertToFormat(QImage.Format_Grayscale8)
