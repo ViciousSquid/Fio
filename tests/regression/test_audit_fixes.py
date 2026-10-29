@@ -284,11 +284,14 @@ def test_editor_mode_real_press_still_handled():
 
 
 def test_no_other_key_handling_was_altered():
-    """Only the guard moved: the rest of both handlers is untouched."""
+    """The console key is layout-aware; other play-mode keys still work."""
     press = _key_handler_source("keyPressEvent")
     for marker in ("_is_play_console_visible()", "Qt.Key_Escape",
-                   "self.keys_pressed", "Qt.Key_QuoteLeft"):
+                   "self.keys_pressed", "is_console_key(event)"):
         assert marker in press, f"unrelated play-mode handling lost: {marker}"
+    # The cross-platform console key must be handled before play-mode input.
+    assert press.index("if is_console_key(event):") < press.index(
+        "if self.view_3d.play_mode:")
     release = _key_handler_source("keyReleaseEvent")
     assert "Consume the event completely in play mode" in release
     assert re.search(r"if event\.key\(\) in self\.keys_pressed:", release)
