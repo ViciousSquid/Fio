@@ -15,10 +15,10 @@ from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
 from engine.speaker_audio import (AUDIO_EXTENSIONS, SPEAKER_AUDIO_FOLDERS,
                                   list_speaker_audio, speaker_sound_path)
 
-#: Thumbnail edge in pixels, chosen by right-clicking blank grid space:
-#: medium, then 20% and 35% smaller.
+#: Thumbnail edge in pixels, chosen by right-clicking blank grid space.
+#: New browsers start at the most compact size; saved choices take precedence.
 THUMBNAIL_SIZES = {'medium': 90, 'small': 72, 'smallest': 58}
-DEFAULT_THUMBNAIL_SIZE = 'medium'
+DEFAULT_THUMBNAIL_SIZE = 'smallest'
 
 
 def render_obj_thumbnail(filepath, width, height):
