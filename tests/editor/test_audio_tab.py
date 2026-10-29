@@ -170,7 +170,7 @@ def test_audio_tab_lists_fiopak_members_and_keeps_project_relative_paths(
     assert tab.selected_speaker_sound() == "assets/sounds/ui/click.ogg"
 
 
-def test_archive_only_audio_browser_does_not_create_loose_folders(
+def test_archive_only_audio_browser_creates_empty_workspaces_without_extraction(
         qt_app, tmp_path, main_window, monkeypatch):
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -184,16 +184,19 @@ def test_archive_only_audio_browser_does_not_create_loose_folders(
     try:
         tab = browser.tab_audio
         assert _names(tab) == ["beep.wav"]
-        assert not (assets / "sounds").exists()
+        assert (assets / "sounds").is_dir()
+        assert not any((assets / "sounds").iterdir())
 
         tab.toggle_audio_folder()
         assert tab.audio_mode == "music"
         assert _names(tab) == ["theme.ogg"]
-        assert not (assets / "music").exists()
+        assert (assets / "music").is_dir()
+        assert not any((assets / "music").iterdir())
 
         tab.toggle_audio_folder()
         assert _names(tab) == ["beep.wav"]
-        assert not (assets / "sounds").exists()
+        assert (assets / "sounds").is_dir()
+        assert not any((assets / "sounds").iterdir())
     finally:
         browser.deleteLater()
 
