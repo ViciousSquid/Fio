@@ -388,7 +388,8 @@ class Prop(_ThingBase):
             project_root = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), os.pardir))
             absolute_path = os.path.join(project_root, sprite_path)
-            pixmap = QPixmap(absolute_path)
+            from engine.asset_qt import asset_pixmap
+            pixmap = asset_pixmap(absolute_path)
             return None if pixmap.isNull() else pixmap
         except Exception:
             return None
