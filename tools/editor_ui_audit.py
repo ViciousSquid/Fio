@@ -318,7 +318,23 @@ def run_audit(audit, window, sections):
         for large in (False, True):
             window.config.set("Display", "big_toolbar_buttons", str(large))
             window.apply_toolbar_button_size()
-            audit.surface("toolbar/" + ("large" if large else "small"), window.tool_toolbar)
+            audit.settle()
+            tool = window.tool_toolbar
+            # The editor must never put Play (or another editing tool) behind
+            # Qt's overflow chevron. Audit this on real Windows/Cocoa widgets,
+            # not just against the cross-platform arithmetic unit test.
+            for action in tool.actions():
+                rect = tool.actionGeometry(action)
+                if (not rect.isValid() or rect.y() < 0
+                        or rect.bottom() >= tool.height()):
+                    raise AssertionError(
+                        "Toolbar action clipped on %s (large=%s): %r rect=%r height=%d"
+                        % (audit.app.platformName(), large, action.text(),
+                           rect, tool.height()))
+            if not window.play_button.isVisibleTo(tool):
+                raise AssertionError("Play is hidden on %s (large=%s)"
+                                     % (audit.app.platformName(), large))
+            audit.surface("toolbar/" + ("large" if large else "small"), tool)
         window.config.set("Display", "big_toolbar_buttons", "False")
         window.apply_toolbar_button_size()
 
