@@ -326,10 +326,14 @@ def install_editor_style(app):
     """Install once, before building any editor or launcher widgets."""
     if getattr(app, "_fio_editor_style_installed", False):
         return
-    directory = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "editor"
-    for path in sorted(directory.glob("*.ttf")):
-        if QFontDatabase.addApplicationFont(str(path)) < 0:
-            raise RuntimeError("Could not load editor font: " + str(path))
+    from engine.asset_archives import asset_bytes, asset_names
+    root = Path(__file__).resolve().parents[1]
+    for member in asset_names('assets/fonts/editor/', root):
+        if not member.lower().endswith('.ttf'):
+            continue
+        payload = asset_bytes(str(root / member), root)
+        if payload is None or QFontDatabase.addApplicationFontFromData(payload) < 0:
+            raise RuntimeError("Could not load editor font: " + member)
     families = set(QFontDatabase().families())
     if not {UI_FONT, MONO_FONT}.issubset(families):
         raise RuntimeError("The bundled editor fonts are missing")
