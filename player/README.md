@@ -11,8 +11,7 @@ releases; Android reads its assets directly from the ZIP archive.
 
 The committed APK is a signed **debug/test build**. `_SHOWCASE.fiopak` is a
 separate download and is excluded from the APK. The current renderer has host
-GLES coverage, but the Pixel 8a running Android 17 has not been device-tested.
-Complete desktop visual parity is still a work in progress.
+GLES coverage.
 
 ## Android system requirements
 
