@@ -42,20 +42,21 @@ def render_obj_thumbnail(filepath, width, height):
             return None
         for line in data.decode('utf-8', errors='replace').splitlines():
             line_count += 1
-                if line_count > max_lines: break
-                
-                if line.startswith('#'):
-                    up_tag = up_axis_tag(line) or up_tag
-                elif line.startswith('v '):
-                    parts = line.split()
-                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
-                elif line.startswith('f '):
-                    parts = line.split()
-                    face_idxs = []
-                    for p in parts[1:]:
-                        idx = int(p.split('/')[0]) - 1
-                        face_idxs.append(idx)
-                    faces.append(face_idxs)
+            if line_count > max_lines:
+                break
+
+            if line.startswith('#'):
+                up_tag = up_axis_tag(line) or up_tag
+            elif line.startswith('v '):
+                parts = line.split()
+                vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+            elif line.startswith('f '):
+                parts = line.split()
+                face_idxs = []
+                for p in parts[1:]:
+                    idx = int(p.split('/')[0]) - 1
+                    face_idxs.append(idx)
+                faces.append(face_idxs)
     except Exception:
         return None
 
