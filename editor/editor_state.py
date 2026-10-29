@@ -51,6 +51,21 @@ _RENDERER_PRIVATE_KEYS = frozenset({
     '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer)
 }) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS)
 
+class _HistoryBase(str):
+    """The bottom entry of the undo stack after a load: where history begins.
+
+    Never restored -- undo keeps one entry and refuses to pop this one -- so
+    it holds no snapshot of the scene. Each load pushes its own instance, so
+    the editor's "has anything changed since" markers (which compare the top
+    entry by identity) tell one load from the next.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls):
+        return super().__new__(cls, "")
+
+
 # Import lightmap bake state
 try:
     from lightmap.bake_state import BakeState
@@ -702,11 +717,17 @@ class EditorState:
         validate_level(level_data)
 
     def load_from_data(self, level_data, *, yield_hook=None, save_undo=True,
-                       stream_editor=False):
+                       validated=False, stream_editor=False):
         """Populates the scene from a dictionary.
 
         ``yield_hook`` is an optional cooperative callback used by long-running
         imports. Normal editor loads remain unchanged.
+
+        ``validated`` is for a caller that has itself just passed *level_data*
+        through :meth:`validate_level_data`, unchanged since -- opening a map
+        validates it before touching the open level -- so every brush and
+        entity is not checked a second time. Every other caller leaves it
+        False and the map is validated here.
 
         ``stream_editor`` lets a Big World map keep only the cells around the
         editor camera live (see :mod:`plugins.bigworld.editor_streaming`).
@@ -714,7 +735,8 @@ class EditorState:
         # Everything is parsed before the scene is touched: a malformed map
         # raises here and leaves the current scene exactly as it was, rather
         # than half of one map mixed with half of another.
-        self.validate_level_data(level_data)
+        if not validated:
+            self.validate_level_data(level_data)
         stream = None
         if stream_editor and any(
                 str(r.get('type', r.get('properties', {}).get('type', '')))
@@ -807,7 +829,15 @@ class EditorState:
         get_manager().auto_enable_for_map(level_data)
 
         if save_undo:
-            self.save_state()
+            # The history's base: the bottom of the undo stack is never
+            # restored (undo always keeps one entry), so it need not be a
+            # checkpoint of the map just loaded -- serializing and encoding the
+            # whole scene, the most costly step of a load on a big map. The
+            # first edit checkpoints the scene as it is then, as every edit
+            # does. What a checkpoint does besides snapshot is done here.
+            self._bump_io_revision()
+            self._discarded_redo = None
+            self.undo_stack.append(_HistoryBase())
 
         if stream is not None:
             stream.remember_resident(self)
@@ -1130,7 +1160,7 @@ class EditorState:
         restoring its predecessor instead stepped back two gestures at a time,
         so a mapper who made three edits and pressed undo once lost two of them.
         """
-        if len(self.undo_stack) <= 1:
+        if len(self.undo_stack) <= 1 or isinstance(self.undo_stack[-1], _HistoryBase):
             return False
         self.redo_stack.append(self.snapshot())
         self.restore_state(self.undo_stack.pop())

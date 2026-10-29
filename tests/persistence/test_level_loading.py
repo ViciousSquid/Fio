@@ -231,11 +231,11 @@ def _load_into(window, data):
 
 
 @pytest.mark.perf
-def test_opening_a_map_validates_it_once_before_play_and_once_on_parse(
-        main_window, tmp_path, monkeypatch):
+def test_opening_a_map_validates_it_once(main_window, tmp_path, monkeypatch):
     """Validation is as costly as parsing the JSON on a large map (~25 ms for
-    the 3,600-brush Big World test map), so it must not run a third time in
-    ``_apply_level_data``, which hands straight to ``load_from_data``."""
+    the 3,600-brush Big World test map). ``_load_level`` validates before the
+    open level is touched and hands the map on as already validated, so
+    ``load_from_data`` does not check every brush and entity again."""
     import editor.editor_state as editor_state
     calls = []
     real = editor_state.validate_level
@@ -245,7 +245,37 @@ def test_opening_a_map_validates_it_once_before_play_and_once_on_parse(
     path.write_text(json.dumps(PLAYABLE_LEVEL))
 
     assert main_window.load_level_file(str(path)) is True
-    assert len(calls) == 2
+    assert len(calls) == 1
+
+
+def test_load_from_data_still_validates_for_ordinary_callers(main_window):
+    """Only a caller that has validated the map itself may skip the check."""
+    malformed = {"version": 3, "brushes": [{"pos": "not a vector"}], "things": []}
+    with pytest.raises(ValueError):
+        main_window.state.load_from_data(malformed)
+
+
+def test_a_load_does_not_checkpoint_the_whole_map_and_the_first_edit_undoes(
+        main_window, monkeypatch):
+    """The undo history starts from a base entry, not a serialization of the
+    map just loaded; the first edit is still undoable, and undo never steps
+    below the load."""
+    state = main_window.state
+    snapshots = []
+    real = state.snapshot
+    monkeypatch.setattr(state, "snapshot", lambda: (snapshots.append(1), real())[1])
+    state.load_from_data(PLAYABLE_LEVEL)
+    assert snapshots == []                                   # nothing serialized
+    assert state.undo() is False                             # nothing to undo yet
+    start = state.things[0]
+    old = list(start.pos)
+    state.save_state()                                       # an edit begins
+    start.pos = [old[0] + 64.0, old[1], old[2]]
+    assert state.undo() is True
+    assert list(state.things[0].pos) == old
+    assert state.undo() is False                             # not past the load
+    assert state.redo() is True
+    assert list(state.things[0].pos) == [old[0] + 64.0, old[1], old[2]]
 
 
 def test_applying_a_malformed_map_leaves_the_open_scene_alone(main_window):

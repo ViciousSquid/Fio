@@ -4513,18 +4513,20 @@ class MainWindow(QMainWindow):
         if filePath:
             self.load_level_file(filePath)
 
-    def _apply_level_data(self, level_data):
+    def _apply_level_data(self, level_data, *, validated=False):
         """Replace the scene with *level_data*, terrain included.
 
         The one place a parsed map becomes the editor's scene: opening a file,
-        a level change and playing a package all go through it.
+        a level change and playing a package all go through it. *validated*
+        says the caller has just validated *level_data* itself (see
+        :meth:`_load_level`); otherwise it is validated here.
         """
         # load_from_data validates and parses the whole map before it replaces
         # the scene (and does everything clear_scene did but mark lighting
         # dirty), so a malformed map or one that fails to parse leaves the open
         # level as it was. Clearing first emptied the scene for any map that
         # got past the shape check.
-        self.state.load_from_data(level_data, stream_editor=True)
+        self.state.load_from_data(level_data, validated=validated, stream_editor=True)
         self.state.set_editor_whole_world(
             self.config.getboolean('Display', 'show_whole_world', fallback=True),
             self.view_3d.camera.pos)
@@ -4742,7 +4744,8 @@ class MainWindow(QMainWindow):
                           self.state.things)
             self.file_path = None
             scene_replacement_started = True
-            self._apply_level_data(level_data)
+            # Validated at the top, before the open level was touched.
+            self._apply_level_data(level_data, validated=True)
             self.reset_camera_mode()
 
             # --- The start the player will spawn at; the camera goes there ---
