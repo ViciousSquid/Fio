@@ -753,11 +753,19 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def resizeEvent(self, event):
+        """Refit the tool strip as the editor's usable height changes."""
+        super().resizeEvent(event)
+        if hasattr(self, 'tool_toolbar'):
+            self._schedule_toolbar_fit()
+
     def moveEvent(self, event):
         """Handle window move."""
         super().moveEvent(event)
         if self.screen() is not self._minimum_size_screen:
             self._cap_minimum_size()
+            if hasattr(self, 'tool_toolbar'):
+                self._schedule_toolbar_fit()
 
     def _cap_minimum_size(self):
         """1280x800 minimum, but never more than this window's screen holds.
