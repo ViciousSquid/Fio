@@ -5257,7 +5257,11 @@ class PropertyEditor(QWidget):
         def open_dialog():
             from engine.speaker_audio import speaker_sound_path
             start = os.path.join(_project_root(), 'assets', 'sounds')
-            os.makedirs(start, exist_ok=True)
+            # A packaged sound is selected in the Asset Browser's Audio tab.
+            # Browsing for a loose override must not create an empty sounds/
+            # directory beside sounds.fiopak.
+            if not os.path.isdir(start):
+                start = os.path.dirname(start)
             fp, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Sound File",
