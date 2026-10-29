@@ -1,16 +1,10 @@
-"""Startup discovery of category .fiopak assets, with loose-file overrides.
-
-Qt, Pillow and model loaders keep their existing paths. Non-audio archives
-materialise only missing files at those paths; sounds/music remain streamed
-by audio_archives. No archive is consulted in a rendering hot path.
-"""
+"""Validated category ZIP assets with loose-file overrides and no extraction."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import stat
-import tempfile
 import zipfile
 
 
@@ -70,59 +64,108 @@ def _entries(archive, category):
     return infos
 
 
-def prepare_asset_archives(root_dir) -> tuple[str, ...]:
-    """Discover supported assets/*.fiopak; preserve every existing loose file.
 
-    Called before the splash/icons and by MainWindow for alternative hosts.
-    Repeated calls only stat the archives unless an archive changed. Failed
-    preparations are never cached. A bad archive is reported and ignored so
-    a working loose-file installation can still start.
-    """
+# Indexed archive members, per project root. Values are archive categories.
+_prepared = {}
+
+
+def prepare_asset_archives(root_dir) -> tuple[str, ...]:
+    """Validate and mount category archives; never extract their contents."""
     root = Path(root_dir).resolve()
     assets = root / 'assets'
-    found = tuple(c for c in ASSET_CATEGORIES
-                  if (assets / f'{c}.fiopak').is_file())
+    found = tuple(c for c in ASSET_CATEGORIES if (assets / f'{c}.fiopak').is_file())
+    index = {}
     for category in found:
         path = assets / f'{category}.fiopak'
-        if category in ('sounds', 'music'):
-            continue  # Native readers use the archive without extraction.
         try:
-            stamp = path.stat()
-            key = (str(root), category)
-            signature = (stamp.st_mtime_ns, stamp.st_size)
-            if _prepared.get(key) == signature:
-                continue
             with zipfile.ZipFile(path) as archive:
-                infos = _entries(archive, category)
-                # Validate all destinations before writing anything.
-                for info in infos:
-                    target = root / info.filename
-                    if not target.resolve().is_relative_to(assets.resolve()):
-                        raise ValueError('asset destination escapes assets directory')
-                    if assets.is_symlink() or target.is_symlink():
-                        raise ValueError('asset destination is a symbolic link')
-                for info in infos:
-                    target = root / info.filename
-                    if target.exists():
-                        continue
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    # Read fully (including ZIP CRC validation) before exposing
-                    # the file to a loader. Link is atomic and never overwrites.
-                    data = archive.read(info)
-                    temp_name = None
-                    try:
-                        with tempfile.NamedTemporaryFile(
-                                dir=target.parent, delete=False) as temp:
-                            temp_name = temp.name
-                            temp.write(data)
-                        try:
-                            os.link(temp_name, target)
-                        except FileExistsError:
-                            pass  # A loose override appeared during startup.
-                    finally:
-                        if temp_name is not None:
-                            os.unlink(temp_name)
-            _prepared[key] = signature
-        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as exc:
-            print(f'[Assets] Cannot prepare {path.name}: {exc}')
+                index.update((info.filename, category)
+                             for info in _entries(archive, category))
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError,
+                NotImplementedError) as exc:
+            print(f'[Assets] Cannot mount {path.name}: {exc}')
+    _prepared[str(root)] = index
     return found
+
+
+def _asset_key(path, root_dir=None):
+    """The owning project and an asset-relative ZIP member, if safe."""
+    name = os.fspath(path)
+    root = Path(root_dir).resolve() if root_dir is not None else Path.cwd().resolve()
+    if os.path.isabs(name):
+        absolute = Path(name).resolve()
+        roots = (root, *(Path(r) for r in _prepared if r != str(root)))
+        for candidate in roots:
+            try:
+                rel = absolute.relative_to(candidate).as_posix()
+            except ValueError:
+                continue
+            if rel.startswith('assets/'):
+                return str(candidate), rel
+        return str(root), None
+    rel = name.replace('\\', '/')
+    if not rel.startswith('assets/'):
+        return str(root), None
+    if any(p in ('', '.', '..') or ':' in p for p in rel.split('/')):
+        return str(root), None
+    return str(root), rel
+
+
+def _archive_member(path, root_dir=None):
+    root, member = _asset_key(path, root_dir)
+    if member is None:
+        return None
+    if root not in _prepared:
+        prepare_asset_archives(root)
+    category = _prepared[root].get(member)
+    if category is None:
+        return None
+    return Path(root) / 'assets' / f'{category}.fiopak', member
+
+
+def asset_exists(path, root_dir=None) -> bool:
+    """Loose-file or archive-backed asset presence."""
+    return os.path.isfile(path) or _archive_member(path, root_dir) is not None
+
+
+def asset_bytes(path, root_dir=None, max_bytes=MAX_ENTRY_BYTES):
+    """Read a loose override or validated ZIP member, without extracting."""
+    if os.path.isfile(path):
+        try:
+            with open(path, 'rb') as stream:
+                result = stream.read(max_bytes + 1)
+            return result if len(result) <= max_bytes else None
+        except OSError:
+            return None
+    item = _archive_member(path, root_dir)
+    if item is None:
+        return None
+    archive_path, member = item
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            info = archive.getinfo(member)
+            if info.file_size > max_bytes:
+                return None
+            data = archive.read(info)
+            return data if len(data) <= max_bytes else None
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError,
+            NotImplementedError) as exc:
+        print(f'[Assets] Cannot read {member}: {exc}')
+        return None
+
+
+def asset_names(prefix='assets/', root_dir=None):
+    """Return sorted virtual asset names, including loose overrides."""
+    root = Path(root_dir).resolve() if root_dir is not None else Path.cwd().resolve()
+    key = str(root)
+    if key not in _prepared:
+        prepare_asset_archives(root)
+    result = {name for name in _prepared[key] if name.startswith(prefix)}
+    loose = root / 'assets'
+    if loose.is_dir():
+        for path in loose.rglob('*'):
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() != '.fiopak':
+                name = path.relative_to(root).as_posix()
+                if name.startswith(prefix):
+                    result.add(name)
+    return sorted(result, key=str.casefold)
