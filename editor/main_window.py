@@ -3953,14 +3953,9 @@ class MainWindow(QMainWindow):
             self.clone_selected_object()
             return
 
-        # G: toggle grid
+        # G: toggle grid through the same path as the toolbar switch.
         if event.key() == Qt.Key_G:
-            new_state = not self.grid_visible
-            self.toggle_grid(new_state)
-            if hasattr(self, 'grid_btn'):
-                self.grid_btn.blockSignals(True)
-                self.grid_btn.setChecked(new_state)
-                self.grid_btn.blockSignals(False)
+            self.toggle_grid(not self.grid_visible)
             return
 
         # [  /  ] : decrease / increase grid size
@@ -4042,12 +4037,21 @@ class MainWindow(QMainWindow):
         return grid_size if self.snap_to_grid_enabled() else 0
 
     def toggle_grid(self, visible):
-        """Toggle grid visibility in 3D view only."""
+        """Set the 3D grid visibility and keep the toolbar switch in sync."""
+        visible = bool(visible)
         self.grid_visible = visible
-        # Update the 3D view grid
-        if self.view_3d.grid_visible:
-            self.view_3d.grid_visible = visible
-            self.view_3d.update()
+        # Always assign the new value: guarding on the old value meant that
+        # hiding the grid permanently prevented it from being shown again.
+        self.view_3d.grid_visible = visible
+        self.view_3d.update()
+
+        button = getattr(self, 'grid_btn', None)
+        if button is not None and button.isChecked() != visible:
+            was_blocked = button.blockSignals(True)
+            try:
+                button.setChecked(visible)
+            finally:
+                button.blockSignals(was_blocked)
 
     def set_connection_links_enabled(self, enabled):
         """Set visibility of editor I/O connection links in all views."""
