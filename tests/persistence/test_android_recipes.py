@@ -91,3 +91,103 @@ def test_android_pygame_simd_patch_fails_closed_on_upstream_changes():
               "arm64-v8a")
     with pytest.raises(ValueError, match="Unsupported Android"):
         patch("machine_name = platform.machine()", "unsupported-target")
+
+
+def _load_install_helper_without_android_dependencies():
+    """Load the pure staging helper; no p4a/NDK is required to test it."""
+    import shutil
+    import struct
+    from tempfile import TemporaryDirectory
+
+    recipe = RECIPES / "pygame-ce" / "__init__.py"
+    tree = ast.parse(recipe.read_text(encoding="utf-8"), filename=str(recipe))
+    target = next(node for node in tree.body
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name == "install_cross_built_pygame")
+    namespace = {"Path": Path, "shutil": shutil, "struct": struct,
+                 "TemporaryDirectory": TemporaryDirectory}
+    exec(compile(ast.Module(body=[target], type_ignores=[]),
+                 str(recipe), "exec"), namespace)
+    return namespace["install_cross_built_pygame"]
+
+
+def _synthetic_android_elf(machine):
+    """Minimal ELF64 header sufficient for the target-architecture gate."""
+    import struct
+
+    header = bytearray(64)
+    header[:6] = b"\x7fELF\x02\x01"
+    struct.pack_into("<HH", header, 16, 3, machine)
+    return bytes(header)
+
+
+def test_android_pygame_install_bypasses_the_second_build():
+    """Build_ext output and source files reach the target without pip/Meson."""
+    import tempfile
+    from pathlib import Path
+
+    import pytest
+
+    recipe = (RECIPES / "pygame-ce" / "__init__.py").read_text()
+    tree = ast.parse(recipe)
+    cls = next(x for x in tree.body
+               if isinstance(x, ast.ClassDef) and x.name == "PygameCeRecipe")
+    method = next(x for x in cls.body
+                  if isinstance(x, ast.FunctionDef)
+                  and x.name == "install_python_package")
+    calls = [n.func.id for n in ast.walk(method)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+    assert "install_cross_built_pygame" in calls
+    assert "install_python_package" not in calls
+    assert not any(isinstance(n, ast.Attribute) and n.attr == "pip"
+                   for n in ast.walk(method))
+
+    stage = _load_install_helper_without_android_dependencies()
+    for target, machine in (("arm64-v8a", 183), ("x86_64", 62)):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "source"
+            src = root / "src_py"
+            (src / "_sdl2").mkdir(parents=True)
+            (src / "__init__.py").write_text("from . import base\n")
+            (src / "_sdl2" / "__init__.py").write_text("")
+            (src / "freesansbold.ttf").write_bytes(b"font")
+            built = root / "build" / "lib.linux-x86_64-cpython-314" / "pygame"
+            built.mkdir(parents=True)
+            # The extension suffix can name the build host before p4a
+            # normalises it, but the ELF itself must match the Android ABI.
+            extension = built / "base.cpython-314-x86_64-linux-gnu.so"
+            extension.write_bytes(_synthetic_android_elf(machine))
+            destination = Path(work) / "site-packages"
+            (destination / "pygame").mkdir(parents=True)
+            (destination / "pygame" / "stale.py").write_text("obsolete")
+
+            assert stage(root, destination, target) == 1
+            installed = destination / "pygame"
+            assert (installed / "__init__.py").read_text() == "from . import base\n"
+            assert (installed / "_sdl2" / "__init__.py").is_file()
+            assert (installed / "freesansbold.ttf").read_bytes() == b"font"
+            assert (installed / extension.name).read_bytes() == _synthetic_android_elf(machine)
+            assert not (installed / "stale.py").exists()
+
+            # A wrongly-built native extension must never reach the package.
+            extension.write_bytes(_synthetic_android_elf(62 if machine == 183 else 183))
+            with pytest.raises(RuntimeError, match="non-"):
+                stage(root, destination, target)
+            assert (installed / extension.name).read_bytes() == _synthetic_android_elf(machine)
+
+
+def test_android_pygame_install_refuses_missing_or_unsupported_builds():
+    import tempfile
+
+    import pytest
+
+    stage = _load_install_helper_without_android_dependencies()
+    with tempfile.TemporaryDirectory() as work:
+        root = Path(work) / "source"
+        dest = Path(work) / "site"
+        (root / "src_py").mkdir(parents=True)
+        (root / "src_py" / "__init__.py").write_text("")
+        with pytest.raises(RuntimeError, match="unique pygame build"):
+            stage(root, dest, "arm64-v8a")
+        with pytest.raises(ValueError, match="Unsupported Android"):
+            stage(root, dest, "armeabi-v7a")
