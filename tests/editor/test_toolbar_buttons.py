@@ -166,7 +166,7 @@ def test_large_toolbar_shrinks_without_hiding_play(toolbar, qt_app):
         qt_app.processEvents()
 
     assert tool.orientation() == Qt.Vertical
-    assert window._toolbar_icon_size < 45
+    assert window._toolbar_icon_size < 40
     play_actions = [action for action in tool.actions()
                     if tool.widgetForAction(action) is window.play_button]
     assert len(play_actions) == 1
