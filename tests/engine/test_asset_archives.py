@@ -1,10 +1,12 @@
-"""Archive-only startup preserves payload bytes and loose development overrides."""
+"""Archive-backed category reads never materialise missing project files."""
 
 import zipfile
 
 import pytest
 
-from engine.asset_archives import prepare_asset_archives
+from engine.asset_archives import (
+    asset_bytes, asset_exists, asset_names, prepare_asset_archives,
+)
 from tools.pack_assets import pack_category
 
 
@@ -16,20 +18,37 @@ def write_archive(root, category, members):
             archive.writestr(name, data)
 
 
-def test_startup_restores_exact_bytes_without_overwriting_loose_assets(tmp_path):
-    write_archive(tmp_path, 'editor', {'assets/b_save.png': b'original icon',
-                                     'assets/splash.png': b'splash'})
-    write_archive(tmp_path, 'sprites', {'assets/sprites/monster/a.png': b'sprite'})
-    override = tmp_path / 'assets/b_save.png'
-    override.write_bytes(b'my edited icon')
-    assert prepare_asset_archives(tmp_path) == ('editor', 'sprites')
-    assert override.read_bytes() == b'my edited icon'
-    assert (tmp_path / 'assets/splash.png').read_bytes() == b'splash'
-    sprite = tmp_path / 'assets/sprites/monster/a.png'
-    assert sprite.read_bytes() == b'sprite'
-    mtime = sprite.stat().st_mtime_ns
+def test_all_categories_mount_without_materialisation(tmp_path):
+    categories = {
+        'editor': ('assets/b_save.png', b'icon'),
+        'sprites': ('assets/sprites/monster/a.png', b'sprite'),
+        'textures': ('assets/textures/stone.jpg', b'texture'),
+        'models': ('assets/models/tree.obj', b'obj'),
+        'fonts': ('assets/fonts/editor/FioUI-Regular.ttf', b'font'),
+        'music': ('assets/music/theme.ogg', b'music'),
+        'sounds': ('assets/sounds/hit.wav', b'sound'),
+    }
+    for category, (member, data) in categories.items():
+        write_archive(tmp_path, category, {member: data})
+
+    assert prepare_asset_archives(tmp_path) == tuple(categories)
+    for member, data in categories.values():
+        path = tmp_path / member
+        assert not path.exists()
+        assert asset_exists(path)
+        assert asset_bytes(path) == data
+        assert not path.exists()
+    assert asset_names('assets/models/', tmp_path) == ['assets/models/tree.obj']
+
+
+def test_loose_development_override_takes_precedence(tmp_path):
+    write_archive(tmp_path, 'sprites', {'assets/sprites/a.png': b'archive'})
+    path = tmp_path / 'assets/sprites/a.png'
+    path.parent.mkdir()
+    path.write_bytes(b'loose')
     prepare_asset_archives(tmp_path)
-    assert sprite.stat().st_mtime_ns == mtime
+    assert asset_bytes(path) == b'loose'
+    assert path.read_bytes() == b'loose'
 
 
 @pytest.mark.parametrize('category, file_name', [
@@ -47,35 +66,30 @@ def test_audio_is_discovered_and_read_natively_without_extraction(
                               member, f'assets/{category}') == b'audio'
 
 
-@pytest.mark.parametrize('name', ['assets/../outside.png', '/assets/sprites/a.png',
-                                  'assets/sprites/../../outside.png',
-                                  'assets/sprites/code.py', 'assets/models/a.png',
-                                  'assets/sprites\\a.png'])
+@pytest.mark.parametrize('name', [
+    'assets/../outside.png', '/assets/sprites/a.png',
+    'assets/sprites/../../outside.png', 'assets/sprites/code.py',
+    'assets/models/a.png', 'assets/sprites\\a.png',
+])
 def test_invalid_archive_writes_nothing(tmp_path, name):
-    write_archive(tmp_path, 'sprites', {'assets/sprites/ok.png': b'ok', name: b'bad'})
+    write_archive(tmp_path, 'sprites', {
+        'assets/sprites/ok.png': b'ok', name: b'bad',
+    })
     prepare_asset_archives(tmp_path)
     assert not (tmp_path / 'assets/sprites/ok.png').exists()
+    assert asset_bytes(tmp_path / 'assets/sprites/ok.png') is None
 
 
-def test_symlink_destination_cannot_escape_assets(tmp_path):
-    outside = tmp_path / 'outside'
-    outside.mkdir()
-    write_archive(tmp_path, 'sprites', {'assets/sprites/ok.png': b'ok'})
-    (tmp_path / 'assets/sprites').symlink_to(outside, target_is_directory=True)
-    prepare_asset_archives(tmp_path)
-    assert not (outside / 'ok.png').exists()
-
-
-def test_corrupt_archive_keeps_the_loose_installation_usable(tmp_path):
+def test_corrupt_archive_keeps_loose_installation_usable(tmp_path):
     assets = tmp_path / 'assets'
     assets.mkdir()
     (assets / 'editor.fiopak').write_bytes(b'not a ZIP')
     (assets / 'b_save.png').write_bytes(b'loose')
     prepare_asset_archives(tmp_path)
-    assert (assets / 'b_save.png').read_bytes() == b'loose'
+    assert asset_bytes(assets / 'b_save.png') == b'loose'
 
 
-def test_repacking_is_deterministic_and_round_trips(tmp_path):
+def test_repacking_is_deterministic_and_archive_reads_round_trip(tmp_path):
     source = tmp_path / 'assets/sprites/nested/a.png'
     source.parent.mkdir(parents=True)
     payload = bytes(range(256)) * 10
@@ -87,12 +101,15 @@ def test_repacking_is_deterministic_and_round_trips(tmp_path):
     assert path.read_bytes() == first
     source.unlink()
     prepare_asset_archives(tmp_path)
-    assert source.read_bytes() == payload
+    assert asset_bytes(source) == payload
+    assert not source.exists()
 
 
 def test_repacking_partial_overrides_preserves_archive_only_members(tmp_path):
-    write_archive(tmp_path, 'sprites', {'assets/sprites/a.png': b'old',
-                                      'assets/sprites/b.png': b'archive only'})
+    write_archive(tmp_path, 'sprites', {
+        'assets/sprites/a.png': b'old',
+        'assets/sprites/b.png': b'archive only',
+    })
     source = tmp_path / 'assets/sprites/a.png'
     source.parent.mkdir()
     source.write_bytes(b'edited')
