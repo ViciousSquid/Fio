@@ -23,6 +23,18 @@ jobs:
           pip install -r requirements.txt
           pip install "nuitka==4.2.2" zstandard
 
+      - name: Mark the version as the Windows x64 build
+        # Shown in Help -> About, the console banner and the start-up log.
+        shell: pwsh
+        run: |
+          $path = "editor/version.txt"
+          $text = ([IO.File]::ReadAllText($path)).TrimEnd()
+          if ($text -notmatch '^version \d+(\.\d+)+$') {
+            throw "Unexpected editor/version.txt: '$text'"
+          }
+          [IO.File]::WriteAllText($path, "$text WinX64`n")
+          Write-Host "editor/version.txt: $([IO.File]::ReadAllText($path).TrimEnd())"
+
       - name: Build with Nuitka
         run: |
           python -m nuitka `

@@ -1,8 +1,9 @@
 name: Nuitka Build and Validate
 
 # One workflow for every desktop build: Windows x64, Windows ARM64 (native
-# runner, PyQt5-WinARM64 wheel, version marked "WinARM64"), macOS (app
-# bundle, ad-hoc signed) and Linux, then one GitHub release with all four.
+# runner, PyQt5-WinARM64 wheel), macOS (app bundle, ad-hoc signed) and
+# Linux, then one GitHub release with all four. Each build marks its
+# platform on editor/version.txt: "WinX64", "WinARM64", "macOS", "Linux".
 
 on:
   workflow_dispatch:
@@ -19,6 +20,8 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    env:
+      VERSION_SUFFIX: " WinX64"
 
     steps:
       - uses: actions/checkout@v7
@@ -32,6 +35,20 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install "nuitka==4.2.2" zstandard
+
+      - name: Mark the version as the Windows x64 build
+        # Shown in Help -> About, the console banner and the start-up log.
+        # Only this job's checkout is changed; the release's version check
+        # reads the committed file.
+        shell: pwsh
+        run: |
+          $path = "editor/version.txt"
+          $text = ([IO.File]::ReadAllText($path)).TrimEnd()
+          if ($text -notmatch '^version \d+(\.\d+)+$') {
+            throw "Unexpected editor/version.txt: '$text'"
+          }
+          [IO.File]::WriteAllText($path, "$text$env:VERSION_SUFFIX`n")
+          Write-Host "editor/version.txt: $([IO.File]::ReadAllText($path).TrimEnd())"
 
       - name: Build with Nuitka
         run: |
@@ -66,6 +83,11 @@ jobs:
             Write-Error "Build failed: Fio.exe not found"
             exit 1
           }
+          $packaged = ([IO.File]::ReadAllText("build/main.dist/editor/version.txt")).TrimEnd()
+          if (-not $packaged.EndsWith($env:VERSION_SUFFIX)) {
+            throw "Packaged editor/version.txt does not end with$($env:VERSION_SUFFIX): '$packaged'"
+          }
+          Write-Host "Packaged version: $packaged"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -306,6 +328,8 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    env:
+      VERSION_SUFFIX: " macOS"
 
     steps:
       - uses: actions/checkout@v7
@@ -319,6 +343,28 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install "nuitka==4.2.2" zstandard imageio
+
+      - name: Mark the version as the macOS build
+        # Shown in Help -> About, the console banner and the start-up log.
+        # Only this job's checkout is changed; the release's version check
+        # reads the committed file.
+        run: |
+          path=editor/version.txt
+          text=$(tr -d '\r' < "$path" | sed -e 's/[[:space:]]*$//')
+          pattern='^version [0-9]+(\.[0-9]+)+$'
+          if ! [[ $text =~ $pattern ]]; then
+            echo "Unexpected editor/version.txt: '$text'"
+            exit 1
+          fi
+          printf '%s%s\n' "$text" "$VERSION_SUFFIX" > "$path"
+          echo "editor/version.txt: $(cat "$path")"
+
+      - name: Turn off high-DPI scaling in the bundled settings
+        # Cocoa already renders Retina pixels; only the macOS build's
+        # settings.ini changes.
+        run: |
+          sed -i '' -E 's/^high_dpi_scaling = .*/high_dpi_scaling = False/' settings.ini
+          grep -qx 'high_dpi_scaling = False' settings.ini || { echo "settings.ini has no high_dpi_scaling line"; exit 1; }
 
       - name: Convert icon to .icns
         run: |
@@ -348,7 +394,8 @@ jobs:
 
       - name: Read Fio version
         run: |
-          FIO_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          # The number only: this job has marked the file " macOS".
+          FIO_VERSION="$(sed -n -E 's/^version ([0-9]+(\.[0-9]+)+).*/\1/p' editor/version.txt)"
           test -n "$FIO_VERSION"
           echo "FIO_VERSION=$FIO_VERSION" >> "$GITHUB_ENV"
           echo "Building Fio $FIO_VERSION"
@@ -389,6 +436,12 @@ jobs:
             echo "App bundle broken"
             exit 1
           fi
+          version=$(find build/main.app -path '*/editor/version.txt' | head -1)
+          settings=$(find build/main.app -name settings.ini | head -1)
+          packaged=$(cat "$version")
+          [[ $packaged == *"$VERSION_SUFFIX" ]] || { echo "Packaged version does not end with$VERSION_SUFFIX: '$packaged'"; exit 1; }
+          grep -qx 'high_dpi_scaling = False' "$settings" || { echo "Packaged settings.ini keeps high-DPI scaling on"; exit 1; }
+          echo "Packaged version: $packaged; $settings has high_dpi_scaling = False"
 
       - name: Inject Info.plist with proper icon configuration
         run: |
@@ -519,6 +572,8 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
+    env:
+      VERSION_SUFFIX: " Linux"
 
     steps:
       - uses: actions/checkout@v7
@@ -537,6 +592,21 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install "nuitka==4.2.2" zstandard
+
+      - name: Mark the version as the Linux build
+        # Shown in Help -> About, the console banner and the start-up log.
+        # Only this job's checkout is changed; the release's version check
+        # reads the committed file.
+        run: |
+          path=editor/version.txt
+          text=$(tr -d '\r' < "$path" | sed -e 's/[[:space:]]*$//')
+          pattern='^version [0-9]+(\.[0-9]+)+$'
+          if ! [[ $text =~ $pattern ]]; then
+            echo "Unexpected editor/version.txt: '$text'"
+            exit 1
+          fi
+          printf '%s%s\n' "$text" "$VERSION_SUFFIX" > "$path"
+          echo "editor/version.txt: $(cat "$path")"
 
       - name: Build with Nuitka
         run: |
@@ -596,6 +666,9 @@ jobs:
             echo "Build failed: executable not found"
             exit 1
           fi
+          packaged=$(cat build/main.dist/editor/version.txt)
+          [[ $packaged == *"$VERSION_SUFFIX" ]] || { echo "Packaged version does not end with$VERSION_SUFFIX: '$packaged'"; exit 1; }
+          echo "Packaged version: $packaged"
 
       - uses: actions/upload-artifact@v7
         with:
