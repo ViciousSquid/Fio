@@ -61,15 +61,19 @@ dark_stylesheet = """
         background-color: #4b4d4d;
     }
     QMenu {
-        background-color: #3c3f41;
+        background-color: #2b2b2b;
         color: #e0e0e0;
         border: 1px solid #555;
     }
-    QMenu::item:selected {
-        background-color: #4b4d4d;
+    /* Qt 5 on macOS can leave the bottom pixel of an old hover highlight
+       behind if the unselected action is drawn transparently. Every normal
+       item must repaint its entire rectangle with an opaque background. */
+    QMenu::item {
+        background-color: #2b2b2b;
     }
-    /* Explicit separator painting avoids native-style highlight remnants
-       when a submenu opens (notably with Qt 5 on macOS). */
+    QMenu::item:selected {
+        background-color: #F08000;
+    }
     QMenu::separator {
         height: 1px;
         background-color: #555;
