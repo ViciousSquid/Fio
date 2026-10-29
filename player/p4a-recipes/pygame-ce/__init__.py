@@ -66,7 +66,7 @@ def install_cross_built_pygame(build_root: Path, install_root: Path,
     for library in libraries:
         with library.open("rb") as file:
             header = file.read(20)
-        if (len(header) < 20 or header[:6] != b"\\x7fELF\\x02\\x01"
+        if (len(header) < 20 or header[:6] != b"\x7fELF\x02\x01"
                 or struct.unpack_from("<H", header, 18)[0] != machines[target_arch]):
             raise RuntimeError(
                 f"pygame-ce produced a non-{target_arch} native extension: {library}"
