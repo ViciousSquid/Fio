@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QHBoxLayout, QGridLayout, QSplitter, QApplication,
                              QMainWindow, QPushButton, QTreeView,
                              QFileSystemModel, QTabWidget,
-                             QSizePolicy, QListWidget, QListWidgetItem)
+                             QSizePolicy, QListWidget, QListWidgetItem, QMenu, QActionGroup)
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer, QFileSystemWatcher
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage, QImageReader
 from engine.glb_loader import render_glb_thumbnail
@@ -14,6 +14,11 @@ from engine.glb_loader import render_glb_thumbnail
 from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
 from engine.speaker_audio import (AUDIO_EXTENSIONS, SPEAKER_AUDIO_FOLDERS,
                                   list_speaker_audio, speaker_sound_path)
+
+#: Thumbnail edge in pixels, chosen by right-clicking blank grid space:
+#: medium, then 20% and 35% smaller.
+THUMBNAIL_SIZES = {'medium': 90, 'small': 72, 'smallest': 58}
+DEFAULT_THUMBNAIL_SIZE = 'medium'
 
 
 def render_obj_thumbnail(filepath, width, height):
@@ -182,15 +187,19 @@ class AssetItem(QWidget):
     A widget representing a single asset (file) in the grid view.
     Selection is shown by a 3px orange border around the entire item.
     """
-    def __init__(self, name, path, browser, is_model=False, is_audio=False):
+    def __init__(self, name, path, browser, is_model=False, is_audio=False,
+                 thumb_size=THUMBNAIL_SIZES[DEFAULT_THUMBNAIL_SIZE]):
         super().__init__()
         self.name_text = name
         self.file_path = path
         self.browser = browser
         self.is_model = is_model
         self.is_audio = is_audio
-        
-        self.setFixedSize(100, 120)
+        self.thumb_size = thumb_size
+        #: The loaded image before scaling, kept so a size change is a rescale.
+        self._source_pixmap = None
+
+        self.setFixedSize(*self.tile_size(thumb_size))
         # Reduce layout margins so the border has room
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -198,7 +207,7 @@ class AssetItem(QWidget):
         
         # Thumbnail
         self.thumb_label = QLabel()
-        self.thumb_label.setFixedSize(90, 90)
+        self.thumb_label.setFixedSize(thumb_size, thumb_size)
         self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setStyleSheet("background-color: #333; border-radius: 4px;")
         
@@ -248,6 +257,27 @@ class AssetItem(QWidget):
         if not is_model and not is_audio:
             self.setToolTip(texture_info(path, animated))
 
+    @staticmethod
+    def tile_size(thumb_size):
+        """Tile (width, height): the thumbnail plus margins and its name."""
+        return thumb_size + 10, thumb_size + 30
+
+    def set_thumbnail_size(self, thumb_size):
+        if thumb_size == self.thumb_size:
+            return
+        self.stop_preview()
+        self.thumb_size = thumb_size
+        self.setFixedSize(*self.tile_size(thumb_size))
+        self.thumb_label.setFixedSize(thumb_size, thumb_size)
+        self.selection_overlay.setGeometry(0, 0, self.width(), self.height())
+        # Animation frames are scaled for one size; decode again on play.
+        self._preview_frames = None
+        self._show_thumbnail()
+        current = self.thumb_label.pixmap()
+        self._static_thumb = QPixmap(current) if current is not None else None
+        if self.preview_btn is not None:
+            self.preview_btn.move(thumb_size - 22, thumb_size - 22)
+
     def _add_preview_button(self):
         btn = QPushButton("\u25b6", self.thumb_label)
         btn.setFixedSize(20, 20)
@@ -291,7 +321,7 @@ class AssetItem(QWidget):
                 qimage = QImage(image.tobytes(), image.width, image.height,
                                 image.width * 4, QImage.Format_RGBA8888).copy()
                 frames.append(QPixmap.fromImage(qimage).scaled(
-                    90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    self.thumb_size, self.thumb_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self._preview_frames = list(zip(frames, seconds))
         if not self._preview_frames:
             return
@@ -328,7 +358,7 @@ class AssetItem(QWidget):
         pixmap = QPixmap()
 
         if self.is_audio:
-            self.thumb_label.setPixmap(audio_thumbnail(self.file_path, 90))
+            self._show_thumbnail()
             return
         if self.is_model:
             # 1. Look for .png sidecar
@@ -376,14 +406,20 @@ class AssetItem(QWidget):
                 except Exception:
                     pixmap = QPixmap()
 
-        if not pixmap.isNull():
-            if self.is_model and not os.path.exists(os.path.splitext(self.file_path)[0] + ".png"):
-                self.thumb_label.setPixmap(pixmap)
-            else:
-                scaled = pixmap.scaled(90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.thumb_label.setPixmap(scaled)
-        else:
+        self._source_pixmap = None if pixmap.isNull() else pixmap
+        self._show_thumbnail()
+
+    def _show_thumbnail(self):
+        size = self.thumb_size
+        if self.is_audio:
+            self.thumb_label.setPixmap(audio_thumbnail(self.file_path, size))
+        elif self._source_pixmap is None:
             self.thumb_label.setText("?")
+        elif self._source_pixmap.width() == size and self._source_pixmap.height() == size:
+            self.thumb_label.setPixmap(self._source_pixmap)
+        else:
+            self.thumb_label.setPixmap(self._source_pixmap.scaled(
+                size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
 
     def _update_border(self):
@@ -432,6 +468,7 @@ class AssetBrowserTab(QWidget):
         self.parent_browser = parent_browser
         self.selected_item = None
         self.items = []
+        self.thumb_size = THUMBNAIL_SIZES[getattr(parent_browser, 'thumbnail_size', DEFAULT_THUMBNAIL_SIZE)]
 
         # Filesystem events drive asset refreshes.  There is deliberately no
         # polling timer: adding/removing an asset emits directoryChanged and
@@ -644,6 +681,9 @@ class AssetBrowserTab(QWidget):
         )
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_layout.setSpacing(10)
+        # Right-click blank space between or around assets for thumbnail size.
+        self.grid_container.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.grid_container.customContextMenuRequested.connect(self._show_grid_menu)
         self.scroll_area.setWidget(self.grid_container)
         self.splitter.addWidget(self.scroll_area)
 
@@ -680,7 +720,7 @@ class AssetBrowserTab(QWidget):
             return
         
         # Compute number of columns
-        item_width = 100
+        item_width = AssetItem.tile_size(self.thumb_size)[0]
         spacing = self.grid_layout.horizontalSpacing()
         margins = self.grid_layout.contentsMargins()
         available_width = self.scroll_area.viewport().width() - margins.left() - margins.right()
@@ -710,6 +750,33 @@ class AssetBrowserTab(QWidget):
                 row += 1
         
         self.grid_container.setUpdatesEnabled(True)
+
+    def set_thumbnail_size(self, thumb_size):
+        if thumb_size == self.thumb_size:
+            return
+        self.thumb_size = thumb_size
+        for item in self.items:
+            item.set_thumbnail_size(thumb_size)
+        self.relayout_grid(force=True)
+
+    def _show_grid_menu(self, pos):
+        if self.grid_container.childAt(pos) is not None:
+            return  # on an asset, not blank space
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        for name in THUMBNAIL_SIZES:
+            action = menu.addAction(name.capitalize())
+            action.setCheckable(True)
+            action.setChecked(THUMBNAIL_SIZES[name] == self.thumb_size)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked, name=name: self._choose_thumbnail_size(name))
+        menu.exec_(self.grid_container.mapToGlobal(pos))
+
+    def _choose_thumbnail_size(self, name):
+        if hasattr(self.parent_browser, 'set_thumbnail_size'):
+            self.parent_browser.set_thumbnail_size(name)
+        else:
+            self.set_thumbnail_size(THUMBNAIL_SIZES[name])
 
     def go_to_root(self):
         self.load_directory(self.root_path)
@@ -778,7 +845,8 @@ class AssetBrowserTab(QWidget):
                 try:
                     relative = member[len(prefix):]
                     full_path = os.path.join(project_root, *member.split("/"))
-                    item = AssetItem(relative, full_path, self, is_audio=True)
+                    item = AssetItem(relative, full_path, self, is_audio=True,
+                                     thumb_size=self.thumb_size)
                     self.items.append(item)
                 except Exception as exc:
                     print(f"[AssetBrowser] Skipped '{member}': {exc}")
@@ -803,7 +871,7 @@ class AssetBrowserTab(QWidget):
                     # skipped file is named so the failure stays diagnosable.
                     try:
                         item = AssetItem(f, full_path, self, is_model=self.is_model_tab,
-                                         is_audio=self.is_audio_tab)
+                                         is_audio=self.is_audio_tab, thumb_size=self.thumb_size)
                         self.items.append(item)
                     except Exception as e:
                         print(f"[AssetBrowser] Skipped '{f}': {e}")
@@ -1093,6 +1161,10 @@ class AssetBrowser(QWidget):
                 try: os.makedirs(p)
                 except OSError: pass
 
+        config = getattr(editor, 'config', None)
+        saved = config.get('AssetBrowser', 'thumbnail_size', fallback=DEFAULT_THUMBNAIL_SIZE) if config else None
+        self.thumbnail_size = saved if saved in THUMBNAIL_SIZES else DEFAULT_THUMBNAIL_SIZE
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -1124,6 +1196,22 @@ class AssetBrowser(QWidget):
                                          editor, parent_browser=self,
                                          audio_folders=audio_folders)
         self.tabs.addTab(self.tab_audio, "Audio")
+
+    def set_thumbnail_size(self, name):
+        """Resize every grid's thumbnails to ``name`` and remember it."""
+        if name not in THUMBNAIL_SIZES:
+            return
+        self.thumbnail_size = name
+        for tab in (self.tab_textures, self.tab_models, self.tab_audio):
+            tab.set_thumbnail_size(THUMBNAIL_SIZES[name])
+        config = getattr(self.editor, 'config', None)
+        if config is not None:
+            if not config.has_section('AssetBrowser'):
+                config.add_section('AssetBrowser')
+            config['AssetBrowser']['thumbnail_size'] = name
+            save = getattr(self.editor, 'save_config', None)
+            if save is not None:
+                save()
 
     def get_selected_filepath(self):
         """Return the file path of the currently selected asset, or None."""

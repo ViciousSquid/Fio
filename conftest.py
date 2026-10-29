@@ -363,6 +363,35 @@ def pytest_configure(config):
     _install_modal_guard()
 
 
+def pytest_runtest_setup(item):
+    """Give the Qt tier the editor's style before its first widget exists.
+
+    Several modules create the QApplication themselves; installing the style
+    later, over widgets an earlier module left alive, restyles them in place.
+    The OpenGL tier sets its surface format first, so it is left alone.
+    """
+    if item.get_closest_marker("qt") is None or item.get_closest_marker("gl") is not None:
+        return
+    try:
+        from PyQt5.QtWidgets import QApplication
+    except ImportError:
+        return
+    app = QApplication.instance()
+    if app is not None and getattr(app, "_fio_editor_style_installed", False):
+        return
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from editor.desktop_style import install_editor_style, prepare_qt
+    prepare_qt()
+    global _STYLED_QT_APP
+    # Held for the session: an unreferenced QApplication is destroyed.
+    _STYLED_QT_APP = app or QApplication([])
+    install_editor_style(_STYLED_QT_APP)
+
+
+_STYLED_QT_APP = None
+
+
 @pytest.fixture(autouse=True)
 def _qt_callback_errors_fail_the_test():
     """Fail the test during which an exception escaped a Qt callback."""

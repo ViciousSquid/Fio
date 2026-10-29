@@ -89,3 +89,53 @@ def test_thumbnail_rows_fit_the_viewport_including_layout_margins(qt_app, tmp_pa
     finally:
         tab.close()
         tab.deleteLater()
+
+
+def _texture_folder(tmp_path, count=3):
+    folder = tmp_path / "textures"
+    folder.mkdir()
+    for index in range(count):
+        _write_png(folder / f"tex{index}.png")
+    return folder
+
+
+@pytest.mark.parametrize("name, edge", [("medium", 90), ("small", 72), ("smallest", 58)])
+def test_thumbnail_sizes_scale_tiles_and_columns(qt_app, tmp_path, name, edge):
+    from editor.asset_browser import THUMBNAIL_SIZES, AssetItem
+
+    assert THUMBNAIL_SIZES[name] == edge
+    tab = AssetBrowserTab(str(_texture_folder(tmp_path)), [".png"])
+    tab.resize(400, 300)
+    tab.show()
+    qt_app.processEvents()
+    tab.set_thumbnail_size(edge)
+    qt_app.processEvents()
+    item = tab.items[0]
+    assert item.thumb_label.size().width() == edge
+    assert (item.width(), item.height()) == AssetItem.tile_size(edge)
+    assert item.thumb_label.pixmap().width() <= edge
+    tab.close()
+
+
+def test_right_clicking_blank_space_offers_thumbnail_sizes(qt_app, tmp_path, monkeypatch):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QMenu
+
+    tab = AssetBrowserTab(str(_texture_folder(tmp_path)), [".png"])
+    tab.resize(400, 300)
+    tab.show()
+    qt_app.processEvents()
+    offered = []
+
+    def choose_smallest(menu, *_args):
+        offered.append([(action.text(), action.isChecked()) for action in menu.actions()])
+        menu.actions()[2].trigger()
+
+    monkeypatch.setattr(QMenu, "exec_", choose_smallest)
+    container = tab.grid_container
+    tab._show_grid_menu(tab.items[0].geometry().center())
+    assert offered == []  # right-clicking an asset is not blank space
+    tab._show_grid_menu(QPoint(container.width() - 2, container.height() - 2))
+    assert offered == [[("Medium", True), ("Small", False), ("Smallest", False)]]
+    assert tab.thumb_size == 58
+    tab.close()

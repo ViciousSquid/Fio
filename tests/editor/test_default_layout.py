@@ -84,6 +84,19 @@ def test_the_asset_browser_takes_a_third_of_its_column(main_window, qt_app):
     assert abs(host.asset_browser_dock.y() - host.properties_dock.y()) <= 8
 
 
+def test_view_menu_sets_the_asset_thumbnail_size(main_window):
+    host = main_window
+    host.thumbnail_size_actions['smallest'].trigger()
+    assert host.asset_browser.thumbnail_size == 'smallest'
+    assert host.asset_browser.tab_textures.thumb_size == 58
+    assert host.config.get('AssetBrowser', 'thumbnail_size') == 'smallest'
+    host.asset_browser.set_thumbnail_size('small')
+    menu = host.thumbnail_size_actions['small'].parent()
+    menu.aboutToShow.emit()
+    assert host.thumbnail_size_actions['small'].isChecked()
+    assert not host.thumbnail_size_actions['smallest'].isChecked()
+
+
 # ────────────────────────────
 # The version gate
 # ────────────────────────────

@@ -15,7 +15,7 @@ from engine.view_distance import (
     DEFAULT_VIEW_DISTANCE, MAX_VIEW_DISTANCE, MIN_VIEW_DISTANCE)
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
-from editor.asset_browser import AssetBrowser
+from editor.asset_browser import THUMBNAIL_SIZES, AssetBrowser
 from editor.hierarchy_dock import SceneHierarchyDock
 from editor.debug_console import DebugConsole
 
@@ -618,6 +618,24 @@ class Ui_MainWindow(object):
         view_menu.addSeparator()
         
         view_menu.addAction(self.action_asset_browser)
+
+        # The same choices as right-clicking blank space in the Asset Browser.
+        thumbnail_menu = view_menu.addMenu('Thumbnail Size')
+        thumbnail_group = QActionGroup(thumbnail_menu)
+        MainWindow.thumbnail_size_actions = {}
+        for name in THUMBNAIL_SIZES:
+            action = thumbnail_menu.addAction(name.capitalize())
+            action.setCheckable(True)
+            thumbnail_group.addAction(action)
+            action.triggered.connect(
+                lambda _checked, name=name: MainWindow.asset_browser.set_thumbnail_size(name))
+            MainWindow.thumbnail_size_actions[name] = action
+
+        def sync_thumbnail_menu():
+            for name, action in MainWindow.thumbnail_size_actions.items():
+                action.setChecked(name == MainWindow.asset_browser.thumbnail_size)
+        thumbnail_menu.aboutToShow.connect(sync_thumbnail_menu)
+        sync_thumbnail_menu()
 
         MainWindow.surface_inspector_view_action = QAction(
             'Surface Inspector (T)', MainWindow)
