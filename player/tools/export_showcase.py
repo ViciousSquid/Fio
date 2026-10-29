@@ -50,10 +50,22 @@ def export_showcase(output, root=None):
             print(f'PASS: desktop Fio loaded _SHOWCASE and exported {output} ({output.stat().st_size} bytes)')
         finally:
             if window is not None:
+                # This command runs without QApplication.exec_(). Merely
+                # calling processEvents() does not deliver DeferredDelete
+                # events, leaving the OpenGL viewport and its Qt children
+                # alive until interpreter teardown (an intermittent native
+                # crash on the offscreen Linux runner).
+                from PyQt5.QtCore import QEvent
+                import gc
+
                 window._close_current_overlay()
                 window.unsaved_changes = False
                 window.close()
+                window.deleteLater()
                 application.processEvents()
+                application.sendPostedEvents(None, QEvent.DeferredDelete)
+                gc.collect()
+                application.sendPostedEvents(None, QEvent.DeferredDelete)
             os.chdir(old_directory)
     return output
 

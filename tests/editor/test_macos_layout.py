@@ -8,6 +8,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFormLayout, QPushButton
 
 from editor.things import Light
+from editor.ui import TOOLBAR_ICON_SIZES
 from editor.view_2d import View2D
 from main import dark_stylesheet
 
@@ -54,10 +55,15 @@ def test_small_toolbar_obeys_its_size_with_the_real_application_theme(main_windo
         main_window.config.set('Display', 'big_toolbar_buttons', 'False')
         main_window.apply_toolbar_button_size()
         qt_app.processEvents()
+        # Small icons are 26px by default (10% larger than 24px), but
+        # must be allowed to shrink when the toolbar has less space.
+        icon = main_window._toolbar_icon_size
+        assert 1 <= icon <= TOOLBAR_ICON_SIZES[False]
         for button in main_window.tool_toolbar.findChildren(QPushButton):
             if button.property('toolbar_icon_button'):
-                assert button.iconSize().width() == 24
-                assert button.width() == 28  # global QPushButton min-width must not win
+                assert button.iconSize().width() == icon
+                assert button.width() == icon + 4  # theme min-width must not win
+                assert button.height() == icon + 8
     finally:
         qt_app.setStyleSheet(old_style)
 

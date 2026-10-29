@@ -157,15 +157,11 @@ def test_new_asset_browser_uses_smallest_thumbnails(qt_app, tmp_path):
         browser.deleteLater()
 
 
-def test_saved_thumbnail_preference_takes_precedence(qt_app, tmp_path):
+def test_saved_thumbnail_preference_takes_precedence(qt_app, tmp_path, main_window):
     """Changing the default must not override a previously saved choice."""
-    from configparser import ConfigParser
-    from types import SimpleNamespace
-
-    config = ConfigParser()
-    config["AssetBrowser"] = {"thumbnail_size": "medium"}
-    editor = SimpleNamespace(root_dir=str(tmp_path), config=config)
-    browser = AssetBrowser(str(_texture_folder(tmp_path)), editor=editor)
+    # Use the real editor owner, as other behavioural editor tests do.
+    main_window.config["AssetBrowser"] = {"thumbnail_size": "medium"}
+    browser = AssetBrowser(str(_texture_folder(tmp_path)), editor=main_window)
     try:
         assert browser.thumbnail_size == "medium"
         for tab in (browser.tab_textures, browser.tab_models, browser.tab_audio):
