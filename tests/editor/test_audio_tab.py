@@ -170,6 +170,34 @@ def test_audio_tab_lists_fiopak_members_and_keeps_project_relative_paths(
     assert tab.selected_speaker_sound() == "assets/sounds/ui/click.ogg"
 
 
+def test_archive_only_audio_browser_does_not_create_loose_folders(
+        qt_app, tmp_path, main_window, monkeypatch):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    with zipfile.ZipFile(assets / "sounds.fiopak", "w") as archive:
+        archive.writestr("assets/sounds/beep.wav", b"sound")
+    with zipfile.ZipFile(assets / "music.fiopak", "w") as archive:
+        archive.writestr("assets/music/theme.ogg", b"music")
+
+    monkeypatch.setattr(main_window, "root_dir", str(tmp_path))
+    browser = AssetBrowser(str(assets / "textures"), editor=main_window)
+    try:
+        tab = browser.tab_audio
+        assert _names(tab) == ["beep.wav"]
+        assert not (assets / "sounds").exists()
+
+        tab.toggle_audio_folder()
+        assert tab.audio_mode == "music"
+        assert _names(tab) == ["theme.ogg"]
+        assert not (assets / "music").exists()
+
+        tab.toggle_audio_folder()
+        assert _names(tab) == ["beep.wav"]
+        assert not (assets / "sounds").exists()
+    finally:
+        browser.deleteLater()
+
+
 def test_the_game_view_loads_a_speaker_music_member_from_music_fiopak(
         main_window, project, monkeypatch):
     view = main_window.view_3d
