@@ -7,7 +7,9 @@ runtime contract.
 
 from os.path import join
 from pathlib import Path
-import re
+import shutil
+import struct
+from tempfile import TemporaryDirectory
 
 from pythonforandroid.recipe import CompiledComponentsPythonRecipe
 from pythonforandroid.toolchain import current_directory
@@ -37,6 +39,58 @@ def patch_pygame_simd_target(setup_text: str, target_arch: str) -> str:
     return setup_text.replace(probe, target_probe, 1)
 
 
+def install_cross_built_pygame(build_root: Path, install_root: Path,
+                               target_arch: str) -> int:
+    """Stage the already cross-compiled extensions without pip or Meson.
+
+    CompiledComponentsPythonRecipe.build_arch has already run setup.py
+    build_ext. Its normal install_python_package subsequently runs pip install
+    ., which can select pygame-ce's incompatible Meson Android backend and
+    rebuild for the build host. Copy the actual build_ext output instead.
+    """
+    machines = {"arm64-v8a": 183, "x86_64": 62}
+    if target_arch not in machines:
+        raise ValueError(f"Unsupported Android pygame-ce ABI: {target_arch}")
+
+    source = build_root / "src_py"
+    candidates = sorted(
+        child / "pygame" for child in (build_root / "build").glob("lib.*")
+        if (child / "pygame").is_dir()
+    )
+    if not (source / "__init__.py").is_file() or len(candidates) != 1:
+        raise RuntimeError("pygame-ce build_ext did not produce a unique pygame build")
+    compiled = candidates[0]
+    libraries = sorted(compiled.rglob("*.so"))
+    if not libraries or not any(path.name.split(".")[0] == "base" for path in libraries):
+        raise RuntimeError("pygame-ce cross-build is missing its base extension")
+    for library in libraries:
+        with library.open("rb") as file:
+            header = file.read(20)
+        if (len(header) < 20 or header[:6] != b"\\x7fELF\\x02\\x01"
+                or struct.unpack_from("<H", header, 18)[0] != machines[target_arch]):
+            raise RuntimeError(
+                f"pygame-ce produced a non-{target_arch} native extension: {library}"
+            )
+
+    # src_py contains the runtime Python modules, font and icons. build_ext
+    # places the native extension modules under build/lib.*/pygame, potentially
+    # using host-Python ABI suffixes; p4a normalises those when bundling.
+    # Stage before replacing a previous installation so failure cannot leave
+    # an incomplete Python package. There is deliberately no pip invocation.
+    install_root.mkdir(parents=True, exist_ok=True)
+    destination = install_root / "pygame"
+    if destination.is_symlink():
+        raise RuntimeError("Refusing to overwrite a symlinked pygame target")
+    with TemporaryDirectory(prefix=".fio-pygame-", dir=install_root) as staging:
+        staged = Path(staging) / "pygame"
+        shutil.copytree(source, staged)
+        shutil.copytree(compiled, staged, dirs_exist_ok=True)
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.move(str(staged), str(destination))
+    return len(libraries)
+
+
 class PygameCeRecipe(CompiledComponentsPythonRecipe):
     version = "2.5.8"
     url = "https://github.com/pygame-community/pygame-ce/archive/refs/tags/{version}.tar.gz"
@@ -55,6 +109,15 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
     ]
     call_hostpython_via_targetpython = False
     install_in_hostpython = False
+    hostpython_prerequisites = ["setuptools", "Cython<3.2"]
+
+    def install_python_package(self, arch, name=None, env=None, is_dir=True):
+        """Install cross-compiled output, never invoke pip/mesonpy again."""
+        install_cross_built_pygame(
+            Path(self.get_build_dir(arch.arch)),
+            Path(self.ctx.get_python_install_dir(arch.arch)),
+            arch.arch,
+        )
 
     def get_recipe_env(self, arch, **kwargs):
         # prebuild_arch's local dictionary does not reach the build subprocess.
@@ -66,16 +129,9 @@ class PygameCeRecipe(CompiledComponentsPythonRecipe):
     def prebuild_arch(self, arch):
         super().prebuild_arch(arch)
         with current_directory(self.get_build_dir(arch.arch)):
-            # pygame-ce 2.5.8 defaults to Meson, whose own Android branch
-            # explicitly rejects the platform. Its maintained Android Setup
-            # template still uses setuptools. Use that backend for pip's
-            # install step as well as our setup.py build_ext step.
-            project = Path('pyproject.toml')
-            text = project.read_text()
-            text = re.sub(r'\[build-system\].*?(?=\n\[)',
-                          '[build-system]\nrequires = ["setuptools>=77", "wheel", "Cython<3.2"]\n'
-                          'build-backend = "setuptools.build_meta"\n', text, count=1, flags=re.S)
-            project.write_text(text)
+            # Build only through pygame-ce's Android Setup + setup.py.
+            # install_python_package below stages build_ext results directly;
+            # never run pip on pygame-ce's pyproject.toml/Meson backend.
             setup_path = Path('setup.py')
             text = setup_path.read_text()
             text = text.replace('os.path.abspath(sys.argv[0])', 'os.path.abspath(__file__)')
