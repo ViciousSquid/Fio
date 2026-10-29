@@ -594,8 +594,10 @@ class QtGameView(QOpenGLWidget):
             available = False
             try:
                 path = os.path.join(fonts_dir, filename)
-                if os.path.isfile(path):
-                    font_id = QFontDatabase.addApplicationFont(path)
+                from engine.asset_archives import asset_bytes
+                payload = asset_bytes(path)
+                if payload is not None:
+                    font_id = QFontDatabase.addApplicationFontFromData(payload)
                     if font_id >= 0:
                         families = QFontDatabase.applicationFontFamilies(font_id)
                         if families:
@@ -623,8 +625,10 @@ class QtGameView(QOpenGLWidget):
             return None
         path = os.path.join(os.getcwd(), "assets", "fonts", basename)
         try:
-            if os.path.isfile(path):
-                font_id = QFontDatabase.addApplicationFont(path)
+            from engine.asset_archives import asset_bytes
+            payload = asset_bytes(path)
+            if payload is not None:
+                font_id = QFontDatabase.addApplicationFontFromData(payload)
                 if font_id >= 0:
                     families = QFontDatabase.applicationFontFamilies(font_id)
                     if families:
@@ -4378,7 +4382,9 @@ class QtGameView(QOpenGLWidget):
     def _hud_pixmap(self, path):
         """The QPixmap of the HUD sprite at *path*, or None if there is none."""
         if path not in self.hud_pixmaps:
-            self.hud_pixmaps[path] = QPixmap(path) if path and os.path.exists(path) else None
+            from engine.asset_qt import asset_pixmap
+            pixmap = asset_pixmap(path) if path else None
+            self.hud_pixmaps[path] = pixmap if pixmap is not None and not pixmap.isNull() else None
         return self.hud_pixmaps[path]
 
     @staticmethod
