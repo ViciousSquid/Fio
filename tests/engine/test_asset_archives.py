@@ -125,3 +125,27 @@ def test_repacking_partial_overrides_preserves_archive_only_members(tmp_path):
     with zipfile.ZipFile(path) as archive:
         assert archive.read('assets/sprites/a.png') == b'edited'
         assert archive.read('assets/sprites/b.png') == b'archive only'
+
+
+def test_shipped_fonts_fiopak_contains_current_fio_ui_family():
+    """All five Fio UI weights must be packaged byte-for-byte, not extracted.
+
+    The source TTFs are kept in the repository for licensed development and
+    repacking; the application reads their archive members directly.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    assets = root / 'assets'
+    archive_path = assets / 'fonts.fiopak'
+    names = (
+        'FioUI-Regular.ttf',
+        'FioUI-Bold.ttf',
+        'FioUI-Light.ttf',
+        'FioUI-Semibold.ttf',
+        'FioUI-Semilight.ttf',
+    )
+    with zipfile.ZipFile(archive_path) as archive:
+        for name in names:
+            member = f'assets/fonts/editor/{name}'
+            assert archive.read(member) == (assets / 'fonts/editor' / name).read_bytes()
