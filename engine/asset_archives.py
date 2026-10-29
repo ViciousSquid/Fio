@@ -11,6 +11,9 @@ import zipfile
 # Root images belong to the editor; everything else has its own directory.
 ASSET_CATEGORIES = ('editor', 'sprites', 'textures', 'models', 'fonts',
                     'music', 'sounds')
+# The editor exposes writable loose-asset directories alongside the ZIPs.
+# 'editor' is intentionally omitted: its members live at assets/ itself.
+ASSET_FOLDERS = tuple(c for c in ASSET_CATEGORIES if c != 'editor')
 _ROOT_IMAGES = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.icns',
                 '.ppm', '.pbm', '.pgm', '.pnm'}
 _DATA_SUFFIXES = _ROOT_IMAGES | {
@@ -71,10 +74,26 @@ _game_package = None
 _game_members = {}
 
 
+def ensure_asset_directories(root_dir):
+    """Create empty loose-asset folders without extracting archive members.
+
+    Existing authored files are never touched. A read-only packaged install
+    still loads normally: lack of write permission is not a mount failure.
+    """
+    assets = Path(root_dir).resolve() / 'assets'
+    for category in ASSET_FOLDERS:
+        path = assets / category
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f'[Assets] Cannot prepare loose-asset folder {path}: {exc}')
+
+
 def prepare_asset_archives(root_dir) -> tuple[str, ...]:
-    """Validate and mount category archives; never extract their contents."""
+    """Prepare loose directories and mount ZIPs without extracting their files."""
     root = Path(root_dir).resolve()
     assets = root / 'assets'
+    ensure_asset_directories(root)
     found = tuple(c for c in ASSET_CATEGORIES if (assets / f'{c}.fiopak').is_file())
     index = {}
     for category in found:
