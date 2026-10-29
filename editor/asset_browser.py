@@ -41,7 +41,7 @@ def render_obj_thumbnail(filepath, width, height):
         if data is None:
             return None
         for line in data.decode('utf-8', errors='replace').splitlines():
-                line_count += 1
+            line_count += 1
                 if line_count > max_lines: break
                 
                 if line.startswith('#'):
@@ -845,7 +845,7 @@ class AssetBrowserTab(QWidget):
             self.tree_toggle_btn.setChecked(False)
             self.tree_toggle_btn.setEnabled(False)
             self.tree_toggle_btn.setToolTip(
-                "Archive audio is listed across subfolders; the folder tree is unavailable."
+                "Archive assets are listed across subfolders; the folder tree is unavailable."
             )
             self.tree_frame.setVisible(False)
             project_root = os.path.abspath(self.editor.root_dir)
@@ -925,7 +925,7 @@ class AssetBrowserTab(QWidget):
         assets_root = (self.parent_browser.assets_root
                        if self.parent_browser is not None else os.path.dirname(self.root_path))
         path = os.path.join(assets_root, f'{category}.fiopak')
-        return path if os.path.isfile(path) else None
+        return path if os.path.isfile(path) and self.editor is not None else None
 
     def _active_audio_archive(self):
         """Return the active sounds/music archive path, if one exists."""
