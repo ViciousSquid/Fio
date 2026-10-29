@@ -10,6 +10,8 @@ values, and any option can be changed on its own afterwards.
 """
 
 import os
+import io
+from engine.asset_archives import asset_bytes
 from dataclasses import dataclass, field, fields
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -710,10 +712,11 @@ def texture_average(filename: str) -> Optional[np.ndarray]:
     result = None
     for root in (here, os.getcwd()):
         path = os.path.join(root, 'assets', 'textures', 'terrain', filename)
-        if os.path.isfile(path):
+        data = asset_bytes(path)
+        if data is not None:
             try:
                 from PIL import Image
-                with Image.open(path) as img:
+                with Image.open(io.BytesIO(data)) as img:
                     small = img.convert('RGB').resize((64, 64))
                     result = np.asarray(small, dtype=np.float64).reshape(-1, 3).mean(0) / 255.0
             except Exception:
