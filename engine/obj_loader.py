@@ -1,6 +1,7 @@
 from typing import List, Tuple, Optional
 import os
 import numpy as np
+from engine.asset_archives import asset_bytes, asset_exists, asset_names
 
 # OBJLoader parses CPU data without a graphics runtime. Only OBJ's GPU
 # resource methods need PyOpenGL; keep the shared module cached once loaded.
@@ -19,10 +20,10 @@ def _read_text(path: str) -> Optional[str]:
     read forever.
     """
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) > MAX_OBJ_FILE_BYTES:
+        payload = asset_bytes(path, max_bytes=MAX_OBJ_FILE_BYTES)
+        if payload is None:
             return None
-        with open(path, 'r', encoding='utf-8') as f:
-            text = f.read(MAX_OBJ_FILE_BYTES + 1)
+        text = payload.decode('utf-8')
     except (OSError, UnicodeDecodeError):
         return None
     return text if len(text) <= MAX_OBJ_FILE_BYTES else None
