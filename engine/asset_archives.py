@@ -65,6 +65,10 @@ def _entries(archive, category):
 
 # Indexed archive members, per project root. Values are archive categories.
 _prepared = {}
+# One active portable world package in the desktop editor. The ZIP is reopened
+# only for resource cache misses and never extracted.
+_game_package = None
+_game_members = {}
 
 
 def prepare_asset_archives(root_dir) -> tuple[str, ...]:
@@ -84,6 +88,78 @@ def prepare_asset_archives(root_dir) -> tuple[str, ...]:
             print(f'[Assets] Cannot mount {path.name}: {exc}')
     _prepared[str(root)] = index
     return found
+
+
+def mount_game_package(path):
+    """Validate and mount a portable world .fiopak, without unpacking it.
+
+    Validate the *entire* archive first. A failed mount leaves any previously
+    mounted world unchanged; no untrusted ZIP entry is written to disk.
+    """
+    from player.fiopak import (FioPackage, MAX_ASSET_ENTRY_BYTES,
+                               MAX_TOTAL_ASSET_BYTES)
+    root = str(Path(path).resolve())
+    members = {}
+    total = 0
+    with FioPackage.open(root) as package:
+        package.start_map_path()
+        with zipfile.ZipFile(root) as archive:
+            infos = archive.infolist()
+            if len(infos) > 20000:
+                raise ValueError('Package contains too many files')
+            for info in infos:
+                name = info.filename
+                if (name.startswith('/') or '\\' in name or
+                        any(p in ('', '.', '..') or ':' in p for p in name.split('/'))):
+                    raise ValueError(f'Unsafe package entry: {name!r}')
+                mode = info.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise ValueError('Package contains a symbolic link')
+                if name in members:
+                    raise ValueError(f'Duplicate package entry: {name!r}')
+                if info.file_size > MAX_ASSET_ENTRY_BYTES:
+                    raise ValueError(f'Package entry too large: {name!r}')
+                total += info.file_size
+                if total > MAX_TOTAL_ASSET_BYTES:
+                    raise ValueError('Package expands past the size limit')
+                if not info.is_dir():
+                    members[name] = info.file_size
+    global _game_package, _game_members
+    _game_package, _game_members = root, members
+    return root
+
+
+def unmount_game_package():
+    """Return to normal project assets after a package session ends."""
+    global _game_package, _game_members
+    _game_package, _game_members = None, {}
+
+
+def mounted_game_package():
+    return _game_package
+
+
+def package_document(name):
+    """Read an explicitly named bounded cutscene JSON in the active world."""
+    from player.fiopak import MAX_DOCUMENT_BYTES
+    if (_game_package is None or not name.startswith('cutscenes/') or
+            name not in _game_members or
+            _game_members[name] > MAX_DOCUMENT_BYTES):
+        return None
+    with zipfile.ZipFile(_game_package) as archive:
+        return archive.read(name)
+
+
+def _package_asset(name, max_bytes=MAX_ENTRY_BYTES):
+    if (_game_package is None or name not in _game_members or
+            not name.startswith('assets/') or _game_members[name] > max_bytes):
+        return None
+    try:
+        with zipfile.ZipFile(_game_package) as archive:
+            data = archive.read(name)
+        return data if len(data) <= max_bytes else None
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError):
+        return None
 
 
 def _asset_key(path, root_dir=None):
@@ -122,12 +198,18 @@ def _archive_member(path, root_dir=None):
 
 
 def asset_exists(path, root_dir=None) -> bool:
-    """Loose-file or archive-backed asset presence."""
+    """Package, loose-file, or category archive-backed asset presence."""
+    _, name = _asset_key(path, root_dir)
+    if name is not None and name in _game_members and name.startswith('assets/'):
+        return True
     return os.path.isfile(path) or _archive_member(path, root_dir) is not None
 
 
 def asset_bytes(path, root_dir=None, max_bytes=MAX_ENTRY_BYTES):
-    """Read a loose override or validated ZIP member, without extracting."""
+    """Read from active game package, loose override or category ZIP."""
+    _, member = _asset_key(path, root_dir)
+    if member is not None and member in _game_members and member.startswith('assets/'):
+        return _package_asset(member, max_bytes)
     if os.path.isfile(path):
         try:
             with open(path, 'rb') as stream:
@@ -159,6 +241,8 @@ def asset_names(prefix='assets/', root_dir=None):
     if key not in _prepared:
         prepare_asset_archives(root)
     result = {name for name in _prepared[key] if name.startswith(prefix)}
+    result.update(name for name in _game_members if name.startswith(prefix)
+                  and name.startswith('assets/'))
     loose = root / 'assets'
     if loose.is_dir():
         for path in loose.rglob('*'):
