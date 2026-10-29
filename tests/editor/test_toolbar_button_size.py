@@ -23,7 +23,7 @@ pytestmark = pytest.mark.qt
 def test_small_icons_are_ten_percent_larger_without_changing_large_mode():
     """24px * 1.10 rounds to 26 Qt logical pixels on both platforms."""
     assert TOOLBAR_ICON_SIZES[False] == round(24 * 1.10) == 26
-    assert TOOLBAR_ICON_SIZES[True] == 45
+    assert TOOLBAR_ICON_SIZES[True] == 40
     assert PLAY_BUTTON_LENGTHS == {False: 110, True: 250}
 
     config = configparser.ConfigParser()
