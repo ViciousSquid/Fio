@@ -17,7 +17,7 @@ import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QFileDialog, QDialog, QWidget, QLabel, QVBoxLayout,
     QGraphicsOpacityEffect, QInputDialog, QColorDialog, QProgressDialog, QAction, QToolBar, QDockWidget,
-    QPushButton, QDialogButtonBox, QHBoxLayout
+    QPushButton, QDialogButtonBox, QHBoxLayout, QStyle, QStatusBar
 )
 from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
@@ -929,8 +929,12 @@ class MainWindow(QMainWindow):
                 self.right_tabs.setCurrentIndex(next_index)
 
     def eventFilter(self, obj, event):
-        """Track right-click state on view_3d for camera movement detection."""
+        """Track viewport input and the toolbar's available layout space."""
         from PyQt5.QtCore import QEvent
+
+        if obj is getattr(self, 'tool_toolbar', None):
+            if event.type() in (QEvent.Resize, QEvent.Show):
+                self._schedule_toolbar_fit()
 
         if obj == self.view_3d:
             if event.type() == QEvent.MouseButtonPress:
@@ -1682,23 +1686,79 @@ class MainWindow(QMainWindow):
         self.scene_hierarchy.highlight_item(obj)
 
 
-    def apply_toolbar_button_size(self):
-        """Resize the toolbar buttons (Play included) to the current setting."""
-        from editor.ui import toolbar_metrics
-        if not hasattr(self, 'tool_toolbar'):
+    def _schedule_toolbar_fit(self):
+        """Coalesce Qt resize/show events; resizing buttons can resize the bar."""
+        if getattr(self, '_toolbar_fit_pending', False):
             return
-        icon, length = toolbar_metrics(self.config)
+        self._toolbar_fit_pending = True
+        QTimer.singleShot(0, self._apply_pending_toolbar_fit)
+
+    def _apply_pending_toolbar_fit(self):
+        self._toolbar_fit_pending = False
+        toolbar = getattr(self, 'tool_toolbar', None)
+        if toolbar is not None and toolbar.isVisible():
+            self.apply_toolbar_button_size()
+
+    def apply_toolbar_button_size(self):
+        """Keep every editing button and Play within the available toolbar.
+
+        A fixed 45px icon and 250px vertical Play button were too tall for
+        laptop screens: Qt pushed Play into its overflow. Treat those as
+        maximum sizes, shrinking *all* buttons together when height is tight.
+        """
+        from editor.ui import fit_toolbar_metrics
+        toolbar = getattr(self, 'tool_toolbar', None)
+        if toolbar is None:
+            return
+        vertical = toolbar.orientation() == Qt.Vertical
+        screen = self.screen() or QApplication.primaryScreen()
+        if toolbar.isFloating() and screen is not None:
+            bounds = screen.availableGeometry()
+            available = (bounds.height() if vertical else bounds.width()) - 48
+        elif vertical:
+            # Calculate from the *window*, not the old toolbar size hint (which
+            # already includes the oversized buttons that caused overflow).
+            available = self.height() - 12
+            menubar = self.menuBar()
+            if menubar is not None and menubar.isVisible():
+                available -= menubar.height()
+            status = self.findChild(QStatusBar)
+            if status is not None and status.isVisible():
+                available -= status.height()
+            if toolbar.isVisible() and toolbar.height() > 200:
+                available = min(available, toolbar.height())
+        else:
+            available = self.width() - 12
+            if toolbar.isVisible() and toolbar.width() > 200:
+                available = min(available, toolbar.width())
+
+        buttons = [button for button in toolbar.findChildren(QPushButton)
+                   if button.property("toolbar_icon_button")]
+        separators = sum(action.isSeparator() for action in toolbar.actions())
+        style = toolbar.style()
+        icon, length = fit_toolbar_metrics(
+            self.config, available, len(buttons), separators, vertical,
+            spacing=style.pixelMetric(QStyle.PM_ToolBarItemSpacing, None, toolbar),
+            margin=style.pixelMetric(QStyle.PM_ToolBarItemMargin, None, toolbar),
+            handle=style.pixelMetric(QStyle.PM_ToolBarHandleExtent, None, toolbar),
+            separator_extent=style.pixelMetric(QStyle.PM_ToolBarSeparatorExtent, None, toolbar),
+        )
+        if (icon == getattr(self, '_toolbar_icon_size', None)
+                and length == getattr(self, '_play_button_length', None)
+                and (not buttons or buttons[0].height() == icon + 8)
+                and (not hasattr(self, 'play_button') or
+                     (self.play_button.height() if vertical else self.play_button.width()) == length)):
+            return
         self._toolbar_icon_size = icon
         self._play_button_length = length
-        for button in self.tool_toolbar.findChildren(QPushButton):
-            if button.property("toolbar_icon_button"):
-                button.setIconSize(QSize(icon, icon))
-                button.setFixedSize(icon + 4, icon + 8)
+        for button in buttons:
+            button.setIconSize(QSize(icon, icon))
+            button.setFixedSize(icon + 4, icon + 8)
         if hasattr(self, 'play_button'):
             self.play_button.setIconSize(QSize(icon, icon))
             sync = getattr(self, '_sync_play_button', None)
             if sync is not None:
-                sync(self.tool_toolbar.orientation())
+                sync(toolbar.orientation())
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
