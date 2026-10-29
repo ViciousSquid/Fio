@@ -11,7 +11,9 @@ from PyQt5.QtCore import QCoreApplication  # noqa: E402
 from PyQt5.QtGui import QImage  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
-from editor.asset_browser import AssetBrowserTab  # noqa: E402
+from editor.asset_browser import (  # noqa: E402
+    AssetBrowser, AssetBrowserTab, DEFAULT_THUMBNAIL_SIZE, THUMBNAIL_SIZES,
+)
 
 pytestmark = pytest.mark.qt
 
@@ -136,6 +138,38 @@ def test_right_clicking_blank_space_offers_thumbnail_sizes(qt_app, tmp_path, mon
     tab._show_grid_menu(tab.items[0].geometry().center())
     assert offered == []  # right-clicking an asset is not blank space
     tab._show_grid_menu(QPoint(container.width() - 2, container.height() - 2))
-    assert offered == [[("Medium", True), ("Small", False), ("Smallest", False)]]
+    assert offered == [[("Medium", False), ("Small", False), ("Smallest", True)]]
     assert tab.thumb_size == 58
     tab.close()
+
+
+def test_new_asset_browser_uses_smallest_thumbnails(qt_app, tmp_path):
+    """Default applies to all grid tabs, not just the View menu checkmark."""
+    browser = AssetBrowser(str(_texture_folder(tmp_path)))
+    try:
+        assert DEFAULT_THUMBNAIL_SIZE == "smallest"
+        assert browser.thumbnail_size == "smallest"
+        for tab in (browser.tab_textures, browser.tab_models, browser.tab_audio):
+            assert tab.thumb_size == THUMBNAIL_SIZES["smallest"]
+        assert browser.tab_textures.items[0].thumb_label.width() == 58
+    finally:
+        browser.close()
+        browser.deleteLater()
+
+
+def test_saved_thumbnail_preference_takes_precedence(qt_app, tmp_path):
+    """Changing the default must not override a previously saved choice."""
+    from configparser import ConfigParser
+    from types import SimpleNamespace
+
+    config = ConfigParser()
+    config["AssetBrowser"] = {"thumbnail_size": "medium"}
+    editor = SimpleNamespace(root_dir=str(tmp_path), config=config)
+    browser = AssetBrowser(str(_texture_folder(tmp_path)), editor=editor)
+    try:
+        assert browser.thumbnail_size == "medium"
+        for tab in (browser.tab_textures, browser.tab_models, browser.tab_audio):
+            assert tab.thumb_size == THUMBNAIL_SIZES["medium"]
+    finally:
+        browser.close()
+        browser.deleteLater()
