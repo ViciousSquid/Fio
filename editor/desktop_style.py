@@ -9,7 +9,7 @@ from PyQt5.QtGui import QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QGu
 from PyQt5.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialogButtonBox,
                              QFileDialog, QFileIconProvider,
                              QFormLayout, QHeaderView, QLabel, QMessageBox, QProxyStyle, QSizePolicy, QStyle, QStyleFactory,
-                             QRadioButton, QSplitter, QTabWidget, QToolTip, QWidget)
+                             QMenu, QRadioButton, QSplitter, QTabWidget, QToolTip, QWidget)
 
 UI_FONT = "Fio UI"
 MONO_FONT = "IBM Plex Mono"
@@ -226,6 +226,12 @@ class EditorLayoutRules(QObject):
     def eventFilter(self, obj, event):
         if not isinstance(obj, QWidget):
             return False
+        if (sys.platform == 'darwin' and isinstance(obj, QMenu)
+                and event.type() == QEvent.MouseMove):
+            # Qt 5/Cocoa sometimes leaves one-pixel selection edges behind
+            # when QMenu redraws only the old and new action rectangles.
+            # A coalesced full update includes those edges and separators.
+            obj.update()
         if event.type() in (QEvent.Polish, QEvent.FontChange) and isinstance(obj, (QLabel, QCheckBox, QRadioButton)):
             if obj.text() and obj.maximumHeight() == 16777215:
                 previous = obj.property('_fio_label_height')
