@@ -89,6 +89,9 @@ class StreamingHost:
         self.sim_near_radius = DEFAULT_NEAR_RADIUS
         #: Outer edge of live simulation; tracks the activation radius.
         self.sim_active_radius = 0.0
+        #: Where the renderer finishes fading streamed lights (None: its own
+        #: light range).
+        self.light_fade_range = None
         #: Bumped whenever the set of drawable objects changes. A host that
         #: caches "every non-hidden brush" between frames — rebuilding it per
         #: frame is O(total brushes), exactly the cost streaming exists to
@@ -459,6 +462,9 @@ class BigWorldSession:
         try:
             logic.sim_active_radius = float(self.tiers.active_radius)
             logic.sim_near_radius = float(self.tiers.near_radius)
+            # The renderer's fixed range can exceed a camera-fitted region.
+            # Publish the earlier fade boundary without changing either budget.
+            logic.light_fade_range = float(self.manager.activation_radius) if self.streaming else None
         except Exception:
             pass  # a host that refuses the attributes is not an error
 
@@ -501,6 +507,10 @@ class BigWorldSession:
             self._release_view_horizon()
             self._release_view_horizon = None
         self._started = False
+        try:
+            self.logic.light_fade_range = None
+        except AttributeError:
+            pass
 
     def _clear_transient_markers(self) -> None:
         """Drop this session's own activation markers from every object."""

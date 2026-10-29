@@ -67,6 +67,7 @@ def test_residency_is_sized_from_the_screen_not_the_authored_radius():
     # Past the corners by the refresh distance, and well inside the authored 2048.
     assert corner + session.FIT_REFRESH <= act < corner + session.FIT_REFRESH + session.FIT_QUANTUM
     assert act < 2048.0
+    assert logic.light_fade_range == act
     assert session.manager.deactivation_radius > act
     assert session.tiers.near_rect == session.tiers.near_rect
     # The camera's far plane follows residency.

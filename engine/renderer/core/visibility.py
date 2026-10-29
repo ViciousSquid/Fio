@@ -21,6 +21,7 @@ from engine.portal_transform import (
     contains_point as _portal_contains_point,
     mirror_point as _portal_mirror_point,
 )
+from .light_stream import ACTIVE_LIGHT_RANGE, LightStream   # noqa: F401  (re-exported)
 
 
 @dataclass(frozen=True)
@@ -222,20 +223,50 @@ class VisibilityMixin:
         )
 
     def _get_active_lights(self, config):
-        """Return active lights directly from the dense EntityTable."""
+        """Return active lights directly from the dense EntityTable.
+
+        With a ``light_focus`` in the frame input (the player, in play), the
+        lights near it are streamed as the focus moves (:class:`LightStream`):
+        only those within ``light_range`` (:data:`ACTIVE_LIGHT_RANGE` by
+        default) light, nearest first, so every shader's light cap keeps the
+        closest -- and a frame measures only the lights near the player, not
+        every light in the map."""
         table = config.get('entity_table')
         if table is None or not hasattr(table, 'light_color'):
             raise RuntimeError("dense EntityTable is required for light rendering")
-        slots = table.light_slots
-        if len(slots):
+        hidden = config.get('thing_hidden')
+        if not config.get('play_mode', False):
+            hidden = None
+        elif hidden is not None:
+            hidden = np.asarray(hidden)
+
+        def usable(slots):
             keep = table.light_enabled[slots]
-            hidden = config.get('thing_hidden')
-            if config.get('play_mode', False) and hidden is not None:
+            if hidden is not None:
                 # A hidden light is out of the running world -- Big World
                 # parks out-of-range lights exactly this way, and they must
                 # not keep lighting (or take light and shadow slots).
-                keep = keep & ~np.asarray(hidden)[slots]
-            slots = slots[keep]
+                keep = keep & ~hidden[slots]
+            return keep
+
+        focus = config.get('light_focus')
+        if focus is not None:
+            stream = getattr(self, '_light_stream', None) if self is not None else None
+            if stream is None:
+                stream = LightStream()
+                if self is not None:
+                    self._light_stream = stream
+            slots = stream.select(table, table.light_slots, focus,
+                                  usable=usable, reach=config.get('light_range'),
+                                  fade_reach=config.get('light_fade_range'))
+            if self is not None:
+                self._light_fade = (table, dict(zip(slots, stream.weights)))
+            return (table, slots)
+        if self is not None:
+            self._light_fade = None
+        slots = table.light_slots
+        if len(slots):
+            slots = slots[usable(slots)]
         return (table, slots)
 
     def env_uniform_values(self):

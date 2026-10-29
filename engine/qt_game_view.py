@@ -1932,6 +1932,14 @@ class QtGameView(QOpenGLWidget):
         self._render_config["entity_refs"] = render_state.entity_refs
         self._render_config["visible_thing_slots"] = render_state.visible_thing_slots
         self._render_config["thing_hidden"] = render_state.thing_hidden
+        # In play only the lights near the player light (nearest first), so a
+        # map may hold more lights than the shaders have room for.
+        _focus = None
+        if self.play_mode:
+            _fp = render_state.player_pos
+            _focus = (float(_fp.x), float(_fp.y), float(_fp.z))
+        self._render_config["light_focus"] = _focus
+        self._render_config["light_fade_range"] = render_state.light_fade_range
 
         _splitscreen = (
             self.play_mode

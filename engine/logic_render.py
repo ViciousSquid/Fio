@@ -250,6 +250,8 @@ class LogicRender:
         started = time.perf_counter()
         write_state = logic.game_state.get_write_state()
         write_state.is_play_mode = logic.session_runtime.play_mode
+        write_state.light_fade_range = (
+            getattr(logic, 'light_fade_range', None) if write_state.is_play_mode else None)
 
         if logic.session_runtime.play_mode and logic.player_runtime.player:
             cs = logic.cutscene_runtime.state

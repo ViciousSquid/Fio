@@ -177,6 +177,9 @@ def test_the_session_publishes_one_pair_of_radii():
     assert session.logic.sim_active_radius == 4096.0
     assert session.logic.sim_near_radius == 1024.0
     assert session.tiers.active_radius == session.manager.activation_radius
+    assert session.logic.light_fade_range == session.manager.activation_radius
+    session.stop()
+    assert session.logic.light_fade_range is None
 
 
 def test_bigworld_residency_never_ends_inside_the_visual_horizon():

@@ -65,6 +65,13 @@ FRAME_INPUT = {
                            'outlines) draws only these rows. The editor\'s view '
                            'filters leave rows out; a light left out still lights',
     'thing_hidden': 'bool per entity row: hidden or collected in the running world',
+    'light_focus': 'optional (x, y, z): only lights within light_range of this '
+                   'point light the frame, nearest first, so every shader\'s '
+                   'light cap keeps the closest (the host passes the player in play)',
+    'light_range': 'optional float: the reach of light_focus in world units '
+                   '(default engine.renderer.core.visibility.ACTIVE_LIGHT_RANGE)',
+    'light_fade_range': 'optional float: finish the intensity fade before this '
+                       'world-streaming boundary; does not change light selection',
     'terrain': 'engine.terrain.Terrain or None; the renderer prepares whatever '
                'GPU state it needs from it when it first sees it',
     # Selection (same object as render_scene's primary_selection argument)

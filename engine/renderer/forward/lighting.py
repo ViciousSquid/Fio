@@ -159,7 +159,14 @@ class LightingMixin:
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("light upload requires (LightTable, slots)")
         table, slots = lights
-        key = ('dense', id(table), table.generation, count, tuple(slots[:count].tolist()))
+        active_lights = slots[:count]
+        # Streamed play lights ease out before their cutoff (LightStream).
+        fade = getattr(self, '_light_fade', None)
+        weights = (1.0,) * count
+        if fade is not None and fade[0] is table:
+            weights = tuple(float(fade[1].get(slot, 1.0)) for slot in active_lights)
+        key = ('dense', id(table), table.generation, count,
+               tuple(active_lights.tolist()), weights)
         if self._light_ubo_key == key:
             return
 
@@ -169,13 +176,14 @@ class LightingMixin:
         active['params'].fill(0.0)
         active['indices'].fill(0)
 
-        table, slots = lights
-        active_lights = slots[:count]
         active['position'][:, :3] = table.pos[active_lights].astype(np.float32, copy=False)
         active['position'][:, 3] = 1.0
         active['color'][:, :3] = table.light_color[active_lights]
         active['color'][:, 3] = 1.0
         active['params'][:, :2] = table.light_params[active_lights]
+        # Shared by brush, model, terrain and water shaders. Never change the
+        # table's authored intensity (which also drives flicker and I/O).
+        active['params'][:, 0] *= weights
         shadow_indices = np.fromiter(
             (self._light_shadow_index.get(int(slot), -1) for slot in active_lights),
             dtype=np.int32,

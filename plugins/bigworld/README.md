@@ -97,6 +97,14 @@ authored world through its existing Big World lifecycle; Stop restores the
 chosen editor residency mode. The map's **Stream around editor camera** setting can disable
 this editor behavior when a full-world authoring pass is needed.
 
+In Play, the renderer lights only the lights near the player (within 2048
+units by default, nearest first, with the same kind of hysteresis as cells),
+and fades them smoothly over the last 256 world units before that limit, or
+Big World's active radius when smaller, including overhead-camera fitting.
+The existing activation range, hysteresis, light budgets and Big World parking
+remain in place. The fade affects rendered intensity only; authored values,
+flicker and explicit light on/off inputs retain their behavior.
+
 # Quick start
 
 ## 1. Opt a map into Big World
