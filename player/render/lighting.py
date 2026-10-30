@@ -42,6 +42,8 @@ class LightBuffer:
             self.data['color_intensity'][row,:3] = light['color']
             self.data['color_intensity'][row,3] = light['intensity']
             self.data['indices'][row,0] = shadows.get(row,-1)
+            self.data['indices'][row,1] = round(max(0., min(1., light.get('shadow_strength', 1.))) * 1000)
+            self.data['indices'][row,2] = int(bool(light.get('shadow_only', False)))
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self.buffer)
         gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, self.data.nbytes, self.data)
         gl.glBindBufferBase(gl.GL_UNIFORM_BUFFER, LIGHT_UBO_BINDING, self.buffer)
