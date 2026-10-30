@@ -44,14 +44,8 @@ class CutsceneWizard(QtWidgets.QDialog):
 
     The editor remains fully usable while this panel is open. Temporary actors
     are ordinary editor entities, which means selection, movement and property
-    editing all work through the normal Fio/MiniWind editor machinery.
+    editing all work through the normal Fio editor machinery.
     """
-
-    NPC_ROLES = ("villager", "guard", "merchant", "blacksmith", "farmer", "beggar")
-    CREATURE_ROLES = (
-        "wolf", "bear", "boar", "mudcrab", "bandit", "cultist",
-        "skeleton", "wraith", "cow", "sheep", "hen",
-    )
 
     @staticmethod
     def _scroll_page(page):
@@ -152,7 +146,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         setup_layout.addWidget(header)
         setup_help = QtWidgets.QLabel(
             "<b>Simple workflow:</b> add temporary actors, place them in the 3D view, "
-            "capture their movement as waypoints, then set the camera. Dialogue and other events are optional. "
+            "capture their movement as waypoints, then set the camera. Message and I/O events are optional. "
             "The temporary actors are removed after the cutscene finishes."
         )
         setup_help.setWordWrap(True)
@@ -178,12 +172,11 @@ class CutsceneWizard(QtWidgets.QDialog):
         av.addWidget(help_label)
 
         actor_buttons = QtWidgets.QHBoxLayout()
-        self.add_npc_button = QtWidgets.QPushButton("+ Actor")
-        self.add_creature_button = QtWidgets.QPushButton("+ Actor")
+        self.add_actor_button = QtWidgets.QPushButton("+ Actor")
         self.capture_button = QtWidgets.QPushButton("+ Selected")
         self.remove_actor_button = QtWidgets.QPushButton("Remove")
         self.focus_actor_button = QtWidgets.QPushButton("Focus")
-        for button in (self.add_npc_button, self.add_creature_button,
+        for button in (self.add_actor_button,
                        self.capture_button, self.remove_actor_button,
                        self.focus_actor_button):
             actor_buttons.addWidget(button)
@@ -320,8 +313,8 @@ class CutsceneWizard(QtWidgets.QDialog):
         tabs.addTab(self._scroll_page(camera_page), "Keyframes")
 
         # -----------------------------------------------------------------
-        # Events / dialogue. Advanced functionality remains available, but
-        # it no longer makes the primary wizard vertically enormous.
+        # Events. Advanced functionality remains available, but it no
+        # longer makes the primary wizard vertically enormous.
         # -----------------------------------------------------------------
         events_page = QtWidgets.QWidget()
         events_outer = QtWidgets.QVBoxLayout(events_page)
@@ -434,9 +427,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.play_button.clicked.connect(self._preview_play)
         self.fast_forward_button.clicked.connect(self._preview_fast_forward)
 
-        self.add_npc_button.clicked.connect(lambda: self._create_temporary_actor("monster"))
-        self.add_creature_button.clicked.connect(lambda: self._create_temporary_actor("monster"))
-        self.add_creature_button.hide()
+        self.add_actor_button.clicked.connect(lambda: self._create_temporary_actor("monster"))
         self.capture_button.clicked.connect(self._capture_selected_actors)
         self.remove_actor_button.clicked.connect(self._remove_selected_actors)
         self.focus_actor_button.clicked.connect(self._focus_selected_actor)
@@ -797,102 +788,6 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_summary()
         self.io_time.setValue(float(event["time"]) + 1.0)
 
-    def _build_fight_tab(self, tabs):
-        fight = QtWidgets.QWidget()
-        fv = QtWidgets.QVBoxLayout(fight)
-        self.fight_time = QtWidgets.QDoubleSpinBox()
-        self.fight_time.setRange(0, 3600)
-        self.fight_time.setDecimals(2)
-        self.fight_duration = QtWidgets.QDoubleSpinBox()
-        self.fight_duration.setRange(0.05, 300)
-        self.fight_duration.setDecimals(2)
-        self.fight_duration.setValue(5)
-        self.fight_style = QtWidgets.QComboBox()
-        self.fight_style.addItem("Use each actor's normal combat style", "normal")
-        self.fight_style.addItem("Melee — swords / claws / close combat", "melee")
-        self.fight_style.addItem("Archery — bows / ranged attacks", "bow")
-        self.fight_style.addItem("Spell — magical ranged attack", "magic")
-        form = QtWidgets.QFormLayout()
-        form.addRow("Start time", self.fight_time)
-        form.addRow("Duration", self.fight_duration)
-        form.addRow("How they fight", self.fight_style)
-        fv.addLayout(form)
-        lists = QtWidgets.QHBoxLayout()
-        self.attackers = QtWidgets.QListWidget()
-        self.attackers.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self.defenders = QtWidgets.QListWidget()
-        self.defenders.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        lists.addWidget(self._labelled_list("Attackers", self.attackers))
-        lists.addWidget(self._labelled_list("Defenders", self.defenders))
-        fv.addLayout(lists, 1)
-        button = QtWidgets.QPushButton("Add fight event")
-        button.clicked.connect(self._add_fight)
-        fv.addWidget(button)
-        tabs.addTab(fight, "Fight")
-
-    def _build_blood_tab(self, tabs):
-        blood = QtWidgets.QWidget()
-        bv = QtWidgets.QVBoxLayout(blood)
-        form = QtWidgets.QFormLayout()
-        self.blood_time = QtWidgets.QDoubleSpinBox()
-        self.blood_time.setRange(0, 3600)
-        self.blood_time.setDecimals(2)
-        self.blood_variant = QtWidgets.QComboBox()
-        self.blood_variant.addItem("Random", "random")
-        self.blood_x = QtWidgets.QDoubleSpinBox()
-        self.blood_y = QtWidgets.QDoubleSpinBox()
-        self.blood_z = QtWidgets.QDoubleSpinBox()
-        for spin in (self.blood_x, self.blood_y, self.blood_z):
-            spin.setRange(-100000, 100000)
-            spin.setDecimals(2)
-        self.blood_w = QtWidgets.QDoubleSpinBox()
-        self.blood_h = QtWidgets.QDoubleSpinBox()
-        self.blood_w.setRange(8, 512)
-        self.blood_h.setRange(8, 512)
-        self.blood_w.setValue(72)
-        self.blood_h.setValue(48)
-        form.addRow("Time", self.blood_time)
-        form.addRow("Variant", self.blood_variant)
-        form.addRow("X", self.blood_x)
-        form.addRow("Y", self.blood_y)
-        form.addRow("Z", self.blood_z)
-        form.addRow("Width", self.blood_w)
-        form.addRow("Height", self.blood_h)
-        bv.addLayout(form)
-        row = QtWidgets.QHBoxLayout()
-        use_pos = QtWidgets.QPushButton("Use selected actor position")
-        use_pos.clicked.connect(self._use_selected_position)
-        add = QtWidgets.QPushButton("Add blood keyframe")
-        add.clicked.connect(self._add_blood)
-        row.addWidget(use_pos)
-        row.addWidget(add)
-        bv.addLayout(row)
-        tabs.addTab(blood, "Blood")
-
-    def _build_dialogue_tab(self, tabs):
-        dialog = QtWidgets.QWidget()
-        dv = QtWidgets.QVBoxLayout(dialog)
-        form = QtWidgets.QFormLayout()
-        self.dialogue_time = QtWidgets.QDoubleSpinBox()
-        self.dialogue_time.setRange(0, 3600)
-        self.dialogue_time.setDecimals(2)
-        self.dialogue_duration = QtWidgets.QDoubleSpinBox()
-        self.dialogue_duration.setRange(0.05, 300)
-        self.dialogue_duration.setValue(3)
-        self.dialogue_duration.setDecimals(2)
-        self.dialogue_speaker = QtWidgets.QComboBox()
-        self.dialogue_text = QtWidgets.QPlainTextEdit()
-        self.dialogue_text.setFixedHeight(100)
-        form.addRow("Time", self.dialogue_time)
-        form.addRow("Duration", self.dialogue_duration)
-        form.addRow("Speaker", self.dialogue_speaker)
-        form.addRow("Text", self.dialogue_text)
-        dv.addLayout(form)
-        button = QtWidgets.QPushButton("Add dialogue keyframe")
-        button.clicked.connect(self._add_dialogue)
-        dv.addWidget(button)
-        tabs.addTab(dialog, "Dialogue")
-
     def _build_message_tab(self, tabs):
         message = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(message)
@@ -909,13 +804,6 @@ class CutsceneWizard(QtWidgets.QDialog):
         button.clicked.connect(self._add_message)
         form.addRow("", button)
         tabs.addTab(message, "Message")
-
-    @staticmethod
-    def _labelled_list(title, widget):
-        box = QtWidgets.QGroupBox(title)
-        lay = QtWidgets.QVBoxLayout(box)
-        lay.addWidget(widget)
-        return box
 
     # ------------------------------------------------------------------
     # Live actor authoring.
@@ -972,7 +860,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             QtWidgets.QMessageBox.information(
                 self,
                 "Actors",
-                "Select one or more NPCs or creatures in the editor first.",
+                "Select one or more actors in the editor first.",
             )
             return
         for actor in selected:
@@ -1000,8 +888,8 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.actor_tracks.pop(aid, None)
 
         # Remove every authored reference to the deleted actor. A cutscene
-        # must never save dangling actor IDs in fights, camera look-at targets,
-        # dialogue speakers, or waypoint destinations.
+        # must never save dangling actor IDs in fights, camera look-at
+        # targets, or waypoint destinations.
         self.camera_keys = [
             row for row in self.camera_keys
             if str(row.get("look_at", {}).get("actor", "")) != aid
@@ -1020,9 +908,6 @@ class CutsceneWizard(QtWidgets.QDialog):
                 event = dict(event)
                 event["attackers"] = attackers
                 event["defenders"] = defenders
-            elif event.get("type") == "dialogue" and str(event.get("speaker_id", "")) == aid:
-                event = dict(event)
-                event["speaker_id"] = ""
             elif event.get("type") == "io" and str(event.get("source_id", "")) == aid:
                 continue
             cleaned_events.append(event)
@@ -1095,9 +980,8 @@ class CutsceneWizard(QtWidgets.QDialog):
     def _refresh_actor_lists(self):
         """Refresh actor widgets that are part of the current simple wizard UI.
 
-        The old advanced Fight/Dialogue controls are intentionally no longer
-        created in the Events tab.  Keep this refresh path aligned with the
-        widgets that actually exist instead of touching removed controls.
+        Keep this refresh path aligned with the widgets that actually exist
+        instead of touching removed controls.
         """
         wanted = self._current_actor_id()
 
@@ -1119,7 +1003,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             self._select_actor_id(wanted)
 
         # Only these actor-selection combos are present in the simplified
-        # wizard.  Do not reference removed dialogue/fight widgets here.
+        # wizard.  Do not reference removed advanced widgets here.
         for combo in (self.look_at, self.waypoint_target):
             current = combo.currentData()
             combo.blockSignals(True)
@@ -1137,18 +1021,12 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._update_waypoint_controls()
         self._refresh_summary()
 
-    @staticmethod
-    def _restore_multi_selection(widget, ids):
-        for i in range(widget.count()):
-            if str(widget.item(i).data(QtCore.Qt.UserRole)) in ids:
-                widget.item(i).setSelected(True)
-
     def _update_waypoint_controls(self):
         is_attack = self.waypoint_action.currentData() == "attack"
         self.waypoint_attack_duration.setEnabled(is_attack)
-        self.waypoint_target_label.setText("Attack this person" if is_attack else "Move to location")
+        self.waypoint_target_label.setText("Attack this actor" if is_attack else "Move to location")
         self.waypoint_target.setToolTip(
-            "Choose the person to attack" if is_attack else
+            "Choose the actor to attack" if is_attack else
             "Optional: use another actor as the destination location"
         )
 
@@ -1358,67 +1236,6 @@ class CutsceneWizard(QtWidgets.QDialog):
     # ------------------------------------------------------------------
     # Existing event functionality.
     # ------------------------------------------------------------------
-    def _add_fight(self):
-        attackers = [
-            str(x.data(QtCore.Qt.UserRole)) for x in self.attackers.selectedItems()
-        ]
-        defenders = [
-            str(x.data(QtCore.Qt.UserRole)) for x in self.defenders.selectedItems()
-        ]
-        if not attackers or not defenders:
-            QtWidgets.QMessageBox.warning(
-                self, "Fight", "Choose at least one attacker and one defender."
-            )
-            return
-        self.events.append({
-            "time": float(self.fight_time.value()),
-            "type": "fight",
-            "duration": float(self.fight_duration.value()),
-            "attackers": attackers,
-            "defenders": defenders,
-            "style": self.fight_style.currentData(),
-        })
-        self._refresh_event_list()
-        self._refresh_summary()
-
-    def _use_selected_position(self):
-        actors = _selected_actors(self.main_window)
-        if actors:
-            pos = _v3(actors[0].pos)
-            self.blood_x.setValue(pos[0])
-            self.blood_y.setValue(pos[1])
-            self.blood_z.setValue(pos[2])
-
-    def _add_blood(self):
-        self.events.append({
-            "time": float(self.blood_time.value()),
-            "type": "blood",
-            "position": [
-                self.blood_x.value(), self.blood_y.value(), self.blood_z.value()
-            ],
-            "variant": self.blood_variant.currentData(),
-            "width": float(self.blood_w.value()),
-            "height": float(self.blood_h.value()),
-            "persist": True,
-        })
-        self._refresh_event_list()
-        self._refresh_summary()
-
-    def _add_dialogue(self):
-        text = self.dialogue_text.toPlainText().strip()
-        if not text:
-            QtWidgets.QMessageBox.warning(self, "Dialogue", "Enter dialogue text first.")
-            return
-        self.events.append({
-            "time": float(self.dialogue_time.value()),
-            "type": "dialogue",
-            "duration": float(self.dialogue_duration.value()),
-            "speaker_id": self.dialogue_speaker.currentData() or "",
-            "text": text,
-        })
-        self._refresh_event_list()
-        self._refresh_summary()
-
     def _add_message(self):
         text = self.message_text.text()
         self.events.append({
@@ -1487,19 +1304,6 @@ class CutsceneWizard(QtWidgets.QDialog):
             form.addRow("Parameter", parameter)
             widgets.update(target=target, input_name=input_name, parameter=parameter)
 
-        elif kind == "dialogue":
-            speaker = QtWidgets.QLineEdit(str(event.get("speaker_id", "")))
-            duration = QtWidgets.QDoubleSpinBox()
-            duration.setRange(0.05, 300)
-            duration.setDecimals(2)
-            duration.setSuffix(" s")
-            duration.setValue(float(event.get("duration", 5.0)))
-            text = QtWidgets.QPlainTextEdit(str(event.get("text", "")))
-            form.addRow("Speaker", speaker)
-            form.addRow("Duration", duration)
-            form.addRow("Text", text)
-            widgets.update(speaker=speaker, duration=duration, text=text)
-
         elif kind == "fight":
             duration = QtWidgets.QDoubleSpinBox()
             duration.setRange(0.05, 300)
@@ -1507,7 +1311,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             duration.setSuffix(" s")
             duration.setValue(float(event.get("duration", 5.0)))
             style = QtWidgets.QComboBox()
-            for label, value in (("Normal", "normal"), ("Melee", "melee"), ("Archery", "bow"), ("Spell", "magic")):
+            for label, value in (("Normal", "normal"), ("Melee", "melee")):
                 style.addItem(label, value)
             style.setCurrentIndex(max(0, style.findData(event.get("style", "normal"))))
             attackers = QtWidgets.QLineEdit(", ".join(map(str, event.get("attackers", []))))
@@ -1517,28 +1321,6 @@ class CutsceneWizard(QtWidgets.QDialog):
             form.addRow("Attackers", attackers)
             form.addRow("Defenders", defenders)
             widgets.update(duration=duration, style=style, attackers=attackers, defenders=defenders)
-
-        elif kind == "blood":
-            position = list(event.get("position", [0, 0, 0]))
-            spins = []
-            for label, value in zip(("Position X", "Position Y", "Position Z"), position[:3]):
-                spin = QtWidgets.QDoubleSpinBox()
-                spin.setRange(-100000, 100000)
-                spin.setDecimals(2)
-                spin.setValue(float(value))
-                form.addRow(label, spin)
-                spins.append(spin)
-            variant = QtWidgets.QLineEdit(str(event.get("variant", "random")))
-            width = QtWidgets.QDoubleSpinBox()
-            height = QtWidgets.QDoubleSpinBox()
-            for spin, value in ((width, event.get("width", 64)), (height, event.get("height", 64))):
-                spin.setRange(0.01, 100000)
-                spin.setDecimals(2)
-                spin.setValue(float(value))
-            form.addRow("Variant", variant)
-            form.addRow("Width", width)
-            form.addRow("Height", height)
-            widgets.update(spins=spins, variant=variant, width=width, height=height)
 
         else:
             raw = QtWidgets.QPlainTextEdit(json.dumps(
@@ -1572,20 +1354,11 @@ class CutsceneWizard(QtWidgets.QDialog):
                 event["parameter"] = widgets["parameter"].text()
             else:
                 event.pop("parameter", None)
-        elif kind == "dialogue":
-            event["speaker_id"] = widgets["speaker"].text().strip()
-            event["duration"] = float(widgets["duration"].value())
-            event["text"] = widgets["text"].toPlainText()
         elif kind == "fight":
             event["duration"] = float(widgets["duration"].value())
             event["style"] = widgets["style"].currentData()
             event["attackers"] = [x.strip() for x in widgets["attackers"].text().split(",") if x.strip()]
             event["defenders"] = [x.strip() for x in widgets["defenders"].text().split(",") if x.strip()]
-        elif kind == "blood":
-            event["position"] = [float(spin.value()) for spin in widgets["spins"]]
-            event["variant"] = widgets["variant"].text().strip()
-            event["width"] = float(widgets["width"].value())
-            event["height"] = float(widgets["height"].value())
         else:
             try:
                 raw_data = json.loads(widgets["raw"].toPlainText())
@@ -1609,8 +1382,6 @@ class CutsceneWizard(QtWidgets.QDialog):
             label = f"{event['time']:.2f}s — {kind}"
             if kind == "fight":
                 label += f" ({len(event.get('attackers', []))} vs {len(event.get('defenders', []))})"
-            elif kind == "dialogue":
-                label += f" — {str(event.get('text', ''))[:45]}"
             elif kind == "message":
                 label += f" — {event.get('line', 'message')}: {str(event.get('text', ''))[:45]}"
             elif kind == "io":
