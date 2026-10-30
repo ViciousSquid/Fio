@@ -181,9 +181,13 @@ class LightingMixin:
         active['color'][:, :3] = table.light_color[active_lights]
         active['color'][:, 3] = 1.0
         active['params'][:, :2] = table.light_params[active_lights]
+        active['params'][:, 2] = table.light_shadow_strength[active_lights]
+        active['params'][:, 3] = table.light_shadow_only[active_lights]
         # Shared by brush, model, terrain and water shaders. Never change the
         # table's authored intensity (which also drives flicker and I/O).
         active['params'][:, 0] *= weights
+        # Artistic shadow strength follows the same BigWorld light fade.
+        active['params'][:, 2] *= weights
         shadow_indices = np.fromiter(
             (self._light_shadow_index.get(int(slot), -1) for slot in active_lights),
             dtype=np.int32,
