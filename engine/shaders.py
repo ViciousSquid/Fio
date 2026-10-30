@@ -165,7 +165,7 @@ MAX_TERRAIN_STAMP_TEXTURES = 16
 LIGHT_UBO_BINDING = 2
 
 _LIGHT_DECL_RE = re.compile(
-    r"struct\s+Light\s*\{.*?\};\s*uniform\s+Light\s+lights\s*\[\s*(\d+)\s*\]\s*;",
+    r"struct\s+Light\s*\{.*?\};\s*uniform\s+Light\s+lights\s*\[\s*(\d+|MAX_LIGHTS)\s*\]\s*;",
     re.DOTALL,
 )
 
@@ -184,7 +184,7 @@ def light_ubo_source(source):
     if match is None:
         return source
 
-    count = int(match.group(1))
+    count = match.group(1)  # decimal bound or shader-local MAX_LIGHTS macro
     block = (
         "struct Light {\n"
         "    highp vec4 position;\n"
