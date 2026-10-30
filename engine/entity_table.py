@@ -576,6 +576,8 @@ _COLUMNS = (
     ('light_params', (2,), np.float32, 0.0),
     ('light_enabled', (), bool, False),
     ('light_casts_shadows', (), bool, False),
+    ('light_shadow_only', (), bool, False),
+    ('light_shadow_strength', (), np.float32, 1.0),
     #: Portal topology/render columns. Target links are resolved to integer
     #: entity slots at reconcile.
     ('portal_target_slot', (), np.int32, -1),
@@ -1398,6 +1400,8 @@ class EntityTable:
                 props, 'light_enabled', True
             )
             self.light_casts_shadows[slot] = False
+            self.light_shadow_only[slot] = False
+            self.light_shadow_strength[slot] = 1.0
         else:
             if (self._effect_published is not None
                     and (self.effect_slots == slot).any()):
@@ -1448,14 +1452,22 @@ class EntityTable:
             self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
                                        _light_float(thing, 'radius', 512.0))
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
-            self.light_casts_shadows[slot] = _light_bool(
-                thing, 'casts_shadows', False)
+            self.light_shadow_only[slot] = _light_bool(thing, 'shadow_only', False)
+            self.light_shadow_strength[slot] = max(0.0, min(1.0,
+                _light_float(thing, 'shadow_strength', 1.0)))
+            # Shadow-only lights always request a cubemap, even when the
+            # authored casts_shadows flag is off.
+            self.light_casts_shadows[slot] = (
+                _light_bool(thing, 'casts_shadows', False)
+                or self.light_shadow_only[slot])
         elif not (self.class_bits[slot] & ENT_EFFECT):
             # A reused slot must not keep its previous occupant's light.
             self.light_color[slot] = 0.0
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
+            self.light_shadow_only[slot] = False
+            self.light_shadow_strength[slot] = 1.0
 
         if self.class_bits[slot] & ENT_PORTAL:
             self.portal_active[slot] = _bool_property(
