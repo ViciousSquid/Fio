@@ -3597,6 +3597,30 @@ class PropertyEditor(QWidget):
                 form.addRow("", cb)
                 continue
 
+            # Shadow-only lights cast animated occlusion but add no brightness.
+            if isinstance(thing, Light) and key == 'shadow_only':
+                cb = _make_checkbox(
+                    'Shadow Only', bool(value),
+                    lambda checked: self.update_object_prop('shadow_only', checked),
+                    _Style.CHECKBOX,
+                )
+                cb.setToolTip('Cast shadows without brightening nearby surfaces.')
+                form.addRow('', cb)
+                continue
+
+            if isinstance(thing, Light) and key == 'shadow_strength':
+                spin = QDoubleSpinBox()
+                spin.setRange(0.0, 1.0)
+                spin.setSingleStep(0.05)
+                spin.setDecimals(2)
+                spin.setValue(max(0.0, min(1.0, float(value))))
+                spin.setToolTip('0 = no darkening, 1 = full shadow strength.')
+                spin.valueChanged.connect(
+                    lambda v: self.update_object_prop('shadow_strength', v)
+                )
+                form.addRow(QLabel('Shadow Strength:'), spin)
+                continue
+
             # Light shadow-map size.
             if isinstance(thing, Light) and key == 'shadow_map_size':
                 spin = QSpinBox()
