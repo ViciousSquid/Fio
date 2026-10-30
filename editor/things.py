@@ -516,6 +516,8 @@ class Light(Thing):
     'state',
     'show_radius',
     'casts_shadows',
+    'shadow_only',
+    'shadow_strength',
     'shadow_map_size',
     )
 
@@ -528,6 +530,9 @@ class Light(Thing):
         self.properties.setdefault('state', 'on')
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('casts_shadows', False)
+        # Artistic occlusion without a local illumination hotspot.
+        self.properties.setdefault('shadow_only', False)
+        self.properties.setdefault('shadow_strength', 1.0)
 
         # Parenting: attach this light to a mover brush by name.
         # When parent_mover is non-empty the logic thread moves this
