@@ -387,7 +387,7 @@ void main() {
             if (lights[i].shadowOnly > 0.5) {
                 shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
             } else {
-            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+                result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
             }
         }
     }
@@ -461,7 +461,7 @@ void main() {
             if (lights[i].shadowOnly > 0.5) {
                 shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
             } else {
-            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+                result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
             }
         }
     }
@@ -2192,7 +2192,7 @@ void main() {
             if (lights[i].shadowOnly > 0.5) {
                 shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
             } else {
-            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+                result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
             }
         }
     }
@@ -2257,7 +2257,7 @@ uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
             if (lights[i].shadowOnly > 0.5) {
                 shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
             } else {
-            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+                result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
             }
         }
     }
