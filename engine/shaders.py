@@ -189,7 +189,7 @@ def light_ubo_source(source):
         "struct Light {\n"
         "    highp vec4 position;\n"
         "    vec4 color;\n"
-        "    vec4 params;       // x=intensity, y=radius\n"
+        "    vec4 params;       // x=intensity, y=radius, z=shadow strength, w=shadow-only\n"
         "    ivec4 indices;     // x=shadow index\n"
         "};\n"
         "layout(std140) uniform FioLightBlock {\n"
@@ -202,6 +202,8 @@ def light_ubo_source(source):
     result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
     result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
     result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
+    result = re.sub(r"lights\[([^]]+)\]\.shadowStrength\b", r"lights[\1].params.z", result)
+    result = re.sub(r"lights\[([^]]+)\]\.shadowOnly\b", r"lights[\1].params.w", result)
     result = re.sub(
         r"lights\[([^]]+)\]\.shadowIndex\b",
         r"int(lights[\1].indices.x)",
@@ -364,12 +366,13 @@ in highp vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
-struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; float shadowStrength; float shadowOnly; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.1) + uAmbient) * object_color;
+    float shadowTransmission = 1.0;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
@@ -381,10 +384,14 @@ void main() {
             float att  = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
-            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            if (lights[i].shadowOnly > 0.5) {
+                shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
+            } else {
+            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            }
         }
     }
-    FragColor = vec4(applyFog(result, FragPos), alpha);
+    FragColor = vec4(applyFog(result * shadowTransmission, FragPos), alpha);
 }""",
 
     'textured.vert': """#version 330 core
@@ -427,7 +434,7 @@ in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
 uniform vec4 model_tint;
-struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
+struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; float shadowStrength; float shadowOnly; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
@@ -438,6 +445,7 @@ void main() {
 
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.1) + uAmbient) * texColor.rgb;
+    float shadowTransmission = 1.0;
 
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
@@ -450,10 +458,14 @@ void main() {
             float att  = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
-            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            if (lights[i].shadowOnly > 0.5) {
+                shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
+            } else {
+            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            }
         }
     }
-    FragColor = vec4(applyFog(result, FragPos), texColor.a);
+    FragColor = vec4(applyFog(result * shadowTransmission, FragPos), texColor.a);
 }""",
 
     'sprite.vert': """#version 330 core
@@ -792,6 +804,7 @@ struct Light {
     vec3 color;
     float intensity;
     highp float radius;
+    float shadowOnly;
 };
 
 #define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
@@ -1181,7 +1194,7 @@ void main()
     for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
         highp vec3 toL = lights[i].position - FragPos;
         highp float dist = length(toL);
-        if (dist < lights[i].radius) {
+        if (dist < lights[i].radius && lights[i].shadowOnly < 0.5) {
             vec3 Ldir = toL / dist;
             float att =
                 1.0 - smoothstep(0.0, lights[i].radius, dist);
@@ -1660,6 +1673,8 @@ struct Light {
     float intensity;
     highp float radius;
     int shadowIndex;
+    float shadowStrength;
+    float shadowOnly;
 };
 
 uniform Light lights[""" + str(MAX_LIGHTS_TERRAIN) + """];
@@ -1861,6 +1876,7 @@ void main() {
     float fillDiff = max(dot(norm, fillDir), 0.0) * 0.2;
     result += fillDiff * skyColor * texColor;
 
+    float shadowTransmission = 1.0;
     for (int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_TERRAIN) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distance = length(toLight);
@@ -1870,10 +1886,15 @@ void main() {
             float attenuation = 1.0 - smoothstep(0.0, lights[i].radius, distance);
             attenuation       = attenuation * attenuation;
             float shadow      = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
-            result += (1.0 - shadow) * diff * lights[i].color * lights[i].intensity * attenuation * texColor;
+            if (lights[i].shadowOnly > 0.5) {
+                shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * attenuation;
+            } else {
+                result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * diff * lights[i].color * lights[i].intensity * attenuation * texColor;
+            }
         }
     }
 
+    result *= shadowTransmission;
     float gray = dot(result, vec3(0.299, 0.587, 0.114));
     result = mix(vec3(gray), result, 1.15);
 
@@ -2150,12 +2171,13 @@ in vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
-struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
+struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; float shadowStrength; float shadowOnly; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.12) + uAmbient) * object_color;
+    float shadowTransmission = 1.0;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
@@ -2167,10 +2189,14 @@ void main() {
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
-            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            if (lights[i].shadowOnly > 0.5) {
+                shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
+            } else {
+            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
+            }
         }
     }
-    FragColor = vec4(applyFog(result, FragPos), alpha);
+    FragColor = vec4(applyFog(result * shadowTransmission, FragPos), alpha);
 }"""
 
 DEFAULT_SHADERS['textured_arm.vert'] = """#version 330 core
@@ -2207,7 +2233,7 @@ in vec3 Normal;
 in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 uniform vec4 model_tint;
-struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
+struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; float shadowStrength; float shadowOnly; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
@@ -2216,6 +2242,7 @@ uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);
     vec3 norm = normalize(Normal);
     vec3 result = (vec3(0.12) + uAmbient) * texColor.rgb;
+    float shadowTransmission = 1.0;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
@@ -2227,10 +2254,14 @@ uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius, diff);
-            result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            if (lights[i].shadowOnly > 0.5) {
+                shadowTransmission *= 1.0 - clamp(lights[i].shadowStrength, 0.0, 1.0) * shadow * att;
+            } else {
+            result += (1.0 - shadow * clamp(lights[i].shadowStrength, 0.0, 1.0)) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
+            }
         }
     }
-    FragColor = vec4(applyFog(result, FragPos), texColor.a);
+    FragColor = vec4(applyFog(result * shadowTransmission, FragPos), texColor.a);
 }"""
 
 DEFAULT_SHADERS['fog_arm.frag'] = """#version 330 core
