@@ -31,14 +31,16 @@ def lights(table, eye, limit=MAX_LIGHTS, *, player_position=None, cutscene=False
             radius = max(radius, visible_horizon + float(table.light_params[row, 1]))
         return sum((float(table.pos[row, a])-float(center[a]))**2 for a in range(3)) <= radius**2
     candidates = [int(i) for i in table.light_slots
-                  if not table.hidden[i] and table.light_enabled[i] and table.light_params[i, 0] > 0
+                  if not table.hidden[i] and table.light_enabled[i] and (table.light_params[i, 0] > 0 or table.light_shadow_only[i])
                   and in_range(i)]
     if len(candidates) > limit:
         candidates.sort(key=lambda i: sum((table.pos[i, a]-eye[a])**2 for a in range(3)) /
                         max(1, float(table.light_params[i, 1]))**2)
     return [dict(pos=table.pos[i], color=table.light_color[i],
                  intensity=float(table.light_params[i, 0]), radius=float(table.light_params[i, 1]),
-                 casts_shadows=bool(table.light_casts_shadows[i])) for i in candidates[:limit]]
+                 casts_shadows=bool(table.light_casts_shadows[i]),
+                  shadow_only=bool(table.light_shadow_only[i]),
+                  shadow_strength=float(table.light_shadow_strength[i])) for i in candidates[:limit]]
 
 
 def effect_image(table, row):
