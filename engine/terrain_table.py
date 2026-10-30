@@ -71,8 +71,8 @@ _COLUMNS = (
     #: the build queue's sort was stable over it; this reproduces that order.
     ('order', (), np.int64, 0),
     #: World origin and edge length, frozen when the row is created -- exactly
-    #: what ``TerrainChunk`` stored, and why an offset edit only takes effect
-    #: for chunks created after it.
+    #: what ``TerrainChunk`` stored. A row whose geometry no longer matches the
+    #: terrain's is released by :meth:`prune_stale_geometry` and made again.
     ('world', (2,), np.float64, 0.0),
     ('size', (), np.float64, 0.0),
     #: Heights no longer match the terrain's height function.
@@ -319,6 +319,30 @@ class TerrainTable:
         out = ((c[:, 0] < min_cx) | (c[:, 0] > max_cx) |
                (c[:, 1] < min_cz) | (c[:, 1] > max_cz))
         return self.release(slots[out])
+
+    def prune_stale_geometry(self, chunk_size, offset_x, offset_z) -> list:
+        """Release rows built for a different chunk size or terrain offset.
+
+        A row freezes its world origin and edge length when it is created, and
+        ``slot_of_coord`` names it only by chunk index. When the terrain's
+        ``chunk_size`` or offset changes (loading a map into a terrain that has
+        already drawn a frame, an offset edit) the old rows would otherwise
+        keep their indices: the chunk at ``(cx, cz)`` is never recreated at
+        its real place, and the terrain shows holes where it should be.
+        Released rows are ensured again, at the current geometry, by the next
+        stream or ``ensure_bounds``.
+        """
+        slots = self.live_slots()
+        if not len(slots):
+            return []
+        cs = float(chunk_size)
+        c = self.coord[slots]
+        stale = ((self.size[slots] != cs)
+                 | (self.world[slots, 0] != c[:, 0] * cs + offset_x)
+                 | (self.world[slots, 1] != c[:, 1] * cs + offset_z))
+        if not stale.any():
+            return []
+        return self.release(slots[stale])
 
     # -- per-frame geometry -------------------------------------------------
 

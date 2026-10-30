@@ -290,3 +290,21 @@ def test_an_empty_table_allocates_nothing():
     t = TerrainTable()
     assert t.capacity == 0 and t.count == 0 and t.triangle_count() == 0
     assert t.heights.nbytes == 0
+
+
+def test_rows_from_an_old_chunk_size_or_offset_are_released():
+    """A terrain that drew a frame before a map's chunk size or offset was
+    loaded must not keep those chunk indices at the old geometry: the real
+    chunks would never be made, leaving a hole in the terrain."""
+    t = TerrainTable()
+    t.ensure_bounds((-2, 2, -2, 2), 256.0, 0.0, 0.0)
+    assert t.prune_stale_geometry(256.0, 0.0, 0.0) == []
+
+    assert len(t.prune_stale_geometry(2048.0, 0.0, 0.0)) == 25
+    t.ensure_bounds((-2, 2, -2, 2), 2048.0, 0.0, 0.0)
+    slot = t.slot_of_coord[(1, -1)]
+    assert t.size[slot] == 2048.0
+    assert tuple(t.world[slot]) == (2048.0, -2048.0)
+
+    released = t.prune_stale_geometry(2048.0, 100.0, 0.0)
+    assert len(released) == 25 and t.count == 0

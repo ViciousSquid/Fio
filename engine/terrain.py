@@ -1803,6 +1803,12 @@ class Terrain:
         if self._pending_prune:
             self._remove_out_of_bounds_chunks()
             self._pending_prune = False
+        # Rows made before the chunk size or offset changed (from_dict on a
+        # terrain that already drew a frame -- the loading overlay's repaint
+        # can draw the fresh default terrain mid-load -- or an offset edit)
+        # would hold their chunk indices at the old geometry for good.
+        self._free_gl(self.table.prune_stale_geometry(
+            self.chunk_size, self.offset_x, self.offset_z))
 
         if self.streaming:
             # The stream radius is the caller's to set (Big World derives it
@@ -3203,6 +3209,9 @@ class Terrain:
         self.max_chunk_x = data.get('max_chunk_x', 2)
         self.min_chunk_z = data.get('min_chunk_z', -2)
         self.max_chunk_z = data.get('max_chunk_z', 2)
+        # Chunks resident from before the load may lie outside the new bounds;
+        # free them on the GL thread's next frame.
+        self._pending_prune = True
         # Texture blending is opt-in for terrain, including older maps that
         # do not contain an explicit use_textures field.
         self.use_textures = data.get('use_textures', False)
