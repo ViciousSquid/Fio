@@ -56,7 +56,9 @@ for _old, _new in (('FragPos','worldPos'), ('Normal','worldNormal'),
 _fragment = light_ubo_source(_fragment)
 _fragment = _fragment.replace('highp vec4 position;', 'highp vec4 position_radius;')
 _fragment = _fragment.replace('vec4 color;', 'vec4 color_intensity;')
-_fragment = _fragment.replace('    vec4 params;       // x=intensity, y=radius\n', '')
+_fragment = _fragment.replace('    vec4 params;       // x=intensity, y=radius, z=shadow strength, w=shadow-only\n', '')
+_fragment = _fragment.replace('lights[i].params.z', '(float(lights[i].indices.y) / 1000.0)')
+_fragment = _fragment.replace('lights[i].params.w', 'float(lights[i].indices.z)')
 for _old, _new in (('.position.xyz','.position_radius.xyz'),
                   ('.color.xyz','.color_intensity.xyz'),
                   ('.params.x','.color_intensity.w'), ('.params.y','.position_radius.w')):
