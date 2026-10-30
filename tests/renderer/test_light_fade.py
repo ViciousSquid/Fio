@@ -21,6 +21,8 @@ def table_at(*xs):
         light_enabled=np.ones(count, dtype=bool),
         light_color=np.ones((count, 3), dtype=np.float32),
         light_params=np.array([(2.0, 512.0)] * count, dtype=np.float32),
+        light_shadow_only=np.zeros(count, dtype=bool),
+        light_shadow_strength=np.ones(count, dtype=np.float32),
     )
 
 
