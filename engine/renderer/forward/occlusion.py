@@ -443,11 +443,22 @@ class OcclusionMixin:
             del self._occlusion_probes[coord]
             self._occlusion_query_pool.append(query)
             metadata = self._occlusion_probe_meta.pop(coord, None)
-            if (coord in candidates and metadata is not None
-                    and metadata == (
-                        self._occlusion_box_by_cell.get(coord),
-                        self._occlusion_view_epoch)):
-                self.occlusion_book.record(coord, samples, frame)
+            if coord not in candidates or metadata is None:
+                continue
+            box, view_epoch, issued_frame, issued_eye = metadata
+            # A query that the Adreno driver reports many frames late
+            # describes an old camera. Never stamp it with today's frame.
+            # This also guards the slow-motion case where no individual
+            # movement was large enough to invalidate the view epoch.
+            eye_now = self._occlusion_last_eye
+            if (box != self._occlusion_box_by_cell.get(coord)
+                    or view_epoch != self._occlusion_view_epoch
+                    or frame - issued_frame > cell_cull.MAX_RESULT_AGE
+                    or eye_now is None
+                    or float(np.dot(eye_now - issued_eye,
+                                    eye_now - issued_eye)) > 32.0 ** 2):
+                continue
+            self.occlusion_book.record(coord, samples, issued_frame)
         self.occlusion_book.retire(candidates)
 
         if groups is None or not self._occlusion_active(config):
@@ -508,7 +519,8 @@ class OcclusionMixin:
             self._occlusion_issued += 1
             self._occlusion_probe_meta[coord] = (
                 self._occlusion_box_by_cell[coord],
-                self._occlusion_view_epoch)
+                self._occlusion_view_epoch, frame,
+                self._occlusion_last_eye.copy())
         # Restore what the tail of render_scene expects to find: the very
         # next lines re-enable the depth mask and disable the depth test.
         gl.glBindVertexArray(0)
