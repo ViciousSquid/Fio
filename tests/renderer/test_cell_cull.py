@@ -21,6 +21,7 @@ from engine.cell_cull import (  # noqa: E402
     OCCLUDE_AFTER,
     OcclusionProbeBook,
     group_rows_by_cell,
+    select_probe_groups,
 )
 from engine.spatial import CELL_SIZE, cell_of_point  # noqa: E402
 
@@ -179,15 +180,63 @@ def test_book_retires_cells_that_left_the_view():
     for frame in range(OCCLUDE_AFTER):
         book.record(keep, 0, frame)
         book.record(gone, 0, frame)
-    assert book.culled(gone, 10)
+    assert book.culled(gone, OCCLUDE_AFTER)
 
     book.retire([keep])
     assert len(book) == 1
-    assert not book.culled(gone, 11)
-    assert book.culled(keep, 11)
+    assert not book.culled(gone, OCCLUDE_AFTER + 1)
+    assert book.culled(keep, OCCLUDE_AFTER + 1)
 
 
 def test_book_defaults_match_module_constants():
     book = OcclusionProbeBook()
     assert book.occlude_after == OCCLUDE_AFTER
     assert book.max_result_age == MAX_RESULT_AGE
+
+
+def test_changed_cell_forgets_old_hidden_answers():
+    book = OcclusionProbeBook()
+    coord = (4, -7)
+    book.record(coord, 0, 1)
+    book.record(coord, 0, 2)
+    assert book.culled(coord, 3)
+    book.forget(coord)
+    assert not book.culled(coord, 3)
+    book.record(coord, 0, 4)
+    assert not book.culled(coord, 5)
+
+
+def test_probe_selection_excludes_near_small_groups_and_never_exceeds_budget():
+    counts = (30, 3, 40, 21)
+    group_of_row = np.repeat(np.arange(4), counts)
+    # Group 0 is near-exempt, group 1 too small to repay a query.
+    near_sq = np.array([0.0, 300.0, 500.0, 200.0])
+    result = select_probe_groups(
+        group_of_row, near_sq, 2, near_exempt_sq=100.0,
+        min_group_rows=16)
+    assert result.tolist() == [2, 3]
+    assert select_probe_groups(
+        group_of_row, near_sq, 1, near_exempt_sq=100.0,
+        min_group_rows=16).tolist() == [2]
+    assert not len(select_probe_groups(
+        group_of_row, near_sq, 0, near_exempt_sq=100.0))
+
+
+def test_probe_selection_uses_3d_aabb_distance_not_xy_only():
+    # The caller's distance uses the eye-to-BOX clamped 3-D distance,
+    # so X/Z motion changes priority as intended.
+    counts = (20, 20)
+    mapping = np.repeat(np.arange(2), counts)
+    result = select_probe_groups(
+        mapping, np.array([400.0, 100.0]), 1, near_exempt_sq=0.0)
+    assert result.tolist() == [1]
+
+
+def test_probe_selection_no_groups_or_no_useful_groups():
+    empty = select_probe_groups(
+        np.empty(0, np.intp), np.empty(0), 8, near_exempt_sq=0.0)
+    assert empty.shape == (0,)
+    only_near = select_probe_groups(
+        np.zeros(20, np.intp), np.array([1.0]), 8,
+        near_exempt_sq=100.0)
+    assert not len(only_near)
