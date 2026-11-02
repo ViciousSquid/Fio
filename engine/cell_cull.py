@@ -419,21 +419,29 @@ class ProbeGovernor:
 
     def __init__(self, max_probes, window=32,
                  keep_fraction=PROBE_KEEP_FRACTION,
-                 min_budget=MIN_PROBE_BUDGET, cooldown=PROBE_COOLDOWN):
+                 min_budget=MIN_PROBE_BUDGET, cooldown=PROBE_COOLDOWN,
+                 max_cpu_ms=None, strong_savings_fraction=0.35):
         self.max_probes = int(max_probes)
         self.budget = self.max_probes
         self.window = int(window)
         self.keep_fraction = float(keep_fraction)
         self.min_budget = int(min_budget)
         self.cooldown = int(cooldown)
+        # Cost-based guardrail, not a claim of proven net savings: true
+        # payback still requires a full-frame A/B run on the target GPU.
+        self.max_cpu_ms = (None if max_cpu_ms is None
+                           else float(max_cpu_ms))
+        self.strong_savings_fraction = float(strong_savings_fraction)
         self._samples = []
         self._idle_left = 0
 
-    def record(self, rows_probed, rows_skipped):
-        """One probed frame's outcome: rows probed and rows removed."""
+    def record(self, rows_probed, rows_skipped, overhead_ms=None):
+        """Record culling output AND optional measured CPU overhead."""
         if rows_probed <= 0:
             return
-        self._samples.append((int(rows_probed), int(rows_skipped)))
+        self._samples.append((
+            int(rows_probed), int(rows_skipped),
+            None if overhead_ms is None else max(0.0, float(overhead_ms))))
         if len(self._samples) > self.window:
             del self._samples[:len(self._samples) - self.window]
 
@@ -450,10 +458,19 @@ class ProbeGovernor:
                 self._samples = []
             return 0
         if len(self._samples) >= self.window:
-            probed = sum(sample for sample, _ in self._samples)
-            skipped = sum(sample for _, sample in self._samples)
+            probed = sum(sample for sample, _, _ in self._samples)
+            skipped = sum(sample for _, sample, _ in self._samples)
+            costs = [cost for _, _, cost in self._samples
+                     if cost is not None]
             self._samples = []
-            if skipped / probed < self.keep_fraction:
+            fraction = skipped / probed
+            # Even high skip rates can lose on Adreno if CPU-side group
+            # work and GL queries cost too much. Only allow expensive
+            # probing when it hides a substantial fraction of brushes.
+            expensive = (self.max_cpu_ms is not None and costs
+                         and sum(costs) / len(costs) > self.max_cpu_ms
+                         and fraction < self.strong_savings_fraction)
+            if fraction < self.keep_fraction or expensive:
                 if self.budget > self.min_budget:
                     self.budget = max(self.min_budget, self.budget // 2)
                 else:
