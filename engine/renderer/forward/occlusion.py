@@ -128,11 +128,10 @@ class OcclusionMixin:
     hooks return the slots untouched.
     """
 
-    #: The starting per-frame probe budget, nearest first -- a hard ceiling
-    #: on the extra draw work the feature itself adds. The governor shrinks
-    #: it when a rolling window measures the probes not paying for
-    #: themselves, and parks them when they save nothing at all.
-    MAX_PROBES = 48
+    #: Hard ceiling on additional probe draws *and* outstanding queries.
+    #: Keep this deliberately small even on fast GPUs: the extra PyOpenGL
+    #: submission calls are not free, particularly on low-power hardware.
+    MAX_PROBES = 8
     #: Groups whose box comes this close to the eye (squared 3D distance)
     #: are never culled: probe latency behind a distant wall is harmless,
     #: the same latency at the player's feet would show a hole.
@@ -165,7 +164,12 @@ class OcclusionMixin:
         self._occlusion_frame = 0
         self._occlusion_query_pool = []
         self._occlusion_probes = {}
+        self._occlusion_probe_meta = {}
+        self._occlusion_box_by_cell = {}
         self._occlusion_groups = None
+        self._occlusion_near_sq = None
+        self._occlusion_view_epoch = 0
+        self._occlusion_last_eye = None
         self._occlusion_last_forward = None
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
@@ -183,7 +187,8 @@ class OcclusionMixin:
         except Exception:
             pass
         self.occlusion_governor = ProbeGovernor(
-            max_probes=24 if low_power else self.MAX_PROBES,
+            max_probes=4 if low_power else self.MAX_PROBES,
+            min_budget=2,
             keep_fraction=0.15 if low_power else PROBE_KEEP_FRACTION)
         self._occlusion_budget = 0
         self.render_stats.details['occlusion'] = self._describe_occlusion
@@ -247,6 +252,8 @@ class OcclusionMixin:
             except Exception:
                 pass
         self._occlusion_probes = {}
+        self._occlusion_probe_meta = {}
+        self._occlusion_box_by_cell = {}
         for query in list(getattr(self, '_occlusion_query_pool', ())):
             try:
                 gl.glDeleteQueries(1, [int(query)])
@@ -302,6 +309,7 @@ class OcclusionMixin:
         cells streamed in by the Big World plugin are simply part of it.
         """
         self._occlusion_groups = None
+        self._occlusion_near_sq = None
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
         if (camera_pos is None or table.bounds is None
@@ -322,31 +330,47 @@ class OcclusionMixin:
         group_bounds, group_of_row, group_cells = groups
         if not len(group_bounds):
             return slots
-        # Kept for the end-of-frame hook: the probes are issued against the
-        # same grouping the culling used, one frame later.
+        # Keep the exact boxes that are probed and invalidate previous
+        # answers when a cell's bounds change (edits, moving brushes,
+        # streamed objects). A stale in-flight answer is discarded below.
+        book = self.occlusion_book
+        current_boxes = {
+            (int(c[0]), int(c[1])): tuple(float(v) for v in b)
+            for c, b in zip(group_cells, group_bounds)
+        }
+        previous_boxes = self._occlusion_box_by_cell
+        for coord, box in current_boxes.items():
+            if previous_boxes.get(coord) != box:
+                book.forget(coord)
+        self._occlusion_box_by_cell = current_boxes
         self._occlusion_groups = groups
 
-        # A fast turn invalidates every pending answer at once -- they were
-        # measured from yesterday's view. Suspend the *use* of results for
-        # this frame; the probes below keep running, so the book stays warm.
-        forward = (-float(view[0][2]), -float(view[1][2]),
-                   -float(view[2][2]))
-        last = self._occlusion_last_forward
-        self._occlusion_last_forward = forward
-        if (last is not None
-                and (forward[0] * last[0] + forward[1] * last[1]
-                     + forward[2] * last[2]) < self.MAX_TURN_COS):
-            return slots
-
-        book = self.occlusion_book
-        frame = self._occlusion_frame
         cam = np.asarray(self._camera_xyz(camera_pos), dtype=np.float64)
-        # Squared clamped distance from the eye to each group box: how far
-        # the box is from the eye when it is not already around it.
         delta = np.maximum(
             np.abs(group_bounds[:, :3] - cam) - group_bounds[:, 3:], 0.0)
         near_sq = np.einsum('ij,ij->i', delta, delta)
+        self._occlusion_near_sq = near_sq
 
+        # A teleport or fast turn makes previous depth answers unsafe.
+        # Invalidate them and discard pending queries from that old view.
+        forward = (-float(view[0][2]), -float(view[1][2]),
+                   -float(view[2][2]))
+        last_forward = self._occlusion_last_forward
+        last_eye = self._occlusion_last_eye
+        self._occlusion_last_forward = forward
+        self._occlusion_last_eye = cam.copy()
+        jumped = (last_eye is not None
+                  and float(np.dot(cam - last_eye, cam - last_eye))
+                  > 128.0 ** 2)
+        turned = (last_forward is not None
+                  and sum(a * b for a, b in zip(forward, last_forward))
+                  < self.MAX_TURN_COS)
+        if jumped or turned:
+            self._occlusion_view_epoch += 1
+            book.retire(())
+            return slots
+
+        frame = self._occlusion_frame
         culled_groups = np.zeros(len(group_bounds), dtype=bool)
         for i in range(len(group_bounds)):
             if near_sq[i] < self.NEAR_EXEMPT_SQ:
@@ -399,7 +423,11 @@ class OcclusionMixin:
             samples = self._query_object_uiv(query, gl.GL_QUERY_RESULT)
             del self._occlusion_probes[coord]
             self._occlusion_query_pool.append(query)
-            if coord in candidates:
+            metadata = self._occlusion_probe_meta.pop(coord, None)
+            if (coord in candidates and metadata is not None
+                    and metadata == (
+                        self._occlusion_box_by_cell.get(coord),
+                        self._occlusion_view_epoch)):
                 self.occlusion_book.record(coord, samples, frame)
         self.occlusion_book.retire(candidates)
 
@@ -409,13 +437,15 @@ class OcclusionMixin:
         if not len(group_bounds) or camera_pos is None:
             return
 
-        # Probe budget, nearest groups first: a distant cell hidden behind a
-        # wall saves the same submission work as a near one, and the near
-        # ones are the first to become visible, so they are probed first.
-        cam = np.asarray(self._camera_xyz(camera_pos), dtype=np.float64)
-        flat = group_bounds[:, :2] - cam[:2]
-        dist_sq = np.einsum('ij,ij->i', flat, flat)
-        order = np.argsort(dist_sq)[: self._occlusion_budget]
+        # The budget is a ceiling, not a quota. Avoid ever probing nearby
+        # exempt boxes or cells with too few brushes to repay a draw call.
+        # The squared distances were already calculated for the cull mask;
+        # selection remains GL-free and is exercised by headless tests.
+        order = cell_cull.select_probe_groups(
+            _group_of_row, self._occlusion_near_sq,
+            self._occlusion_budget, near_exempt_sq=self.NEAR_EXEMPT_SQ)
+        if not len(order) or len(self._occlusion_probes) >= self.occlusion_governor.max_probes:
+            return
 
         proj_view = projection * view
         gl.glUseProgram(self._occlusion_program)
@@ -437,6 +467,8 @@ class OcclusionMixin:
             coord = (int(group_cells[i, 0]), int(group_cells[i, 1]))
             if coord in self._occlusion_probes:
                 continue  # one outstanding query per cell
+            if len(self._occlusion_probes) >= self.occlusion_governor.max_probes:
+                break  # also bound pending GPU work on a slow driver
             query = (self._occlusion_query_pool.pop()
                      if self._occlusion_query_pool
                      else self._query_name(gl.glGenQueries(1)))
@@ -444,12 +476,18 @@ class OcclusionMixin:
             cx, cy, cz = group_bounds[i, :3]
             hx, hy, hz = group_bounds[i, 3:]
             model = glm.translate(glm.mat4(1.0), glm.vec3(cx, cy, cz))
-            model = glm.scale(model, glm.vec3(hx, hy, hz))
+            # The unit cube spans [-0.5, +0.5]. glm.scale needs the
+            # *full* extents, otherwise the probe tests only half a box
+            # and can incorrectly hide geometry at its edges.
+            model = glm.scale(model, glm.vec3(2 * hx, 2 * hy, 2 * hz))
             gl.glUniformMatrix4fv(self._occlusion_model_loc, 1, gl.GL_FALSE,
                                  glm.value_ptr(model))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             gl.glEndQuery(self._occlusion_target)
             self._occlusion_probes[coord] = query
+            self._occlusion_probe_meta[coord] = (
+                self._occlusion_box_by_cell[coord],
+                self._occlusion_view_epoch)
         # Restore what the tail of render_scene expects to find: the very
         # next lines re-enable the depth mask and disable the depth test.
         gl.glBindVertexArray(0)
