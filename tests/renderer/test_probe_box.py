@@ -11,6 +11,10 @@ import glm
 import numpy as np
 import pytest
 
+# The no-GPU CI tier deliberately omits PyOpenGL. This matrix test needs
+# renderer imports but no actual context; the OpenGL tier runs it.
+pytest.importorskip("OpenGL.GL")
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from engine.renderer.forward.occlusion import OcclusionMixin, _PROBE_VERTS  # noqa: E402
 
