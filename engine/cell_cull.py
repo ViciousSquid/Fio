@@ -190,3 +190,94 @@ class OcclusionProbeBook:
 
     def __len__(self):
         return len(self._last_result)
+
+
+#: Fraction of its window's probed rows the probes must remove for probing
+#: to keep its full budget; below it the budget halves, and at the floor
+#: the feature parks for :data:`PROBE_COOLDOWN` frames, then re-arms.
+PROBE_KEEP_FRACTION = 0.10
+#: The smallest per-frame probe budget :class:`ProbeGovernor` shrinks to.
+MIN_PROBE_BUDGET = 8
+#: Frames :class:`ProbeGovernor` keeps the feature parked once the budget
+#: floor still finds no savings.
+PROBE_COOLDOWN = 180
+
+
+class ProbeGovernor:
+    """The probe budget, decided by what the probes actually remove.
+
+    The occlusion probes are cheap one at a time and not cheap as a habit:
+    every probed frame pays the grouping pass and up to the budget in extra
+    draw calls, through drivers (the low-power ARM target) where a draw
+    call costs a measurable share of the frame. Whether that habit pays
+    depends on the scene -- an interior with long walls hides whole cells
+    and repays it many times over; an open field hides nothing and the cost
+    is pure loss. The governor keeps a rolling window of (rows probed,
+    rows removed) and decides, once per window, whether the probes earned
+    their budget:
+
+    * at or above :data:`PROBE_KEEP_FRACTION` removed, the budget stays
+      (or steps back up toward its maximum after a shrink);
+    * below it, the budget halves, down to :data:`MIN_PROBE_BUDGET`;
+    * at the floor with still nothing removed, the feature parks for
+      :data:`PROBE_COOLDOWN` frames -- no grouping, no probes -- then
+      re-arms with a small budget to re-sample a world that may have
+      changed while parked.
+
+    Frames the feature did not run (fast turns, empty scenes) are simply
+    not sampled, so a held camera does not count against the probes. No GL
+    lives here; like :class:`OcclusionProbeBook`, the rules are plain
+    integers, pinned headlessly in ``tests/renderer/``.
+    """
+
+    def __init__(self, max_probes, window=32,
+                 keep_fraction=PROBE_KEEP_FRACTION,
+                 min_budget=MIN_PROBE_BUDGET, cooldown=PROBE_COOLDOWN):
+        self.max_probes = int(max_probes)
+        self.budget = self.max_probes
+        self.window = int(window)
+        self.keep_fraction = float(keep_fraction)
+        self.min_budget = int(min_budget)
+        self.cooldown = int(cooldown)
+        self._samples = []
+        self._idle_left = 0
+
+    def record(self, rows_probed, rows_skipped):
+        """One probed frame's outcome: rows probed and rows removed."""
+        if rows_probed <= 0:
+            return
+        self._samples.append((int(rows_probed), int(rows_skipped)))
+        if len(self._samples) > self.window:
+            del self._samples[:len(self._samples) - self.window]
+
+    def probe_count(self):
+        """How many probes this frame may issue; 0 means parked."""
+        if self._idle_left:
+            self._idle_left -= 1
+            if not self._idle_left:
+                # Re-arm small: the world may have changed while the feature
+                # was parked -- movers, streamed-in cells, a corridor the
+                # camera only now reached -- and a small budget spends
+                # little to find out.
+                self.budget = min(self.max_probes, self.min_budget * 2)
+                self._samples = []
+            return 0
+        if len(self._samples) >= self.window:
+            probed = sum(sample for sample, _ in self._samples)
+            skipped = sum(sample for _, sample in self._samples)
+            self._samples = []
+            if skipped / probed < self.keep_fraction:
+                if self.budget > self.min_budget:
+                    self.budget = max(self.min_budget, self.budget // 2)
+                else:
+                    self._idle_left = self.cooldown
+                    return 0
+            elif self.budget < self.max_probes:
+                self.budget = min(self.max_probes, self.budget * 2)
+        return self.budget
+
+    def state(self):
+        """One word for Debug Tables: the current budget, or 'parked'."""
+        if self._idle_left:
+            return f"parked {self._idle_left}"
+        return f"budget {self.budget}"

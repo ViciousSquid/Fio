@@ -386,8 +386,11 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
   drops the hidden cells' brushes before the
   passes classify or pack them. Toggled via `[Renderer] occlusion_culling` in
   `settings.ini`; skipped-brush counts on the Debug Tables overlay via
-  `RenderStats.details`. New `engine/cell_cull.py` holds the grouping and the
-  fail-open probe bookkeeping, pinned by headless tests.
+  `RenderStats.details`. New `engine/cell_cull.py` holds the grouping, the fail-open probe
+  bookkeeping and the probe-budget governor -- which shrinks the
+  per-frame probe budget when the probes remove less than they cost,
+  parks them when they remove nothing, and starts at 24 probes on the
+  low-power ARM target -- all pinned by headless tests.
 - Brush passes that draw one row at a time (lit, textured angled brushes,
   glow, water, glass, fog, non-instanced shadow casters) send each row's
   model/normal matrix and colour through the GL entry point directly, by

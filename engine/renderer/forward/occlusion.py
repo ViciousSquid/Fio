@@ -35,6 +35,13 @@ The shape of the feature follows from that latency:
   only the :data:`MAX_PROBES` nearest groups are even asked. When anything
   is in doubt the answer is *draw it*: the feature's failure direction is a
   wasted draw, never a hole in the world.
+* **Self-funding.** The grouping and the probes are not free -- on the
+  low-power ARM target every probe is a draw call through a driver where
+  draw calls cost a measurable share of the frame. A rolling window of
+  what the probes actually removed shrinks the per-frame budget when the
+  savings do not cover the cost, parks the feature when they cover none,
+  and re-arms after a cooldown to re-sample a world that may have changed
+  (:class:`engine.cell_cull.ProbeGovernor`).
 
 Nothing is baked or stored in the map. The groups are this frame's surviving
 slots re-derived per call, so an edit, a mover or a cell streamed in by the
@@ -58,7 +65,9 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import cell_cull
-from engine.cell_cull import OcclusionProbeBook
+from engine.cell_cull import (
+    PROBE_KEEP_FRACTION, OcclusionProbeBook, ProbeGovernor,
+)
 
 # 36 vertices of a unit cube centred on the origin. Winding is irrelevant --
 # face culling is disabled for the probe pass -- so this is simply the plain
@@ -119,8 +128,10 @@ class OcclusionMixin:
     hooks return the slots untouched.
     """
 
-    #: At most this many cell groups are probed per frame, nearest first --
-    #: a hard ceiling on the extra draw work the feature itself adds.
+    #: The starting per-frame probe budget, nearest first -- a hard ceiling
+    #: on the extra draw work the feature itself adds. The governor shrinks
+    #: it when a rolling window measures the probes not paying for
+    #: themselves, and parks them when they save nothing at all.
     MAX_PROBES = 48
     #: Groups whose box comes this close to the eye (squared 3D distance)
     #: are never culled: probe latency behind a distant wall is harmless,
@@ -161,6 +172,20 @@ class OcclusionMixin:
         self._occlusion_program = 0
         self._occlusion_vbo = 0
         self.occlusion_book = OcclusionProbeBook()
+        # The Snapdragon-class design target: there a probe is a draw call
+        # through a driver where draw calls cost a measurable share of the
+        # frame, so the budget starts tighter and the bar for staying on is
+        # higher. Everywhere else the ceiling and the default bar apply.
+        low_power = False
+        try:
+            from engine import shaders
+            low_power = shaders.detect_low_power_arm()[0]
+        except Exception:
+            pass
+        self.occlusion_governor = ProbeGovernor(
+            max_probes=24 if low_power else self.MAX_PROBES,
+            keep_fraction=0.15 if low_power else PROBE_KEEP_FRACTION)
+        self._occlusion_budget = 0
         self.render_stats.details['occlusion'] = self._describe_occlusion
         try:
             program = self.shader_loader.compile_from_source(
@@ -258,8 +283,10 @@ class OcclusionMixin:
         if not self.occlusion_culling:
             return "off"
         total = self._occlusion_skipped + self._occlusion_drawn
+        governor = getattr(self, 'occlusion_governor', None)
+        state = f"; {governor.state()}" if governor is not None else ''
         return (f"{self._occlusion_skipped} of {total} brushes skipped; "
-                f"{len(self._occlusion_probes)} probes in flight")
+                f"{len(self._occlusion_probes)} probes in flight{state}")
 
     # -- the two render_scene hooks ------------------------------------
 
@@ -281,6 +308,14 @@ class OcclusionMixin:
                 or len(slots) < self.MIN_PROBED_ROWS
                 or not self._occlusion_active(config)):
             return slots
+        budget = self.occlusion_governor.probe_count()
+        if budget <= 0:
+            # Parked by the governor: the last windows measured the probes
+            # saving less than they cost, so this frame pays neither the
+            # grouping nor the probe draws; the cooldown re-arms a small
+            # budget to re-sample a world that may have changed.
+            return slots
+        self._occlusion_budget = budget
 
         slots = np.asarray(slots, dtype=np.intp)
         groups = cell_cull.group_rows_by_cell(table.bounds[slots])
@@ -320,11 +355,15 @@ class OcclusionMixin:
                 culled_groups[i] = True
         if not culled_groups.any():
             self._occlusion_drawn = len(slots)
+            self.occlusion_governor.record(len(slots), 0)
             return slots
 
         keep = ~culled_groups[group_of_row]
         self._occlusion_skipped = int(np.count_nonzero(~keep))
         self._occlusion_drawn = len(slots) - self._occlusion_skipped
+        # The window's currency is rows: what fraction of the surviving rows
+        # the probes actually removed decides the next budget.
+        self.occlusion_governor.record(len(slots), self._occlusion_skipped)
         return slots[keep]
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
@@ -376,7 +415,7 @@ class OcclusionMixin:
         cam = np.asarray(self._camera_xyz(camera_pos), dtype=np.float64)
         flat = group_bounds[:, :2] - cam[:2]
         dist_sq = np.einsum('ij,ij->i', flat, flat)
-        order = np.argsort(dist_sq)[: self.MAX_PROBES]
+        order = np.argsort(dist_sq)[: self._occlusion_budget]
 
         proj_view = projection * view
         gl.glUseProgram(self._occlusion_program)
