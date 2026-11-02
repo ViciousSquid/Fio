@@ -175,6 +175,7 @@ class OcclusionMixin:
         self._occlusion_last_forward = None
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
+        self._occlusion_issued = 0
         self._occlusion_program = 0
         self._occlusion_vbo = 0
         self.occlusion_book = OcclusionProbeBook()
@@ -196,6 +197,7 @@ class OcclusionMixin:
         # Larger early-out on Snapdragon-class machines: an O(N log N)
         # grouping pass is not justified for a few hundred visible rows.
         self._occlusion_min_rows = 1024 if low_power else self.MIN_PROBED_ROWS
+        self._occlusion_min_group_rows = 32 if low_power else self.MIN_PROBE_GROUP_ROWS
         self.render_stats.details['occlusion'] = self._describe_occlusion
         try:
             program = self.shader_loader.compile_from_source(
@@ -298,7 +300,8 @@ class OcclusionMixin:
         governor = getattr(self, 'occlusion_governor', None)
         state = f"; {governor.state()}" if governor is not None else ''
         return (f"{self._occlusion_skipped} of {total} brushes skipped; "
-                f"{len(self._occlusion_probes)} probes in flight{state}")
+                f"{self._occlusion_issued} probes issued, "
+                f"{len(self._occlusion_probes)} pending{state}")
 
     # -- the two render_scene hooks ------------------------------------
 
@@ -417,6 +420,7 @@ class OcclusionMixin:
         if not self._occlusion_ready:
             return
         self._occlusion_frame += 1
+        self._occlusion_issued = 0
         frame = self._occlusion_frame
 
         # The cells the camera can currently reach: this frame's grouping,
@@ -459,7 +463,7 @@ class OcclusionMixin:
         order = cell_cull.select_probe_groups(
             _group_of_row, self._occlusion_near_sq,
             self._occlusion_budget, near_exempt_sq=self.NEAR_EXEMPT_SQ,
-            min_group_rows=self.MIN_PROBE_GROUP_ROWS)
+            min_group_rows=self._occlusion_min_group_rows)
         if not len(order) or len(self._occlusion_probes) >= self.occlusion_governor.max_probes:
             return
         # If all selected groups already have pending results, no shader,
@@ -507,6 +511,7 @@ class OcclusionMixin:
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             gl.glEndQuery(self._occlusion_target)
             self._occlusion_probes[coord] = query
+            self._occlusion_issued += 1
             self._occlusion_probe_meta[coord] = (
                 self._occlusion_box_by_cell[coord],
                 self._occlusion_view_epoch)
