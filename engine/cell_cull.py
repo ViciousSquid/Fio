@@ -181,7 +181,10 @@ class CellGroupIndex:
              tuple(map(float, table.bounds[slot])),
              int(table.class_bits[slot]), int(table.geo_epoch[slot]))
             for slot in slots))
-        return (box, rows)
+        # Compact, buffer-independent fingerprint rather than retaining
+        # 20,000 Python tuples in RAM. Both published tables compute the
+        # same hash for the same row contents within one running process.
+        return (box, hash(rows))
 
     def update(self, table, dirty):
         """Incrementally apply the journalled row edits and affected boxes."""
@@ -260,7 +263,7 @@ class CellGroupIndex:
 
 
 def select_probe_groups(group_of_row, near_sq, budget, *, near_exempt_sq,
-                        min_group_rows=16):
+                        min_group_rows=16, counts=None):
     """Choose a *small* set of worthwhile groups to probe, without GL.
 
     The renderer has already calculated the squared 3-D distance to each
@@ -272,8 +275,11 @@ def select_probe_groups(group_of_row, near_sq, budget, *, near_exempt_sq,
     near_sq = np.asarray(near_sq, dtype=np.float64)
     if budget <= 0 or not len(near_sq):
         return np.empty(0, dtype=np.intp)
-    counts = np.bincount(np.asarray(group_of_row, dtype=np.intp),
-                         minlength=len(near_sq))
+    if counts is None:
+        counts = np.bincount(np.asarray(group_of_row, dtype=np.intp),
+                             minlength=len(near_sq))
+    else:
+        counts = np.asarray(counts, dtype=np.intp)
     candidates = np.flatnonzero(
         (near_sq >= near_exempt_sq) & (counts >= min_group_rows))
     if not len(candidates):
