@@ -59,6 +59,7 @@ exactly what the tail of ``render_scene`` expects to find.
 from __future__ import annotations
 
 import ctypes
+import time
 
 import glm
 import numpy as np
@@ -170,6 +171,12 @@ class OcclusionMixin:
         self._occlusion_box_by_cell = {}
         self._occlusion_groups = None
         self._occlusion_near_sq = None
+        self._occlusion_group_counts = None
+        self._occlusion_cpu_filter_ms = 0.0
+        self._occlusion_cpu_index_ms = 0.0
+        self._occlusion_cpu_query_ms = 0.0
+        self._occlusion_cpu_probe_ms = 0.0
+        self._occlusion_index_rebuilds = 0
         self._occlusion_view_epoch = 0
         self._occlusion_last_eye = None
         self._occlusion_last_forward = None
@@ -301,23 +308,43 @@ class OcclusionMixin:
         state = f"; {governor.state()}" if governor is not None else ''
         return (f"{self._occlusion_skipped} of {total} brushes skipped; "
                 f"{self._occlusion_issued} probes issued, "
-                f"{len(self._occlusion_probes)} pending{state}")
+                f"{len(self._occlusion_probes)} pending; "
+                f"CPU filter {self._occlusion_cpu_filter_ms:.3f}ms, "
+                f"GPU query calls {self._occlusion_cpu_query_ms:.3f}ms, "
+                f"probe submission {self._occlusion_cpu_probe_ms:.3f}ms; "
+                f"index {self._occlusion_cpu_index_ms:.3f}ms{state}")
 
     # -- the two render_scene hooks ------------------------------------
 
     def _occlusion_filter_slots(self, table, slots, config, camera_pos, view):
+        """Measure the actual cost of the cell-filter pass, including index work."""
+        if not self.occlusion_culling:
+            self._occlusion_cpu_filter_ms = 0.0
+            self._occlusion_cpu_index_ms = 0.0
+            return slots
+        t0 = time.perf_counter_ns()
+        try:
+            return self._occlusion_filter_slots_impl(
+                table, slots, config, camera_pos, view)
+        finally:
+            self._occlusion_cpu_filter_ms = (
+                time.perf_counter_ns() - t0) * 1e-6
+
+    def _occlusion_filter_slots_impl(self, table, slots, config, camera_pos, view):
         """Drop the cell groups the GPU has verified occluded.
 
         Runs after the distance cull and before pass classification, so
         every brush pass -- opaque, water, glass -- submits the same
         narrowed slot list, and the classification, sorting, packing and
         buffer uploads behind it are skipped wholesale for a hidden cell.
-        The grouping is this frame's own answer, derived from the slots that
-        survived the earlier culls and never cached, so edits, movers and
-        cells streamed in by the Big World plugin are simply part of it.
+        Cell membership and union boxes come from the RenderTable's
+        journal-driven index. This frame only gathers already computed dense
+        group IDs from surviving slots and counts them via NumPy.
         """
         self._occlusion_groups = None
         self._occlusion_near_sq = None
+        self._occlusion_group_counts = None
+        self._occlusion_cpu_index_ms = 0.0
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
         if (camera_pos is None or table.bounds is None
@@ -333,34 +360,45 @@ class OcclusionMixin:
             return slots
         self._occlusion_budget = budget
 
+        # The index is created once per published RenderTable buffer.
+        # Mutation paths journal only touched slots; the renderer applies
+        # those changes once and then needs no per-frame group rebuild.
+        t_index = time.perf_counter_ns()
+        index = table._occlusion_index
+        if index is None:
+            index = cell_cull.CellGroupIndex(table)
+            table._occlusion_index = index
+            table._occlusion_dirty = set()
+            self._occlusion_index_rebuilds += 1
+        elif table._occlusion_dirty:
+            index.update(table, table._occlusion_dirty)
+            table._occlusion_dirty.clear()
         slots = np.asarray(slots, dtype=np.intp)
-        # Rotated boxes and arbitrary convex meshes may extend beyond the
-        # unrotated centre/half RenderTable bounds. Never allow a query of
-        # those bounds to hide such geometry. Keep their slots in the draw
-        # list and group only ordinary axis-aligned boxes.
-        eligible = ((table.rot[slots, 3] == 0)
-                    & (table.geometry_id[slots] < 0))
-        safe_slots = slots[eligible]
-        if len(safe_slots) < self._occlusion_min_rows:
+        visible = index.visible(slots)
+        self._occlusion_cpu_index_ms = (
+            time.perf_counter_ns() - t_index) * 1e-6
+        if visible is None:
             return slots
-        groups = cell_cull.group_rows_by_cell(table.bounds[safe_slots])
-        group_bounds, group_of_row, group_cells = groups
-        if not len(group_bounds):
+        eligible, group_bounds, group_of_row, group_cells, counts, signatures = visible
+        safe_count = int(np.count_nonzero(eligible))
+        if safe_count < self._occlusion_min_rows:
             return slots
-        # Keep the exact boxes that are probed and invalidate previous
-        # answers when a cell's bounds change (edits, moving brushes,
-        # streamed objects). A stale in-flight answer is discarded below.
+        groups = (group_bounds, group_of_row, group_cells)
+        # A signature is built only when a cell's published rows change.
+        # Cache-hit frames reuse these immutable tuples; no per-frame
+        # Python walk over every brush to calculate bounding boxes.
         book = self.occlusion_book
         current_boxes = {
-            (int(c[0]), int(c[1])): tuple(float(v) for v in b)
-            for c, b in zip(group_cells, group_bounds)
+            (int(c[0]), int(c[1])): signature
+            for c, signature in zip(group_cells, signatures)
         }
         previous_boxes = self._occlusion_box_by_cell
-        for coord, box in current_boxes.items():
-            if previous_boxes.get(coord) != box:
+        for coord, signature in current_boxes.items():
+            if previous_boxes.get(coord) != signature:
                 book.forget(coord)
         self._occlusion_box_by_cell = current_boxes
         self._occlusion_groups = groups
+        self._occlusion_group_counts = counts
 
         cam = np.asarray(self._camera_xyz(camera_pos), dtype=np.float64)
         delta = np.maximum(
@@ -396,7 +434,7 @@ class OcclusionMixin:
                 culled_groups[i] = True
         if not culled_groups.any():
             self._occlusion_drawn = len(slots)
-            self.occlusion_governor.record(len(safe_slots), 0)
+            self.occlusion_governor.record(safe_count, 0)
             return slots
 
         keep = np.ones(len(slots), dtype=bool)
@@ -405,7 +443,7 @@ class OcclusionMixin:
         self._occlusion_drawn = len(slots) - self._occlusion_skipped
         # Score savings against *eligible* rows; a map full of protected
         # convex geometry should not bury a useful small occlusion region.
-        self.occlusion_governor.record(len(safe_slots), self._occlusion_skipped)
+        self.occlusion_governor.record(safe_count, self._occlusion_skipped)
         return slots[keep]
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
@@ -474,7 +512,8 @@ class OcclusionMixin:
         order = cell_cull.select_probe_groups(
             _group_of_row, self._occlusion_near_sq,
             self._occlusion_budget, near_exempt_sq=self.NEAR_EXEMPT_SQ,
-            min_group_rows=self._occlusion_min_group_rows)
+            min_group_rows=self._occlusion_min_group_rows,
+            counts=self._occlusion_group_counts)
         if not len(order) or len(self._occlusion_probes) >= self.occlusion_governor.max_probes:
             return
         # If all selected groups already have pending results, no shader,
