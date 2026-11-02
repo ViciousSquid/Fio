@@ -33,6 +33,8 @@ standalone ``.fiopak`` player and a headless test all reach the same grouping.
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 
 from .spatial import CELL_SIZE, cells_of_points
@@ -176,15 +178,19 @@ class CellGroupIndex:
         box = tuple(map(float, self.boxes[group]))
         if not slots:
             return (box, ())
-        rows = tuple(sorted(
-            (str(table.ids[slot]),
-             tuple(map(float, table.bounds[slot])),
-             int(table.class_bits[slot]), int(table.geo_epoch[slot]))
-            for slot in slots))
-        # Compact, buffer-independent fingerprint rather than retaining
-        # 20,000 Python tuples in RAM. Both published tables compute the
-        # same hash for the same row contents within one running process.
-        return (box, hash(rows))
+        # Hash the dense numeric rows in C instead of constructing a
+        # Python tuple of every brush and every float. Slot addresses are
+        # stable within a published generation; structural changes discard
+        # this index. The same content in either publication buffer produces
+        # the same signature, even if a mover changes the union box by zero.
+        idx = np.fromiter(slots, dtype=np.intp, count=len(slots))
+        idx.sort()
+        digest = hashlib.blake2b(digest_size=16)
+        digest.update(idx.tobytes())
+        digest.update(table.bounds[idx].tobytes())
+        digest.update(table.class_bits[idx].tobytes())
+        digest.update(table.geo_epoch[idx].tobytes())
+        return (box, digest.digest())
 
     def update(self, table, dirty):
         """Incrementally apply the journalled row edits and affected boxes."""
