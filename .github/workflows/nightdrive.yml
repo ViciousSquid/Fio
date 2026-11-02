@@ -1,0 +1,24 @@
+name: Night Drive headless tests
+
+on:
+  push:
+    paths:
+      - "plugins/nightdrive/**"
+      - ".github/workflows/nightdrive.yml"
+  pull_request:
+    paths:
+      - "plugins/nightdrive/**"
+      - ".github/workflows/nightdrive.yml"
+  workflow_dispatch:
+
+jobs:
+  driving:
+    name: Driving and city map tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Run dependency-free driving regression suite
+        run: python -m unittest discover -s plugins/nightdrive/tests -v
