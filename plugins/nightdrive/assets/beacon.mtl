@@ -1,0 +1,9 @@
+newmtl dark
+Ka 0.03 0.04 0.06
+Kd 0.06 0.12 0.16
+newmtl cyan
+Ka 0.28 0.9 0.9
+Kd 0.12 0.88 0.91
+newmtl gold
+Ka 0.32 0.23 0.02
+Kd 0.9 0.65 0.12
