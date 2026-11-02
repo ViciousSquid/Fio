@@ -381,7 +381,9 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 - Cell-group occlusion culling in the forward renderer (play mode): one depth-tested
   probe box per visible 512-unit cell, chained over frames
-  (`GL_ANY_SAMPLES_PASSED_CONSERVATIVE`), drops the hidden cells' brushes before the
+  (the strongest query target the context accepts: conservative,
+  else 3.3-core `GL_ANY_SAMPLES_PASSED`, else `GL_SAMPLES_PASSED`),
+  drops the hidden cells' brushes before the
   passes classify or pack them. Toggled via `[Renderer] occlusion_culling` in
   `settings.ini`; skipped-brush counts on the Debug Tables overlay via
   `RenderStats.details`. New `engine/cell_cull.py` holds the grouping and the

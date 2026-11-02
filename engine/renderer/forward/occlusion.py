@@ -189,11 +189,19 @@ class OcclusionMixin:
             gl.glBindVertexArray(0)
             self.vaos['occlusion_probe'] = vao
 
-            # Conservative when OpenGL 3.3 offers it (it does, in core):
-            # the query may report samples that barely failed, never the
-            # reverse, which is exactly the fail-open direction wanted here.
-            self._occlusion_target = getattr(
-                gl, 'GL_ANY_SAMPLES_PASSED_CONSERVATIVE', gl.GL_SAMPLES_PASSED)
+            # The query target is asked of the live context, not assumed:
+            # GL_ANY_SAMPLES_PASSED_CONSERVATIVE is desktop 4.3
+            # (ARB_ES3_compatibility), so a 3.3 core context rejects it with
+            # INVALID_ENUM -- and a query whose glBeginQuery was refused
+            # never completes. The feature would sit "ready" while culling
+            # nothing, with every issued query pending forever. The strongest
+            # target the context accepts is used; none means the feature
+            # stays off rather than keying on answers that never arrive.
+            self._occlusion_target = self._pick_query_target()
+            if self._occlusion_target is None:
+                print("[Renderer] occlusion culling unavailable: the context "
+                      "accepts no occlusion query target")
+                return
             self._occlusion_ready = True
         except Exception as exc:
             self._occlusion_ready = False
@@ -392,7 +400,7 @@ class OcclusionMixin:
                 continue  # one outstanding query per cell
             query = (self._occlusion_query_pool.pop()
                      if self._occlusion_query_pool
-                     else int(gl.glGenQueries(1)))
+                     else self._query_name(gl.glGenQueries(1)))
             gl.glBeginQuery(self._occlusion_target, query)
             cx, cy, cz = group_bounds[i, :3]
             hx, hy, hz = group_bounds[i, 3:]
@@ -409,6 +417,59 @@ class OcclusionMixin:
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glUseProgram(0)
+
+    def _pick_query_target(self, gl_module=None):
+        """The strongest occlusion query target this context accepts.
+
+        Ranked by latency, not truth: GL_ANY_SAMPLES_PASSED_CONSERVATIVE
+        over-reports visibility (a box that barely failed the depth test can
+        still count -- the fail-open direction), but it reached desktop
+        OpenGL with 4.3's ARB_ES3_compatibility; GL_ANY_SAMPLES_PASSED is
+        3.3 core (ARB_occlusion_query2) and GL_SAMPLES_PASSED 1.5. The
+        feature keys only on *zero samples*, which all three answer exactly,
+        so each candidate is tried, strongest first, against the live
+        context: an empty query is begun and ended between two error-flag
+        reads, after draining whatever earlier passes left behind. A target
+        the driver rejects -- a 3.3 core context rejects the conservative
+        one with INVALID_ENUM -- is skipped, not trusted. ``None`` means
+        the context takes no occlusion query at all.
+        """
+        if gl_module is None:
+            gl_module = gl
+        candidates = []
+        for name in ('GL_ANY_SAMPLES_PASSED_CONSERVATIVE',
+                     'GL_ANY_SAMPLES_PASSED'):
+            target = getattr(gl_module, name, None)
+            if target is not None:
+                candidates.append(target)
+        candidates.append(gl_module.GL_SAMPLES_PASSED)
+        for target in candidates:
+            try:
+                while gl_module.glGetError() != gl_module.GL_NO_ERROR:
+                    pass  # errors left by earlier passes are not ours to read
+                query = self._query_name(gl_module.glGenQueries(1))
+                gl_module.glBeginQuery(target, query)
+                gl_module.glEndQuery(target)
+                accepted = gl_module.glGetError() == gl_module.GL_NO_ERROR
+                gl_module.glDeleteQueries(1, [query])
+            except Exception:
+                continue
+            if accepted:
+                return target
+        return None
+
+    @staticmethod
+    def _query_name(value):
+        """int() of whichever shape PyOpenGL returns for a single query id.
+
+        A bare int on most paths, a one-element array under the size hints
+        the engine enables -- the same shapes _query_object_uiv already
+        copes with.
+        """
+        try:
+            return int(value)
+        except TypeError:
+            return int(value[0])
 
     @staticmethod
     def _query_object_uiv(query, pname):
