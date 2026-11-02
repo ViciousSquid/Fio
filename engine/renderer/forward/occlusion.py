@@ -499,13 +499,7 @@ class OcclusionMixin:
                      if self._occlusion_query_pool
                      else self._query_name(gl.glGenQueries(1)))
             gl.glBeginQuery(self._occlusion_target, query)
-            cx, cy, cz = group_bounds[i, :3]
-            hx, hy, hz = group_bounds[i, 3:]
-            model = glm.translate(glm.mat4(1.0), glm.vec3(cx, cy, cz))
-            # The unit cube spans [-0.5, +0.5]. glm.scale needs the
-            # *full* extents, otherwise the probe tests only half a box
-            # and can incorrectly hide geometry at its edges.
-            model = glm.scale(model, glm.vec3(2 * hx, 2 * hy, 2 * hz))
+            model = self._probe_model_matrix(group_bounds[i])
             gl.glUniformMatrix4fv(self._occlusion_model_loc, 1, gl.GL_FALSE,
                                  glm.value_ptr(model))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
@@ -561,6 +555,18 @@ class OcclusionMixin:
             if accepted:
                 return target
         return None
+
+    @staticmethod
+    def _probe_model_matrix(bounds):
+        """Map the core-profile unit cube to the ENTIRE union AABB.
+
+        The cube's local corners are +/-0.5, whereas RenderTable holds
+        half-extents. The model scale must therefore be 2*half on each
+        axis. This helper is independently testable without a GL context.
+        """
+        cx, cy, cz, hx, hy, hz = (float(v) for v in bounds)
+        model = glm.translate(glm.mat4(1.0), glm.vec3(cx, cy, cz))
+        return glm.scale(model, glm.vec3(2 * hx, 2 * hy, 2 * hz))
 
     @staticmethod
     def _query_name(value):
