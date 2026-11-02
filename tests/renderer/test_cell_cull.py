@@ -20,6 +20,7 @@ from engine.cell_cull import (  # noqa: E402
     MAX_RESULT_AGE,
     OCCLUDE_AFTER,
     OcclusionProbeBook,
+    CellGroupIndex,
     group_rows_by_cell,
     select_probe_groups,
 )
@@ -240,3 +241,116 @@ def test_probe_selection_no_groups_or_no_useful_groups():
         np.zeros(20, np.intp), np.array([1.0]), 8,
         near_exempt_sq=100.0)
     assert not len(only_near)
+
+
+
+# -- Change-driven cache (the per-frame path must NOT sort brushes) --------
+
+
+class _FakeRenderTable:
+    def __init__(self, bounds):
+        self.bounds = np.asarray(bounds, dtype=np.float64).copy()
+        self.count = len(self.bounds)
+        self.ids = [f"cell-brush-{n}" for n in range(self.count)]
+        self.rot = np.zeros((self.count, 4), dtype=np.float32)
+        self.hidden = np.zeros(self.count, dtype=bool)
+        self.geometry_id = np.full(self.count, -1, dtype=np.int32)
+        self.class_bits = np.zeros(self.count, dtype=np.uint16)
+        self.geo_epoch = np.zeros(self.count, dtype=np.int64)
+
+
+def _visible_cells(index, slots):
+    got = index.visible(slots)
+    assert got is not None
+    eligible, boxes, row_groups, cells, counts, signatures = got
+    return eligible, boxes, row_groups, cells, counts, signatures
+
+
+def test_cell_index_matches_direct_grouping_without_per_frame_rebuild(scene_bounds):
+    table = _FakeRenderTable(scene_bounds)
+    index = CellGroupIndex(table)
+    assert index.rebuilds == 1
+    slots = np.arange(table.count, dtype=np.intp)
+    mask, boxes, row_groups, cells, counts, signatures = _visible_cells(index, slots)
+    direct_boxes, direct_groups, direct_cells = group_rows_by_cell(scene_bounds)
+    np.testing.assert_array_equal(cells, direct_cells)
+    np.testing.assert_array_equal(row_groups, direct_groups)
+    np.testing.assert_allclose(boxes, direct_boxes)
+    np.testing.assert_array_equal(counts, np.bincount(
+        direct_groups, minlength=len(direct_cells)))
+    assert mask.all()
+    for _ in range(100):
+        _visible_cells(index, slots)
+    assert index.rebuilds == 1
+    assert index.changed_groups == 0
+
+
+def test_cell_index_updates_only_touched_cells_for_move_and_hidden():
+    table = _FakeRenderTable([
+        [100, 0, 100, 10, 10, 10],
+        [150, 0, 100, 10, 10, 10],
+        [800, 0, 100, 10, 10, 10],
+    ])
+    index = CellGroupIndex(table)
+    old = _visible_cells(index, [0, 1, 2])
+    table.bounds[1, 0] = 900
+    index.update(table, [1])
+    assert index.rebuilds == 1
+    assert index.changed_groups == 2
+    moved = _visible_cells(index, [0, 1, 2])
+    assert tuple(moved[3][moved[2][1]]) == (1, 0)
+    assert tuple(moved[3][moved[2][0]]) == (0, 0)
+    assert moved[5][0] != old[5][0]
+
+    table.hidden[2] = True
+    index.update(table, [2])
+    after_hide = _visible_cells(index, [0, 1, 2])
+    assert after_hide[0].tolist() == [True, True, False]
+    assert index.rebuilds == 1
+
+
+def test_cell_index_fail_open_for_rotated_and_convex_brushes():
+    table = _FakeRenderTable([
+        [100, 0, 100, 10, 10, 10],
+        [150, 0, 150, 10, 10, 10],
+        [170, 0, 170, 10, 10, 10],
+    ])
+    table.rot[1, 3] = 30
+    table.geometry_id[2] = 4
+    index = CellGroupIndex(table)
+    mask, boxes, group, cells, counts, signatures = _visible_cells(index, [0, 1, 2])
+    assert mask.tolist() == [True, False, False]
+    assert counts.tolist() == [1]
+    table.rot[1, 3] = 0
+    table.geometry_id[2] = -1
+    index.update(table, [1, 2])
+    assert _visible_cells(index, [0, 1, 2])[0].all()
+
+
+def test_cached_group_signature_detects_content_change_without_box_change():
+    table = _FakeRenderTable([
+        [100, 0, 100, 10, 10, 10],
+        [100, 0, 100, 10, 10, 10],
+    ])
+    index = CellGroupIndex(table)
+    first = _visible_cells(index, [0, 1])[5][0]
+    table.class_bits[0] = 8
+    index.update(table, [0])
+    second = _visible_cells(index, [0, 1])[5][0]
+    assert first != second
+    assert index.rebuilds == 1
+
+
+def test_cell_index_new_groups_and_rebuild_on_large_dirty_batches():
+    table = _FakeRenderTable(np.tile(
+        np.array([100., 0., 100., 10., 10., 10.]), (1024, 1)))
+    index = CellGroupIndex(table)
+    table.bounds[0, 0] = 900
+    index.update(table, [0])
+    assert len(index.cells) == 2
+    assert index.rebuilds == 1
+    table.bounds[200:700, 0] = 1500
+    index.update(table, range(200, 700))
+    assert index.rebuilds == 2
+    assert set(map(tuple, _visible_cells(
+        index, np.arange(1024))[3])) == {(0, 0), (1, 0), (2, 0)}
