@@ -206,7 +206,8 @@ class CellGroupIndex:
             previous = int(self.slot_group[slot])
             if self._eligible(table, slot):
                 xs, zs = cells_of_points(
-                    [table.bounds[slot, 0]], [table.bounds[slot, 2]])
+                    table.bounds[slot:slot + 1, 0],
+                    table.bounds[slot:slot + 1, 2])
                 coord = (int(xs[0]), int(zs[0]))
                 current = self.coord_ids.get(coord)
                 if current is None:
