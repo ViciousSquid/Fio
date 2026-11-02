@@ -295,7 +295,8 @@ class RenderTable:
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
         'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
-        '_shown_mask', '_shown_slots', '_shown_stale', '__weakref__'))
+        '_shown_mask', '_shown_slots', '_shown_stale',
+        '_occlusion_index', '_occlusion_dirty', '__weakref__'))
 
     @property
     def center(self):
@@ -334,6 +335,11 @@ class RenderTable:
         self._shown_mask = np.empty(0, dtype=bool)
         self._shown_slots = np.empty(0, dtype=np.intp)
         self._shown_stale = True
+        # Lazy: an editor that never enables occlusion never builds a cell
+        # index or pays to track changed rows. When used, the publisher
+        # journals only the rows it was going to refresh anyway.
+        self._occlusion_index = None
+        self._occlusion_dirty = None
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -708,6 +714,8 @@ class RenderTable:
         self._row_tuple = peer._row_tuple
         self._slot_of_obj = dict(peer._slot_of_obj)
         self._shown_stale = True
+        self._occlusion_index = None
+        self._occlusion_dirty = None
         self.generation += 1
 
     def epoch_is_current(self, epoch):
@@ -841,6 +849,8 @@ class RenderTable:
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
+        self._occlusion_index = None  # mapping or row set may have changed
+        self._occlusion_dirty = None
         self.generation += 1
         return not survivors
 
@@ -851,6 +861,8 @@ class RenderTable:
         are read one at a time; a batch (a Big World cell crossing parks
         thousands) is read with one column store each.
         """
+        if self._occlusion_dirty is not None:
+            self._occlusion_dirty.update(int(slot) for slot in slots)
         if len(slots) > 16:
             self._resolve_warm_rows(slots, brushes)
         else:
@@ -866,6 +878,8 @@ class RenderTable:
         geometry layout, so that case falls back to a full reconcile.
         """
         slots = sorted({int(slot) for slot in slots})
+        if self._occlusion_dirty is not None:
+            self._occlusion_dirty.update(slots)
         self.rows_read += len(slots)
         self._resolve_warm_rows(slots, brushes)
         self._resolve_cold_rows(slots, brushes)

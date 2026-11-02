@@ -33,6 +33,8 @@ standalone ``.fiopak`` player and a headless test all reach the same grouping.
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 
 from .spatial import CELL_SIZE, cells_of_points
@@ -107,10 +109,190 @@ def group_rows_by_cell(bounds, cell_size=CELL_SIZE):
     maxs = bounds[:, :3] + bounds[:, 3:]
     group_min = np.minimum.reduceat(mins[order], starts)
     group_max = np.maximum.reduceat(maxs[order], starts)
-    group_bounds = np.concatenate(
-        ((group_min + group_max) * 0.5, (group_max - group_min) * 0.5), axis=1)
+    group_center = (group_min + group_max) * 0.5
+    group_half = (group_max - group_min) * 0.5
+    # Reconstructing min/max from centre +/- half can round INWARDS even in
+    # float64. More importantly, GPU probe transforms are float32 on GL 3.3,
+    # including an SQ3 Adreno: pad outwards for the loss of float32 precision
+    # in the centre, scale and vertex transform. Never trust a marginal
+    # false-negative result that could punch a hole in the scene.
+    pad = 8.0 * np.finfo(np.float32).eps * np.maximum(
+        1.0, np.maximum(np.abs(group_min), np.abs(group_max)))
+    group_bounds = np.concatenate((group_center, group_half + pad), axis=1)
     group_cells = np.stack((cell_x[order][starts], cell_z[order][starts]), axis=1)
     return group_bounds, group_of_row, group_cells
+
+
+
+class CellGroupIndex:
+    """A change-driven cell index owned by one published RenderTable buffer.
+
+    Group construction runs once at first use or on structural reconcile.
+    Row refreshes update only old/new touched cells. The frame-time path
+    consumes cached group IDs, boxes, and signatures with a NumPy bincount,
+    never sorting or recomputing AABBs for the visible brush population.
+    """
+
+    def __init__(self, table):
+        self.rebuild(table)
+
+    @staticmethod
+    def _eligible(table, slot):
+        return (not bool(table.hidden[slot])
+                and float(table.rot[slot, 3]) == 0.0
+                and int(table.geometry_id[slot]) < 0)
+
+    def rebuild(self, table):
+        n = int(table.count)
+        self.slot_group = np.full(n, -1, dtype=np.int32)
+        self.coord_ids = {}
+        self.member_sets = []
+        self.cells = []
+        self.boxes = np.zeros((0, 6), dtype=np.float64)
+        self.signatures = []
+        eligible = np.flatnonzero(
+            (~table.hidden[:n]) & (table.rot[:n, 3] == 0)
+            & (table.geometry_id[:n] < 0))
+        if len(eligible):
+            boxes, members, cells = group_rows_by_cell(table.bounds[eligible])
+            self.boxes = boxes
+            self.cells = [tuple(map(int, cell)) for cell in cells]
+            self.coord_ids = {cell: i for i, cell in enumerate(self.cells)}
+            self.member_sets = [set() for _ in self.cells]
+            self.slot_group[eligible] = members.astype(np.int32)
+            for slot, group in zip(eligible, members):
+                self.member_sets[int(group)].add(int(slot))
+            self.signatures = [self._signature(table, i)
+                               for i in range(len(self.cells))]
+        self.rebuilds = getattr(self, 'rebuilds', 0) + 1
+        self.changed_groups = 0
+
+    def _signature(self, table, group):
+        """Stable across publication buffers for identical rows in a cell.
+
+        Include full row data: moving/hidden geometry must invalidate old
+        answers even if its cell union box happens to remain unchanged.
+        Built only on a changed group, not in the hot camera frame.
+        """
+        slots = self.member_sets[group]
+        box = tuple(map(float, self.boxes[group]))
+        if not slots:
+            return (box, ())
+        # Hash the dense numeric rows in C instead of constructing a
+        # Python tuple of every brush and every float. Slot addresses are
+        # stable within a published generation; structural changes discard
+        # this index. The same content in either publication buffer produces
+        # the same signature, even if a mover changes the union box by zero.
+        idx = np.fromiter(slots, dtype=np.intp, count=len(slots))
+        idx.sort()
+        digest = hashlib.blake2b(digest_size=16)
+        digest.update(idx.tobytes())
+        digest.update(table.bounds[idx].tobytes())
+        digest.update(table.class_bits[idx].tobytes())
+        digest.update(table.geo_epoch[idx].tobytes())
+        return (box, digest.digest())
+
+    def update(self, table, dirty):
+        """Incrementally apply the journalled row edits and affected boxes."""
+        dirty = {int(s) for s in dirty if 0 <= int(s) < table.count}
+        if not dirty:
+            return
+        if (len(self.slot_group) != int(table.count)
+                or len(dirty) > max(128, table.count // 8)):
+            self.rebuild(table)
+            return
+        touched = set()
+        for slot in dirty:
+            previous = int(self.slot_group[slot])
+            if self._eligible(table, slot):
+                xs, zs = cells_of_points(
+                    table.bounds[slot:slot + 1, 0],
+                    table.bounds[slot:slot + 1, 2])
+                coord = (int(xs[0]), int(zs[0]))
+                current = self.coord_ids.get(coord)
+                if current is None:
+                    current = len(self.cells)
+                    self.coord_ids[coord] = current
+                    self.cells.append(coord)
+                    self.member_sets.append(set())
+                    self.boxes = np.vstack(
+                        (self.boxes, np.zeros((1, 6), dtype=np.float64)))
+                    self.signatures.append(None)
+            else:
+                current = -1
+            if previous >= 0:
+                touched.add(previous)
+            if previous != current:
+                if previous >= 0:
+                    self.member_sets[previous].discard(slot)
+                if current >= 0:
+                    self.member_sets[current].add(slot)
+                self.slot_group[slot] = current
+            if current >= 0:
+                touched.add(current)
+
+        for group in touched:
+            members = self.member_sets[group]
+            if not members:
+                self.boxes[group] = 0.0
+                self.signatures[group] = None
+                continue
+            rows = table.bounds[np.fromiter(members, dtype=np.intp)]
+            mins = np.min(rows[:, :3] - rows[:, 3:], axis=0)
+            maxs = np.max(rows[:, :3] + rows[:, 3:], axis=0)
+            center = (mins + maxs) * 0.5
+            half = (maxs - mins) * 0.5
+            pad = 8.0 * np.finfo(np.float32).eps * np.maximum(
+                1.0, np.maximum(np.abs(mins), np.abs(maxs)))
+            self.boxes[group] = np.r_[center, half + pad]
+            self.signatures[group] = self._signature(table, group)
+        self.changed_groups += len(touched)
+
+    def visible(self, slots):
+        """Cheap dense gather + bincount instead of per-frame cell grouping."""
+        slots = np.asarray(slots, dtype=np.intp)
+        per_slot = self.slot_group[slots]
+        eligible = per_slot >= 0
+        if not np.any(eligible):
+            return None
+        group = per_slot[eligible]
+        counts = np.bincount(group, minlength=len(self.cells))
+        active = np.flatnonzero(counts)
+        if not len(active):
+            return None
+        reverse = np.empty(len(self.cells), dtype=np.int32)
+        reverse[active] = np.arange(len(active), dtype=np.int32)
+        return (eligible, self.boxes[active],
+                reverse[group], np.asarray([self.cells[i] for i in active],
+                                           dtype=np.int64),
+                np.asarray(counts[active], dtype=np.intp),
+                [self.signatures[i] for i in active])
+
+
+def select_probe_groups(group_of_row, near_sq, budget, *, near_exempt_sq,
+                        min_group_rows=16, counts=None):
+    """Choose a *small* set of worthwhile groups to probe, without GL.
+
+    The renderer has already calculated the squared 3-D distance to each
+    union bounding box (not to its centre, and not an erroneous X/Y
+    ground-plane distance).  Never spend a draw on near-exempt groups or
+    groups containing too few brushes to plausibly repay the probe.
+    Prioritise groups containing more brush rows, then nearer boxes.
+    """
+    near_sq = np.asarray(near_sq, dtype=np.float64)
+    if budget <= 0 or not len(near_sq):
+        return np.empty(0, dtype=np.intp)
+    if counts is None:
+        counts = np.bincount(np.asarray(group_of_row, dtype=np.intp),
+                             minlength=len(near_sq))
+    else:
+        counts = np.asarray(counts, dtype=np.intp)
+    candidates = np.flatnonzero(
+        (near_sq >= near_exempt_sq) & (counts >= min_group_rows))
+    if not len(candidates):
+        return np.empty(0, dtype=np.intp)
+    order = np.lexsort((near_sq[candidates], -counts[candidates]))
+    return candidates[order[:int(budget)]].astype(np.intp, copy=False)
 
 
 class OcclusionProbeBook:
@@ -173,6 +355,12 @@ class OcclusionProbeBook:
             return False
         return frame - self._last_result.get(coord, -1) <= self.max_result_age
 
+    def forget(self, coord):
+        """Drop any visibility decision for a cell whose contents changed."""
+        coord = (int(coord[0]), int(coord[1]))
+        self._streak.pop(coord, None)
+        self._last_result.pop(coord, None)
+
     def retire(self, coords):
         """Drop every cell not in *coords*; they left the candidate set.
 
@@ -232,21 +420,29 @@ class ProbeGovernor:
 
     def __init__(self, max_probes, window=32,
                  keep_fraction=PROBE_KEEP_FRACTION,
-                 min_budget=MIN_PROBE_BUDGET, cooldown=PROBE_COOLDOWN):
+                 min_budget=MIN_PROBE_BUDGET, cooldown=PROBE_COOLDOWN,
+                 max_cpu_ms=None, strong_savings_fraction=0.35):
         self.max_probes = int(max_probes)
         self.budget = self.max_probes
         self.window = int(window)
         self.keep_fraction = float(keep_fraction)
         self.min_budget = int(min_budget)
         self.cooldown = int(cooldown)
+        # Cost-based guardrail, not a claim of proven net savings: true
+        # payback still requires a full-frame A/B run on the target GPU.
+        self.max_cpu_ms = (None if max_cpu_ms is None
+                           else float(max_cpu_ms))
+        self.strong_savings_fraction = float(strong_savings_fraction)
         self._samples = []
         self._idle_left = 0
 
-    def record(self, rows_probed, rows_skipped):
-        """One probed frame's outcome: rows probed and rows removed."""
+    def record(self, rows_probed, rows_skipped, overhead_ms=None):
+        """Record culling output AND optional measured CPU overhead."""
         if rows_probed <= 0:
             return
-        self._samples.append((int(rows_probed), int(rows_skipped)))
+        self._samples.append((
+            int(rows_probed), int(rows_skipped),
+            None if overhead_ms is None else max(0.0, float(overhead_ms))))
         if len(self._samples) > self.window:
             del self._samples[:len(self._samples) - self.window]
 
@@ -263,10 +459,19 @@ class ProbeGovernor:
                 self._samples = []
             return 0
         if len(self._samples) >= self.window:
-            probed = sum(sample for sample, _ in self._samples)
-            skipped = sum(sample for _, sample in self._samples)
+            probed = sum(sample for sample, _, _ in self._samples)
+            skipped = sum(sample for _, sample, _ in self._samples)
+            costs = [cost for _, _, cost in self._samples
+                     if cost is not None]
             self._samples = []
-            if skipped / probed < self.keep_fraction:
+            fraction = skipped / probed
+            # Even high skip rates can lose on Adreno if CPU-side group
+            # work and GL queries cost too much. Only allow expensive
+            # probing when it hides a substantial fraction of brushes.
+            expensive = (self.max_cpu_ms is not None and costs
+                         and sum(costs) / len(costs) > self.max_cpu_ms
+                         and fraction < self.strong_savings_fraction)
+            if fraction < self.keep_fraction or expensive:
                 if self.budget > self.min_budget:
                     self.budget = max(self.min_budget, self.budget // 2)
                 else:

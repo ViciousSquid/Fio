@@ -78,6 +78,8 @@ FRAME_INPUT = {
     'primary_selection': 'SelectionOverlay or None',
     # View settings
     'play_mode': 'bool: running game rather than editing',
+    'splitscreen_active': 'bool: two player views share the viewport; '
+                          'single-view GPU occlusion history must not run',
     'render_mode': 'one of engine.constants.RENDER_MODE_* (lit, unlit, wireframe, vertex)',
     'brush_display_mode': "the editor's Display box: 'Textured' (everything as "
                           "normal), 'Solid Lit' (brushes shaded, no textures), "

@@ -150,7 +150,9 @@ class Bench:
         game_state = view.game_state
         tick = logic.TICK_DURATION
         logic_ms, paint_ms, ai_ms, paint_cpu_ms = [], [], [], []
-        frame_ms, occlusion_skipped, occlusion_drawn = [], [], []
+        frame_ms, occlusion_skipped, occlusion_drawn, occlusion_issued = [], [], [], []
+        occlusion_cpu = {name: [] for name in (
+            "filter", "index", "query", "probe")}
         pass_totals = {}
         logic_prof = cProfile.Profile() if profile else None
         paint_prof = cProfile.Profile() if profile else None
@@ -189,6 +191,10 @@ class Bench:
                 paint_cpu_ms.append((c2 - c1) * 1000.0)
                 occlusion_skipped.append(getattr(view.renderer, "_occlusion_skipped", 0))
                 occlusion_drawn.append(getattr(view.renderer, "_occlusion_drawn", 0))
+                occlusion_issued.append(getattr(view.renderer, "_occlusion_issued", 0))
+                for name, values in occlusion_cpu.items():
+                    values.append(float(getattr(
+                        view.renderer, "_occlusion_cpu_" + name + "_ms", 0.0)))
                 stats = getattr(view.renderer, "render_stats", None)
                 for name, ms in (getattr(stats, "pass_ms", None) or {}).items():
                     pass_totals[name] = pass_totals.get(name, 0.0) + ms
@@ -255,6 +261,25 @@ class Bench:
                 sum(occlusion_drawn) / max(1, len(occlusion_drawn)), 1)
             result["occlusion_probes_pending"] = len(
                 getattr(view.renderer, "_occlusion_probes", {}) or {})
+            result["occlusion_probes_issued_mean"] = round(
+                sum(occlusion_issued) / max(1, len(occlusion_issued)), 2)
+            result["occlusion_probes_issued_max"] = max(occlusion_issued, default=0)
+            result["occlusion_probe_budget_max"] = getattr(
+                getattr(view.renderer, "occlusion_governor", None), "max_probes", 0)
+            for name, values in occlusion_cpu.items():
+                result["occlusion_cpu_" + name + "_ms_median"] = round(
+                    statistics.median(values), 4)
+                result["occlusion_cpu_" + name + "_ms_p95"] = round(
+                    _percentile(values, 0.95), 4)
+            result["occlusion_index_rebuilds"] = getattr(
+                view.renderer, "_occlusion_index_rebuilds", 0)
+            result["occlusion_cpu_overhead_ms_median"] = round(
+                statistics.median([sum(row) for row in zip(
+                    occlusion_cpu["filter"], occlusion_cpu["query"],
+                    occlusion_cpu["probe"])]), 4)
+            # This is the *extra culling work*, not net savings.
+            # Compare paint_cpu_ms and frame_ms with --occlusion off to
+            # establish whether the cached queries actually pay for themselves.
         terrain = getattr(window, 'terrain', None)
         if terrain is not None:
             table = terrain.table

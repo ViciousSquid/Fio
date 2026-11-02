@@ -459,3 +459,49 @@ def test_water_optics_fall_back_to_existing_reflectivity():
     assert t.water_params[0, 4] == pytest.approx(0.5)
     assert t.water_params[0, 5] == pytest.approx(1.333)
     assert t.water_params[0, 6] == pytest.approx(0.0)
+
+
+
+def test_occlusion_index_is_lazy_and_row_updates_are_journalled():
+    from engine.cell_cull import CellGroupIndex
+
+    a = _brush(id="occlusion-a", pos=[100.0, 0.0, 100.0])
+    b = _brush(id="occlusion-b", pos=[200.0, 0.0, 100.0])
+    table = _synced([a, b])
+    assert table._occlusion_index is None
+    assert table._occlusion_dirty is None
+
+    index = CellGroupIndex(table)
+    table._occlusion_index = index
+    table._occlusion_dirty = set()
+    a["pos"] = [700.0, 0.0, 100.0]
+    table.refresh_transforms([a, b], [0])
+    assert table._occlusion_dirty == {0}
+    index.update(table, table._occlusion_dirty)
+    table._occlusion_dirty.clear()
+    mask, _boxes, groups, cells, _counts, _signatures = index.visible([0, 1])
+    assert tuple(cells[groups[0]]) == (1, 0)
+    assert tuple(cells[groups[1]]) == (0, 0)
+    assert mask.all()
+
+    b["shader"] = "Glass"
+    table.refresh_rows([a, b], [1])
+    assert table._occlusion_dirty == {1}
+
+    # Structural publication invalidates the slot-index cache entirely.
+    table.sync([a, b, _brush(id="occlusion-new")], epoch=2)
+    assert table._occlusion_index is None
+    assert table._occlusion_dirty is None
+
+
+def test_render_table_peer_adoption_invalidates_occlusion_cache():
+    from engine.cell_cull import CellGroupIndex
+
+    rows = [_brush(id="cache-a"), _brush(id="cache-b")]
+    source = _synced(rows, epoch=1)
+    peer = _synced(rows, epoch=1)
+    peer._occlusion_index = CellGroupIndex(peer)
+    peer._occlusion_dirty = set()
+    peer.adopt(source)
+    assert peer._occlusion_index is None
+    assert peer._occlusion_dirty is None

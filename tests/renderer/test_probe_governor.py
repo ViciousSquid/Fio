@@ -55,7 +55,7 @@ def test_at_the_floor_with_no_savings_it_parks_then_rearms():
     # Parked dark for the whole cooldown, then re-armed small to re-sample.
     for _ in range(governor.cooldown):
         assert governor.probe_count() == 0
-    assert governor.probe_count() == 0  # the re-arming frame stays dark
+    # The final cooldown call re-arms the governor for the NEXT frame.
     assert governor.probe_count() == 16
     assert governor.state() == "budget 16"
 
@@ -74,3 +74,48 @@ def test_unprobed_frames_do_not_count_against_the_probes():
     governor.record(0, 0)  # a turn-suppressed frame: no sample
     # Window not full: no decision, budget untouched.
     assert governor.probe_count() == 48
+
+
+def test_sq3_budget_never_exceeds_four_and_parks_at_two():
+    governor = ProbeGovernor(max_probes=4, min_budget=2, window=4)
+    assert governor.probe_count() == 4
+    _fill(governor, 4, 1000, 0)
+    assert governor.probe_count() == 2
+    _fill(governor, 4, 1000, 0)
+    assert governor.probe_count() == 0
+    assert governor.state().startswith("parked")
+    for _ in range(governor.cooldown):
+        assert governor.probe_count() == 0
+    assert governor.probe_count() == 4
+
+
+
+def test_expensive_cpu_probes_shrink_even_when_skip_fraction_looks_healthy():
+    governor = ProbeGovernor(max_probes=4, min_budget=2, window=4,
+                             max_cpu_ms=0.167)
+    # 20% culled is above the usual 10% heuristic, but the SQ3 CPU
+    # spending 0.6ms on probes is unacceptable without very large savings.
+    for _ in range(4):
+        governor.record(1000, 200, overhead_ms=0.6)
+    assert governor.probe_count() == 2
+    for _ in range(4):
+        governor.record(1000, 200, overhead_ms=0.6)
+    assert governor.probe_count() == 0
+
+
+def test_fast_probes_keep_the_budget_when_saving_rows():
+    governor = ProbeGovernor(max_probes=4, min_budget=2, window=4,
+                             max_cpu_ms=0.167)
+    for _ in range(4):
+        governor.record(1000, 200, overhead_ms=0.025)
+    assert governor.probe_count() == 4
+
+
+def test_major_occlusion_is_not_parked_solely_by_cost_guardrail():
+    governor = ProbeGovernor(max_probes=4, min_budget=2, window=4,
+                             max_cpu_ms=0.167)
+    # More than a third of the eligible geometry eliminated is potentially
+    # a large GPU win; the device A/B benchmark still decides in practice.
+    for _ in range(4):
+        governor.record(1000, 700, overhead_ms=0.4)
+    assert governor.probe_count() == 4
