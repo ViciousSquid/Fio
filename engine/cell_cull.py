@@ -107,8 +107,16 @@ def group_rows_by_cell(bounds, cell_size=CELL_SIZE):
     maxs = bounds[:, :3] + bounds[:, 3:]
     group_min = np.minimum.reduceat(mins[order], starts)
     group_max = np.maximum.reduceat(maxs[order], starts)
-    group_bounds = np.concatenate(
-        ((group_min + group_max) * 0.5, (group_max - group_min) * 0.5), axis=1)
+    group_center = (group_min + group_max) * 0.5
+    group_half = (group_max - group_min) * 0.5
+    # Reconstructing min/max from centre +/- half can round INWARDS even in
+    # float64. More importantly, GPU probe transforms are float32 on GL 3.3,
+    # including an SQ3 Adreno: pad outwards for the loss of float32 precision
+    # in the centre, scale and vertex transform. Never trust a marginal
+    # false-negative result that could punch a hole in the scene.
+    pad = 8.0 * np.finfo(np.float32).eps * np.maximum(
+        1.0, np.maximum(np.abs(group_min), np.abs(group_max)))
+    group_bounds = np.concatenate((group_center, group_half + pad), axis=1)
     group_cells = np.stack((cell_x[order][starts], cell_z[order][starts]), axis=1)
     return group_bounds, group_of_row, group_cells
 
