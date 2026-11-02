@@ -447,6 +447,21 @@ class OcclusionMixin:
         return slots[keep]
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
+        """Measure non-blocking query polling and optional probe submission."""
+        if not self._occlusion_ready:
+            return
+        self._occlusion_cpu_query_ms = 0.0
+        self._occlusion_cpu_probe_ms = 0.0
+        started = time.perf_counter_ns()
+        try:
+            self._occlusion_end_of_frame_impl(
+                projection, view, camera_pos, config)
+        finally:
+            total_ms = (time.perf_counter_ns() - started) * 1e-6
+            self._occlusion_cpu_probe_ms = max(
+                0.0, total_ms - self._occlusion_cpu_query_ms)
+
+    def _occlusion_end_of_frame_impl(self, projection, view, camera_pos, config):
         """Poll last frame's probes, then issue this frame's.
 
         Called where the frame's opaque depth is finished (after the fog
@@ -457,6 +472,7 @@ class OcclusionMixin:
         """
         if not self._occlusion_ready:
             return
+        started_poll = time.perf_counter_ns()
         self._occlusion_frame += 1
         self._occlusion_issued = 0
         frame = self._occlusion_frame
@@ -498,6 +514,10 @@ class OcclusionMixin:
                 continue
             self.occlusion_book.record(coord, samples, issued_frame)
         self.occlusion_book.retire(candidates)
+        # This includes the GL_QUERY_RESULT_AVAILABLE calls; no blocking
+        # result is ever requested on an unfinished query.
+        self._occlusion_cpu_query_ms = (
+            time.perf_counter_ns() - started_poll) * 1e-6
 
         if groups is None or not self._occlusion_active(config):
             return
