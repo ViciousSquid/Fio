@@ -150,7 +150,7 @@ class Bench:
         game_state = view.game_state
         tick = logic.TICK_DURATION
         logic_ms, paint_ms, ai_ms, paint_cpu_ms = [], [], [], []
-        frame_ms, occlusion_skipped, occlusion_drawn = [], [], []
+        frame_ms, occlusion_skipped, occlusion_drawn, occlusion_issued = [], [], [], []
         pass_totals = {}
         logic_prof = cProfile.Profile() if profile else None
         paint_prof = cProfile.Profile() if profile else None
@@ -189,6 +189,7 @@ class Bench:
                 paint_cpu_ms.append((c2 - c1) * 1000.0)
                 occlusion_skipped.append(getattr(view.renderer, "_occlusion_skipped", 0))
                 occlusion_drawn.append(getattr(view.renderer, "_occlusion_drawn", 0))
+                occlusion_issued.append(getattr(view.renderer, "_occlusion_issued", 0))
                 stats = getattr(view.renderer, "render_stats", None)
                 for name, ms in (getattr(stats, "pass_ms", None) or {}).items():
                     pass_totals[name] = pass_totals.get(name, 0.0) + ms
@@ -255,6 +256,11 @@ class Bench:
                 sum(occlusion_drawn) / max(1, len(occlusion_drawn)), 1)
             result["occlusion_probes_pending"] = len(
                 getattr(view.renderer, "_occlusion_probes", {}) or {})
+            result["occlusion_probes_issued_mean"] = round(
+                sum(occlusion_issued) / max(1, len(occlusion_issued)), 2)
+            result["occlusion_probes_issued_max"] = max(occlusion_issued, default=0)
+            result["occlusion_probe_budget_max"] = getattr(
+                getattr(view.renderer, "occlusion_governor", None), "max_probes", 0)
         terrain = getattr(window, 'terrain', None)
         if terrain is not None:
             table = terrain.table
