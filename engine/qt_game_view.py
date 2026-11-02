@@ -292,6 +292,7 @@ class QtGameView(QOpenGLWidget):
             "show_triggers_as_solid": False,
             "show_caulk": True,
             "play_mode": False,
+            "splitscreen_active": False,
             "primary_selection": None,
             "time": 0.0,
             "show_sprites_in_play_mode": False,
