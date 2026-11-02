@@ -30,12 +30,13 @@ from .instancing import InstancingMixin
 from .lighting import LightingMixin
 from .passes import PassesMixin
 from .portals import PortalsMixin
+from .occlusion import OcclusionMixin
 from .distance import DistanceMixin
 from .shaders import ShadersMixin
 
 
 class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
-                      DistanceMixin, ShadersMixin, RendererCore):
+                      DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
     *config* is the application ConfigParser (or None). *texture_loader*
@@ -253,6 +254,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._init_portal_gl()
             self._init_shadow_resources()
             self._init_distance()
+            self._init_occlusion(config)
 
     def render_scene(self, projection, view, camera_pos,
                      primary_selection, config, clear=True, brush_slots=None):
@@ -348,6 +350,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 and cx is not None):
             slots = self._distance_cull_slots(
                 table, slots, cx, cz, self.view_distance.distance_sq)
+        # GPU-verified hidden cells drop out here, before the passes classify,
+        # sort and pack the surviving rows (renderer/forward/occlusion.py).
+        slots = self._occlusion_filter_slots(table, slots, config, camera_pos,
+                                             view)
         groups = self._classify_brush_slots(table, slots, config)
         if cx is not None:
             for key in ('transparent', 'water', 'glass'):
@@ -566,6 +572,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                                      table=_tbl)
             self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config,
                                   table=_tbl)
+        # The frame's opaque depth is finished: poll the chained occlusion
+        # probes and issue this frame's, against exactly the geometry the
+        # brushes were hidden behind (renderer/forward/occlusion.py).
+        self._occlusion_end_of_frame(projection, view, camera_pos, config)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
@@ -578,6 +588,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
     def cleanup(self):
         """Release ForwardRenderer's own GL resources, then RendererCore's."""
+        self._cleanup_occlusion()
         if self._sprite_layers is not None:
             self._sprite_layers.cleanup()
             self._sprite_layers = None

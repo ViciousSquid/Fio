@@ -15,7 +15,7 @@ Needs a display with OpenGL (``xvfb-run -a``; ``LIBGL_ALWAYS_SOFTWARE=1``
 selects llvmpipe).  Usage::
 
     xvfb-run -a python tools/bench_compare.py [--frames N] [--json out.json]
-        [--profile] [--memory] [map.json ...]
+        [--profile] [--memory] [--occlusion off|on] [map.json ...]
 
 ``--terrain-updates 1`` fixes the chunk-build limit and lifts its wall-clock
 budget for comparable terrain workloads. Default runs retain normal streaming
@@ -27,6 +27,18 @@ keeps it).  Reported per map: load ms, enter-play ms, per-frame logic and paint 
 software rasteriser's worker threads), Python function calls per frame for each phase (machine
 independent: a Python hot loop shows up here before it shows up as time), and,
 with ``--memory``, traced Python/NumPy memory growth over the run.
+
+``--occlusion off|on`` forces the play-mode occlusion culling state once
+play mode has started (the perf/cell-occlusion-culling branch renderer),
+for same-process A/B runs: ``off`` is the "before" (the occlusion hooks
+return immediately, matching the previous renderer frame for frame),
+``on`` the "after"; the default leaves settings.ini in charge.
+``frame_ms`` / ``fps_median`` are the logic+paint frame budget (the
+monster AI runs on its own thread in production and is excluded), so
+before/after FPS is::
+
+    python tools/bench_compare.py --occlusion off --json before.json
+    python tools/bench_compare.py --occlusion on  --json after.json
 """
 from __future__ import annotations
 
@@ -100,7 +112,8 @@ class Bench:
         assert not logic.is_alive(), "logic thread did not stop"
         return logic
 
-    def run_map(self, path, frames, profile=False, memory=False):
+    def run_map(self, path, frames, profile=False, memory=False,
+                occlusion="settings"):
         from PyQt5.QtCore import Qt
         from OpenGL import GL
         window, view = self.window, self.view
@@ -117,6 +130,12 @@ class Bench:
         window.enter_play_mode()
         enter_ms = (time.perf_counter() - started) * 1000.0
         assert view.play_mode, "play mode did not start for %s" % path
+        if occlusion != "settings":
+            renderer = view.renderer
+            if not hasattr(renderer, "occlusion_culling"):
+                raise SystemExit("--occlusion needs the perf/cell-occlusion-"
+                                 "culling branch's renderer")
+            renderer.occlusion_culling = occlusion == "on"
 
         # The monster AI normally runs on its own 30 Hz thread. Run the same
         # update on this thread every other frame instead, so the work done is
@@ -131,6 +150,9 @@ class Bench:
         game_state = view.game_state
         tick = logic.TICK_DURATION
         logic_ms, paint_ms, ai_ms, paint_cpu_ms = [], [], [], []
+        frame_ms, occlusion_skipped, occlusion_drawn, occlusion_issued = [], [], [], []
+        occlusion_cpu = {name: [] for name in (
+            "filter", "index", "query", "probe")}
         pass_totals = {}
         logic_prof = cProfile.Profile() if profile else None
         paint_prof = cProfile.Profile() if profile else None
@@ -167,6 +189,12 @@ class Bench:
             c2 = time.thread_time()
             if measure:
                 paint_cpu_ms.append((c2 - c1) * 1000.0)
+                occlusion_skipped.append(getattr(view.renderer, "_occlusion_skipped", 0))
+                occlusion_drawn.append(getattr(view.renderer, "_occlusion_drawn", 0))
+                occlusion_issued.append(getattr(view.renderer, "_occlusion_issued", 0))
+                for name, values in occlusion_cpu.items():
+                    values.append(float(getattr(
+                        view.renderer, "_occlusion_cpu_" + name + "_ms", 0.0)))
                 stats = getattr(view.renderer, "render_stats", None)
                 for name, ms in (getattr(stats, "pass_ms", None) or {}).items():
                     pass_totals[name] = pass_totals.get(name, 0.0) + ms
@@ -174,6 +202,9 @@ class Bench:
                 if index % 2 == 0:
                     ai_ms.append((tb - ta) * 1000.0)
                 paint_ms.append((t2 - t1) * 1000.0)
+                # Production frame budget: logic + paint. The AI is
+                # excluded because it overlaps on its own thread.
+                frame_ms.append((t2 - t0 - (tb - ta)) * 1000.0)
 
         warmup = min(30, frames // 4)
         for index in range(warmup):
@@ -208,6 +239,10 @@ class Bench:
             # the driver's worker threads, so this is what Fio's submission
             # costs, the part a hardware GPU would still leave on the CPU.
             "paint_cpu_ms_median": round(statistics.median(paint_cpu_ms), 3),
+            "frame_ms_median": round(statistics.median(frame_ms), 3),
+            "frame_ms_p95": round(_percentile(frame_ms, 0.95), 3),
+            "fps_median": round(1000.0 / statistics.median(frame_ms), 1),
+            "fps_at_p95_frame_ms": round(1000.0 / _percentile(frame_ms, 0.95), 1),
             "pass_ms_mean": {name: round(total / frames, 3)
                              for name, total in sorted(pass_totals.items())},
             "threads": sorted(t.name for t in __import__("threading").enumerate()),
@@ -215,6 +250,36 @@ class Bench:
             "brushes": len(window.state.brushes),
             "viewport": [view.width(), view.height()],
         }
+        if hasattr(view.renderer, "occlusion_book"):
+            result["occlusion_enabled"] = bool(getattr(
+                view.renderer, "occlusion_culling", False))
+            result["occlusion_ready"] = bool(getattr(
+                view.renderer, "_occlusion_ready", False))
+            result["occlusion_skipped_mean"] = round(
+                sum(occlusion_skipped) / max(1, len(occlusion_skipped)), 1)
+            result["occlusion_drawn_mean"] = round(
+                sum(occlusion_drawn) / max(1, len(occlusion_drawn)), 1)
+            result["occlusion_probes_pending"] = len(
+                getattr(view.renderer, "_occlusion_probes", {}) or {})
+            result["occlusion_probes_issued_mean"] = round(
+                sum(occlusion_issued) / max(1, len(occlusion_issued)), 2)
+            result["occlusion_probes_issued_max"] = max(occlusion_issued, default=0)
+            result["occlusion_probe_budget_max"] = getattr(
+                getattr(view.renderer, "occlusion_governor", None), "max_probes", 0)
+            for name, values in occlusion_cpu.items():
+                result["occlusion_cpu_" + name + "_ms_median"] = round(
+                    statistics.median(values), 4)
+                result["occlusion_cpu_" + name + "_ms_p95"] = round(
+                    _percentile(values, 0.95), 4)
+            result["occlusion_index_rebuilds"] = getattr(
+                view.renderer, "_occlusion_index_rebuilds", 0)
+            result["occlusion_cpu_overhead_ms_median"] = round(
+                statistics.median([sum(row) for row in zip(
+                    occlusion_cpu["filter"], occlusion_cpu["query"],
+                    occlusion_cpu["probe"])]), 4)
+            # This is the *extra culling work*, not net savings.
+            # Compare paint_cpu_ms and frame_ms with --occlusion off to
+            # establish whether the cached queries actually pay for themselves.
         terrain = getattr(window, 'terrain', None)
         if terrain is not None:
             table = terrain.table
@@ -247,6 +312,11 @@ def main(argv=None):
                         help="count Python calls per frame (slower)")
     parser.add_argument("--memory", action="store_true",
                         help="trace Python/NumPy memory growth (slows timings)")
+    parser.add_argument("--occlusion", choices=("settings", "off", "on"),
+                        default="settings",
+                        help="force play-mode occlusion culling off/on for A/B FPS "
+                             "runs (perf/cell-occlusion-culling branch; default: "
+                             "leave settings.ini in charge)")
     parser.add_argument("--dump", help="directory to write .pstats files to")
     parser.add_argument("--top", type=int, default=0,
                         help="print the N hottest functions per phase")
@@ -288,7 +358,7 @@ def _run(args):
     results = []
     for path in args.maps:
         result = bench.run_map(path, args.frames, profile=args.profile,
-                               memory=args.memory)
+                               memory=args.memory, occlusion=args.occlusion)
         for phase in ("logic", "paint"):
             prof = result.pop("_%s_profile" % phase, None)
             if prof is not None and args.dump:

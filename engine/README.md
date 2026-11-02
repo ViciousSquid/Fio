@@ -6,6 +6,7 @@
 | `actor_pick.py` | Finds the actor under a screen ray, using the published tables. |
 | `animated_texture.py` | Decodes animated GIF textures and picks the frame for a play time. |
 | `brush_geometry.py` | Convex brush geometry from planes: faces, collision meshes, 2D outlines, bounds, component edits. |
+| `cell_cull.py` | Cell-group bucketing over the 512-unit grid, occlusion-probe bookkeeping, and the probe-budget governor that parks the probes when they stop paying for themselves. |
 | `camera.py` | Camera state and view/projection matrices. |
 | `change_journal.py` | Records entity changes so the dense tables refresh only changed rows. |
 | `constants.py` | Shared engine constants: sizes, render modes, physics and movement tuning. |
@@ -88,6 +89,7 @@
 | `forward/distance.py` | The Wireframe and Points display modes. |
 | `forward/instancing.py` | Instance buffers. |
 | `forward/lighting.py` | Lights and shadow maps. |
+| `forward/occlusion.py` | Chained occlusion queries over the cell groups (play mode). |
 | `forward/passes.py` | Draw passes. |
 | `forward/portals.py` | Stencil portals. |
 | `forward/renderer.py` | `ForwardRenderer`, the built-in renderer. |

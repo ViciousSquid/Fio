@@ -379,6 +379,28 @@ Gameplay moves and falls as in Quake 2, on Fio's one physics:
 
 ### Performance
 
+- Cell-group occlusion culling in the forward renderer (play mode):
+  asynchronous depth queries over 512-unit cell groups, with conservative
+  fallback when results are unavailable. Uses only APIs accepted by the
+  active context (including OpenGL 3.3 core's `GL_ANY_SAMPLES_PASSED`).
+  A **hard cap of four probes per frame and four outstanding queries on
+  low-power ARM** (eight elsewhere) avoids the previous 24/48-query cost;
+  the governor can reduce the SQ3 budget to two or park probing for 180
+  frames when it observes insufficient brush savings **or excessive measured
+  CPU overhead**. Probe-group membership, bounds and content signatures are
+  now built once per RenderTable publication buffer and incrementally updated
+  from its change journal. The render frame uses a dense group-ID gather and
+  bincount, with no per-frame brush sorting or AABB reconstruction. Independent
+  filter, cache, query-poll and submission CPU timings are exported by
+  `tools/bench_compare.py`. Probes are skipped for near cells, small groups,
+  and small scenes. Rotated
+  and convex brushes cannot be culled by their unrotated bounds; moving or
+  streamed cell bounds invalidate old answers. Probe cubes cover the full
+  union AABB rather than half its size. Actual issued-probe counts and
+  skipped brushes appear in Debug Tables and `tools/bench_compare.py`
+  (`--occlusion on|off`). Actual SQ3 frame-time improvements must still be
+  established by A/B benchmarking. Toggled with
+  `[Renderer] occlusion_culling` in `settings.ini`.
 - Brush passes that draw one row at a time (lit, textured angled brushes,
   glow, water, glass, fog, non-instanced shadow casters) send each row's
   model/normal matrix and colour through the GL entry point directly, by

@@ -1770,9 +1770,9 @@ class MainWindow(QMainWindow):
 
     def update_play_button_color(self):
         """Update the Play button color based on current mode."""
-        checkbox = getattr(self, 'show_whole_world_checkbox', None)
-        if checkbox is not None:
-            checkbox.setEnabled(not self.view_3d.play_mode)
+        action = getattr(self, 'show_whole_world_action', None)
+        if action is not None:
+            action.setEnabled(not self.view_3d.play_mode)
         if hasattr(self, 'play_button'):
             if self.view_3d.play_mode:
                 # Red for play mode
