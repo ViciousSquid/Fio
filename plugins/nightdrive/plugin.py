@@ -41,8 +41,9 @@ def _set_pose(entity, x, z, angle):
 
 
 class NightDriveSession:
-    def __init__(self, logic):
+    def __init__(self, logic, editor_view=None):
         self.logic = logic
+        self._editor_view = editor_view
         things = list(logic.editor_state.things)
         self.player_prop = next((p for p in things if _role(p) == "player_vehicle"), None)
         self.traffic_props = [p for p in things if _role(p) == "traffic"]
@@ -100,7 +101,7 @@ class NightDriveSession:
         # Prop, so the pedestrian sprite must not be layered on top of it.
         editor = (getattr(self.logic, "main_window", None) or
                   getattr(self.logic.editor_state, "main_window", None))
-        self.view = getattr(editor, "view_3d", None)
+        self.view = self._editor_view or getattr(editor, "view_3d", None)
         if self.view is not None:
             self.sprite_before = self.view.overhead_sprite_enabled
             self.view.overhead_sprite_enabled = False
@@ -217,6 +218,7 @@ class NightDrivePlugin(FioPlugin):
     category = "Games"
     enabled = False
     _sessions = weakref.WeakKeyDictionary()
+    _loading_view = None
 
     def map_uses_plugin(self, map_data):
         if not isinstance(map_data, dict):
@@ -227,10 +229,11 @@ class NightDrivePlugin(FioPlugin):
             for p in map_data.get("things", ())
         )
 
-    @staticmethod
-    def _load_demo_map(main_window):
+    def _load_demo_map(self, main_window):
         if not main_window.check_unsaved_changes():
             return
+        view = getattr(main_window, "view_3d", None)
+        self._loading_view = weakref.ref(view) if view is not None else None
         main_window.load_level_file(MAP_PATH)
 
     def register(self, api):
@@ -252,7 +255,8 @@ class NightDrivePlugin(FioPlugin):
         host.wrap(logic.player_runtime, "update_primary", drive_input)
 
     def on_play_start(self, logic):
-        session = NightDriveSession(logic)
+        view = self._loading_view() if self._loading_view is not None else None
+        session = NightDriveSession(logic, editor_view=view)
         if session.vehicle is None:
             return
         self._sessions[logic] = session
