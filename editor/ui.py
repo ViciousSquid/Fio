@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QLabel, QSpinBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup,
     QApplication, QSizePolicy, QInputDialog, QMenu,
-    QStyle, QStyleOptionButton, QCheckBox
+    QStyle, QStyleOptionButton
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
 from PyQt5.QtGui import QIcon, QKeySequence, QPainter
@@ -690,6 +690,17 @@ class Ui_MainWindow(object):
             MainWindow.set_connection_links_enabled)
         view_menu.addAction(MainWindow.connection_links_action)
 
+        MainWindow.show_whole_world_action = QAction(
+            'Show whole world', MainWindow, checkable=True)
+        MainWindow.show_whole_world_action.setChecked(
+            MainWindow.config.getboolean('Display', 'show_whole_world', fallback=True))
+        MainWindow.show_whole_world_action.setToolTip(
+            "Big World maps: load every editor cell. Clear to stream cells "
+            "around the 3D camera.")
+        MainWindow.show_whole_world_action.triggered.connect(
+            MainWindow.set_show_whole_world)
+        view_menu.addAction(MainWindow.show_whole_world_action)
+
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
@@ -1148,23 +1159,6 @@ class Ui_MainWindow(object):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Display:"))
         bottom_layout.addWidget(MainWindow.display_mode_combobox)
-
-        MainWindow.show_whole_world_checkbox = QCheckBox("Show whole world")
-        MainWindow.show_whole_world_checkbox.setStyleSheet("""
-            QCheckBox::indicator { width: 14px; height: 14px;
-                border: 1px solid #888; border-radius: 2px; background: #3c3f41; }
-            QCheckBox::indicator:checked { background: #F08000;
-                border-color: #F08000; image: url(assets/checkmark.svg); }
-            QCheckBox:disabled { color: #777; }
-        """)
-        MainWindow.show_whole_world_checkbox.setChecked(
-            MainWindow.config.getboolean('Display', 'show_whole_world', fallback=True))
-        MainWindow.show_whole_world_checkbox.setToolTip(
-            "Big World maps: load every editor cell. Clear to stream cells "
-            "around the 3D camera.")
-        MainWindow.show_whole_world_checkbox.toggled.connect(MainWindow.set_show_whole_world)
-        bottom_layout.addSpacing(12)
-        bottom_layout.addWidget(MainWindow.show_whole_world_checkbox)
 
         # Camera mode (native): First Person vs Overhead (top-down).
         MainWindow.camera_mode_combobox = QComboBox()

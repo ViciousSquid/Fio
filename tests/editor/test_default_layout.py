@@ -97,6 +97,48 @@ def test_view_menu_sets_the_asset_thumbnail_size(main_window):
     assert not host.thumbnail_size_actions['smallest'].isChecked()
 
 
+def test_show_whole_world_is_a_checkable_view_menu_action(main_window, monkeypatch):
+    host = main_window
+    action = host.show_whole_world_action
+    view_menu = next(
+        entry.menu() for entry in host.menuBar().actions()
+        if entry.text().replace('&', '') == 'View')
+
+    assert action in view_menu.actions()
+    assert action.text() == 'Show whole world'
+    assert action.isCheckable()
+    assert not hasattr(host, 'show_whole_world_checkbox')
+
+    initial = host.config.getboolean('Display', 'show_whole_world', fallback=True)
+    assert action.isChecked() == initial
+
+    saved = []
+    streamed = []
+    monkeypatch.setattr(host, 'save_config', lambda: saved.append(True))
+    monkeypatch.setattr(
+        host.state, 'set_editor_whole_world',
+        lambda shown, camera_pos: streamed.append(shown) or False)
+
+    action.trigger()
+
+    assert action.isChecked() == (not initial)
+    assert host.config.getboolean('Display', 'show_whole_world') == (not initial)
+    assert streamed == [not initial]
+    assert saved == [True]
+
+
+def test_show_whole_world_menu_action_disabled_during_play(main_window, monkeypatch):
+    host = main_window
+    action = host.show_whole_world_action
+    monkeypatch.setattr(host.view_3d, 'play_mode', True)
+    host.update_play_button_color()
+    assert not action.isEnabled()
+
+    monkeypatch.setattr(host.view_3d, 'play_mode', False)
+    host.update_play_button_color()
+    assert action.isEnabled()
+
+
 # ────────────────────────────
 # The version gate
 # ────────────────────────────
