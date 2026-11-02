@@ -121,6 +121,144 @@ def group_rows_by_cell(bounds, cell_size=CELL_SIZE):
     return group_bounds, group_of_row, group_cells
 
 
+
+class CellGroupIndex:
+    """A change-driven cell index owned by one published RenderTable buffer.
+
+    Group construction runs once at first use or on structural reconcile.
+    Row refreshes update only old/new touched cells. The frame-time path
+    consumes cached group IDs, boxes, and signatures with a NumPy bincount,
+    never sorting or recomputing AABBs for the visible brush population.
+    """
+
+    def __init__(self, table):
+        self.rebuild(table)
+
+    @staticmethod
+    def _eligible(table, slot):
+        return (not bool(table.hidden[slot])
+                and float(table.rot[slot, 3]) == 0.0
+                and int(table.geometry_id[slot]) < 0)
+
+    def rebuild(self, table):
+        n = int(table.count)
+        self.slot_group = np.full(n, -1, dtype=np.int32)
+        self.coord_ids = {}
+        self.member_sets = []
+        self.cells = []
+        self.boxes = np.zeros((0, 6), dtype=np.float64)
+        self.signatures = []
+        eligible = np.flatnonzero(
+            (~table.hidden[:n]) & (table.rot[:n, 3] == 0)
+            & (table.geometry_id[:n] < 0))
+        if len(eligible):
+            boxes, members, cells = group_rows_by_cell(table.bounds[eligible])
+            self.boxes = boxes
+            self.cells = [tuple(map(int, cell)) for cell in cells]
+            self.coord_ids = {cell: i for i, cell in enumerate(self.cells)}
+            self.member_sets = [set() for _ in self.cells]
+            self.slot_group[eligible] = members.astype(np.int32)
+            for slot, group in zip(eligible, members):
+                self.member_sets[int(group)].add(int(slot))
+            self.signatures = [self._signature(table, i)
+                               for i in range(len(self.cells))]
+        self.rebuilds = getattr(self, 'rebuilds', 0) + 1
+        self.changed_groups = 0
+
+    def _signature(self, table, group):
+        """Stable across publication buffers for identical rows in a cell.
+
+        Include full row data: moving/hidden geometry must invalidate old
+        answers even if its cell union box happens to remain unchanged.
+        Built only on a changed group, not in the hot camera frame.
+        """
+        slots = self.member_sets[group]
+        box = tuple(map(float, self.boxes[group]))
+        if not slots:
+            return (box, ())
+        rows = tuple(sorted(
+            (str(table.ids[slot]),
+             tuple(map(float, table.bounds[slot])),
+             int(table.class_bits[slot]), int(table.geo_epoch[slot]))
+            for slot in slots))
+        return (box, rows)
+
+    def update(self, table, dirty):
+        """Incrementally apply the journalled row edits and affected boxes."""
+        dirty = {int(s) for s in dirty if 0 <= int(s) < table.count}
+        if not dirty:
+            return
+        if (len(self.slot_group) != int(table.count)
+                or len(dirty) > max(128, table.count // 8)):
+            self.rebuild(table)
+            return
+        touched = set()
+        for slot in dirty:
+            previous = int(self.slot_group[slot])
+            if self._eligible(table, slot):
+                xs, zs = cells_of_points(
+                    [table.bounds[slot, 0]], [table.bounds[slot, 2]])
+                coord = (int(xs[0]), int(zs[0]))
+                current = self.coord_ids.get(coord)
+                if current is None:
+                    current = len(self.cells)
+                    self.coord_ids[coord] = current
+                    self.cells.append(coord)
+                    self.member_sets.append(set())
+                    self.boxes = np.vstack(
+                        (self.boxes, np.zeros((1, 6), dtype=np.float64)))
+                    self.signatures.append(None)
+            else:
+                current = -1
+            if previous >= 0:
+                touched.add(previous)
+            if previous != current:
+                if previous >= 0:
+                    self.member_sets[previous].discard(slot)
+                if current >= 0:
+                    self.member_sets[current].add(slot)
+                self.slot_group[slot] = current
+            if current >= 0:
+                touched.add(current)
+
+        for group in touched:
+            members = self.member_sets[group]
+            if not members:
+                self.boxes[group] = 0.0
+                self.signatures[group] = None
+                continue
+            rows = table.bounds[np.fromiter(members, dtype=np.intp)]
+            mins = np.min(rows[:, :3] - rows[:, 3:], axis=0)
+            maxs = np.max(rows[:, :3] + rows[:, 3:], axis=0)
+            center = (mins + maxs) * 0.5
+            half = (maxs - mins) * 0.5
+            pad = 8.0 * np.finfo(np.float32).eps * np.maximum(
+                1.0, np.maximum(np.abs(mins), np.abs(maxs)))
+            self.boxes[group] = np.r_[center, half + pad]
+            self.signatures[group] = self._signature(table, group)
+        self.changed_groups += len(touched)
+
+    def visible(self, slots):
+        """Cheap dense gather + bincount instead of per-frame cell grouping."""
+        slots = np.asarray(slots, dtype=np.intp)
+        per_slot = self.slot_group[slots]
+        eligible = per_slot >= 0
+        if not np.any(eligible):
+            return None
+        group = per_slot[eligible]
+        counts = np.bincount(group, minlength=len(self.cells))
+        active = np.flatnonzero(counts)
+        if not len(active):
+            return None
+        reverse = np.empty(len(self.cells), dtype=np.int32)
+        reverse[active] = np.arange(len(active), dtype=np.int32)
+        return (eligible, self.boxes[active],
+                reverse[group], np.asarray([self.cells[i] for i in active],
+                                           dtype=np.int64),
+                np.asarray(counts[active], dtype=np.intp),
+                [self.signatures[i] for i in active])
+
+
 def select_probe_groups(group_of_row, near_sq, budget, *, near_exempt_sq,
                         min_group_rows=16):
     """Choose a *small* set of worthwhile groups to probe, without GL.
