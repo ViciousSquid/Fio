@@ -55,7 +55,7 @@ def test_at_the_floor_with_no_savings_it_parks_then_rearms():
     # Parked dark for the whole cooldown, then re-armed small to re-sample.
     for _ in range(governor.cooldown):
         assert governor.probe_count() == 0
-    assert governor.probe_count() == 0  # the re-arming frame stays dark
+    # The final cooldown call re-arms the governor for the NEXT frame.
     assert governor.probe_count() == 16
     assert governor.state() == "budget 16"
 
@@ -74,3 +74,16 @@ def test_unprobed_frames_do_not_count_against_the_probes():
     governor.record(0, 0)  # a turn-suppressed frame: no sample
     # Window not full: no decision, budget untouched.
     assert governor.probe_count() == 48
+
+
+def test_sq3_budget_never_exceeds_four_and_parks_at_two():
+    governor = ProbeGovernor(max_probes=4, min_budget=2, window=4)
+    assert governor.probe_count() == 4
+    _fill(governor, 4, 1000, 0)
+    assert governor.probe_count() == 2
+    _fill(governor, 4, 1000, 0)
+    assert governor.probe_count() == 0
+    assert governor.state().startswith("parked")
+    for _ in range(governor.cooldown):
+        assert governor.probe_count() == 0
+    assert governor.probe_count() == 4
