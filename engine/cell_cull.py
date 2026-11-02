@@ -113,6 +113,29 @@ def group_rows_by_cell(bounds, cell_size=CELL_SIZE):
     return group_bounds, group_of_row, group_cells
 
 
+def select_probe_groups(group_of_row, near_sq, budget, *, near_exempt_sq,
+                        min_group_rows=16):
+    """Choose a *small* set of worthwhile groups to probe, without GL.
+
+    The renderer has already calculated the squared 3-D distance to each
+    union bounding box (not to its centre, and not an erroneous X/Y
+    ground-plane distance).  Never spend a draw on near-exempt groups or
+    groups containing too few brushes to plausibly repay the probe.
+    Prioritise groups containing more brush rows, then nearer boxes.
+    """
+    near_sq = np.asarray(near_sq, dtype=np.float64)
+    if budget <= 0 or not len(near_sq):
+        return np.empty(0, dtype=np.intp)
+    counts = np.bincount(np.asarray(group_of_row, dtype=np.intp),
+                         minlength=len(near_sq))
+    candidates = np.flatnonzero(
+        (near_sq >= near_exempt_sq) & (counts >= min_group_rows))
+    if not len(candidates):
+        return np.empty(0, dtype=np.intp)
+    order = np.lexsort((near_sq[candidates], -counts[candidates]))
+    return candidates[order[:int(budget)]].astype(np.intp, copy=False)
+
+
 class OcclusionProbeBook:
     """Chained occlusion answers for the cell groups, GL-free.
 
@@ -172,6 +195,12 @@ class OcclusionProbeBook:
         if self._streak.get(coord, 0) < self.occlude_after:
             return False
         return frame - self._last_result.get(coord, -1) <= self.max_result_age
+
+    def forget(self, coord):
+        """Drop any visibility decision for a cell whose contents changed."""
+        coord = (int(coord[0]), int(coord[1]))
+        self._streak.pop(coord, None)
+        self._last_result.pop(coord, None)
 
     def retire(self, coords):
         """Drop every cell not in *coords*; they left the candidate set.
