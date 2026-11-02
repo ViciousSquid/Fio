@@ -1948,6 +1948,7 @@ class QtGameView(QOpenGLWidget):
             and render_state is not None
             and render_state.splitscreen_active
         )
+        self._render_config["splitscreen_active"] = bool(_splitscreen)
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
