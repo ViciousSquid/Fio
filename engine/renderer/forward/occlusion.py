@@ -173,6 +173,7 @@ class OcclusionMixin:
         self._occlusion_near_sq = None
         self._occlusion_group_counts = None
         self._occlusion_cpu_filter_ms = 0.0
+        self._occlusion_rows_sampled = 0
         self._occlusion_cpu_index_ms = 0.0
         self._occlusion_cpu_query_ms = 0.0
         self._occlusion_cpu_probe_ms = 0.0
@@ -199,7 +200,10 @@ class OcclusionMixin:
         self.occlusion_governor = ProbeGovernor(
             max_probes=4 if low_power else self.MAX_PROBES,
             min_budget=2,
-            keep_fraction=0.15 if low_power else PROBE_KEEP_FRACTION)
+            keep_fraction=0.15 if low_power else PROBE_KEEP_FRACTION,
+            # 1% of a 60fps CPU frame on SQ3; only a conservative
+            # governor guardrail, real break-even is measured by --off/on.
+            max_cpu_ms=0.167 if low_power else 0.25)
         self._occlusion_budget = 0
         # Larger early-out on Snapdragon-class machines: an O(N log N)
         # grouping pass is not justified for a few hundred visible rows.
@@ -321,6 +325,7 @@ class OcclusionMixin:
         if not self.occlusion_culling:
             self._occlusion_cpu_filter_ms = 0.0
             self._occlusion_cpu_index_ms = 0.0
+            self._occlusion_rows_sampled = 0
             return slots
         t0 = time.perf_counter_ns()
         try:
@@ -329,6 +334,15 @@ class OcclusionMixin:
         finally:
             self._occlusion_cpu_filter_ms = (
                 time.perf_counter_ns() - t0) * 1e-6
+            if self._occlusion_rows_sampled:
+                # Probe submission and result polling are measured by the
+                # preceding completed frame. Give the governor real CPU
+                # overhead, not merely the percentage of skipped brushes.
+                self.occlusion_governor.record(
+                    self._occlusion_rows_sampled, self._occlusion_skipped,
+                    overhead_ms=(self._occlusion_cpu_filter_ms
+                                 + self._occlusion_cpu_query_ms
+                                 + self._occlusion_cpu_probe_ms))
 
     def _occlusion_filter_slots_impl(self, table, slots, config, camera_pos, view):
         """Drop the cell groups the GPU has verified occluded.
@@ -344,6 +358,7 @@ class OcclusionMixin:
         self._occlusion_groups = None
         self._occlusion_near_sq = None
         self._occlusion_group_counts = None
+        self._occlusion_rows_sampled = 0
         self._occlusion_cpu_index_ms = 0.0
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
@@ -383,6 +398,7 @@ class OcclusionMixin:
         safe_count = int(np.count_nonzero(eligible))
         if safe_count < self._occlusion_min_rows:
             return slots
+        self._occlusion_rows_sampled = safe_count
         groups = (group_bounds, group_of_row, group_cells)
         # A signature is built only when a cell's published rows change.
         # Cache-hit frames reuse these immutable tuples; no per-frame
@@ -434,7 +450,6 @@ class OcclusionMixin:
                 culled_groups[i] = True
         if not culled_groups.any():
             self._occlusion_drawn = len(slots)
-            self.occlusion_governor.record(safe_count, 0)
             return slots
 
         keep = np.ones(len(slots), dtype=bool)
@@ -443,7 +458,6 @@ class OcclusionMixin:
         self._occlusion_drawn = len(slots) - self._occlusion_skipped
         # Score savings against *eligible* rows; a map full of protected
         # convex geometry should not bury a useful small occlusion region.
-        self.occlusion_governor.record(safe_count, self._occlusion_skipped)
         return slots[keep]
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
