@@ -1,0 +1,21 @@
+newmtl paint
+Ka 0.08 0.08 0.08
+Kd 0.73 0.76 0.76
+Ks 0.32 0.32 0.32
+Ns 65
+newmtl glass
+Ka 0.04 0.04 0.05
+Kd 0.11 0.25 0.34
+Ks 0.5 0.5 0.5
+Ns 90
+newmtl rubber
+Ka 0.02 0.02 0.02
+Kd 0.055 0.065 0.075
+newmtl headlamp
+Ka 1 1 0.65
+Kd 1 0.99 0.77
+newmtl taillamp
+Ka 0.9 0.02 0.01
+Kd 0.92 0.03 0.02
+newmtl chrome
+Kd 0.38 0.39 0.41
