@@ -142,6 +142,8 @@ class OcclusionMixin:
     #: Below this many surviving slots the world on screen is small enough
     #: that grouping it costs more than hiding part of it could save.
     MIN_PROBED_ROWS = 512
+    # A tiny group cannot pay for its own GL query on the Adreno driver.
+    MIN_PROBE_GROUP_ROWS = 16
 
     # -- lifetime -----------------------------------------------------
 
@@ -191,6 +193,9 @@ class OcclusionMixin:
             min_budget=2,
             keep_fraction=0.15 if low_power else PROBE_KEEP_FRACTION)
         self._occlusion_budget = 0
+        # Larger early-out on Snapdragon-class machines: an O(N log N)
+        # grouping pass is not justified for a few hundred visible rows.
+        self._occlusion_min_rows = 1024 if low_power else self.MIN_PROBED_ROWS
         self.render_stats.details['occlusion'] = self._describe_occlusion
         try:
             program = self.shader_loader.compile_from_source(
@@ -313,7 +318,7 @@ class OcclusionMixin:
         self._occlusion_skipped = 0
         self._occlusion_drawn = 0
         if (camera_pos is None or table.bounds is None
-                or len(slots) < self.MIN_PROBED_ROWS
+                or len(slots) < self._occlusion_min_rows
                 or not self._occlusion_active(config)):
             return slots
         budget = self.occlusion_governor.probe_count()
@@ -326,7 +331,16 @@ class OcclusionMixin:
         self._occlusion_budget = budget
 
         slots = np.asarray(slots, dtype=np.intp)
-        groups = cell_cull.group_rows_by_cell(table.bounds[slots])
+        # Rotated boxes and arbitrary convex meshes may extend beyond the
+        # unrotated centre/half RenderTable bounds. Never allow a query of
+        # those bounds to hide such geometry. Keep their slots in the draw
+        # list and group only ordinary axis-aligned boxes.
+        eligible = ((table.rot[slots, 3] == 0)
+                    & (table.geometry_id[slots] < 0))
+        safe_slots = slots[eligible]
+        if len(safe_slots) < self._occlusion_min_rows:
+            return slots
+        groups = cell_cull.group_rows_by_cell(table.bounds[safe_slots])
         group_bounds, group_of_row, group_cells = groups
         if not len(group_bounds):
             return slots
@@ -361,7 +375,7 @@ class OcclusionMixin:
         self._occlusion_last_eye = cam.copy()
         jumped = (last_eye is not None
                   and float(np.dot(cam - last_eye, cam - last_eye))
-                  > 128.0 ** 2)
+                  > 32.0 ** 2)
         turned = (last_forward is not None
                   and sum(a * b for a, b in zip(forward, last_forward))
                   < self.MAX_TURN_COS)
@@ -379,15 +393,16 @@ class OcclusionMixin:
                 culled_groups[i] = True
         if not culled_groups.any():
             self._occlusion_drawn = len(slots)
-            self.occlusion_governor.record(len(slots), 0)
+            self.occlusion_governor.record(len(safe_slots), 0)
             return slots
 
-        keep = ~culled_groups[group_of_row]
+        keep = np.ones(len(slots), dtype=bool)
+        keep[eligible] = ~culled_groups[group_of_row]
         self._occlusion_skipped = int(np.count_nonzero(~keep))
         self._occlusion_drawn = len(slots) - self._occlusion_skipped
-        # The window's currency is rows: what fraction of the surviving rows
-        # the probes actually removed decides the next budget.
-        self.occlusion_governor.record(len(slots), self._occlusion_skipped)
+        # Score savings against *eligible* rows; a map full of protected
+        # convex geometry should not bury a useful small occlusion region.
+        self.occlusion_governor.record(len(safe_slots), self._occlusion_skipped)
         return slots[keep]
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
@@ -443,8 +458,15 @@ class OcclusionMixin:
         # selection remains GL-free and is exercised by headless tests.
         order = cell_cull.select_probe_groups(
             _group_of_row, self._occlusion_near_sq,
-            self._occlusion_budget, near_exempt_sq=self.NEAR_EXEMPT_SQ)
+            self._occlusion_budget, near_exempt_sq=self.NEAR_EXEMPT_SQ,
+            min_group_rows=self.MIN_PROBE_GROUP_ROWS)
         if not len(order) or len(self._occlusion_probes) >= self.occlusion_governor.max_probes:
+            return
+        # If all selected groups already have pending results, no shader,
+        # VAO or GL render-state change is warranted this frame.
+        order = [i for i in order if (int(group_cells[i, 0]),
+                                     int(group_cells[i, 1])) not in self._occlusion_probes]
+        if not order:
             return
 
         proj_view = projection * view
