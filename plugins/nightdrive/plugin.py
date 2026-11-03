@@ -205,7 +205,7 @@ class NightDriveSession:
         # The stock Fio HUD draws this line; no bespoke GPU text or UI thread
         # traffic is introduced for speed/score.
         ctx.set_prompt("NIGHT DRIVE  |  %03d km/h  |  $%05d  |  %s"
-                       "  |  W/S accelerate/brake  A/D steer  SPACE drift  R recover"
+                       "  |  SPACE drift  R recover"
                        % (int(abs(self.vehicle.speed) * 0.36), self.score,
                           target_text), priority=2)
 
