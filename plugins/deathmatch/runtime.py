@@ -65,6 +65,7 @@ class Fighter:
     captures: int = 0
     objective_score: int = 0
     role: str = "bot"
+    peer: str | None = None
 
 
 class DeathmatchSession:
@@ -103,6 +104,7 @@ class DeathmatchSession:
         self.settings = next((t for t in things if isinstance(t, DeathmatchSettings)), None)
         if self.settings is None:
             return False  # Enabling the plugin alone never changes ordinary maps.
+        self.map_data = self.logic.editor_state.get_level_data()
         props = self.settings.properties
         self.game = TeamGame(self)
         self.limit = int(number(props, "frag_limit", 20, 0, 10000))
@@ -166,6 +168,11 @@ class DeathmatchSession:
         original(delta)
         if not self._started:
             return
+        if self.network is not None:
+            with self.logic.session_runtime.monster_lock:
+                self.network.tick(max(0, min(float(delta), 0.1)))
+            if self.network.is_client:
+                return
         # Unlike Fio's regular plugin tick, this also runs during the native
         # death screen, so the respawn clock and surviving bots keep moving.
         if (self.logic.session_runtime.world_paused or self.logic.cutscene_runtime.state
@@ -178,6 +185,13 @@ class DeathmatchSession:
             self.step(delta)
 
     def _player_fire(self, original):
+        if self.network is not None and self.network.is_client:
+            import time
+            combat = self.logic.combat_runtime
+            if combat.shot_ready(time.perf_counter()) and not self.finished:
+                self.network.fire()
+                combat._last_player_shot_time = time.perf_counter()
+            return
         fighter = self.fighters["player"]
         if self.finished or not fighter.alive:
             return
@@ -197,6 +211,8 @@ class DeathmatchSession:
                 and self.clock >= fighter.protected_until)
 
     def _player_hit(self, original, weapon, entity):
+        if self.network is not None and self.network.is_client:
+            return False
         victim = self._fighter_for(entity)
         if victim is None:
             return original(weapon, entity)
@@ -236,6 +252,8 @@ class DeathmatchSession:
         return next((f for f in self.fighters.values() if f.entity is not None and id(f.entity) == owner), None)
 
     def _human_hit(self, original, damage):
+        if self.network is not None and self.network.is_client:
+            return
         victim = self.fighters["player"]
         if not self._can_damage(victim) or not self.game.can_damage(self._human_attacker or self.projectile_attacker(), victim):
             return
@@ -367,6 +385,7 @@ class DeathmatchSession:
     def respawn(self, fighter):
         import glm
         pos, angle = self.spawn_choice(fighter)
+        fighter.actor.set_ducked(False)
         fighter.actor.pos = glm.vec3(pos) + glm.vec3(0, fighter.actor.height / 2, 0)
         fighter.actor.velocity = glm.vec3(0)
         fighter.actor.angle, fighter.actor.pitch = angle, 0.0
@@ -388,6 +407,10 @@ class DeathmatchSession:
             self.give_loadout()
         else:
             fighter.supplies = BotSupplies(self, fighter)
+            if fighter.role == "remote":
+                fighter.supplies.weapons = {"gun1", "gun2"}
+                fighter.supplies.ammo = 24
+                fighter.fire_at = self.clock
             fighter.entity.pos = list(pos)
             fighter.entity.properties.update(
                 health=int(number(fighter.entity.properties, "max_health", 100, 1, 10000)),
@@ -429,8 +452,8 @@ class DeathmatchSession:
         self.publish()
         return f"Added {name} ({skill})."
 
-    def remove_bot(self, name=None):
-        bots = [f for f in self.fighters.values() if f.entity is not None]
+    def remove_bot(self, name=None, *, allow_remote=False):
+        bots = [f for f in self.fighters.values() if f.entity is not None and (allow_remote or f.role == "bot")]
         if not bots:
             return "No bots to remove."
         if name is None:
@@ -646,6 +669,9 @@ class DeathmatchSession:
         travelled = math.hypot(fighter.actor.pos.x - old.x, fighter.actor.pos.z - old.z)
         fighter.stuck = fighter.stuck + dt if glm.length(move) > 0.1 and travelled < dt * 15 else 0
         if fighter.stuck > 1.2:
+            if fighter.supplies.target is not None:
+                fighter.supplies.avoid_until[id(fighter.supplies.target)] = self.clock + 3
+                fighter.supplies.target, fighter.supplies.route = None, []
             fighter.escape_angle = fighter.actor.angle + math.pi * 0.6 * fighter.strafe
             fighter.escape_until = self.clock + 0.7
             fighter.route.clear()
@@ -657,17 +683,23 @@ class DeathmatchSession:
         if fighter.actor.pos.y < -4096:
             self.kill(fighter)
 
-    def fire_bot(self, shooter):
+    def fire_bot(self, shooter, selected=None, cadence=None):
         import glm
         if not shooter.alive or self.finished:
             return
         target = self.fighters.get(shooter.target)
         target_distance = distance(self.feet(shooter), self.feet(target)) if target else 400
-        weapon = shooter.supplies.weapon(target_distance) if shooter.supplies is not None else None
+        if selected is not None and selected in shooter.supplies.weapons:
+            item = self.logic.combat_runtime.items.resolve(selected)
+            weapon = item.weapon if item is not None else None
+            if weapon is not None and shooter.supplies.ammo < weapon.ammo_per_shot:
+                return
+        else:
+            weapon = shooter.supplies.weapon(target_distance) if shooter.supplies is not None else None
         if weapon is None:
             return
         shooter.supplies.ammo -= weapon.ammo_per_shot
-        shooter.fire_at = self.clock + max(weapon.cooldown, self.skill(shooter)[2])
+        shooter.fire_at = self.clock + max(weapon.cooldown, self.skill(shooter)[2] if cadence is None else cadence)
         shooter.shoot_until = self.clock + 0.12
         shooter.protected_until = 0
         self.noises.append((self.clock, self.feet(shooter), shooter.key))
@@ -725,8 +757,6 @@ class DeathmatchSession:
             if self.duration and self.clock >= self.duration:
                 self.finish("Time limit")
         if not self.finished:
-            if self.network is not None:
-                self.network.tick(dt)
             for fighter in self.fighters.values():
                 if not fighter.alive:
                     if self.clock >= fighter.respawn_at:
@@ -735,7 +765,10 @@ class DeathmatchSession:
                     if fighter.entity.properties.get("dead") or fighter.entity.properties.get("health", 1) <= 0:
                         self.kill(fighter)
                     else:
-                        self.update_bot(fighter, dt)
+                        if fighter.role == "remote" and self.network is not None:
+                            self.network.update_remote(fighter, dt)
+                        else:
+                            self.update_bot(fighter, dt)
                 elif self.logic.player_runtime.player_health <= 0 or self.logic.player_runtime.player_dead:
                     self.kill(fighter)
                 if self.finished:
@@ -764,6 +797,7 @@ class DeathmatchSession:
             teams=tuple((f.name, f.team, f.captures, f.carrying) for f in rows),
             flags=tuple((flag.team, "carried" if flag.carrier else "dropped" if flag.dropped else "home")
                         for flag in self.game.flags.values()) if self.game.ctf else (),
+            network_client=self.network is not None and self.network.is_client,
         )
 
     def stop(self):

@@ -84,6 +84,7 @@ class DeathmatchPlugin(FioPlugin):
         api.register_menu_action("Load Demo map", self._load_demo,
                                  "Load the bundled Deathmatch arena")
         api.register_menu_action("Load CTF map", self._load_ctf, "Load the red/blue CTF arena")
+        api.register_menu_action("LAN Multiplayer…", self._open_lobby, "Find or host LAN games")
         api.register_pause_menu_item("Restart Deathmatch", self._restart_menu)
         api.register_console_command("addbot", self._addbot,
                                      'addbot ["name"] [easy|normal|hard] — add a match bot')
@@ -101,6 +102,8 @@ class DeathmatchPlugin(FioPlugin):
         with logic._tick_lock, logic.session_runtime.monster_lock:
             if not session._started:
                 return "Start a Deathmatch arena in Play mode first."
+            if session.network is not None and session.network.is_client:
+                return "Run match console commands on the LAN host."
             return action(session)
 
     def _addbot(self, args, main_window, logic, play_mode):
@@ -163,6 +166,8 @@ class DeathmatchPlugin(FioPlugin):
         if lobby is None:
             lobby = LanLobby(main_window, self)
             main_window._deathmatch_lobby = lobby
+        elif not lobby.isVisible():
+            lobby.refresh_games()
         lobby.show()
         lobby.raise_()
 
@@ -293,6 +298,7 @@ class DeathmatchPlugin(FioPlugin):
                                  f"Respawning in {state['respawn']}…")
             if state["finished"]:
                 painter.drawText(QRect(0, y + 90 + extra + len(rows) * 25, width, 60), Qt.AlignCenter,
-                                 f"{state['winner']}  •  {state['reason']}\nPress R for a new match")
+                                 f"{state['winner']}  •  {state['reason']}\n" +
+                                 ("Host controls restart" if state["network_client"] else "Press R for a new match"))
         finally:
             painter.restore()

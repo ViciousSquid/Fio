@@ -20,6 +20,35 @@ select the pistol/shotgun. You receive both at spawn, with 24 shotgun rounds.
 Hold **Tab** for the full scoreboard. After a match, press **R** to restart,
 or choose **Restart Deathmatch** in the Escape pause menu at any time.
 
+## LAN multiplayer GUI
+
+Install the same Fio checkout and this plugin on each computer, then open
+**Plugins → deathmatch → LAN Multiplayer…**.
+
+- **Host:** enter your player/game names, select Deathmatch, Capture the Flag,
+  or Team Deathmatch, choose the bundled arena or your current map, set the
+  appropriate score limit and click **Host game**.
+- **Join:** click **Refresh LAN games**, select a discovered game and click
+  **Join selected game**. The list shows game type, player count and address.
+  Alternatively enter the host's LAN address and click **Join address**.
+- Choose red/blue or auto team assignment before joining. Up to eight human
+  connections are supported; bots can be added by the host's console.
+
+Discovery uses **UDP 27960**, and play uses **TCP 27961**. Permit those ports on
+the host's local firewall. Discovery broadcasts stay on the local subnet;
+direct address joining works when broadcasts are unavailable. This is LAN
+play, without Internet matchmaking. Peers must already have the referenced
+assets/plugins installed; the handshake transfers JSON map data, not code or
+asset files.
+
+The host simulates remote movement, combat, pickups, respawns and flags. Clients
+send movement/look/fire/use inputs and receive actor, inventory, pickup, score
+and flag snapshots, with local movement prediction and server correction.
+Host pauses and round results propagate to clients. The host controls restart
+and match console commands; client commands cannot change authoritative scores.
+Disconnects remove the remote player and drop any carried flag. Stopping Play
+closes the LAN session and restores the edited map.
+
 The demo ends at **15 frags or five minutes**. Tied frag totals produce a draw.
 Deaths respawn after three seconds. New spawns have 1.5 seconds of protection;
 firing ends your protection. A kill grants one frag; suicide or a world death
@@ -153,8 +182,9 @@ fighter IDs (`player` for the human); end events include `winner` and `reason`.
   code separately rather than placing it inside the package.
 - Native projectile damage retains its owner for plugin scoring. Bot and human
   projectile kills therefore receive the same credit as hitscan kills.
-- Single local human versus bots; network multiplayer and split-screen scoring
-  are not implemented. Dedicated arena maps are recommended.
+- LAN arenas replicate players, bots, pickup availability and flag state.
+  Arbitrary map scripts, moving world geometry, carried physics Props and
+  split-screen scoring are not synchronized; use dedicated arena maps.
 - Match scores and AI memory are per Play session. Native save-game loading
   does not restore this plugin's round state; restart the match after loading.
 
@@ -171,6 +201,12 @@ The suite uses real Fio engine objects for combat, physics, respawns, scoring,
 perception and routing. It includes an editor Play/HUD/Stop check and an entire
 simulated demo round. The dummy audio driver keeps headless runs independent
 of an audio device.
+
+The LAN tests also use real UDP/TCP loopback sockets and two native Fio logic
+sessions, including remote movement, shooting, pickup consumption, pause,
+respawn, disconnect and CTF capture replication. Run them with local socket
+access enabled. Cross-machine play and a full OpenGL visual playtest still need
+to be checked on the target LAN/graphics setup.
 
 The plugin includes Quake III-derived gameplay algorithms and is distributed
 under **GPL-2.0-or-later**. See `LICENSE` and `NOTICE.md` for the original id

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Item utility/travel-cost goals adapt Quake III botlib/be_ai_goal.c.
+# Copyright id Software; see NOTICE.md and LICENSE.
 """Bot inventory and utility-based collection of native Props."""
 import math
 
@@ -8,11 +11,13 @@ class BotSupplies:
     def __init__(self, session, fighter):
         self.session, self.fighter = session, fighter
         self.weapons = {"gun1"}
+        self.active = "gun1"
         self.ammo = self.armor = 0
         self.keys = set()
         self.target = None
         self.route = []
         self.check_at = 0.0
+        self.avoid_until = {}
 
     def reward(self, prop):
         p = prop.properties
@@ -40,7 +45,8 @@ class BotSupplies:
         s, f = self.session, self.fighter
         runtime = s.logic.prop_runtime
         if (not f.alive or not runtime._collectable(prop) or runtime.held is prop
-                or prop.properties.get("hidden") or id(prop) not in runtime._by_id):
+                or prop.properties.get("hidden") or id(prop) not in runtime._by_id
+                or self.avoid_until.get(id(prop), 0) > s.clock):
             return 0
         kind, item, amount = self.reward(prop)
         if kind == "health":
@@ -76,12 +82,13 @@ class BotSupplies:
             self.keys.add(item)
         elif effect == "weapon":
             self.weapons.add(item.id)
+            self.active = item.id
             self.ammo = max(self.ammo, item.weapon.ammo)
         else:
             return False
         return True
 
-    def collect_nearby(self):
+    def collect_nearby(self, use_allowed=True):
         s, f = self.session, self.fighter
         if not f.alive or s.finished:
             return
@@ -90,6 +97,8 @@ class BotSupplies:
             if self.utility(prop) <= 0:
                 continue
             activation = runtime._activation(prop)
+            if activation == "use" and not use_allowed:
+                continue
             origin = s.eye(f) if activation == "use" else tuple(f.actor.pos)
             reach = runtime.DEFAULT_COLLECT_USE_REACH if activation == "use" else runtime.DEFAULT_COLLECT_WALK_REACH
             dist = distance(origin, prop.pos)
