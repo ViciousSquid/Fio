@@ -1,6 +1,6 @@
 # Deathmatch for Fio
 
-A free-for-all game mode for Fio's **desktop editor Play mode**, using plugin
+A Deathmatch, Team Deathmatch and Capture the Flag plugin for Fio's **desktop editor Play mode**, using plugin
 API 1.7.0. No additional packages are required. The accompanying core changes
 in `engine/prop_runtime.py` and `engine/logic_combat.py` provide actor-aware
 pickup collection and projectile damage ownership; install those changes too.
@@ -72,6 +72,28 @@ match ends prepares them for the next round; press R to start it.
   Native Monster identity provides billboard sprites and weapon hit detection.
   The plugin reserves `disabled=True` on its bots so stock Monster AI cannot
   move or attack for them as well.
+
+## Teams and Capture the Flag
+
+Choose `deathmatch`, `teamdeathmatch`, or `ctf` in Match Settings. Team modes
+use red and blue; set `player_team`, bot `team` (`auto` balances), and spawn
+`team` (`any` is a fallback). `addbot "Ranger" hard blue` assigns a team.
+Friendly fire is off by default. Blue bots use Fio's flying monster `variant1`,
+red bots its base flying sprite; movement still uses player physics.
+
+**Plugins → deathmatch → Load CTF map** loads a playable two-base arena with
+visible red and blue flag sprites, team spawns, navigation and pickups. To
+author CTF, place exactly one red and one blue **CTF Flag** at floor height.
+Take the enemy flag to your base while your own flag is home to capture.
+Carriers drop flags on death or removal; touch your dropped flag to return it.
+Unattended flags return after `flag_return_time` (default 40 seconds, from
+Quake III). `capture_limit` defaults to three; zero disables it. Frag limits
+do not end CTF games. Team Deathmatch uses combined team frags and penalizes
+team kills/suicides. The scoreboard shows team scores and flag status.
+
+Bots attack, escort carriers, recover their own flag and defend base. The
+spawn selector adapts Quake III's randomized furthest-half algorithm, avoiding
+occupied spawns and preferring the participant's team spawns.
 
 ## Build your own arena
 
@@ -150,4 +172,6 @@ perception and routing. It includes an editor Play/HUD/Stop check and an entire
 simulated demo round. The dummy audio driver keeps headless runs independent
 of an audio device.
 
-The plugin is distributed under the MIT license; see `LICENSE`.
+The plugin includes Quake III-derived gameplay algorithms and is distributed
+under **GPL-2.0-or-later**. See `LICENSE` and `NOTICE.md` for the original id
+Software attribution and source references. Fio's existing MIT notices remain.

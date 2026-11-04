@@ -473,6 +473,111 @@ def test_round_restart_replenishes_consumed_pickups(arena):
     assert not prop.properties["collect_collected"]
 
 
+@pytest.fixture
+def ctf(arena):
+    from plugins.deathmatch.entities import DeathmatchFlag
+    logic, _, _, _ = arena
+    plugin = get_manager().find_plugin("deathmatch")
+    plugin.on_play_stop(logic)
+    settings = next(t for t in logic.editor_state.things if isinstance(t, DeathmatchSettings))
+    settings.properties.update(game_type="ctf", capture_limit=2)
+    logic.editor_state.things.extend([
+        DeathmatchFlag([-500, 0, 0], {"team": "red"}),
+        DeathmatchFlag([500, 0, 0], {"team": "blue"}),
+        DeathmatchSpawn([-600, 0, 0], {"team": "red"}),
+        DeathmatchSpawn([600, 0, 0], {"team": "blue"}),
+    ])
+    plugin.on_play_start(logic)
+    session = plugin._sessions[logic]
+    human = session.fighters["player"]
+    bot = next(f for f in session.fighters.values() if f.entity is not None)
+    yield logic, session, human, bot
+
+
+def test_ctf_steal_capture_drop_return_and_sprites(ctf):
+    logic, session, human, bot = ctf
+    assert human.team == "red" and bot.team == "blue"
+    assert bot.entity.properties["monster_type"] == "flying"
+    assert bot.entity.properties["variant"] == "variant1"
+    game = session.game
+    for flag in game.flags.values():
+        assert Path(flag.entity.properties["sprite_path"]).is_file()
+        assert flag.entity.properties["render_mode"] == "billboard"
+    place(human, [500, 0, 0])
+    game.step()
+    assert human.carrying == "blue"
+    assert game.flags["blue"].entity.pos[1] == 64  # Next update follows carrier.
+    game.step()
+    assert game.flags["blue"].entity.pos[1] == 160
+    place(human, [-500, 0, 0])
+    game.step()
+    assert game.scores["red"] == 1 and human.captures == 1
+    assert human.carrying is None and game.flags["blue"].pos == (500, 0, 0)
+    place(human, [500, 0, 0]); game.step()
+    place(human, [200, 0, 0])
+    session.kill(human, bot)
+    assert game.flags["blue"].dropped and game.flags["blue"].pos == (200, 0, 0)
+    place(bot, [200, 0, 0]); game.step()
+    assert not game.flags["blue"].dropped
+    assert game.flags["blue"].pos == (500, 0, 0)
+
+
+def test_ctf_cannot_capture_with_own_flag_missing_and_auto_return(ctf):
+    logic, session, human, bot = ctf
+    game = session.game
+    place(human, [500, 0, 0]); game.step()
+    place(bot, [-500, 0, 0]); game.step()
+    place(human, [-500, 0, 0]); game.step()
+    assert game.scores["red"] == 0 and human.carrying == "blue"
+    place(bot, [100, 0, 100]); game.drop(bot)
+    session.clock += game.return_delay + 0.1
+    game.step()
+    assert game.flags["red"].carrier is None and not game.flags["red"].dropped
+    assert game.scores["red"] == 1
+
+
+def test_ctf_capture_limit_ignores_fraglimit_and_restart_resets_flags(ctf):
+    logic, session, human, bot = ctf
+    session.limit = 1
+    human.frags = 50
+    session.check_frag_limit()
+    assert not session.finished
+    for _ in range(2):
+        place(human, [500, 0, 0]); session.game.step()
+        place(human, [-500, 0, 0]); session.game.step()
+    assert session.finished and session.result_winner == "Red"
+    session.restart()
+    assert not session.finished and session.game.scores == {"red": 0, "blue": 0}
+    assert all(not f.carrying for f in session.fighters.values())
+    assert session.feet(human)[0] == -600 and session.feet(bot)[0] == 600
+
+
+def test_teams_prevent_friendly_fire_and_teamkill_penalizes(arena):
+    logic, session, human, bot = arena
+    session.game.enabled = True
+    session.game.mode = "teamdeathmatch"
+    session.game.assign(human, "red"); session.game.assign(bot, "red")
+    logic.combat_runtime._handle_shooting()
+    assert bot.entity.properties["health"] == 100
+    session.perceive(bot)
+    assert bot.target is None
+    session.game.friendly_fire = True
+    for _ in range(4): logic.combat_runtime._handle_shooting()
+    assert human.frags == -1 and session.game.scores["red"] == -1
+
+
+def test_teamdeathmatch_team_frag_limit_and_ctf_bot_goals(arena, ctf):
+    logic, session, human, bot = ctf
+    assert session.game.objective(bot) == session.game.flags["red"].home
+    session.game.touch(bot, session.game.flags["red"])
+    assert session.game.objective(bot) == session.game.flags["blue"].home
+    session.game.drop(bot)
+    session.game.mode = "teamdeathmatch"; session.game.ctf = False
+    session.limit = 1
+    session.kill(bot, human)
+    assert session.finished and session.result_winner == "Red"
+
+
 def test_real_editor_play_hud_and_stop(fio_session):
     from types import SimpleNamespace
     from PyQt5.QtGui import QImage, QPainter

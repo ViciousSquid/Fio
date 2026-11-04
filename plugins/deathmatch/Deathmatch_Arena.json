@@ -847,6 +847,94 @@
         "state": "on",
         "casts_shadows": false
       }
+    },
+    {
+      "type": "prop",
+      "pos": [
+        -800,
+        50,
+        560
+      ],
+      "properties": {
+        "type": "prop",
+        "name": "Health_West",
+        "id": "6b0cfe8d-b443-5916-83fe-fda89a6a42a1",
+        "render_mode": "billboard",
+        "collect_enabled": true,
+        "collect_type": "health",
+        "collect_item": "gun2",
+        "collect_value": 50,
+        "collect_respawns": true,
+        "collect_respawn_time": 20,
+        "carry_enabled": false,
+        "no_collision": true
+      }
+    },
+    {
+      "type": "prop",
+      "pos": [
+        800,
+        50,
+        -560
+      ],
+      "properties": {
+        "type": "prop",
+        "name": "Health_East",
+        "id": "ef617c70-c2c9-5c00-a231-daee2f015e0b",
+        "render_mode": "billboard",
+        "collect_enabled": true,
+        "collect_type": "health",
+        "collect_item": "gun2",
+        "collect_value": 50,
+        "collect_respawns": true,
+        "collect_respawn_time": 20,
+        "carry_enabled": false,
+        "no_collision": true
+      }
+    },
+    {
+      "type": "prop",
+      "pos": [
+        0,
+        50,
+        560
+      ],
+      "properties": {
+        "type": "prop",
+        "name": "Shotgun_North",
+        "id": "952b60ea-5553-5aa7-a6e3-3d5e3f5e0608",
+        "render_mode": "billboard",
+        "collect_enabled": true,
+        "collect_type": "item",
+        "collect_item": "gun2",
+        "collect_value": 8,
+        "collect_respawns": true,
+        "collect_respawn_time": 20,
+        "carry_enabled": false,
+        "no_collision": true
+      }
+    },
+    {
+      "type": "prop",
+      "pos": [
+        0,
+        50,
+        -560
+      ],
+      "properties": {
+        "type": "prop",
+        "name": "Ammo_South",
+        "id": "0f58c5ed-9d5a-5070-b679-deb3c1b5247b",
+        "render_mode": "billboard",
+        "collect_enabled": true,
+        "collect_type": "ammo",
+        "collect_item": "gun2",
+        "collect_value": 8,
+        "collect_respawns": true,
+        "collect_respawn_time": 20,
+        "carry_enabled": false,
+        "no_collision": true
+      }
     }
   ]
 }

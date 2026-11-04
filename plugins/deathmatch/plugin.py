@@ -4,13 +4,13 @@ import shlex
 import weakref
 
 from plugins.api import FioPlugin, io_def, prop
-from .entities import DeathmatchSettings, DeathmatchBot, DeathmatchSpawn, DeathmatchNode
+from .entities import DeathmatchSettings, DeathmatchBot, DeathmatchSpawn, DeathmatchNode, DeathmatchFlag
 from .runtime import DeathmatchSession
 
 
 class DeathmatchPlugin(FioPlugin):
     name = "deathmatch"
-    version = "1.0.0"
+    version = "2.0.0"
     api_version = "1.7.0"
     description = "Free-for-all arena combat with tactical bot opponents."
     category = "Deathmatch"
@@ -24,10 +24,16 @@ class DeathmatchPlugin(FioPlugin):
         for cls, label in ((DeathmatchSettings, "Match Settings"),
                            (DeathmatchBot, "Bot Opponent"),
                            (DeathmatchSpawn, "Respawn Point"),
-                           (DeathmatchNode, "Navigation Node")):
+                           (DeathmatchNode, "Navigation Node"), (DeathmatchFlag, "CTF Flag")):
             api.register_entity(cls, menu_label=label)
         api.register_singleton_entity("deathmatchsettings")
         api.register_properties("deathmatchsettings", [
+            prop("game_type", type="enum", default="deathmatch", choices=["deathmatch", "teamdeathmatch", "ctf"]),
+            prop("player_team", type="enum", default="red", choices=["red", "blue"]),
+            prop("friendly_fire", type="bool", default=False),
+            prop("team_skins", type="bool", default=True),
+            prop("capture_limit", type="int", default=3, min=0, max=1000),
+            prop("flag_return_time", type="float", default=40.0, min=1, max=300),
             prop("frag_limit", type="int", default=20, min=0, max=10000,
                  help="Frags to win. Zero disables this limit."),
             prop("time_limit", type="float", default=300.0, min=0, max=86400,
@@ -39,6 +45,7 @@ class DeathmatchPlugin(FioPlugin):
             prop("show_hud", type="bool", default=True),
         ])
         api.register_properties("deathmatchbot", [
+            prop("team", type="enum", default="auto", choices=["auto", "red", "blue"]),
             prop("skill", type="enum", default="normal", choices=["easy", "normal", "hard"]),
             prop("max_health", type="int", default=100, min=1, max=10000),
             prop("vision_range", type="float", default=1800.0, min=64, max=10000),
@@ -47,12 +54,20 @@ class DeathmatchPlugin(FioPlugin):
             prop("preferred_range", type="float", default=480.0, min=100, max=2000),
         ])
         api.register_properties("deathmatchspawn", [
+            prop("team", type="enum", default="any", choices=["any", "red", "blue"]),
             prop("angle", type="float", default=0.0, min=-360, max=360,
                  help="Heading in degrees: 0 faces +Z, 90 faces +X."),
         ])
         api.register_properties("deathmatchnode", [
             prop("links", type="string", default="",
                  help="Comma-separated node names; connections work in both directions."),
+        ])
+        api.register_properties("deathmatchflag", [
+            prop("team", type="enum", default="red", choices=["red", "blue"]),
+        ])
+        api.register_io("deathmatchflag", inputs=[], outputs=[
+            io_def("OnTaken", "Flag picked up", "string"), io_def("OnDrop", "Carrier dropped flag"),
+            io_def("OnReturn", "Flag returned to base"), io_def("OnCapture", "Flag captured", "string"),
         ])
         api.register_io("deathmatchsettings", inputs=[
             io_def("Restart", "Start a fresh match"),
@@ -68,6 +83,7 @@ class DeathmatchPlugin(FioPlugin):
         ])
         api.register_menu_action("Load Demo map", self._load_demo,
                                  "Load the bundled Deathmatch arena")
+        api.register_menu_action("Load CTF map", self._load_ctf, "Load the red/blue CTF arena")
         api.register_pause_menu_item("Restart Deathmatch", self._restart_menu)
         api.register_console_command("addbot", self._addbot,
                                      'addbot ["name"] [easy|normal|hard] — add a match bot')
@@ -88,11 +104,14 @@ class DeathmatchPlugin(FioPlugin):
             return action(session)
 
     def _addbot(self, args, main_window, logic, play_mode):
-        usage = 'Usage: addbot ["name"] [easy|normal|hard]'
+        usage = 'Usage: addbot ["name"] [easy|normal|hard] [red|blue|auto]'
         try:
             words = shlex.split(args)
         except ValueError:
             return usage
+        team = "auto"
+        if words and words[-1].lower() in ("red", "blue", "auto"):
+            team = words.pop().lower()
         if len(words) > 2:
             return usage
         name, skill = None, "normal"
@@ -105,7 +124,7 @@ class DeathmatchPlugin(FioPlugin):
             name, skill = words[0], words[1].lower()
             if skill not in ("easy", "normal", "hard"):
                 return usage
-        return self._command(logic, play_mode, lambda s: s.add_bot(name, skill))
+        return self._command(logic, play_mode, lambda s: s.add_bot(name, skill, team))
 
     def _removebot(self, args, main_window, logic, play_mode):
         try:
@@ -133,6 +152,19 @@ class DeathmatchPlugin(FioPlugin):
     def _load_demo(self, main_window):
         if main_window.check_unsaved_changes():
             main_window.load_level_file(str(Path(__file__).with_name("Deathmatch_Arena.json")))
+
+    def _load_ctf(self, main_window):
+        if main_window.check_unsaved_changes():
+            main_window.load_level_file(str(Path(__file__).with_name("CTF_Arena.json")))
+
+    def _open_lobby(self, main_window):
+        from .lobby import LanLobby
+        lobby = getattr(main_window, "_deathmatch_lobby", None)
+        if lobby is None:
+            lobby = LanLobby(main_window, self)
+            main_window._deathmatch_lobby = lobby
+        lobby.show()
+        lobby.raise_()
 
     def _restart_menu(self, main_window, logic):
         session = self._sessions.get(logic)
@@ -201,7 +233,7 @@ class DeathmatchPlugin(FioPlugin):
         state = session.snapshot
         remaining = state["remaining"]
         timer = "No time limit" if remaining is None else f"{remaining // 60}:{remaining % 60:02d}"
-        ctx.set_prompt(f"Deathmatch | {timer} | TAB: scoreboard", priority=-10)
+        ctx.set_prompt(f"{state['mode'].upper()} | {timer} | TAB: scoreboard", priority=-10)
 
     def _draw_overlay(self, event):
         if not event.get("play_mode", False):
@@ -227,17 +259,31 @@ class DeathmatchPlugin(FioPlugin):
         painter.save()
         try:
             painter.setFont(QFont("Sans Serif", 11))
-            painter.fillRect(x, y, panel_width, 80 + len(rows) * 25, QColor(12, 18, 26, 220))
+            team_mode = state["mode"] in ("ctf", "teamdeathmatch")
+            extra = 48 if team_mode else 0
+            painter.fillRect(x, y, panel_width, 80 + extra + len(rows) * 25, QColor(12, 18, 26, 220))
             painter.setPen(QColor(114, 225, 205))
             remaining = state["remaining"]
             timer = "Unlimited" if remaining is None else f"{remaining // 60}:{remaining % 60:02d}"
-            painter.drawText(x + 14, y + 23, f"DEATHMATCH   {timer}   / {state['limit'] or '∞'} frags")
+            limit = state["capture_limit"] if state["mode"] == "ctf" else state["limit"]
+            unit = "captures" if state["mode"] == "ctf" else "frags"
+            painter.drawText(x + 14, y + 23, f"{state['mode'].upper()}   {timer}   / {limit or '∞'} {unit}")
+            if team_mode:
+                scores = dict(state["team_scores"])
+                painter.drawText(x + 14, y + 46, f"RED  {scores['red']}        BLUE  {scores['blue']}")
+                painter.drawText(x + 14, y + 67, "   ".join(f"{team}: {status}" for team, status in state["flags"]))
             painter.setPen(QColor(230, 235, 240))
-            painter.drawText(x + 14, y + 48, "PLAYER                         FRAGS    DEATHS")
+            painter.drawText(x + 14, y + 48 + extra, "PLAYER                         FRAGS    DEATHS")
+            teams = {n: (t, c, flag) for n, t, c, flag in state["teams"]}
             for index, (name, frags, deaths, alive) in enumerate(rows):
-                row_y = y + 72 + index * 25
-                painter.setPen(QColor(230, 235, 240) if alive else QColor(140, 145, 155))
-                painter.drawText(x + 14, row_y, name[:24])
+                row_y = y + 72 + extra + index * 25
+                team, captures, flag = teams.get(name, ("", 0, None))
+                color = QColor(255, 110, 120) if team == "red" else QColor(110, 170, 255) if team == "blue" else QColor(230, 235, 240)
+                painter.setPen(color if alive else QColor(140, 145, 155))
+                label = (f"[{team[0].upper()}] " if team else "") + name[:19]
+                if flag:
+                    label += " ⚑"
+                painter.drawText(x + 14, row_y, label)
                 painter.drawText(x + panel_width - 122, row_y, str(frags))
                 painter.drawText(x + panel_width - 44, row_y, str(deaths))
             for index, text in enumerate(state["feed"]):
@@ -246,7 +292,7 @@ class DeathmatchPlugin(FioPlugin):
                 painter.drawText(QRect(0, height // 2, width, 50), Qt.AlignCenter,
                                  f"Respawning in {state['respawn']}…")
             if state["finished"]:
-                painter.drawText(QRect(0, y + 90 + len(rows) * 25, width, 60), Qt.AlignCenter,
+                painter.drawText(QRect(0, y + 90 + extra + len(rows) * 25, width, 60), Qt.AlignCenter,
                                  f"{state['winner']}  •  {state['reason']}\nPress R for a new match")
         finally:
             painter.restore()

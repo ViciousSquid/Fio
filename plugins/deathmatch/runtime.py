@@ -13,6 +13,7 @@ import random
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
 from .navigation import Navigation, distance
 from .supplies import BotSupplies
+from .teams import TeamGame
 
 
 SKILLS = {
@@ -59,6 +60,11 @@ class Fighter:
     aim_error: tuple = (0.0, 0.0)
     mode: str = "roam"
     supplies: object = None
+    team: str = ""
+    carrying: str | None = None
+    captures: int = 0
+    objective_score: int = 0
+    role: str = "bot"
 
 
 class DeathmatchSession:
@@ -80,6 +86,7 @@ class DeathmatchSession:
         self.feed = []
         self.noises = []
         self.fighters = {}
+        self.network = None
 
     @staticmethod
     def supported(logic):
@@ -97,6 +104,7 @@ class DeathmatchSession:
         if self.settings is None:
             return False  # Enabling the plugin alone never changes ordinary maps.
         props = self.settings.properties
+        self.game = TeamGame(self)
         self.limit = int(number(props, "frag_limit", 20, 0, 10000))
         self.duration = number(props, "time_limit", 300, 0, 86400)
         self.delay = number(props, "respawn_delay", 3, 0.1, 30)
@@ -105,8 +113,11 @@ class DeathmatchSession:
         self.nav = Navigation([t for t in things if isinstance(t, DeathmatchNode)])
         self.spawns = [(tuple(t.pos), math.radians(number(t.properties, "angle", 0, -360, 360)))
                        for t in things if isinstance(t, DeathmatchSpawn)]
+        self.spawn_teams = {tuple(t.pos): t.properties.get("team", "any")
+                            for t in things if isinstance(t, DeathmatchSpawn)}
         rt = self.logic.player_runtime
-        self.fighters["player"] = Fighter("player", "You", actor=rt.player)
+        self.fighters["player"] = Fighter("player", "You", actor=rt.player, role="player")
+        self.game.assign(self.fighters["player"], props.get("player_team", "red"))
         self._player_state = {key: copy.deepcopy(getattr(rt, key)) for key in (
             "player_health", "player_max_health", "player_armor", "player_dead")}
         combat = self.logic.combat_runtime
@@ -123,6 +134,7 @@ class DeathmatchSession:
             key = str(entity.properties["id"])
             self.fighters[key] = Fighter(key, entity.name, entity, actor,
                                          strafe=self.rng.choice((-1.0, 1.0)))
+            self.game.assign(self.fighters[key], entity.properties.get("team", "auto"))
             # Reserved while the mode runs: stock AI must not drive these bots.
             entity.properties["disabled"] = True
         if not self.spawns:
@@ -188,7 +200,7 @@ class DeathmatchSession:
         victim = self._fighter_for(entity)
         if victim is None:
             return original(weapon, entity)
-        if not self._can_damage(victim):
+        if not self._can_damage(victim) or not self.game.can_damage(self.fighters["player"], victim):
             return False
         if victim.supplies is not None:
             from dataclasses import replace
@@ -202,11 +214,12 @@ class DeathmatchSession:
         victim = self._fighter_for(entity)
         if victim is None:
             return original(entity, damage, attacker=attacker)
-        if not self._can_damage(victim):
+        killer = self._fighter_for(attacker) or self.projectile_attacker()
+        if not self._can_damage(victim) or not self.game.can_damage(killer, victim):
             return
         result = original(entity, self.absorb(victim, damage), attacker=attacker)
         if entity.properties.get("dead"):
-            self.kill(victim, self._fighter_for(attacker) or self.projectile_attacker())
+            self.kill(victim, killer)
         return result
 
     def absorb(self, fighter, damage):
@@ -224,7 +237,7 @@ class DeathmatchSession:
 
     def _human_hit(self, original, damage):
         victim = self.fighters["player"]
-        if not self._can_damage(victim):
+        if not self._can_damage(victim) or not self.game.can_damage(self._human_attacker or self.projectile_attacker(), victim):
             return
         result = original(damage)
         if self.logic.player_runtime.player_health <= 0:
@@ -247,10 +260,19 @@ class DeathmatchSession:
         victim.deaths += 1
         victim.respawn_at = self.clock + self.delay
         victim.target, victim.route = None, []
+        was_carrier = victim.carrying is not None
+        self.game.drop(victim)
         if killer is not None and killer is not victim:
-            killer.frags += 1
+            friendly = self.game.allies(killer, victim)
+            killer.frags += -1 if friendly else 1
+            if self.game.mode == "teamdeathmatch":
+                self.game.scores[killer.team] += -1 if friendly else 1
+            if was_carrier and not friendly:
+                killer.objective_score += 2
         else:
             victim.frags -= 1
+            if self.game.mode == "teamdeathmatch":
+                self.game.scores[victim.team] -= 1
         if victim.entity is not None:
             victim.entity.properties.update(dead=True, hidden=True, is_shooting=False)
         text = f"{killer.name if killer else 'World'} > {victim.name}"
@@ -258,7 +280,13 @@ class DeathmatchSession:
         self.output(self.settings, "OnFrag", text)
         self.emit("deathmatch.frag", victim=victim.key,
                   killer=killer.key if killer else None)
-        if self.limit and killer is not None and killer.frags >= self.limit:
+        self.check_frag_limit()
+
+    def check_frag_limit(self):
+        if not self.limit or self.game.ctf:
+            return
+        values = self.game.scores.values() if self.game.enabled else (f.frags for f in self.fighters.values())
+        if any(v >= self.limit for v in values):
             self.finish("Frag limit")
 
     def finish(self, reason):
@@ -269,7 +297,7 @@ class DeathmatchSession:
             if fighter.entity is not None:
                 fighter.entity.properties["is_shooting"] = False
         leaders = self.leaders()
-        winner = "Draw" if len(leaders) != 1 else leaders[0].name
+        winner = self.game.winner() or ("Draw" if len(leaders) != 1 else leaders[0].name)
         self.result_winner = winner
         self.output(self.settings, "OnMatchEnd", winner)
         self.emit("deathmatch.end", winner=winner, reason=reason)
@@ -285,6 +313,7 @@ class DeathmatchSession:
         self.feed.clear()
         self.noises.clear()
         self.restart_requested = False
+        self.game.reset()
         self.logic.combat_runtime._monster_projectiles.clear()
         for prop in self.logic.prop_runtime.props:
             if prop.properties.get("collect_collected") and not self._pickup_initial.get(id(prop), False):
@@ -311,19 +340,29 @@ class DeathmatchSession:
     def spawn_choice(self, fighter):
         others = [f for f in self.fighters.values() if f is not fighter and f.alive]
         candidates = list(self.spawns)
+        if self.game.enabled:
+            own = [s for s in candidates if self.spawn_teams.get(s[0]) == fighter.team]
+            if own:
+                candidates = own
         self.rng.shuffle(candidates)
 
         def score(spawn):
             pos, _ = spawn
             # Clear occupancy outweighs exposure and distance. No telefrag.
             occupied = any(distance(pos, self.feet(other)) < 80 for other in others)
-            nearest = min((distance(pos, self.feet(o)) for o in others), default=10000)
+            enemies = [o for o in others if not self.game.allies(fighter, o)]
+            nearest = min((distance(pos, self.feet(o)) for o in enemies), default=10000)
             exposed = sum(self.visible_points((pos[0], pos[1] + 104, pos[2]), self.eye(o))
                           for o in others)
             return (not occupied, nearest - exposed * 400)
 
         valid = [s for s in candidates if self.clear(s[0], s[0])]
-        return max(valid or candidates, key=score)
+        ranked = sorted(valid or candidates, key=score, reverse=True)[:64]
+        empty = [s for s in ranked if score(s)[0]]
+        ranked = empty or ranked
+        # Quake III SelectRandomFurthestSpawnPoint: randomize the farthest half.
+        # Copyright id Software; GPL-2.0-or-later, see NOTICE.md.
+        return self.rng.choice(ranked[:max(1, len(ranked) // 2)])
 
     def respawn(self, fighter):
         import glm
@@ -363,7 +402,7 @@ class DeathmatchSession:
                 combat.give_weapon(item)
         combat.player_ammo = max(combat.player_ammo, 24)
 
-    def add_bot(self, name=None, skill="normal"):
+    def add_bot(self, name=None, skill="normal", team="auto"):
         """Called with the tick and monster locks held by the console handler."""
         from engine.player import Player
         existing = {f.name.casefold() for f in self.fighters.values()}
@@ -381,6 +420,7 @@ class DeathmatchSession:
         key = entity.properties["id"]
         fighter = Fighter(key, name, entity, actor, strafe=self.rng.choice((-1.0, 1.0)))
         self.fighters[key] = fighter
+        self.game.assign(fighter, team)
         self._spawned.append(entity)
         self.logic.editor_state.things.append(entity)
         self.respawn(fighter)
@@ -403,6 +443,7 @@ class DeathmatchSession:
                 return "Several bots have that name; use the bot's entity ID."
             fighter = matches[0]
         entity = fighter.entity
+        self.game.drop(fighter)
         scene = self.logic.editor_state.things
         if entity in scene:
             if entity not in self._spawned:
@@ -421,8 +462,8 @@ class DeathmatchSession:
 
     def set_frag_limit(self, value):
         self.limit = value
-        if not self.finished and value and any(f.frags >= value for f in self.fighters.values()):
-            self.finish("Frag limit")
+        if not self.finished:
+            self.check_frag_limit()
         self.publish()
         return "Frag limit: unlimited." if value == 0 else f"Frag limit: {value}."
 
@@ -473,7 +514,7 @@ class DeathmatchSession:
         half_fov = math.radians(number(props, "field_of_view", 160, 30, 360)) / 2
         seen = []
         for other in self.fighters.values():
-            if other is fighter or not other.alive:
+            if other is fighter or not other.alive or self.game.allies(fighter, other):
                 continue
             dist = distance(self.eye(fighter), self.eye(other))
             if dist > vision:
@@ -522,6 +563,7 @@ class DeathmatchSession:
                    and self.visible_points(self.eye(fighter), self.eye(target)))
         pos = self.feet(fighter)
         supply_goal = fighter.supplies.goal(visible)
+        objective = self.game.objective(fighter)
         retreat = self.health(fighter) < number(fighter.entity.properties, "max_health", 100, 1) * 0.3
         fighter.mode = "retreat" if retreat and visible else "fight" if visible else "search" if fighter.last_seen else "roam"
         goal = fighter.last_seen
@@ -534,6 +576,27 @@ class DeathmatchSession:
                 delta = glm.vec3(prop.pos) - glm.vec3(self.eye(fighter))
                 fighter.actor.pitch = math.atan2(delta.y, math.hypot(delta.x, delta.z))
             move = glm.vec3(0, 0, 1) if distance(pos, supply_goal) > 8 else glm.vec3(0)
+        elif objective is not None:
+            fighter.mode = "flag carrier" if fighter.carrying else "objective"
+            if self.clock >= fighter.route_at or not fighter.route:
+                fighter.route = self.nav.route(pos, objective, self.clear)
+                fighter.route_at = self.clock + 0.5
+            while fighter.route and distance(pos, fighter.route[0]) < 25:
+                fighter.route.pop(0)
+            move = glm.vec3(0)
+            if fighter.route:
+                waypoint = fighter.route[0]
+                if visible:
+                    offset = glm.vec3(self.eye(target)) - glm.vec3(self.eye(fighter))
+                    fighter.actor.angle = math.atan2(offset.x, offset.z) + fighter.aim_error[0]
+                    fighter.actor.pitch = math.atan2(offset.y, math.hypot(offset.x, offset.z)) + fighter.aim_error[1]
+                    if self.clock >= fighter.fire_at:
+                        self.fire_bot(fighter)
+                else:
+                    fighter.actor.angle = math.atan2(waypoint[0] - pos[0], waypoint[2] - pos[2])
+                    fighter.actor.pitch = 0
+                heading = math.atan2(waypoint[0] - pos[0], waypoint[2] - pos[2]) - fighter.actor.angle
+                move = glm.vec3(math.sin(heading), 0, math.cos(heading))
         elif visible:
             goal = self.feet(target)
             # Face the opponent while strafing/backpedalling.
@@ -662,6 +725,8 @@ class DeathmatchSession:
             if self.duration and self.clock >= self.duration:
                 self.finish("Time limit")
         if not self.finished:
+            if self.network is not None:
+                self.network.tick(dt)
             for fighter in self.fighters.values():
                 if not fighter.alive:
                     if self.clock >= fighter.respawn_at:
@@ -675,6 +740,8 @@ class DeathmatchSession:
                     self.kill(fighter)
                 if self.finished:
                     break
+            if not self.finished:
+                self.game.step()
         self.noises = [n for n in self.noises if self.clock - n[0] < 2]
         self.feed = [entry for entry in self.feed if self.clock < entry[0]][-4:]
         self.publish()
@@ -692,12 +759,21 @@ class DeathmatchSession:
             reason=self.reason, feed=tuple(text for _, text in self.feed),
             respawn=max(0, math.ceil(human.respawn_at - self.clock)) if not human.alive else 0,
             show=bool(self.settings.properties.get("show_hud", True)),
+            mode=self.game.mode, team_scores=tuple(self.game.scores.items()),
+            capture_limit=self.game.capture_limit,
+            teams=tuple((f.name, f.team, f.captures, f.carrying) for f in rows),
+            flags=tuple((flag.team, "carried" if flag.carrier else "dropped" if flag.dropped else "home")
+                        for flag in self.game.flags.values()) if self.game.ctf else (),
         )
 
     def stop(self):
         if not self._started:
             return
         self._started = False
+        if self.network is not None:
+            self.network.close()
+            self.network = None
+        self.game.stop()
         for obj, name, original, wrapped in reversed(self._hooks):
             if getattr(obj, name) is wrapped:
                 setattr(obj, name, original)
