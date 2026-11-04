@@ -1,0 +1,402 @@
+"""Integration coverage using native Fio logic, weapons, AI and physics."""
+import copy
+import json
+import math
+from pathlib import Path
+
+import glm
+import pytest
+
+from editor.editor_state import EditorState
+from editor.things import Thing
+from engine.logic_thread import LogicThread
+from engine.player import Player
+from engine.threaded_game_state import ThreadedGameState
+from plugins.manager import get_manager, load_plugins
+from plugins.deathmatch.entities import (
+    DeathmatchSettings, DeathmatchBot, DeathmatchSpawn, DeathmatchNode,
+)
+from plugins.deathmatch.navigation import Navigation
+
+pytestmark = pytest.mark.qt
+
+
+def brush(pos, size):
+    return dict(pos=pos, size=size, is_trigger=False)
+
+
+@pytest.fixture
+def arena():
+    load_plugins()
+    manager = get_manager()
+    plugin = manager.find_plugin("deathmatch")
+    was_enabled = plugin.enabled
+    manager.set_enabled(plugin, True)
+    state = EditorState()
+    state.brushes = [brush([0, -25, 0], [4000, 50, 4000])]
+    state.things = [DeathmatchSettings(properties={"frag_limit": 0, "spawn_protection": 0}),
+                    DeathmatchBot([0, 0, 300], {"name": "Bot"}),
+                    DeathmatchSpawn([0, 0, 0]), DeathmatchSpawn([0, 0, 600])]
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player = Player(0, 0)
+    logic.session_runtime.apply_play_mode(True)
+    session = plugin._sessions[logic]
+    human = session.fighters["player"]
+    bot = next(f for f in session.fighters.values() if f.entity is not None)
+    place(human, [0, 0, 0])
+    place(bot, [0, 0, 300])
+    yield logic, session, human, bot
+    logic.session_runtime.apply_play_mode(False)
+    logic.stop()
+    manager.set_enabled(plugin, was_enabled)
+
+
+def place(fighter, feet, angle=0):
+    fighter.actor.pos = glm.vec3(feet) + glm.vec3(0, fighter.actor.height / 2, 0)
+    fighter.actor.angle, fighter.actor.pitch = angle, 0
+    fighter.actor.velocity = glm.vec3(0)
+    fighter.protected_until = 0
+    if fighter.entity is not None:
+        fighter.entity.pos = feet[:]
+
+
+def walls(logic, *extra):
+    logic.editor_state.brushes = [logic.editor_state.brushes[0], *extra]
+    logic.collision_runtime.refresh_collision_brushes_cache()
+    logic.session_runtime.spatial_grid.populate(logic.editor_state.brushes)
+
+
+def test_registration_and_demo_round_trip(arena):
+    manager = get_manager()
+    assert manager.plugin_for_type("deathmatchbot").name == "deathmatch"
+    data = json.loads(Path(__file__).parents[1].joinpath("Deathmatch_Arena.json").read_text())
+    entities = [Thing.from_dict(record) for record in data["things"]]
+    assert sum(isinstance(t, DeathmatchBot) for t in entities) == 4
+    assert sum(isinstance(t, DeathmatchSettings) for t in entities) == 1
+    assert all(t is not None for t in entities)
+    assert manager.required_plugins_for_map(data)[0].name == "deathmatch"
+
+
+def test_native_hitscan_kill_counts_once_and_respawns(arena):
+    logic, session, human, bot = arena
+    for _ in range(4):
+        logic.combat_runtime._handle_shooting()
+    assert human.frags == 1 and bot.deaths == 1 and not bot.alive
+    assert bot.entity.properties["hidden"]
+    logic.combat_runtime._handle_shooting()
+    assert human.frags == 1
+    for _ in range(31):
+        session.step(0.1)
+    assert bot.alive and bot.entity.properties["health"] > 0
+    assert bot.entity.properties["disabled"]  # Stock AI never takes over.
+
+
+def test_native_shot_is_blocked_by_wall(arena):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    logic.combat_runtime._handle_shooting()
+    assert bot.entity.properties["health"] == 100
+    assert human.frags == 0
+
+
+def test_bot_shot_uses_occlusion_and_nearest_fighter(arena):
+    logic, session, human, bot = arena
+    place(bot, [0, 0, 300], math.pi)
+    session.fire_bot(bot)
+    assert logic.player_runtime.player_health == 82
+    logic.player_runtime.player_health = 100
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    session.fire_bot(bot)
+    assert logic.player_runtime.player_health == 100
+
+
+def test_bot_can_kill_player_and_native_death_ticks_respawn(arena):
+    logic, session, human, bot = arena
+    logic.player_runtime.player_health = 10
+    place(bot, [0, 0, 300], math.pi)
+    session.fire_bot(bot)
+    assert logic.player_runtime.player_dead and not human.alive
+    assert bot.frags == 1 and human.deaths == 1
+    bot.fire_at = 1000
+    for _ in range(32):
+        logic._tick_play_mode(0.1)
+    assert human.alive and not logic.player_runtime.player_dead
+    assert logic.player_runtime.player_health > 0
+
+
+def test_spawn_protection_blocks_damage_but_firing_ends_it(arena):
+    logic, session, human, bot = arena
+    human.protected_until = bot.protected_until = 10
+    logic.trigger_runtime._apply_player_damage(1000)
+    assert logic.player_runtime.player_health == 100
+    logic.combat_runtime._handle_shooting()
+    assert human.protected_until == 0
+    assert bot.entity.properties["health"] == 100
+    session.fire_bot(bot)
+    assert bot.protected_until == 0
+
+
+def test_bot_vs_bot_and_world_deaths_have_correct_credit(arena):
+    logic, session, human, bot = arena
+    # Native Monster damage carries the attacking bot for infighting.
+    logic.monster_ai._apply_monster_damage(bot.entity, 1000, attacker=bot.entity)
+    assert bot.frags == -1 and human.frags == 0 and bot.deaths == 1
+    session.respawn(bot)
+    logic.monster_ai._apply_monster_damage(bot.entity, 1000, attacker=None)
+    assert bot.frags == -2 and human.frags == 0 and bot.deaths == 2
+
+
+def test_bot_hits_nearest_opponent_and_gets_frag_credit(arena):
+    from plugins.deathmatch.runtime import Fighter
+    logic, session, human, bot = arena
+    entity = DeathmatchBot([0, 0, 150], {"name": "Other"})
+    actor = Player(0, 150)
+    other = Fighter(entity.properties["id"], "Other", entity, actor)
+    session.fighters[other.key] = other
+    place(other, [0, 0, 150])
+    place(bot, [0, 0, 300], math.pi)
+    for _ in range(6):
+        session.fire_bot(bot)
+    assert not other.alive and other.deaths == 1
+    assert bot.frags == 1 and human.frags == 0
+    assert logic.player_runtime.player_health == 100
+
+
+def test_frag_limit_latches_and_restart_clears_round(arena):
+    logic, session, human, bot = arena
+    session.limit = 1
+    for _ in range(4):
+        logic.combat_runtime._handle_shooting()
+    assert session.finished and session.snapshot["winner"] == "You"
+    logic.trigger_runtime._apply_player_damage(1000)
+    assert human.alive
+    session.restart_requested = True
+    session.step(0)
+    assert not session.finished
+    assert all(f.frags == f.deaths == 0 and f.alive for f in session.fighters.values())
+
+
+def test_time_limit_reports_tie_and_freezes_scores(arena):
+    logic, session, human, bot = arena
+    session.duration = 0.2
+    session.step(0.1)
+    session.step(0.1)
+    assert session.finished and session.snapshot["winner"] == "Draw"
+    session.kill(bot, human)
+    assert human.frags == 0 and bot.alive
+
+
+def test_pause_does_not_advance_match_or_respawn(arena):
+    logic, session, human, bot = arena
+    session.kill(human, bot)
+    clock = session.clock
+    logic.session_runtime.set_world_paused("test", True)
+    for _ in range(10):
+        logic._tick_play_mode(0.1)
+    assert session.clock == clock and not human.alive
+    logic.session_runtime.set_world_paused("test", False)
+
+
+def test_perception_does_not_see_through_walls_or_outside_fov(arena):
+    logic, session, human, bot = arena
+    place(bot, [0, 0, 300], math.pi)
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    session.perceive(bot)
+    assert bot.target is None
+    walls(logic)
+    bot.actor.angle = 0
+    session.perceive(bot)
+    assert bot.target is None
+    bot.actor.angle = math.pi
+    session.perceive(bot)
+    assert bot.target == "player" and bot.visible
+    assert bot.fire_at >= session.clock + session.skill(bot)[0]
+
+
+def test_hearing_investigates_position_without_granting_visibility(arena):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    session.noises.append((session.clock, session.feet(human), human.key))
+    session.perceive(bot)
+    assert bot.last_seen == session.feet(human)
+    assert bot.target is None and not bot.visible
+
+
+def test_waypoints_route_around_wall_and_reject_closed_path(arena):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    nodes = [DeathmatchNode([240, 0, 0], {"name": "a", "links": "b"}),
+             DeathmatchNode([240, 0, 300], {"name": "b"})]
+    nav = Navigation(nodes)
+    path = nav.route([0, 0, 0], [0, 0, 300], session.clear)
+    assert path and path[-1] == (0, 0, 300)
+    previous = [0, 0, 0]
+    for point in path:
+        assert session.clear(previous, point)
+        previous = point
+    walls(logic, brush([0, 120, 150], [1000, 240, 50]))
+    assert nav.route([0, 0, 0], [0, 0, 300], session.clear) == []
+
+
+def test_native_physics_keeps_bot_out_of_walls_and_on_floor(arena):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [1000, 240, 50]))
+    place(bot, [0, 0, 300], math.pi)
+    bot.last_seen = (0, 0, 0)
+    bot.memory_until = 10
+    for _ in range(120):
+        session.step(1 / 60)
+    assert bot.actor.pos.z >= 200
+    assert bot.actor.pos.y == pytest.approx(bot.actor.height / 2, abs=1)
+
+
+def test_disable_restores_authored_entities_and_methods(arena):
+    logic, session, human, bot = arena
+    authored = copy.deepcopy(session._authored[0][2])
+    original_tick = session._hooks[0][2]
+    session.stop()
+    assert bot.entity.properties == authored
+    assert logic._tick_play_mode == original_tick
+    session.stop()  # Idempotent cleanup.
+
+
+def test_ordinary_maps_are_inert(arena):
+    logic, session, human, bot = arena
+    plugin = get_manager().find_plugin("deathmatch")
+    plugin.on_play_stop(logic)
+    logic.editor_state.things = []
+    plugin.on_play_start(logic)
+    assert logic not in plugin._sessions
+
+
+def command(logic, name, args="", play_mode=True):
+    handled, reply = get_manager().dispatch_console_command(name, args, logic=logic, play_mode=play_mode)
+    assert handled
+    return reply
+
+
+def test_console_add_remove_updates_native_indexes_and_cleans_up(arena):
+    logic, session, human, bot = arena
+    original_scene = list(logic.editor_state.things)
+    assert command(logic, "addbot", '"New Challenger" hard') == "Added New Challenger (hard)."
+    added = next(f for f in session.fighters.values() if f.name == "New Challenger")
+    assert added.entity in logic.world_runtime.monster_things
+    assert added.entity.properties["skill"] == "hard"
+    assert added.entity.properties["disabled"] and added.alive
+    assert command(logic, "addbot") == "Added Bot 1 (normal)."
+    assert command(logic, "removebot") == "Removed Bot 1."
+    assert command(logic, "removebot", '"new challenger"') == "Removed New Challenger."
+    assert added.entity not in logic.world_runtime.monster_things
+    assert command(logic, "removebot", "Bot") == "Removed Bot."
+    assert command(logic, "removebot") == "No bots to remove."
+    session.stop()
+    assert logic.editor_state.things == original_scene
+    assert bot.entity in logic.world_runtime.monster_things
+
+
+def test_console_fraglimit_unlimited_query_validation_and_lowering(arena):
+    logic, session, human, bot = arena
+    assert command(logic, "fraglimit", "0") == "Frag limit: unlimited."
+    human.frags = 30
+    session.step(0)
+    assert not session.finished
+    assert command(logic, "fraglimit") == "Frag limit: unlimited."
+    for invalid in ("-1", "1.5", "nan", "20 extra", "999999999999999999999", "１２"):
+        command(logic, "fraglimit", invalid)
+        assert session.limit == 0
+    assert command(logic, "fraglimit", "25") == "Frag limit: 25."
+    assert session.finished and session.snapshot["winner"] == "You"
+    assert command(logic, "removebot") == "Removed Bot."
+    assert session.snapshot["winner"] == "You"  # Final result stays latched.
+    session.restart()
+    assert session.limit == 25
+
+
+def test_console_rejects_invalid_names_args_and_nonplay(arena):
+    logic, session, human, bot = arena
+    before = len(session.fighters)
+    assert "first" in command(logic, "addbot", play_mode=False)
+    assert "Usage" in command(logic, "addbot", '"unterminated')
+    assert "Usage" in command(logic, "addbot", "Name impossible")
+    assert "already exists" in command(logic, "addbot", "bot")
+    assert "1–48" in command(logic, "addbot", '""')
+    assert "Usage" in command(logic, "removebot", "one two")
+    assert len(session.fighters) == before
+    logic.session_runtime.set_world_paused("test", True)
+    assert command(logic, "addbot", "easy") == "Added Bot 1 (easy)."
+    assert command(logic, "removebot", session._spawned[-1].properties["id"]) == "Removed Bot 1."
+    logic.session_runtime.set_world_paused("test", False)
+
+
+def test_console_commands_only_exist_while_deathmatch_is_enabled(arena):
+    logic, session, human, bot = arena
+    manager = get_manager()
+    plugin = manager.find_plugin("deathmatch")
+    names = ("addbot", "removebot", "fraglimit")
+    assert all(manager.has_console_command(name) for name in names)
+    manager.set_enabled(plugin, False)
+    scene = list(logic.editor_state.things)
+    for name in names:
+        assert not manager.has_console_command(name)
+        assert name not in manager.console_commands()
+        assert manager.dispatch_console_command(name, "0", logic=logic, play_mode=True) == (False, None)
+    assert logic.editor_state.things == scene
+    assert logic not in plugin._sessions
+    manager.set_enabled(plugin, True)
+    assert all(manager.has_console_command(name) for name in names)
+    assert logic in plugin._sessions
+
+
+def test_real_editor_play_hud_and_stop(fio_session):
+    from types import SimpleNamespace
+    from PyQt5.QtGui import QImage, QPainter
+    from plugins.host import Event
+
+    editor = fio_session("plugins/deathmatch/Deathmatch_Arena.json")
+    bots = [t for t in editor.state.things if isinstance(t, DeathmatchBot)]
+    positions = [list(t.pos) for t in bots]
+    editor.start_play().step(120)
+    plugin = get_manager().find_plugin("deathmatch")
+    session = plugin._sessions[editor.logic]
+    assert session.clock == pytest.approx(2, abs=0.05)
+    assert len(session.snapshot["rows"]) == 5
+    image = QImage(800, 600, QImage.Format_ARGB32)
+    image.fill(0)
+    painter = QPainter(image)
+    try:
+        plugin._draw_overlay(Event("render.overlay", dict(
+            play_mode=True, viewport=SimpleNamespace(logic_thread=editor.logic),
+            painter=painter, width=800, height=600)))
+    finally:
+        painter.end()
+    assert image.pixelColor(15, 35).alpha() > 0
+    editor.stop_play()
+    assert editor.logic not in plugin._sessions
+    assert [list(t.pos) for t in bots] == positions
+
+
+def test_demo_bots_fight_over_a_full_round():
+    load_plugins()
+    manager = get_manager()
+    plugin = manager.find_plugin("deathmatch")
+    was_enabled = plugin.enabled
+    state = EditorState()
+    data = json.loads(Path(__file__).parents[1].joinpath("Deathmatch_Arena.json").read_text())
+    state.load_from_data(data)
+    manager.set_enabled(plugin, True)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player_runtime.player = Player(0, 850)
+    logic.session_runtime.apply_play_mode(True)
+    session = plugin._sessions[logic]
+    try:
+        for _ in range(6000):
+            logic._tick_play_mode(1 / 60)
+            if session.finished:
+                break
+        assert session.finished
+        assert session.reason == "Frag limit"
+        assert sum(f.deaths for f in session.fighters.values()) >= 15
+    finally:
+        logic.session_runtime.apply_play_mode(False)
+        logic.stop()
+        manager.set_enabled(plugin, was_enabled)
