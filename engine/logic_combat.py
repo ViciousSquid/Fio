@@ -64,6 +64,8 @@ class LogicCombat:
         #: Bumped each time a slot key takes a weapon the player has in hand.
         self.weapon_switch_serial = 0
         self._gunfire_events = []
+        # Scoped to a projectile's damage callback, for actor-aware plugins.
+        self.projectile_damage_owner = None
 
     # -- the player's weapons -------------------------------------------------
 
@@ -560,6 +562,17 @@ class LogicCombat:
             else:
                 self._update_monster_projectiles_dense(projectiles, delta)
 
+    def _projectile_damage(self, victim, damage, owner_id):
+        previous = self.projectile_damage_owner
+        self.projectile_damage_owner = int(owner_id)
+        try:
+            if victim is None:
+                self.logic.trigger_runtime._apply_player_damage(damage)
+            else:
+                self.logic.monster_ai._apply_monster_damage(victim, damage, attacker=None)
+        finally:
+            self.projectile_damage_owner = previous
+
 
     def _update_monster_projectiles_scalar(self, projectiles, delta: float):
         """Advance a small projectile set row-by-row without batch allocations."""
@@ -628,7 +641,7 @@ class LogicCombat:
                 dz = pz - float(player_pos[2])
                 if dx * dx + dy * dy + dz * dz < player_radius_sq:
                     damage = float(projectiles.damage[i])
-                    logic.trigger_runtime._apply_player_damage(damage)
+                    self._projectile_damage(None, damage, owner_id)
                     if logic.monster_ai.monster_debug_active:
                         debug_log(
                             "MonsterAI",
@@ -665,9 +678,7 @@ class LogicCombat:
 
             if hit_monster is not None:
                 damage = float(projectiles.damage[i])
-                logic.monster_ai._apply_monster_damage(
-                    hit_monster, damage, attacker=None
-                )
+                self._projectile_damage(hit_monster, damage, owner_id)
                 if logic.monster_ai.monster_debug_active:
                     name = hit_monster.properties.get('name', '?')
                     debug_log(
@@ -800,7 +811,7 @@ class LogicCombat:
                 and not logic.player_runtime.player_dead
             ):
                 damage = float(projectiles.damage[i])
-                logic.trigger_runtime._apply_player_damage(damage)
+                self._projectile_damage(None, damage, int(projectiles.owner_id[i]))
                 if logic.monster_ai.monster_debug_active:
                     debug_log(
                         "MonsterAI",
@@ -818,9 +829,7 @@ class LogicCombat:
                     break
             if hit_monster is not None:
                 damage = float(projectiles.damage[i])
-                logic.monster_ai._apply_monster_damage(
-                    hit_monster, damage, attacker=None
-                )
+                self._projectile_damage(hit_monster, damage, int(projectiles.owner_id[i]))
                 if logic.monster_ai.monster_debug_active:
                     name = hit_monster.properties.get('name', '?')
                     debug_log(

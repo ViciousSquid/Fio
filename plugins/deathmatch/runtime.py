@@ -12,13 +12,14 @@ import random
 
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
 from .navigation import Navigation, distance
+from .supplies import BotSupplies
 
 
 SKILLS = {
-    # reaction seconds, aim error degrees, shot interval, damage
-    "easy": (0.65, 8.0, 0.85, 12),
-    "normal": (0.35, 4.0, 0.60, 18),
-    "hard": (0.18, 1.5, 0.42, 22),
+    # reaction seconds, aim error degrees, minimum shot interval
+    "easy": (0.65, 8.0, 0.85),
+    "normal": (0.35, 4.0, 0.60),
+    "hard": (0.18, 1.5, 0.42),
 }
 
 
@@ -57,6 +58,7 @@ class Fighter:
     escape_angle: float = 0.0
     aim_error: tuple = (0.0, 0.0)
     mode: str = "roam"
+    supplies: object = None
 
 
 class DeathmatchSession:
@@ -126,6 +128,8 @@ class DeathmatchSession:
         if not self.spawns:
             self.spawns = [(self.feet(f), f.actor.angle) for f in self.fighters.values()]
         self._install_hooks()
+        self._pickup_initial = {id(p): p.properties.get("collect_collected", False)
+                                for p in self.logic.prop_runtime.props}
         self.restart()
         return True
 
@@ -146,6 +150,7 @@ class DeathmatchSession:
         self._hook(self.logic.combat_runtime, "_handle_shooting", self._player_fire)
 
     def _engine_tick(self, original, delta):
+        was_dead = self.logic.player_runtime.player_dead
         original(delta)
         if not self._started:
             return
@@ -155,6 +160,9 @@ class DeathmatchSession:
                 or self.logic.interaction_runtime.level_complete_ui):
             return
         with self.logic.session_runtime.monster_lock:
+            if was_dead:
+                self.logic.prop_runtime._update_respawns(delta)
+                self.logic.prop_runtime._update_respawn_fades(delta)
             self.step(delta)
 
     def _player_fire(self, original):
@@ -182,6 +190,9 @@ class DeathmatchSession:
             return original(weapon, entity)
         if not self._can_damage(victim):
             return False
+        if victim.supplies is not None:
+            from dataclasses import replace
+            weapon = replace(weapon, damage=self.absorb(victim, weapon.damage))
         result = original(weapon, entity)
         if entity.properties.get("dead"):
             self.kill(victim, self.fighters["player"])
@@ -193,12 +204,23 @@ class DeathmatchSession:
             return original(entity, damage, attacker=attacker)
         if not self._can_damage(victim):
             return
-        result = original(entity, damage, attacker=attacker)
+        result = original(entity, self.absorb(victim, damage), attacker=attacker)
         if entity.properties.get("dead"):
-            # Core projectiles currently discard owner information here. An
-            # unknown attacker is a world kill, never a guessed player frag.
-            self.kill(victim, self._fighter_for(attacker))
+            self.kill(victim, self._fighter_for(attacker) or self.projectile_attacker())
         return result
+
+    def absorb(self, fighter, damage):
+        if fighter.supplies is None:
+            return damage
+        absorbed = min(fighter.supplies.armor, max(0, damage))
+        fighter.supplies.armor -= absorbed
+        return damage - absorbed
+
+    def projectile_attacker(self):
+        owner = self.logic.combat_runtime.projectile_damage_owner
+        if owner == 0:
+            return self.fighters["player"]
+        return next((f for f in self.fighters.values() if f.entity is not None and id(f.entity) == owner), None)
 
     def _human_hit(self, original, damage):
         victim = self.fighters["player"]
@@ -207,7 +229,7 @@ class DeathmatchSession:
         result = original(damage)
         if self.logic.player_runtime.player_health <= 0:
             self.logic.player_runtime.player_dead = True
-            self.kill(victim, self._human_attacker)
+            self.kill(victim, self._human_attacker or self.projectile_attacker())
         return result
 
     def output(self, entity, name, value=None):
@@ -263,6 +285,10 @@ class DeathmatchSession:
         self.feed.clear()
         self.noises.clear()
         self.restart_requested = False
+        self.logic.combat_runtime._monster_projectiles.clear()
+        for prop in self.logic.prop_runtime.props:
+            if prop.properties.get("collect_collected") and not self._pickup_initial.get(id(prop), False):
+                self.logic.prop_runtime.respawn_prop(prop)
         # Mark everyone out before selecting spawns, then reserve each spawn
         # with the fighters already placed there.
         for fighter in self.fighters.values():
@@ -322,6 +348,7 @@ class DeathmatchSession:
             fighter.actor.set_ducked(False)
             self.give_loadout()
         else:
+            fighter.supplies = BotSupplies(self, fighter)
             fighter.entity.pos = list(pos)
             fighter.entity.properties.update(
                 health=int(number(fighter.entity.properties, "max_health", 100, 1, 10000)),
@@ -494,10 +521,20 @@ class DeathmatchSession:
         visible = (fighter.visible and target is not None and target.alive
                    and self.visible_points(self.eye(fighter), self.eye(target)))
         pos = self.feet(fighter)
+        supply_goal = fighter.supplies.goal(visible)
         retreat = self.health(fighter) < number(fighter.entity.properties, "max_health", 100, 1) * 0.3
         fighter.mode = "retreat" if retreat and visible else "fight" if visible else "search" if fighter.last_seen else "roam"
         goal = fighter.last_seen
-        if visible:
+        if supply_goal is not None:
+            fighter.mode = "resupply"
+            fighter.actor.angle = math.atan2(supply_goal[0] - pos[0], supply_goal[2] - pos[2])
+            fighter.actor.pitch = 0
+            prop = fighter.supplies.target
+            if prop is not None and distance(self.eye(fighter), prop.pos) < 80:
+                delta = glm.vec3(prop.pos) - glm.vec3(self.eye(fighter))
+                fighter.actor.pitch = math.atan2(delta.y, math.hypot(delta.x, delta.z))
+            move = glm.vec3(0, 0, 1) if distance(pos, supply_goal) > 8 else glm.vec3(0)
+        elif visible:
             goal = self.feet(target)
             # Face the opponent while strafing/backpedalling.
             offset = glm.vec3(self.eye(target)) - glm.vec3(self.eye(fighter))
@@ -552,13 +589,22 @@ class DeathmatchSession:
             fighter.route_at = self.clock + 0.5
             fighter.stuck = 0
         fighter.entity.pos = list(self.feet(fighter))
+        fighter.supplies.collect_nearby()
         fighter.entity.properties["is_shooting"] = self.clock < fighter.shoot_until
         if fighter.actor.pos.y < -4096:
             self.kill(fighter)
 
     def fire_bot(self, shooter):
         import glm
-        shooter.fire_at = self.clock + self.skill(shooter)[2]
+        if not shooter.alive or self.finished:
+            return
+        target = self.fighters.get(shooter.target)
+        target_distance = distance(self.feet(shooter), self.feet(target)) if target else 400
+        weapon = shooter.supplies.weapon(target_distance) if shooter.supplies is not None else None
+        if weapon is None:
+            return
+        shooter.supplies.ammo -= weapon.ammo_per_shot
+        shooter.fire_at = self.clock + max(weapon.cooldown, self.skill(shooter)[2])
         shooter.shoot_until = self.clock + 0.12
         shooter.protected_until = 0
         self.noises.append((self.clock, self.feet(shooter), shooter.key))
@@ -567,7 +613,21 @@ class DeathmatchSession:
         direction = glm.vec3(math.sin(yaw) * math.cos(pitch), math.sin(pitch),
                              math.cos(yaw) * math.cos(pitch))
         combat = self.logic.combat_runtime
-        reach = number(shooter.entity.properties, "vision_range", 1800, 64, 10000)
+        self.logic.game_state.queue_sound({"file": weapon.sound, "volume": 0.6,
+                                            "position": tuple(origin), "radius": 1200})
+        if weapon.mode == "projectile":
+            speed = weapon.projectile_speed
+            combat._add_monster_projectile(tuple(origin), tuple(direction * speed), id(shooter.entity),
+                                           weapon.damage, min(weapon.range, 2048) / speed)
+            return
+        for pellet in range(weapon.pellets):
+            ray = combat._scatter(direction, weapon.spread, pellet)
+            self.fire_ray(shooter, weapon, origin, ray)
+
+    def fire_ray(self, shooter, weapon, origin, direction):
+        import glm
+        combat = self.logic.combat_runtime
+        reach = weapon.range
         wall, _ = combat._trace_brushes(self.logic.collision_runtime.collision_rows(), origin, direction, reach)
         victim, nearest = None, min(wall, reach)
         for other in self.fighters.values():
@@ -578,11 +638,9 @@ class DeathmatchSession:
             hit, dist = combat.intersect_ray_aabb(origin, direction, center - half, center + half, reach)
             if hit and dist < nearest:
                 victim, nearest = other, dist
-        self.logic.game_state.queue_sound({"file": "shoot.wav", "volume": 0.6,
-                                            "position": tuple(origin), "radius": 1200})
         if victim is None:
             return
-        damage = self.skill(shooter)[3]
+        damage = weapon.damage
         if victim.entity is not None:
             self.logic.monster_ai._apply_monster_damage(victim.entity, damage, attacker=shooter.entity)
         else:

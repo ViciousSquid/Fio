@@ -103,7 +103,7 @@ def test_bot_shot_uses_occlusion_and_nearest_fighter(arena):
     logic, session, human, bot = arena
     place(bot, [0, 0, 300], math.pi)
     session.fire_bot(bot)
-    assert logic.player_runtime.player_health == 82
+    assert logic.player_runtime.player_health == 75
     logic.player_runtime.player_health = 100
     walls(logic, brush([0, 120, 150], [300, 240, 50]))
     session.fire_bot(bot)
@@ -155,7 +155,7 @@ def test_bot_hits_nearest_opponent_and_gets_frag_credit(arena):
     session.fighters[other.key] = other
     place(other, [0, 0, 150])
     place(bot, [0, 0, 300], math.pi)
-    for _ in range(6):
+    for _ in range(4):
         session.fire_bot(bot)
     assert not other.alive and other.deaths == 1
     assert bot.frags == 1 and human.frags == 0
@@ -345,6 +345,132 @@ def test_console_commands_only_exist_while_deathmatch_is_enabled(arena):
     manager.set_enabled(plugin, True)
     assert all(manager.has_console_command(name) for name in names)
     assert logic in plugin._sessions
+
+
+def pickup(logic, position, **properties):
+    from engine.prop_entity import Prop
+    entity = Prop(position, dict(collect_enabled=True, **properties))
+    logic.editor_state.things.append(entity)
+    logic.world_runtime.build_entity_caches()
+    return entity
+
+
+def test_bot_health_prop_grants_only_bot_and_shares_respawn(arena):
+    logic, session, human, bot = arena
+    bot.entity.properties["health"] = 30
+    prop = pickup(logic, [0, 50, 300], collect_type="health", collect_value=50,
+                  collect_respawns=True, collect_respawn_time=0.2)
+    human_health = logic.player_runtime.player_health
+    bot.supplies.collect_nearby()
+    assert bot.entity.properties["health"] == 80
+    assert logic.player_runtime.player_health == human_health
+    assert prop.properties["collect_collected"]
+    assert not logic.prop_runtime.collect_prop(prop)  # Human cannot claim it too.
+    logic.prop_runtime._update_respawns(0.21)
+    assert not prop.properties["collect_collected"]
+    bot.supplies.collect_nearby()
+    assert bot.entity.properties["health"] == 100
+
+
+def test_full_health_disabled_and_occluded_props_are_not_consumed(arena):
+    logic, session, human, bot = arena
+    prop = pickup(logic, [0, 50, 300], collect_type="health")
+    bot.supplies.collect_nearby()
+    assert not prop.properties["collect_collected"]
+    bot.entity.properties["health"] = 20
+    prop.properties["disabled"] = True
+    bot.supplies.collect_nearby()
+    assert not prop.properties["collect_collected"]
+    prop.properties["disabled"] = False
+    prop.pos = [0, 50, 320]
+    walls(logic, brush([0, 60, 310], [300, 120, 4]))
+    bot.supplies.collect_nearby()
+    assert not prop.properties["collect_collected"]
+
+
+def test_bot_seeks_health_and_collects_use_props(arena):
+    logic, session, human, bot = arena
+    place(human, [-1500, 0, -1500])
+    bot.entity.properties["health"] = 20
+    prop = pickup(logic, [0, 50, 500], collect_type="health", collect_value=50)
+    for _ in range(120):
+        session.step(1 / 60)
+        if prop.properties["collect_collected"]:
+            break
+    assert prop.properties["collect_collected"]
+    assert bot.entity.properties["health"] == 70
+    place(bot, [0, 0, 300])
+    use_prop = pickup(logic, [0, 80, 330], collect_type="health", collect_activation="use")
+    bot.supplies.collect_nearby()
+    assert use_prop.properties["collect_collected"]
+
+
+def test_bot_uses_collected_weapon_ammo_then_falls_back(arena):
+    logic, session, human, bot = arena
+    human_loadout = (set(logic.combat_runtime.weapons), logic.combat_runtime.player_ammo)
+    gun = pickup(logic, [0, 50, 300], collect_type="item", collect_item="gun2")
+    bot.supplies.collect_nearby()
+    assert gun.properties["collect_collected"] and bot.supplies.ammo == 8
+    assert bot.supplies.weapon().damage == 75
+    place(bot, [0, 0, 300], math.pi)
+    session.fire_bot(bot)
+    assert logic.player_runtime.player_health == 25
+    assert bot.supplies.ammo == 7
+    assert session.clock + 1 == bot.fire_at
+    assert (logic.combat_runtime.weapons, logic.combat_runtime.player_ammo) == human_loadout
+    bot.supplies.ammo = 0
+    assert bot.supplies.weapon().damage == 25
+    ammo = pickup(logic, [0, 50, 300], collect_type="ammo", collect_value=8)
+    bot.supplies.collect_nearby()
+    assert ammo.properties["collect_collected"] and bot.supplies.ammo == 8
+    session.respawn(bot)
+    assert bot.supplies.weapons == {"gun1"} and bot.supplies.ammo == 0
+
+
+def test_bot_custom_armor_pickup_absorbs_native_player_damage(arena):
+    from engine.items import default_definition
+    logic, session, human, bot = arena
+    definition = default_definition("custom1")
+    definition.update(kind="pickup", pickup=dict(activation="walk_over", effect="armor", amount=40,
+                                                respawns=True, respawn_time=1, item_id="", key_name=""))
+    logic.editor_state.item_definitions.set_custom("custom1", definition)
+    logic.combat_runtime.items = logic.editor_state.item_definitions.registry()
+    prop = pickup(logic, [0, 50, 300], collect_type="item", collect_item="custom1")
+    bot.supplies.collect_nearby()
+    assert bot.supplies.armor == 40
+    assert id(prop) in logic.prop_runtime.respawn_timers
+    logic.combat_runtime._handle_shooting()
+    assert bot.entity.properties["health"] == 100 and bot.supplies.armor == 15
+
+
+def test_collected_projectile_weapon_keeps_bot_kill_credit(arena):
+    from engine.items import default_definition
+    logic, session, human, bot = arena
+    definition = default_definition("custom1")
+    definition["weapon"].update(mode="projectile", damage=120, projectile_speed=900,
+                                 cooldown=1, ammo=5, ammo_per_shot=1)
+    logic.editor_state.item_definitions.set_custom("custom1", definition)
+    logic.combat_runtime.items = logic.editor_state.item_definitions.registry()
+    pickup(logic, [0, 50, 300], collect_type="item", collect_item="custom1")
+    bot.supplies.collect_nearby()
+    place(bot, [0, 0, 300], math.pi)
+    bot.actor.pitch = -math.atan2(40, 300)
+    session.fire_bot(bot)
+    assert len(logic.combat_runtime._monster_projectiles) == 1
+    for _ in range(30):
+        logic.combat_runtime._update_monster_projectiles(1 / 60)
+    assert human.deaths == 1 and bot.frags == 1
+    assert logic.combat_runtime.projectile_damage_owner is None
+
+
+def test_round_restart_replenishes_consumed_pickups(arena):
+    logic, session, human, bot = arena
+    bot.entity.properties["health"] = 20
+    prop = pickup(logic, [0, 50, 300], collect_type="health")
+    bot.supplies.collect_nearby()
+    assert prop.properties["collect_collected"]
+    session.restart()
+    assert not prop.properties["collect_collected"]
 
 
 def test_real_editor_play_hud_and_stop(fio_session):

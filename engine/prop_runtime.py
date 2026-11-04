@@ -229,10 +229,13 @@ class PropSession:
 
     # -- I/O --------------------------------------------------------------
 
-    def _fire(self, prop, output):
+    def _fire(self, prop, output, activator=None):
         io = self.logic.io_manager
         if io is not None:
-            io.fire_output(prop, output)
+            if activator is None:
+                io.fire_output(prop, output)
+            else:
+                io.fire_output(prop, output, activator_entity=activator)
 
     def _on_rest(self, prop):
         self._fire(prop, "OnRest")
@@ -472,7 +475,7 @@ class PropSession:
             self.logic.combat_runtime.give_weapon(weapon)
         return True
 
-    def _collect(self, prop):
+    def _collect(self, prop, *, grant=None, collector=None):
         """Collect *prop*; False (and nothing happens) if it gives nothing."""
         p = prop.properties
         collect_type = p.get("collect_type", "health")
@@ -484,7 +487,14 @@ class PropSession:
             value_num = 25
 
         item = None
-        if collect_type == "health":
+        if grant is not None:
+            item = self._item(prop) if collect_type == "item" else None
+            if collect_type == "item" and item is None:
+                self._report_unknown_item(prop)
+                return False
+            if not grant(collect_type, value_num, item):
+                return False
+        elif collect_type == "health":
             self._give_health(value_num)
         elif collect_type == "key":
             self._give_key(p.get("collect_key_name", ""))
@@ -504,7 +514,7 @@ class PropSession:
         if self.physics is not None:
             self.physics.set_kinematic(prop, True)
 
-        self._fire(prop, "OnCollected")
+        self._fire(prop, "OnCollected", activator=collector)
 
         emit = self.logic._plugin_emit
         if emit is not None:
@@ -513,6 +523,7 @@ class PropSession:
                 prop=prop,
                 collect_type=collect_type,
                 value=value_num,
+                **({"collector": collector} if collector is not None else {}),
             )
 
         if item is not None and item.pickup is not None:
@@ -543,13 +554,21 @@ class PropSession:
         print(f"[Props] {prop.properties.get('name', 'Prop')} gives item "
               f"{item_id!r}, but {reason}")
 
-    def collect_prop(self, prop):
-        """Collect *prop* through the same path as player collection."""
+    def collect_prop(self, prop, *, grant=None, collector=None):
+        """Collect a registered Prop, optionally for a non-player actor.
+
+        ``grant(kind, amount, compiled_item) -> bool`` applies that actor's
+        reward; False leaves the Prop untouched. The Prop domain still owns
+        consumption, physics, I/O and respawns. ``collector`` is the entity
+        supplied as the OnCollected activator and prop_collected event actor.
+        Without these arguments, the native human-player path is unchanged.
+        Call on the logic thread (or while holding the session tick lock).
+        """
         if prop is None or id(prop) not in self._by_id:
             return False
         if not self._collectable(prop):
             return False
-        return self._collect(prop)
+        return self._collect(prop, grant=grant, collector=collector)
 
     def respawn_prop(self, prop):
         """Force a collected Prop back into its authored live state."""

@@ -1,7 +1,9 @@
 # Deathmatch for Fio
 
 A free-for-all game mode for Fio's **desktop editor Play mode**, using plugin
-API 1.7.0. No core engine edits or additional packages are required.
+API 1.7.0. No additional packages are required. The accompanying core changes
+in `engine/prop_runtime.py` and `engine/logic_combat.py` provide actor-aware
+pickup collection and projectile damage ownership; install those changes too.
 
 ## Install and play
 
@@ -58,8 +60,14 @@ match ends prepares them for the next round; press R to start it.
   clearance before using an edge. Bots explore when they have no target.
 - Bots strafe, keep a preferred fighting distance, backpedal at low health,
   and attempt a jump and a short detour when stuck.
-- Easy/normal/hard skills change reaction delay, aim error, firing interval and
-  damage. Shots trace actual rays, hit the nearest fighter and stop at walls.
+- Easy/normal/hard skills change reaction delay, aim error and firing interval.
+  Bots start with a pistol, seek useful weapon/ammo Props, and switch weapons
+  by range, ammunition and damage. Collected weapons use their compiled firing
+  mode (hitscan, melee or projectile), damage, pellets, spread and cooldown.
+- Wounded bots seek health, including during a retreat. Native health, ammo,
+  weapon, armor and key Props share consumption, use/walk-over activation,
+  OnCollected I/O and respawns with the human player. Full-health bots leave
+  health for others. Each life resets the bot's inventory.
 - Native Fio Player physics handles gravity, walls, steps, slopes and water.
   Native Monster identity provides billboard sprites and weapon hit detection.
   The plugin reserves `disabled=True` on its bots so stock Monster AI cannot
@@ -121,10 +129,8 @@ fighter IDs (`player` for the human); end events include `winner` and `reason`.
   world combat services. The plugin loads there but logs a message and does
   not start a match. A `.fiopak` is a world container: install Python plugin
   code separately rather than placing it inside the package.
-- The supported scoring loadout is the native pistol and shotgun (and native
-  hitscan/melee weapons). Native projectiles can damage bots, but the current
-  engine discards their shooter identity before reporting monster damage.
-  Those deaths count as world deaths, without awarding a guessed frag.
+- Native projectile damage retains its owner for plugin scoring. Bot and human
+  projectile kills therefore receive the same credit as hitscan kills.
 - Single local human versus bots; network multiplayer and split-screen scoring
   are not implemented. Dedicated arena maps are recommended.
 - Match scores and AI memory are per Play session. Native save-game loading
