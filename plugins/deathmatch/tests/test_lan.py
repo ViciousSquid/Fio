@@ -222,3 +222,27 @@ def test_lobby_hosts_real_ctf_session(qt_app, main_window):
         if main_window.view_3d.play_mode:
             main_window.enter_play_mode()
         lobby.close(); lobby.deleteLater(); qt_app.processEvents()
+
+
+def test_lobby_joins_real_host_and_enters_client_play(linked, qt_app, main_window):
+    from plugins.deathmatch.lobby import LanLobby
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    plugin = get_manager().find_plugin("deathmatch")
+    lobby = LanLobby(main_window, plugin)
+    lobby.nickname.setText("GUI Guest")
+    lobby.connect_to("127.0.0.1", host.transport.port)
+    def advance():
+        host.tick(1 / 60)
+        lobby.pump()
+        qt_app.processEvents()
+    try:
+        wait_until(lambda: main_window.view_3d.play_mode, advance)
+        logic = main_window.view_3d.logic_thread
+        session = plugin._sessions[logic]
+        assert isinstance(session.network, ClientGame)
+        assert session.fighters["player"].name == "GUI Guest"
+        assert len(host.peers) == 2
+    finally:
+        if main_window.view_3d.play_mode:
+            main_window.enter_play_mode()
+        lobby.close(); lobby.deleteLater(); qt_app.processEvents()
