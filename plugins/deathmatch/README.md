@@ -84,6 +84,10 @@ match ends prepares them for the next round; press R to start it.
 For illustrated routing examples and node placement advice, see the
 [bot navigation guide](NAVIGATION_GUIDE.md).
 
+`botdebug` opens a floating live overview and one tab per bot, including
+ordinary monsters. It is a core editor command and also works while the
+Deathmatch plugin is disabled. Use `botdebug off` to close it.
+
 - Bots fight every opposing participant, including other bots.
 - Field of view, range and real world occlusion govern sight. Bots remember a
   last seen position briefly; hearing gunfire prompts investigation without
@@ -136,7 +140,7 @@ Place entities from **Plugins → deathmatch**:
 | Match Settings | Exactly one per arena. Starts the mode. |
 | Bot Opponent | One bot per entity; edit skill, health and perception settings. |
 | Respawn Point | Shared spawn, placed at **floor/feet height**. Add more than the participant count if possible. |
-| Navigation Node | Waypoint at **floor height**, with a unique name. |
+| Navigation Node | Marker at any convenient height, with a unique name and arrival `radius`. |
 
 Add a normal **PlayerStart** so Fio can enter Play. Deathmatch replaces its
 initial position with a shared respawn. Spawn angles use the runtime convention:
@@ -146,7 +150,12 @@ behind cover. Positions must have room for the player hull.
 
 Connect navigation nodes using comma-separated **names** in `links`, such as
 `West_Corner,Central_Hall`. Links work in both directions. Place enough nodes
-around corners and obstacles; keep linked segments on walkable floors. This is
+around corners and obstacles; keep linked segments over walkable floors.
+Markers are projected onto standing surfaces near the bot's current level;
+their Y coordinate does not need to match the floor. Bots advance within the
+node's `radius` when the next segment is clear, rather than requiring its exact
+centre. Ctrl-K followed by dragging to another node creates a link; the same
+gesture creates native PathNode chains and appropriate entity I/O links. This is
 an authored waypoint planner, not an automatic navmesh bake: it does not plan
 intentional jumps, ladders or routes across cliffs. Without waypoints, bots
 still use direct pursuit and local exploration, with less reliable navigation

@@ -239,13 +239,15 @@ def _monster_sprite_candidates(props, rotation=None):
             candidates.append((key, 'idle.png', base_folder, True))
 
     if rotation is not None and sprite_type != 'dead':
-        directional = []
+        from .monster_facing import rotation_filename
         key += '_rotation_%d' % rotation
+        directional = []
         for _, name, folder, cache in candidates:
-            stem, ext = os.path.splitext(name)
-            directional.append((key, '%s_%d%s' % (stem, rotation, ext), folder, cache))
-            directional.append((key, name, folder, cache))
-        return tuple(directional)
+            directional.append((key, rotation_filename(name, rotation), folder, cache))
+        # A missing custom/variant view must not pin every angle to a single
+        # front image while a matching built-in directional image exists.
+        fallback = [(key, name, folder, cache) for _, name, folder, cache in candidates]
+        return tuple(directional + fallback)
     return tuple(candidates)
 
 

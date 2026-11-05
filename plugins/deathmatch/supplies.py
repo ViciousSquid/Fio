@@ -145,8 +145,9 @@ class BotSupplies:
                 _, _, self.target, self.route = max(candidates, key=lambda c: (c[0], c[1]))
         if self.target is None or (fighting and self.reward(self.target)[0] != "health"):
             return None
-        while len(self.route) > 1 and distance(s.feet(f), self.route[0]) < 30:
-            self.route.pop(0)
+        # Keep the final pickup approach until collection, but honour node
+        # radii and safe corner transitions on every intermediate waypoint.
+        s.nav.advance(self.route, s.feet(f), s.clear, default_radius=30, keep_final=True)
         return self.route[0] if self.route else None
 
     def weapon(self, target_distance=400):

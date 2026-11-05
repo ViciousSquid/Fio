@@ -269,3 +269,33 @@ def test_remote_heading_and_attack_frames_replicate(linked):
     table.begin_frame([mirror], epoch=1)
     assert table.monster_angle[0] == pytest.approx(270)
     assert not mirror.properties['is_shooting']
+
+
+@pytest.mark.parametrize('linked', ['dm', 'ctf'], indirect=True)
+def test_all_eight_idle_and_attack_views_survive_lan_replication(linked):
+    import math
+    from pathlib import Path
+    import numpy as np
+    from engine.entity_table import EntityTable
+    from engine.monster_facing import sprite_keys_for_view
+
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    root = Path(__file__).resolve().parents[3]
+    for shooting in (False, True):
+        for fighter in hs.fighters.values():
+            fighter.actor.angle = math.pi / 2
+            fighter.shoot_until = hs.clock + 1 if shooting else hs.clock
+        hs.publish()
+        client.apply(host.snapshot())
+        visible = [f for f in hs.fighters.values() if f.entity is not None]
+        visible += [f for f in cs.fighters.values() if f.entity is not None]
+        for fighter in visible:
+            table = EntityTable()
+            table.begin_frame([fighter.entity], epoch=1)
+            for rotation in range(1, 9):
+                bearing = fighter.actor.angle + (rotation - 1) * math.pi / 4
+                eye = np.asarray(fighter.entity.pos) + [math.sin(bearing) * 400, 0, math.cos(bearing) * 400]
+                key = sprite_keys_for_view(table, np.array([0]), eye)[0]
+                _, filename, folder, _ = table.sprite_recipes()[key][0]
+                assert filename == f'{"shoot" if shooting else "idle"}_{rotation}.png'
+                assert (root / 'assets' / folder / filename).is_file()

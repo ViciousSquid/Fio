@@ -52,6 +52,7 @@ class ConsoleCommandHandler:
             'kill_monster': self.cmd_monster_kill,
             'monster_revive':     self.cmd_monster_revive,
             'monster_revive_all': self.cmd_monster_revive_all,
+            'botdebug': self.cmd_botdebug,
 
             'ent': self.cmd_info,
             'info': self.cmd_info,
@@ -200,7 +201,19 @@ class ConsoleCommandHandler:
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
     #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
     #: without asking, so a map could throw away the user's unsaved work.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit'})
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit', 'botdebug'})
+
+    def cmd_botdebug(self, args):
+        if args.strip().lower() not in ('', 'on', 'off'):
+            debug_log('Error', 'Usage: botdebug [on|off]')
+            return
+        if args.strip().lower() == 'off':
+            window = getattr(self.main_window, '_bot_debug_window', None)
+            if window is not None:
+                window.close()
+            return
+        from editor.bot_debug import show_bot_debug
+        show_bot_debug(self.main_window)
 
     def handle_command(self, cmd_string, *, from_map=False):
         """Run one console command line.
@@ -978,6 +991,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">connect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt; [delay]<br>
 <b style="color:orange;">disconnect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;<br>
 <b style="color:cyan;">=== Monsters ===</b><br>
+<b style="color:orange;">botdebug</b> [on|off] — Floating live decisions: overview and one tab per bot<br>
 <b style="color:orange;">monster_kill</b> &lt;name&gt; — Instantly kill a named monster<br>
 <b style="color:orange;">monster_revive</b> &lt;name&gt; — Restore a named monster to full health<br>
 <b style="color:orange;">monster_revive_all</b> — Restore every monster in the level<br>

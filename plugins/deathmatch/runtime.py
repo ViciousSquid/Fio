@@ -11,7 +11,7 @@ import math
 import random
 
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
-from .navigation import Navigation, distance
+from .navigation import Navigation, distance, ground_position
 from .supplies import BotSupplies
 from .teams import TeamGame
 
@@ -112,7 +112,8 @@ class DeathmatchSession:
         self.delay = number(props, "respawn_delay", 3, 0.1, 30)
         self.protection = number(props, "spawn_protection", 1.5, 0, 10)
         self.rng = random.Random(int(number(props, "seed", 42, -2147483648, 2147483647)))
-        self.nav = Navigation([t for t in things if isinstance(t, DeathmatchNode)])
+        self.nav = Navigation([t for t in things if isinstance(t, DeathmatchNode)],
+                              project=self.navigation_point)
         self.spawns = [(tuple(t.pos), math.radians(number(t.properties, "angle", 0, -360, 360)))
                        for t in things if isinstance(t, DeathmatchSpawn)]
         self.spawn_teams = {tuple(t.pos): t.properties.get("team", "any")
@@ -505,7 +506,8 @@ class DeathmatchSession:
         """Conservative full-hull corridor, including current movers/doors.
 
         This is a flat waypoint planner. Physics still handles slopes/steps;
-        designers connect nodes on walkable floors, never across drops.
+        Marker heights are projected separately; walking segments must have
+        supporting floors and must never be authored across drops.
         """
         import glm
         combat = self.logic.combat_runtime
@@ -526,6 +528,12 @@ class DeathmatchSession:
             if hit:
                 return False
         return True
+
+    def navigation_point(self, marker, reference):
+        brushes = (b for b in self.logic.collision_runtime._collision_brushes_cache
+                   if self.logic.combat_runtime._blocks_hitscan(b))
+        return ground_position(marker, reference, brushes,
+                               self.logic.world_runtime.terrain, self.clear)
 
     def health(self, fighter):
         return (self.logic.player_runtime.player_health if fighter.entity is None
@@ -604,8 +612,7 @@ class DeathmatchSession:
             if self.clock >= fighter.route_at or not fighter.route:
                 fighter.route = self.nav.route(pos, objective, self.clear)
                 fighter.route_at = self.clock + 0.5
-            while fighter.route and distance(pos, fighter.route[0]) < 25:
-                fighter.route.pop(0)
+            self.nav.advance(fighter.route, pos, self.clear, default_radius=25)
             move = glm.vec3(0)
             if fighter.route:
                 waypoint = fighter.route[0]
@@ -637,14 +644,14 @@ class DeathmatchSession:
             fighter.actor.pitch = 0
             if goal is None and self.nav.points:
                 if not fighter.route or self.clock >= fighter.route_at:
-                    goal = self.rng.choice(list(self.nav.points.values()))
+                    name = self.rng.choice(list(self.nav.points))
+                    goal = self.nav.point(name, pos)
                 else:
                     goal = fighter.route[-1]
             if goal is not None and (self.clock >= fighter.route_at or not fighter.route):
                 fighter.route = self.nav.route(pos, goal, self.clear)
                 fighter.route_at = self.clock + 1.0
-            while fighter.route and distance(pos, fighter.route[0]) < 36:
-                fighter.route.pop(0)
+            self.nav.advance(fighter.route, pos, self.clear)
             move = glm.vec3(0)
             if fighter.route:
                 nxt = fighter.route[0]

@@ -59,11 +59,36 @@ def test_directional_recipe_preserves_custom_and_variant_fallbacks():
                  custom_shoot='assets/sprites/custom.png')
     recipe = _monster_sprite_candidates(props, 5)
     assert [(r[1], r[2]) for r in recipe[:4]] == [
-        ('custom_5.png', 'sprites'), ('custom.png', 'sprites'),
+        ('custom_5.png', 'sprites'),
         ('shoot_5.png', 'sprites/monsters/human/variant1'),
-        ('shoot.png', 'sprites/monsters/human/variant1')]
+        ('shoot_5.png', 'sprites/monsters/human'),
+        ('idle_5.png', 'sprites/monsters/human/variant1')]
     assert any(r[1] == 'idle_5.png' for r in recipe)
     assert recipe[0][0] != _monster_sprite_candidates(props, 1)[0][0]
+
+
+@pytest.mark.parametrize('selected', range(1, 9))
+def test_selecting_any_custom_view_resolves_the_whole_rotation_set(selected):
+    props = dict(monster_type='human', custom_idle=f'assets/sprites/monsters/ranger_{selected}.png')
+    assert [_monster_sprite_candidates(props, view)[0][1] for view in range(1, 9)] == [
+        f'ranger_{view}.png' for view in range(1, 9)]
+
+
+@pytest.mark.qt
+def test_missing_custom_view_uses_matching_builtin_direction():
+    from editor.things import Monster
+    from engine.entity_table import EntityTable
+    from player.render.renderer import GLESRenderer
+
+    class Package:
+        def has_asset(self, name):
+            return name in {'assets/sprites/monsters/custom_1.png',
+                            'assets/sprites/monsters/human/idle_5.png'}
+    table = EntityTable()
+    table.begin_frame([Monster([0, 96, 0], {
+        'custom_idle': 'assets/sprites/monsters/custom_1.png'})], epoch=1)
+    renderer = SimpleNamespace(_scene={'package': Package()})
+    assert GLESRenderer._sprite_image(renderer, table, 0, (0, 96, -100)).endswith('human/idle_5.png')
 
 
 def test_corpse_retains_the_single_rotation_zero_frame():

@@ -59,6 +59,9 @@ class DeathmatchPlugin(FioPlugin):
                  help="Heading in degrees: 0 faces +Z, 90 faces +X."),
         ])
         api.register_properties("deathmatchnode", [
+            prop("show_radius", type="bool", default=False),
+            prop("radius", type="float", default=36.0, min=1,
+                 help="Horizontal arrival radius. Marker height does not set the walking floor."),
             prop("links", type="string", default="",
                  help="Comma-separated node names; connections work in both directions."),
         ])

@@ -1645,7 +1645,7 @@ class View2D(QWidget):
         # Build a lookup: node-name → thing, for fast resolution
         node_lookup = {}
         for t in self.editor.state.things:
-            if isinstance(t, PathNode) and not self._filtered(t):
+            if (isinstance(t, PathNode) or t.properties.get('type') == 'deathmatchnode') and not self._filtered(t):
                 n = t.properties.get('name', '') or ''
                 if n:
                     node_lookup[n] = t
@@ -1656,10 +1656,12 @@ class View2D(QWidget):
         olive_dim = QColor(128, 128, 0, 80)
         chain_pen = QPen(olive, 2, Qt.DashLine)
 
+        links = []
         for name, node in node_lookup.items():
-            next_name = node.get_next_node_name()
-            if not next_name:
-                continue
+            targets = ([node.get_next_node_name()] if isinstance(node, PathNode)
+                       else str(node.properties.get('links', '')).replace(',', ' ').split())
+            links.extend((node, target) for target in targets if target)
+        for node, next_name in links:
             next_node = node_lookup.get(next_name)
             if next_node is None:
                 continue
@@ -1691,7 +1693,7 @@ class View2D(QWidget):
             font = QFont()
             font.setPointSize(7)
             painter.setFont(font)
-            painter.drawText(mid + QPointF(4, -4), "next")
+            painter.drawText(mid + QPointF(4, -4), "next" if isinstance(node, PathNode) else "link")
             painter.restore()
 
         # --- 2. Monster → patrol_target lines (teal, dotted, thinner) ----
@@ -2355,7 +2357,7 @@ class View2D(QWidget):
                     painter.restore()
 
                 # 1c. Draw PathNode Radius
-                if isinstance(thing, PathNode) and thing.properties.get('show_radius', False):
+                if (isinstance(thing, PathNode) or thing.properties.get('type') == 'deathmatchnode') and thing.properties.get('show_radius', False):
                     radius = thing.get_radius() * self.zoom_factor
                     painter.setBrush(QBrush(QColor(38, 166, 154, 30)))
                     painter.setPen(QPen(QColor(38, 166, 154, 220), 1, Qt.DashLine))
@@ -2365,7 +2367,8 @@ class View2D(QWidget):
                     font = QFont()
                     font.setPointSize(8)
                     painter.setFont(font)
-                    label = f"{int(thing.get_radius())} u  [{thing.get_affects_type()}]"
+                    affects = thing.get_affects_type() if isinstance(thing, PathNode) else 'ground'
+                    label = f"{int(thing.get_radius())} u  [{affects}]"
                     painter.drawText(QPointF(s_pos.x() + radius + 4, s_pos.y() + 4), label)
                     painter.restore()
 

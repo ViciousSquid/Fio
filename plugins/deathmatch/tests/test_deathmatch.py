@@ -238,6 +238,86 @@ def test_waypoints_route_around_wall_and_reject_closed_path(arena):
     assert nav.route([0, 0, 0], [0, 0, 300], session.clear) == []
 
 
+@pytest.mark.parametrize('marker_y', [-500, 90, 10000])
+def test_waypoint_height_does_not_change_ground_route(arena, marker_y):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    nodes = [DeathmatchNode([240, marker_y, 0], {'name': 'a', 'links': 'b', 'radius': 72}),
+             DeathmatchNode([240, marker_y, 300], {'name': 'b'})]
+    nav = Navigation(nodes, project=session.navigation_point)
+    route = nav.route((0, 0, 0), (0, 0, 300), session.clear)
+    assert route and route[-1] == (0, 0, 300)
+    assert route[0].radius == 72
+    assert all(point[1] == 0 for point in route)
+    previous = (0, 0, 0)
+    for point in route:
+        assert session.clear(previous, point)
+        previous = point
+
+
+def test_waypoint_radius_advances_without_cutting_a_corner(arena):
+    from plugins.deathmatch.navigation import Waypoint
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 120, 150], [300, 240, 50]))
+    first = Waypoint((240, 0, 0), 180)
+    route = [first, Waypoint((240, 0, 300)), (0, 0, 300)]
+    session.nav.advance(route, (100, 0, 0), session.clear)
+    assert route[0] is first  # Inside the radius, but the next diagonal hits the wall.
+    session.nav.advance(route, (220, 0, 0), session.clear)
+    assert route[0] == (240, 0, 300)
+    session.nav.advance(route, (240, 300, 300), session.clear)
+    assert route[0] == (240, 0, 300)  # Being on another storey is not arrival.
+
+
+def test_direct_roaming_goal_keeps_its_authored_radius(arena):
+    logic, session, human, bot = arena
+    nav = Navigation([DeathmatchNode((200, 90, 300), {'name': 'roam', 'radius': 90})],
+                     project=session.navigation_point)
+    point = nav.point('roam', session.feet(bot))
+    route = nav.route(session.feet(bot), point, session.clear)
+    assert route[0].radius == 90
+    nav.advance(route, (120, 0, 300), session.clear)
+    assert route == []
+
+
+def test_node_projection_uses_the_bot_storey_not_the_marker_height(arena):
+    logic, session, human, bot = arena
+    walls(logic, brush([0, 275, 0], [1000, 50, 1000]))
+    marker = (0, 90, 0)
+    assert session.navigation_point(marker, (0, 0, 0)) == (0, 0, 0)
+    assert session.navigation_point(marker, (0, 300, 0)) == (0, 300, 0)
+
+
+def test_botdebug_reads_actual_match_decisions_and_does_not_block_a_tick(arena):
+    from types import SimpleNamespace
+    from editor.bot_debug import collect_bots
+    import threading
+    logic, session, human, bot = arena
+    owner = SimpleNamespace(state=logic.editor_state,
+        view_3d=SimpleNamespace(logic_thread=logic, play_mode=True))
+    bot.target, bot.visible, bot.mode = 'player', True, 'fight'
+    row, = collect_bots(owner)['rows']
+    assert row['mode'] == 'fight' and row['target'] == human.name
+    assert dict(row['details'])['Target visible'] == 'yes'
+    bot.mode, bot.route = 'resupply', [(100, 0, 300)]
+    row, = collect_bots(owner)['rows']
+    assert row['mode'] == 'resupply'
+    assert row['route'] == ((100, 0, 300),)
+    held, release = threading.Event(), threading.Event()
+    def tick():
+        with logic._tick_lock:
+            held.set()
+            release.wait(3)
+    thread = threading.Thread(target=tick)
+    thread.start()
+    try:
+        assert held.wait(3)
+        assert collect_bots(owner) is None
+    finally:
+        release.set()
+        thread.join(3)
+
+
 def test_native_physics_keeps_bot_out_of_walls_and_on_floor(arena):
     logic, session, human, bot = arena
     walls(logic, brush([0, 120, 150], [1000, 240, 50]))

@@ -48,13 +48,19 @@ class DeathmatchSpawn(Thing):
 
 
 class DeathmatchNode(Thing):
-    """A navigation waypoint at floor height; links are bidirectional names."""
+    """A navigation area; marker height is independent of the walking floor."""
     pixmap_path = "assets/sprites/logic_relay.png"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties["type"] = "deathmatchnode"
         self.properties.setdefault("links", "")
+        self.properties.setdefault("radius", 36.0)
+        self.properties.setdefault("show_radius", False)
+
+    def get_radius(self):
+        from .navigation import Waypoint
+        return Waypoint(self.pos, self.properties.get("radius", 36.0)).radius
 
 
 class DeathmatchFlag(Prop):

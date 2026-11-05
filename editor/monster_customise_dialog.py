@@ -1,7 +1,8 @@
 """
 monster_customise_dialog.py
-Popup for assigning custom PNG sprites (idle / shoot / dead) and 3D billboard
-size to an individual Monster entity.
+Popup for assigning eight-view PNG sets (idle / shoot), a corpse image, and
+3D billboard size to an individual Monster entity. Selecting any numbered
+idle/attack view identifies its entire _1 through _8 set.
 
 All sprite paths are stored relative to the project root and must reside
 inside  assets/sprites/monsters/.  The engine will automatically fall back
@@ -64,7 +65,7 @@ class MonsterCustomiseDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
 
         # ── Sprite frames ───────────────────────────────────────────────
-        sprite_group = QGroupBox("Sprite Frames")
+        sprite_group = QGroupBox("Sprite Frames — Eight Facing Directions")
         sprite_group.setStyleSheet(self._group_style())
         sprite_form = QFormLayout(sprite_group)
         sprite_form.setSpacing(8)
@@ -118,7 +119,9 @@ class MonsterCustomiseDialog(QDialog):
         # ── Info note ───────────────────────────────────────────────────
         info = QLabel(
             "Sprites must be PNG files inside  assets/sprites/monsters/\n"
-            "Missing custom files fall back to the default monster sprites automatically."
+            "Idle and attack sets use name_1.png through name_8.png; select any view.\n"
+            "1 = front, 3 = left, 5 = back, 7 = right; the other views are diagonals.\n"
+            "Missing views use the matching built-in direction. Death uses one image."
         )
         # Increased font-size to 13px and adjusted color for better contrast
         info.setStyleSheet("""
