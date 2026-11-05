@@ -679,7 +679,6 @@ class DeathmatchSession:
             fighter.stuck = 0
         fighter.entity.pos = list(self.feet(fighter))
         fighter.supplies.collect_nearby()
-        fighter.entity.properties["is_shooting"] = self.clock < fighter.shoot_until
         if fighter.actor.pos.y < -4096:
             self.kill(fighter)
 
@@ -780,6 +779,16 @@ class DeathmatchSession:
         self.publish()
 
     def publish(self):
+        from engine.monster_facing import face_direction
+        from engine.monster_ai import _set_render_flag
+        # Stock MonsterAI deliberately skips these actors. Publish their real
+        # aim heading for local bots, host-side guests and replicated players.
+        for fighter in self.fighters.values():
+            if fighter.entity is not None:
+                yaw = fighter.actor.angle
+                face_direction(fighter.entity, (math.sin(yaw), 0, math.cos(yaw)))
+                _set_render_flag(fighter.entity, 'is_shooting',
+                                 fighter.alive and self.clock < fighter.shoot_until)
         rows = sorted(self.fighters.values(), key=lambda f: (-f.frags, f.deaths, f.name))
         human = self.fighters["player"]
         leaders = self.leaders()

@@ -246,3 +246,26 @@ def test_lobby_joins_real_host_and_enters_client_play(linked, qt_app, main_windo
         if main_window.view_3d.play_mode:
             main_window.enter_play_mode()
         lobby.close(); lobby.deleteLater(); qt_app.processEvents()
+
+
+def test_remote_heading_and_attack_frames_replicate(linked):
+    import math
+    from engine.entity_table import EntityTable
+
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    server = hs.fighters['player']
+    server.actor.angle = math.pi / 2
+    server.shoot_until = hs.clock + 1
+    hs.publish()
+    client.apply(host.snapshot())
+    mirror = cs.fighters['host'].entity
+    table = EntityTable()
+    table.begin_frame([mirror], epoch=1)
+    assert table.monster_angle[0] == pytest.approx(90)
+    assert mirror.properties['is_shooting']
+    server.actor.angle = -math.pi / 2
+    server.shoot_until = hs.clock
+    client.apply(host.snapshot())
+    table.begin_frame([mirror], epoch=1)
+    assert table.monster_angle[0] == pytest.approx(270)
+    assert not mirror.properties['is_shooting']

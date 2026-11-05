@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised by the head-less player
         print(f"[{category}] {message}")
 from .change_journal import JOURNAL, STATE, set_positions, touch
 from . import monster_table
+from .monster_facing import face_direction
 from .spatial import TIER_DORMANT, tier_of
 from .constants import is_solid_world_brush
 from .physics import world_gravity
@@ -613,6 +614,9 @@ all accumulated time when it runs, so simulation time is not lost.
         t.mode[rows] = np.where(in_sight, monster_table.MODE_CHASE,
                                 monster_table.MODE_SEARCH)
 
+        for i in np.flatnonzero(in_sight):
+            face_direction(monsters[rows[i]], target_pos[i] - p32[i])
+
         # ---- Step toward the target, sliding along walls ------------------
         final = p32.copy()
         stepped = np.zeros(len(rows), dtype=bool)
@@ -963,6 +967,7 @@ all accumulated time when it runs, so simulation time is not lost.
         distance_sq = glm.dot(_dist_diff, _dist_diff)
 
         if distance_sq <= MONSTER_SIGHT_RANGE * MONSTER_SIGHT_RANGE:
+            face_direction(thing, target_pos - thing_pos)
             # ---- Entered sight range ----
             if not state['in_sight']:
                 state['in_sight'] = True
@@ -1607,6 +1612,7 @@ the scalar fallback for callers that do not have the dense table.
             return False
 
         # Move toward the sound source
+        face_direction(monster, sound_pos - thing_pos)
         direction = sound_pos - thing_pos
         dir_len = glm.length(direction)
         if dir_len > 0.001:
@@ -1836,6 +1842,7 @@ the scalar fallback for callers that do not have the dense table.
             if direction is None:
                 return      # the node is directly overhead; no way to walk to it
 
+        face_direction(monster, direction)
         step = direction * MONSTER_MOVE_SPEED * speed_mult * delta
         new_pos = m_pos + step
 

@@ -685,3 +685,31 @@ def test_a_monster_removed_from_the_world_leaves_its_state_behind_harmlessly(
     assert logic.damage_applied == [5], (
         "the removed monster 'b' still attacked: damage log %s"
         % (logic.damage_applied,))
+
+
+@pytest.mark.parametrize('dense', [True, False])
+@pytest.mark.parametrize('mtype', ['human', 'flying'])
+def test_monster_faces_target_even_inside_stop_distance(
+        monster_factory, ai_world, flat_ground, dense, mtype):
+    monster = monster_factory('facing', (0, 96, 0), angle=0, monster_type=mtype)
+    ai, logic = ai_world(brushes=flat_ground, things=[monster], player_pos=(50, 96, 0))
+    ai.DENSE_UPDATE = dense
+    ai.update(TICK)
+    assert monster.properties['angle'] == pytest.approx(90)
+    # A second viewport cannot change the monster's authoritative heading.
+    logic.player_runtime.player.pos = glm.vec3(-50, 96, 0)
+    ai.update(TICK)
+    assert monster.properties['angle'] == pytest.approx(270)
+
+
+@pytest.mark.parametrize('dense', [True, False])
+def test_patrolling_monster_faces_its_path_node(
+        monster_factory, path_node_factory, ai_world, flat_ground, dense):
+    node = path_node_factory('destination', (-400, 96, 0))
+    monster = monster_factory('patroller', (0, 96, 0), patrol=True,
+                              patrol_target='destination', angle=0)
+    ai, logic = ai_world(brushes=flat_ground, things=[monster, node],
+                          player_pos=(4000, 96, 0))
+    ai.DENSE_UPDATE = dense
+    ai.update(TICK)
+    assert monster.properties['angle'] == pytest.approx(270)

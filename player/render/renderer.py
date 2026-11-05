@@ -359,8 +359,10 @@ class GLESRenderer:
         self._texture_frames[name] = frame
         return texture
 
-    def _sprite_image(self, table, row):
-        recipe = table.sprite_recipes()[int(table.sprite_key_id[row])]
+    def _sprite_image(self, table, row, camera_pos=None):
+        from engine.monster_facing import sprite_keys_for_view
+        key = sprite_keys_for_view(table, [row], camera_pos)[0]
+        recipe = table.sprite_recipes()[int(key)]
         package = self._scene.get('package')
         for _, filename, folder, _ in recipe or ():
             if filename:
@@ -479,7 +481,7 @@ class GLESRenderer:
                             if int(table.effect_type[row]) == 1:
                                 position[1] += height*.5
                         else:
-                            texture = self._load_texture(self._sprite_image(table, row))
+                            texture = self._load_texture(self._sprite_image(table, row, eye))
                             tint = (1,1,1,float(table.render_alpha[row]))
                         view = state.get('view', glmath.look_at(eye, eye + front))
                         yaw = float(table.sprite_fixed_yaw[row])

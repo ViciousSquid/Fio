@@ -631,3 +631,27 @@ def test_demo_bots_fight_over_a_full_round():
         logic.session_runtime.apply_play_mode(False)
         logic.stop()
         manager.set_enabled(plugin, was_enabled)
+
+
+def test_bot_heading_and_attack_reach_the_render_projection(arena):
+    from engine.entity_table import EntityTable
+    from engine.monster_facing import sprite_keys_for_view
+    import numpy as np
+
+    logic, session, human, bot = arena
+    table = EntityTable()
+    table.begin_frame([bot.entity], epoch=1)
+    bot.actor.angle = math.pi / 2
+    bot.shoot_until = session.clock + 1
+    session.publish()
+    table.begin_frame([bot.entity], epoch=1)
+    assert bot.entity.properties['angle'] == pytest.approx(90)
+    assert table.monster_angle[0] == pytest.approx(90)
+    eye = np.asarray(bot.entity.pos) + [100, 0, 0]
+    key = sprite_keys_for_view(table, np.array([0]), eye)[0]
+    assert table.sprite_recipes()[key][0][1] == 'shoot_1.png'
+    session.clock += 2
+    session.publish()
+    table.begin_frame([bot.entity], epoch=1)
+    key = sprite_keys_for_view(table, np.array([0]), eye)[0]
+    assert table.sprite_recipes()[key][0][1] == 'idle_1.png'

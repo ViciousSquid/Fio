@@ -114,7 +114,7 @@ class HostGame:
                 pos=list(f.actor.pos), angle=f.actor.angle, pitch=f.actor.pitch,
                 hp=s.health(f), alive=f.alive, frags=f.frags, deaths=f.deaths,
                 carrying=f.carrying, captures=f.captures,
-                respawn=f.respawn_at, protection=f.protected_until,
+                respawn=f.respawn_at, protection=f.protected_until, shoot_until=f.shoot_until,
                 weapons=sorted(supply.weapons) if supply else sorted(s.logic.combat_runtime.weapons),
                 ammo=supply.ammo if supply else s.logic.combat_runtime.player_ammo,
                 armor=supply.armor if supply else s.logic.player_runtime.player_armor,
@@ -221,6 +221,7 @@ class ClientGame:
             f.alive, f.frags, f.deaths = record["alive"], record["frags"], record["deaths"]
             f.carrying, f.captures = record["carrying"], record["captures"]
             f.respawn_at, f.protected_until = record["respawn"], record["protection"]
+            f.shoot_until = record.get("shoot_until", 0.0)
         for key, f in list(s.fighters.items()):
             if key not in seen and f.entity is not None:
                 if f.entity in s.logic.editor_state.things:
