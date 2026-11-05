@@ -14,6 +14,7 @@ from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, Deathma
 from .navigation import Navigation, MoverTraversal, distance
 from .moving_navigation import NavigationWorld
 from .supplies import BotSupplies
+from .spawning import choose_spawn
 from .teams import TeamGame
 
 
@@ -393,31 +394,7 @@ class DeathmatchSession:
         return (float(p[0]), float(p[1]) + fighter.actor.camera_height, float(p[2]))
 
     def spawn_choice(self, fighter):
-        others = [f for f in self.fighters.values() if f is not fighter and f.alive]
-        candidates = list(self.spawns)
-        if self.game.enabled:
-            own = [s for s in candidates if self.spawn_teams.get(s[0]) == fighter.team]
-            if own:
-                candidates = own
-        self.rng.shuffle(candidates)
-
-        def score(spawn):
-            pos, _ = spawn
-            # Clear occupancy outweighs exposure and distance. No telefrag.
-            occupied = any(distance(pos, self.feet(other)) < 80 for other in others)
-            enemies = [o for o in others if not self.game.allies(fighter, o)]
-            nearest = min((distance(pos, self.feet(o)) for o in enemies), default=10000)
-            exposed = sum(self.visible_points((pos[0], pos[1] + 104, pos[2]), self.eye(o))
-                          for o in others)
-            return (not occupied, nearest - exposed * 400)
-
-        valid = [s for s in candidates if self.clear(s[0], s[0])]
-        ranked = sorted(valid or candidates, key=score, reverse=True)[:64]
-        empty = [s for s in ranked if score(s)[0]]
-        ranked = empty or ranked
-        # Quake III SelectRandomFurthestSpawnPoint: randomize the farthest half.
-        # Copyright id Software; GPL-2.0-or-later, see NOTICE.md.
-        return self.rng.choice(ranked[:max(1, len(ranked) // 2)])
+        return choose_spawn(self, fighter)
 
     def respawn(self, fighter):
         if fighter.spectator:

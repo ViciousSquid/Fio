@@ -122,14 +122,18 @@ visible red and blue flag sprites, team spawns, navigation and pickups. To
 author CTF, place exactly one red and one blue **CTF Flag** at floor height.
 Take the enemy flag to your base while your own flag is home to capture.
 Carriers drop flags on death or removal; touch your dropped flag to return it.
-Unattended flags return after `flag_return_time` (default 40 seconds, from
-Quake III). `capture_limit` defaults to 10; zero disables it. Frag limits
+Unattended flags return after `flag_return_time` (default 40 seconds).
+`capture_limit` defaults to 10; zero disables it. Frag limits
 do not end CTF games. Team Deathmatch uses combined team frags and penalizes
 team kills/suicides. The scoreboard shows team scores and flag status.
 
 Bots attack, escort carriers, recover their own flag and defend base. The
-spawn selector adapts Quake III's randomized furthest-half algorithm, avoiding
-occupied spawns and preferring the participant's team spawns.
+spawn selector samples usable locations with inverse weights for the combined
+threat of live enemies. It avoids occupied locations when space is available
+and prefers the participant's team spawns. Bots seek pickups by need priority,
+then choose the shortest reachable route within that priority. Flag contacts
+use explicit home, carried and dropped states, with friendly recoveries
+resolved before captures and enemy pickups.
 
 ## Build your own arena
 
@@ -228,9 +232,8 @@ respawn, disconnect and CTF capture replication. Run them with local socket
 access enabled. Cross-machine play and a full OpenGL visual playtest still need
 to be checked on the target LAN/graphics setup.
 
-The plugin includes Quake III-derived gameplay algorithms and is distributed
-under **GPL-2.0-or-later**. See `LICENSE` and `NOTICE.md` for the original id
-Software attribution and source references. Fio's existing MIT notices remain.
+The plugin is distributed under **GPL-2.0-or-later**; see `LICENSE`.
+Fio's existing MIT notices remain.
 
 CTF flags use transparent red/blue billboards and overlay a smaller flag icon on
 the carrier. Each flag always emits its colour of light at home, while dropped

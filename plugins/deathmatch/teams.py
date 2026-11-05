@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Flag rules adapted from id Software Quake III Arena code/game/g_team.c.
-# Original Copyright (C) 1999-2005 id Software, Inc.; see NOTICE.md and LICENSE.
-"""Red/blue teams and Quake III-style two-flag Capture the Flag."""
+"""Red/blue teams and a contact-driven Capture the Flag state machine."""
 from dataclasses import dataclass
 import copy
 
@@ -12,6 +10,16 @@ from .navigation import distance
 
 
 TEAMS = ("red", "blue")
+RECOVERY_POINTS = 1
+CAPTURE_POINTS = 5
+
+# (touching own flag, current flag state) -> requested transition.
+CONTACT_ACTIONS = {
+    (True, "home"): "capture",
+    (True, "dropped"): "recover",
+    (False, "home"): "take",
+    (False, "dropped"): "take",
+}
 
 
 @dataclass
@@ -24,6 +32,12 @@ class Flag:
     dropped: bool = False
     return_at: float = 0.0
     light: object = None
+
+    @property
+    def state(self):
+        if self.carrier is not None:
+            return "carried"
+        return "dropped" if self.dropped else "home"
 
 
 class TeamGame:
@@ -82,9 +96,13 @@ class TeamGame:
             self.return_flag(flag, announce=False)
 
     def return_flag(self, flag, announce=True):
-        if flag.carrier in self.session.fighters:
-            self.session.fighters[flag.carrier].carrying = None
-        flag.pos, flag.carrier, flag.dropped, flag.return_at = flag.home, None, False, 0
+        holder = self.session.fighters.get(flag.carrier)
+        if holder is not None and holder.carrying == flag.team:
+            holder.carrying = None
+        flag.carrier = None
+        flag.dropped = False
+        flag.return_at = 0.0
+        flag.pos = flag.home
         self.draw(flag)
         if announce:
             self.session.feed.append((self.session.clock + 5, f"{flag.team.title()} flag returned"))
@@ -134,104 +152,120 @@ class TeamGame:
                 touch(flag.light)
 
     def drop(self, fighter):
-        if not fighter.carrying:
-            return
-        flag = self.flags[fighter.carrying]
+        flag = self.flags.get(fighter.carrying)
         fighter.carrying = None
-        flag.carrier, flag.dropped = None, True
-        pos = self.session.feet(fighter)
-        if pos[1] < -1024:
-            self.return_flag(flag)
+        if flag is None or flag.carrier != fighter.key:
             return
-        ground = self.session.logic.session_runtime.spatial_grid.raycast_down(pos[0], pos[2], pos[1] + 10)
+        pos = self.session.feet(fighter)
+        grid = self.session.logic.session_runtime.spatial_grid
+        ground = None if pos[1] < -1024 else grid.raycast_down(pos[0], pos[2], pos[1] + 10)
         if ground is None:
             self.return_flag(flag)
             return
-        flag.pos, flag.return_at = (pos[0], ground, pos[2]), self.session.clock + self.return_delay
+        flag.carrier = None
+        flag.dropped = True
+        flag.pos = (pos[0], ground, pos[2])
+        flag.return_at = self.session.clock + self.return_delay
         self.draw(flag)
         self.session.output(flag.entity, "OnDrop")
 
     def touch(self, fighter, flag):
-        """Port of Team_TouchOurFlag / Team_TouchEnemyFlag rule ordering."""
-        s = self.session
-        if not fighter.alive or flag.carrier is not None:
+        """Resolve a contact using flag state and team ownership."""
+        if (not self.ctf or self.session.finished or not fighter.alive
+                or fighter.spectator or fighter.team not in TEAMS):
             return
-        if fighter.team == flag.team:
-            if flag.dropped:
-                fighter.objective_score += 1  # CTF_RECOVERY_BONUS
-                self.return_flag(flag)
-                return
-            if fighter.carrying:
-                stolen = self.flags[fighter.carrying]
-                fighter.captures += 1
-                fighter.objective_score += 5  # CTF_CAPTURE_BONUS
-                self.scores[fighter.team] += 1
-                self.return_flag(stolen, announce=False)
-                s.feed.append((s.clock + 5, f"{fighter.name} captured for {fighter.team}!"))
-                s.output(flag.entity, "OnCapture", fighter.name)
-                s.emit("deathmatch.capture", team=fighter.team, fighter=fighter.key)
-                if self.capture_limit and self.scores[fighter.team] >= self.capture_limit:
-                    s.finish("Capture limit")
+        action = CONTACT_ACTIONS.get((fighter.team == flag.team, flag.state))
+        if action == "recover":
+            fighter.objective_score += RECOVERY_POINTS
+            self.return_flag(flag)
+        elif action == "take":
+            self._take_flag(fighter, flag)
+        elif action == "capture":
+            self._capture_flag(fighter, flag)
+
+    def _take_flag(self, fighter, flag):
+        if fighter.carrying is not None:
             return
-        if fighter.carrying is None and fighter.team in TEAMS:
-            # Taking the flag removes spawn protection, as firing does.
-            fighter.carrying, flag.carrier = flag.team, fighter.key
-            fighter.protected_until = 0
-            flag.dropped, flag.return_at = False, 0
-            self.draw(flag)
-            s.feed.append((s.clock + 5, f"{fighter.name} took the {flag.team} flag"))
-            s.output(flag.entity, "OnTaken", fighter.name)
+        flag.carrier = fighter.key
+        flag.dropped = False
+        flag.return_at = 0.0
+        fighter.carrying = flag.team
+        fighter.protected_until = 0
+        self.draw(flag)
+        session = self.session
+        session.output(flag.entity, "OnTaken", fighter.name)
+        session.feed.append((session.clock + 5, f"{fighter.name} took the {flag.team} flag"))
+
+    def _capture_flag(self, fighter, base):
+        cargo = self.flags.get(fighter.carrying)
+        if cargo is None or cargo.team == fighter.team or cargo.carrier != fighter.key:
+            return
+        self.return_flag(cargo, announce=False)
+        fighter.captures += 1
+        fighter.objective_score += CAPTURE_POINTS
+        self.scores[fighter.team] += 1
+        session = self.session
+        session.output(base.entity, "OnCapture", fighter.name)
+        session.emit("deathmatch.capture", team=fighter.team, fighter=fighter.key)
+        session.feed.append((session.clock + 5, f"{fighter.name} captured for {fighter.team}!"))
+        if self.capture_limit > 0 and self.scores[fighter.team] >= self.capture_limit:
+            session.finish("Capture limit")
 
     def step(self):
-        if not self.ctf:
+        if not self.ctf or self.session.finished:
             return
-        s = self.session
+        session = self.session
+        # Resolve ownership and deadlines before accepting any new contacts.
         for flag in self.flags.values():
-            if flag.carrier is not None:
-                carrier = s.fighters.get(flag.carrier)
-                if carrier is None or not carrier.alive:
-                    if carrier is not None:
-                        self.drop(carrier)
-                    else:
-                        self.return_flag(flag)
-                else:
-                    flag.pos = s.feet(carrier)
-            elif flag.dropped and s.clock >= flag.return_at:
+            if flag.state == "carried":
+                holder = session.fighters.get(flag.carrier)
+                if holder is None or holder.carrying != flag.team:
+                    self.return_flag(flag)
+                elif not holder.alive or holder.spectator:
+                    self.drop(holder)
+            elif flag.state == "dropped" and session.clock >= flag.return_at:
                 self.return_flag(flag)
             self.draw(flag)
-        # Own dropped-flag returns precede captures for deterministic touches.
-        for fighter in list(s.fighters.values()):
-            if not fighter.alive or fighter.team not in TEAMS:
-                continue
-            for flag in sorted(self.flags.values(), key=lambda f: f.team != fighter.team):
-                if flag.carrier is None and distance(s.feet(fighter), flag.pos) <= 60:
-                    a, b = s.eye(fighter), (flag.pos[0], flag.pos[1] + 40, flag.pos[2])
-                    if s.visible_points(a, b):
-                        self.touch(fighter, flag)
-                        if s.finished:
-                            return
+
+        def contacts():
+            for fighter in sorted(session.fighters.values(), key=lambda f: f.key):
+                if not fighter.alive or fighter.spectator or fighter.team not in TEAMS:
+                    continue
+                for flag in self.flags.values():
+                    if flag.state == "carried" or distance(session.feet(fighter), flag.pos) > 60:
+                        continue
+                    flag_eye = (flag.pos[0], flag.pos[1] + 40, flag.pos[2])
+                    if session.visible_points(session.eye(fighter), flag_eye):
+                        yield fighter, flag
+
+        # All friendly recoveries happen before captures or enemy pickups.
+        for fighter, flag in contacts():
+            if fighter.team == flag.team and flag.state == "dropped":
+                self.touch(fighter, flag)
+        # Sample again because returning a flag changes its contact location.
+        for fighter, flag in contacts():
+            self.touch(fighter, flag)
+            if session.finished:
+                break
 
     def objective(self, fighter):
-        """Carriers return; defenders recover flags; attackers raid/escort."""
-        if not self.ctf or fighter.team not in self.flags:
+        """Select a team task from ownership, then assign idle defenders."""
+        if not self.ctf or fighter.spectator or fighter.team not in self.flags:
             return None
         own = self.flags[fighter.team]
-        enemy = self.flags["blue" if fighter.team == "red" else "red"]
+        enemy = next(flag for team, flag in self.flags.items() if team != fighter.team)
         if fighter.carrying:
-            return own.pos if own.dropped else own.home
-        if own.dropped:
-            return own.pos
-        if own.carrier:
-            carrier = self.session.fighters.get(own.carrier)
-            return self.session.feet(carrier) if carrier else own.home
-        if enemy.carrier:
-            carrier = self.session.fighters.get(enemy.carrier)
-            if carrier and carrier is not fighter:
-                p = self.session.feet(carrier)
-                return (p[0] + 90, p[1], p[2] + 90)
-        # Every third bot defends; the rest attack. Remote/local humans use input.
-        bots = [f for f in self.session.fighters.values() if f.entity is not None and not f.spectator and f.team == fighter.team]
-        if len(bots) > 2 and bots.index(fighter) % 3 == 2:
+            return own.pos if own.state == "dropped" else own.home
+        if own.state != "home":
+            thief = self.session.fighters.get(own.carrier)
+            return self.session.feet(thief) if thief is not None else own.pos
+        escort = self.session.fighters.get(enemy.carrier)
+        if escort is not None and escort is not fighter:
+            x, y, z = self.session.feet(escort)
+            return (x + 90, y, z + 90)
+        bots = sorted((f.key for f in self.session.fighters.values()
+                       if f.role == "bot" and not f.spectator and f.team == fighter.team))
+        if fighter.key in bots[2::3]:
             return own.home
         return enemy.pos
 

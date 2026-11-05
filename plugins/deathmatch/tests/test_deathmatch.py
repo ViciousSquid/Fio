@@ -553,6 +553,35 @@ def test_round_restart_replenishes_consumed_pickups(arena):
     assert not prop.properties["collect_collected"]
 
 
+def test_critical_health_takes_priority_over_nearer_empty_ammo(arena):
+    logic, session, human, bot = arena
+    bot.entity.properties["health"] = 20
+    bot.supplies.weapons.add("gun2")
+    pickup(logic, [200, 50, 300], collect_type="ammo", collect_value=8)
+    health = pickup(logic, [800, 50, 300], collect_type="health", collect_value=25)
+    assert bot.supplies.goal() is not None
+    assert bot.supplies.target is health
+
+
+def test_supplies_choose_shortest_route_within_a_need_category(arena):
+    logic, session, human, bot = arena
+    bot.entity.properties["health"] = 20
+    pickup(logic, [800, 50, 300], collect_type="health", collect_value=100)
+    near = pickup(logic, [200, 50, 300], collect_type="health", collect_value=5)
+    bot.supplies.goal()
+    assert bot.supplies.target is near
+
+
+def test_fighting_drops_routine_pickup_goal_before_next_rescan(arena):
+    logic, session, human, bot = arena
+    bot.entity.properties["health"] = 20
+    pickup(logic, [400, 50, 300], collect_type="health", collect_value=25)
+    assert bot.supplies.goal() is not None
+    bot.entity.properties["health"] = 80
+    assert bot.supplies.goal(fighting=True) is None
+    assert bot.supplies.target is None
+
+
 @pytest.fixture
 def ctf(arena):
     from plugins.deathmatch.entities import DeathmatchFlag
@@ -634,6 +663,34 @@ def test_ctf_capture_limit_ignores_fraglimit_and_restart_resets_flags(ctf):
     assert not session.finished and session.game.scores == {"red": 0, "blue": 0}
     assert all(not f.carrying for f in session.fighters.values())
     assert session.feet(human)[0] == -600 and session.feet(bot)[0] == 600
+
+
+def test_ctf_rejects_spectator_contacts_and_unowned_cargo(ctf):
+    logic, session, human, bot = ctf
+    game = session.game
+    human.spectator = True
+    game.touch(human, game.flags["blue"])
+    assert game.flags["blue"].state == "home" and human.carrying is None
+    human.spectator = False
+    human.carrying = "blue"
+    game.touch(human, game.flags["red"])
+    assert game.scores["red"] == 0 and human.captures == 0
+
+
+def test_ctf_recovery_allows_waiting_carrier_to_capture_in_same_tick(ctf):
+    logic, session, human, bot = ctf
+    game = session.game
+    game.touch(human, game.flags["blue"])
+    game.touch(bot, game.flags["red"])
+    place(bot, [0, 0, 300])
+    game.drop(bot)
+    game.assign(bot, "red")
+    place(human, list(game.flags["red"].home))
+    game.step()
+    assert game.scores["red"] == 1 and human.captures == 1
+    assert bot.objective_score == 1
+    game.step()
+    assert game.scores["red"] == 1 and human.captures == 1
 
 
 def test_teams_prevent_friendly_fire_and_teamkill_penalizes(arena):

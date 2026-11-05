@@ -474,9 +474,8 @@ def test_faces_are_submitted_per_state_run_not_per_face(renderer, context):
 
     A run is one texture and one cube face; everything else that used to be a
     per-face uniform travels as instance data. So a level of any size drawn
-    with T textures costs at most T * 6 submissions for its box brushes -- the
-    Quake 3 backend's rule, that state changes only where the sorted key
-    actually changes.
+    with T textures costs at most T * 6 submissions for its box brushes.
+    State changes only where the sorted key actually changes.
     """
     brushes, things = _grid_scene(side=12, textures=4)
     _render(renderer, context, brushes, things, numeric=True)

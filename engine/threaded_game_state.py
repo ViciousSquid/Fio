@@ -244,9 +244,8 @@ class ThreadedGameState:
         #: the thread already holding it); folded in by the next locked call.
         self._deferred_releases = []
 
-        # Double buffering, as in Quake 3's SMP renderer: the renderer reads
-        # one RenderState while the logic thread writes the other, and each
-        # owns its own persistent RenderTable/EntityTable.
+        # The renderer reads one RenderState while the logic thread writes
+        # the other. Each owns its own persistent RenderTable/EntityTable.
         #
         # The renderer borrows the read buffer for the length of a paint
         # (get_render_state / release_render_state). While it is borrowed the

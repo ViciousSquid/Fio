@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Item utility/travel-cost goals adapt Quake III botlib/be_ai_goal.c.
-# Copyright id Software; see NOTICE.md and LICENSE.
-"""Bot inventory and utility-based collection of native Props."""
+"""Bot inventory and priority-based collection of native Props."""
 import math
 
 from .navigation import distance
@@ -42,6 +40,12 @@ class BotSupplies:
         return pickup.effect, pickup.key_name, pickup.amount
 
     def utility(self, prop):
+        """An ordinal need category; zero means this pickup cannot help.
+
+        Survival, an empty ammunition reserve, new weapons and routine
+        replenishment form separate priorities. Travel distance breaks ties
+        within a priority instead of diluting an urgent need.
+        """
         s, f = self.session, self.fighter
         runtime = s.logic.prop_runtime
         if (not f.alive or not runtime._collectable(prop) or runtime.held is prop
@@ -51,20 +55,26 @@ class BotSupplies:
         kind, item, amount = self.reward(prop)
         if kind == "health":
             maximum = max(1, float(f.entity.properties.get("max_health", 100)))
-            missing = max(0, maximum - s.health(f))
-            return (100 + 200 * missing / maximum) if missing > 0 and amount > 0 else 0
+            health = s.health(f)
+            if health >= maximum or amount <= 0:
+                return 0
+            return 5 if health <= maximum * 0.35 else 2
         if kind == "weapon":
             if item is None or item.weapon is None or not item.weapon.fires:
                 return 0
-            return 100 if item.id not in self.weapons else 0
+            return 3 if item.id not in self.weapons else 0
         if kind == "ammo":
-            armed = any(s.logic.combat_runtime.items.resolve(w).weapon.ammo_per_shot > 0
-                        for w in self.weapons if s.logic.combat_runtime.items.resolve(w) is not None)
-            return (120 if self.ammo < 4 else 50) if armed and self.ammo < 24 and amount > 0 else 0
+            registry = s.logic.combat_runtime.items
+            weapons = [registry.resolve(name) for name in self.weapons]
+            armed = any(w is not None and w.weapon is not None
+                        and w.weapon.ammo_per_shot > 0 for w in weapons)
+            if not armed or self.ammo >= 24 or amount <= 0:
+                return 0
+            return 4 if self.ammo < 4 else 2
         if kind == "armor":
-            return 70 if self.armor < 100 and amount > 0 else 0
+            return 1 if self.armor < 100 and amount > 0 else 0
         if kind == "key":
-            return 20 if item and item not in self.keys else 0
+            return 1 if item and item not in self.keys else 0
         return 0
 
     def grant(self, prop, kind, amount, compiled_item):
@@ -116,34 +126,44 @@ class BotSupplies:
                 break
 
     def goal(self, fighting=False):
+        """Pursue the shortest reachable route in the highest need category."""
         s, f = self.session, self.fighter
         self.collect_nearby()
-        if self.target is not None and self.utility(self.target) <= 0:
+
+        def priority(prop):
+            need = self.utility(prop)
+            if fighting:
+                maximum = max(1, float(f.entity.properties.get("max_health", 100)))
+                if self.reward(prop)[0] != "health" or s.health(f) > maximum * 0.35:
+                    return 0
+            return need
+
+        if self.target is not None and priority(self.target) == 0:
             self.target, self.route = None, []
         if s.clock >= self.check_at:
             self.check_at = s.clock + 0.5
             candidates = []
+            origin = s.feet(f)
+            grid = s.logic.session_runtime.spatial_grid
             for prop in s.logic.prop_runtime.props_within(f.actor.pos.x, f.actor.pos.z, 1400):
-                value = self.utility(prop)
-                if not value or (fighting and self.reward(prop)[0] != "health"):
-                    continue
-                if fighting and s.health(f) > float(f.entity.properties.get("max_health", 100)) * 0.35:
+                need = priority(prop)
+                if need == 0:
                     continue
                 if not s.visible_points(s.eye(f), prop.pos):
                     continue
-                grid = s.logic.session_runtime.spatial_grid
                 ground = grid.raycast_down(prop.pos[0], prop.pos[2], prop.pos[1] + f.actor.height)
                 if ground is None:
                     continue
                 point = (prop.pos[0], ground, prop.pos[2])
-                route = s.nav.route(s.feet(f), point, s.walkable)
+                route = s.nav.route(origin, point, s.walkable)
                 if not route:
                     continue
-                cost = distance(s.feet(f), route[0]) + sum(distance(a, b) for a, b in zip(route, route[1:]))
-                candidates.append((value / (cost + 100), str(prop.properties["id"]), prop, route))
+                length = sum(distance(a, b) for a, b in zip([origin, *route], route))
+                candidates.append((need, -length, str(prop.properties["id"]), prop, route))
+            self.target, self.route = None, []
             if candidates:
-                _, _, self.target, self.route = max(candidates, key=lambda c: (c[0], c[1]))
-        if self.target is None or (fighting and self.reward(self.target)[0] != "health"):
+                _, _, _, self.target, self.route = max(candidates, key=lambda c: c[:3])
+        if self.target is None:
             return None
         # Keep the final pickup approach until collection, but honour node
         # radii and safe corner transitions on every intermediate waypoint.

@@ -1,13 +1,8 @@
 """Numerical render keys, and the state runs they sort into.
 
-Quake 3's backend never asks a surface what it is.  The frontend packs a
-surface's state -- its shader, entity, fog and dynamic-light bits -- into the
-integer ``drawSurf_t.sort``, sorts that array, and the backend walks it
-changing GL state only where the decoded key changes.  Classification happens
-once, numerically, at the front; submission is a walk over sorted integers.
-
-This module is that boundary for Fio, and nothing more.  It is deliberately
-small and deliberately GL-free:
+Fio groups surfaces by the GPU state they share. Dense NumPy columns are
+packed into integer keys, sorted, and split into equal-key runs so each run
+can establish its state once. This module provides that GL-free boundary:
 
 * :class:`KeyLayout` declares what a pass's key is made of and packs the dense
   columns describing it into one sortable ``int64`` per item;
