@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Host-authoritative LAN actors and snapshots, pumped on Fio's logic thread."""
 import math
+from engine.glasses import normalize_glasses
 
 from .lan import PROTOCOL
 from .entities import DeathmatchBot
@@ -51,6 +52,7 @@ class HostGame:
                     s.add_bot(name, "normal", team)
                     fighter = next(f for f in s.fighters.values() if f.name == name)
                     fighter.role, fighter.peer = "remote", key
+                    fighter.glasses_style = normalize_glasses(packet.get('glasses'))
                     fighter.fire_at = s.clock
                     fighter.supplies.weapons = {"gun1", "gun2"}
                     fighter.supplies.ammo = 24
@@ -60,12 +62,25 @@ class HostGame:
                                             weapon="gun1", at=s.clock)
                     self.transport.send(key, dict(type="welcome", protocol=PROTOCOL, you=fighter.key,
                                                   name=name, map=self.map_data))
+                elif packet.get('type') == 'spectate' and key in self.peers:
+                    if type(packet.get('enabled')) is not bool:
+                        continue
+                    target = packet.get('target')
+                    target = target if isinstance(target, str) else None
+                    other = s.fighters.get(target)
+                    fighter = self.peers[key]
+                    fighter.glasses_style = normalize_glasses(packet.get('glasses', fighter.glasses_style))
+                    if other is None or other is fighter or other.spectator or not other.alive:
+                        target = None
+                    s.spectators.set(fighter, packet['enabled'], target)
                 elif packet.get("type") == "input" and key in self.peers:
                     keys = packet.get("keys", [])
                     if not isinstance(keys, list) or len(keys) > 10:
                         continue
                     allowed = (0x57, 0x53, 0x41, 0x44, 0x20, 0x43, 0x01000020)
                     old = self.inputs[key]
+                    fighter = self.peers[key]
+                    fighter.glasses_style = normalize_glasses(packet.get('glasses', fighter.glasses_style))
                     self.inputs[key] = dict(keys=[k for k in keys if type(k) is int and k in allowed],
                         angle=finite(packet.get("angle")) % (2 * math.pi),
                         pitch=max(-1.5, min(1.5, finite(packet.get("pitch")))),
@@ -87,6 +102,12 @@ class HostGame:
         keys = set(data.get("keys", [])) if s.clock - data.get("at", -100) < 0.5 else set()
         fighter.actor.angle = data.get("angle", fighter.actor.angle)
         fighter.actor.pitch = data.get("pitch", 0)
+        if fighter.spectator:
+            if not s.spectators.follow(fighter):
+                s.spectators.fly(fighter.actor, dt, keys)
+            s.sync_entity_position(fighter)
+            data['shoot'] = False
+            return
         move = glm.vec3(int(0x41 in keys) - int(0x44 in keys), 0,
                         int(0x57 in keys) - int(0x53 in keys))
         fighter.actor.update(dt, move, 0x20 in keys, 0x43 in keys,
@@ -94,7 +115,7 @@ class HostGame:
             s.logic.mover_runtime._mover_brush_list, s.logic.mover_runtime._door_brush_list,
             s.logic.world_runtime.terrain, spatial_grid=s.logic.session_runtime.spatial_grid,
             sprint=0x01000020 in keys, gravity=world_gravity(s.logic.session_runtime.physics_world))
-        fighter.entity.pos = list(s.feet(fighter))
+        s.sync_entity_position(fighter)
         selected = data.get("weapon", "gun1")
         if selected in fighter.supplies.weapons:
             fighter.supplies.active = selected
@@ -112,6 +133,9 @@ class HostGame:
             supply = f.supplies
             actors.append(dict(key=f.key, name=f.name, role=f.role, team=f.team,
                 pos=list(f.actor.pos), angle=f.actor.angle, pitch=f.actor.pitch,
+                ducked=f.actor.ducked,
+                spectator=f.spectator, spectator_target=f.spectator_target,
+                glasses=normalize_glasses(s.logic.player_runtime.glasses_style if f.entity is None else f.glasses_style),
                 hp=s.health(f), alive=f.alive, frags=f.frags, deaths=f.deaths,
                 carrying=f.carrying, captures=f.captures,
                 respawn=f.respawn_at, protection=f.protected_until, shoot_until=f.shoot_until,
@@ -137,6 +161,7 @@ class ClientGame:
 
     def __init__(self, session, transport, welcome):
         self.session, self.transport, self.you = session, transport, welcome["you"]
+        self.pending_spectate = None
         self.elapsed, self.shot = 0, None
         self.disconnected = False
         s = session
@@ -175,6 +200,7 @@ class ClientGame:
             keys = s.logic.game_state.get_keys()
             shot = self.shot or {}
             self.transport.send(dict(type="input", keys=list(keys & {0x57, 0x53, 0x41, 0x44, 0x20, 0x43, 0x01000020}),
+                glasses=s.logic.player_runtime.glasses_style,
                 angle=shot.get("angle", actor.angle), pitch=shot.get("pitch", actor.pitch),
                 weapon=shot.get("weapon", s.logic.combat_runtime.active_weapon),
                 shoot=self.shot is not None, use=0x45 in keys))
@@ -193,6 +219,10 @@ class ClientGame:
         for record in records:
             key = mapping(record["key"])
             seen.add(key)
+            if key == 'player' and self.pending_spectate is not None:
+                if bool(record.get('spectator', False)) != self.pending_spectate:
+                    continue
+                self.pending_spectate = None
             f = s.fighters.get(key)
             if f is None:
                 entity = DeathmatchBot(properties={"id": key, "name": record["name"]})
@@ -203,21 +233,34 @@ class ClientGame:
                 s._spawned.append(entity)
                 topology = True
             s.game.assign(f, record["team"])
+            f.glasses_style = normalize_glasses(record.get('glasses'))
+            was_spectator = f.spectator
+            spectator = bool(record.get('spectator', False))
+            target = record.get('spectator_target')
+            target = mapping(target) if target else None
+            if key == 'player' and (spectator != f.spectator or target != f.spectator_target):
+                s.spectators.set(f, spectator, target)
+            else:
+                f.spectator, f.spectator_target = spectator, target
             server_pos = glm.vec3(record["pos"])
             if key == "player":
                 if not f.alive and record["alive"]:
                     f.actor.set_ducked(False)
                 # Local movement prediction with bounded authoritative correction.
                 error = glm.length(f.actor.pos - server_pos)
-                f.actor.pos = server_pos if error > 80 or not f.alive else f.actor.pos * 0.5 + server_pos * 0.5
+                f.actor.pos = server_pos if error > 80 or (not f.alive and not f.spectator) else f.actor.pos * 0.5 + server_pos * 0.5
                 rt, combat = s.logic.player_runtime, s.logic.combat_runtime
-                rt.player_health, rt.player_dead, rt.player_armor = record["hp"], not record["alive"], record["armor"]
+                rt.player_health, rt.player_dead, rt.player_armor = record["hp"], not record["alive"] and not spectator, record["armor"]
                 combat.weapons, combat.active_weapon, combat.player_ammo = set(record["weapons"]), record["weapon"], record["ammo"]
             else:
+                f.actor.set_ducked(record.get("ducked", False))
                 f.actor.pos = server_pos
                 f.actor.angle, f.actor.pitch = record["angle"], record["pitch"]
-                f.entity.pos = list(s.feet(f))
+                s.sync_entity_position(f)
                 f.entity.properties.update(health=record["hp"], dead=not record["alive"], hidden=not record["alive"], disabled=True)
+                if was_spectator != spectator:
+                    from engine.change_journal import touch
+                    touch(f.entity)
             f.alive, f.frags, f.deaths = record["alive"], record["frags"], record["deaths"]
             f.carrying, f.captures = record["carrying"], record["captures"]
             f.respawn_at, f.protected_until = record["respawn"], record["protection"]

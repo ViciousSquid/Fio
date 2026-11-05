@@ -160,6 +160,17 @@ def test_interleaved_textures_are_one_draw(renderer, context):
     assert renderer._sprite_layers.count == 3
 
 
+@pytest.mark.parametrize('overlay_first', [False, True])
+def test_carried_icon_overlays_coplanar_body_in_either_entity_order(renderer, context, overlay_first):
+    body = _billboard(renderer, 'carrier', (0, 90, 0), _solid((20, 200, 30)))
+    flag = _billboard(renderer, 'flag', (0, 90, 0), _solid((230, 20, 20)))
+    flag.properties['_sprite_overlay'] = True
+    things = [flag, body] if overlay_first else [body, flag]
+    image = _render(renderer, context, things)
+    centre = image[SIZE//2, SIZE//2].astype(int)
+    assert centre[0] > 180 and centre[1] < 70, centre.tolist()
+
+
 def test_a_layer_shows_the_same_image_as_its_texture(renderer, context):
     """The array path samples what the per-texture path sampled."""
     image = np.zeros((32, 32, 4), dtype=np.uint8)

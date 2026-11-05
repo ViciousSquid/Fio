@@ -6,8 +6,17 @@ front, 2 front-left, 3 left, 4 back-left, 5 back, 6 back-right,
 """
 
 import math
+import os
+import re
 
 import numpy as np
+
+
+def rotation_filename(filename, rotation):
+    """Accept either a sprite prefix or any selected view of an eight-view set."""
+    stem, ext = os.path.splitext(filename)
+    stem = re.sub(r'_[1-8]$', '', stem)
+    return '%s_%d%s' % (stem, rotation, ext)
 
 
 def face_direction(thing, direction):

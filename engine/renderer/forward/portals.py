@@ -477,7 +477,7 @@ class PortalsMixin:
             # and fog cannot overwrite them, with the oblique
             # projection so anything behind the destination aperture
             # stays clipped, and inside this portal's stencil level.
-            if cfg.get('show_glasses', True):
+            if cfg.get('show_glasses', True) or cfg.get('spectator_glasses_active', False):
                 player_glasses = self._portal_glasses_positions(
                     cfg, view_state, camera_pos)
                 if player_glasses:

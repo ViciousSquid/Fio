@@ -96,8 +96,10 @@ FRAME_INPUT = {
     'time': 'seconds since the view started, for editor-time animation',
     # Player presentation
     'show_glasses': 'bool: draw player glasses (portals mirror them)',
+    'spectator_glasses_active': 'bool: spectator appearances remain visible independently of normal player glasses',
     'player_glasses_positions': 'tuple of (x, y, z) per visible player',
     'player_glasses_sprites': 'tuple of sprite-texture keys, one per position',
+    'player_glasses_self_candidates': 'optional bool per pair: remote spectators cannot be mistaken for the viewer in mirrors',
 }
 
 

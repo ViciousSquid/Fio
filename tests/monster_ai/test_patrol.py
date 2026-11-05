@@ -145,6 +145,32 @@ def test_a_patrolling_monster_walks_toward_its_current_node(
            MONSTER_MOVE_SPEED * TICK))
 
 
+@pytest.mark.parametrize('marker_y', [-500, 90, 10000])
+def test_ground_patrol_arrives_within_radius_regardless_of_marker_height(
+        monster_factory, path_node_factory, ai_world, flat_ground, io_manager, marker_y):
+    node = path_node_factory('high_marker', (50, marker_y, 0), radius=64, wait_time=1)
+    monster = monster_factory('walker', (0, 96, 0), patrol=True, patrol_target='high_marker')
+    ai, logic = ai_world(brushes=flat_ground, things=[monster, node], player_pos=FAR_PLAYER)
+    logic.io_manager = io_manager
+    ai.update(TICK)
+    assert 'OnMonsterArrived' in io_manager.names()
+    assert monster.pos[1] == pytest.approx(96)
+
+
+@pytest.mark.parametrize('monster_type', ['human', 'flying'])
+@pytest.mark.parametrize('heading', range(0, 360, 45))
+def test_patrol_publishes_actual_heading_for_eight_direction_sprites(
+        monster_factory, path_node_factory, ai_world, flat_ground, monster_type, heading):
+    import math
+    angle = math.radians(heading)
+    node = path_node_factory('destination', (math.sin(angle)*600, 96, math.cos(angle)*600), radius=32)
+    monster = monster_factory('walker', (0, 96, 0), monster_type=monster_type,
+                              patrol=True, patrol_target='destination')
+    ai, logic = ai_world(brushes=flat_ground, things=[monster, node], player_pos=FAR_PLAYER)
+    ai.update(TICK)
+    assert monster.properties['angle'] == pytest.approx(heading, abs=1e-3)
+
+
 def test_arriving_at_a_node_fires_onmonsterarrived_once(
         monster_factory, path_node_factory, ai_world, flat_ground, io_manager):
     node = path_node_factory("n0", (40, 96, 0), radius=64.0)

@@ -268,6 +268,8 @@ class MainWindow(QMainWindow):
         self.surface_inspector = None  # lazily created Face-mode Surface Inspector
         self._entity_inspectors = {}   # id(entity) -> open EntityInspector (API 1.5.0)
         self.shortcuts_window = None   # lazily created Help > Keys window
+        from editor.entity_linking import EntityLinkTool
+        self.entity_link_tool = EntityLinkTool(self)
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)

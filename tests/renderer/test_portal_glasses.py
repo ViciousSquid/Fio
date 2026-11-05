@@ -88,6 +88,12 @@ def test_own_glasses_are_mirrored_and_others_stay_where_they_are(renderer):
     assert np.linalg.norm(np.subtract(got[1], cam)) > 100.0
 
 
+def test_spectator_near_the_camera_is_not_mistaken_for_our_own_glasses(renderer):
+    cfg = _cfg(SELF_EYE, sprites=['Glasses:cateye_pink'])
+    cfg['player_glasses_self_candidates'] = (False,)
+    assert _entries(renderer, cfg, _view(), SELF_EYE) == ((SELF_EYE, 'Glasses:cateye_pink'),)
+
+
 def test_nested_portal_views_drop_the_self_reflection(renderer):
     got = _positions(renderer, _cfg(SELF_EYE, OTHER_EYE), _view(depth=2), SELF_EYE)
     assert len(got) == 1

@@ -588,7 +588,10 @@ class VisibilityMixin:
             cy = float(frame_camera_pos[1])
             cz = float(frame_camera_pos[2])
             best = self.PORTAL_SELF_GLASSES_RADIUS ** 2
+            self_candidates = cfg.get('player_glasses_self_candidates', ())
             for i, pos in enumerate(positions):
+                if i < len(self_candidates) and not self_candidates[i]:
+                    continue
                 dx = float(pos[0]) - cx
                 dy = float(pos[1]) - cy
                 dz = float(pos[2]) - cz

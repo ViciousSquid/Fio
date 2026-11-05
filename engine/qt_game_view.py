@@ -1605,9 +1605,9 @@ class QtGameView(QOpenGLWidget):
     def _render_bullet_marks(self, marks, proj_matrix, view_matrix):
         self.renderer.draw_bullet_marks(proj_matrix, view_matrix, marks)
 
-    def _render_player_glasses(self, positions, proj_matrix, view_matrix):
+    def _render_player_glasses(self, positions, proj_matrix, view_matrix, *, sprites=None, force=False):
         """Draw one or more player bodies as glasses billboards."""
-        if not self.show_glasses:
+        if not force and not self.show_glasses:
             return
         if not positions or not self.renderer:
             return
@@ -1617,7 +1617,7 @@ class QtGameView(QOpenGLWidget):
             positions,
             width=40.0,
             height=18.0,
-            sprites=self._render_config.get("player_glasses_sprites", ()),
+            sprites=self._render_config.get("player_glasses_sprites", ()) if sprites is None else sprites,
         )
         # render_scene leaves depth testing disabled; restore that state after
         # this explicit post-scene billboard pass.
@@ -1903,21 +1903,17 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
-        _glass_positions = []
-        _glass_sprites = []
-        if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
-            if not render_state.player_dead:
-                _p = render_state.player_pos
-                _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
-                _glass_sprites.append(glasses_sprite_key(
-                    self.player1_glasses))
-            if (render_state.splitscreen_active
-                    and not render_state.player2_dead):
-                _p2 = render_state.player2_pos
-                _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
-                _glass_sprites.append(DEFAULT_SPRITE_KEY)
-        self._render_config["player_glasses_positions"] = tuple(_glass_positions)
-        self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
+        from engine.glasses import world_glasses
+        self.logic_thread.player_runtime.glasses_style = normalize_glasses(self.player1_glasses)
+        (_glass_positions, _glass_sprites, _spectator_positions, _spectator_sprites,
+         _spectator_active) = world_glasses(render_state if self.play_mode else None,
+                                          self.show_glasses, self.player1_glasses)
+        self._render_config["player_glasses_positions"] = _glass_positions
+        self._render_config["player_glasses_sprites"] = _glass_sprites
+        self._render_config["spectator_glasses_active"] = _spectator_active
+        self._render_config['player_glasses_self_candidates'] = (
+            (True,) * (len(_glass_positions)-len(_spectator_positions))
+            + (False,) * len(_spectator_positions))
         self._render_config["grid_visible"] = self.grid_visible and not self.play_mode
         _filters = self.editor.state.view_filters
         self._render_config["terrain"] = (
@@ -1992,11 +1988,12 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, self.view_matrix)
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, self.view_matrix)
-            if self.show_glasses and render_state is not None:
+            if (self.show_glasses or _spectator_active) and render_state is not None:
                 self._render_player_glasses(
                     self._render_config.get("player_glasses_positions", ()),
                     _split_proj,
                     self.view_matrix,
+                    force=_spectator_active,
                 )
 
 
@@ -2030,11 +2027,12 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, _p2_view)
             if self.play_mode and self.show_spatial_grid:
                 self._render_spatial_grid(_split_proj, _p2_view)
-            if self.show_glasses and render_state is not None:
+            if (self.show_glasses or _spectator_active) and render_state is not None:
                 self._render_player_glasses(
                     self._render_config.get("player_glasses_positions", ()),
                     _split_proj,
                     _p2_view,
+                    force=_spectator_active,
                 )
 
 
@@ -2049,6 +2047,9 @@ class QtGameView(QOpenGLWidget):
             # Native overhead player sprite (top-down mode), depth-tested so
             # walls occlude it correctly.
             self._draw_overhead_sprite(render_state)
+            if self.play_mode and render_state is not None:
+                self._render_player_glasses(_spectator_positions, self.projection_matrix, self.view_matrix,
+                                            sprites=_spectator_sprites, force=True)
             # Collision visualization
             if getattr(self, '_collision_vis_mode', 'off') != 'off':
                 # Get collision brushes from logic thread

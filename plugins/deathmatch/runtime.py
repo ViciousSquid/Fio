@@ -11,7 +11,8 @@ import math
 import random
 
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
-from .navigation import Navigation, distance
+from .navigation import Navigation, MoverTraversal, distance
+from .moving_navigation import NavigationWorld
 from .supplies import BotSupplies
 from .teams import TeamGame
 
@@ -66,6 +67,11 @@ class Fighter:
     objective_score: int = 0
     role: str = "bot"
     peer: str | None = None
+    traversal: object = None
+    navigation_reason: str = ""
+    spectator: bool = False
+    spectator_target: str | None = None
+    glasses_style: str = 'classic'
 
 
 class DeathmatchSession:
@@ -107,12 +113,11 @@ class DeathmatchSession:
         self.map_data = self.logic.editor_state.get_level_data()
         props = self.settings.properties
         self.game = TeamGame(self)
-        self.limit = int(number(props, "frag_limit", 20, 0, 10000))
-        self.duration = number(props, "time_limit", 300, 0, 86400)
+        self.limit = int(number(props, "frag_limit", 50, 0, 10000))
+        self.duration = number(props, "time_limit", 1800, 0, 86400)
         self.delay = number(props, "respawn_delay", 3, 0.1, 30)
         self.protection = number(props, "spawn_protection", 1.5, 0, 10)
         self.rng = random.Random(int(number(props, "seed", 42, -2147483648, 2147483647)))
-        self.nav = Navigation([t for t in things if isinstance(t, DeathmatchNode)])
         self.spawns = [(tuple(t.pos), math.radians(number(t.properties, "angle", 0, -360, 360)))
                        for t in things if isinstance(t, DeathmatchSpawn)]
         self.spawn_teams = {tuple(t.pos): t.properties.get("team", "any")
@@ -126,6 +131,10 @@ class DeathmatchSession:
         self._loadout = (set(combat.weapons), combat.active_weapon, combat.player_ammo)
         self._player_pose = (tuple(rt.player.pos), rt.player.angle, rt.player.pitch)
         self.hull = (rt.player.width / 2, rt.player.height / 2, rt.player.depth / 2)
+        self.nav_world = NavigationWorld(self.logic, self.hull, rt.player.step_height)
+        self.nav = Navigation([t for t in things if isinstance(t, DeathmatchNode)],
+                              project=self.navigation_point, surfaces=self.nav_world.surfaces,
+                              transition=self.nav_world.transfer)
         self._started = True
         for entity in things:
             if not isinstance(entity, DeathmatchBot):
@@ -157,21 +166,39 @@ class DeathmatchSession:
         setattr(obj, name, wrapped)
 
     def _install_hooks(self):
+        from .spectator import Spectators
+        self.spectators = Spectators(self)
         self._hook(self.logic, "_tick_play_mode", self._engine_tick)
         self._hook(self.logic.combat_runtime, "_damage_monster", self._player_hit)
         self._hook(self.logic.monster_ai, "_apply_monster_damage", self._monster_hit)
         self._hook(self.logic.trigger_runtime, "_apply_player_damage", self._human_hit)
         self._hook(self.logic.combat_runtime, "_handle_shooting", self._player_fire)
+        self.spectators.install()
 
     def _engine_tick(self, original, delta):
         was_dead = self.logic.player_runtime.player_dead
+        riders = [(f, f.actor.ground_object, tuple(f.actor.ground_object['pos']))
+                  for f in self.fighters.values() if f.entity is not None and f.alive
+                  and f.actor.on_ground and isinstance(f.actor.ground_object, dict)
+                  and (f.actor.ground_object.get('is_mover') or f.actor.ground_object.get('is_door'))]
         original(delta)
         if not self._started:
             return
+        # Native movers carry the local player. Carry the other Player
+        # controllers by the same actual translation, once, before snapshots.
+        import glm
+        live = {id(b) for b in self.logic.editor_state.brushes}
+        for fighter, support, before in riders:
+            if (fighter.alive and id(support) in live and fighter.actor.on_ground
+                    and fighter.actor.ground_object is support):
+                fighter.actor.pos += glm.vec3(support['pos']) - glm.vec3(before)
+                self.sync_entity_position(fighter)
         if self.network is not None:
             with self.logic.session_runtime.monster_lock:
                 self.network.tick(max(0, min(float(delta), 0.1)))
             if self.network.is_client:
+                if self.fighters['player'].spectator:
+                    self.spectators.follow(self.fighters['player'])
                 return
         # Unlike Fio's regular plugin tick, this also runs during the native
         # death screen, so the respawn clock and surviving bots keep moving.
@@ -185,6 +212,8 @@ class DeathmatchSession:
             self.step(delta)
 
     def _player_fire(self, original):
+        if self.fighters['player'].spectator:
+            return
         if self.network is not None and self.network.is_client:
             import time
             combat = self.logic.combat_runtime
@@ -278,6 +307,7 @@ class DeathmatchSession:
         victim.deaths += 1
         victim.respawn_at = self.clock + self.delay
         victim.target, victim.route = None, []
+        victim.traversal = None
         was_carrier = victim.carrying is not None
         self.game.drop(victim)
         if killer is not None and killer is not victim:
@@ -303,7 +333,7 @@ class DeathmatchSession:
     def check_frag_limit(self):
         if not self.limit or self.game.ctf:
             return
-        values = self.game.scores.values() if self.game.enabled else (f.frags for f in self.fighters.values())
+        values = self.game.scores.values() if self.game.enabled else (f.frags for f in self.fighters.values() if not f.spectator)
         if any(v >= self.limit for v in values):
             self.finish("Frag limit")
 
@@ -322,8 +352,9 @@ class DeathmatchSession:
         self.publish()
 
     def leaders(self):
-        best = max(f.frags for f in self.fighters.values())
-        return [f for f in self.fighters.values() if f.frags == best]
+        participants = [f for f in self.fighters.values() if not f.spectator]
+        best = max((f.frags for f in participants), default=0)
+        return [f for f in participants if f.frags == best]
 
     def restart(self):
         self.clock, self.finished, self.reason = 0.0, False, ""
@@ -350,6 +381,12 @@ class DeathmatchSession:
     def feet(self, fighter):
         p = fighter.actor.pos
         return (float(p[0]), float(p[1]) - fighter.actor.height / 2, float(p[2]))
+
+    def sync_entity_position(self, fighter):
+        """Centre the billboard above the controller's feet, using its own size."""
+        from engine.entity_table import sprite_size
+        x, y, z = self.feet(fighter)
+        fighter.entity.pos = [x, y + sprite_size(fighter.entity)[1] / 2, z]
 
     def eye(self, fighter):
         p = fighter.actor.pos
@@ -383,6 +420,8 @@ class DeathmatchSession:
         return self.rng.choice(ranked[:max(1, len(ranked) // 2)])
 
     def respawn(self, fighter):
+        if fighter.spectator:
+            return
         import glm
         pos, angle = self.spawn_choice(fighter)
         fighter.actor.set_ducked(False)
@@ -398,6 +437,7 @@ class DeathmatchSession:
         fighter.shoot_until = 0.0
         fighter.memory_until = fighter.route_at = fighter.stuck = 0.0
         fighter.escape_until = 0.0
+        fighter.traversal, fighter.navigation_reason = None, ""
         fighter.jump_held = False
         fighter.mode, fighter.visible = "roam", False
         if fighter.entity is None:
@@ -411,7 +451,7 @@ class DeathmatchSession:
                 fighter.supplies.weapons = {"gun1", "gun2"}
                 fighter.supplies.ammo = 24
                 fighter.fire_at = self.clock
-            fighter.entity.pos = list(pos)
+            self.sync_entity_position(fighter)
             fighter.entity.properties.update(
                 health=int(number(fighter.entity.properties, "max_health", 100, 1, 10000)),
                 dead=False, hidden=False, disabled=True, is_shooting=False)
@@ -505,27 +545,102 @@ class DeathmatchSession:
         """Conservative full-hull corridor, including current movers/doors.
 
         This is a flat waypoint planner. Physics still handles slopes/steps;
-        designers connect nodes on walkable floors, never across drops.
+        Marker heights are projected separately; walking segments must have
+        supporting floors and must never be authored across drops.
         """
-        import glm
-        combat = self.logic.combat_runtime
-        a = glm.vec3(start) + glm.vec3(0, self.hull[1], 0)
-        b = glm.vec3(end) + glm.vec3(0, self.hull[1], 0)
-        delta = b - a
-        length = glm.length(delta)
-        direction = delta / length if length > 0.001 else glm.vec3(0, 0, 1)
-        # Slightly inset floor/ceiling so a grounded actor isn't blocked by
-        # its own supporting floor through floating-point contact noise.
-        hull = glm.vec3(self.hull) - glm.vec3(0, 1, 0)
-        for brush in self.logic.collision_runtime._collision_brushes_cache:
-            if not combat._blocks_hitscan(brush):
-                continue
-            half = glm.vec3(brush["size"]) * 0.5 + hull
-            center = glm.vec3(brush["pos"])
-            hit, _ = combat.intersect_ray_aabb(a, direction, center - half, center + half, length)
-            if hit:
-                return False
-        return True
+        return self.nav_world.clear(start, end)
+
+    def walkable(self, start, end):
+        return self.nav_world.walkable(start, end)
+
+    def navigation_point(self, marker, reference):
+        return self.nav_world.project(marker, reference)
+
+    def plan_route(self, fighter, goal):
+        route = self.nav.route(self.feet(fighter), goal, self.walkable)
+        fighter.navigation_reason = '' if route else self.nav_world.blocker(self.feet(fighter), goal)
+        return route
+
+    def follow_route(self, fighter, route, radius=36):
+        self.nav.advance(route, self.feet(fighter), self.walkable, default_radius=radius)
+        if not route:
+            if fighter.navigation_reason:
+                fighter.mode = 'waiting for route'
+            return None
+        point = route[0]
+        if isinstance(point, MoverTraversal):
+            fighter.traversal = point
+            point.route = route
+            return self.traversal_target(fighter)
+        if self.walkable(self.feet(fighter), point):
+            fighter.navigation_reason = ""
+            return point
+        fighter.navigation_reason = self.nav_world.blocker(self.feet(fighter), point)
+        fighter.mode = 'waiting for route'
+        route.clear()
+        fighter.route_at = self.clock + 0.25
+        return None
+
+    def traversal_target(self, fighter):
+        action = fighter.traversal
+        mover, pos = action.mover, self.feet(fighter)
+        name = mover.get('name') or 'platform'
+        if (not any(b is mover for b in self.logic.editor_state.brushes)
+                or mover.get('hidden') or mover.get('disabled')):
+            fighter.traversal = None
+            action.route.clear()
+            fighter.route_at = self.clock
+            fighter.navigation_reason = 'Mover no longer available; replanning'
+            return None
+        aboard = fighter.actor.on_ground and fighter.actor.ground_object is mover
+        if aboard and action.stage not in ('disembark',):
+            action.stage = 'ride'
+        if action.stage == 'approach':
+            if math.hypot(pos[0]-action.landing[0], pos[2]-action.landing[2]) > 12:
+                fighter.mode = 'approaching mover'
+                return action.landing if self.walkable(pos, action.landing) else None
+            action.stage = 'wait'
+        current = tuple(mover['pos'])
+        standing = (current[0]+action.offset[0], current[1]+mover['size'][1]/2,
+                    current[2]+action.offset[2])
+        if action.stage in ('wait', 'board'):
+            near_stop = (abs(current[1]-action.board[1]) <= fighter.actor.step_height+1
+                         and math.hypot(current[0]-action.board[0], current[2]-action.board[2]) <= 32)
+            if near_stop and self.walkable(pos, standing):
+                action.stage = 'board'
+                fighter.mode = 'boarding mover'
+                fighter.navigation_reason = f'Boarding {name}'
+                return standing
+            fighter.mode = 'waiting for mover'
+            fighter.navigation_reason = f'Waiting for {name} at the boarding stop'
+            return None
+        if action.stage == 'ride':
+            if not aboard and fighter.actor.on_ground:
+                fighter.traversal = None
+                action.route.clear()
+                fighter.route_at = self.clock
+                fighter.navigation_reason = 'Left mover before destination; replanning'
+                return None
+            if self.walkable(pos, action.target):
+                action.stage = 'disembark'
+            else:
+                fighter.mode = 'riding mover'
+                fighter.navigation_reason = f'Riding {name}; waiting for a supported exit'
+                return standing if math.hypot(pos[0]-standing[0], pos[2]-standing[2]) > 6 else None
+        if action.stage == 'disembark':
+            if not aboard and abs(pos[1]-action.target[1]) <= 2:
+                fighter.traversal = None
+                if action.route and action.route[0] is action:
+                    action.route.pop(0)
+                fighter.navigation_reason = f'Disembarked from {name}'
+                return None
+            if self.walkable(pos, action.target):
+                fighter.mode = 'leaving mover'
+                return action.target
+            if aboard:
+                action.stage = 'ride'
+                fighter.navigation_reason = self.nav_world.blocker(pos, action.target)
+            return None
 
     def health(self, fighter):
         return (self.logic.player_runtime.player_health if fighter.entity is None
@@ -590,25 +705,31 @@ class DeathmatchSession:
         retreat = self.health(fighter) < number(fighter.entity.properties, "max_health", 100, 1) * 0.3
         fighter.mode = "retreat" if retreat and visible else "fight" if visible else "search" if fighter.last_seen else "roam"
         goal = fighter.last_seen
-        if supply_goal is not None:
+        if fighter.traversal is not None:
+            waypoint = self.traversal_target(fighter)
+            move = glm.vec3(0)
+            if waypoint is not None:
+                fighter.actor.angle = math.atan2(waypoint[0]-pos[0], waypoint[2]-pos[2])
+                fighter.actor.pitch = 0
+                move.z = 1 if math.hypot(waypoint[0]-pos[0], waypoint[2]-pos[2]) > 4 else 0
+        elif supply_goal is not None:
             fighter.mode = "resupply"
-            fighter.actor.angle = math.atan2(supply_goal[0] - pos[0], supply_goal[2] - pos[2])
+            supply_goal = self.follow_route(fighter, fighter.supplies.route, 30)
+            fighter.actor.angle = math.atan2(supply_goal[0] - pos[0], supply_goal[2] - pos[2]) if supply_goal else fighter.actor.angle
             fighter.actor.pitch = 0
             prop = fighter.supplies.target
             if prop is not None and distance(self.eye(fighter), prop.pos) < 80:
                 delta = glm.vec3(prop.pos) - glm.vec3(self.eye(fighter))
                 fighter.actor.pitch = math.atan2(delta.y, math.hypot(delta.x, delta.z))
-            move = glm.vec3(0, 0, 1) if distance(pos, supply_goal) > 8 else glm.vec3(0)
+            move = glm.vec3(0, 0, 1) if supply_goal is not None and distance(pos, supply_goal) > 8 else glm.vec3(0)
         elif objective is not None:
             fighter.mode = "flag carrier" if fighter.carrying else "objective"
-            if self.clock >= fighter.route_at or not fighter.route:
-                fighter.route = self.nav.route(pos, objective, self.clear)
+            if self.clock >= fighter.route_at:
+                fighter.route = self.plan_route(fighter, objective)
                 fighter.route_at = self.clock + 0.5
-            while fighter.route and distance(pos, fighter.route[0]) < 25:
-                fighter.route.pop(0)
+            waypoint = self.follow_route(fighter, fighter.route, 25)
             move = glm.vec3(0)
-            if fighter.route:
-                waypoint = fighter.route[0]
+            if waypoint is not None:
                 if visible:
                     offset = glm.vec3(self.eye(target)) - glm.vec3(self.eye(fighter))
                     fighter.actor.angle = math.atan2(offset.x, offset.z) + fighter.aim_error[0]
@@ -637,17 +758,18 @@ class DeathmatchSession:
             fighter.actor.pitch = 0
             if goal is None and self.nav.points:
                 if not fighter.route or self.clock >= fighter.route_at:
-                    goal = self.rng.choice(list(self.nav.points.values()))
+                    name = self.rng.choice(list(self.nav.points))
+                    options = self.nav.options(name, pos)
+                    goal = self.rng.choice(options) if options else None
                 else:
                     goal = fighter.route[-1]
             if goal is not None and (self.clock >= fighter.route_at or not fighter.route):
-                fighter.route = self.nav.route(pos, goal, self.clear)
+                fighter.route = self.plan_route(fighter, goal)
                 fighter.route_at = self.clock + 1.0
-            while fighter.route and distance(pos, fighter.route[0]) < 36:
-                fighter.route.pop(0)
+            waypoint = self.follow_route(fighter, fighter.route)
             move = glm.vec3(0)
-            if fighter.route:
-                nxt = fighter.route[0]
+            if waypoint is not None:
+                nxt = waypoint
                 fighter.actor.angle = math.atan2(nxt[0] - pos[0], nxt[2] - pos[2])
                 move.z = 1.0
             elif goal is None:
@@ -655,10 +777,16 @@ class DeathmatchSession:
                 fighter.actor.angle += dt * 0.35 * fighter.strafe
                 move.z = 1.0
         old = glm.vec3(fighter.actor.pos)
-        if self.clock < fighter.escape_until:
+        if self.clock < fighter.escape_until and fighter.traversal is None:
             fighter.actor.angle = fighter.escape_angle
             move = glm.vec3(0, 0, 1)
-        jump = fighter.stuck > 0.6 and not fighter.jump_held
+        if fighter.actor.on_ground and glm.length(move) > 0:
+            forward = glm.vec3(math.sin(fighter.actor.angle), 0, math.cos(fighter.actor.angle))
+            side = glm.vec3(math.cos(fighter.actor.angle), 0, -math.sin(fighter.actor.angle))
+            predicted = glm.vec3(pos) + (forward*move.z+side*move.x)*max(8, dt*fighter.actor.speed)
+            if not self.walkable(pos, predicted):
+                move = glm.vec3(0)
+        jump = fighter.stuck > 0.6 and not fighter.jump_held and fighter.traversal is None
         fighter.actor.update(
             dt, move, jump, False, self.logic.collision_runtime._collision_brushes_cache,
             self.logic.mover_runtime._mover_brush_list, self.logic.mover_runtime._door_brush_list,
@@ -677,7 +805,7 @@ class DeathmatchSession:
             fighter.route.clear()
             fighter.route_at = self.clock + 0.5
             fighter.stuck = 0
-        fighter.entity.pos = list(self.feet(fighter))
+        self.sync_entity_position(fighter)
         fighter.supplies.collect_nearby()
         if fighter.actor.pos.y < -4096:
             self.kill(fighter)
@@ -757,6 +885,10 @@ class DeathmatchSession:
                 self.finish("Time limit")
         if not self.finished:
             for fighter in self.fighters.values():
+                if fighter.spectator:
+                    if fighter.role == 'remote' and self.network is not None:
+                        self.network.update_remote(fighter, dt)
+                    continue
                 if not fighter.alive:
                     if self.clock >= fighter.respawn_at:
                         self.respawn(fighter)
@@ -774,6 +906,9 @@ class DeathmatchSession:
                     break
             if not self.finished:
                 self.game.step()
+        for fighter in self.fighters.values():
+            if fighter.spectator:
+                self.spectators.follow(fighter)
         self.noises = [n for n in self.noises if self.clock - n[0] < 2]
         self.feed = [entry for entry in self.feed if self.clock < entry[0]][-4:]
         self.publish()
@@ -807,12 +942,17 @@ class DeathmatchSession:
             flags=tuple((flag.team, "carried" if flag.carrier else "dropped" if flag.dropped else "home")
                         for flag in self.game.flags.values()) if self.game.ctf else (),
             network_client=self.network is not None and self.network.is_client,
+            spectating=human.spectator,
+            watching=self.fighters[human.spectator_target].name if human.spectator_target in self.fighters else None,
+            spectators=tuple(f.name for f in rows if f.spectator),
+            watchable=tuple((f.key, f.name, f.team, f.alive, f.spectator) for f in rows),
         )
 
     def stop(self):
         if not self._started:
             return
         self._started = False
+        self.spectators.stop()
         if self.network is not None:
             self.network.close()
             self.network = None

@@ -81,6 +81,13 @@ match ends prepares them for the next round; press R to start it.
 
 ## Bot behaviour
 
+For illustrated routing examples and node placement advice, see the
+[bot navigation guide](NAVIGATION_GUIDE.md).
+
+`botdebug` opens a floating live overview and one tab per bot, including
+ordinary monsters. It is a core editor command and also works while the
+Deathmatch plugin is disabled. Use `botdebug off` to close it.
+
 - Bots fight every opposing participant, including other bots.
 - Field of view, range and real world occlusion govern sight. Bots remember a
   last seen position briefly; hearing gunfire prompts investigation without
@@ -116,7 +123,7 @@ author CTF, place exactly one red and one blue **CTF Flag** at floor height.
 Take the enemy flag to your base while your own flag is home to capture.
 Carriers drop flags on death or removal; touch your dropped flag to return it.
 Unattended flags return after `flag_return_time` (default 40 seconds, from
-Quake III). `capture_limit` defaults to three; zero disables it. Frag limits
+Quake III). `capture_limit` defaults to 10; zero disables it. Frag limits
 do not end CTF games. Team Deathmatch uses combined team frags and penalizes
 team kills/suicides. The scoreboard shows team scores and flag status.
 
@@ -133,7 +140,7 @@ Place entities from **Plugins → deathmatch**:
 | Match Settings | Exactly one per arena. Starts the mode. |
 | Bot Opponent | One bot per entity; edit skill, health and perception settings. |
 | Respawn Point | Shared spawn, placed at **floor/feet height**. Add more than the participant count if possible. |
-| Navigation Node | Waypoint at **floor height**, with a unique name. |
+| Bot Navigation Node | Marker at any convenient height, with a unique name and arrival `radius`. |
 
 Add a normal **PlayerStart** so Fio can enter Play. Deathmatch replaces its
 initial position with a shared respawn. Spawn angles use the runtime convention:
@@ -141,16 +148,29 @@ initial position with a shared respawn. Spawn angles use the runtime convention:
 Respawn selection prefers unoccupied positions farther from opponents and
 behind cover. Positions must have room for the player hull.
 
-Connect navigation nodes using comma-separated **names** in `links`, such as
-`West_Corner,Central_Hall`. Links work in both directions. Place enough nodes
-around corners and obstacles; keep linked segments on walkable floors. This is
-an authored waypoint planner, not an automatic navmesh bake: it does not plan
-intentional jumps, ladders or routes across cliffs. Without waypoints, bots
-still use direct pursuit and local exploration, with less reliable navigation
-around complex geometry.
+New **Bot Navigation Nodes** use a teal diamond marker and automatically connect
+to up to six reachable neighbours within `link_range` (default 512 units).
+Fine-tune their comma-separated `links` afterwards; Ctrl-K dragging adds a link.
+Links work in both directions. Placement preserves existing manual edits, and
+loading/playing a map does not regenerate links. Moving a node keeps its links
+for review. `auto_link` controls its placement-time behaviour.
 
-Match Settings exposes `frag_limit` (default 20), `time_limit` in seconds
-(default 300), `respawn_delay`, `spawn_protection`, `seed`, and `show_hud`.
+Marker height is flexible: standing surfaces and route connectivity determine
+the actual walking height. Bots arrive within the node's `radius` when the next
+segment is safe. Live validation rejects walls, unsupported gaps and closed or
+partly open doors. Bots can wait for, board, ride and disembark active cyclic
+linear and path-driven platforms with clear, supported approaches. The mover's
+ordinary PathNodes remain distinct from the bot's teal navigation nodes.
+
+This is a waypoint planner, not an automatic navmesh bake. It does not plan
+intentional jumps, ladders, rotating/scripted movers or routes across cliffs.
+Without waypoints, bots still use direct pursuit and local exploration, with
+less reliable navigation around complex geometry. See the illustrated guide
+for door, platform and node placement examples. Ctrl-K also creates native
+PathNode chains and appropriate entity I/O links.
+
+Match Settings exposes `frag_limit` (default 50), `time_limit` in seconds
+(default 1800, or 30 minutes), `respawn_delay`, `spawn_protection`, `seed`, and `show_hud`.
 Zero disables either limit; zero for both allows continuous play. The seed
 controls bot decisions and spawn tie-breaking for a given sequence of ticks.
 
@@ -211,3 +231,25 @@ to be checked on the target LAN/graphics setup.
 The plugin includes Quake III-derived gameplay algorithms and is distributed
 under **GPL-2.0-or-later**. See `LICENSE` and `NOTICE.md` for the original id
 Software attribution and source references. Fio's existing MIT notices remain.
+
+CTF flags use transparent red/blue billboards and overlay a smaller flag icon on
+the carrier. Each flag always emits its colour of light at home, while dropped
+and while carried. `dflaglight` / `dflaglight on` enables shadow casting for both
+flag lights in your own view; `dflaglight off` keeps the lights on without shadows.
+This setting is per-client, is never replicated, and survives round restarts. `botdebug` refreshes
+twice per second (500 ms).
+
+Open **Esc → Spectator…** during a match, or type `spectate` in the console.
+The menu offers free camera, a live player/bot list, follow/cycle controls and
+Join match. `spectate free`, `spectate off`, `spectate next`, `spectate prev`,
+and `spectate PlayerName` also work on the host or a LAN client.
+
+Spectators cannot shoot, collect items, trigger interactions or carry flags.
+They do not auto-respawn; Join match starts a fresh life. Free camera uses WASD,
+Space up, C down and Shift for faster flight. Following switches to free camera
+if the watched player dies or leaves.
+
+Spectators **always appear as glasses**, wearing the style they chose in
+Settings → Appearance. Their chosen appearance is shared with other players;
+the ordinary Show glasses toggle does not hide spectators. Flag light shadow
+quality remains a separate, per-client setting and is never replicated.

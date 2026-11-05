@@ -33,6 +33,7 @@ class LogicPlayer:
     def __init__(self, logic):
         self.logic = logic
         self.player = None
+        self.glasses_style = 'classic'
         self.player2 = None
         self._player_was_in_water = False
         self._waterwalk_timer = 0.0

@@ -59,6 +59,7 @@ DECLARED = (
     ('Edit', 'Ctrl+C', 'Copy the selected brush or multi-selection'),
     ('Edit', 'Ctrl+V', 'Paste the copied brush or multi-selection, offset by one grid step'),
     ('Edit', 'Shift+Space', 'Clone the selection and place the copy'),
+    ('Tools', 'Ctrl+K', 'Drag an arrow from the selected entity to another entity to link them'),
     ('Edit', 'H', 'Hide the selected brush'),
     ('Edit', 'Shift+H', 'Unhide every brush'),
 

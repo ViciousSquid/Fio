@@ -249,6 +249,8 @@ class LogicRender:
         logic = self.logic
         started = time.perf_counter()
         write_state = logic.game_state.get_write_state()
+        write_state.local_spectator = False
+        write_state.spectator_glasses = ()
         write_state.is_play_mode = logic.session_runtime.play_mode
         write_state.light_fade_range = (
             getattr(logic, 'light_fade_range', None) if write_state.is_play_mode else None)
