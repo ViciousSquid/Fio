@@ -80,6 +80,9 @@ def collect_bots(owner):
                             ('Goal', row['route'][-1] if row['route'] else None),
                             ('Next waypoint', row['route'][0] if row['route'] else None),
                             ('Waypoints remaining', len(row['route'])),
+                            ('Navigation', fighter.navigation_reason),
+                            ('Mover phase', fighter.traversal.stage if fighter.traversal else None),
+                            ('Mover', fighter.traversal.mover.get('name', 'platform') if fighter.traversal else None),
                             ('Stuck time (s)', fighter.stuck),
                             ('Escape remaining (s)', max(0, fighter.escape_until - session.clock)),
                             ('Weapon', row['weapon']), ('Ammo', supply.ammo if supply else None),
@@ -140,7 +143,7 @@ def collect_bots(owner):
 
 
 class BotDebugWindow(QDialog):
-    REFRESH_MS = 250
+    REFRESH_MS = 500
 
     def __init__(self, owner):
         super().__init__(owner, Qt.Tool | Qt.WindowStaysOnTopHint | Qt.WindowCloseButtonHint)

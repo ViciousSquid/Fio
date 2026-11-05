@@ -3,6 +3,9 @@
 # Original Copyright (C) 1999-2005 id Software, Inc.; see NOTICE.md and LICENSE.
 """Red/blue teams and Quake III-style two-flag Capture the Flag."""
 from dataclasses import dataclass
+import copy
+
+from engine.change_journal import touch
 
 from .entities import DeathmatchFlag
 from .navigation import distance
@@ -20,6 +23,7 @@ class Flag:
     carrier: str | None = None
     dropped: bool = False
     return_at: float = 0.0
+    light: object = None
 
 
 class TeamGame:
@@ -30,8 +34,9 @@ class TeamGame:
         self.enabled = self.mode in ("teamdeathmatch", "ctf")
         self.ctf = self.mode == "ctf"
         self.friendly_fire = bool(p.get("friendly_fire", False))
-        self.capture_limit = max(0, int(p.get("capture_limit", 3)))
+        self.capture_limit = max(0, int(p.get("capture_limit", 10)))
         self.return_delay = max(1, min(300, float(p.get("flag_return_time", 40))))
+        self.flag_shadows = False
         self.scores = dict.fromkeys(TEAMS, 0)
         self.flags = {}
         self._authored = []
@@ -43,7 +48,7 @@ class TeamGame:
                 raise ValueError("A CTF map requires exactly one red and one blue flag.")
             home = tuple(entity.pos)
             self.flags[team] = Flag(team, entity, home, home)
-            self._authored.append((entity, list(entity.pos), entity.properties.get("hidden", False)))
+            self._authored.append((entity, list(entity.pos), copy.deepcopy(entity.properties)))
         if self.ctf and set(self.flags) != set(TEAMS):
             raise ValueError("CTF needs one Deathmatch Flag for each team.")
 
@@ -87,9 +92,46 @@ class TeamGame:
             self.session.emit("deathmatch.flag_return", team=flag.team)
 
     def draw(self, flag):
-        flag.entity.properties["hidden"] = not self.ctf
-        p = flag.pos
-        flag.entity.pos = [p[0], p[1] + (160 if flag.carrier else 64), p[2]]
+        carrier = self.session.fighters.get(flag.carrier)
+        carried = carrier is not None and carrier.alive
+        presentation = dict(hidden=not self.ctf, _sprite_overlay=carried,
+                            sprite_size=[64, 64] if carried else [128, 128],
+                            sprite_path=flag.entity.get_sprite_path())
+        props = flag.entity.properties
+        if any(props.get(key) != value for key, value in presentation.items()):
+            props.update(presentation)
+            touch(flag.entity)
+        if carried:
+            # Share the body's exact centre, for every heading and camera.
+            # The renderer's overlay ordering keeps the icon over the body.
+            flag.pos = self.session.feet(carrier)
+            if carrier.entity is not None:
+                flag.entity.pos = list(carrier.entity.pos)
+            else:
+                p = flag.pos
+                flag.entity.pos = [p[0], p[1]+64, p[2]]
+        else:
+            p = flag.pos
+            flag.entity.pos = [p[0], p[1]+64, p[2]]
+        self.draw_light(flag)
+
+    def draw_light(self, flag):
+        if self.ctf and flag.light is None:
+            from editor.things import Light
+            colour = [255, 35, 20] if flag.team == 'red' else [40, 90, 255]
+            flag.light = Light(list(flag.entity.pos), dict(
+                name=f'CTF_{flag.team}_flag_light', colour=colour, state='on',
+                intensity=2.0, radius=320.0, casts_shadows=False))
+            self.session.logic.editor_state.things.append(flag.light)
+            self.session._spawned.append(flag.light)
+            self.session.logic.world_runtime.build_entity_caches()
+        if flag.light is not None:
+            flag.light.pos = list(flag.entity.pos)
+            presentation = dict(state='on' if self.ctf else 'off', hidden=not self.ctf,
+                                casts_shadows=self.flag_shadows)
+            if any(flag.light.properties.get(k) != v for k, v in presentation.items()):
+                flag.light.properties.update(presentation)
+                touch(flag.light)
 
     def drop(self, fighter):
         if not fighter.carrying:
@@ -136,6 +178,7 @@ class TeamGame:
             fighter.carrying, flag.carrier = flag.team, fighter.key
             fighter.protected_until = 0
             flag.dropped, flag.return_at = False, 0
+            self.draw(flag)
             s.feed.append((s.clock + 5, f"{fighter.name} took the {flag.team} flag"))
             s.output(flag.entity, "OnTaken", fighter.name)
 
@@ -200,6 +243,8 @@ class TeamGame:
         return "Red" if self.scores["red"] > self.scores["blue"] else "Blue"
 
     def stop(self):
-        for entity, pos, hidden in self._authored:
+        for entity, pos, properties in self._authored:
             entity.pos = pos
-            entity.properties["hidden"] = hidden
+            entity.properties.clear()
+            entity.properties.update(properties)
+            touch(entity)

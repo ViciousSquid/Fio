@@ -14,10 +14,10 @@ class DeathmatchSettings(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties["type"] = "deathmatchsettings"
-        for key, value in dict(frag_limit=20, time_limit=300.0, respawn_delay=3.0,
+        for key, value in dict(frag_limit=50, time_limit=1800.0, respawn_delay=3.0,
                                spawn_protection=1.5, seed=42, show_hud=True,
                                game_type="deathmatch", player_team="red", friendly_fire=False,
-                               capture_limit=3, flag_return_time=40.0, team_skins=True).items():
+                               capture_limit=10, flag_return_time=40.0, team_skins=True).items():
             self.properties.setdefault(key, value)
 
 
@@ -49,7 +49,8 @@ class DeathmatchSpawn(Thing):
 
 class DeathmatchNode(Thing):
     """A navigation area; marker height is independent of the walking floor."""
-    pixmap_path = "assets/sprites/logic_relay.png"
+    pixmap_path = str(Path(__file__).parent / "sprites" / "navigation_node.png")
+    editor_sprite_path = pixmap_path
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -57,10 +58,16 @@ class DeathmatchNode(Thing):
         self.properties.setdefault("links", "")
         self.properties.setdefault("radius", 36.0)
         self.properties.setdefault("show_radius", False)
+        self.properties.setdefault("auto_link", True)
+        self.properties.setdefault("link_range", 512.0)
 
     def get_radius(self):
         from .navigation import Waypoint
         return Waypoint(self.pos, self.properties.get("radius", 36.0)).radius
+
+    def on_editor_placed(self, state):
+        from .authoring import connect_neighbours
+        return connect_neighbours(self, state)
 
 
 class DeathmatchFlag(Prop):
@@ -68,7 +75,11 @@ class DeathmatchFlag(Prop):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties["type"] = "deathmatchflag"
-        team = self.properties.setdefault("team", "red")
-        sprite = str(Path(__file__).parent / "sprites" / ("blue_flag.png" if team == "blue" else "red_flag.png"))
-        self.properties.update(render_mode="billboard", sprite_path=sprite, sprite_size=[80, 128],
+        self.properties.setdefault("team", "red")
+        sprite = self.get_sprite_path()
+        self.properties.update(render_mode="billboard", sprite_path=sprite, sprite_size=[128, 128],
                                collect_enabled=False, carry_enabled=False, no_collision=True)
+
+    def get_sprite_path(self):
+        filename = 'blue_flag.png' if self.properties.get('team') == 'blue' else 'red_flag.png'
+        return str(Path(__file__).parent / 'sprites' / filename)

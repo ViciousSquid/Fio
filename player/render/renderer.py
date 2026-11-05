@@ -508,7 +508,9 @@ class GLESRenderer:
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniform_location(gl, prog, "diffuse"), 0)
         ordered = sorted(self._batches, key=lambda b: (self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect'),
-                         -sum((float(self._draw_sources[b[0]][1].pos[i])-eye[i])**2 for i in range(3)) if self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect') else self._texture_names[b[0]]))
+                         (-sum((float(self._draw_sources[b[0]][1].pos[i])-eye[i])**2 for i in range(3))
+                          + (0.001 if self._draw_sources[b[0]][1].properties.get('_sprite_overlay') else 0))
+                         if self._draw_sources.get(b[0], ('',))[0] in ('sprite','effect') else self._texture_names[b[0]]))
         last_state = last_lights = last_texture = None
         max_batch_lights = 0
         surfaces_drawn = False

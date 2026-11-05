@@ -1679,21 +1679,25 @@ class View2D(QWidget):
             p1 = self.world_to_screen(src_w)
             p2 = self.world_to_screen(dst_w)
 
-            painter.setPen(chain_pen)
+            navigation = node.properties.get('type') == 'deathmatchnode'
+            link_color = QColor(38, 166, 154, 230) if navigation else olive
+            painter.setPen(QPen(link_color, 2, Qt.SolidLine) if navigation else chain_pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawLine(p1, p2)
 
             # Small arrowhead at destination
-            self._draw_connection_arrow(painter, p1, p2, olive)
+            self._draw_connection_arrow(painter, p1, p2, link_color)
+            if navigation:
+                self._draw_connection_arrow(painter, p2, p1, link_color)
 
             # Tiny "next" label at midpoint
             mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
             painter.save()
-            painter.setPen(QPen(olive_dim))
+            painter.setPen(QPen(link_color if navigation else olive_dim))
             font = QFont()
             font.setPointSize(7)
             painter.setFont(font)
-            painter.drawText(mid + QPointF(4, -4), "next" if isinstance(node, PathNode) else "link")
+            painter.drawText(mid + QPointF(4, -4), "nav" if navigation else "next")
             painter.restore()
 
         # --- 2. Monster → patrol_target lines (teal, dotted, thinner) ----
@@ -3992,6 +3996,9 @@ class View2D(QWidget):
 
             self.main_window.save_state()
             self.editor.state.things.append(thing)
+            placed = getattr(thing, 'on_editor_placed', None)
+            if callable(placed):
+                placed(self.editor.state)
             self.editor.set_selected_objects([thing])
             if self.main_window.properties_tab_widget:
                 self._focus_properties_tab()

@@ -24,7 +24,7 @@ class DeathmatchPlugin(FioPlugin):
         for cls, label in ((DeathmatchSettings, "Match Settings"),
                            (DeathmatchBot, "Bot Opponent"),
                            (DeathmatchSpawn, "Respawn Point"),
-                           (DeathmatchNode, "Navigation Node"), (DeathmatchFlag, "CTF Flag")):
+                           (DeathmatchNode, "Bot Navigation Node"), (DeathmatchFlag, "CTF Flag")):
             api.register_entity(cls, menu_label=label)
         api.register_singleton_entity("deathmatchsettings")
         api.register_properties("deathmatchsettings", [
@@ -32,11 +32,11 @@ class DeathmatchPlugin(FioPlugin):
             prop("player_team", type="enum", default="red", choices=["red", "blue"]),
             prop("friendly_fire", type="bool", default=False),
             prop("team_skins", type="bool", default=True),
-            prop("capture_limit", type="int", default=3, min=0, max=1000),
+            prop("capture_limit", type="int", default=10, min=0, max=1000),
             prop("flag_return_time", type="float", default=40.0, min=1, max=300),
-            prop("frag_limit", type="int", default=20, min=0, max=10000,
+            prop("frag_limit", type="int", default=50, min=0, max=10000,
                  help="Frags to win. Zero disables this limit."),
-            prop("time_limit", type="float", default=300.0, min=0, max=86400,
+            prop("time_limit", type="float", default=1800.0, min=0, max=86400,
                  help="Match duration in seconds. Zero disables the timer."),
             prop("respawn_delay", type="float", default=3.0, min=0.1, max=30),
             prop("spawn_protection", type="float", default=1.5, min=0, max=10,
@@ -59,6 +59,10 @@ class DeathmatchPlugin(FioPlugin):
                  help="Heading in degrees: 0 faces +Z, 90 faces +X."),
         ])
         api.register_properties("deathmatchnode", [
+            prop("auto_link", type="bool", default=True,
+                 help="Connect nearby potential neighbours once when this node is placed."),
+            prop("link_range", type="float", default=512.0, min=1, max=10000,
+                 help="Maximum horizontal neighbour distance for automatic placement links."),
             prop("show_radius", type="bool", default=False),
             prop("radius", type="float", default=36.0, min=1,
                  help="Horizontal arrival radius. Marker height does not set the walking floor."),
@@ -95,8 +99,24 @@ class DeathmatchPlugin(FioPlugin):
                                      'removebot ["name"|id] — remove a bot; default: last bot')
         api.register_console_command("fraglimit", self._fraglimit,
                                      "fraglimit [number] — query/set frag limit; 0 is unlimited")
+        api.register_console_command('dflaglight', self._dflaglight,
+                                     'dflaglight [on|off] — enable/disable flag light shadows; default: on')
 
-    def _command(self, logic, play_mode, action):
+    def _dflaglight(self, args, main_window, logic, play_mode):
+        value = args.strip().lower()
+        if value not in ('', 'on', 'off', '1', '0'):
+            return 'Usage: dflaglight [on|off]'
+        enabled = value not in ('off', '0')
+        def apply(session):
+            if not session.game.ctf:
+                return 'Start a CTF match first.'
+            session.game.flag_shadows = enabled
+            for flag in session.game.flags.values():
+                session.game.draw_light(flag)
+            return 'Flag light shadows: on.' if enabled else 'Flag light shadows: off.'
+        return self._command(logic, play_mode, apply, local=True)
+
+    def _command(self, logic, play_mode, action, *, local=False):
         session = self._sessions.get(logic) if logic is not None else None
         if not play_mode or session is None:
             return "Start a Deathmatch arena in Play mode first."
@@ -105,7 +125,7 @@ class DeathmatchPlugin(FioPlugin):
         with logic._tick_lock, logic.session_runtime.monster_lock:
             if not session._started:
                 return "Start a Deathmatch arena in Play mode first."
-            if session.network is not None and session.network.is_client:
+            if not local and session.network is not None and session.network.is_client:
                 return "Run match console commands on the LAN host."
             return action(session)
 

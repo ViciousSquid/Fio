@@ -136,7 +136,7 @@ class BotSupplies:
                 if ground is None:
                     continue
                 point = (prop.pos[0], ground, prop.pos[2])
-                route = s.nav.route(s.feet(f), point, s.clear)
+                route = s.nav.route(s.feet(f), point, s.walkable)
                 if not route:
                     continue
                 cost = distance(s.feet(f), route[0]) + sum(distance(a, b) for a, b in zip(route, route[1:]))
@@ -147,7 +147,7 @@ class BotSupplies:
             return None
         # Keep the final pickup approach until collection, but honour node
         # radii and safe corner transitions on every intermediate waypoint.
-        s.nav.advance(self.route, s.feet(f), s.clear, default_radius=30, keep_final=True)
+        s.nav.advance(self.route, s.feet(f), s.walkable, default_radius=30, keep_final=True)
         return self.route[0] if self.route else None
 
     def weapon(self, target_distance=400):

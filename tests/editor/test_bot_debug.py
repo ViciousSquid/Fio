@@ -11,6 +11,7 @@ def test_command_opens_one_floating_window_with_live_tabs(main_window, qt_app):
     main_window.console_handler.handle_command('botdebug')
     panel = main_window._bot_debug_window
     assert panel.isVisible() and panel._timer.isActive()
+    assert panel._timer.interval() == 500
     assert panel.tabs.count() == 3
     assert panel.tabs.tabText(0) == 'Overview'
     assert {panel.tabs.tabText(i) for i in (1, 2)} == {'Alpha', 'Bravo'}

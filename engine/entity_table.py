@@ -280,7 +280,7 @@ def sprite_candidates(thing):
         out.append(('logic_%s' % ltype, 'logic_%s.png' % ltype, 'sprites', True))
     elif Prop is not None and isinstance(thing, Prop):
         if str(props.get('render_mode', 'model')).lower() == 'billboard':
-            path = str(props.get('sprite_path', '') or '')
+            path = str(thing.get_sprite_path() or '')
             if path:
                 key = 'propsprite__%s' % path.replace('/', '__').replace('.', '_')
                 filename, subfolder = _split_asset_path(path)
@@ -300,6 +300,9 @@ def sprite_candidates(thing):
         out.append(('LogicCamera', 'logic_camera.png', 'sprites', True))
     elif props.get('sprite_path'):
         filename, subfolder = _split_asset_path(props.get('sprite_path'))
+        out.append((class_name, filename, subfolder, True))
+    elif getattr(type(thing), 'editor_sprite_path', None):
+        filename, subfolder = _split_asset_path(type(thing).editor_sprite_path)
         out.append((class_name, filename, subfolder, True))
     else:
         out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
@@ -631,6 +634,9 @@ _COLUMNS = (
     #: Locked world-facing yaw for a carried billboard; -10000 means an
     #: ordinary camera-facing billboard.
     ('sprite_fixed_yaw', (), np.float32, -10000.0),
+    #: Carried icons sort just after a coplanar body, while retaining world
+    #: depth testing and the normal order relative to other actors.
+    ('sprite_overlay', (), bool, False),
     #: Interned sprite recipe id; :data:`SPRITE_NONE` for a row that draws none.
     ('sprite_key_id', (), np.int32, SPRITE_NONE),
     #: Camera-relative recipes, chosen independently for each viewport.
@@ -1291,6 +1297,7 @@ class EntityTable:
         self.render_alpha[slot] = _render_alpha(thing)
         carry_yaw = _carry_sprite_yaw(thing)
         self.sprite_fixed_yaw[slot] = carry_yaw
+        self.sprite_overlay[slot] = bool(props.get('_sprite_overlay', False))
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
         self.sprite_direction_ids[slot] = SPRITE_NONE
         self.monster_angle[slot] = _float_property(props.get('angle', 0.0))

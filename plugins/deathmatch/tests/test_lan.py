@@ -185,10 +185,22 @@ def test_ctf_flag_carrier_and_capture_replicate(linked):
     assert remote.carrying == "red"
     assert cs.fighters["player"].carrying == "red"
     assert cs.game.flags["red"].carrier == "player"
+    assert hs.game.flags['red'].entity.pos == remote.entity.pos
+    for session in (hs, cs):
+        flag = session.game.flags['red']
+        assert flag.entity.properties['_sprite_overlay']
+        assert flag.light.properties['state'] == 'on'
+        assert flag.light.properties['colour'] == [255, 35, 20]
+        assert flag.light.pos == flag.entity.pos
     remote.actor.pos = glm.vec3(own.home) + glm.vec3(0, 50, 0)
     cl.player_runtime.player.pos = glm.vec3(remote.actor.pos)
     pump(25)
     assert hs.game.scores["blue"] == 1 and cs.game.scores["blue"] == 1
+    for session in (hs, cs):
+        flag = session.game.flags['red']
+        assert not flag.entity.properties['_sprite_overlay']
+        assert flag.light.properties['state'] == 'on'
+        assert flag.light.pos == flag.entity.pos
 
 
 def test_lobby_exposes_modes_and_empty_discovery(qt_app, main_window):
@@ -299,3 +311,75 @@ def test_all_eight_idle_and_attack_views_survive_lan_replication(linked):
                 _, filename, folder, _ = table.sprite_recipes()[key][0]
                 assert filename == f'{"shoot" if shooting else "idle"}_{rotation}.png'
                 assert (root / 'assets' / folder / filename).is_file()
+
+
+def test_opponent_billboards_follow_feet_and_crouch_on_host_and_client(linked):
+    import glm
+    from engine.entity_table import EntityTable
+
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    server = hs.fighters["player"]
+    server.actor.pos = glm.vec3(100, 290, 200)
+    remote.actor.pos = glm.vec3(-100, 290, -200)
+
+    def check_projection(session, fighter):
+        table = EntityTable()
+        table.begin_frame([fighter.entity], epoch=1)
+        feet = session.feet(fighter)
+        assert feet[1] == pytest.approx(240)
+        assert table.pos[0, 0] == pytest.approx(feet[0])
+        assert table.pos[0, 2] == pytest.approx(feet[2])
+        assert table.pos[0, 1] - table.sprite_size[0, 1] / 2 == pytest.approx(feet[1])
+
+    for ducked in (False, True, False):
+        server.actor.set_ducked(ducked)
+        server.actor.pos.y = 240 + server.actor.height / 2
+        remote.actor.set_ducked(ducked)
+        remote.actor.pos.y = 240 + remote.actor.height / 2
+        remote.actor.on_ground = True
+        host.inputs[remote.peer]["keys"] = [0x43] if ducked else []
+        host.update_remote(remote, 0)
+        client.apply(host.snapshot())
+        mirror = cs.fighters["host"]
+        assert mirror.actor.ducked is ducked
+        check_projection(hs, remote)
+        check_projection(cs, mirror)
+
+    hs.spawns = [((0, 240, 600), 0)]
+    hs.respawn(server)
+    hs.respawn(remote)
+    client.apply(host.snapshot())
+    check_projection(hs, remote)
+    check_projection(cs, cs.fighters["host"])
+
+
+@pytest.mark.parametrize('linked', ['ctf'], indirect=True)
+def test_flag_light_shadows_are_independent_per_client_and_never_replicated(linked):
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    manager = get_manager()
+    def command(logic, argument):
+        handled, reply = manager.dispatch_console_command('dflaglight', argument, logic=logic, play_mode=True)
+        assert handled and reply == f'Flag light shadows: {"off" if argument == "off" else "on"}.'
+    def check(host_on, client_on):
+        packet = host.snapshot()
+        assert 'flag_shadows' not in packet
+        client.apply(packet)
+        for session, enabled in ((hs, host_on), (cs, client_on)):
+            assert session.game.flag_shadows is enabled
+            for flag in session.game.flags.values():
+                assert flag.light.properties['casts_shadows'] is enabled
+                assert flag.light.properties['state'] == 'on'
+    check(False, False)
+    command(cl, '')
+    check(False, True)
+    command(hl, '')
+    check(True, True)
+    command(cl, 'off')
+    check(True, False)
+    command(hl, 'off')
+    command(cl, 'on')
+    check(False, True)
+    # Even an older host's rendering preference must not override this client.
+    packet = dict(host.snapshot(), flag_shadows=False)
+    client.apply(packet)
+    assert cs.game.flag_shadows

@@ -73,12 +73,19 @@ def test_drag_release_links_without_moving_the_entities(main_window, qt_app):
     main_window.state.selected_objects = [a]
     view = main_window.view_top
     view.show()
+    main_window.activateWindow()
     view.setFocus()
     qt_app.processEvents()
+    QTest.qWait(30)
     start = view.world_to_screen(QPointF(-150, 0)).toPoint()
     end = view.world_to_screen(QPointF(150, 0)).toPoint()
     before = [list(a.pos), list(b.pos)]
-    QTest.keyClick(view, Qt.Key_K, Qt.ControlModifier)
+    QTest.keyPress(view, Qt.Key_Control)
+    try:
+        QTest.keyClick(view, Qt.Key_K, Qt.ControlModifier)
+    finally:
+        QTest.keyRelease(view, Qt.Key_Control)
+    qt_app.processEvents()
     assert main_window.entity_link_tool.source is a
     QTest.mousePress(view, Qt.LeftButton, pos=start)
     QTest.mouseMove(view, end)
@@ -107,8 +114,12 @@ def test_three_dimensional_view_uses_the_same_drag_link_workflow(main_window, qt
     main_window.state.things = [a, b]
     main_window.state.selected_objects = [a]
     view = main_window.view_3d
+    main_window.activateWindow()
     view.setFocus()
     qt_app.processEvents()
+    view.camera.fov = 60.0
+    view.set_editor_camera([0, 90, 1000], yaw=-90.0, pitch=0.0)
+    QTest.qWait(50)
     view.projection_matrix = glm.perspective(glm.radians(60.0), view.width()/max(1, view.height()), 1.0, 3000.0)
     view.view_matrix = glm.lookAt(glm.vec3(0, 90, 1000), glm.vec3(0, 90, 0), glm.vec3(0, 1, 0))
     view.logic_thread.camera.get_editor_camera().pos = glm.vec3(0, 90, 1000)
@@ -127,3 +138,27 @@ def test_self_link_and_deleted_target_are_rejected(main_window):
         connect_entities(main_window, a, a)
     with pytest.raises(ValueError):
         connect_entities(main_window, a, b)
+
+
+def test_placing_navigation_node_auto_links_in_one_undo_step(main_window):
+    from plugins.manager import get_manager, load_plugins
+    from tests.helpers.worlds import box_brush
+    load_plugins()
+    manager = get_manager()
+    plugin = manager.find_plugin('deathmatch')
+    was_enabled = plugin.enabled
+    manager.set_enabled(plugin, True)
+    try:
+        main_window.state.brushes = [box_brush('Floor', (0, -25, 0), (3000, 50, 3000))]
+        a = DeathmatchNode([0, 90, 0], {'name': 'A'})
+        main_window.state.things = [a]
+        main_window.view_top._place_plugin_entity(plugin, DeathmatchNode, 'Bot Navigation Node', [300, 90, 0])
+        assert len(main_window.state.things) == 2
+        placed = main_window.state.things[-1]
+        assert placed.properties['links'] == 'A'
+        assert a.properties['links'] == ''
+        main_window.undo()
+        assert len(main_window.state.things) == 1
+        assert main_window.state.things[0].name == 'A'
+    finally:
+        manager.set_enabled(plugin, was_enabled)

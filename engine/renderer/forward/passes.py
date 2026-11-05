@@ -1076,7 +1076,7 @@ class PassesMixin:
         # off -- so nothing below is allowed to reorder it.
         count = len(slots)
         if camera_pos is None:
-            order = np.arange(count, dtype=np.intp)
+            order = np.argsort(table.sprite_overlay[slots], kind='stable')
         else:
             cx, _, cz = self._camera_xyz(camera_pos)
             depth_sq = self._sprite_depth_scratch[:count]
@@ -1089,6 +1089,9 @@ class PassesMixin:
             np.square(depth_aux, out=depth_aux)
             np.add(depth_sq, depth_aux, out=depth_sq)
             np.negative(depth_sq, out=depth_aux)
+            # A flag attached at its carrier's centre must paint over that
+            # body regardless of map entity order. World depth still applies.
+            depth_aux += table.sprite_overlay[slots] * 0.001
             order = np.argsort(depth_aux, kind='stable')
         ordered_textures = textures[order]
 

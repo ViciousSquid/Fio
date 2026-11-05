@@ -2,7 +2,7 @@
 
 How bots choose a path, where to place Navigation Nodes, and how to build routes that work in Deathmatch and Capture the Flag.
 
-**Scope:** ground-monster PathNodes and Deathmatch Navigation Nodes, including height-tolerant markers and arrival radii. This guide describes the authored waypoint system. Automatic navigation with optional authored hints is planned; it is not implemented in this version. Quake III’s AAS navigation and fuzzy bot decisions are references for that work.
+**Scope:** ground-monster PathNodes and Deathmatch Navigation Nodes, including height-tolerant markers and arrival radii. New Bot Navigation Nodes automatically connect to nearby reachable neighbours when placed; you can edit those links afterwards. This is a waypoint system with placement-time linking. A full automatic level navigation bake with optional authored hints remains planned. Quake III’s AAS navigation and fuzzy bot decisions are references for that work.
 
 [Download the printable PDF](docs/navigation/Fio-Bot-Navigation-Guide.pdf).
 
@@ -17,12 +17,12 @@ Fio has two related authoring systems: ordinary monster **PathNodes** use `next_
 The current sequence is:
 
 1. **Choose a goal.** Depending on the situation, a bot seeks a pickup, follows a CTF objective, investigates an opponent’s last known position, or roams between nodes. Visible enemies can trigger direct combat movement instead of waypoint following.
-2. **Try the direct route.** If the controller’s full body can clear the straight segment, the planner returns the goal directly. Nodes are not mandatory stops: a clear direct path takes precedence over them.
-3. **Attach to the graph.** Deathmatch projects marker X/Z positions onto valid standing surfaces, then considers up to three nearest body-clear start nodes. Goal-side nodes also need a clear connection to the goal. The bot and goal do not need to stand exactly on nodes.
-4. **Run A\*.** The planner adds the distance already travelled to an estimate of the remaining distance. Both use straight-line 3D distance; the estimate helps it search toward the goal. Every authored link is checked for current obstacle clearance before use.
+2. **Try the direct route.** If the controller’s full body can clear the straight segment and the segment has walkable floor support, the planner returns the goal directly. Nodes are not mandatory stops: a clear direct path takes precedence over them.
+3. **Attach to the graph.** Deathmatch projects marker X/Z positions onto valid standing surfaces, then considers reachable start nodes, including valid floors at different heights. Goal-side nodes also need a supported walking connection or a validated platform transfer to the goal. The bot and goal do not need to stand exactly on nodes.
+4. **Run A\*.** The planner adds the distance already travelled to an estimate of the remaining distance. Both use straight-line 3D distance; the estimate helps it search toward the goal. Every link is checked against live doors, movers, body clearance and floor support before use. Platform transfers add their walking and riding distances plus a wait penalty to the route cost.
 5. **Move and reconsider.** The bot steers toward successive positions using Fio’s Player controller. A Navigation Node is reached within its radius; the bot can advance before reaching its exact centre when the next segment is clear. Large radii must not cause corner cutting. Routes are reconsidered periodically; stuck recovery attempts a jump and turn.
 
-**A link expresses intent, not a guarantee.** The planner checks an expanded body-sized box against brush obstacles. It does not verify continuous floor support or generate special jump, ladder, lift or teleport traversal instructions.
+**A link expresses intent, not a guarantee.** The planner checks an expanded body-sized box against live brush obstacles and samples supporting floors along each walking segment. A platform route includes explicit approach, wait, board, ride and exit actions. Jump, ladder and teleport traversal instructions are not generated.
 
 ## 2. Put nodes at changes in movement
 
@@ -55,13 +55,17 @@ The bot resolves these markers to Y = 0, attaches to `East_Approach`, passes eas
 
 ## 3. Create and connect nodes in the editor
 
-For a playable arena, enable the Deathmatch plugin and provide **Match Settings**, a **Bot Opponent**, a normal **PlayerStart**, and suitable **Respawn Points**. Navigation Nodes alone do not activate a match or spawn bots.
+For a playable arena, enable the Deathmatch plugin and provide **Match Settings**, a **Bot Opponent**, a normal **PlayerStart**, and suitable **Respawn Points**. Navigation Nodes alone do not activate a match or spawn bots. New Match Settings default to **50 frags**, **10 captures** and **30 minutes** (`time_limit = 1800` seconds); existing authored limits remain configurable.
 
-1. Place a **Navigation Node** from the **Plugins → deathmatch** entity menu.
+1. Place a **Bot Navigation Node** from the **Plugins → deathmatch** entity menu. It automatically links to up to **six** nearby reachable Bot Navigation Nodes within its **`link_range`**, default **512 units** horizontally.
 2. Put its X/Z position over a walkable part of the level. Its marker may be at floor, eye or another convenient height; inspect the actual floor and headroom in a side view.
-3. Give it a **unique, case-sensitive name without spaces**, such as `West_Junction`.
-4. In its `links` property, enter neighbouring node names separated by commas or spaces: `North_Door, Health_Approach`.
+3. Keep its generated unique name, or give it a **unique, case-sensitive name without spaces**, such as `West_Junction`. If you rename a node, update any `links` entries that refer to its old name.
+4. Inspect the automatic links and fine-tune the `links` property. Remove unwanted names or add neighbours with Ctrl-K. Names are separated by commas or spaces: `North_Door, Health_Approach`.
 5. Set `radius` to suit the arrival area; enable `show_radius` to preview it. Repeat at the next junction, then test the connecting segment in both directions.
+
+**Automatic links are a starting point.** Placement checks static walls, supporting floors and potential platform transfers. A closed door may have a potential link across it, but the runtime route stays unavailable until the door physically clears the bot’s body. `auto_link` can be disabled for a node before calling its placement hook; changing it on an existing node does not regenerate links. Existing links are preserved when other nodes are placed, when loading a map and during Play. Moving a node afterwards keeps its links for you to review; runtime validation rejects links that have become unsafe.
+
+**Recognise the node type:** Bot Navigation Nodes use a **teal diamond with an N**, and solid teal connections with arrows at both ends. Ordinary PathNodes retain their existing marker and dashed, olive `next` chain lines. These systems are visually and functionally distinct.
 
 You can also select the source, press **Ctrl-K**, drag the arrow to the destination and release. Navigation Nodes gain a `links` entry; ordinary PathNodes gain a `next_node` link. See the editor workflow below.
 
@@ -93,11 +97,23 @@ CTF requires exactly one red and one blue **CTF Flag**, plus appropriate team sp
 
 The most important safety check is **whether a player can actually walk every linked segment in both directions**.
 
-- Use side views to check the **bot’s walking surface and headroom**, rather than aligning the marker to an exact height. On stacked floors, the walking surface is resolved near the bot’s level; marker height is not a command to change storeys.
-- Do not connect across pits or between overlapping floors just because their top-down positions are close. A body-clear line over empty space may be accepted and lead the bot off the edge.
+- Use side views to check the **bot’s walking surface and headroom**, rather than aligning the marker to an exact height. On stacked floors, the planner considers connected standing surfaces and validated platform transfers; marker height is not a command to change storeys.
+- Do not connect across pits or between overlapping floors just because their top-down positions are close. A clear line through empty air is rejected as a walking connection when the sampled route lacks support.
 - For ordinary stairs and ramps, put nodes at useful landings and bends, then test short links in both directions. Player physics supports steps and slopes, but the planner’s conservative brush-box approximation can still reject a physically walkable segment.
-- Do not depend on planned jumps, ladders, lifts or teleports. The current graph has no movement-type links for them. A stuck bot’s jump attempt is reactive recovery, not a validated jump route.
-- Keep routes out of damaging or otherwise unsafe areas yourself. The current A* cost measures distance, not damage exposure, tactical risk or travel time.
+- Do not depend on planned jumps, ladders or teleports. A stuck bot’s jump attempt is reactive recovery, not a validated jump route. Supported lifts and translating platforms are handled as described below.
+- Keep routes out of damaging or otherwise unsafe areas yourself. A* measures distance and a platform wait penalty; it does not model damage exposure or tactical risk.
+
+### Closed doors and moving platforms
+
+A closed or partly open door invalidates a route if it still intersects the standing bot’s body. The planner reads the door’s actual position, not just its open/closed command state. If a door closes after planning, the bot stops, discards the blocked route and searches again. Put nodes on both safe approaches and provide an alternate corridor where possible. Bots do not automatically press remote buttons or solve scripted door puzzles.
+
+For a lift, put one Bot Navigation Node on the **fixed lower landing** and another on the **fixed upper landing**, with clear approaches to the platform. Place the mover’s own ordinary PathNodes along its travel path if using a path-driven mover. The teal bot nodes describe where a bot wants to go; the ordinary PathNodes describe where the platform moves.
+
+![Door route disabled until physically clear; a lift route uses lower and upper landing nodes with explicit boarding and riding phases.](docs/navigation/06-doors-and-platforms.svg)
+
+Bots can wait for, board, ride and leave sufficiently large **active, cyclic translating platforms**, including linear lifts and chained PathNode movers. The route checks the body’s clearance throughout the predicted ride and requires supported boarding and exit walks. The mover carries the bot controller, so the bot remains standing on it instead of being left behind. A platform disappearing or becoming disabled cancels the trip and triggers replanning.
+
+Give platforms room for a standing player and keep their whole travel corridor clear. Linear platforms must cycle; the planner does not invent a return trip for `move_once` motion. Disabled/stopped movers do not create new ride routes, and bots do not automatically enable them. Rotating movers, scripted transfers and moving-world synchronisation over LAN need separate support. These platform actions apply to Deathmatch/CTF bot controllers; ordinary monster patrols retain their native movement rules.
 
 ## 6. Test and diagnose the network
 
@@ -108,7 +124,7 @@ Test in Play with a bot and a useful destination on opposite sides of the geomet
 | Bot takes a direct path past your nodes | A clear direct route takes precedence; nodes are not forced patrol stops. |
 | Bot stops at a wall or keeps turning/jumping | Check the missing corner node, link spelling, body clearance and whether the graph actually connects around the obstacle. |
 | Bot falls into a gap | Inspect floor support along the link. Obstacle clearance alone does not make a walkable route. |
-| Bot cannot reach another floor | Check a continuous, tested walking route. A vertical link does not add jump, ladder or lift behaviour. |
+| Bot cannot reach another floor | Check a continuous, tested walking route. Use a supported walking route or an active platform with clear boarding and exit positions. A vertical link alone does not add a jump or ladder action. |
 | Bot ignores a useful pickup | Check inventory need, pickup availability, visibility and a usable final approach, as well as the route. |
 | Door closure strands a bot | Confirm that an alternate connected corridor exists and is open. Waypoints do not automatically activate doors. |
 
@@ -136,13 +152,21 @@ Custom idle and attack sets should supply `name_1.png` through `name_8.png`. In 
 
 Regular Monster AI publishes its movement/attack heading. Deathmatch publishes bot aim heading and shooting state; LAN snapshots carry heading and attack timing so clients select the same appropriate views. Separate cameras can show different views of one actor at the same time.
 
+### CTF flag billboards and lights
+
+The red and blue flags use matching transparent, camera-facing billboard sprites. At base or when dropped, the flag uses its full square sprite. On pickup, it becomes a smaller icon over the carrier’s body and follows that carrier on the host and LAN clients; dropping or returning it restores the full-size world flag.
+
+**Both flags always emit their own colour of light** during CTF: red light from the red flag and blue light from the blue flag. The light stays with the flag at home, while dropped and while carried. Flag lights use a 320-unit radius and start without shadow casting.
+
+Type **`dflaglight`** or **`dflaglight on`** to make both flag lights cast dynamic shadows in your own view. **`dflaglight off`** disables shadow casting while keeping their coloured illumination on. This is a **per-client rendering setting**, including on the host: it is never sent to other clients or changed by multiplayer snapshots. It lasts for the current Play session, including round restarts, and the renderer’s global shadow settings still apply.
+
 ## 8. Inspect decisions with `botdebug`
 
 Type **`botdebug`** in the console to open a floating, non-modal Bot Debug window. It works in the editor and Play mode and includes an **Overview** plus **one tab per bot**. Names, additions and removals update live.
 
-The overview shows controller, decision/state, target, health, route length and weapon. A Deathmatch bot’s tab shows visibility, last known position, memory and reaction/shot timers, team/flag state, next waypoint, goal, stuck recovery, inventory and pickup target. Ordinary monster tabs show actual patrol chains, waits, detours and combat state. Each tab keeps a short history of observed decision changes.
+The overview shows controller, decision/state, target, health, route length and weapon. A Deathmatch bot’s tab shows visibility, last known position, memory and reaction/shot timers, team/flag state, next waypoint, goal, blocked-route reason, mover name and traversal phase, stuck recovery, inventory and pickup target. Ordinary monster tabs show actual patrol chains, waits, detours and combat state. Each tab keeps a short history of observed decision changes.
 
-The panel refreshes four times per second while visible and stops polling when closed. If the simulation is busy, it retains the previous sample rather than blocking the game. `botdebug off` closes it. In a LAN client, host decision details are not replicated; the panel labels those bots **Replicated**. Run it on the host to inspect their actual AI decisions.
+The panel refreshes twice per second (every 500 ms) while visible and stops polling when closed. If the simulation is busy, it retains the previous sample rather than blocking the game. `botdebug off` closes it. In a LAN client, host decision details are not replicated; the panel labels those bots **Replicated**. Run it on the host to inspect their actual AI decisions.
 
 ## 9. Connect entities with Ctrl-K
 
@@ -154,7 +178,7 @@ The panel refreshes four times per second while visible and stops polling when c
 | Source → destination | Created link |
 | --- | --- |
 | PathNode → PathNode | `next_node` patrol-chain link |
-| Navigation Node → Navigation Node | Bidirectional Deathmatch `links` connection |
+| Bot Navigation Node → Bot Navigation Node | Bidirectional Deathmatch `links` connection |
 | Monster → PathNode | `patrol_target`, with patrol enabled |
 | Logic Camera / Spawner → PathNode | Camera path / spawn target |
 | Portal → Portal | Portal target |
@@ -165,7 +189,9 @@ I/O connections use a stable target ID. The toast identifies the chosen output a
 ## Reference: where this behaviour lives
 
 - [Navigation graph and A*](navigation.py): name-based links, direct route check and reachable start/goal connections.
-- [Deathmatch runtime](runtime.py): body clearance, goal following, perception, movement and stuck recovery.
+- [Live navigation world](moving_navigation.py): walk support, door clearance, mover prediction and platform reachability.
+- [Placement linking](authoring.py): one-time neighbour connections for new bot nodes.
+- [Deathmatch runtime](runtime.py): route validation, platform phases, goal following, perception and movement.
 - [Bot supplies](supplies.py): pickup desirability, visibility filtering and route-distance scoring.
 - [CTF/team logic](teams.py): flag state and bot objective selection.
 - [Routing tests](tests/test_deathmatch.py): `test_waypoints_route_around_wall_and_reject_closed_path`.

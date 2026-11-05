@@ -412,7 +412,7 @@ def test_console_commands_only_exist_while_deathmatch_is_enabled(arena):
     logic, session, human, bot = arena
     manager = get_manager()
     plugin = manager.find_plugin("deathmatch")
-    names = ("addbot", "removebot", "fraglimit")
+    names = ("addbot", "removebot", "fraglimit", "dflaglight")
     assert all(manager.has_console_command(name) for name in names)
     manager.set_enabled(plugin, False)
     scene = list(logic.editor_state.things)
@@ -586,13 +586,17 @@ def test_ctf_steal_capture_drop_return_and_sprites(ctf):
     place(human, [500, 0, 0])
     game.step()
     assert human.carrying == "blue"
-    assert game.flags["blue"].entity.pos[1] == 64  # Next update follows carrier.
+    assert game.flags["blue"].entity.pos == [500, 64, 0]
+    assert game.flags["blue"].entity.properties['_sprite_overlay']
+    assert game.flags["blue"].entity.properties['sprite_size'] == [64, 64]
     game.step()
-    assert game.flags["blue"].entity.pos[1] == 160
+    assert game.flags["blue"].entity.pos[1] == 64
     place(human, [-500, 0, 0])
     game.step()
     assert game.scores["red"] == 1 and human.captures == 1
     assert human.carrying is None and game.flags["blue"].pos == (500, 0, 0)
+    assert not game.flags["blue"].entity.properties['_sprite_overlay']
+    assert game.flags["blue"].entity.properties['sprite_size'] == [128, 128]
     place(human, [500, 0, 0]); game.step()
     place(human, [200, 0, 0])
     session.kill(human, bot)
@@ -735,3 +739,107 @@ def test_bot_heading_and_attack_reach_the_render_projection(arena):
     table.begin_frame([bot.entity], epoch=1)
     key = sprite_keys_for_view(table, np.array([0]), eye)[0]
     assert table.sprite_recipes()[key][0][1] == 'idle_1.png'
+
+
+@pytest.mark.parametrize("sprite_height", [128, 192])
+@pytest.mark.parametrize("floor_y", [0, 240])
+def test_bot_billboard_feet_match_controller_after_respawn_and_movement(
+        arena, sprite_height, floor_y):
+    from engine.entity_table import EntityTable
+
+    logic, session, human, bot = arena
+    bot.entity.properties["sprite_height"] = sprite_height
+    session.spawns = [((0, floor_y, 600), 0)]
+    session.respawn(bot)
+    assert session.feet(bot)[1] == pytest.approx(floor_y)
+    table = EntityTable()
+
+    def check_projection():
+        table.begin_frame([bot.entity], epoch=1)
+        feet = session.feet(bot)
+        assert table.pos[0, 0] == pytest.approx(feet[0])
+        assert table.pos[0, 2] == pytest.approx(feet[2])
+        assert table.pos[0, 1] - table.sprite_size[0, 1] / 2 == pytest.approx(feet[1])
+
+    check_projection()
+    for _ in range(5):
+        session.update_bot(bot, 1 / 60)
+        check_projection()
+
+
+@pytest.mark.parametrize('team', ['red', 'blue'])
+def test_flag_light_stays_on_at_home_dropped_and_carried_then_cleans_up(ctf, team):
+    from engine.entity_table import EntityTable
+    logic, session, human, bot = ctf
+    fighter = bot if team == 'red' else human
+    flag = session.game.flags[team]
+    light = flag.light
+    assert light.properties['state'] == 'on' and not light.properties['hidden']
+    assert light.pos == flag.entity.pos
+    session.game.touch(fighter, flag)
+    assert flag.light is light
+    assert light is not None
+    assert light.properties['state'] == 'on' and not light.properties['hidden']
+    expected = [255, 35, 20] if team == 'red' else [40, 90, 255]
+    assert light.properties['colour'] == expected
+    place(fighter, [100, 0, 200])
+    if fighter.entity is not None:
+        session.sync_entity_position(fighter)
+    session.game.step()
+    centre_y = fighter.entity.properties['sprite_height']/2 if fighter.entity is not None else 64
+    assert flag.entity.pos == light.pos == [100, centre_y, 200]
+    table = EntityTable()
+    table.begin_frame(logic.editor_state.things, epoch=1)
+    row = table.slot_of_id[light.properties['id']]
+    assert table.light_enabled[row]
+    assert table.light_params[row].tolist() == [2, 320]
+    assert table.light_color[row].tolist() == pytest.approx([v/255 for v in expected])
+    flag_row = table.slot_of_id[flag.entity.properties['id']]
+    assert table.sprite_overlay[flag_row]
+    session.kill(fighter)
+    assert flag.dropped and not flag.entity.properties['_sprite_overlay']
+    assert light.properties['state'] == 'on' and not light.properties['hidden']
+    assert light.pos == flag.entity.pos == [100, 64, 200]
+    session.restart()
+    assert flag.light is light  # Reuse, rather than accumulating lights per life.
+    assert light.properties['state'] == 'on'
+    assert light.pos == flag.entity.pos
+    session.stop()
+    assert light not in logic.editor_state.things
+    assert '_sprite_overlay' not in flag.entity.properties
+    assert flag.entity.properties['sprite_size'] == [128, 128]
+
+
+def test_flag_textures_have_real_transparency_and_follow_editor_team(qt_app):
+    from PyQt5.QtGui import QImage
+    from engine.entity_table import sprite_candidates
+    from plugins.deathmatch.entities import DeathmatchFlag
+    flag = DeathmatchFlag()
+    for team in ('red', 'blue'):
+        flag.properties['team'] = team
+        assert flag.get_sprite_path().endswith(f'{team}_flag.png')
+        assert sprite_candidates(flag)[0][1] == f'{team}_flag.png'
+        image = QImage(flag.get_sprite_path())
+        assert not image.isNull() and image.hasAlphaChannel()
+        assert image.width() == image.height()
+        assert image.pixelColor(0, 0).alpha() == 0
+        colour = image.pixelColor(image.width()//3, image.height()//3)
+        assert colour.alpha() >= 250
+        assert (colour.red() > colour.blue()) if team == 'red' else (colour.blue() > colour.red())
+
+
+def test_dflaglight_switches_shadows_without_extinguishing_flags(ctf):
+    logic, session, human, bot = ctf
+    assert not session.game.flag_shadows
+    assert command(logic, 'dflaglight') == 'Flag light shadows: on.'
+    assert session.game.flag_shadows
+    for flag in session.game.flags.values():
+        assert flag.light.properties['casts_shadows']
+        assert flag.light.properties['state'] == 'on'
+    session.restart()
+    assert all(f.light.properties['casts_shadows'] for f in session.game.flags.values())
+    assert command(logic, 'dflaglight', 'off') == 'Flag light shadows: off.'
+    assert not session.game.flag_shadows
+    assert all(not f.light.properties['casts_shadows'] for f in session.game.flags.values())
+    assert all(f.light.properties['state'] == 'on' for f in session.game.flags.values())
+    assert command(logic, 'dflaglight', 'invalid') == 'Usage: dflaglight [on|off]'
