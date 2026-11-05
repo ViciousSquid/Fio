@@ -2,7 +2,7 @@
 
 How bots choose a path, where to place Navigation Nodes, and how to build routes that work in Deathmatch and Capture the Flag.
 
-**Scope:** ground-monster PathNodes and Deathmatch Navigation Nodes, including height-tolerant markers and arrival radii. New Bot Navigation Nodes automatically connect to nearby reachable neighbours when placed; you can edit those links afterwards. This is a waypoint system with placement-time linking. A full automatic level navigation bake with optional authored hints remains planned. Quake III’s AAS navigation and fuzzy bot decisions are references for that work.
+**Scope:** ground-monster PathNodes and Deathmatch Navigation Nodes, including height-tolerant markers and arrival radii. New Bot Navigation Nodes automatically connect to nearby reachable neighbours when placed; you can edit those links afterwards. This is a waypoint system with placement-time linking. A full automatic level navigation bake with optional authored hints remains planned.
 
 [Download the printable PDF](docs/navigation/Fio-Bot-Navigation-Guide.pdf).
 
@@ -202,10 +202,10 @@ Spectators cannot shoot, take damage, collect pickups, carry flags or activate p
 - [Live navigation world](moving_navigation.py): walk support, door clearance, mover prediction and platform reachability.
 - [Placement linking](authoring.py): one-time neighbour connections for new bot nodes.
 - [Deathmatch runtime](runtime.py): route validation, platform phases, goal following, perception and movement.
-- [Bot supplies](supplies.py): pickup desirability, visibility filtering and route-distance scoring.
+- [Bot supplies](supplies.py): pickup priorities, visibility filtering and shortest-route selection.
 - [CTF/team logic](teams.py): flag state and bot objective selection.
 - [Routing tests](tests/test_deathmatch.py): `test_waypoints_route_around_wall_and_reject_closed_path`.
 - [Bot Debug window](../../editor/bot_debug.py): live snapshots, overview and per-bot decision history.
 - [Ctrl-K linking](../../editor/entity_linking.py): drag feedback and native link creation.
 
-Quake III separates **reachability/routing** from **goal desirability** and **behaviour states**. Its [AAS routing](https://github.com/id-Software/Quake-III-Arena/blob/master/code/botlib/be_aas_route.c), [fuzzy weights](https://github.com/id-Software/Quake-III-Arena/blob/master/code/botlib/be_ai_weight.c), and [CTF team decisions](https://github.com/id-Software/Quake-III-Arena/blob/master/code/game/ai_team.c) are useful references. Fuzzy logic helps choose what to pursue; it does not establish that the floor, doorway or jump is traversable.
+Fio keeps **reachability/routing**, **goal selection** and **behaviour states** separate. Supply priorities and team objectives choose what a bot pursues; route validation checks whether the floor, doorway or jump is traversable.

@@ -508,7 +508,7 @@ def convert_fio_entity(fio_thing: Dict[str, Any],
         brightness = int(intensity * 300)
         quake_props['light'] = str(brightness)
         
-        # Color (Quake 2/3 format, some engines support it)
+        # Normalized RGB light color, supported by some map consumers.
         if isinstance(colour, list) and len(colour) >= 3:
             r, g, b = int(colour[0] * 255), int(colour[1] * 255), int(colour[2] * 255)
             quake_props['_color'] = f"{r/255:.3f} {g/255:.3f} {b/255:.3f}"
