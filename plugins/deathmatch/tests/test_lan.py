@@ -269,3 +269,43 @@ def test_remote_heading_and_attack_frames_replicate(linked):
     table.begin_frame([mirror], epoch=1)
     assert table.monster_angle[0] == pytest.approx(270)
     assert not mirror.properties['is_shooting']
+
+
+def test_opponent_billboards_follow_feet_and_crouch_on_host_and_client(linked):
+    import glm
+    from engine.entity_table import EntityTable
+
+    hl, hs, cl, cs, host, client, remote, pump = linked
+    server = hs.fighters["player"]
+    server.actor.pos = glm.vec3(100, 290, 200)
+    remote.actor.pos = glm.vec3(-100, 290, -200)
+
+    def check_projection(session, fighter):
+        table = EntityTable()
+        table.begin_frame([fighter.entity], epoch=1)
+        feet = session.feet(fighter)
+        assert feet[1] == pytest.approx(240)
+        assert table.pos[0, 0] == pytest.approx(feet[0])
+        assert table.pos[0, 2] == pytest.approx(feet[2])
+        assert table.pos[0, 1] - table.sprite_size[0, 1] / 2 == pytest.approx(feet[1])
+
+    for ducked in (False, True, False):
+        server.actor.set_ducked(ducked)
+        server.actor.pos.y = 240 + server.actor.height / 2
+        remote.actor.set_ducked(ducked)
+        remote.actor.pos.y = 240 + remote.actor.height / 2
+        remote.actor.on_ground = True
+        host.inputs[remote.peer]["keys"] = [0x43] if ducked else []
+        host.update_remote(remote, 0)
+        client.apply(host.snapshot())
+        mirror = cs.fighters["host"]
+        assert mirror.actor.ducked is ducked
+        check_projection(hs, remote)
+        check_projection(cs, mirror)
+
+    hs.spawns = [((0, 240, 600), 0)]
+    hs.respawn(server)
+    hs.respawn(remote)
+    client.apply(host.snapshot())
+    check_projection(hs, remote)
+    check_projection(cs, cs.fighters["host"])

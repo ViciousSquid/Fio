@@ -94,7 +94,7 @@ class HostGame:
             s.logic.mover_runtime._mover_brush_list, s.logic.mover_runtime._door_brush_list,
             s.logic.world_runtime.terrain, spatial_grid=s.logic.session_runtime.spatial_grid,
             sprint=0x01000020 in keys, gravity=world_gravity(s.logic.session_runtime.physics_world))
-        fighter.entity.pos = list(s.feet(fighter))
+        s.sync_entity_position(fighter)
         selected = data.get("weapon", "gun1")
         if selected in fighter.supplies.weapons:
             fighter.supplies.active = selected
@@ -112,6 +112,7 @@ class HostGame:
             supply = f.supplies
             actors.append(dict(key=f.key, name=f.name, role=f.role, team=f.team,
                 pos=list(f.actor.pos), angle=f.actor.angle, pitch=f.actor.pitch,
+                ducked=f.actor.ducked,
                 hp=s.health(f), alive=f.alive, frags=f.frags, deaths=f.deaths,
                 carrying=f.carrying, captures=f.captures,
                 respawn=f.respawn_at, protection=f.protected_until, shoot_until=f.shoot_until,
@@ -214,9 +215,10 @@ class ClientGame:
                 rt.player_health, rt.player_dead, rt.player_armor = record["hp"], not record["alive"], record["armor"]
                 combat.weapons, combat.active_weapon, combat.player_ammo = set(record["weapons"]), record["weapon"], record["ammo"]
             else:
+                f.actor.set_ducked(record.get("ducked", False))
                 f.actor.pos = server_pos
                 f.actor.angle, f.actor.pitch = record["angle"], record["pitch"]
-                f.entity.pos = list(s.feet(f))
+                s.sync_entity_position(f)
                 f.entity.properties.update(health=record["hp"], dead=not record["alive"], hidden=not record["alive"], disabled=True)
             f.alive, f.frags, f.deaths = record["alive"], record["frags"], record["deaths"]
             f.carrying, f.captures = record["carrying"], record["captures"]

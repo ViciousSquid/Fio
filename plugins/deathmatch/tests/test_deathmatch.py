@@ -655,3 +655,29 @@ def test_bot_heading_and_attack_reach_the_render_projection(arena):
     table.begin_frame([bot.entity], epoch=1)
     key = sprite_keys_for_view(table, np.array([0]), eye)[0]
     assert table.sprite_recipes()[key][0][1] == 'idle_1.png'
+
+
+@pytest.mark.parametrize("sprite_height", [128, 192])
+@pytest.mark.parametrize("floor_y", [0, 240])
+def test_bot_billboard_feet_match_controller_after_respawn_and_movement(
+        arena, sprite_height, floor_y):
+    from engine.entity_table import EntityTable
+
+    logic, session, human, bot = arena
+    bot.entity.properties["sprite_height"] = sprite_height
+    session.spawns = [((0, floor_y, 600), 0)]
+    session.respawn(bot)
+    assert session.feet(bot)[1] == pytest.approx(floor_y)
+    table = EntityTable()
+
+    def check_projection():
+        table.begin_frame([bot.entity], epoch=1)
+        feet = session.feet(bot)
+        assert table.pos[0, 0] == pytest.approx(feet[0])
+        assert table.pos[0, 2] == pytest.approx(feet[2])
+        assert table.pos[0, 1] - table.sprite_size[0, 1] / 2 == pytest.approx(feet[1])
+
+    check_projection()
+    for _ in range(5):
+        session.update_bot(bot, 1 / 60)
+        check_projection()

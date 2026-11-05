@@ -351,6 +351,12 @@ class DeathmatchSession:
         p = fighter.actor.pos
         return (float(p[0]), float(p[1]) - fighter.actor.height / 2, float(p[2]))
 
+    def sync_entity_position(self, fighter):
+        """Centre the billboard above the controller's feet, using its own size."""
+        from engine.entity_table import sprite_size
+        x, y, z = self.feet(fighter)
+        fighter.entity.pos = [x, y + sprite_size(fighter.entity)[1] / 2, z]
+
     def eye(self, fighter):
         p = fighter.actor.pos
         return (float(p[0]), float(p[1]) + fighter.actor.camera_height, float(p[2]))
@@ -411,7 +417,7 @@ class DeathmatchSession:
                 fighter.supplies.weapons = {"gun1", "gun2"}
                 fighter.supplies.ammo = 24
                 fighter.fire_at = self.clock
-            fighter.entity.pos = list(pos)
+            self.sync_entity_position(fighter)
             fighter.entity.properties.update(
                 health=int(number(fighter.entity.properties, "max_health", 100, 1, 10000)),
                 dead=False, hidden=False, disabled=True, is_shooting=False)
@@ -677,7 +683,7 @@ class DeathmatchSession:
             fighter.route.clear()
             fighter.route_at = self.clock + 0.5
             fighter.stuck = 0
-        fighter.entity.pos = list(self.feet(fighter))
+        self.sync_entity_position(fighter)
         fighter.supplies.collect_nearby()
         if fighter.actor.pos.y < -4096:
             self.kill(fighter)
