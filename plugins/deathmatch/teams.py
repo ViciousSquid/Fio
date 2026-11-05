@@ -59,7 +59,7 @@ class TeamGame:
                 fighter.entity.properties["team"] = ""
             return
         if requested not in TEAMS:
-            counts = {t: sum(f is not fighter and f.team == t for f in self.session.fighters.values()) for t in TEAMS}
+            counts = {t: sum(f is not fighter and not f.spectator and f.team == t for f in self.session.fighters.values()) for t in TEAMS}
             requested = min(TEAMS, key=lambda t: counts[t])
         fighter.team = requested
         if fighter.entity is not None:
@@ -230,7 +230,7 @@ class TeamGame:
                 p = self.session.feet(carrier)
                 return (p[0] + 90, p[1], p[2] + 90)
         # Every third bot defends; the rest attack. Remote/local humans use input.
-        bots = [f for f in self.session.fighters.values() if f.entity is not None and f.team == fighter.team]
+        bots = [f for f in self.session.fighters.values() if f.entity is not None and not f.spectator and f.team == fighter.team]
         if len(bots) > 2 and bots.index(fighter) % 3 == 2:
             return own.home
         return enemy.pos

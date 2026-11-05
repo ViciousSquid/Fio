@@ -93,6 +93,7 @@ class DeathmatchPlugin(FioPlugin):
         api.register_menu_action("Load CTF map", self._load_ctf, "Load the red/blue CTF arena")
         api.register_menu_action("LAN Multiplayer…", self._open_lobby, "Find or host LAN games")
         api.register_pause_menu_item("Restart Deathmatch", self._restart_menu)
+        api.register_pause_menu_item('Spectator…', self._open_spectator, close_menu=False)
         api.register_console_command("addbot", self._addbot,
                                      'addbot ["name"] [easy|normal|hard] — add a match bot')
         api.register_console_command("removebot", self._removebot,
@@ -101,6 +102,42 @@ class DeathmatchPlugin(FioPlugin):
                                      "fraglimit [number] — query/set frag limit; 0 is unlimited")
         api.register_console_command('dflaglight', self._dflaglight,
                                      'dflaglight [on|off] — enable/disable flag light shadows; default: on')
+        api.register_console_command('spectate', self._spectate,
+                                     'spectate [free|off|next|prev|name] — open spectator menu or choose a view')
+
+    def _open_spectator(self, main_window, logic):
+        from .spectator_menu import SpectatorMenu
+        if logic not in self._sessions:
+            main_window.show_toast('Start a multiplayer match first.')
+            return
+        main_window.close_pause_menu()
+        menu = getattr(main_window, '_spectator_menu', None)
+        if menu is None or menu.logic is not logic:
+            if menu is not None:
+                menu.close()
+            menu = main_window._spectator_menu = SpectatorMenu(main_window, self, logic)
+        menu.show()
+        menu.raise_()
+        menu.activateWindow()
+
+    def _spectate(self, args, main_window, logic, play_mode):
+        value = args.strip()
+        if not value:
+            if not play_mode or main_window is None:
+                return 'Open the spectator menu in a playing editor, or use spectate free/off/next/prev.'
+            self._open_spectator(main_window, logic)
+            return 'Spectator menu opened.'
+        def apply(session):
+            controller = session.spectators
+            if value.lower() == 'off':
+                return controller.choose(False)
+            if value.lower() == 'free':
+                return controller.choose(True)
+            if value.lower() in ('next', 'prev'):
+                return controller.cycle(1 if value.lower() == 'next' else -1)
+            fighter = next((f for f in session.fighters.values() if f.name.casefold() == value.casefold()), None)
+            return controller.choose(True, fighter.key) if fighter else 'Player not found.'
+        return self._command(logic, play_mode, apply, local=True)
 
     def _dflaglight(self, args, main_window, logic, play_mode):
         value = args.strip().lower()
@@ -311,12 +348,16 @@ class DeathmatchPlugin(FioPlugin):
                 label = (f"[{team[0].upper()}] " if team else "") + name[:19]
                 if flag:
                     label += " ⚑"
+                if name in state.get('spectators', ()):
+                    label = '[SPEC] '+name[:19]
                 painter.drawText(x + 14, row_y, label)
                 painter.drawText(x + panel_width - 122, row_y, str(frags))
                 painter.drawText(x + panel_width - 44, row_y, str(deaths))
             for index, text in enumerate(state["feed"]):
                 painter.drawText(14, height - 80 - index * 22, text)
-            if state["respawn"] and not state["finished"]:
+            if state.get('spectating'):
+                painter.drawText(14, height-28, 'SPECTATING — '+(state.get('watching') or 'Free camera')+' — Esc: Spectator menu')
+            elif state["respawn"] and not state["finished"]:
                 painter.drawText(QRect(0, height // 2, width, 50), Qt.AlignCenter,
                                  f"Respawning in {state['respawn']}…")
             if state["finished"]:

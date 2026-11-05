@@ -186,6 +186,16 @@ The panel refreshes twice per second (every 500 ms) while visible and stops poll
 
 I/O connections use a stable target ID. The toast identifies the chosen output and input; use the I/O editor to adjust the action, delay or parameters. Unsupported pairs are rejected without changing the map. Repeating the same connection does not create a duplicate. Each completed link is one undoable edit; dragging does not move either entity.
 
+## 10. Spectator menu
+
+Open **Esc → Spectator…**, or type **`spectate`** in the console. The menu lists players and bots live, with **Free camera**, **Follow selected**, **Previous / Next player** and **Join match** controls. Selecting a mode closes the menu so you can use the camera. Reopen it with Esc or the console.
+
+Free camera uses **WASD**, **Space** to rise, **C** to descend and **Shift** for faster flight. Following uses the watched participant’s view; if they die, leave or become a spectator, you return to free camera. You can also use `spectate free`, `spectate off`, `spectate next`, `spectate prev`, or `spectate PlayerName`.
+
+Spectators cannot shoot, take damage, collect pickups, carry flags or activate player interactions. Entering spectator mode drops a carried flag. They do not auto-respawn; **Join match** gives a fresh spawn. Host and LAN clients can spectate, while the host validates membership and movement.
+
+**Spectators always appear as a pair of glasses**, including through portals. Each wears the type they selected in **Settings → Appearance**. The normal Show glasses toggle applies to ordinary player presentation; it does not hide spectators. This avatar appearance is replicated, while `dflaglight` remains an independent, local rendering preference.
+
 ## Reference: where this behaviour lives
 
 - [Navigation graph and A*](navigation.py): name-based links, direct route check and reachable start/goal connections.

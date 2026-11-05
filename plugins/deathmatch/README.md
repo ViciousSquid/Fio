@@ -238,3 +238,18 @@ and while carried. `dflaglight` / `dflaglight on` enables shadow casting for bot
 flag lights in your own view; `dflaglight off` keeps the lights on without shadows.
 This setting is per-client, is never replicated, and survives round restarts. `botdebug` refreshes
 twice per second (500 ms).
+
+Open **Esc → Spectator…** during a match, or type `spectate` in the console.
+The menu offers free camera, a live player/bot list, follow/cycle controls and
+Join match. `spectate free`, `spectate off`, `spectate next`, `spectate prev`,
+and `spectate PlayerName` also work on the host or a LAN client.
+
+Spectators cannot shoot, collect items, trigger interactions or carry flags.
+They do not auto-respawn; Join match starts a fresh life. Free camera uses WASD,
+Space up, C down and Shift for faster flight. Following switches to free camera
+if the watched player dies or leaves.
+
+Spectators **always appear as glasses**, wearing the style they chose in
+Settings → Appearance. Their chosen appearance is shared with other players;
+the ordinary Show glasses toggle does not hide spectators. Flag light shadow
+quality remains a separate, per-client setting and is never replicated.

@@ -69,6 +69,9 @@ class Fighter:
     peer: str | None = None
     traversal: object = None
     navigation_reason: str = ""
+    spectator: bool = False
+    spectator_target: str | None = None
+    glasses_style: str = 'classic'
 
 
 class DeathmatchSession:
@@ -163,11 +166,14 @@ class DeathmatchSession:
         setattr(obj, name, wrapped)
 
     def _install_hooks(self):
+        from .spectator import Spectators
+        self.spectators = Spectators(self)
         self._hook(self.logic, "_tick_play_mode", self._engine_tick)
         self._hook(self.logic.combat_runtime, "_damage_monster", self._player_hit)
         self._hook(self.logic.monster_ai, "_apply_monster_damage", self._monster_hit)
         self._hook(self.logic.trigger_runtime, "_apply_player_damage", self._human_hit)
         self._hook(self.logic.combat_runtime, "_handle_shooting", self._player_fire)
+        self.spectators.install()
 
     def _engine_tick(self, original, delta):
         was_dead = self.logic.player_runtime.player_dead
@@ -191,6 +197,8 @@ class DeathmatchSession:
             with self.logic.session_runtime.monster_lock:
                 self.network.tick(max(0, min(float(delta), 0.1)))
             if self.network.is_client:
+                if self.fighters['player'].spectator:
+                    self.spectators.follow(self.fighters['player'])
                 return
         # Unlike Fio's regular plugin tick, this also runs during the native
         # death screen, so the respawn clock and surviving bots keep moving.
@@ -204,6 +212,8 @@ class DeathmatchSession:
             self.step(delta)
 
     def _player_fire(self, original):
+        if self.fighters['player'].spectator:
+            return
         if self.network is not None and self.network.is_client:
             import time
             combat = self.logic.combat_runtime
@@ -323,7 +333,7 @@ class DeathmatchSession:
     def check_frag_limit(self):
         if not self.limit or self.game.ctf:
             return
-        values = self.game.scores.values() if self.game.enabled else (f.frags for f in self.fighters.values())
+        values = self.game.scores.values() if self.game.enabled else (f.frags for f in self.fighters.values() if not f.spectator)
         if any(v >= self.limit for v in values):
             self.finish("Frag limit")
 
@@ -342,8 +352,9 @@ class DeathmatchSession:
         self.publish()
 
     def leaders(self):
-        best = max(f.frags for f in self.fighters.values())
-        return [f for f in self.fighters.values() if f.frags == best]
+        participants = [f for f in self.fighters.values() if not f.spectator]
+        best = max((f.frags for f in participants), default=0)
+        return [f for f in participants if f.frags == best]
 
     def restart(self):
         self.clock, self.finished, self.reason = 0.0, False, ""
@@ -409,6 +420,8 @@ class DeathmatchSession:
         return self.rng.choice(ranked[:max(1, len(ranked) // 2)])
 
     def respawn(self, fighter):
+        if fighter.spectator:
+            return
         import glm
         pos, angle = self.spawn_choice(fighter)
         fighter.actor.set_ducked(False)
@@ -872,6 +885,10 @@ class DeathmatchSession:
                 self.finish("Time limit")
         if not self.finished:
             for fighter in self.fighters.values():
+                if fighter.spectator:
+                    if fighter.role == 'remote' and self.network is not None:
+                        self.network.update_remote(fighter, dt)
+                    continue
                 if not fighter.alive:
                     if self.clock >= fighter.respawn_at:
                         self.respawn(fighter)
@@ -889,6 +906,9 @@ class DeathmatchSession:
                     break
             if not self.finished:
                 self.game.step()
+        for fighter in self.fighters.values():
+            if fighter.spectator:
+                self.spectators.follow(fighter)
         self.noises = [n for n in self.noises if self.clock - n[0] < 2]
         self.feed = [entry for entry in self.feed if self.clock < entry[0]][-4:]
         self.publish()
@@ -922,12 +942,17 @@ class DeathmatchSession:
             flags=tuple((flag.team, "carried" if flag.carrier else "dropped" if flag.dropped else "home")
                         for flag in self.game.flags.values()) if self.game.ctf else (),
             network_client=self.network is not None and self.network.is_client,
+            spectating=human.spectator,
+            watching=self.fighters[human.spectator_target].name if human.spectator_target in self.fighters else None,
+            spectators=tuple(f.name for f in rows if f.spectator),
+            watchable=tuple((f.key, f.name, f.team, f.alive, f.spectator) for f in rows),
         )
 
     def stop(self):
         if not self._started:
             return
         self._started = False
+        self.spectators.stop()
         if self.network is not None:
             self.network.close()
             self.network = None

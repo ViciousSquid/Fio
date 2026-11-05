@@ -48,3 +48,25 @@ def glasses_sprite_key(style):
 def glasses_path(style):
     """Path of *style*'s image relative to the project root."""
     return f'assets/{GLASSES_SUBFOLDER}/{glasses_file(style)}'
+
+
+def world_glasses(state, show_players, local_style):
+    """Spectators always wear their own chosen style, independent of visibility."""
+    positions, sprites, spectators, spectator_sprites = [], [], [], []
+    if state is None:
+        return (), (), (), (), False
+    local_spectator = bool(getattr(state, 'local_spectator', False))
+    if not state.player_dead and (show_players or local_spectator):
+        p = state.player_pos
+        positions.append((float(p.x), float(p.y)+40, float(p.z)))
+        sprites.append(glasses_sprite_key(local_style))
+    if show_players and state.splitscreen_active and not state.player2_dead:
+        p = state.player2_pos
+        positions.append((float(p.x), float(p.y)+40, float(p.z)))
+        sprites.append(DEFAULT_SPRITE_KEY)
+    for position, style in getattr(state, 'spectator_glasses', ()):
+        spectators.append(tuple(position))
+        spectator_sprites.append(glasses_sprite_key(style))
+    positions.extend(spectators)
+    sprites.extend(spectator_sprites)
+    return tuple(positions), tuple(sprites), tuple(spectators), tuple(spectator_sprites), local_spectator or bool(spectators)

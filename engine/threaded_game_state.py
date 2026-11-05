@@ -36,6 +36,8 @@ class RenderState:
         self.player_health = 100
         self.player_max_health = 100
         self.player_dead = False
+        self.local_spectator = False
+        self.spectator_glasses = ()
         self.active_weapon = None
         #: Bumped each time the player takes another weapon in hand by slot
         #: key; the HUD shows the weapon briefly when it changes.
@@ -143,6 +145,8 @@ class RenderState:
         self.player_health = 100
         self.player_max_health = 100
         self.player_dead = False
+        self.local_spectator = False
+        self.spectator_glasses = ()
         self.active_weapon = None
         #: Bumped each time the player takes another weapon in hand by slot
         #: key; the HUD shows the weapon briefly when it changes.
