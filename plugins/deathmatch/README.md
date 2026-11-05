@@ -81,6 +81,9 @@ match ends prepares them for the next round; press R to start it.
 
 ## Bot behaviour
 
+For illustrated routing examples and node placement advice, see the
+[bot navigation guide](NAVIGATION_GUIDE.md).
+
 - Bots fight every opposing participant, including other bots.
 - Field of view, range and real world occlusion govern sight. Bots remember a
   last seen position briefly; hearing gunfire prompts investigation without
