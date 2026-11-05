@@ -593,6 +593,7 @@ class Monster(Thing):
     EDITOR_PRIMARY_PROPERTIES = (
         'monster_type',
         'monster_id',
+        'angle',
         'health',
         'damage',
         'awake',
@@ -633,6 +634,7 @@ class Monster(Thing):
         self.properties['monster_type'] = monster_type
 
         self.properties.setdefault('monster_id', 0)
+        self.properties.setdefault('angle', 0.0)
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
 

@@ -424,8 +424,10 @@ class GLESRenderer:
                 gl.glDeleteTextures([self._textures.pop(old)])
         return texture
 
-    def _sprite_image(self, table, row):
-        recipe = table.sprite_recipes()[int(table.sprite_key_id[row])]
+    def _sprite_image(self, table, row, camera_pos=None):
+        from engine.monster_facing import sprite_keys_for_view
+        key = sprite_keys_for_view(table, [row], camera_pos)[0]
+        recipe = table.sprite_recipes()[int(key)]
         package = self._scene.get('package')
         for _, filename, folder, _ in recipe or ():
             if filename:
@@ -587,7 +589,7 @@ class GLESRenderer:
                 if source[0] == 'effect':
                     texture, _, tint = self._effect_texture(table, origin)
                 else:
-                    texture = self._load_texture(self._sprite_image(table, origin))
+                    texture = self._load_texture(self._sprite_image(table, origin, eye))
             else:
                 texture = self._load_texture(self._texture_names[vao])
             draw_state = (transparent, vao in self._static_vaos or bool(source and source[0] == 'brush'))

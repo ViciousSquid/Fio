@@ -194,7 +194,7 @@ SPRITE_NONE = -1
 _LOOKUP_ONLY = ('', '', False)
 
 
-def _monster_sprite_candidates(props):
+def _monster_sprite_candidates(props, rotation=None):
     """The monster sprite branch, expressed as numeric texture candidates.
 
     Reads the same four state fields that branch reads, from a Monster's
@@ -238,6 +238,14 @@ def _monster_sprite_candidates(props):
         if sprite_type != 'idle':
             candidates.append((key, 'idle.png', base_folder, True))
 
+    if rotation is not None and sprite_type != 'dead':
+        directional = []
+        key += '_rotation_%d' % rotation
+        for _, name, folder, cache in candidates:
+            stem, ext = os.path.splitext(name)
+            directional.append((key, '%s_%d%s' % (stem, rotation, ext), folder, cache))
+            directional.append((key, name, folder, cache))
+        return tuple(directional)
     return tuple(candidates)
 
 
@@ -623,6 +631,9 @@ _COLUMNS = (
     ('sprite_fixed_yaw', (), np.float32, -10000.0),
     #: Interned sprite recipe id; :data:`SPRITE_NONE` for a row that draws none.
     ('sprite_key_id', (), np.int32, SPRITE_NONE),
+    #: Camera-relative recipes, chosen independently for each viewport.
+    ('sprite_direction_ids', (8,), np.int32, SPRITE_NONE),
+    ('monster_angle', (), np.float64, 0.0),
     #: Interned model recipe id; -1 means no model.
     ('model_recipe_id', (), np.int32, -1),
     #: Model transform, a flattened mat4, and its normal matrix padded to 12.
@@ -1279,6 +1290,12 @@ class EntityTable:
         carry_yaw = _carry_sprite_yaw(thing)
         self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
+        self.sprite_direction_ids[slot] = SPRITE_NONE
+        self.monster_angle[slot] = _float_property(props.get('angle', 0.0))
+        if self.class_bits[slot] & ENT_MONSTER and not props.get('dead'):
+            self.sprite_direction_ids[slot] = [
+                self.intern_sprite(_monster_sprite_candidates(props, rotation))
+                for rotation in range(1, 9)]
 
         if self.class_bits[slot] & ENT_EFFECT:
             self._effect_published = None

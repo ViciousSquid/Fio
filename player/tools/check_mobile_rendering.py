@@ -47,6 +47,34 @@ def run(renderer):
     finally:
         world.close()
 
+    # The merged renderer must select each camera's monster frame after
+    # visibility testing, without decoding sprites that are off screen.
+    assets = {}
+    for rotation, colour in ((1, 'red'), (5, 'blue')):
+        image = io.BytesIO()
+        Image.new('RGBA', (8, 8), colour).save(image, format='PNG')
+        assets[f'assets/sprites/monsters/human/idle_{rotation}.png'] = image.getvalue()
+    data = {'brushes': [], 'things': [{'type': 'Monster', 'pos': [0, 0, -100],
+            'properties': {'monster_type': 'human', 'angle': 0, 'awake': False}}]}
+    with package(data, assets) as archive:
+        world = PlayerWorld(data, package=archive)
+        try:
+            renderer.load_scene(data, archive, world)
+            # Look away first. Scene upload may create a fallback texture,
+            # but neither directional frame should be requested yet.
+            with patch.object(renderer, '_load_texture', wraps=renderer._load_texture) as loads:
+                renderer.render(dict(state, cam_yaw=90))
+                assert renderer.frame_stats['drawn_batches'] == 0
+                assert loads.call_count == 0, 'Invisible monster texture was loaded'
+            for eye, yaw, expected in (((0, 0, 0), -90, (255, 0, 0)),
+                                       ((0, 0, -200), 90, (0, 0, 255))):
+                renderer.render(dict(state, cam_pos=eye, cam_yaw=yaw))
+                assert renderer.frame_stats['drawn_batches'] == 1
+                np.testing.assert_allclose(pixels()[64, 64, :3], expected, atol=2)
+            assert GL.glGetError() == GL.GL_NO_ERROR
+        finally:
+            world.close()
+
     frames = io.BytesIO()
     Image.new('RGB',(8,8),'red').save(frames,format='GIF',save_all=True,
         append_images=[Image.new('RGB',(8,8),'lime')],duration=[100,100],loop=0)
