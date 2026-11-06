@@ -86,6 +86,15 @@ _geometry_serials = itertools.count(1)
 # Classification bits
 # --------------------------------------------------------------------------
 
+def _frozen(value):
+    """A hashable, exact copy of an authored plane value."""
+    if isinstance(value, dict):
+        return tuple(sorted((key, _frozen(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen(item) for item in value)
+    return value
+
+
 class GeometryRecord:
     """Dense cold render record for one convex geometry-table entry.
 
@@ -93,9 +102,19 @@ class GeometryRecord:
     ``serial`` is a number no other record has had: a consumer that keeps
     state per geometry handle (the renderer's GPU meshes) recognises a record
     it has seen -- wherever a reconcile moved its handle -- by its serial.
+
+    ``surface`` is the brush's authored surface as one exact, hashable
+    value: every plane as authored (offset, normal, texture, UV mapping,
+    texture basis, face tag) and each face's natural-scale flag. It is what
+    ``signature`` stood for, minus the geometry epoch -- an epoch belongs to a
+    dict, and an undo restores every brush as a new dict -- so a renderer
+    keyed by it finds a restored but unchanged brush's mesh again, while any
+    real change to the surface, however small, is a different key. Like the
+    signature, it leaves out ``origin``/``scale``: a mover moves its ``pos``,
+    not its planes, and keeps the mesh it has.
     """
     __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale',
-                 'serial')
+                 'serial', 'surface')
 
     def __init__(self, signature, convex, origin, scale, natural_scale):
         self.signature = signature
@@ -104,6 +123,10 @@ class GeometryRecord:
         self.scale = scale
         self.natural_scale = natural_scale
         self.serial = next(_geometry_serials)
+        self.surface = (
+            tuple(_frozen(plane) for plane in convex.planes),
+            tuple(bool(natural_scale.get(id(face), False))
+                  for face in convex.faces))
 
     def describes(self, signature, convex, origin, scale, natural_scale):
         """Whether a record built from these inputs would equal this one."""

@@ -6,7 +6,9 @@ edits -- one per frame, interleaved with still frames -- through a production
 ``RenderTable`` and ``ForwardRenderer`` from a fixed camera, and records for
 every frame:
 
-* CPU ms (this thread: table refresh + submission), wall ms, and GPU ms
+* CPU ms (this thread), split into the table refresh (``sync``, which the
+  logic thread does in the app) and the renderer's own (``render``); wall ms;
+  and GPU ms
   measured by a ``GL_TIME_ELAPSED`` query around the frame (OpenGL 3.3 core),
   since CPU time alone does not show a stall the GPU takes;
 * bytes uploaded to the shared convex store by kind (geometry, transforms,
@@ -216,8 +218,8 @@ class Run:
         gl = self.gl
         uploads = self._uploads()
         builds = self.builds
-        c0, t0 = time.thread_time(), time.perf_counter()
         dirty = self.edit(op)
+        c0, t0 = time.thread_time(), time.perf_counter()
         if dirty is None:
             self.epoch += 1
             self.table.begin_frame(self.brushes, epoch=self.epoch)
@@ -227,6 +229,7 @@ class Run:
                                    dirty_objects={id(b) for b in dirty})
         else:
             self.table.begin_frame(self.brushes, epoch=self.epoch)
+        cs = time.thread_time()
         config = self._config()
         gl.glBeginQuery(gl.GL_TIME_ELAPSED, self.query)
         self.renderer.render_scene(*self.camera, None, config,
@@ -242,6 +245,7 @@ class Run:
         gpu_ns = int(elapsed.value)
         after = self._uploads()
         return {"op": op, "cpu": (c1 - c0) * 1000.0, "wall": (t1 - t0) * 1000.0,
+                "sync": (cs - c0) * 1000.0, "render": (c1 - cs) * 1000.0,
                 "gpu": gpu_ns / 1e6, "builds": self.builds - builds,
                 **{"up_" + k: after[k] - uploads[k] for k in after},
                 **self._allocation()}
@@ -273,6 +277,8 @@ def measure(renderer, brushes, batching, width, height, frames, seed=11):
         by_op[op] = {
             "frames": len(rows),
             "cpu_ms": _summary([r["cpu"] for r in rows]),
+            "sync_ms": _summary([r["sync"] for r in rows]),
+            "render_ms": _summary([r["render"] for r in rows]),
             "wall_ms": _summary([r["wall"] for r in rows]),
             "gpu_ms": _summary([r["gpu"] for r in rows]),
             "builds_mean": round(statistics.mean(r["builds"] for r in rows), 2),
@@ -283,6 +289,7 @@ def measure(renderer, brushes, batching, width, height, frames, seed=11):
         }
     everything = {
         "cpu_ms": _summary([r["cpu"] for r in records]),
+        "render_ms": _summary([r["render"] for r in records]),
         "wall_ms": _summary([r["wall"] for r in records]),
         "gpu_ms": _summary([r["gpu"] for r in records]),
     }

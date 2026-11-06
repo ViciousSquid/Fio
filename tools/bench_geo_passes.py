@@ -335,6 +335,9 @@ def main(argv=None):
     parser.add_argument("--json")
     parser.add_argument("--tree", default=os.path.dirname(HERE))
     parser.add_argument("--save-map", help="also write the world as a map")
+    parser.add_argument("--batching", default="elements",
+                        help="geo_batching for a renderer that has it "
+                             "(elements, multidraw, off)")
     args = parser.parse_args(argv)
     # main.py's PyOpenGL settings: no glGetError after every call unless
     # FIO_GL_DEBUG=1 asks for it. Decided before anything imports OpenGL.GL.
@@ -360,9 +363,12 @@ def main(argv=None):
     from engine.renderer.forward import ForwardRenderer
     renderer = ForwardRenderer(None)
     renderer.shadows_enabled = False
+    if hasattr(renderer, "geo_batching"):
+        renderer.geo_batching = args.batching
     renderer.set_grid(4096, 64)
     renderer.set_sprite_textures({})
     result = {"tree": tree, "grid": args.grid, "brushes": len(brushes),
+              "batching": getattr(renderer, "geo_batching", None),
               "angled": sum(1 for b in brushes if b.get("geometry")),
               "frames": args.frames, "size": [width, height]}
     for mode, play in (("editor", False), ("play", True)):

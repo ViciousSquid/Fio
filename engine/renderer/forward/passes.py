@@ -637,7 +637,7 @@ class PassesMixin:
             return
         geo, runs, rows, handles = faces
         if self.geo_batching != 'off' and 'geo_batched' in self.shaders:
-            batched = self._geo_batchable(geo, handles)
+            batched = self._geo_batchable(geo, handles, self._geo_store())
             if batched.any():
                 current_tex = self._draw_geo_batched(
                     projection, view, lights, geo, runs[batched], rows[batched],
@@ -651,10 +651,13 @@ class PassesMixin:
                                 models, normals, uniforms, current_tex)
 
     @staticmethod
-    def _geo_batchable(geo, handles):
-        """Faces the batched path can draw: stored, and their mesh's
-        transform slot used by no other visible row."""
-        stored = geo.page[handles] >= 0
+    def _geo_batchable(geo, handles, store):
+        """Faces the batched path can draw: stored in a page it can index,
+        and their mesh's transform slot used by no other visible row."""
+        pages = geo.page[handles]
+        stored = pages >= 0
+        if stored.any():
+            stored[stored] = store.batchable(pages[stored])
         unique_handles = np.unique(handles[stored])
         slots = geo.slot[unique_handles]
         values, counts = np.unique(slots, return_counts=True)

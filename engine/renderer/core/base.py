@@ -127,12 +127,13 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         self._sprite_vbo = None
         self._grid_vbo = None
 
-        # Convex geometry meshes, owned by geometry signature. The signature
-        # carries the brush's geometry epoch, which every change to its shape
-        # or face mapping bumps, so it names the mesh's content exactly -- and
-        # it survives a table reconcile and is the same in both render
-        # buffers' tables. Keying by (table generation, geometry id) rebuilt
-        # every convex mesh, once per buffer, after any structural edit.
+        # Convex geometry meshes, owned by their record's surface key: every
+        # authored input of the mesh, exactly, and nothing else -- so it
+        # survives a table reconcile, is the same in both render buffers'
+        # tables, and survives an undo that restores a brush unchanged as a
+        # new dict. Keying by (table generation, geometry id) rebuilt every
+        # convex mesh, once per buffer, after any structural edit; keying by
+        # the epoch-carrying signature rebuilt every one after an undo.
         self._geo_mesh_cache = {}
         #: id(RenderTable) -> GeoHandles: the per-frame index into the cache,
         #: as arrays indexed by geometry handle. Meshes live while a recently

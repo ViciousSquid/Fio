@@ -248,11 +248,33 @@ class GeometryMixin:
         dropped[kept] = False
         released = entry.meshes[dropped]
         records = table.geometry_records
-        for handle in np.flatnonzero(~found).tolist():
+        fresh = np.flatnonzero(~found).tolist()
+        # Records new to this table: first take the meshes the cache already
+        # has (another table, or a surface that came back); then let go of
+        # what this table dropped, so a mesh only it held is freed; only then
+        # build the misses -- into the space just freed. Building first held
+        # every replaced mesh and its replacement at once (an undo doubled
+        # the pages).
+        misses = []
+        for handle in fresh:
+            record = records[handle]
+            mesh = (self._geo_mesh_cache.get(record.surface)
+                    if record is not None else None)
+            if mesh is None:
+                misses.append(handle)
+            else:
+                meshes[handle] = mesh
+                mesh.refs += 1
+        if len(released):
+            self._unref_geo_meshes(released)
+        for handle in misses:
             mesh = self._get_geo_mesh_record(records[handle])
             meshes[handle] = mesh
             if mesh is not None:
                 mesh.refs += 1
+        for handle in fresh:
+            mesh = meshes[handle]
+            if mesh is not None:
                 columns['vao'][handle] = mesh.vao
                 columns['face_vao'][handle] = mesh.face_vao or 0
                 columns['page'][handle] = mesh.page
@@ -265,8 +287,6 @@ class GeometryMixin:
         entry.serials = serials.copy()
         entry.meshes = meshes
         entry.version = table.geometry_version
-        if len(released):
-            self._unref_geo_meshes(released)
 
     def _prepare_geo_meshes(self, table, slots):
         """``geometry handle -> BrushGeoMesh`` for the convex rows of *slots*.
@@ -289,12 +309,14 @@ class GeometryMixin:
     def _get_geo_mesh_record(self, record, geometry_id=None, geometry_generation=None):
         """Get or build a GPU mesh from a dense GeometryRecord.
 
-        Keyed by the record's geometry signature, which names the mesh's
-        content exactly and is the same in both render buffers' tables.
+        Keyed by the record's ``surface`` -- the exact authored inputs of the
+        mesh, with no per-dict epoch -- so both render buffers' tables share
+        one mesh, and an undo that restores a brush unchanged (as a new dict)
+        finds its mesh again instead of building and uploading a copy.
         """
         if record is None or record.convex is None or not record.convex.is_valid:
             return None
-        key = record.signature
+        key = record.surface
         mesh = self._geo_mesh_cache.get(key)
         if mesh is None:
             try:

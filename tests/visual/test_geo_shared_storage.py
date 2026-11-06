@@ -201,8 +201,12 @@ def _cut(brush, normal):
 
 
 def _mesh_of(renderer, brush):
-    from engine import brush_geometry as bg
-    return renderer._geo_mesh_cache.get(bg.geometry_signature(brush))
+    """The cached mesh a table would resolve *brush* to (by its surface key)."""
+    from engine.render_table import RenderTable
+    probe = RenderTable()
+    probe.sync([brush], 1)
+    record = probe.geometry_records[0]
+    return renderer._geo_mesh_cache.get(record.surface)
 
 
 def test_shared_storage_through_an_editing_session(renderer, context):
@@ -292,6 +296,13 @@ def test_shared_storage_through_an_editing_session(renderer, context):
         assert differs.tolist() == [mesh.slot]
         assert _index_lists(renderer) == lists
         session.check("moved one brush (transform only)")
+        # Back home, as Stop puts every mover (pos = original_pos). A brush
+        # whose pos differs from its planes exists only during Play, where
+        # there is no undo; meshes are keyed by surface, not pos, so a mover
+        # keeps its mesh across record refreshes, as it always did.
+        mover['pos'] = list(session.geometry_of.pop(id(mover))['pos'])
+        moved(mover)
+        session.frames(2)
 
         # 4a. Hide one brush: parity; its groups' index lists rebuilt.
         hidden = state.brushes[300]
@@ -328,16 +339,32 @@ def test_shared_storage_through_an_editing_session(renderer, context):
         assert _delta(before, _uploads(renderer)) == {
             'geometry': 0, 'transforms': 0, 'indices': 0}
         session.check("reordered")
-        # 4d. Undo a reshape: parity holds (the restored world is new dicts,
-        # so this is the expensive edit -- measured by the benchmark).
+        # 4d. Undo and redo a move: parity holds, and although every brush is
+        # restored as a new dict, only the moved brush is rebuilt.
         state.save_state()
         edited = state.brushes[10]
         bg.translate_brush(edited, (16.0, 0.0, 0.0))
         state.mark_world_changed([edited])
         session.check("moved before undo")
+        store = renderer._geo_store()
+        capacity = [p.capacity if p is not None else 0 for p in store.pages]
+        builds['n'] = 0
+        before = _uploads(renderer)
         state.undo()
-        session.geometry_of.clear()
+        session.frames(2)
+        # Every brush comes back as a new dict; meshes are found by surface,
+        # so only the brush the undo really changed is built again.
+        assert builds['n'] == 1, "undo rebuilt %d meshes" % builds['n']
+        moved_back = _mesh_of(renderer, state.brushes[10])
+        assert _delta(before, _uploads(renderer))['geometry'] == (
+            moved_back.count * geo_store.STRIDE)
+        assert [p.capacity if p is not None else 0 for p in store.pages] == capacity
         session.check("undo")
+        builds['n'] = 0
+        state.redo()
+        session.frames(2)
+        assert builds['n'] == 1, "redo rebuilt %d meshes" % builds['n']
+        session.check("redo")
         renderer._build_geo_mesh = build
 
         # 5. Delete a brush; the next brush reuses its range and slot.
@@ -471,3 +498,100 @@ def test_churn_reuses_storage_instead_of_growing(renderer, context):
     # The face-run arena compacts: dead rows do not accumulate.
     arena = renderer._geo_runs()
     assert arena.used <= 3 * sum(m.run_len for m in renderer._geo_mesh_cache.values()) + 2048
+
+
+@pytest.mark.parametrize("missing", (("geo_batched",), ("geo_batched", "geo_textured")),
+                         ids=("no-batched-program", "no-convex-programs"))
+def test_a_missing_convex_program_falls_back_with_parity(renderer, context, missing):
+    """A driver that rejects the batched (or both convex) programs still draws
+    every face, through the per-mesh path, exactly."""
+    from tests.visual.test_geo_run_parity import (_gl_texture, _setup, _production,
+                                                  angled_scene)
+    brushes, things = angled_scene()
+    for name in missing:
+        program = renderer.shaders.pop(name)
+        import OpenGL.GL as gl
+        gl.glDeleteProgram(program)
+    config, table, slots, camera = _setup(renderer, context, brushes, things, False)
+    with DrawCapture(program=convex_programs(renderer),
+                     skip_buffers=[renderer._cube_vbo]) as capture:
+        _production(renderer, context, config, table, slots, camera, 'opaque')
+    expected = expected_geo_draws([brushes[int(s)] for s in slots], False,
+                                  _gl_texture(renderer), renderer._texture_pixel_size)
+    import OpenGL.GL as gl
+    assert compare_geo_draws(expected, capture.draws, cull=gl.GL_BACK) == []
+    assert capture.calls > len({d['texture'] for d in expected}), (
+        "the fallback should draw per mesh")
+
+
+def test_page_placement_never_touches_neighbouring_ranges(context):
+    """A full page, a new page, an oversize mesh and a released range: every
+    other range's bytes are untouched, and oversize pages are not batched."""
+    import ctypes
+    import OpenGL.GL as gl
+    from engine.renderer.core import geo_store
+    store = geo_store.GeoStore()
+    try:
+        def mesh(count, value):
+            vertices = np.full((count, 8), value, dtype=np.float32)
+            faces = np.full((count, 5), -value, dtype=np.float32)
+            return vertices, faces
+
+        def read(page, start, count):
+            size = count * geo_store.STRIDE
+            data = (ctypes.c_ubyte * size)()
+            gl.glBindBuffer(gl.GL_COPY_READ_BUFFER, store.pages[page].vbo)
+            gl.glGetBufferSubData(gl.GL_COPY_READ_BUFFER, start * geo_store.STRIDE,
+                                  size, data)
+            gl.glBindBuffer(gl.GL_COPY_READ_BUFFER, 0)
+            return bytes(data)
+
+        first = geo_store.FIRST_PAGE_VERTICES
+        placed = []
+        for value, count in ((1.0, first - 300), (2.0, 300), (3.0, 500),
+                             (4.0, geo_store.PAGE_VERTICES + 7), (5.0, 120)):
+            vertices, faces = mesh(count, value)
+            slot = store.take_slot()
+            page, start = store.place(vertices, faces, slot)
+            placed.append((page, start, count, read(page, start, count)))
+        # The first page filled exactly; the next mesh opened a new page.
+        assert placed[0][:2] == (0, 0) and placed[1][:2] == (0, first - 300)
+        assert placed[2][0] != 0
+        oversize = placed[3]
+        assert store.pages[oversize[0]].capacity == oversize[2]
+        assert not store.batchable([oversize[0]])[0]
+        assert store.batchable([placed[0][0]])[0]
+        # Release one range and fill it again: neighbours are untouched.
+        store.release(placed[1][0], placed[1][1], placed[1][2])
+        vertices, faces = mesh(200, 6.0)
+        page, start = store.place(vertices, faces, store.take_slot())
+        assert (page, start) == (0, first - 300)
+        for page, start, count, data in placed[:1] + placed[2:]:
+            assert read(page, start, count) == data
+    finally:
+        store.delete()
+
+
+def test_teardown_releases_every_shared_gl_object(context):
+    import OpenGL.GL as gl
+    from engine.render_table import RenderTable
+    from tools.bench_geo_passes import angled_world
+    made = glh.make_renderer()
+    brushes = angled_world(3)
+    table = RenderTable()
+    table.sync(brushes, 1)
+    config = glh.render_config(all_brushes=brushes, render_table=table,
+                               all_brush_slots=np.arange(table.count, dtype=np.int32),
+                               shadows_enabled=False)
+    made.render_scene(*glh.camera_matrices(eye=(0, 500, 700), target=(0, 0, 0)),
+                      None, config, brush_slots=config['all_brush_slots'])
+    store = made._geo_store()
+    buffers = [p.vbo for p in store.pages if p is not None]
+    buffers += [e[0] for variants in store._index_lists.values() for e in variants]
+    buffers.append(store.transform_buffer)
+    arrays = [p.vao for p in store.pages if p is not None]
+    arrays += [m.vao for m in made._geo_mesh_cache.values()]
+    assert buffers and arrays
+    made.cleanup()
+    assert not any(gl.glIsBuffer(b) for b in buffers), "a shared buffer outlived cleanup"
+    assert not any(gl.glIsVertexArray(a) for a in arrays), "a VAO outlived cleanup"

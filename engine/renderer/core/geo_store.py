@@ -11,7 +11,8 @@ can be drawn by one call:
   geometrically up to :data:`PAGE_VERTICES`; a full page means a new page, so
   nothing is ever copied or repacked, and an edit uploads only the edited
   mesh's own range. A released mesh's range goes back to its page's free
-  list. Every pass that draws one mesh at a time still binds a per-mesh
+  list, and a page left empty is deleted -- one empty page is kept as a
+  spare, so churn at a page boundary does not create and delete pages. Every pass that draws one mesh at a time still binds a per-mesh
   vertex array -- pointing into the page at the mesh's offset -- so the
   vertices exist once.
 * **Transform slots.** OpenGL 3.3 has no ``gl_DrawID``, so a draw covering
@@ -135,6 +136,8 @@ class GeoStore:
     """The pages, transform slots and index buffers of one renderer."""
 
     def __init__(self):
+        #: Pages by index; None where a page was released (indices of live
+        #: pages never change, since meshes hold them).
         self.pages = []
         self._free_slots = []
         self._next_slot = 0
@@ -156,24 +159,40 @@ class GeoStore:
     # -- vertex pages ------------------------------------------------------
 
     def place(self, vertices, faces, slot):
-        """Store one mesh: ``(page, start)``, or None if it cannot fit a page.
+        """Store one mesh: ``(page, start)``, or None for an empty mesh.
 
         *vertices* is ``(n, 8)`` float32, *faces* ``(n, 5)`` float32 -- the
-        per-vertex face UV state -- and *slot* the mesh's transform slot.
+        per-vertex face UV state -- and *slot* the mesh's transform slot. A
+        mesh larger than :data:`PAGE_VERTICES` gets a page of its own, which
+        :meth:`batchable` excludes (16-bit indices cannot address it); the
+        per-mesh path draws it.
         """
         count = len(vertices)
-        if not count or count > PAGE_VERTICES:
+        if not count:
             return None
         for index, page in enumerate(self.pages):
+            if page is None:
+                continue
             start = page.take(count)
             if start is not None:
                 break
         else:
-            last = self.pages[-1].capacity if self.pages else FIRST_PAGE_VERTICES // 2
-            capacity = min(PAGE_VERTICES, max(count, last * 2))
-            self.pages.append(_Page(capacity))
-            index = len(self.pages) - 1
-            start = self.pages[index].take(count)
+            # Sized by what is live: each new page about doubles the total,
+            # so a world that emptied its pages (and filled them again) gets
+            # the same small-to-large sequence, not one maximum-size page.
+            live = sum(p.used for p in self.pages if p is not None)
+            capacity = FIRST_PAGE_VERTICES
+            while capacity < max(count, live) and capacity < PAGE_VERTICES:
+                capacity *= 2
+            capacity = max(capacity, count)
+            page = _Page(capacity)
+            if None in self.pages:
+                index = self.pages.index(None)
+                self.pages[index] = page
+            else:
+                self.pages.append(page)
+                index = len(self.pages) - 1
+            start = page.take(count)
         block = np.empty((count, STRIDE // 4), dtype=np.float32)
         block[:, :VERTEX_FLOATS] = vertices
         block[:, VERTEX_FLOATS:VERTEX_FLOATS + FACE_FLOATS] = faces
@@ -184,7 +203,16 @@ class GeoStore:
         return index, start
 
     def release(self, page, start, count):
-        self.pages[page].give(start, count)
+        held = self.pages[page]
+        held.give(start, count)
+        if held.used:
+            return
+        # Empty: delete it, unless it is the only empty page (the spare).
+        if any(other is not None and other is not held and not other.used
+               for other in self.pages):
+            gl.glDeleteVertexArrays(1, [held.vao])
+            gl.glDeleteBuffers(1, [held.vbo])
+            self.pages[page] = None
 
     def mesh_vao(self, page, start, face):
         """A VAO over one mesh's vertices in its page (offset *start*).
@@ -203,8 +231,14 @@ class GeoStore:
     def page_vao(self, page):
         return self.pages[page].vao
 
+    def batchable(self, pages):
+        """Per entry of *pages*: whether that page can be drawn batched."""
+        sizes = np.array([p.capacity if p is not None else 0 for p in self.pages]
+                         or [0], dtype=np.int64)
+        return sizes[np.asarray(pages)] <= PAGE_VERTICES
+
     def vertex_bytes(self):
-        return sum(page.capacity for page in self.pages) * STRIDE
+        return sum(page.capacity for page in self.pages if page is not None) * STRIDE
 
     # -- transform slots ---------------------------------------------------
 
@@ -332,8 +366,9 @@ class GeoStore:
     def delete(self):
         try:
             for page in self.pages:
-                gl.glDeleteVertexArrays(1, [page.vao])
-                gl.glDeleteBuffers(1, [page.vbo])
+                if page is not None:
+                    gl.glDeleteVertexArrays(1, [page.vao])
+                    gl.glDeleteBuffers(1, [page.vbo])
             for variants in self._index_lists.values():
                 for entry in variants:
                     gl.glDeleteBuffers(1, [entry[0]])
