@@ -46,6 +46,12 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
     use it to serve a fixed texture.
     """
 
+    #: Texture unit of the angled brushes' transform buffer texture, read by
+    #: the batched convex path's vertex shader. Units in use elsewhere: 0
+    #: diffuse, 2 glass scene, 3 water depth, 4..11 shadow cube-maps, 12..13
+    #: terrain height and paint (terrain program only).
+    GEO_TRANSFORM_UNIT = 14
+
     def __init__(self, config=None, *, texture_loader=None):
         super().__init__(texture_loader)
         self.render_stats.details['sprite texture array'] = self._describe_sprite_layers
@@ -88,6 +94,15 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self.water_quality = 'expensive'
         # Clamp to a sane, power-of-two-ish range. Lower = faster, blockier.
         self.shadow_map_size = max(256, min(2048, int(shadow_size)))
+        # How angled brushes' faces are batched (PassesMixin.GEO_BATCHING):
+        # driver-dependent, so measured rather than assumed, and settable.
+        # (``settings``, not ``config``: the frame-input audit reads every
+        # ``config.get`` in the package as a per-frame key.)
+        settings = config
+        batching = (settings.get('Renderer', 'geo_batching', fallback='elements')
+                    if settings is not None else 'elements')
+        batching = str(batching or '').strip().lower()
+        self.geo_batching = batching if batching in self.GEO_BATCHING else 'elements'
 
         self.fog_quality = 'low'      # 'low' = 16 steps, 'high' = 32 steps
         # OpenGL diagnostics are deliberately opt-in. Keep GL state probing out

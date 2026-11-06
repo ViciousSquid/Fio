@@ -493,17 +493,12 @@ layout (location = 5) in vec2 aFaceShift;
 
 """
 
-    def _compile_geo_face_shader(self, tex_vert, tex_frag):
-        """Compile the textured shader with its per-face UV uniforms as inputs.
+    def _geo_face_vertex_source(self, tex_vert):
+        """The textured vertex shader with its per-face UV uniforms as inputs.
 
-        An angled brush's faces each carry their own UV scale, rotation and
-        shift, which the textured pass used to upload as three uniforms before
-        every face's draw. They do not change from frame to frame, so they are
-        written once, per vertex, when the mesh is built; this variant reads
-        them from there. As for the instanced variants, locals named after the
-        dropped uniforms leave the UV maths in the body byte for byte what the
-        uniform path runs -- the same float32 values in, the same TexCoords out.
-        Absent if the driver rejects it; the pass then keeps the uniform path.
+        Locals named after the dropped uniforms leave the UV maths in the body
+        byte for byte what the uniform path runs. None if the source does not
+        have the shape this rewrite expects.
         """
         drop = ('uniform vec2 tex_scale', 'uniform float tex_angle',
                 'uniform vec2 tex_shift')
@@ -513,19 +508,69 @@ layout (location = 5) in vec2 aFaceShift;
         if (len(kept) != len(tex_vert.splitlines()) - len(drop)
                 or 'out vec3 FragPos;' not in vertex
                 or 'void main() {' not in vertex):
-            return
+            return None
         vertex = vertex.replace('out vec3 FragPos;',
                                 self.GEO_FACE_ATTRS + 'out vec3 FragPos;', 1)
-        vertex = vertex.replace(
+        return vertex.replace(
             'void main() {',
             'void main() {\n'
             '    vec2 tex_scale = aFaceScale;\n'
             '    float tex_angle = aFaceAngle;\n'
             '    vec2 tex_shift = aFaceShift;\n', 1)
+
+    def _compile_geo_face_shader(self, tex_vert, tex_frag):
+        """Compile the textured shader with its per-face UV uniforms as inputs.
+
+        An angled brush's faces each carry their own UV scale, rotation and
+        shift, which the textured pass used to upload as three uniforms before
+        every face's draw. They do not change from frame to frame, so they are
+        written once, per vertex, when the mesh is built; this variant reads
+        them from there -- the same float32 values in, the same TexCoords out.
+        Absent if the driver rejects it; the pass then keeps the uniform path.
+
+        ``geo_batched`` goes one step further for the batched submission: the
+        model and normal matrices, which differ per brush, are fetched from a
+        buffer texture at the vertex's transform slot (an integer attribute
+        written with the vertex), since OpenGL 3.3 gives a vertex no way to
+        know which draw of a batch it belongs to. Again locals carry the
+        dropped uniforms' names, so the body is unchanged.
+        """
+        vertex = self._geo_face_vertex_source(tex_vert)
+        if vertex is None:
+            return
         if self._register_instanced_shader('geo_textured', vertex, tex_frag,
                                            extra_uniforms=['texture_diffuse',
                                                            'normalMatrix']):
             print(f'{_RENDERER_PREFIX} Angled-brush face shader compiled successfully.')
+        drop = ('uniform mat4 model;', 'uniform mat3 normalMatrix;')
+        kept = [line for line in vertex.splitlines()
+                if not line.strip().startswith(drop)]
+        if len(kept) != len(vertex.splitlines()) - len(drop):
+            return
+        batched = '\n'.join(kept).replace(
+            'out vec3 FragPos;', self.GEO_BATCH_INPUTS + 'out vec3 FragPos;', 1)
+        batched = batched.replace('void main() {\n',
+                                  'void main() {\n' + self.GEO_BATCH_FETCH, 1)
+        if self._register_instanced_shader('geo_batched', batched, tex_frag,
+                                           extra_uniforms=['texture_diffuse',
+                                                           'uTransforms']):
+            print(f'{_RENDERER_PREFIX} Batched angled-brush shader compiled successfully.')
+
+    #: The batched variant's extra inputs: the vertex's transform slot and the
+    #: buffer texture of transforms (seven RGBA32F texels per slot).
+    GEO_BATCH_INPUTS = """layout (location = 6) in int aSlot;
+uniform samplerBuffer uTransforms;
+
+"""
+    GEO_BATCH_FETCH = (
+        '    int transform = aSlot * 7;\n'
+        '    mat4 model = mat4(texelFetch(uTransforms, transform),\n'
+        '                      texelFetch(uTransforms, transform + 1),\n'
+        '                      texelFetch(uTransforms, transform + 2),\n'
+        '                      texelFetch(uTransforms, transform + 3));\n'
+        '    mat3 normalMatrix = mat3(texelFetch(uTransforms, transform + 4).xyz,\n'
+        '                             texelFetch(uTransforms, transform + 5).xyz,\n'
+        '                             texelFetch(uTransforms, transform + 6).xyz);\n')
 
     def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
         """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""

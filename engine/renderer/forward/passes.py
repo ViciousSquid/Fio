@@ -19,8 +19,8 @@ from ..api import WATER_QUALITIES
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
 from ..core.geometry import RUN_NODRAW, RUN_SKIP
-from .instancing import (BRUSH_RUN_KEY, GEO_RUN_KEY, _SELECTED_COLOR,
-                         _SUBTRACT_COLOR, _TRIGGER_COLOR)
+from .instancing import (BRUSH_RUN_KEY, GEO_BATCH_KEY, GEO_RUN_KEY,
+                         _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR)
 
 
 def _tinted(colour, tint):
@@ -538,18 +538,16 @@ class PassesMixin:
         self._portal_end_cull()
         gl.glBindVertexArray(0)
 
-    def _geo_run_draw_list(self, table, slots, is_play):
-        """The convex half's draws for *slots*, sorted into state groups.
+    def _geo_visible_faces(self, table, slots, is_play):
+        """Every convex face the textured pass draws for *slots*, unsorted.
 
         Column arithmetic only: the visible rows' geometry handles index the
         renderer's per-table handle arrays, which give each mesh's face rows
         in the face-run arena (resolved when the mesh was built); those are
-        expanded, filtered (caulk always, nodraw in play) by a bit test, and
-        sorted by (texture, geometry) with the KeyLayout machinery. Returns
-        ``None`` when nothing is drawn, else ``(geo, runs, rows, handles,
-        groups)``: the handle arrays, then per draw the arena row, the row of
-        *slots*' transforms and the geometry handle, and the boundaries of the
-        groups that share a texture and a mesh.
+        expanded and filtered (caulk always, nodraw in play) by a bit test.
+        Returns ``None`` or ``(geo, runs, rows, handles)``: the handle arrays,
+        then per face its arena row, the row of *slots*' transforms and its
+        geometry handle.
         """
         bits = table.class_bits[slots]
         geo_rows = np.flatnonzero(bits & render_table.CLASS_HAS_GEOMETRY)
@@ -578,21 +576,34 @@ class PassesMixin:
         arena = self._geo_runs()
         drop = RUN_SKIP | (RUN_NODRAW if is_play else 0)
         keep = (arena.bits[runs] & drop) == 0
-        runs, owner = runs[keep], owner[keep]
+        if not keep.all():
+            runs, owner = runs[keep], owner[keep]
         if not len(runs):
             return None
-        order, groups = sort_into_runs(GEO_RUN_KEY.pack(
-            texture=arena.texture[runs], geometry=handles[owner]))
-        owner = owner[order]
-        return geo, runs[order], geo_rows[owner], handles[owner], groups
+        return geo, runs, geo_rows[owner], handles[owner]
 
-    def _begin_geo_face_pass(self, projection, view, lights):
-        """Bind ``geo_textured`` and its per-pass state; its uniform cache."""
-        program = self.shaders['geo_textured']
-        uniforms = self.uniforms['geo_textured']
+    def _geo_run_draw_list(self, table, slots, is_play):
+        """The per-mesh path's draws for *slots*: :meth:`_geo_visible_faces`
+        sorted by (texture, geometry), with the group boundaries -- draws in
+        one group share their texture and their mesh."""
+        faces = self._geo_visible_faces(table, slots, is_play)
+        if faces is None:
+            return None
+        geo, runs, rows, handles = faces
+        return (geo,) + self._sort_geo_faces(runs, rows, handles)
+
+    def _sort_geo_faces(self, runs, rows, handles):
+        order, groups = sort_into_runs(GEO_RUN_KEY.pack(
+            texture=self._geo_runs().texture[runs], geometry=handles))
+        return runs[order], rows[order], handles[order], groups
+
+    def _begin_geo_face_pass(self, projection, view, lights, name='geo_textured'):
+        """Bind a convex-face program and its per-pass state; its uniforms."""
+        program = self.shaders[name]
+        uniforms = self.uniforms[name]
         gl.glUseProgram(program)
         self._current_shader = program
-        self._upload_lights_once('geo_textured', lights)
+        self._upload_lights_once(name, lights)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
                               glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
@@ -601,25 +612,141 @@ class PassesMixin:
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         return uniforms
 
+    #: How the batched path submits a (texture, page) group of faces:
+    #: ``'elements'`` (one glDrawElements over a cached 16-bit index list) or
+    #: ``'multidraw'`` (one glMultiDrawArrays over the faces' ranges); ``'off'``
+    #: draws every convex face through the per-mesh path. Indexed was faster
+    #: on both drivers measured (llvmpipe, softpipe), multi-draw slower than
+    #: the per-mesh path on softpipe, so neither is assumed: settings.ini's
+    #: ``[Renderer] geo_batching`` chooses.
+    GEO_BATCHING = ('elements', 'multidraw', 'off')
+    geo_batching = 'elements'
+
     def _draw_geo_runs(self, projection, view, lights, table, slots, models,
                        normals, uniforms, is_play, current_tex):
-        """Submit the textured pass's convex faces from resolved columns.
+        """Submit the textured pass's convex faces.
 
-        The loop runs over state groups and issues GL calls only, every value
-        read by index from columns: a texture bind when the group's texture is
-        not the bound one, a VAO bind and a transform upload per group, then
-        the group's draws.
+        Batched (:attr:`geo_batching`) when ``geo_batched`` exists: every face
+        whose mesh is in the shared store and drawn by exactly one row goes
+        out in one draw per (texture, page). Anything else -- a mesh two rows
+        share (one transform slot cannot hold two transforms), batching off,
+        a driver without the program -- takes the per-mesh path.
+        """
+        faces = self._geo_visible_faces(table, slots, is_play)
+        if faces is None:
+            return
+        geo, runs, rows, handles = faces
+        if self.geo_batching != 'off' and 'geo_batched' in self.shaders:
+            batched = self._geo_batchable(geo, handles)
+            if batched.any():
+                current_tex = self._draw_geo_batched(
+                    projection, view, lights, geo, runs[batched], rows[batched],
+                    handles[batched], models, normals, current_tex)
+            if batched.all():
+                return
+            rest = ~batched
+            runs, rows, handles = runs[rest], rows[rest], handles[rest]
+        self._draw_geo_per_mesh(projection, view, lights, geo,
+                                *self._sort_geo_faces(runs, rows, handles),
+                                models, normals, uniforms, current_tex)
+
+    @staticmethod
+    def _geo_batchable(geo, handles):
+        """Faces the batched path can draw: stored, and their mesh's
+        transform slot used by no other visible row."""
+        stored = geo.page[handles] >= 0
+        unique_handles = np.unique(handles[stored])
+        slots = geo.slot[unique_handles]
+        values, counts = np.unique(slots, return_counts=True)
+        if (counts > 1).any():
+            shared = values[counts > 1]
+            stored &= ~np.isin(geo.slot[handles], shared)
+        return stored
+
+    def _draw_geo_batched(self, projection, view, lights, geo, runs, rows,
+                          handles, models, normals, current_tex):
+        """One draw per (texture, page): the shared store's batched path.
+
+        Per pass: the visible brushes' transforms are written to their slots
+        (uploaded only where they changed), the faces are sorted by (texture,
+        page) and vertex offset, and ranges that touch -- a mesh's adjacent
+        faces, adjacent meshes in a page -- become one. The loop then binds a
+        texture or a page when it changes and issues the group's single draw.
+        """
+        store = self._geo_store()
+        arena = self._geo_runs()
+        unique_handles, first_face = np.unique(handles, return_index=True)
+        store.write_transforms(geo.slot[unique_handles],
+                               models[rows[first_face]], normals[rows[first_face]])
+        page = geo.page[handles]
+        first = geo.start[handles] + arena.first[runs]
+        count = arena.count[runs].astype(np.int64)
+        texture = arena.texture[runs]
+        order, groups = sort_into_runs(
+            GEO_BATCH_KEY.pack(texture=texture, page=page), secondary=first)
+        first, count = first[order], count[order]
+        texture, page = texture[order], page[order]
+        follows = np.zeros(len(first), dtype=bool)
+        follows[1:] = first[1:] == first[:-1] + count[:-1]
+        follows[groups[:-1]] = False
+        starts = np.flatnonzero(~follows)
+        first = first[starts].astype(np.int32)
+        count = np.add.reduceat(count, starts).astype(np.int32)
+        bounds = np.searchsorted(starts, groups)
+
+        self._begin_geo_face_pass(projection, view, lights, 'geo_batched')
+        gl.glActiveTexture(gl.GL_TEXTURE0 + self.GEO_TRANSFORM_UNIT)
+        gl.glBindTexture(gl.GL_TEXTURE_BUFFER, store.transform_texture)
+        gl.glUniform1i(self.uniforms['geo_batched']['uTransforms'],
+                       self.GEO_TRANSFORM_UNIT)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        heads = groups[:-1]
+        group_tex = texture[heads].tolist()
+        group_page = page[heads].tolist()
+        group_vao = [store.page_vao(p) for p in group_page]
+        ends = bounds[1:].tolist()
+        elements = self.geo_batching == 'elements'
+        if elements:
+            store.begin_pass()
+        bound_vao = None
+        begin = 0
+        for group, end in enumerate(ends):
+            tex_id = group_tex[group]
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+            vao = group_vao[group]
+            if vao != bound_vao:
+                gl.glBindVertexArray(vao)
+                bound_vao = vao
+            if elements:
+                # Element-array binding is VAO state: bound after the VAO.
+                gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, store.index_buffer(
+                    (tex_id, group_page[group]), first[begin:end], count[begin:end]))
+                gl.glDrawElements(gl.GL_TRIANGLES, int(count[begin:end].sum()),
+                                  gl.GL_UNSIGNED_SHORT, None)
+            else:
+                gl.glMultiDrawArrays(gl.GL_TRIANGLES, first[begin:end],
+                                     count[begin:end], end - begin)
+            begin = end
+        gl.glBindVertexArray(0)
+        self.render_stats.draw_calls += len(ends)
+        self.render_stats.visible_tris += int(count.sum()) // 3
+        return current_tex
+
+    def _draw_geo_per_mesh(self, projection, view, lights, geo, runs, rows,
+                           handles, groups, models, normals, uniforms,
+                           current_tex):
+        """The per-mesh path: per (texture, mesh) group a VAO bind and a
+        transform upload, then the group's draws.
 
         With ``geo_textured`` (the usual case) a face's UV state is in its
         mesh's vertex data, so a draw is just a vertex range -- and faces of
         one mesh that share a texture and sit next to each other in its
         buffer are one range, one draw. Without it, each face's three UV
-        uniforms are uploaded from the arena's columns before its draw.
+        uniforms are uploaded from the arena's columns before its draw. Every
+        value is read by index from columns; nothing is resolved here.
         """
-        draws = self._geo_run_draw_list(table, slots, is_play)
-        if draws is None:
-            return
-        geo, runs, rows, handles, groups = draws
         arena = self._geo_runs()
         first = arena.first[runs]
         count = arena.count[runs]
@@ -692,6 +819,7 @@ class PassesMixin:
         # Counted once per pass: every run is a whole number of triangles.
         self.render_stats.draw_calls += len(count_list)
         self.render_stats.visible_tris += sum(count_list) // 3
+        return current_tex
 
     @timed_pass('glow brushes')
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights,

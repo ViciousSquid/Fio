@@ -67,7 +67,8 @@ class LightingMixin:
         cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
         if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced',
                                                   'textured_instanced', 'brush_instanced',
-                                                  'lit_brush_instanced', 'geo_textured'):
+                                                  'lit_brush_instanced', 'geo_textured',
+                                                  'geo_batched'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
@@ -110,7 +111,7 @@ class LightingMixin:
     def _configure_light_ubo_programs(self):
         for name in ('lit', 'textured', 'lit_instanced', 'textured_instanced',
                      'brush_instanced', 'lit_brush_instanced', 'geo_textured',
-                     'water', 'terrain'):
+                     'geo_batched', 'water', 'terrain'):
             self._configure_light_ubo_program(name)
         self._ensure_light_ubo(self.MAX_LIGHTS)
 
@@ -238,7 +239,8 @@ class LightingMixin:
         # This is one shader-pass operation, never part of the per-draw loop.
         if shader_name in ('lit', 'textured', 'lit_instanced',
                            'textured_instanced', 'brush_instanced',
-                           'lit_brush_instanced', 'geo_textured', 'terrain'):
+                           'lit_brush_instanced', 'geo_textured', 'geo_batched',
+                           'terrain'):
             self._bind_shadow_maps(self.uniforms[shader_name])
 
     # --------------------------------------------------------------------------

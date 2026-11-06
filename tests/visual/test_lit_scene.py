@@ -394,6 +394,9 @@ def test_a_geometry_mesh_is_released_when_its_brush_stops_being_drawn(
         "no GPU mesh was built for the angled brush; the test is not "
         "exercising the cache it is about")
     mesh = next(iter(cached.values()))
+    vao, page = mesh.vao, mesh.page
+    store = renderer._geo_store()
+    assert store.pages[page].used >= mesh.count
 
     # The eviction sweep runs on the renderer's own frame clock (every 240
     # frames, for meshes untouched for 240).  Advancing that clock directly is
@@ -407,9 +410,10 @@ def test_a_geometry_mesh_is_released_when_its_brush_stops_being_drawn(
         "still holds %d cached meshes; GPU memory would grow with every brush "
         "the camera ever saw" % len(renderer._geo_mesh_cache))
     import OpenGL.GL as gl
-    assert gl.glIsBuffer(mesh.vbo) == gl.GL_FALSE, (
-        "the evicted mesh's vertex buffer %d is still a live GL object"
-        % mesh.vbo)
+    assert gl.glIsVertexArray(vao) == gl.GL_FALSE, (
+        "the evicted mesh's vertex array %d is still a live GL object" % vao)
+    assert store.pages[page].used == 0, (
+        "the evicted mesh's range of the shared vertex page was not returned")
 
 
 def test_rendering_an_empty_world_is_harmless(renderer, context):

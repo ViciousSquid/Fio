@@ -14,6 +14,7 @@ import OpenGL.GL as gl
 
 from engine import brush_geometry
 from engine import render_table
+from .geo_store import GeoStore
 
 
 # Cube face order — index maps to the face's 6-vertex run in the cube VAO
@@ -52,24 +53,25 @@ class BrushGeoMesh:
     matrix, per-brush uniforms and shaders unchanged: the mesh simply binds
     in place of the shared unit-cube VAO.
 
-    Its faces' draw parameters are rows ``run_base : run_base + run_len`` of
-    the renderer's face-run arena, resolved when the mesh was built. When the
-    ``geo_textured`` program exists, ``face_vao`` binds the same vertices plus
-    a per-vertex copy of each face's UV scale, rotation and shift
-    (``param_vbo``), so the textured pass draws faces without a uniform upload
-    each; every other pass binds ``vao`` and never sees those attributes.
+    The vertices live in a page of the renderer's shared geometry store
+    (``page``, from vertex ``start``), each carrying its face's UV state and
+    the mesh's transform ``slot`` (:mod:`engine.renderer.core.geo_store`).
+    ``vao`` is the plain per-mesh view of them that one-object-at-a-time
+    passes bind; ``face_vao`` adds the face UV state, for the textured pass's
+    per-mesh path. Its faces' draw parameters are rows ``run_base :
+    run_base + run_len`` of the face-run arena, resolved when it was built.
 
     Faces are ordered sides-first, any flat top face last (``side_count``
     marks the split) so the water path can draw walls and surface separately,
     mirroring its box path.
     """
-    __slots__ = ('vao', 'vbo', 'edge_vao', 'edge_vbo', 'face_vao',
-                 'param_vbo', 'count', 'side_count', 'edge_count',
-                 'has_flat_top', 'key', 'run_base', 'run_len', 'refs')
+    __slots__ = ('vao', 'edge_vao', 'edge_vbo', 'face_vao', 'page', 'start',
+                 'slot', 'count', 'side_count', 'edge_count', 'has_flat_top',
+                 'key', 'run_base', 'run_len', 'refs')
 
     def __init__(self):
-        self.vao = self.vbo = self.edge_vao = self.edge_vbo = None
-        self.face_vao = self.param_vbo = None
+        self.vao = self.edge_vao = self.edge_vbo = self.face_vao = None
+        self.page = self.start = self.slot = -1
         self.count = self.side_count = self.edge_count = 0
         self.has_flat_top = False
         self.key = None
@@ -82,27 +84,29 @@ class GeoHandles:
     """One RenderTable's geometry handles, resolved to cached meshes.
 
     The terrain pattern: the table holds numbers, and the renderer keeps what
-    it made of them in arrays indexed by the same handle -- ``vao[h]`` /
-    ``face_vao[h]`` and the handle's face rows in the arena, ``run_base[h]`` /
-    ``run_len[h]``. On a still frame using it is one integer compare (the
-    table's ``geometry_version``). When that moves, the table's per-handle
-    record serials say exactly what changed: handles whose record this table
-    already had keep what was resolved for it -- wherever a reconcile moved
-    them -- and only records new to it are resolved. ``meshes[h]`` is the
+    it made of them in arrays indexed by the same handle -- the mesh's VAOs,
+    its place in the shared store (``page[h]``, ``start[h]``, ``slot[h]``)
+    and its face rows in the arena (``run_base[h]`` / ``run_len[h]``). On a
+    still frame using it is one integer compare (the table's
+    ``geometry_version``). When that moves, the table's per-handle record
+    serials say exactly what changed: handles whose record this table already
+    had keep what was resolved for it -- wherever a reconcile moved them --
+    and only records new to it are resolved. ``meshes[h]`` is the
     :class:`BrushGeoMesh` itself, for passes that still draw angled brushes
     one object at a time.
     """
-    __slots__ = ('table', 'version', 'serials', 'vao', 'face_vao', 'run_base',
-                 'run_len', 'meshes', 'used')
+    COLUMNS = (('vao', np.int64), ('face_vao', np.int64), ('page', np.intp),
+               ('start', np.intp), ('slot', np.intp), ('run_base', np.intp),
+               ('run_len', np.intp))
+    __slots__ = ('table', 'version', 'serials', 'meshes', 'used') + tuple(
+        name for name, _ in COLUMNS)
 
     def __init__(self, table):
         self.table = weakref.ref(table)
         self.version = None
         self.serials = np.zeros(0, dtype=np.int64)
-        self.vao = np.zeros(0, dtype=np.int64)
-        self.face_vao = np.zeros(0, dtype=np.int64)
-        self.run_base = np.zeros(0, dtype=np.intp)
-        self.run_len = np.zeros(0, dtype=np.intp)
+        for name, dtype in self.COLUMNS:
+            setattr(self, name, np.zeros(0, dtype=dtype))
         self.meshes = np.empty(0, dtype=object)
         self.used = 0
 
@@ -122,6 +126,13 @@ class GeometryMixin:
         if arena is None:
             arena = self._geo_run_arena = _RunArena()
         return arena
+
+    def _geo_store(self):
+        """The shared vertex pages and transform slots (:class:`GeoStore`)."""
+        store = self.__dict__.get('_geo_shared_store')
+        if store is None:
+            store = self._geo_shared_store = GeoStore()
+        return store
 
     # -- lifetime ------------------------------------------------------------
 
@@ -150,20 +161,20 @@ class GeometryMixin:
 
     def _delete_geo_mesh(self, mesh):
         try:
-            if mesh.vao:
-                gl.glDeleteVertexArrays(1, [mesh.vao])
-            if mesh.vbo:
-                gl.glDeleteBuffers(1, [mesh.vbo])
-            if mesh.edge_vao:
-                gl.glDeleteVertexArrays(1, [mesh.edge_vao])
+            for vao in (mesh.vao, mesh.face_vao, mesh.edge_vao):
+                if vao:
+                    gl.glDeleteVertexArrays(1, [vao])
             if mesh.edge_vbo:
                 gl.glDeleteBuffers(1, [mesh.edge_vbo])
-            if mesh.face_vao:
-                gl.glDeleteVertexArrays(1, [mesh.face_vao])
-            if mesh.param_vbo:
-                gl.glDeleteBuffers(1, [mesh.param_vbo])
         except Exception:
             pass  # GL context may already be gone during shutdown
+        store = self._geo_store()
+        if mesh.page >= 0:
+            store.release(mesh.page, mesh.start, mesh.count)
+        if mesh.slot >= 0:
+            store.give_slot(mesh.slot)
+        mesh.vao = mesh.face_vao = mesh.edge_vao = mesh.edge_vbo = None
+        mesh.page = mesh.slot = -1
         self._geo_runs().release(mesh)
 
     def _unref_geo_meshes(self, meshes):
@@ -225,15 +236,12 @@ class GeometryMixin:
             source = np.zeros(len(serials), dtype=np.intp)
         kept = source[found]
         handles = len(serials)
-        vao = np.zeros(handles, dtype=np.int64)
-        face_vao = np.zeros(handles, dtype=np.int64)
-        run_base = np.zeros(handles, dtype=np.intp)
-        run_len = np.zeros(handles, dtype=np.intp)
+        columns = {}
+        for name, dtype in GeoHandles.COLUMNS:
+            column = np.zeros(handles, dtype=dtype)
+            column[found] = getattr(entry, name)[kept]
+            columns[name] = column
         meshes = np.empty(handles, dtype=object)
-        vao[found] = entry.vao[kept]
-        face_vao[found] = entry.face_vao[kept]
-        run_base[found] = entry.run_base[kept]
-        run_len[found] = entry.run_len[kept]
         meshes[found] = entry.meshes[kept]
         # What this table no longer holds: removed handles and replaced records.
         dropped = np.ones(len(old), dtype=bool)
@@ -245,13 +253,16 @@ class GeometryMixin:
             meshes[handle] = mesh
             if mesh is not None:
                 mesh.refs += 1
-                vao[handle] = mesh.vao
-                face_vao[handle] = mesh.face_vao or 0
-                run_base[handle] = mesh.run_base
-                run_len[handle] = mesh.run_len
+                columns['vao'][handle] = mesh.vao
+                columns['face_vao'][handle] = mesh.face_vao or 0
+                columns['page'][handle] = mesh.page
+                columns['start'][handle] = mesh.start
+                columns['slot'][handle] = mesh.slot
+                columns['run_base'][handle] = mesh.run_base
+                columns['run_len'][handle] = mesh.run_len
+        for name, column in columns.items():
+            setattr(entry, name, column)
         entry.serials = serials.copy()
-        entry.vao, entry.face_vao = vao, face_vao
-        entry.run_base, entry.run_len = run_base, run_len
         entry.meshes = meshes
         entry.version = table.geometry_version
         if len(released):
@@ -366,20 +377,23 @@ class GeometryMixin:
         mesh.has_flat_top = top_area >= 0.999
         mesh.run_base, mesh.run_len = self._geo_runs().append(runs)
 
-        arr = np.asarray(data, dtype=np.float32)
-        mesh.vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(mesh.vao)
-        mesh.vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, arr.nbytes, arr, gl.GL_STATIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
-        gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
-        gl.glEnableVertexAttribArray(1)
-        gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
-        gl.glEnableVertexAttribArray(2)
+        vertices = np.asarray(data, dtype=np.float32).reshape(-1, 8)
+        faces = np.empty((vert_count, 5), dtype=np.float32)
+        for first, count, _texture, _bits, uv_scale, angle, shift in runs:
+            # float32 here: exactly what the per-face uniforms would hold.
+            faces[first:first + count] = (uv_scale[0], uv_scale[1], angle,
+                                          shift[0], shift[1])
+        store = self._geo_store()
+        mesh.slot = store.take_slot()
+        placed = store.place(vertices, faces, mesh.slot)
+        if placed is None:
+            store.give_slot(mesh.slot)
+            self._geo_runs().release(mesh)
+            return None
+        mesh.page, mesh.start = placed
+        mesh.vao = store.mesh_vao(mesh.page, mesh.start, face=False)
         if 'geo_textured' in self.shaders:
-            self._build_face_vao(mesh, runs)
+            mesh.face_vao = store.mesh_vao(mesh.page, mesh.start, face=True)
 
         # Edge lines (local space) for the selection outline.
         edge_set = set()
@@ -403,35 +417,6 @@ class GeometryMixin:
         gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
         return mesh
-
-    def _build_face_vao(self, mesh, runs):
-        """The textured pass's VAO: the mesh's vertices plus face UV state.
-
-        Each face's scale, rotation and shift -- static until the brush is
-        edited, when the mesh is rebuilt -- are written to every vertex of the
-        face as float32, the values the per-face uniforms would have held.
-        """
-        params = np.empty((mesh.count, 5), dtype=np.float32)
-        for first, count, _texture, _bits, scale, angle, shift in runs:
-            params[first:first + count] = (scale[0], scale[1], angle,
-                                           shift[0], shift[1])
-        mesh.param_vbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.param_vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, params.nbytes, params,
-                        gl.GL_STATIC_DRAW)
-        mesh.face_vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(mesh.face_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.vbo)
-        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     32, ctypes.c_void_p(offset))
-            gl.glEnableVertexAttribArray(location)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.param_vbo)
-        for location, size, offset in ((3, 2, 0), (4, 1, 8), (5, 2, 12)):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     20, ctypes.c_void_p(offset))
-            gl.glEnableVertexAttribArray(location)
-        gl.glBindVertexArray(0)
 
     def _resolve_face_run(self, face, plane_meta, record, first, count, extent):
         """One face's arena row: what the textured pass draws it with.

@@ -211,7 +211,8 @@ def brush_model_matrix(brush):
     return m.T.reshape(16), normal.T.reshape(9)
 
 
-def expected_geo_draws(brushes, play_mode, gl_texture, texture_pixel_size):
+def expected_geo_draws(brushes, play_mode, gl_texture, texture_pixel_size,
+                       geometry_of=None):
     """What the old convex loop drew for *brushes*, in its own order.
 
     One dict per ``glDrawArrays``: the brush, the vertex range and the exact
@@ -219,12 +220,19 @@ def expected_geo_draws(brushes, play_mode, gl_texture, texture_pixel_size):
     three UV uniforms -- every input the draw depends on. *gl_texture* maps a
     texture name to the GL name the old loop bound (``texture_manager.get(...)
     or load_texture_callback(...)``).
+
+    *geometry_of* maps ``id(brush)`` to a snapshot of the brush taken when its
+    geometry was last resolved. A mover changes ``pos`` without touching its
+    planes, and the old renderer drew it with the mesh it already had -- built
+    against the old ``pos`` -- under the new transform; the snapshot is how the
+    reference says the same.
     """
+    geometry_of = geometry_of or {}
     draws = []
     for brush in brushes:
         if not brush_geometry.brush_has_geometry(brush):
             continue
-        mesh = reference_mesh(brush)
+        mesh = reference_mesh(geometry_of.get(id(brush), brush))
         if mesh is None:
             continue
         model, normal = brush_model_matrix(brush)

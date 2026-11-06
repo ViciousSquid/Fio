@@ -82,6 +82,7 @@
 | `core/base.py` | `RendererCore`, optional shared renderer infrastructure. |
 | `core/diagnostics.py` | Pass timing. |
 | `core/geometry.py` | Shared GPU geometry (cube, sprite quad, angled-brush meshes). |
+| `core/geo_store.py` | Shared storage for angled-brush meshes: vertex pages, buffer-texture transform slots, cached index lists. |
 | `core/overlays.py` | Editor and debug overlays. |
 | `core/resources.py` | Texture, model, effect-frame and shader loading; animates GIF textures. |
 | `core/tables.py` | Lookups into the render and entity tables. |

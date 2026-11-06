@@ -203,6 +203,9 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()
         self._geo_by_table.clear()
+        store = self.__dict__.get('_geo_shared_store')
+        if store is not None:
+            store.delete()
 
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])

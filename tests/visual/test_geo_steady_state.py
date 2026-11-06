@@ -9,8 +9,8 @@ per-table handle arrays. These tests pin the consequences:
   geometry records, the brush dicts, the texture cache and the loaders are
   replaced by tripwires that raise if touched, and frames still draw --
   identically.
-* **Work happens only on a genuine miss.** A still world builds no mesh and
-  loads no texture; a change to an unrelated brush resolves no geometry
+* **Work happens only on a genuine miss.** A still world builds no mesh,
+  loads no texture and uploads no byte of geometry, transforms or indices; a change to an unrelated brush resolves no geometry
   handle at all; a structural edit that renumbers every handle moves what was
   resolved, by record serial, without resolving it again; a reshape builds
   exactly one mesh and releases the one it replaces at once.
@@ -34,10 +34,11 @@ def context():
     glh.reset_texture_cache()
 
 
-@pytest.fixture
-def renderer(context):
+@pytest.fixture(params=('elements', 'multidraw', 'off'))
+def renderer(context, request):
     made = glh.make_renderer()
     made.shadows_enabled = False
+    made.geo_batching = request.param
     try:
         yield made
     finally:
@@ -84,6 +85,8 @@ def test_a_steady_frame_reads_no_authored_state(renderer, context):
     table = config['render_table']
     before = _frame(renderer, context, config)
     _frame(renderer, context, config)
+    store = renderer._geo_store()
+    uploaded = store.uploaded
 
     # Everything authored, or derived from authored state per brush, that the
     # draw could reach: the brushes, the geometry records' contents, the
@@ -106,6 +109,9 @@ def test_a_steady_frame_reads_no_authored_state(renderer, context):
         renderer.texture_manager = {}
     for image in after:
         assert np.array_equal(image, before), "the steady frame changed"
+    assert store.uploaded == uploaded, (
+        "a still world uploaded %d bytes of geometry, transforms or indices"
+        % (store.uploaded - uploaded))
 
 
 def _counting(renderer):

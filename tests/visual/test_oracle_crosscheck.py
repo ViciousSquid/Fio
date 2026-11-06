@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from tests.helpers import gl as glh
-from tests.helpers.draw_oracle import DrawCapture, compare_geo_draws
+from tests.helpers.draw_oracle import DrawCapture, compare_geo_draws, convex_programs
 from tests.helpers.geo_reference import expected_geo_draws
 from tests.helpers.table_oracle import render_table_diff
 
@@ -79,7 +79,7 @@ def _oracles(renderer, context, brushes, table, slots):
                                all_brush_slots=slots, shadows_enabled=False)
     context.bind()
     gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-    programs = [renderer.shaders['textured'], renderer.shaders.get('geo_textured')]
+    programs = convex_programs(renderer)
     with DrawCapture(program=programs, skip_buffers=[renderer._cube_vbo]) as cap:
         renderer.render_scene(*glh.camera_matrices(eye=(0, 380, 640),
                                                    target=(0, 20, 0)),
@@ -94,9 +94,10 @@ def _oracles(renderer, context, brushes, table, slots):
     return render_table_diff(table), compare_geo_draws(expected, cap.draws)
 
 
-@pytest.fixture
-def scene(renderer, context):
+@pytest.fixture(params=('elements', 'off'), ids=('batched', 'per-mesh'))
+def scene(renderer, context, request):
     from engine.render_table import RenderTable
+    renderer.geo_batching = request.param
     brushes = _world()
     table = RenderTable()
     table.sync(brushes, 1)
@@ -131,8 +132,10 @@ def test_swapped_handle_arrays_fail_only_the_draw_oracle(renderer, context, scen
     brushes, table, slots = scene
     _oracles(renderer, context, *scene)
     entry = renderer._geo_handles(table)
-    for column in (entry.face_vao, entry.vao):
+    for name, _dtype in type(entry).COLUMNS:
+        column = getattr(entry, name)
         column[[0, 1]] = column[[1, 0]]
+    entry.meshes[[0, 1]] = entry.meshes[[1, 0]]
     table_problems, draw_problems = _oracles(renderer, context, *scene)
     assert table_problems == []
     assert draw_problems, "the draw oracle missed a wrong handle-to-mesh mapping"
@@ -158,11 +161,14 @@ def test_wrong_per_vertex_face_state_fails_only_the_draw_oracle(
         pytest.skip("no per-vertex face program on this driver")
     brushes, table, slots = scene
     _oracles(renderer, context, *scene)
+    from engine.renderer.core import geo_store
     mesh = renderer._geo_handles(table).meshes[3]
-    # One vertex's UV shift (floats 3..4 of its 5) nudged by one ulp's worth.
+    # One vertex's UV shift, in the shared page, replaced.
     bad = (ctypes.c_float * 2)(0.25, 0.75)
-    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.param_vbo)
-    gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 12, 8, bad)
+    page = renderer._geo_store().pages[mesh.page]
+    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, page.vbo)
+    gl.glBufferSubData(gl.GL_ARRAY_BUFFER, mesh.start * geo_store.STRIDE + 44,
+                       8, bad)
     gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
     table_problems, draw_problems = _oracles(renderer, context, *scene)
     assert table_problems == []
@@ -222,8 +228,7 @@ def test_a_scripted_session_passes_both_oracles(renderer, context):
                     play_mode=play, shadows_enabled=False)
                 context.bind()
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-                programs = [renderer.shaders['textured'],
-                            renderer.shaders.get('geo_textured')]
+                programs = convex_programs(renderer)
                 with DrawCapture(program=programs,
                                  skip_buffers=[renderer._cube_vbo]) as cap:
                     renderer.render_scene(
@@ -263,3 +268,24 @@ def test_a_scripted_session_passes_both_oracles(renderer, context):
         check("play (nodraw dropped)", play=True)
     finally:
         logic.stop()
+
+
+def test_a_wrong_transform_slot_fails_only_the_draw_oracle(renderer, context, scene):
+    """A brush's transform in the buffer texture, changed behind the mirror."""
+    import OpenGL.GL as gl
+    from engine.renderer.core import geo_store
+    if renderer.geo_batching == 'off' or 'geo_batched' not in renderer.shaders:
+        pytest.skip("only the batched path reads transforms from the buffer")
+    brushes, table, slots = scene
+    _oracles(renderer, context, *scene)
+    store = renderer._geo_store()
+    slot = int(renderer._geo_handles(table).slot[2])
+    shifted = store.mirror[slot].copy()
+    shifted[3, 0] += 8.0                 # the model matrix's x translation
+    gl.glBindBuffer(gl.GL_TEXTURE_BUFFER, store.transform_buffer)
+    gl.glBufferSubData(gl.GL_TEXTURE_BUFFER,
+                       slot * geo_store.TEXELS_PER_SLOT * 16, shifted.nbytes, shifted)
+    gl.glBindBuffer(gl.GL_TEXTURE_BUFFER, 0)
+    table_problems, draw_problems = _oracles(renderer, context, *scene)
+    assert table_problems == []
+    assert draw_problems, "the draw oracle missed a brush drawn with a wrong transform"

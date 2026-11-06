@@ -234,20 +234,24 @@ def _reference(renderer, context, config, brushes, camera, cull, play_mode):
 
 
 CULL_MODES = (None, 'opaque', 'portal')
+BATCHING = ('elements', 'multidraw', 'off')
 
 
+@pytest.mark.parametrize("batching", BATCHING)
 @pytest.mark.parametrize("play_mode", (False, True), ids=("editor", "play"))
 @pytest.mark.parametrize("cull", CULL_MODES, ids=("no-cull", "main-view", "portal-view"))
 def test_angled_brush_draws_match_the_frozen_old_path(renderer, context,
-                                                      play_mode, cull):
+                                                      play_mode, cull, batching):
     import OpenGL.GL as gl
-    from tests.helpers.draw_oracle import DrawCapture, compare_geo_draws
+    from tests.helpers.draw_oracle import (DrawCapture, compare_geo_draws,
+                                           convex_programs)
     from tests.helpers.geo_reference import expected_geo_draws
 
+    renderer.geo_batching = batching
     brushes, things = angled_scene()
     config, table, slots, camera = _setup(renderer, context, brushes, things,
                                           play_mode)
-    programs = [renderer.shaders['textured'], renderer.shaders.get('geo_textured')]
+    programs = convex_programs(renderer)
     with DrawCapture(program=programs,
                      skip_buffers=[renderer._cube_vbo]) as capture:
         _production(renderer, context, config, table, slots, camera, cull)
@@ -264,14 +268,20 @@ def test_angled_brush_draws_match_the_frozen_old_path(renderer, context,
         "GL generated %d primitives; the old path draws %d triangles"
         % (capture.primitives, triangles))
     stats = renderer.render_stats
-    assert stats.draw_calls == len(capture.draws) <= len(expected)
+    assert stats.draw_calls == capture.calls <= len(expected)
     assert stats.visible_tris == triangles
+    if batching != 'off':
+        # One draw call per (texture, page): the per-brush draws are gone.
+        textures = len({d['texture'] for d in expected})
+        assert capture.calls <= textures
 
 
+@pytest.mark.parametrize("batching", BATCHING)
 @pytest.mark.parametrize("play_mode", (False, True), ids=("editor", "play"))
 @pytest.mark.parametrize("cull", CULL_MODES, ids=("no-cull", "main-view", "portal-view"))
 def test_angled_brush_pixels_match_the_frozen_old_path(renderer, context,
-                                                       play_mode, cull):
+                                                       play_mode, cull, batching):
+    renderer.geo_batching = batching
     brushes, things = angled_scene()
     config, table, slots, camera = _setup(renderer, context, brushes, things,
                                           play_mode)

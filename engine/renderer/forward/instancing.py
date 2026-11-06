@@ -29,6 +29,11 @@ BRUSH_RUN_KEY = KeyLayout([('texture', 32), ('face', 3)])
 # built, as BRUSH_RUN_KEY's is for box faces.
 GEO_RUN_KEY = KeyLayout([('texture', 32), ('geometry', 28)])
 
+# The batched convex path's key: faces of every brush in one shared vertex
+# page are one draw per texture, so (texture, page) is all that cannot vary;
+# the vertex offset is the tie-break that makes adjacent ranges adjacent.
+GEO_BATCH_KEY = KeyLayout([('texture', 32), ('page', 16)])
+
 # The three fixed colours the lit pass overrides a brush's own colour with.
 # Module constants so the per-brush branch does not build a list every draw.
 _TRIGGER_COLOR = (0.0, 1.0, 1.0)
