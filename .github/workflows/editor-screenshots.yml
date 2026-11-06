@@ -2,10 +2,14 @@ name: Native editor screenshots
 
 # Release verification: the desktop editor, with a map loaded, captured by
 # each platform's own screen capture so the real window and its native frame
-# can be compared. Runs on demand, and when this file changes. Every capture
-# is 1024x768: the size GitHub's Windows and macOS runners provide. The editor is
-# started through the unmodified main.py; the map is then opened with
-# MainWindow.load_level_file, exactly as File > Open does.
+# can be compared: Windows, macOS, Linux X11 and Linux Wayland, each at
+# 1920x1080, 2560x1440 and 2048x1080 (DCI 2K). Runs on demand, and when this
+# file changes.
+#
+# The editor is started through the unmodified main.py; the map is then
+# opened with MainWindow.load_level_file, exactly as File > Open does.
+# Each screenshot is named with the size actually captured: a runner whose
+# virtual display refuses a mode is reported, never silently substituted.
 
 on:
   workflow_dispatch:
@@ -31,25 +35,25 @@ env:
 
 jobs:
   capture:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.platform.name }} ${{ matrix.size.name }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            id: windows
-          - name: macOS
-            os: macos-latest
-            id: macos
-          - name: Linux X11
-            os: ubuntu-24.04
-            id: linux-x11
-          - name: Linux Wayland
-            os: ubuntu-24.04
-            id: linux-wayland
-    runs-on: ${{ matrix.os }}
+        platform:
+          - { name: Windows, os: windows-latest, id: windows }
+          - { name: macOS, os: macos-latest, id: macos }
+          - { name: Linux X11, os: ubuntu-24.04, id: linux-x11 }
+          - { name: Linux Wayland, os: ubuntu-24.04, id: linux-wayland }
+        size:
+          - { name: 1080p, width: 1920, height: 1080 }
+          - { name: 1440p, width: 2560, height: 1440 }
+          - { name: 2K, width: 2048, height: 1080 }
+    runs-on: ${{ matrix.platform.os }}
     timeout-minutes: 30
+    env:
+      SHOT: ${{ matrix.platform.id }}-${{ matrix.size.name }}
+      WIDTH: ${{ matrix.size.width }}
+      HEIGHT: ${{ matrix.size.height }}
     defaults:
       run:
         shell: bash
@@ -80,7 +84,10 @@ jobs:
               def load():
                   self.load_level_file(os.path.join(root, os.environ['FIO_MAP']))
                   self.unsaved_changes = False
-                  print('MAP_LOADED', os.environ['FIO_MAP'], 'platform', QGuiApplication.platformName(), flush=True)
+                  screen = QGuiApplication.primaryScreen()
+                  print('MAP_LOADED', os.environ['FIO_MAP'], 'platform', QGuiApplication.platformName(),
+                        'screen', screen.size().width(), 'x', screen.size().height(),
+                        'dpr', screen.devicePixelRatio(), flush=True)
               QTimer.singleShot(3000, load)
 
           main_window.MainWindow.showMaximized = show
@@ -89,8 +96,8 @@ jobs:
           PY
 
       # -- platform setup ---------------------------------------------------
-      - name: Windows - software OpenGL
-        if: matrix.id == 'windows'
+      - name: Windows - software OpenGL and display mode
+        if: matrix.platform.id == 'windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -102,13 +109,30 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           gh release download --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
+          Get-ChildItem "$env:RUNNER_TEMP\mesa" | Format-Table Name, Length
           7z x -y -o"$env:RUNNER_TEMP\mesa\x" (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z").FullName | Out-Null
+          $gl = Get-ChildItem "$env:RUNNER_TEMP\mesa\x" -Recurse -Filter opengl32.dll |
+                Where-Object { $_.DirectoryName -match '(^|\\)x64$' } | Select-Object -First 1
+          if (-not $gl) {
+            Get-ChildItem "$env:RUNNER_TEMP\mesa\x" -Recurse -Filter *.dll | Format-Table FullName
+            throw 'No 64-bit Mesa opengl32.dll in the release archive'
+          }
           $python = Split-Path (Get-Command python).Source
-          Copy-Item "$env:RUNNER_TEMP\mesa\x\x64\*.dll" $python -Force
-          if (-not (Test-Path "$python\opengl32.dll")) { throw 'Mesa opengl32.dll was not installed' }
-          Get-ChildItem "$python\*.dll" | Select-Object Name, Length | Format-Table
+          Copy-Item "$($gl.DirectoryName)\*.dll" $python -Force
+          Get-ChildItem "$python\*.dll" | Format-Table Name, Length
+          try { Set-DisplayResolution -Width $env:WIDTH -Height $env:HEIGHT -Force }
+          catch { Write-Host "Display mode not changed: $_" }
+      - name: macOS - display mode
+        if: matrix.platform.id == 'macos'
+        run: |
+          brew install displayplacer
+          displayplacer list | tee "$RUNNER_TEMP/shots/$SHOT-displays.txt"
+          id=$(displayplacer list | awk '/^Persistent screen id:/ {print $4; exit}')
+          displayplacer "id:$id res:${WIDTH}x${HEIGHT} scaling:off origin:(0,0) degree:0" \
+            || echo "Display mode ${WIDTH}x${HEIGHT} not available on this runner"
+          sleep 3
       - name: Linux - window system tools
-        if: startsWith(matrix.id, 'linux')
+        if: startsWith(matrix.platform.id, 'linux')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb openbox imagemagick sway grim \
@@ -119,7 +143,7 @@ jobs:
       # -- launch, wait for the map, capture natively -----------------------
       - name: Capture
         run: |
-          shots="$RUNNER_TEMP/shots"; log="$shots/${{ matrix.id }}.log"
+          shots="$RUNNER_TEMP/shots"; log="$shots/$SHOT.log"; raw="$shots/$SHOT-raw.png"
           launch() { python "$RUNNER_TEMP/launch_with_map.py" > "$log" 2>&1 & app=$!; }
           wait_for_map() {
             for i in $(seq 1 120); do grep -q MAP_LOADED "$log" && break; sleep 1; done
@@ -128,38 +152,45 @@ jobs:
             # on macOS): let layout, textures and the 3D view settle.
             sleep 45
           }
-          case "${{ matrix.id }}" in
+          case "${{ matrix.platform.id }}" in
             windows)
               pydir=$(python -c "import os, sys; print(os.path.dirname(sys.executable))")
               export GALLIUM_DRIVER=llvmpipe QT_OPENGL=software QT_OPENGL_DLL="$pydir\\opengl32.dll"
               launch; wait_for_map
-              python -c "from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$shots/windows.png')" ;;
+              python -c "import ctypes; ctypes.windll.user32.SetProcessDPIAware(); from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$raw')" ;;
             macos)
               launch; wait_for_map
-              screencapture -x "$shots/macos.png" ;;
+              screencapture -x "$raw" ;;
             linux-x11)
               export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
-              Xvfb :91 -screen 0 1024x768x24 -nolisten tcp & sleep 2
+              Xvfb :91 -screen 0 ${WIDTH}x${HEIGHT}x24 -nolisten tcp & sleep 2
               openbox & sleep 1
               launch; wait_for_map
-              import -window root "$shots/linux-x11.png" ;;
+              import -window root "$raw" ;;
             linux-wayland)
               export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
               unset DISPLAY
-              printf 'output HEADLESS-1 resolution 1024x768 bg #2b2b2b solid_color\ndefault_border normal 2\nfont pango:DejaVu Sans 10\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
+              printf 'output HEADLESS-1 resolution %sx%s bg #2b2b2b solid_color\ndefault_border normal 2\nfont pango:DejaVu Sans 10\nxwayland disable\n' "$WIDTH" "$HEIGHT" > "$RUNNER_TEMP/sway.conf"
               WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$RUNNER_TEMP/sway.conf" &
               for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
               export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
               export QT_QPA_PLATFORM=wayland LIBGL_ALWAYS_SOFTWARE=1
               launch; wait_for_map
-              grim "$shots/linux-wayland.png" ;;
+              grim "$raw" ;;
           esac
           kill $app 2>/dev/null || true
+          # Name the image by the size actually captured.
+          size=$(python -c "from PIL import Image; w, h = Image.open(r'$raw').size; print(f'{w}x{h}')")
+          final="$shots/$SHOT-captured-$size.png"
+          mv "$raw" "$final"
+          if [ "$size" != "${WIDTH}x${HEIGHT}" ]; then
+            echo "::warning title=${{ matrix.platform.name }} ${{ matrix.size.name }}::Requested ${WIDTH}x${HEIGHT}; the runner captured $size"
+          fi
           ls -la "$shots"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: editor-screenshot-${{ matrix.id }}
+          name: editor-screenshot-${{ matrix.platform.id }}-${{ matrix.size.name }}
           path: ${{ runner.temp }}/shots/
           retention-days: 30
           if-no-files-found: error
