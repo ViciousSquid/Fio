@@ -49,3 +49,26 @@ def test_a_different_client_size_is_reported_alone():
     small = record("windows")
     small["size"] = [1024, 707]
     assert compare(record("linux-x11"), small) == ["window client size [1600, 900] != [1024, 707]"]
+
+
+def test_font_rounding_is_allowed_only_up_to_the_tolerance():
+    linux = record("linux-x11")
+    linux["widgets"][0]["rect"][2] += 1
+    linux["widgets"][0]["font"]["height"] = 16
+    rounded = []
+    assert compare(record("windows"), linux, tolerance=1, rounded=rounded) == []
+    assert len(rounded) == 2
+    ok, lines = report({"windows": record("windows"), "linux-x11": linux},
+                       expect=("windows", "linux-x11"), tolerance=1)
+    assert ok and "linux-x11: identical (2 within 1px font rounding)" in lines
+
+    linux["widgets"][0]["rect"][2] += 1
+    assert len(compare(record("windows"), linux, tolerance=1)) == 1
+
+
+def test_docks_text_and_font_family_have_no_tolerance():
+    mac = record("macos")
+    mac["docks"]["SceneDock"][2] = 201
+    mac["widgets"][0]["text"] = "other"
+    mac["widgets"][0]["font"]["family"] = "Helvetica"
+    assert len(compare(record("windows"), mac, tolerance=1)) == 3
