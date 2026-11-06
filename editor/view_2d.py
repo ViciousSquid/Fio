@@ -3840,8 +3840,9 @@ class View2D(QWidget):
             plugin_menu = menu.addMenu("Plugins")
             plugin_submenus = {}
             for plugin, label, cls in plugin_entries:
-                submenu = plugin_submenus.setdefault(
-                    plugin, plugin_menu.addMenu(plugin.name))
+                if plugin not in plugin_submenus:
+                    plugin_submenus[plugin] = plugin_menu.addMenu(plugin.name)
+                submenu = plugin_submenus[plugin]
                 action_item = submenu.addAction(label)
                 plugin_actions[action_item] = (plugin, label, cls)
 

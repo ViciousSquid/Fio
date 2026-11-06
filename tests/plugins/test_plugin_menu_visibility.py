@@ -240,3 +240,40 @@ def test_add_entity_at_origin_places_the_entity(window):
         assert list(placed.pos) == [0.0, 40.0, 0.0]
     finally:
         mgr.set_enabled(tidy, was)
+
+
+@pytest.mark.parametrize("view_name", ["view_top", "view_front", "view_side"])
+def test_context_menu_groups_deathmatch_entities_in_one_submenu(window, monkeypatch, view_name):
+    """Five Deathmatch entities must not produce four extra empty submenus."""
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtGui import QContextMenuEvent
+    from PyQt5.QtWidgets import QMenu
+
+    mgr = get_manager()
+    deathmatch = mgr.find_plugin("deathmatch")
+    assert deathmatch is not None
+    was = mgr.is_enabled(deathmatch)
+    inspected = []
+
+    def inspect_menu(menu, *args):
+        plugins = next(action.menu() for action in menu.actions()
+                       if action.text() == "Plugins")
+        submenus = [action.menu() for action in plugins.actions()
+                    if action.text() == "deathmatch"]
+        assert len(submenus) == 1
+        assert [action.text() for action in submenus[0].actions()] == [
+            "Match Settings", "Bot Opponent", "Respawn Point",
+            "Bot Navigation Node", "CTF Flag",
+        ]
+        assert all(action.menu().actions() for action in plugins.actions())
+        inspected.append(True)
+        return None
+
+    monkeypatch.setattr(QMenu, "exec_", inspect_menu)
+    try:
+        mgr.set_enabled(deathmatch, True)
+        view = getattr(window, view_name)
+        view.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(80, 80)))
+        assert inspected == [True]
+    finally:
+        mgr.set_enabled(deathmatch, was)
