@@ -3070,7 +3070,6 @@ class QtGameView(QOpenGLWidget):
 
     def load_all_sprite_textures(self):
         things = {
-            'PlayerStart': 'player.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
             'Prop': 'pickup.png',
@@ -3678,6 +3677,14 @@ class QtGameView(QOpenGLWidget):
                     best_obj = brush
         for thing in self.editor.state.things:
             if not component_edit.is_selectable(thing) or filters.hides_thing(thing):
+                continue
+            if getattr(thing, 'editor_model_bounds', None):
+                from engine.entity_models import editor_model_ray_distance
+                t = editor_model_ray_distance(thing, ray_o, ray_d)
+                if t is not None:
+                    hits.append((t, thing))
+                    if t < best_t:
+                        best_t, best_obj = t, thing
                 continue
             tp = glm.vec3(thing.pos)
             radius = 32.0

@@ -9,7 +9,9 @@ from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
-from engine.constants import brush_aabb_bounds
+from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
+from engine.entity_models import (model_path as entity_model_path,
+                                  model_rotation, model_scale)
 from editor import component_edit as ce  # shared object/face/edge/vertex model
 from editor.selection import SelectionLookup
 
@@ -1284,6 +1286,8 @@ class View2D(QWidget):
             radius = thing.get_radius()
         # Also add a small fixed margin for sprites
         margin = max(32.0, radius) / self.zoom_factor if self.zoom_factor > 0 else 32.0
+        if isinstance(thing, PlayerStart):
+            margin = max(margin, 64.0)  # full 100-unit sign, including its base
 
         point_rect = QRectF(x - margin, y - margin, margin * 2, margin * 2)
         return visible_bounds.intersects(point_rect)
@@ -2073,7 +2077,7 @@ class View2D(QWidget):
     def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
         """Helper to compute screen coordinates for a model's wireframe.
         Returns (pts_x, pts_y) numpy arrays, or None if failed."""
-        model_path = model_thing.properties.get('model_path')
+        model_path = entity_model_path(model_thing)
         if not model_path:
             return None
 
@@ -2096,9 +2100,9 @@ class View2D(QWidget):
 
         # Transform parameters
         pos = model_thing.pos
-        scale = model_thing.properties.get('scale', 1.0)
+        scale = model_scale(model_thing)
         if isinstance(scale, (int, float)): scale = [scale, scale, scale]
-        rot = model_thing.properties.get('rotation', [0, 0, 0])
+        rot = model_rotation(model_thing)
         
         # Build Rotation Matrix
         def rotate_x(a):
@@ -2144,15 +2148,16 @@ class View2D(QWidget):
 
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
-        model_path = model_thing.properties.get('model_path')
+        model_path = entity_model_path(model_thing)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
 
         if coords is None:
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
-            painter.drawRect(QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20))
-            return
+            rect = QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20)
+            painter.drawRect(rect)
+            return rect
 
         pts_x, pts_y = coords
         n_pts = len(pts_x)
@@ -2203,6 +2208,9 @@ class View2D(QWidget):
                 painter.drawLine(p0, p1)
                 painter.drawLine(p1, p2)
                 painter.drawLine(p2, p0)
+
+        return QRectF(float(np.min(pts_x)), float(np.min(pts_y)),
+                      max(2.0, float(np.ptp(pts_x))), max(2.0, float(np.ptp(pts_y))))
 
     @staticmethod
     def _point_segment_distance_sq(point, a, b):
@@ -2306,10 +2314,8 @@ class View2D(QWidget):
             # billboard.  Representation, not asset history, decides what the
             # 2D view draws.
             render_mode = str(thing.properties.get('render_mode', 'model')).lower()
-            if thing.properties.get('model_path') and render_mode == 'model':
-                self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
-                # Selection box for models
-                draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
+            if entity_model_path(thing) and (render_mode == 'model' or isinstance(thing, PlayerStart)):
+                draw_rect = self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
 
             # --- PORTAL RENDERING ---
             elif isinstance(thing, Portal):
@@ -2405,45 +2411,45 @@ class View2D(QWidget):
                     draw_rect = self._sprite_rect(pixmap, s_pos)
                     painter.drawPixmap(draw_rect.toRect(), pixmap)
 
-                # 2b. The entity's label (a Monster's name; a PlayerStart's
-                # name and Primary) beneath its sprite.
-                label_lines = thing.editor_label_lines()
-                if label_lines:
-                    self._draw_entity_label(painter, s_pos, label_lines,
-                                            self._ENTITY_LABEL_COLOURS.get(
-                                                type(thing).__name__, QColor(255, 100, 100)),
-                                            draw_rect)
+            # 2b. The entity's label (a Monster's name; a PlayerStart's
+            # name and Primary) beneath its model or sprite.
+            label_lines = thing.editor_label_lines()
+            if label_lines:
+                self._draw_entity_label(painter, s_pos, label_lines,
+                                        self._ENTITY_LABEL_COLOURS.get(
+                                            type(thing).__name__, QColor(255, 100, 100)),
+                                        draw_rect)
 
-                # 3. Direction Arrow
-                angle_deg = None
-                if 'angle' in thing.properties:
-                    angle_deg = float(thing.properties.get('angle', 0.0))
-                
-                if angle_deg is not None:
-                    painter.save()
-                    arrow_color = QColor(0, 255, 255) if thing.__class__.__name__ == 'PlayerStart' else QColor(255, 128, 0)
-                    angle_rad = math.radians(angle_deg)
-                    arrow_len = 35 * self.zoom_factor
-                    if arrow_len < 15: arrow_len = 15
-                    
-                    dx = math.cos(angle_rad) * arrow_len
-                    dy = math.sin(angle_rad) * arrow_len
-                    if self.view_type == 'top': dy = -dy 
-                    
-                    s_end = s_pos + QPointF(dx, dy)
-                    painter.setPen(QPen(arrow_color, 2))
-                    painter.drawLine(s_pos, s_end)
-                    
-                    head_angle = math.atan2(s_end.y() - s_pos.y(), s_end.x() - s_pos.x())
-                    head_size = 8
-                    p1 = s_end - QPointF(math.cos(head_angle - math.pi / 6) * head_size, 
-                                         math.sin(head_angle - math.pi / 6) * head_size)
-                    p2 = s_end - QPointF(math.cos(head_angle + math.pi / 6) * head_size, 
-                                         math.sin(head_angle + math.pi / 6) * head_size)
-                    
-                    painter.setBrush(QBrush(arrow_color))
-                    painter.drawPolygon(QPolygonF([s_end, p1, p2]))
-                    painter.restore()
+            # 3. Direction Arrow
+            angle_deg = None
+            if 'angle' in thing.properties:
+                angle_deg = float(thing.properties.get('angle', 0.0))
+
+            if angle_deg is not None:
+                painter.save()
+                arrow_color = QColor(0, 255, 255) if thing.__class__.__name__ == 'PlayerStart' else QColor(255, 128, 0)
+                angle_rad = math.radians(angle_deg)
+                arrow_len = 35 * self.zoom_factor
+                if arrow_len < 15: arrow_len = 15
+
+                dx = math.cos(angle_rad) * arrow_len
+                dy = math.sin(angle_rad) * arrow_len
+                if self.view_type == 'top': dy = -dy
+
+                s_end = s_pos + QPointF(dx, dy)
+                painter.setPen(QPen(arrow_color, 2))
+                painter.drawLine(s_pos, s_end)
+
+                head_angle = math.atan2(s_end.y() - s_pos.y(), s_end.x() - s_pos.x())
+                head_size = 8
+                p1 = s_end - QPointF(math.cos(head_angle - math.pi / 6) * head_size,
+                                     math.sin(head_angle - math.pi / 6) * head_size)
+                p2 = s_end - QPointF(math.cos(head_angle + math.pi / 6) * head_size,
+                                     math.sin(head_angle + math.pi / 6) * head_size)
+
+                painter.setBrush(QBrush(arrow_color))
+                painter.drawPolygon(QPolygonF([s_end, p1, p2]))
+                painter.restore()
 
             # 4. Overlays (selection highlight + color tag)
             if draw_rect:
@@ -3881,7 +3887,11 @@ class View2D(QWidget):
             new_thing = Light(pos=pos_3d)
         elif action == add_effect_action:
             new_thing = Effect(pos=pos_3d)
-        elif action == add_player_start_action: 
+        elif action == add_player_start_action:
+            # The clicked height is the feet. Spawn.pos remains the runtime's
+            # hull centre; top view places the feet on the Y=0 reference plane.
+            feet_y = 0.0 if self.view_type == 'top' else pos_3d[1]
+            pos_3d[1] = feet_y + PLAYER_HULL_SIZE[1] / 2.0
             new_thing = PlayerStart(pos=pos_3d)
         elif action == add_prop_action:
             new_thing = Prop(pos=pos_3d)
@@ -4306,7 +4316,7 @@ class View2D(QWidget):
                 is_hit = self._portal_gizmo_hit_test(thing, screen_pos, ax1, ax2)
 
             # Standard Thing Hit Test
-            elif thing.properties.get('model_path'):
+            elif entity_model_path(thing):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:

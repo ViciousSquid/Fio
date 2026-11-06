@@ -12,6 +12,8 @@ FLOOR_HEIGHT = -25
 # --- Cube World Settings ---
 TILE_SIZE = 50.0
 WALL_HEIGHT = 100.0
+# Standing collision hull, shared by the runtime and the editor spawn marker.
+PLAYER_HULL_SIZE = (TILE_SIZE, TILE_SIZE * 2, TILE_SIZE)
 
 # --- Tilemap Constants ---
 WALL_TILE = 0

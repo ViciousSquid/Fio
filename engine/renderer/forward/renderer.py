@@ -510,11 +510,21 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 fading_model_mask[:] = False     # distance colour has no alpha
             opaque_model_slots = numeric_model_slots[~fading_model_mask]
             fading_model_slots = numeric_model_slots[fading_model_mask]
+            # The private spawn sign has clear acrylic. Draw it after other
+            # opaque models so they are visible through its panel.
+            editor_mask = (etable.class_bits[opaque_model_slots]
+                           & entity_projection.ENT_EDITOR_MODEL) != 0
+            editor_model_slots = opaque_model_slots[editor_mask]
+            opaque_model_slots = opaque_model_slots[~editor_mask]
             if len(opaque_model_slots):
                 if look == 'Wireframe':
                     gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
                 self.draw_models_instanced(
                     projection, view, camera_pos, etable, opaque_model_slots,
+                    lights, config)
+            if len(editor_model_slots):
+                self.draw_models_instanced(
+                    projection, view, camera_pos, etable, editor_model_slots,
                     lights, config)
         if brush_display_mode == 'Overlay' and current_mode == RENDER_MODE_LIT:
             # The textured, lit frame with its triangles drawn over it.

@@ -11,6 +11,7 @@ import uuid
 import importlib
 
 from engine.change_journal import TrackedAttribute, TrackedPosition, touch
+from engine.constants import PLAYER_HULL_SIZE
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
     map_point as _portal_map_point,
@@ -440,7 +441,14 @@ class PlayerStart(Thing):
     :mod:`engine.player_starts`, and ``EditorState.settle_player_starts``,
     which gives a level's first-created start the flag and keeps it unique).
     """
-    pixmap_path = "assets/sprites/player.png"
+    # Private editor artwork, deliberately outside assets/models (the browser).
+    # It is presentation only: no Prop/model fields are persisted on the spawn.
+    pixmap_path = None
+    editor_model_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'assets', 'editor', 'playerstart.obj')
+    editor_model_bounds = (tuple(-size / 2 for size in PLAYER_HULL_SIZE),
+                           tuple(size / 2 for size in PLAYER_HULL_SIZE))
     EDITOR_PRIMARY_PROPERTIES = ('angle',)
     
     def __init__(self, pos=None, properties=None):

@@ -18,7 +18,7 @@ degrees.
 import math
 import glm
 from .constants import (
-    TILE_SIZE, JUMP_STRENGTH, TERMINAL_VELOCITY,
+    TILE_SIZE, PLAYER_HULL_SIZE, JUMP_STRENGTH, TERMINAL_VELOCITY,
     CL_FORWARDSPEED, CL_SIDESPEED, CL_RUN_SCALE,
     PM_STOPSPEED, PM_MAXSPEED, PM_DUCKSPEED, PM_ACCELERATE, PM_AIRACCELERATE,
     PM_FRICTION, PM_GROUND_NORMAL,
@@ -186,7 +186,7 @@ class Player:
         # Walking speed (Quake 2's cl_forwardspeed); sprint runs at PM_MAXSPEED.
         self.speed = CL_FORWARDSPEED
         self.mouse_sensitivity = 0.0015
-        self.width, self.height, self.depth = TILE_SIZE, TILE_SIZE * 2, TILE_SIZE
+        self.width, self.height, self.depth = PLAYER_HULL_SIZE
         self.camera_height = 40.0  # Offset from pos.y
         # The standing hull and eye; ducking derives its own from these.
         self.stand_height = self.height

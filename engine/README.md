@@ -14,6 +14,7 @@
 | `effect_entity.py` | The Effect entity (FIRE, ORB, EXPLOSION, CUSTOM). |
 | `effect_table.py` | Dense runtime state for Effects. |
 | `entity_table.py` | Dense table of entities for rendering. |
+| `entity_models.py` | Model presentation and picking, including the private playerstart marker. |
 | `fileio.py` | Atomic file writes for maps, autosaves and saves. |
 | `floating_windows.py` | Draggable, collapsible overlay windows drawn in the 3D view (SysMon style). |
 | `glasses.py` | Player glasses styles and their sprite paths. |

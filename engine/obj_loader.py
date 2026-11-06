@@ -1,5 +1,6 @@
 from typing import List, Tuple, Optional
 import os
+import math
 import numpy as np
 
 # OBJLoader parses CPU data without a graphics runtime. Only OBJ's GPU
@@ -224,7 +225,8 @@ class OBJLoader:
                     'color': (0.8, 0.8, 0.8),
                     'ambient': (0.2, 0.2, 0.2),
                     'specular': (0.0, 0.0, 0.0),
-                    'texture': None
+                    'texture': None,
+                    'alpha': 1.0,
                 }
                 loaded_materials += 1
             elif current_mtl:
@@ -241,6 +243,13 @@ class OBJLoader:
                         mtl['ambient'] = colour
                     else:
                         mtl['specular'] = colour
+                elif keyword in ('d', 'Tr') and len(parts) > 1:
+                    try:
+                        alpha = float(parts[1])
+                    except ValueError:
+                        continue
+                    if math.isfinite(alpha):
+                        mtl['alpha'] = max(0.0, min(1.0, 1.0 - alpha if keyword == 'Tr' else alpha))
                 elif keyword in ('map_Kd', 'map_Ka') and len(parts) > 1:
                     texture = self._parse_texture_map(parts[1:])
                     if texture:

@@ -81,6 +81,7 @@ import numpy as np
 from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
 from .portal_transform import basis_from_rotation
 from .render_table import _can_adopt
+from .entity_models import model_path, model_rotation, model_scale
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
@@ -119,6 +120,8 @@ ENT_MODE_MODEL      = 1 << 3
 ENT_MODE_BILLBOARD  = 1 << 4
 #: Carries a ``sprite_path``.
 ENT_HAS_SPRITE      = 1 << 5
+#: Private editor model, visible under the same policy as editor sprites.
+ENT_EDITOR_MODEL    = 1 << 6
 #: Monster / LogicGate / LogicRelay / LogicTimer / LevelChanger -- the classes
 #: ``_thing_render_kind`` calls ``entity_sprite``.
 ENT_ENTITY_SPRITE   = 1 << 7
@@ -155,6 +158,7 @@ BIT_NAMES = (
     (ENT_SKIP, 'SKIP'), (ENT_ALWAYS_SPRITE, 'ALWAYS_SPRITE'),
     (ENT_HAS_MODEL, 'HAS_MODEL'), (ENT_MODE_MODEL, 'MODE_MODEL'),
     (ENT_MODE_BILLBOARD, 'MODE_BILLBOARD'), (ENT_HAS_SPRITE, 'HAS_SPRITE'),
+    (ENT_EDITOR_MODEL, 'EDITOR_MODEL'),
     (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
@@ -265,6 +269,8 @@ def sprite_candidates(thing):
     and class texture recipe before the renderer reaches OpenGL.  Returns ``None`` for a row the
     sprite pass draws nothing for.
     """
+    if getattr(thing, 'editor_model_path', None):
+        return None
     if isinstance(thing, dict):
         return None                # a raw dict row is never drawn
     if Portal is not None and isinstance(thing, Portal):
@@ -352,11 +358,15 @@ def _entity_class_bits(thing) -> int:
     if not isinstance(props, dict):
         props = {}
 
-    if props.get('model_path'):
+    if model_path(thing):
         bits |= ENT_HAS_MODEL
+    if getattr(thing, 'editor_model_path', None):
+        bits |= ENT_EDITOR_MODEL
     if props.get('sprite_path'):
         bits |= ENT_HAS_SPRITE
     render_mode = str(props.get('render_mode', 'model')).lower()
+    if bits & ENT_EDITOR_MODEL:
+        render_mode = 'model'
     if render_mode == 'model':
         bits |= ENT_MODE_MODEL
     elif render_mode == 'billboard':
@@ -400,27 +410,28 @@ def _model_recipe(thing):
     texture's flat-shaded fallback, *tint* multiplies whatever is drawn.
     """
     props = _props_of(thing)
-    model_path = props.get('model_path')
-    if not model_path:
+    path = model_path(thing)
+    if not path:
         return None
-    model_path = str(model_path)
+    path = str(path)
+    if getattr(thing, 'editor_model_path', None):
+        return (path, None, None, None)
     tint = _model_tint(props)
     manual_texture = props.get('texture')
     if not manual_texture:
-        return (model_path, None, None, tint)
+        return (path, None, None, tint)
     colour = props.get('color', [0.8, 0.8, 0.8])
     try:
         colour = (float(colour[0]), float(colour[1]), float(colour[2]))
     except (TypeError, ValueError, IndexError):
         colour = (0.8, 0.8, 0.8)
-    return (model_path, str(manual_texture), colour, tint)
+    return (path, str(manual_texture), colour, tint)
 
 
 def _model_transform_columns(thing):
     """Resolve a model's cold rotation/scale matrices with zero translation."""
-    props = _props_of(thing)
-    rot = props.get('rotation', [0.0, 0.0, 0.0])
-    scale = props.get('scale', 1.0)
+    rot = model_rotation(thing)
+    scale = model_scale(thing)
     scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
     try:
         mat = glm.rotate(glm.mat4(1.0), glm.radians(float(rot[1])), glm.vec3(0, 1, 0))
@@ -1580,7 +1591,7 @@ def _pos_of(thing):
 # portal cull exemptions, etc.) do not enlarge the lookup domain.
 _CLASSIFY_BITS = (ENT_SKIP | ENT_EFFECT | ENT_ALWAYS_SPRITE | ENT_HAS_MODEL |
                   ENT_MODE_MODEL | ENT_MODE_BILLBOARD | ENT_HAS_SPRITE |
-                  ENT_ENTITY_SPRITE | ENT_PROP)
+                  ENT_ENTITY_SPRITE | ENT_PROP | ENT_EDITOR_MODEL)
 
 
 def _render_kind_words(bits, is_hidden, show_ordinary):
@@ -1589,7 +1600,7 @@ def _render_kind_words(bits, is_hidden, show_ordinary):
 
     skip = (bits & ENT_SKIP) != 0
     effect = (bits & ENT_EFFECT) != 0
-    skip = skip | effect
+    skip = skip | effect | (((bits & ENT_EDITOR_MODEL) != 0) & ~np.bool_(show_ordinary))
     always_sprite = (bits & ENT_ALWAYS_SPRITE) != 0
 
     has_model = (bits & ENT_HAS_MODEL) != 0

@@ -350,6 +350,7 @@ class VisibilityMixin:
         bits = table.class_bits[:table.count]
         mask = (
             ((bits & entity_projection.ENT_SKIP) == 0)
+            & ((bits & entity_projection.ENT_EDITOR_MODEL) == 0)
             & ((bits & entity_projection.ENT_ALWAYS_SPRITE) == 0)
             & ((bits & entity_projection.ENT_HAS_MODEL) != 0)
             & ((bits & entity_projection.ENT_MODE_MODEL) != 0)
