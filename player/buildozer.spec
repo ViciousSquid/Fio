@@ -69,6 +69,8 @@ android.ndk_api = 24
 # armeabi-v7a for older-device reach (roughly doubles build time).
 android.archs = arm64-v8a
 android.allow_backup = 0
+# Deathmatch LAN play (TCP 27961, UDP 27960 discovery). No other network use.
+android.permissions = INTERNET, ACCESS_NETWORK_STATE, ACCESS_WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE
 p4a.bootstrap = sdl2
 
 # --- Presentation ---

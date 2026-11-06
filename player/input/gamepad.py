@@ -20,6 +20,8 @@ from .state import (
     ACTION_CROUCH,
     ACTION_SPRINT,
     ACTION_PAUSE,
+    ACTION_WEAPON,
+    ACTION_SCORES,
 )
 
 
@@ -55,6 +57,8 @@ class GamepadMapping:
             "b": ACTION_CROUCH,
             "leftstick": ACTION_SPRINT,
             "start": ACTION_PAUSE,
+            "y": ACTION_WEAPON,
+            "back": ACTION_SCORES,
         }
     )
     look_sensitivity: float = 3.0

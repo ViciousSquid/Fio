@@ -81,6 +81,54 @@ map/JSON document to **64 MiB**. These are reader limits, not RAM budgets:
 decoded images, meshes, simulation state and GPU allocations consume additional
 memory.
 
+## Shipped plugins: Deathmatch, Bigworld and Tidy
+
+A `.fiopak` may not contain plugins, so the APK ships the same plugins as
+desktop Fio: **Deathmatch** (multiplayer), **Bigworld** and **Tidy**. They run
+unchanged on the player's shared engine and auto-enable for worlds that use
+them. Images and models a plugin keeps in its own folder (CTF flags, Tidy's
+book model and covers) are read from the installed plugin, never from a world.
+
+To play a plugin's demo map, load it in desktop Fio (for example **Plugins →
+deathmatch → Load Demo map** or **Load CTF map**), export it with **Export
+Game Package...**, and open the `.fiopak` on the phone.
+
+### Deathmatch (multiplayer)
+
+| Desktop | Android player |
+| --- | --- |
+| Scoreboard overlay, Tab for the full table | Top-left leaders; hold **Scores** for the full table |
+| Number keys 1/2 | **Weapon** cycles owned weapons (gamepad Y) |
+| R after a match | **Restart** button after a match |
+| Console `addbot`, `removebot`, `fraglimit`, `dflaglight`; Restart Deathmatch | **Pause → Match…** (runs the same plugin commands) |
+| Spectator dialog, `spectate` | **Pause → Spectator…**: free camera, previous/next, watch a player, join |
+| LAN Multiplayer dialog | **Pause → LAN multiplayer…** |
+
+Free-camera spectating uses the move stick to fly, **Jump** to rise, **Crouch**
+to descend and **Sprint** to go faster. Other spectators appear as their
+chosen glasses.
+
+**LAN play** uses the plugin's own protocol, so phones, tablets and desktop
+Fio join each other's games on the same Wi-Fi network (discovery UDP 27960,
+game TCP 27961; up to eight players). To host, open the arena world, choose
+**LAN multiplayer… → Host this world** after picking the game type and limit.
+To join, open **the same world exported from desktop Fio** (its assets draw
+the host's map), then tap a discovered game or enter the host's address. The
+lobby shows this device's address for others to type. Match controls stay with
+the host. Opening the pause menu while hosting pauses the match for everyone,
+as on desktop; leave with **Leave LAN game**.
+
+The APK requests `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` and
+`CHANGE_WIFI_MULTICAST_STATE` for LAN play only, and holds a Wi-Fi multicast
+lock just while a lobby or LAN game is active.
+
+### Bigworld and Tidy
+
+Bigworld streams cells around the player exactly as on desktop. When a map
+enables `show_cell_debug`, the cell statistics panel and minimap appear on the
+HUD. Tidy plays as on desktop; its "Load demo map" menu action is an editor
+command, so export its demo from desktop as above.
+
 ## Current playback and rendering
 
 The player uses the existing engine's movement/collision, combat, AI, entity I/O,

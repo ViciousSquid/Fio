@@ -36,6 +36,9 @@ from .state import (
     ACTION_PAUSE,
     ACTION_CROUCH,
     ACTION_SPRINT,
+    ACTION_WEAPON,
+    ACTION_SCORES,
+    ACTION_RESTART,
 )
 
 
@@ -110,10 +113,41 @@ class TouchControls:
             TouchButton(ACTION_PAUSE, cx=0.95, cy=0.07, radius=0.045),
         ]
 
+        self._base_buttons = list(self.buttons)
+
         # Persistent per-pointer role assignment across frames.
         # role is one of: "move", "look", "button:<action>"
         self._roles: Dict[int, str] = {}
         self._look_prev: Dict[int, Tuple[float, float]] = {}
+
+    #: Next owned weapon (desktop: number keys).
+    WEAPON_BUTTON = TouchButton(ACTION_WEAPON, cx=0.76, cy=0.68, radius=0.055)
+    #: Hold for the full arena scoreboard (desktop: Tab).
+    SCORES_BUTTON = TouchButton(ACTION_SCORES, cx=0.86, cy=0.07, radius=0.045)
+    #: Start the next arena match once one has ended (desktop: R).
+    RESTART_BUTTON = TouchButton(ACTION_RESTART, cx=0.50, cy=0.80, radius=0.075)
+
+    def set_context(self, *, weapons: int = 0, arena: bool = False,
+                    can_restart: bool = False) -> None:
+        """Show the situational buttons: weapon cycling, scores, restart.
+
+        Buttons that disappear release any finger holding them, so a lifted
+        control can never stay pressed.
+        """
+        wanted = list(self._base_buttons)
+        if weapons > 1:
+            wanted.append(self.WEAPON_BUTTON)
+        if arena:
+            wanted.append(self.SCORES_BUTTON)
+        if can_restart:
+            wanted.append(self.RESTART_BUTTON)
+        if wanted == self.buttons:
+            return
+        self.buttons = wanted
+        live = {f"button:{b.action}" for b in wanted}
+        for pid, role in list(self._roles.items()):
+            if role.startswith("button:") and role not in live:
+                self._roles[pid] = "released"
 
     # ------------------------------------------------------------------
     def apply(

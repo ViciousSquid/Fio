@@ -21,6 +21,11 @@ ACTION_USE = "use"
 ACTION_CROUCH = "crouch"
 ACTION_SPRINT = "sprint"
 ACTION_PAUSE = "pause"
+# Multiplayer arenas: next owned weapon, hold the full scoreboard, start the
+# next match once one has ended (desktop: number keys, Tab and R).
+ACTION_WEAPON = "weapon"
+ACTION_SCORES = "scores"
+ACTION_RESTART = "restart"
 
 ALL_ACTIONS = (
     ACTION_JUMP,
@@ -29,6 +34,9 @@ ALL_ACTIONS = (
     ACTION_CROUCH,
     ACTION_SPRINT,
     ACTION_PAUSE,
+    ACTION_WEAPON,
+    ACTION_SCORES,
+    ACTION_RESTART,
 )
 
 

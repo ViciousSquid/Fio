@@ -22,7 +22,7 @@ def paint(canvas, state, images):
     draw.text((5, height-5), str(hud['health']), font=font, anchor='ld', fill=(240, 145, 40), stroke_width=1, stroke_fill='black')
     stats = []
     if held and held.weapon and held.weapon.fires:
-        stats.append('∞' if held.weapon.ammo_per_shot == 0 else str(hud['ammo']))
+        stats.append('INF' if held.weapon.ammo_per_shot == 0 else str(hud['ammo']))
     if hud['armor']:
         stats.append(f"Armor {hud['armor']}")
     draw.text((width*.18, height-8), '  '.join(stats), anchor='ld', font=ImageFont.load_default(size=max(18, height//20)), fill='white', stroke_width=1, stroke_fill='black')

@@ -75,6 +75,8 @@ class AndroidHost(DesktopHost):
         pg = self._pg
         for event in pg.event.get():
             et = event.type
+            if self._text_event(event):
+                continue
             if et == getattr(pg, "FINGERDOWN", -1):
                 self.ui_events.append((event.x * self.width, event.y * self.height))
             if et == pg.QUIT:
@@ -116,6 +118,31 @@ class AndroidHost(DesktopHost):
 
     def set_mouse_captured(self, captured):
         pass
+
+    def set_lan_active(self, active):  # pragma: no cover - requires device
+        """Hold a Wi-Fi multicast lock while LAN discovery or play runs.
+
+        Many devices filter broadcast and multicast frames to save power;
+        Deathmatch's UDP discovery needs them. The lock is released as soon
+        as no LAN lobby or game is active.
+        """
+        lock = getattr(self, '_multicast_lock', None)
+        try:
+            if active and lock is None:
+                from jnius import autoclass
+                activity = autoclass('org.kivy.android.PythonActivity').mActivity
+                Context = autoclass('android.content.Context')
+                wifi = activity.getApplicationContext().getSystemService(Context.WIFI_SERVICE)
+                lock = wifi.createMulticastLock('fio-lan')
+                lock.setReferenceCounted(False)
+                lock.acquire()
+                self._multicast_lock = lock
+            elif not active and lock is not None:
+                self._multicast_lock = None
+                if lock.isHeld():
+                    lock.release()
+        except Exception as exc:  # pyjnius missing or Wi-Fi unavailable
+            print(f"[AndroidHost] LAN multicast lock unavailable: {exc}")
 
     def _read_keyboard_mouse(self) -> None:  # pragma: no cover
         # No hardware keyboard/mouse on a phone; touch + gamepad only.

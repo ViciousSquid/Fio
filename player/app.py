@@ -7,7 +7,9 @@ import sys
 
 from player.runtime.fiopak import FioPackage, PackageError
 from .platform.base import HostConfig, FrameCallbacks
-from .input.state import ACTION_PAUSE
+from .input.state import ACTION_PAUSE, ACTION_RESTART, ACTION_SCORES
+from .plugin_ui import arena
+from .plugin_ui.menus import PluginMenus
 
 
 def is_android():
@@ -30,6 +32,8 @@ class FioPlayerApp:
         self._validation = validation
         self._validation_elapsed = 1.
         self._quality_frames = 0
+        self.menus = PluginMenus()
+        self._lan_active = False
 
     def run(self, host=None):
         callbacks = FrameCallbacks(on_gl_ready=self._on_gl_ready, on_frame=self._on_frame,
@@ -91,9 +95,18 @@ class FioPlayerApp:
             old_package.close()
 
     def _load_level(self, path, spawn='', package=None, *, recover=True):
-        from .world import PlayerWorld
         package = package or self.package
-        data = package.load_map(path)
+        self._load_world(package.load_map(path), path, spawn, package, recover=recover)
+
+    def _load_world(self, data, path, spawn='', package=None, *, recover=True):
+        """Play *data* (map JSON) with *package*'s assets.
+
+        A LAN game plays the host's map JSON this way, drawn with the assets
+        of the desktop-exported world open on this device.
+        """
+        from .world import PlayerWorld
+        from .runtime.plugin_assets import PluginAssetPackage
+        package = package or self.package
         previous = (self.package, self.map_path)
         loadout = self.world.logic.session_runtime.carried_loadout() if self.world else None
         # Stop the old session before rebinding the shared installed-plugin
@@ -108,7 +121,9 @@ class FioPlayerApp:
         try:
             world = PlayerWorld(data, package, spawn)
             if self.renderer:
-                self.renderer.load_scene(data, package, world=world)
+                # Shipped plugins draw some entities with their own files,
+                # which a .fiopak may not carry.
+                self.renderer.load_scene(data, PluginAssetPackage(package), world=world)
         except Exception:
             if world:
                 world.close()
@@ -132,24 +147,150 @@ class FioPlayerApp:
         self.cam_pos = [world.player.pos.x, world.player.pos.y + world.player.view_height, world.player.pos.z]
         self._paused = False
         self._quality_frames = 0
+        self.menus.reset()
+
+    # -- plugin controls -----------------------------------------------
+    def set_text_input(self, active):
+        """Show or hide the soft keyboard for a menu text field."""
+        method = getattr(self.host, 'start_text_input' if active else 'stop_text_input', None)
+        if method is not None:
+            method()
+
+    def _set_lan_active(self, active):
+        """Hold Android's Wi-Fi multicast lock while LAN play needs broadcasts."""
+        if active != self._lan_active:
+            self._lan_active = active
+            method = getattr(self.host, 'set_lan_active', None)
+            if method is not None:
+                method(active)
+
+    def host_lan(self, lobby):
+        """Host the open world as a LAN arena (desktop: LAN dialog → Host)."""
+        if self.world is None or self.package is None:
+            return 'Open a world exported from desktop Fio first.'
+        try:
+            data = lobby.prepare_host(self.world.state.get_level_data())
+        except ValueError as error:
+            return str(error)
+        transport = None
+        try:
+            transport = lobby.open_host()
+            self._load_world(data, self.map_path, '', self.package, recover=False)
+            session = arena.session(self.world)
+            if session is None:
+                raise ValueError('This world could not start a Deathmatch session.')
+            from plugins.deathmatch.network_game import HostGame
+            logic = self.world.logic
+            with logic._tick_lock, logic.session_runtime.monster_lock:
+                HostGame(session, transport, data, lobby.name.strip() or 'Host')
+                session.publish()
+        except (OSError, ValueError) as error:
+            if transport is not None:
+                transport.close()
+            if self.world is None and self.map_path:
+                try:
+                    self._load_level(self.map_path, recover=False)
+                except Exception:
+                    pass
+            return f'Could not host: {error}'
+        from .plugin_ui.lobby import local_address
+        return f'Hosting on {local_address()} (TCP {lobby.port}, discovery UDP {lobby.discovery_port}).'
+
+    def _join_lan(self, connection, packet):
+        """Play the host's map with the open world's assets, then follow it."""
+        lobby = self.menus.lobby
+        try:
+            data = lobby.check_welcome(packet)
+            if self.package is None:
+                raise ValueError('Open the world exported from desktop Fio first.')
+            self._load_world(data, self.map_path, '', self.package)
+            session = arena.session(self.world)
+            if session is None:
+                raise ValueError('The host map does not contain an arena.')
+            from plugins.deathmatch.network_game import ClientGame
+            logic = self.world.logic
+            with logic._tick_lock, logic.session_runtime.monster_lock:
+                ClientGame(session, connection, packet)
+        except Exception as error:
+            connection.close()
+            lobby.status = f'Could not join: {error}'
+            return
+        lobby.status = 'Joined LAN game.'
+        self.menus.reset()
+        self._paused = False
+
+    def leave_lan(self):
+        """End the LAN session by reopening the world as it was authored."""
+        if self.package is None or not self.map_path:
+            return 'No LAN game to leave.'
+        self._load_level(self.map_path)
+        self._paused = True
+        return 'Left the LAN game.'
+
+    def _plugin_frame(self, dt, inp):
+        """Lobby, soft keyboard and LAN upkeep; runs every frame."""
+        if self.host is not None:
+            events = getattr(self.host, 'text_events', None)
+            if events:
+                self.menus.text(list(events))
+                events.clear()
+                if self.menus.editing is None:
+                    self.set_text_input(False)
+        welcome = self.menus.lobby.pump()
+        if welcome is not None:
+            self._join_lan(*welcome)
+        session = arena.session(self.world) if self.world else None
+        networked = session is not None and session.network is not None
+        self._set_lan_active(networked or (self._paused and self.menus.page == 'lan')
+                             or self.menus.lobby.pending is not None)
+        if networked and self._paused:
+            # Keep the LAN game flowing behind the menu, paused as on desktop:
+            # peers keep their connection and see the host's pause.
+            runtime = self.world.logic.session_runtime
+            runtime.set_world_paused('player_menu', True)
+            from .input.state import InputState
+            idle = InputState()
+            idle.begin_frame()
+            self.world.step(dt, idle, self.cam_yaw, self.cam_pitch)
+        elif self.world is not None:
+            self.world.logic.session_runtime.set_world_paused('player_menu', False)
+        if self.world is not None and not self._paused and inp.just_pressed(ACTION_RESTART):
+            if arena.can_restart(self.world):
+                arena.restart(self.world)
+        if self.host is not None and hasattr(self.host, 'touch'):
+            self.host.touch.set_context(
+                weapons=len(self.world.owned_weapons()) if self.world else 0,
+                arena=bool(self.world and arena.session(self.world)),
+                can_restart=bool(self.world and arena.can_restart(self.world)))
 
     def _on_frame(self, dt, inp):
         import time
         simulation_ms = 0.
         if inp.just_pressed(ACTION_PAUSE):
-            self._paused = not self._paused
+            self.set_text_input(False)
+            if self._paused and self.menus.page != 'root':
+                # Android Back steps out of a plugin page first.
+                self.menus.back()
+            else:
+                self._paused = not self._paused
+                self.menus.reset()
         if self.host:
             self.host.set_mouse_captured(bool(self.world and not self._paused))
             from .menu import hit_test
             for point in self.host.ui_events:
-                action = hit_test(point, self.host.width, self.host.height, self.world is not None) if self._paused else None
+                page = self.menus.current(self) if self._paused else None
+                key = hit_test(point, self.host.width, self.host.height, self.world is not None, page) if self._paused else None
+                action = self.menus.activate(key, self) if key else None
                 if action == 'resume':
                     self._paused = False
+                    self.menus.reset()
+                    self.set_text_input(False)
                 elif action == 'exit':
                     self.host.request_quit()
                 elif action == 'open':
                     self._open_dialog()
             self.host.ui_events.clear()
+        self._plugin_frame(dt, inp)
         if self.world and not self._paused:
             self.cam_yaw += inp.look_x * 120 * dt + inp.look_delta_x
             self.cam_pitch = max(-89, min(89, self.cam_pitch + inp.look_y * 120 * dt + inp.look_delta_y))
@@ -228,10 +369,24 @@ class FioPlayerApp:
     def _render_state(self):
         state = dict(cam_pos=self.cam_pos, cam_yaw=self.cam_yaw, cam_pitch=self.cam_pitch,
                      paused=self._paused, hud=self.world.hud if self.world else 'Open a .fiopak world')
+        if self._paused:
+            state['menu'] = self.menus.current(self)
         if self.world:
             eye, direction, up, fov = self.world.camera()
             from .render import glmath
-            state.update(game_hud=self.world.hud_state, cam_pos=eye, view=glmath.look_at(eye, eye + direction, up), fov=fov, world=self.world)
+            from .plugin_ui import bigworld, scoreboard
+            from engine.glasses import glasses_path
+            game_hud = dict(self.world.hud_state)
+            match = arena.snapshot(self.world)
+            if match:
+                game_hud['prompt'] = scoreboard.prompt(game_hud.get('prompt'))
+            full = bool(self.host and self.host.input_state.is_down(ACTION_SCORES))
+            panel = bigworld.state(self.world)
+            state.update(game_hud=game_hud, cam_pos=eye, view=glmath.look_at(eye, eye + direction, up),
+                         fov=fov, world=self.world, arena=match, arena_full=full, bigworld=panel,
+                         plugin_ui_key=(scoreboard.key(match, full), panel),
+                         billboards=tuple((position, glasses_path(style), (40.0, 18.0))
+                                          for position, style in arena.spectator_glasses(self.world)))
         return state
 
     def _on_resize(self, width, height):
@@ -250,6 +405,8 @@ class FioPlayerApp:
         self._quality_frames = 0
 
     def _on_shutdown(self):
+        self.menus.lobby.close()
+        self._set_lan_active(False)
         if self.audio:
             self.audio.close()
         if self.world:

@@ -29,6 +29,9 @@ from ..input.state import (
     ACTION_FIRE,
     ACTION_USE,
     ACTION_PAUSE,
+    ACTION_WEAPON,
+    ACTION_SCORES,
+    ACTION_RESTART,
 )
 
 
@@ -38,6 +41,9 @@ _ACTION_COLORS: Dict[str, Tuple[float, float, float]] = {
     ACTION_JUMP: (0.40, 0.80, 0.45),
     ACTION_USE: (0.38, 0.62, 0.95),
     ACTION_PAUSE: (0.72, 0.72, 0.76),
+    ACTION_WEAPON: (0.95, 0.70, 0.30),
+    ACTION_SCORES: (0.45, 0.88, 0.80),
+    ACTION_RESTART: (0.45, 0.88, 0.80),
 }
 _DEFAULT_COLOR = (0.80, 0.80, 0.85)
 

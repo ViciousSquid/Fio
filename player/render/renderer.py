@@ -50,6 +50,7 @@ class GLESRenderer:
         self._context_lost = False
         self._ui_key = None
         self._ui_texture = self._ui_vao = self._ui_vbo = None
+        self._billboard_vao = self._billboard_vbo = None
         self.overlay = OverlayRenderer()
         self.shadows = None
         self.light_buffer = None
@@ -79,6 +80,7 @@ class GLESRenderer:
         self._context_lost = True
         self._ui_key = None
         self._ui_texture = self._ui_vao = self._ui_vbo = None
+        self._billboard_vao = self._billboard_vbo = None
         self._start_time = time.perf_counter()
 
         sources = build_gles_shader_set(prefer_arm=True)
@@ -266,10 +268,10 @@ class GLESRenderer:
         if self.water:
             self.water.close()
         gl = _gl()
-        for vao in (self._triangle_vao, self._ui_vao, self.overlay._disc_vao):
+        for vao in (self._triangle_vao, self._ui_vao, self._billboard_vao, self.overlay._disc_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])
-        for vbo in (self._triangle_vbo, self._ui_vbo, self.overlay._disc_vbo):
+        for vbo in (self._triangle_vbo, self._ui_vbo, self._billboard_vbo, self.overlay._disc_vbo):
             if vbo:
                 gl.glDeleteBuffers(1, [vbo])
         if self._ui_texture:
@@ -385,6 +387,61 @@ class GLESRenderer:
         self._terrain._init_shader()
         if not self._terrain.shader_program:
             raise RuntimeError('Terrain shaders could not be compiled')
+
+    def _draw_billboards(self, billboards, prog, view, eye):
+        """Camera-facing images that are not scene entities.
+
+        Plugins publish these per frame -- other Deathmatch spectators are
+        drawn as their chosen glasses, as on desktop. Each entry is
+        ``(position, image name, (width, height))``. Returns the count drawn.
+        """
+        if not billboards:
+            return 0
+        import ctypes
+        import numpy as np
+        gl = _gl()
+        if self._billboard_vao is None:
+            quad = np.asarray([[x, y, 0, 0, 0, 1, x + .5, y + .5]
+                               for x, y in ((-.5, -.5), (.5, -.5), (.5, .5), (-.5, -.5), (.5, .5), (-.5, .5))],
+                              dtype=np.float32)
+            self._billboard_vao = gl.glGenVertexArrays(1)
+            self._billboard_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._billboard_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._billboard_vbo)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, quad.nbytes, quad, gl.GL_STATIC_DRAW)
+            for attribute, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
+                gl.glVertexAttribPointer(attribute, size, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(offset))
+                gl.glEnableVertexAttribArray(attribute)
+        gl.glUseProgram(prog)
+        gl.glUniform1i(uniform_location(gl, prog, 'unlit'), 1)
+        gl.glUniform1i(uniform_location(gl, prog, 'lightCount'), 0)
+        gl.glUniform4f(uniform_location(gl, prog, 'tint'), 1, 1, 1, 1)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDepthMask(False)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(self._billboard_vao)
+        right, up = np.asarray(view)[0, :3], np.asarray(view)[1, :3]
+        drawn = 0
+        far = self._render_runtime().view_distance.far_plane
+        for position, name, (width, height) in billboards:
+            position = np.asarray(position, dtype=float)
+            if float(np.sum((position - eye) ** 2)) > far * far:
+                continue
+            model = glmath.identity()
+            model[:3, 0] = right * float(width)
+            model[:3, 1] = up * float(height)
+            model[:3, 2] = np.cross(right, up)
+            model[:3, 3] = position
+            _set_mat4(gl, prog, 'model', model)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self._load_texture(name))
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+            drawn += 1
+        gl.glBindVertexArray(0)
+        gl.glDepthMask(True)
+        gl.glDisable(gl.GL_BLEND)
+        return drawn
 
     def _load_texture(self, name, clock=None, loop=True, phase=0):
         from PIL import Image
@@ -637,7 +694,9 @@ class GLESRenderer:
         gl.glBindVertexArray(0)
         if not surfaces_drawn:
             water_draws = draw_surfaces()
+        billboards = self._draw_billboards(state.get('billboards', ()), prog, view, eye)
         self.frame_stats = {'drawn_batches': drawn, 'culled_batches': culled,
+                            'billboards': billboards,
                             'water_brushes': water_draws,
                             'view_distance': distance.effective_distance,
                             'fog_start': env['uFogStart'], 'fog_end': env['uFogEnd'],
@@ -658,32 +717,21 @@ class GLESRenderer:
     def render_ui(self, state, width, height, has_world=True):
         import ctypes
         import numpy as np
-        from PIL import Image, ImageDraw, ImageFont
-        from ..menu import buttons
+        from PIL import Image
+        from ..menu import root_page
 
         gl = _gl()
-        key = (tuple(state.get('game_hud', {}).items()), state.get('hud', ''), state.get('paused', False), width, height, has_world, state.get('control_buttons', ()))
+        page = state.get('menu') or root_page(has_world)
+        key = (tuple(state.get('game_hud', {}).items()), state.get('hud', ''), state.get('paused', False),
+               width, height, has_world, state.get('control_buttons', ()),
+               page if state.get('paused') else None, state.get('plugin_ui_key'))
         if key != self._ui_key:
             self._ui_key = key
             image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            font = ImageFont.load_default(size=max(14, min(28, height // 28)))
             if state.get('paused'):
-                draw.rectangle((0, 0, width, height), fill=(10, 14, 22, 215))
-                draw.text((width / 2, height * .20), 'Fio Player — Paused' if has_world else 'Fio Player',
-                          font=font, anchor='mm', fill='white')
-                for _, label, (x, y, w, h) in buttons(width, height, has_world):
-                    draw.rounded_rectangle((x, y, x + w, y + h), radius=8,
-                                           fill=(45, 65, 90, 255), outline=(140, 160, 180, 255), width=2)
-                    draw.text((x + w / 2, y + h / 2), label, font=font, anchor='mm', fill='white')
+                paint_menu(image, page)
             else:
-                from .hud import paint
-                paint(image, state, self._images)
-                if not state.get('game_hud'):
-                    draw.multiline_text((18, 14), state.get('hud', ''), font=font, fill='white')
-                for action, x, y in state.get('control_buttons', ()):
-                    draw.text((x * width, y * height), action.title(), font=font, anchor='mm',
-                              fill='white', stroke_width=1, stroke_fill='black')
+                paint_hud(image, state, self._images)
             if self._ui_texture:
                 gl.glDeleteTextures([self._ui_texture])
             self._ui_texture = gl.glGenTextures(1)
@@ -760,3 +808,56 @@ def _set_environment(gl, program, values):
             _set_float(gl, program, name, value)
         else:
             _set_vec3(gl, program, name, value)
+
+
+def paint_menu(image, page):
+    """Draw a pause-menu page; the same layout resolves taps (player.menu)."""
+    from PIL import ImageDraw, ImageFont
+    from ..menu import layout
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=max(14, min(28, height // 28)))
+    small = ImageFont.load_default(size=max(12, min(22, height // 36)))
+    draw.rectangle((0, 0, width, height), fill=(10, 14, 22, 215))
+    placed = layout(page, width, height)
+    title_y = (placed[0][2][1] if placed else height * .3) - max(28, height * .06)
+    draw.text((width / 2, title_y), page.title, font=font, anchor='mm', fill='white')
+    fills = {'button': (45, 65, 90, 255), 'selected': (40, 120, 110, 255),
+             'field': (25, 32, 44, 255), 'disabled': (35, 40, 48, 255)}
+    for _, label, (x, y, w, h), style in placed:
+        if style == 'label':
+            draw.text((x + w / 2, y + h / 2), label, font=small, anchor='mm', fill=(200, 210, 220))
+            continue
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=8, fill=fills.get(style, fills['button']),
+                               outline=(140, 160, 180, 255) if style != 'disabled' else (70, 75, 85, 255),
+                               width=2)
+        color = 'white' if style != 'disabled' else (120, 125, 135)
+        if style == 'field':
+            draw.text((x + 14, y + h / 2), label, font=font, anchor='lm', fill=color)
+        else:
+            draw.text((x + w / 2, y + h / 2), label, font=font, anchor='mm', fill=color)
+    if page.status:
+        draw.multiline_text((width / 2, height * .965), page.status, font=small, anchor='md',
+                            align='center', fill=(200, 210, 220))
+
+
+def paint_hud(image, state, images):
+    """The in-play HUD, plugin panels and touch-control labels."""
+    from PIL import ImageDraw, ImageFont
+    from .hud import paint
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=max(14, min(28, height // 28)))
+    paint(image, state, images)
+    if not state.get('game_hud'):
+        draw.multiline_text((18, 14), state.get('hud', ''), font=font, fill='white')
+    if state.get('arena'):
+        from ..plugin_ui import scoreboard
+        scoreboard.paint(image, state['arena'], full=state.get('arena_full', False))
+    if state.get('bigworld'):
+        from ..plugin_ui import bigworld
+        bigworld.paint(image, state['bigworld'])
+    labels = {'weapon': 'Weapon', 'scores': 'Scores', 'restart': 'Restart'}
+    for action, x, y in state.get('control_buttons', ()):
+        draw.text((x * width, y * height), labels.get(action, action.title()), font=font, anchor='mm',
+                  fill='white', stroke_width=1, stroke_fill='black')

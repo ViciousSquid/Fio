@@ -1,6 +1,7 @@
 """Qt-free host for Fio's authoritative simulation, shared by every player."""
 from __future__ import annotations
 
+import copy
 import math
 from types import SimpleNamespace
 
@@ -14,7 +15,25 @@ from engine.logic_thread import LogicThread
 from engine.player import Player
 from engine.player_starts import resolve_start_record
 from engine.threaded_game_state import ThreadedGameState
-from .input.state import ACTION_JUMP, ACTION_CROUCH, ACTION_SPRINT, ACTION_USE, ACTION_FIRE
+from engine.items import ITEM_IDS
+from .input.state import (ACTION_JUMP, ACTION_CROUCH, ACTION_SPRINT, ACTION_USE, ACTION_FIRE,
+                          ACTION_WEAPON)
+
+
+class WorldState(SimpleNamespace):
+    """The scene owner the shared engine and installed plugins read.
+
+    Desktop plugins ask the editor state for the level they are playing
+    (Deathmatch hands it to LAN clients). The player has no editor; the
+    authored map it loaded is that level.
+    """
+
+    def __init__(self, level, **fields):
+        super().__init__(**fields)
+        self._level = level
+
+    def get_level_data(self):
+        return copy.deepcopy(self._level)
 
 
 class PlayerWorld:
@@ -27,8 +46,8 @@ class PlayerWorld:
         self._closed = False
         definitions = ItemDefinitions()
         definitions.load(data.get('items'))
-        self.state = SimpleNamespace(brushes=[], things=[], world_epoch=0,
-                                     item_definitions=definitions, view_filters={})
+        self.state = WorldState(data, brushes=[], things=[], world_epoch=0,
+                                item_definitions=definitions, view_filters={})
         self.game_state = ThreadedGameState()
         self.logic = LogicThread(self.game_state, self.state, threaded_ai=False)
         self.logic.package = package
@@ -93,6 +112,10 @@ class PlayerWorld:
                 keys.add(key)
         self.game_state.set_keys(keys)
         self.game_state.set_movement_axes(-inp.move_x, inp.move_y)
+        if inp.just_pressed(ACTION_WEAPON):
+            slot = self.next_weapon_slot()
+            if slot is not None:
+                self.game_state.queue_weapon_slot(slot)
         if inp.just_pressed(ACTION_USE):
             self.game_state.set_use_key_pressed()
             complete = self.logic.interaction_runtime.level_complete_ui
@@ -108,6 +131,20 @@ class PlayerWorld:
             self.logic.monster_ai.update(self.STEP)
             self._elapsed -= self.STEP
         return [self.player.pos.x, self.player.pos.y + self.player.view_height, self.player.pos.z]
+
+    def owned_weapons(self):
+        """Weapon slots the player holds, in slot order (desktop keys 1-4)."""
+        owned = self.logic.combat_runtime.weapons
+        return [index + 1 for index, item in enumerate(ITEM_IDS) if item in owned]
+
+    def next_weapon_slot(self):
+        """The slot after the weapon in hand, wrapping; None with one weapon."""
+        slots = self.owned_weapons()
+        if len(slots) < 2:
+            return None
+        active = self.logic.combat_runtime.active_weapon
+        current = ITEM_IDS.index(active) + 1 if active in ITEM_IDS else 0
+        return next((slot for slot in slots if slot > current), slots[0])
 
     def camera(self):
         cinematic = self.logic.cutscene_runtime.state

@@ -20,6 +20,9 @@ from ..input.state import (
     ACTION_CROUCH,
     ACTION_SPRINT,
     ACTION_PAUSE,
+    ACTION_WEAPON,
+    ACTION_SCORES,
+    ACTION_RESTART,
 )
 from ..input.touch import TouchControls
 from ..input.gamepad import GamepadMapping, GamepadSnapshot, apply_gamepad
@@ -35,6 +38,9 @@ class DesktopHost(PlatformHost):
         "left shift": ACTION_SPRINT,
         "e": ACTION_USE,
         "escape": ACTION_PAUSE,
+        "q": ACTION_WEAPON,
+        "tab": ACTION_SCORES,
+        "r": ACTION_RESTART,
     }
 
     def __init__(self, config: HostConfig, callbacks: FrameCallbacks):
@@ -49,6 +55,46 @@ class DesktopHost(PlatformHost):
         self._joysticks: list = []
         self._mouse_look = False
         self.ui_events = []
+        #: ``('text', str)``, ``('backspace',)`` and ``('enter',)`` while a
+        #: menu text field has the soft keyboard open.
+        self.text_events = []
+        self.text_input_active = False
+
+    # ------------------------------------------------------------------
+    def start_text_input(self) -> None:
+        """Show the soft keyboard (Android) / accept typed text (desktop)."""
+        self.text_input_active = True
+        if self._pg is not None:
+            try:
+                self._pg.key.start_text_input()
+            except Exception:
+                pass
+
+    def stop_text_input(self) -> None:
+        self.text_input_active = False
+        self.text_events.clear()
+        if self._pg is not None:
+            try:
+                self._pg.key.stop_text_input()
+            except Exception:
+                pass
+
+    def _text_event(self, event) -> bool:
+        """Queue soft-keyboard input for a focused menu field."""
+        pg = self._pg
+        if not self.text_input_active:
+            return False
+        if event.type == getattr(pg, "TEXTINPUT", -1):
+            self.text_events.append(("text", event.text))
+            return True
+        if event.type == getattr(pg, "KEYDOWN", -1):
+            if event.key == getattr(pg, "K_BACKSPACE", -2):
+                self.text_events.append(("backspace",))
+                return True
+            if event.key in (getattr(pg, "K_RETURN", -2), getattr(pg, "K_KP_ENTER", -2)):
+                self.text_events.append(("enter",))
+                return True
+        return False
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -161,6 +207,8 @@ class DesktopHost(PlatformHost):
         focus_gained = getattr(pg, "WINDOWFOCUSGAINED", -1)
         for event in pg.event.get():
             et = event.type
+            if self._text_event(event):
+                continue
             if et == getattr(pg, "FINGERDOWN", -1):
                 self.ui_events.append((event.x * self.width, event.y * self.height))
             if et == pg.QUIT:
