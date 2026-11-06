@@ -108,15 +108,28 @@ jobs:
           # Capture step points Qt at the same file (QT_OPENGL_DLL).
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          gh release download --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
-          Get-ChildItem "$env:RUNNER_TEMP\mesa" | Format-Table Name, Length
-          7z x -y -o"$env:RUNNER_TEMP\mesa\x" (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z").FullName | Out-Null
+          # Recent mesa-dist-win releases no longer ship the OpenGL (WGL)
+          # driver; use the newest release whose archive still has it.
+          $archive = $null
+          $tags = gh release list --repo pal1000/mesa-dist-win --limit 40 --json tagName --jq '.[].tagName'
+          foreach ($tag in $tags) {
+            Remove-Item -Recurse -Force "$env:RUNNER_TEMP\mesa" -ErrorAction SilentlyContinue
+            try {
+              gh release download $tag --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
+            } catch { continue }
+            $candidate = (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z" | Select-Object -First 1).FullName
+            if ($candidate -and ((7z l $candidate) -match 'x64\\opengl32\.dll')) {
+              $archive = $candidate
+              Write-Host "Using mesa-dist-win $tag for OpenGL"
+              break
+            }
+            Write-Host "mesa-dist-win $tag has no x64 opengl32.dll; trying an older release"
+          }
+          if (-not $archive) { throw 'No mesa-dist-win release with a 64-bit OpenGL driver was found' }
+          7z x -y -o"$env:RUNNER_TEMP\mesa\x" $archive | Out-Null
           $gl = Get-ChildItem "$env:RUNNER_TEMP\mesa\x" -Recurse -Filter opengl32.dll |
                 Where-Object { $_.DirectoryName -match '(^|\\)x64$' } | Select-Object -First 1
-          if (-not $gl) {
-            Get-ChildItem "$env:RUNNER_TEMP\mesa\x" -Recurse -Filter *.dll | Format-Table FullName
-            throw 'No 64-bit Mesa opengl32.dll in the release archive'
-          }
+          if (-not $gl) { throw 'The selected Mesa archive has no 64-bit opengl32.dll' }
           $python = Split-Path (Get-Command python).Source
           Copy-Item "$($gl.DirectoryName)\*.dll" $python -Force
           Get-ChildItem "$python\*.dll" | Format-Table Name, Length
