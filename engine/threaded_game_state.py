@@ -27,6 +27,7 @@ class RenderState:
         self.editor_camera_yaw = 0.0
         self.editor_camera_pitch = 0.0
         self.editor_camera_fov = 90.0
+        self.editor_camera_revision = 0
         
         # Player
         self.player_pos = glm.vec3(0, 0, 0)
@@ -138,6 +139,7 @@ class RenderState:
         self.editor_camera_yaw = 0.0
         self.editor_camera_pitch = 0.0
         self.editor_camera_fov = 90.0
+        self.editor_camera_revision = 0
         self.player_pos = glm.vec3(0, 0, 0)
         self.light_fade_range = None  # optional live-world boundary, in world units
         self.player_angle = 0.0

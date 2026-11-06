@@ -9,6 +9,7 @@ from the spawn). These tests check the copy every paint reads from.
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -112,3 +113,117 @@ def test_focusing_an_object_moves_the_camera_the_logic_thread_draws_from(main_wi
     expected = (1000.0 - front.x * distance, 50.0 - front.y * distance,
                 -2000.0 - front.z * distance)
     assert tuple(camera.pos) == pytest.approx(expected, abs=1e-3)
+
+
+def _halt_logic(window):
+    """Control the delay between a camera move and the next published frame."""
+    logic = window.view_3d.logic_thread
+    logic.running = False
+    logic.join(timeout=5.0)
+    assert not logic.is_alive()
+    return logic
+
+
+def _open_from_ui(window, path, route, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QFileDialog
+
+    if route == "file_menu":
+        monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                            staticmethod(lambda *a, **kw: (path, "JSON Files (*.json)")))
+        next(action for action in window.file_menu.actions()
+             if action.text() == "&Open...").trigger()
+    else:
+        browser = window.asset_browser.tab_maps
+        browser.maps_folder = str(Path(path).parent)
+        browser.refresh_list()
+        item = next(browser.list_widget.item(i)
+                    for i in range(browser.list_widget.count())
+                    if browser.list_widget.item(i).data(Qt.UserRole) == path)
+        browser.list_widget.itemDoubleClicked.emit(item)
+
+
+@pytest.mark.parametrize("route", ["file_menu", "asset_browser"])
+def test_loading_does_not_draw_a_frame_from_before_the_camera_snap(
+        main_window, tmp_path, monkeypatch, route):
+    from tests.helpers.renderers import StubRenderer
+
+    window = main_window
+    view = window.view_3d
+    logic = _halt_logic(window)
+    first = _write_map(tmp_path, "first.json", [_start((100.0, 0.0, 100.0), 0.0)])
+    assert window.load_level_file(first)
+    view.set_editor_camera((5000.0, 5000.0, 5000.0), yaw=10.0, pitch=-30.0)
+    logic._step_frame(0.0)
+    assert logic._publish_frame()
+
+    # Exercise paintGL's frame selection without requiring an OpenGL context.
+    drawn = []
+    monkeypatch.setattr(view, "renderer", StubRenderer({}))
+    monkeypatch.setattr(view, "_gl_error_checks_left", 0)
+    monkeypatch.setattr(view, "_paint_frame", lambda frame: drawn.append(
+        (tuple(frame.editor_camera_pos), frame.editor_camera_yaw, frame.editor_camera_pitch)))
+    window.config.read_dict({"Display": {"place_camera_at_player_start": "True"}})
+    path = _write_map(tmp_path, "second.json", [_start((-800.0, 64.0, 1200.0), 45.0)])
+    _open_from_ui(window, path, route, monkeypatch)
+    assert window.file_path == path
+
+    view.paintGL()
+    assert drawn == [], "the first paint used the camera from the previous map"
+    assert tuple(view.camera.pos) == (-800.0, 64.0, 1200.0)
+
+    # Once the logic thread catches up, paint the new pose normally.
+    logic._step_frame(0.0)
+    assert logic._publish_frame()
+    view.paintGL()
+    assert drawn == [((-800.0, 64.0, 1200.0), _play_view_yaw(45.0), 0.0)]
+
+    # Normal navigation after the snap must still reach the renderer.
+    from PyQt5.QtCore import Qt
+    view.game_state.set_keys({Qt.Key_W})
+    logic._step_frame(logic.TICK_DURATION)
+    assert logic._publish_frame()
+    view.paintGL()
+    assert drawn[-1][0] != drawn[-2][0]
+
+
+@pytest.mark.parametrize("route", ["file_menu", "asset_browser"])
+def test_loading_discards_navigation_input_from_the_previous_map(
+        main_window, tmp_path, monkeypatch, route):
+    from PyQt5.QtCore import Qt
+
+    window = main_window
+    view = window.view_3d
+    logic = _halt_logic(window)
+    window.config.read_dict({"Display": {"place_camera_at_player_start": "True"}})
+    window.keys_pressed.add(Qt.Key_W)
+    view.game_state.set_keys({Qt.Key_W})
+    view.game_state.set_mouse_delta(200.0, -100.0)
+    path = _write_map(tmp_path, "start.json", [_start((300.0, 32.0, -500.0), 45.0)])
+
+    _open_from_ui(window, path, route, monkeypatch)
+    logic._step_frame(logic.TICK_DURATION)
+
+    camera = _editor_camera(window)
+    assert tuple(camera.pos) == (300.0, 32.0, -500.0)
+    assert _same_heading(camera.yaw, _play_view_yaw(45.0))
+    assert camera.pitch == 0.0
+    assert window.keys_pressed == set()
+
+
+def test_a_map_loaded_before_the_logic_thread_starts_keeps_its_camera(
+        main_window, tmp_path):
+    window = main_window
+    view = window.view_3d
+    view._stop_logic_thread()
+    path = _write_map(tmp_path, "early.json", [_start((300.0, 32.0, -500.0), 45.0)])
+
+    assert window.load_level_file(path)
+    assert tuple(view.camera.pos) == (300.0, 32.0, -500.0)
+    view._start_logic_thread()
+    logic = _halt_logic(window)
+    logic._step_frame(0.0)
+    assert logic._publish_frame()
+    assert view.game_state.published("editor_camera_revision") == view._editor_camera_revision
+    assert tuple(_editor_camera(window).pos) == (300.0, 32.0, -500.0)
+    assert _same_heading(_editor_camera(window).yaw, _play_view_yaw(45.0))

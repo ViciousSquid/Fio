@@ -127,6 +127,7 @@ class QtGameView(QOpenGLWidget):
         self.show_triggers_as_solid = False
         self.camera = Camera()
         self.camera.pos = glm.vec3(0, 150, 400)
+        self._editor_camera_revision = 0
         self.debug_console_window = DebugConsole.get_instance()
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
@@ -1201,7 +1202,8 @@ class QtGameView(QOpenGLWidget):
 
         The logic thread owns the editor camera: every paint copies this
         view's camera back from the published render state. A move made here
-        alone is undone by the next frame, so it is made on both.
+        alone is undone by the next frame, so it is made on both. Until a
+        frame carrying this move arrives, paintGL skips older camera poses.
         """
         camera = self.camera
         camera.pos = glm.vec3(pos)
@@ -1210,8 +1212,9 @@ class QtGameView(QOpenGLWidget):
         if pitch is not None:
             camera.pitch = float(pitch)
         if self.logic_thread is not None:
-            self.logic_thread.camera.set_editor_camera(
+            self._editor_camera_revision = self.logic_thread.camera.set_editor_camera(
                 camera.pos, camera.yaw, camera.pitch, camera.fov)
+        self.update()
 
     def _start_logic_thread(self):
         if self._thread_started:
@@ -1238,7 +1241,7 @@ class QtGameView(QOpenGLWidget):
         self.logic_thread.set_gui_fault_teardown(self._logic_tick_fault_signal.emit)
         if self.logic_thread is not None:
             self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
-        self.logic_thread.camera.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
+        self.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch)
         self.logic_thread.camera.set_camera_mode(self.camera_mode)
         self.logic_thread.session_runtime.apply_play_mode(False)
         self._sync_view_distance()
@@ -1722,6 +1725,11 @@ class QtGameView(QOpenGLWidget):
             return
         self._animate_textures()
         try:
+            if (not self.play_mode
+                    and render_state.editor_camera_revision < self._editor_camera_revision):
+                # A load/focus moved the camera after this frame was built.
+                # Do not draw its old view or copy its pose back over the move.
+                return
             self._paint_frame(render_state)
         finally:
             # The render state is a borrowed snapshot, and publication waits

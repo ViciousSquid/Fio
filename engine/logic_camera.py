@@ -42,16 +42,21 @@ class LogicCamera:
         # Editor camera.
         self.editor_camera = Camera()
         self.editor_camera.pos = glm.vec3(0, 150, 400)
+        self.editor_camera_revision = 0
 
     # ------------------------------------------------------------------
     # Editor/frustum configuration
     # ------------------------------------------------------------------
 
-    def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float):
-        self.editor_camera.pos = glm.vec3(pos)
-        self.editor_camera.yaw = yaw
-        self.editor_camera.pitch = pitch
-        self.editor_camera.fov = fov
+    def set_editor_camera(self, pos: glm.vec3, yaw: float, pitch: float, fov: float) -> int:
+        """Move between frames and identify the first snapshot with this pose."""
+        with self._host._tick_lock:
+            self.editor_camera.pos = glm.vec3(pos)
+            self.editor_camera.yaw = yaw
+            self.editor_camera.pitch = pitch
+            self.editor_camera.fov = fov
+            self.editor_camera_revision += 1
+            return self.editor_camera_revision
 
     def get_editor_camera(self) -> Camera:
         return self.editor_camera

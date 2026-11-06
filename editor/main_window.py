@@ -4825,6 +4825,14 @@ class MainWindow(QMainWindow):
                 self._pre_play_world = None
                 self._exit_play_mode()
                 self._keep_unsaved_work_on_level_change(captured)
+            else:
+                # Navigation belongs to the map being left. A key release
+                # swallowed by the file dialog, or queued mouse look, must
+                # not move/turn the camera away from the new PlayerStart.
+                self.view_3d.stop_editor_mouselook()
+                self.keys_pressed.clear()
+                self.view_3d.game_state.set_keys(set())
+                self.view_3d.game_state.consume_mouse_delta()
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the

@@ -364,6 +364,7 @@ class LogicRender:
             write_state.editor_camera_yaw = editor_camera.yaw
             write_state.editor_camera_pitch = editor_camera.pitch
             write_state.editor_camera_fov = editor_camera.fov
+            write_state.editor_camera_revision = logic.camera.editor_camera_revision
             view_matrix = editor_camera.get_view_matrix()
             fov = editor_camera.fov
 
