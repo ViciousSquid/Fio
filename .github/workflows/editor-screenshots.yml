@@ -2,7 +2,8 @@ name: Native editor screenshots
 
 # Release verification: the desktop editor, with a map loaded, captured by
 # each platform's own screen capture so the real window and its native frame
-# can be compared. Runs on demand, and when this file changes. The editor is
+# can be compared. Runs on demand, and when this file changes. Every capture
+# is 1024x768: the size GitHub's Windows and macOS runners provide. The editor is
 # started through the unmodified main.py; the map is then opened with
 # MainWindow.load_level_file, exactly as File > Open does.
 
@@ -88,19 +89,24 @@ jobs:
           PY
 
       # -- platform setup ---------------------------------------------------
-      - name: Windows - software OpenGL and a 1600x1000 desktop
+      - name: Windows - software OpenGL
         if: matrix.id == 'windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Hosted runners have no GPU and only OpenGL 1.1; Fio needs 3.3.
-          # Mesa's llvmpipe for Windows, placed beside python.exe, provides it.
+          # Mesa's llvmpipe for Windows, placed beside python.exe, provides it
+          # to PyOpenGL. Qt 5 loads opengl32.dll only from System32, so the
+          # Capture step points Qt at the same file (QT_OPENGL_DLL).
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           gh release download --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
           7z x -y -o"$env:RUNNER_TEMP\mesa\x" (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z").FullName | Out-Null
           $python = Split-Path (Get-Command python).Source
           Copy-Item "$env:RUNNER_TEMP\mesa\x\x64\*.dll" $python -Force
-          try { Set-DisplayResolution -Width 1600 -Height 1000 -Force } catch { Write-Host "Resolution unchanged: $_" }
+          if (-not (Test-Path "$python\opengl32.dll")) { throw 'Mesa opengl32.dll was not installed' }
+          Get-ChildItem "$python\*.dll" | Select-Object Name, Length | Format-Table
       - name: Linux - window system tools
         if: startsWith(matrix.id, 'linux')
         run: |
@@ -118,11 +124,14 @@ jobs:
           wait_for_map() {
             for i in $(seq 1 120); do grep -q MAP_LOADED "$log" && break; sleep 1; done
             grep MAP_LOADED "$log" || { cat "$log"; exit 1; }
-            sleep 15   # first frames, textures and the 3D view settle
+            # Software OpenGL on GPU-less runners is slow (seconds per frame
+            # on macOS): let layout, textures and the 3D view settle.
+            sleep 45
           }
           case "${{ matrix.id }}" in
             windows)
-              export GALLIUM_DRIVER=llvmpipe
+              pydir=$(python -c "import os, sys; print(os.path.dirname(sys.executable))")
+              export GALLIUM_DRIVER=llvmpipe QT_OPENGL=software QT_OPENGL_DLL="$pydir\\opengl32.dll"
               launch; wait_for_map
               python -c "from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$shots/windows.png')" ;;
             macos)
@@ -130,14 +139,14 @@ jobs:
               screencapture -x "$shots/macos.png" ;;
             linux-x11)
               export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
-              Xvfb :91 -screen 0 1600x1000x24 -nolisten tcp & sleep 2
+              Xvfb :91 -screen 0 1024x768x24 -nolisten tcp & sleep 2
               openbox & sleep 1
               launch; wait_for_map
               import -window root "$shots/linux-x11.png" ;;
             linux-wayland)
               export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
               unset DISPLAY
-              printf 'output HEADLESS-1 resolution 1600x1000 bg #2b2b2b solid_color\ndefault_border normal 2\nfont pango:DejaVu Sans 10\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
+              printf 'output HEADLESS-1 resolution 1024x768 bg #2b2b2b solid_color\ndefault_border normal 2\nfont pango:DejaVu Sans 10\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
               WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$RUNNER_TEMP/sway.conf" &
               for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
               export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
