@@ -1,0 +1,156 @@
+name: Native editor screenshots
+
+# Release verification: the desktop editor, with a map loaded, captured by
+# each platform's own screen capture so the real window and its native frame
+# can be compared. Runs on demand, and when this file changes. The editor is
+# started through the unmodified main.py; the map is then opened with
+# MainWindow.load_level_file, exactly as File > Open does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      map:
+        description: Map to open, relative to the repository root
+        default: maps/_SHOWCASE.json
+  push:
+    paths:
+      - '.github/workflows/editor-screenshots.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FIO_MAP: ${{ inputs.map || 'maps/_SHOWCASE.json' }}
+  SDL_AUDIODRIVER: dummy
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  capture:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            id: windows
+          - name: macOS
+            os: macos-latest
+            id: macos
+          - name: Linux X11
+            os: ubuntu-24.04
+            id: linux-x11
+          - name: Linux Wayland
+            os: ubuntu-24.04
+            id: linux-wayland
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install Fio's desktop dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Write the map launcher
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          cat > "$RUNNER_TEMP/launch_with_map.py" <<'PY'
+          import os, runpy, sys
+          root = os.environ['GITHUB_WORKSPACE']
+          os.chdir(root)
+          sys.path.insert(0, root)
+          from PyQt5.QtCore import QTimer
+          from PyQt5.QtGui import QGuiApplication
+          import editor.main_window as main_window
+          shown = main_window.MainWindow.showMaximized
+
+          def show(self):
+              shown(self)
+              def load():
+                  self.load_level_file(os.path.join(root, os.environ['FIO_MAP']))
+                  self.unsaved_changes = False
+                  print('MAP_LOADED', os.environ['FIO_MAP'], 'platform', QGuiApplication.platformName(), flush=True)
+              QTimer.singleShot(3000, load)
+
+          main_window.MainWindow.showMaximized = show
+          sys.argv = [os.path.join(root, 'main.py')]
+          runpy.run_path(sys.argv[0], run_name='__main__')
+          PY
+
+      # -- platform setup ---------------------------------------------------
+      - name: Windows - software OpenGL and a 1600x1000 desktop
+        if: matrix.id == 'windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Hosted runners have no GPU and only OpenGL 1.1; Fio needs 3.3.
+          # Mesa's llvmpipe for Windows, placed beside python.exe, provides it.
+          gh release download --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
+          7z x -y -o"$env:RUNNER_TEMP\mesa\x" (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z").FullName | Out-Null
+          $python = Split-Path (Get-Command python).Source
+          Copy-Item "$env:RUNNER_TEMP\mesa\x\x64\*.dll" $python -Force
+          try { Set-DisplayResolution -Width 1600 -Height 1000 -Force } catch { Write-Host "Resolution unchanged: $_" }
+      - name: Linux - window system tools
+        if: startsWith(matrix.id, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb openbox imagemagick sway grim \
+            libgl1-mesa-dri libglx-mesa0 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-cursor0 libwayland-client0 libwayland-egl1 fonts-dejavu-core
+
+      # -- launch, wait for the map, capture natively -----------------------
+      - name: Capture
+        run: |
+          shots="$RUNNER_TEMP/shots"; log="$shots/${{ matrix.id }}.log"
+          launch() { python "$RUNNER_TEMP/launch_with_map.py" > "$log" 2>&1 & app=$!; }
+          wait_for_map() {
+            for i in $(seq 1 120); do grep -q MAP_LOADED "$log" && break; sleep 1; done
+            grep MAP_LOADED "$log" || { cat "$log"; exit 1; }
+            sleep 15   # first frames, textures and the 3D view settle
+          }
+          case "${{ matrix.id }}" in
+            windows)
+              export GALLIUM_DRIVER=llvmpipe
+              launch; wait_for_map
+              python -c "from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$shots/windows.png')" ;;
+            macos)
+              launch; wait_for_map
+              screencapture -x "$shots/macos.png" ;;
+            linux-x11)
+              export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
+              Xvfb :91 -screen 0 1600x1000x24 -nolisten tcp & sleep 2
+              openbox & sleep 1
+              launch; wait_for_map
+              import -window root "$shots/linux-x11.png" ;;
+            linux-wayland)
+              export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+              unset DISPLAY
+              printf 'output HEADLESS-1 resolution 1600x1000 bg #2b2b2b solid_color\ndefault_border normal 2\nfont pango:DejaVu Sans 10\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
+              WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$RUNNER_TEMP/sway.conf" &
+              for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
+              export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
+              export QT_QPA_PLATFORM=wayland LIBGL_ALWAYS_SOFTWARE=1
+              launch; wait_for_map
+              grim "$shots/linux-wayland.png" ;;
+          esac
+          kill $app 2>/dev/null || true
+          ls -la "$shots"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: editor-screenshot-${{ matrix.id }}
+          path: ${{ runner.temp }}/shots/
+          retention-days: 30
+          if-no-files-found: error
