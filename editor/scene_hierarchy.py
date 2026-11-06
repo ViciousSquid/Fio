@@ -161,11 +161,12 @@ class SceneHierarchy(QWidget):
         # Configure tree widget
         self.tree.header().setVisible(False) 
         self.tree.header().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.tree.setColumnCount(2)
+        # One column: tag, hidden and lock indicators are the item's icon, so
+        # they sit left of the name and stay visible at any width; a long
+        # name is elided instead.
+        self.tree.setColumnCount(1)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.tree.setColumnWidth(1, 48)
         self.tree.setIconSize(QtCore.QSize(44, 20))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_menu)
@@ -617,13 +618,13 @@ class SceneHierarchy(QWidget):
             elif brush_dict.get('lock', False):
                 status_icon = self.lock_icon
             
-            # Apply icons to column 1 (right side)
+            # Indicators go before the name (column 0's icon)
             if status_icon and colour_icon:
-                item.setIcon(1, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
+                item.setIcon(0, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
             elif status_icon:
-                item.setIcon(1, status_icon)
+                item.setIcon(0, status_icon)
             elif colour_icon:
-                item.setIcon(1, colour_icon)
+                item.setIcon(0, colour_icon)
             
             # Check if this brush is in the selected_objects list
             if brush_dict in selected_objects:
@@ -667,13 +668,13 @@ class SceneHierarchy(QWidget):
             elif thing_obj.properties.get('lock', False):
                 status_icon = self.lock_icon
             
-            # Apply icons to column 1 (right side)
+            # Indicators go before the name (column 0's icon)
             if status_icon and colour_icon:
-                item.setIcon(1, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
+                item.setIcon(0, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
             elif status_icon:
-                item.setIcon(1, status_icon)
+                item.setIcon(0, status_icon)
             elif colour_icon:
-                item.setIcon(1, colour_icon)
+                item.setIcon(0, colour_icon)
 
             if thing_obj in selected_objects:
                 item.setSelected(True)

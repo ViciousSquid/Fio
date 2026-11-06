@@ -79,11 +79,11 @@ def reference_refresh_list(self):
 
         # Apply icons to column 1 (right side)
         if status_icon and colour_icon:
-            item.setIcon(1, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
+            item.setIcon(0, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
         elif status_icon:
-            item.setIcon(1, status_icon)
+            item.setIcon(0, status_icon)
         elif colour_icon:
-            item.setIcon(1, colour_icon)
+            item.setIcon(0, colour_icon)
 
         # Check if this brush is in the selected_objects list
         if brush_dict in selected_objects:
@@ -127,11 +127,11 @@ def reference_refresh_list(self):
 
         # Apply icons to column 1 (right side)
         if status_icon and colour_icon:
-            item.setIcon(1, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
+            item.setIcon(0, self._create_composite_icon(status_icon, colour_icon, padlock_on_left=True))
         elif status_icon:
-            item.setIcon(1, status_icon)
+            item.setIcon(0, status_icon)
         elif colour_icon:
-            item.setIcon(1, colour_icon)
+            item.setIcon(0, colour_icon)
 
         if thing_obj in selected_objects:
             item.setSelected(True)

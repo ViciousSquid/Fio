@@ -45,7 +45,7 @@ def hierarchy_rows(panel):
                          item.isSelected(), item.isExpanded(), int(item.flags()),
                          item.font(0).bold(), item.foreground(0),
                          item.background(0), item.background(1),
-                         item.icon(1).pixmap(44, 20).toImage()))
+                         item.icon(0).pixmap(44, 20).toImage()))
     return rows
 
 
