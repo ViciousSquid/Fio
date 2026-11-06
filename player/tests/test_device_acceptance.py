@@ -110,3 +110,31 @@ def test_picker_waits_for_downloads_without_restarting_provider_query(tmp_path, 
     test.adb = lambda *args: taps.append(args)
     test.select_world('_SHOWCASE.fiopak')
     assert taps == [('shell', 'input', 'tap', 310, 265)]
+
+
+def test_picker_waits_out_a_system_not_responding_dialog(tmp_path, monkeypatch):
+    """CI evidence: Quickstep's ANR dialog covered DocumentsUI's file list."""
+    monkeypatch.setattr('player.tools.test_device.time.sleep', lambda _: None)
+    title = ET.Element('node', text="Quickstep isn't responding", bounds='[70,713][1010,860]',
+                       attrib={'package': 'android'})
+    close = ET.Element('node', text='Close app', bounds='[70,870][1010,990]',
+                       attrib={'package': 'android', 'resource-id': 'android:id/aerr_close'})
+    wait = ET.Element('node', text='Wait', bounds='[70,1000][1010,1120]',
+                      attrib={'package': 'android', 'resource-id': 'android:id/aerr_wait'})
+    world = ET.Element('node', text='_SHOWCASE.fiopak', bounds='[190,520][900,570]')
+    snapshots = iter([[title, close, wait], [world]])
+    test = DeviceTest('unused-adb', None, tmp_path / 'evidence')
+    test.nodes = lambda: next(snapshots)
+    test.screenshot = lambda _: (1080, 1920)
+    taps = []
+    test.adb = lambda *args: taps.append(args)
+    test.select_world('_SHOWCASE.fiopak')
+    assert taps == [('shell', 'input', 'tap', 540, 1060), ('shell', 'input', 'tap', 545, 545)]
+
+
+def test_an_unrelated_dialog_without_wait_is_left_alone(tmp_path):
+    test = DeviceTest('unused-adb', None, tmp_path / 'evidence')
+    taps = []
+    test.adb = lambda *args: taps.append(args)
+    assert not test.dismiss_overlays([ET.Element('node', text='Allow access?', bounds='[0,0][10,10]')])
+    assert taps == []

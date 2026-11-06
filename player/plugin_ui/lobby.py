@@ -140,9 +140,16 @@ class Lobby:
         if not valid_address(address):
             self.status = "Enter the host's LAN address."
             return False
+        try:
+            port = int(port or lan.GAME_PORT)
+        except (TypeError, ValueError):
+            port = 0
+        if not 1 <= port <= 65535:
+            self.status = 'That LAN game has an invalid port.'
+            return False
         if self.pending is not None:
             self.pending.close()
-        self.pending = lan.LanClient(address.strip(), int(port or lan.GAME_PORT),
+        self.pending = lan.LanClient(address.strip(), port,
                                      self.name.strip() or 'Player', self.team)
         self.status = f'Connecting to {address}…'
         return True

@@ -459,3 +459,96 @@ def test_back_steps_out_of_plugin_pages_before_resuming(world):
     assert (app._paused, app.menus.page) == (True, 'root')
     back()
     assert not app._paused
+
+
+# -- Release hardening -------------------------------------------------------
+
+def test_a_failing_plugin_panel_never_stops_the_frame(world, monkeypatch, capsys):
+    from player.app import FioPlayerApp
+    app = FioPlayerApp()
+    app.host, app.world, app._paused = _Host(), world, False
+
+    def broken(_world):
+        raise RuntimeError('panel exploded')
+
+    monkeypatch.setattr(arena, 'snapshot', broken)
+    monkeypatch.setattr(arena, 'can_restart', broken)
+    for _ in range(3):
+        app.host.input_state.begin_frame()
+        app._on_frame(1 / 60, app.host.input_state)
+        state = app._render_state()
+    assert state['arena'] == {} and state['game_hud']
+    printed = capsys.readouterr().out
+    assert printed.count('scoreboard failed: panel exploded') == 1      # reported once
+    assert printed.count('match controls failed: panel exploded') == 1
+
+
+def test_a_failing_menu_action_reports_instead_of_crashing(world, monkeypatch):
+    from player.app import FioPlayerApp
+    app = FioPlayerApp()
+    app.host, app.world, app._paused = _Host(), world, True
+    app.menus.page = 'match'
+    monkeypatch.setattr(arena, 'add_bot', lambda *a: 1 / 0)
+    assert app._activate_menu('addbot:easy') is None
+    assert app.menus.message.startswith('That action failed')
+
+
+def test_the_keyboard_closes_whenever_no_field_is_being_edited(world):
+    from player.app import FioPlayerApp
+    from player.input.state import ACTION_PAUSE
+    app = FioPlayerApp()
+    host = app.host = _Host()
+    calls = []
+    host.start_text_input = lambda: calls.append('start')
+    host.stop_text_input = lambda: calls.append('stop')
+    app.world, app._paused, app.package = world, True, object()
+    app.menus.activate('page:lan', app)
+    app.menus.activate('edit:name', app)
+    assert calls == ['start']
+    inp = host.input_state
+    inp.begin_frame()
+    inp.set_button(ACTION_PAUSE, True)      # Back leaves the page...
+    app._on_frame(1 / 60, inp)
+    assert calls == ['start', 'stop'] and app.menus.page == 'root'
+    app.menus.activate('page:lan', app)
+    app.menus.activate('edit:address', app)
+    host.text_events.extend([('text', '10.0.0.7'), ('enter',)])
+    inp.begin_frame()
+    app._on_frame(1 / 60, inp)              # ...and Enter finishes the field.
+    assert app.menus.lobby.address == '10.0.0.7' and calls[-1] == 'stop'
+
+
+def test_one_lan_game_at_a_time(arena_package, monkeypatch):
+    from plugins.deathmatch import lan
+    monkeypatch.setattr(Lobby, 'open_host', lambda self: lan.LanHost(
+        self.game_name, self.mode, address='127.0.0.1', port=0, discovery_port=0))
+    app = _player(arena_package)
+    try:
+        assert app.host_lan(app.menus.lobby).startswith('Hosting')
+        assert app.host_lan(app.menus.lobby) == 'Leave the current LAN game first.'
+        app.menus.page = 'lan'
+        app.menus.lobby.address = '127.0.0.1'
+        app.menus.activate('join', app)
+        assert app.menus.message == 'Leave the current LAN game first.'
+        assert app.menus.lobby.pending is None
+    finally:
+        app._on_shutdown()
+
+
+def test_lobby_rejects_bad_ports_and_long_or_unprintable_text():
+    lobby = Lobby()
+    assert not lobby.join('192.168.1.2', 70000)
+    assert lobby.status == 'That LAN game has an invalid port.'
+    lobby.edit('name', [('text', 'x' * 100 + '\x00\n')])
+    assert lobby.name == ('Player' + 'x' * 100)[:32]
+    lobby.edit('address', [('text', '\x1b[31m10.0.0.1')])
+    assert lobby.address == '[31m10.0.0.1' and not valid_address(lobby.address)
+
+
+def test_plugin_file_spellings_share_one_cached_copy():
+    assets = PluginAssetPackage(None)
+    flag = plugins_root() / 'deathmatch/sprites/red_flag.png'
+    spellings = (str(flag), 'plugins/deathmatch/sprites/red_flag.png',
+                 'plugins/deathmatch/./sprites/red_flag.png', 'plugins/tidy/../deathmatch/sprites/red_flag.png')
+    copies = {id(assets.read_asset(name)) for name in spellings}
+    assert len(copies) == 1 and len(assets._files) == 1

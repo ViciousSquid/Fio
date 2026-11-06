@@ -211,6 +211,10 @@ class PluginMenus:
         if app.package is None:
             self.message = 'Open the world exported from desktop Fio first, then join.'
             return
+        active = getattr(app, '_lan_session_active', None)
+        if active is not None and active():
+            self.message = 'Leave the current LAN game first.'
+            return
         self.lobby.join(address, port)
 
     def text(self, events):

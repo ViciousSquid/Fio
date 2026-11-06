@@ -34,6 +34,8 @@ class FioPlayerApp:
         self._quality_frames = 0
         self.menus = PluginMenus()
         self._lan_active = False
+        self._text_input = False
+        self._plugin_errors = set()
 
     def run(self, host=None):
         callbacks = FrameCallbacks(on_gl_ready=self._on_gl_ready, on_frame=self._on_frame,
@@ -152,9 +154,38 @@ class FioPlayerApp:
     # -- plugin controls -----------------------------------------------
     def set_text_input(self, active):
         """Show or hide the soft keyboard for a menu text field."""
+        active = bool(active)
+        if active == self._text_input:
+            return
+        self._text_input = active
         method = getattr(self.host, 'start_text_input' if active else 'stop_text_input', None)
         if method is not None:
             method()
+
+    def _guarded(self, label, action, *args, default=None):
+        """Run plugin presentation work; a failure must never stop the game.
+
+        Plugin rules run inside the engine, which guards its own plugin
+        calls. This guards the player's UI around them: each distinct failure
+        is reported once, and the frame carries on without that piece.
+        """
+        try:
+            return action(*args)
+        except Exception as error:
+            self._report(label, error)
+            return default
+
+    def _report(self, label, error):
+        key = (label, type(error).__name__, str(error)[:200])
+        if key not in self._plugin_errors:
+            self._plugin_errors.add(key)
+            import traceback
+            print(f'[Fio Player] {label} failed: {error}\n'
+                  + ''.join(traceback.format_exception(error)), flush=True)
+
+    def _lan_session_active(self):
+        session = arena.session(self.world) if self.world else None
+        return session is not None and session.network is not None
 
     def _set_lan_active(self, active):
         """Hold Android's Wi-Fi multicast lock while LAN play needs broadcasts."""
@@ -168,6 +199,8 @@ class FioPlayerApp:
         """Host the open world as a LAN arena (desktop: LAN dialog → Host)."""
         if self.world is None or self.package is None:
             return 'Open a world exported from desktop Fio first.'
+        if self._lan_session_active():
+            return 'Leave the current LAN game first.'
         try:
             data = lobby.prepare_host(self.world.state.get_level_data())
         except ValueError as error:
@@ -227,47 +260,62 @@ class FioPlayerApp:
         self._paused = True
         return 'Left the LAN game.'
 
+    def _activate_menu(self, key):
+        try:
+            return self.menus.activate(key, self)
+        except Exception as error:
+            self._report('menu action', error)
+            self.menus.message = f'That action failed: {error}'
+            return None
+
     def _plugin_frame(self, dt, inp):
         """Lobby, soft keyboard and LAN upkeep; runs every frame."""
         if self.host is not None:
             events = getattr(self.host, 'text_events', None)
             if events:
-                self.menus.text(list(events))
+                self._guarded('text entry', self.menus.text, list(events))
                 events.clear()
-                if self.menus.editing is None:
-                    self.set_text_input(False)
-        welcome = self.menus.lobby.pump()
+        self.set_text_input(self._paused and self.menus.editing is not None)
+        welcome = self._guarded('LAN lobby', self.menus.lobby.pump)
         if welcome is not None:
             self._join_lan(*welcome)
-        session = arena.session(self.world) if self.world else None
-        networked = session is not None and session.network is not None
+        self._guarded('LAN upkeep', self._lan_upkeep, dt)
+        self._guarded('match controls', self._match_controls, inp)
+
+    def _lan_upkeep(self, dt):
+        networked = self._lan_session_active()
         self._set_lan_active(networked or (self._paused and self.menus.page == 'lan')
                              or self.menus.lobby.pending is not None)
+        if self.world is None:
+            return
+        runtime = self.world.logic.session_runtime
         if networked and self._paused:
             # Keep the LAN game flowing behind the menu, paused as on desktop:
             # peers keep their connection and see the host's pause.
-            runtime = self.world.logic.session_runtime
             runtime.set_world_paused('player_menu', True)
             from .input.state import InputState
             idle = InputState()
             idle.begin_frame()
             self.world.step(dt, idle, self.cam_yaw, self.cam_pitch)
-        elif self.world is not None:
-            self.world.logic.session_runtime.set_world_paused('player_menu', False)
-        if self.world is not None and not self._paused and inp.just_pressed(ACTION_RESTART):
-            if arena.can_restart(self.world):
-                arena.restart(self.world)
+        else:
+            runtime.set_world_paused('player_menu', False)
+
+    def _match_controls(self, inp):
+        world = self.world
+        if world is not None and not self._paused and inp.just_pressed(ACTION_RESTART):
+            if arena.can_restart(world):
+                arena.restart(world)
         if self.host is not None and hasattr(self.host, 'touch'):
             self.host.touch.set_context(
-                weapons=len(self.world.owned_weapons()) if self.world else 0,
-                arena=bool(self.world and arena.session(self.world)),
-                can_restart=bool(self.world and arena.can_restart(self.world)))
+                weapons=len(world.owned_weapons()) if world else 0,
+                arena=bool(world and arena.session(world)),
+                can_restart=bool(world and arena.can_restart(world)))
 
     def _on_frame(self, dt, inp):
         import time
         simulation_ms = 0.
         if inp.just_pressed(ACTION_PAUSE):
-            self.set_text_input(False)
+            self.menus.editing = None
             if self._paused and self.menus.page != 'root':
                 # Android Back steps out of a plugin page first.
                 self.menus.back()
@@ -280,11 +328,10 @@ class FioPlayerApp:
             for point in self.host.ui_events:
                 page = self.menus.current(self) if self._paused else None
                 key = hit_test(point, self.host.width, self.host.height, self.world is not None, page) if self._paused else None
-                action = self.menus.activate(key, self) if key else None
+                action = self._activate_menu(key) if key else None
                 if action == 'resume':
                     self._paused = False
                     self.menus.reset()
-                    self.set_text_input(False)
                 elif action == 'exit':
                     self.host.request_quit()
                 elif action == 'open':
@@ -370,23 +417,26 @@ class FioPlayerApp:
         state = dict(cam_pos=self.cam_pos, cam_yaw=self.cam_yaw, cam_pitch=self.cam_pitch,
                      paused=self._paused, hud=self.world.hud if self.world else 'Open a .fiopak world')
         if self._paused:
-            state['menu'] = self.menus.current(self)
+            from .menu import root_page
+            state['menu'] = self._guarded('pause menu', self.menus.current, self,
+                                          default=root_page(self.world is not None))
         if self.world:
             eye, direction, up, fov = self.world.camera()
             from .render import glmath
             from .plugin_ui import bigworld, scoreboard
             from engine.glasses import glasses_path
             game_hud = dict(self.world.hud_state)
-            match = arena.snapshot(self.world)
+            match = self._guarded('scoreboard', arena.snapshot, self.world, default={})
             if match:
                 game_hud['prompt'] = scoreboard.prompt(game_hud.get('prompt'))
             full = bool(self.host and self.host.input_state.is_down(ACTION_SCORES))
-            panel = bigworld.state(self.world)
+            panel = self._guarded('Bigworld panel', bigworld.state, self.world)
+            glasses = self._guarded('spectator glasses', arena.spectator_glasses, self.world, default=())
             state.update(game_hud=game_hud, cam_pos=eye, view=glmath.look_at(eye, eye + direction, up),
                          fov=fov, world=self.world, arena=match, arena_full=full, bigworld=panel,
-                         plugin_ui_key=(scoreboard.key(match, full), panel),
+                         plugin_ui_key=(self._guarded('scoreboard', scoreboard.key, match, full), panel),
                          billboards=tuple((position, glasses_path(style), (40.0, 18.0))
-                                          for position, style in arena.spectator_glasses(self.world)))
+                                          for position, style in glasses))
         return state
 
     def _on_resize(self, width, height):

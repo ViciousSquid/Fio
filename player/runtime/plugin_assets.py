@@ -22,6 +22,8 @@ DATA_SUFFIXES = frozenset({
 })
 #: Cap per file, far above any shipped plugin asset.
 MAX_BYTES = 32 * 1024 * 1024
+#: Distinct names remembered; a world cannot grow the lookup table without bound.
+MAX_NAMES = 4096
 
 
 def plugins_root():
@@ -62,6 +64,7 @@ class PluginAssetPackage:
     def __init__(self, package, root=None):
         self._package = package
         self._root = Path(root or plugins_root()).resolve()
+        self._paths = {}
         self._files = {}
 
     @property
@@ -69,12 +72,21 @@ class PluginAssetPackage:
         return self._package
 
     def _plugin_bytes(self, name):
-        if name in self._files:
-            return self._files[name]
-        path = plugin_asset(name, self._root)
-        data = path.read_bytes() if path is not None else None
-        self._files[name] = data
-        return data
+        # Resolve first and cache by the real file, so the many spellings of
+        # one path (absolute, ``plugins/...``, ``plugins/./...``) share a copy.
+        if name not in self._paths:
+            if len(self._paths) >= MAX_NAMES:
+                return None
+            self._paths[name] = plugin_asset(name, self._root)
+        path = self._paths[name]
+        if path is None:
+            return None
+        if path not in self._files:
+            try:
+                self._files[path] = path.read_bytes()
+            except OSError:
+                self._files[path] = None
+        return self._files[path]
 
     def read_asset(self, name):
         data = self._package.read_asset(name) if self._package is not None else None

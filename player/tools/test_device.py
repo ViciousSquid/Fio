@@ -95,7 +95,7 @@ class DeviceTest:
         opened_roots = False
         while time.monotonic() < deadline:
             nodes = self.nodes()
-            if self.dismiss_fullscreen_hint(nodes):
+            if self.dismiss_overlays(nodes):
                 continue
             # Prefer the exact filename; some providers hide its extension.
             for node in nodes:
@@ -129,13 +129,30 @@ class DeviceTest:
         self.screenshot('picker-failed.png')
         raise RuntimeError('Could not find the world in the Android file picker; see picker-failed.png')
 
-    def dismiss_fullscreen_hint(self, nodes):
-        # Android can show this first-use overlay again when returning from
-        # DocumentsUI. It intercepts touch input while the world keeps running.
+    def dismiss_overlays(self, nodes):
+        """Clear system UI that covers the picker or the app; True if tapped.
+
+        * Android can show its first-use fullscreen hint again when returning
+          from DocumentsUI. It intercepts touch input while the world runs.
+        * A slow emulator can raise an "<app> isn't responding" dialog for a
+          system process (the launcher, Quickstep). The window dump then shows
+          only the dialog, so nothing beneath it can be found or tapped.
+          "Wait" keeps every process alive; the dialog is Android's, not Fio's.
+        """
         for node in nodes:
             if node.get('package') == 'com.android.systemui' and node.get('text') == 'Got it':
                 self.adb('shell', 'input', 'tap', *bounds_center(node.get('bounds', '')))
                 print('Dismissed Android fullscreen introduction.', flush=True)
+                return True
+        if any("isn't responding" in node.get('text', '') or "isn\u2019t responding" in node.get('text', '')
+               for node in nodes):
+            wait = next((node for node in nodes
+                         if node.get('resource-id', '').endswith(':id/aerr_wait')
+                         or node.get('text') == 'Wait'), None)
+            if wait is not None:
+                title = next(n.get('text') for n in nodes if 'responding' in n.get('text', ''))
+                self.adb('shell', 'input', 'tap', *bounds_center(wait.get('bounds', '')))
+                print(f'Dismissed Android dialog: {title} (Wait).', flush=True)
                 return True
         return False
 
@@ -239,7 +256,7 @@ class DeviceTest:
             self.screenshot('load-failed.png')
             raise RuntimeError('No rendered-world reports: use a debug APK and inspect fio-logcat.txt / load-failed.png')
         world_sha256 = self.verify_import(world)
-        self.dismiss_fullscreen_hint(self.nodes())
+        self.dismiss_overlays(self.nodes())
         width, height = self.screenshot('before-movement.png')
         # Drag from the floating stick's origin, then hold the forward position.
         # Slow software emulators need a longer real hold to deliver several

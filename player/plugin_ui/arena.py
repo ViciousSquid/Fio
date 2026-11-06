@@ -15,6 +15,8 @@ single simulation thread -- under the same locks the desktop console takes.
 """
 from __future__ import annotations
 
+import functools
+
 PLUGIN = 'deathmatch'
 RESTART_ITEM = 'Restart Deathmatch'
 SKILLS = ('easy', 'normal', 'hard')
@@ -37,6 +39,7 @@ def plugin(world=None, plugin_manager=None):
     return found if found is not None and plugin_manager.is_enabled(found) else None
 
 
+@functools.lru_cache(maxsize=1)
 def installed():
     """Whether the Deathmatch plugin ships with this player at all."""
     try:
