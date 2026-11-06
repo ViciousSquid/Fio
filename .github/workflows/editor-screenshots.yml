@@ -141,9 +141,14 @@ jobs:
           brew install displayplacer
           displayplacer list | tee "$RUNNER_TEMP/shots/$SHOT-displays.txt"
           id=$(displayplacer list | awk '/^Persistent screen id:/ {print $4; exit}')
-          displayplacer "id:$id res:${WIDTH}x${HEIGHT} scaling:off origin:(0,0) degree:0" \
-            || echo "Display mode ${WIDTH}x${HEIGHT} not available on this runner"
-          sleep 3
+          # Only switch to a mode the virtual display lists. Forcing another
+          # leaves a fractional backing scale that corrupts the capture.
+          if displayplacer list | grep -q "res:${WIDTH}x${HEIGHT} .*scaling:off"; then
+            displayplacer "id:$id res:${WIDTH}x${HEIGHT} scaling:off origin:(0,0) degree:0"
+            sleep 3
+          else
+            echo "::warning title=macOS::${WIDTH}x${HEIGHT} is not a mode of this runner's display; capturing at its native size"
+          fi
       - name: Linux - window system tools
         if: startsWith(matrix.platform.id, 'linux')
         run: |
