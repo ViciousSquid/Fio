@@ -21,6 +21,14 @@ from engine.render_keys import KeyLayout, sort_into_runs
 # engine.render_keys for why the key is the boundary at all.
 BRUSH_RUN_KEY = KeyLayout([('texture', 32), ('face', 3)])
 
+# The render key of the textured pass's convex half. Each face of an angled
+# brush is one draw from its own mesh, so the key says what draws can share:
+# the texture first (a bind is the expensive change), then the geometry (one
+# VAO bind and one transform upload for consecutive faces of the same brush).
+# The texture field is the face's GL texture name, resolved when its mesh was
+# built, as BRUSH_RUN_KEY's is for box faces.
+GEO_RUN_KEY = KeyLayout([('texture', 32), ('geometry', 28)])
+
 # The three fixed colours the lit pass overrides a brush's own colour with.
 # Module constants so the per-brush branch does not build a list every draw.
 _TRIGGER_COLOR = (0.0, 1.0, 1.0)

@@ -18,7 +18,9 @@ from engine.render_keys import runs_in_order, sort_into_runs
 from ..api import WATER_QUALITIES
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
-from .instancing import BRUSH_RUN_KEY, _SELECTED_COLOR, _SUBTRACT_COLOR, _TRIGGER_COLOR
+from ..core.geometry import RUN_NODRAW, RUN_SKIP
+from .instancing import (BRUSH_RUN_KEY, GEO_RUN_KEY, _SELECTED_COLOR,
+                         _SUBTRACT_COLOR, _TRIGGER_COLOR)
 
 
 def _tinted(colour, tint):
@@ -528,60 +530,168 @@ class PassesMixin:
                 self.render_stats.visible_tris += 2
                 self.render_stats.draw_calls += 1
 
-        # Convex/custom geometry is addressed only by the dense geometry handle.
+        # Convex geometry, from the per-face state resolved when each mesh was
+        # built (see _geo_run_draw_list and _draw_geo_runs).
         self._portal_set_cull(is_geo=True)
-        geo_slots = slots[
-            (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
-        ]
-        geo_meshes = self._prepare_geo_meshes(table, geo_slots)
-        geo_rows = np.flatnonzero(
-            (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
-        )
-
-        upload_model = uniform_rows('mat4', models)
-        upload_normal = uniform_rows('mat3', normals)
-        for geo_i, slot_value in enumerate(geo_slots):
-            gid = int(table.geometry_id[int(slot_value)])
-            mesh = geo_meshes.get(gid)
-            if mesh is None:
-                continue
-            row = int(geo_rows[geo_i])
-            upload_model(model_loc, row)
-            if normal_mat_loc != -1:
-                upload_normal(normal_mat_loc, row)
-            gl.glBindVertexArray(mesh.vao)
-
-            for run in mesh.runs:
-                tex_name = self._geo_run_texture(run)
-                if tex_name == 'caulk.jpg':
-                    continue
-                if is_play and tex_name == 'nodraw.jpg':
-                    continue
-
-                tex_id = self.texture_manager.get(
-                    self._tex_cache_path(tex_name)
-                ) or self.load_texture_callback(tex_name, 'textures')
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-
-                if tex_scale_loc != -1:
-                    su, sv = self._geo_run_tex_scale(run, tex_name)
-                    gl.glUniform2f(tex_scale_loc, su, sv)
-                if tex_angle_loc != -1 or tex_shift_loc != -1:
-                    angle, shift_u, shift_v = self._geo_run_tex_transform(run)
-                    if tex_angle_loc != -1:
-                        gl.glUniform1f(tex_angle_loc, angle)
-                    if tex_shift_loc != -1:
-                        gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
-
-                gl.glDrawArrays(
-                    gl.GL_TRIANGLES, run['first'], run['count'])
-                self.render_stats.visible_tris += run['count'] // 3
-                self.render_stats.draw_calls += 1
-
+        self._draw_geo_runs(projection, view, lights, table, slots, models,
+                            normals, uniforms, is_play, current_tex)
         self._portal_end_cull()
         gl.glBindVertexArray(0)
+
+    def _geo_run_draw_list(self, table, slots, is_play):
+        """The convex half's draws for *slots*, sorted into state groups.
+
+        Column arithmetic only: the visible rows' geometry handles index the
+        renderer's per-table handle arrays, which give each mesh's face rows
+        in the face-run arena (resolved when the mesh was built); those are
+        expanded, filtered (caulk always, nodraw in play) by a bit test, and
+        sorted by (texture, geometry) with the KeyLayout machinery. Returns
+        ``None`` when nothing is drawn, else ``(geo, runs, rows, handles,
+        groups)``: the handle arrays, then per draw the arena row, the row of
+        *slots*' transforms and the geometry handle, and the boundaries of the
+        groups that share a texture and a mesh.
+        """
+        bits = table.class_bits[slots]
+        geo_rows = np.flatnonzero(bits & render_table.CLASS_HAS_GEOMETRY)
+        if not len(geo_rows):
+            return None
+        handles = table.geometry_id[slots[geo_rows]]
+        drawable = handles >= 0
+        if not drawable.all():
+            geo_rows, handles = geo_rows[drawable], handles[drawable]
+        if not len(handles):
+            return None
+        geo = self._geo_handles(table)
+        built = geo.vao[handles] != 0
+        if not built.all():
+            geo_rows, handles = geo_rows[built], handles[built]
+        lengths = geo.run_len[handles]
+        total = int(lengths.sum())
+        if not total:
+            return None
+        # CSR expansion: each face's arena row is its mesh's base plus its
+        # offset within the mesh.
+        owner = np.repeat(np.arange(len(handles), dtype=np.intp), lengths)
+        runs = np.arange(total, dtype=np.intp)
+        runs += np.repeat(geo.run_base[handles] - (np.cumsum(lengths) - lengths),
+                          lengths)
+        arena = self._geo_runs()
+        drop = RUN_SKIP | (RUN_NODRAW if is_play else 0)
+        keep = (arena.bits[runs] & drop) == 0
+        runs, owner = runs[keep], owner[keep]
+        if not len(runs):
+            return None
+        order, groups = sort_into_runs(GEO_RUN_KEY.pack(
+            texture=arena.texture[runs], geometry=handles[owner]))
+        owner = owner[order]
+        return geo, runs[order], geo_rows[owner], handles[owner], groups
+
+    def _begin_geo_face_pass(self, projection, view, lights):
+        """Bind ``geo_textured`` and its per-pass state; its uniform cache."""
+        program = self.shaders['geo_textured']
+        uniforms = self.uniforms['geo_textured']
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once('geo_textured', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        return uniforms
+
+    def _draw_geo_runs(self, projection, view, lights, table, slots, models,
+                       normals, uniforms, is_play, current_tex):
+        """Submit the textured pass's convex faces from resolved columns.
+
+        The loop runs over state groups and issues GL calls only, every value
+        read by index from columns: a texture bind when the group's texture is
+        not the bound one, a VAO bind and a transform upload per group, then
+        the group's draws.
+
+        With ``geo_textured`` (the usual case) a face's UV state is in its
+        mesh's vertex data, so a draw is just a vertex range -- and faces of
+        one mesh that share a texture and sit next to each other in its
+        buffer are one range, one draw. Without it, each face's three UV
+        uniforms are uploaded from the arena's columns before its draw.
+        """
+        draws = self._geo_run_draw_list(table, slots, is_play)
+        if draws is None:
+            return
+        geo, runs, rows, handles, groups = draws
+        arena = self._geo_runs()
+        first = arena.first[runs]
+        count = arena.count[runs]
+        texture = arena.texture[runs]
+        per_vertex = 'geo_textured' in self.shaders
+        if per_vertex:
+            uniforms = self._begin_geo_face_pass(projection, view, lights)
+            vaos = geo.face_vao[handles]
+            # A draw continues the one before it when both are in the same
+            # group and its range starts where that one's ended: merge them.
+            follows = np.zeros(len(first), dtype=bool)
+            follows[1:] = first[1:] == first[:-1] + count[:-1]
+            follows[groups[:-1]] = False
+            starts = np.flatnonzero(~follows)
+            first = first[starts]
+            count = np.add.reduceat(count, starts)
+            draw_groups = np.searchsorted(starts, groups)
+        else:
+            vaos = geo.vao[handles]
+            draw_groups = groups
+            upload_scale = uniform_rows('vec2', arena.scale[runs])
+            upload_angle = uniform_rows('float', arena.angle[runs])
+            upload_shift = uniform_rows('vec2', arena.shift[runs])
+            scale_loc = uniforms.get('tex_scale', -1)
+            angle_loc = uniforms.get('tex_angle', -1)
+            shift_loc = uniforms.get('tex_shift', -1)
+        model_loc = uniforms['model']
+        normal_loc = uniforms.get('normalMatrix', -1)
+        if normal_loc is None:
+            normal_loc = -1
+        upload_model = uniform_rows('mat4', models)
+        upload_normal = uniform_rows('mat3', normals)
+        heads = groups[:-1]
+        group_tex = texture[heads].tolist()
+        group_vao = vaos[heads].tolist()
+        group_row = rows[heads].tolist()
+        ends = draw_groups[1:].tolist()
+        first_list = first.tolist()
+        count_list = count.tolist()
+        bound_vao = None
+        begin = 0
+        for group, end in enumerate(ends):
+            tex_id = group_tex[group]
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+            vao = group_vao[group]
+            if vao != bound_vao:
+                gl.glBindVertexArray(vao)
+                bound_vao = vao
+            row = group_row[group]
+            upload_model(model_loc, row)
+            if normal_loc != -1:
+                upload_normal(normal_loc, row)
+            if per_vertex:
+                for draw in range(begin, end):
+                    gl.glDrawArrays(gl.GL_TRIANGLES, first_list[draw],
+                                    count_list[draw])
+            else:
+                for draw in range(begin, end):
+                    if scale_loc != -1:
+                        upload_scale(scale_loc, draw)
+                    if angle_loc != -1:
+                        upload_angle(angle_loc, draw)
+                    if shift_loc != -1:
+                        upload_shift(shift_loc, draw)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, first_list[draw],
+                                    count_list[draw])
+            begin = end
+        # Counted once per pass: every run is a whole number of triangles.
+        self.render_stats.draw_calls += len(count_list)
+        self.render_stats.visible_tris += sum(count_list) // 3
 
     @timed_pass('glow brushes')
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights,

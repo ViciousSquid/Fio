@@ -22,7 +22,6 @@ from editor.editor_state import EditorState               # noqa: E402
 from editor.main_window import MainWindow                 # noqa: E402
 from editor.things import Light, Monster, PlayerStart, Portal  # noqa: E402
 from engine import entity_table as etm                    # noqa: E402
-from engine import render_table as rtm                    # noqa: E402
 from engine.change_journal import touch                   # noqa: E402
 from engine.entity_table import EntityTable               # noqa: E402
 from engine.logic_player import KEY_W
@@ -37,52 +36,9 @@ from tests.helpers.worlds import box_brush, make_thing, pillar_grid  # noqa: E40
 pytestmark = [pytest.mark.qt, pytest.mark.integration]
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-#: Entity columns that are a function of wall-clock time (the Effect clock).
-_CLOCK_COLUMNS = {"effect_elapsed", "effect_alive", "light_params",
-                  "light_enabled", "portal_fade"}
-_INTERNED = {"tex_name_id": "texture_names", "sprite_key_id": "sprite_recipes",
-             "sprite_direction_ids": "sprite_recipes",
-             "model_recipe_id": "model_recipes"}
-
-
-def _named(table, name, ids):
-    names = getattr(table, _INTERNED[name])()
-    return [tuple(names[int(i)] if i >= 0 else None for i in np.atleast_1d(row))
-            for row in ids]
-
-
-def _diff_columns(pub, fresh, columns, skip=()):
-    n = pub.count
-    assert n == fresh.count
-    bad = []
-    for name, *_ in columns:
-        if name in skip or not n:
-            continue
-        a, b = getattr(pub, name)[:n], getattr(fresh, name)[:n]
-        if name in _INTERNED:
-            same = _named(pub, name, a) == _named(fresh, name, b)
-        elif name == "geometry_id":
-            same = ([pub.geometry_records[i].signature if i >= 0 else None for i in a]
-                    == [fresh.geometry_records[i].signature if i >= 0 else None for i in b])
-        elif a.dtype.kind == "f":
-            same = np.allclose(a, b, atol=1e-4, equal_nan=True)
-        else:
-            same = np.array_equal(a, b)
-        if not same:
-            bad.append(name)
-    return bad
-
-
-def _diff_rebuild(frame):
-    """Columns in which the published frame differs from a from-scratch build."""
-    fresh = RenderTable()
-    fresh.sync(list(frame.render_table.brushes))
-    bad = ["RT." + c for c in _diff_columns(frame.render_table, fresh, rtm._COLUMNS)]
-    efresh = EntityTable()
-    efresh.sync(list(frame.entity_table.things))
-    bad += ["ET." + c for c in _diff_columns(frame.entity_table, efresh,
-                                               etm._COLUMNS, _CLOCK_COLUMNS)]
-    return bad
+from tests.helpers.table_oracle import (                    # noqa: E402
+    CLOCK_COLUMNS as _CLOCK_COLUMNS, diff_columns as _diff_columns,
+    diff_rebuild as _diff_rebuild)
 
 
 def _frame(logic, game_state):

@@ -133,12 +133,11 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         # it survives a table reconcile and is the same in both render
         # buffers' tables. Keying by (table generation, geometry id) rebuilt
         # every convex mesh, once per buffer, after any structural edit.
-        # Meshes are dropped after going unused for a while (_begin_geo_frame).
         self._geo_mesh_cache = {}
-        #: id(GeometryRecord) -> mesh: the per-frame lookup, which does not
-        #: hash the signature. Validated against the record's signature, so a
-        #: recycled id cannot alias; cleared with each stale-mesh sweep.
-        self._geo_mesh_by_record = {}
+        #: id(RenderTable) -> GeoHandles: the per-frame index into the cache,
+        #: as arrays indexed by geometry handle. Meshes live while a recently
+        #: drawn table refers to them (_begin_geo_frame).
+        self._geo_by_table = {}
         self._geo_mesh_frame = 0
 
         self._shader_init_failed = False
@@ -203,7 +202,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         for mesh in self._geo_mesh_cache.values():
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()
-        self._geo_mesh_by_record.clear()
+        self._geo_by_table.clear()
 
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])

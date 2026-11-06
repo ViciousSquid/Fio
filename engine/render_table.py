@@ -71,16 +71,31 @@ import numpy as np
 
 from engine.constants import is_water_brush, normalize_color, water_high_quality
 from engine.spatial import authored_hidden
+import itertools
+
 from engine import brush_geometry
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
+
+#: Process-wide sources of :attr:`RenderTable.geometry_version` values (two
+#: tables never share one unless one copied the other's records) and of
+#: :attr:`GeometryRecord.serial`.
+_geometry_versions = itertools.count(1)
+_geometry_serials = itertools.count(1)
 
 # --------------------------------------------------------------------------
 # Classification bits
 # --------------------------------------------------------------------------
 
 class GeometryRecord:
-    """Dense cold render record for one convex geometry-table entry."""
-    __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale')
+    """Dense cold render record for one convex geometry-table entry.
+
+    Immutable once built, so the two render buffers' tables can share it.
+    ``serial`` is a number no other record has had: a consumer that keeps
+    state per geometry handle (the renderer's GPU meshes) recognises a record
+    it has seen -- wherever a reconcile moved its handle -- by its serial.
+    """
+    __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale',
+                 'serial')
 
     def __init__(self, signature, convex, origin, scale, natural_scale):
         self.signature = signature
@@ -88,6 +103,15 @@ class GeometryRecord:
         self.origin = origin
         self.scale = scale
         self.natural_scale = natural_scale
+        self.serial = next(_geometry_serials)
+
+    def describes(self, signature, convex, origin, scale, natural_scale):
+        """Whether a record built from these inputs would equal this one."""
+        return (self.convex is convex
+                and self.signature == signature
+                and np.array_equal(self.origin, origin)
+                and np.array_equal(self.scale, scale)
+                and self.natural_scale == natural_scale)
 
 #
 # One uint16 per brush replacing the chain of dict lookups, string comparisons
@@ -293,7 +317,9 @@ class RenderTable:
 
     __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
-        'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names',
+        'dynamic_slots', 'geometry_records', 'geometry_serial',
+        'geometry_version',
+        '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
         '_shown_mask', '_shown_slots', '_shown_stale',
         '_occlusion_index', '_occlusion_dirty', '__weakref__'))
@@ -327,6 +353,15 @@ class RenderTable:
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
+        #: ``geometry_records[h].serial`` per handle: which records changed,
+        #: and where a reconcile moved the survivors, as one array compare.
+        self.geometry_serial = np.zeros(0, dtype=np.int64)
+        #: Moves whenever ``geometry_records`` does -- a reconcile, a row-local
+        #: refresh that replaced a record, an adopt -- and at no other time: a
+        #: brush whose surface did not change keeps its record. A consumer
+        #: holding state per geometry handle checks this one integer per frame
+        #: and, when it moved, ``geometry_serial`` for the handles that did.
+        self.geometry_version = next(_geometry_versions)
         #: slot -> the brush dict, retained only for cache-boundary resolution
         #: and resource/object lookup. Frame rendering consumes the dense
         #: numeric columns; this reference array is rebuilt only when rows change.
@@ -400,13 +435,18 @@ class RenderTable:
             new[:capacity] = getattr(self, name)
             setattr(self, name, new)
 
-    def _geometry_record(self, slot, brush):
+    def _geometry_record(self, slot, brush, previous=None):
         """The dense cold geometry record for one row, or ``None`` for a box.
 
         Returned rather than stored: where it goes depends on the caller.  A
         reconcile collects records by slot and then compacts them into the
         dense :attr:`geometry_records`; a row-local refresh replaces the row's
         existing dense entry in place.
+
+        *previous* is the row's record before this refresh. When the surface
+        it describes is unchanged -- the brush was recoloured, renamed or
+        toggled, not reshaped or retextured -- it is returned as it is, so
+        nothing downstream sees a geometry change.
         """
         if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
             return None
@@ -419,8 +459,11 @@ class RenderTable:
         scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
         natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
             brush, face.get('face'), face)) for face in convex.faces}
-        return GeometryRecord(
-            brush_geometry.geometry_signature(brush), convex, origin, scale, natural)
+        signature = brush_geometry.geometry_signature(brush)
+        if previous is not None and previous.describes(
+                signature, convex, origin, scale, natural):
+            return previous
+        return GeometryRecord(signature, convex, origin, scale, natural)
 
     # -- row resolution ----------------------------------------------------
 
@@ -708,6 +751,8 @@ class RenderTable:
         self.refs = peer.refs.copy()
         self.dynamic_slots = peer.dynamic_slots.copy()
         self.geometry_records = list(peer.geometry_records)
+        self.geometry_serial = peer.geometry_serial.copy()
+        self.geometry_version = peer.geometry_version   # same records
         self._tex_ids = dict(peer._tex_ids)
         self._tex_names = list(peer._tex_names)
         self._epoch = peer._epoch
@@ -814,7 +859,14 @@ class RenderTable:
         fresh = [slot for slot in range(n) if slot not in survivors]
         self._resolve_cold_rows(fresh, brushes)
         for slot in fresh:
-            new_geometry_records[slot] = self._geometry_record(slot, brushes[slot])
+            # The same brush re-resolved because it is in the dirty journal:
+            # its old record may still describe its surface exactly.
+            old = old_slot_of_id.get(new_ids[slot])
+            previous = (old_geometry_by_slot[old]
+                        if old is not None and old < old_count
+                        and old_brushes[old] is brushes[slot] else None)
+            new_geometry_records[slot] = self._geometry_record(
+                slot, brushes[slot], previous)
 
         # Publish a genuinely dense geometry index. geometry_id is an index
         # into geometry_records, not a RenderTable row number. This keeps AABB
@@ -830,6 +882,10 @@ class RenderTable:
             self.geometry_id[int(slot)] = len(dense_records)
             dense_records.append(record)
         self.geometry_records = dense_records
+        self.geometry_serial = np.fromiter(
+            (record.serial for record in dense_records), dtype=np.int64,
+            count=len(dense_records))
+        self.geometry_version = next(_geometry_versions)
 
         self.ids = new_ids
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)
@@ -883,15 +939,22 @@ class RenderTable:
         self.rows_read += len(slots)
         self._resolve_warm_rows(slots, brushes)
         self._resolve_cold_rows(slots, brushes)
+        replaced = False
         for slot in slots:
             brush = brushes[slot]
-            had_record = self.geometry_id[slot] >= 0
-            record = self._geometry_record(slot, brush)
+            gid = int(self.geometry_id[slot])
+            had_record = gid >= 0
+            previous = self.geometry_records[gid] if had_record else None
+            record = self._geometry_record(slot, brush, previous)
             if (record is not None) != had_record:
                 self._reconcile(brushes, True, {id(brushes[s]) for s in slots})
                 return
-            if record is not None:
-                self.geometry_records[int(self.geometry_id[slot])] = record
+            if record is not None and record is not previous:
+                self.geometry_records[gid] = record
+                self.geometry_serial[gid] = record.serial
+                replaced = True
+        if replaced:
+            self.geometry_version = next(_geometry_versions)
         if slots:
             self.dynamic_slots = np.flatnonzero(
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)

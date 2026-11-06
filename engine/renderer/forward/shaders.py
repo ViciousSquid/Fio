@@ -139,6 +139,7 @@ class ShadersMixin:
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_geo_face_shader(tex_vert, tex_frag)
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
@@ -168,6 +169,7 @@ class ShadersMixin:
         tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_geo_face_shader(tex_vert, tex_frag)
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
@@ -481,6 +483,49 @@ layout (location = 10) in vec4 iPayload;
         if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
                                            extra_uniforms=['texture_diffuse']):
             print(f'{_RENDERER_PREFIX} Brush face instancing shader compiled successfully.')
+
+    #: Per-vertex face attributes of an angled brush's textured-pass VAO: the
+    #: face's UV scale, rotation and shift, the same on every vertex of the
+    #: face. Locations 3..5 -- 0..2 are the mesh's position, normal and UV.
+    GEO_FACE_ATTRS = """layout (location = 3) in vec2 aFaceScale;
+layout (location = 4) in float aFaceAngle;
+layout (location = 5) in vec2 aFaceShift;
+
+"""
+
+    def _compile_geo_face_shader(self, tex_vert, tex_frag):
+        """Compile the textured shader with its per-face UV uniforms as inputs.
+
+        An angled brush's faces each carry their own UV scale, rotation and
+        shift, which the textured pass used to upload as three uniforms before
+        every face's draw. They do not change from frame to frame, so they are
+        written once, per vertex, when the mesh is built; this variant reads
+        them from there. As for the instanced variants, locals named after the
+        dropped uniforms leave the UV maths in the body byte for byte what the
+        uniform path runs -- the same float32 values in, the same TexCoords out.
+        Absent if the driver rejects it; the pass then keeps the uniform path.
+        """
+        drop = ('uniform vec2 tex_scale', 'uniform float tex_angle',
+                'uniform vec2 tex_shift')
+        kept = [line for line in tex_vert.splitlines()
+                if not line.strip().startswith(drop)]
+        vertex = '\n'.join(kept)
+        if (len(kept) != len(tex_vert.splitlines()) - len(drop)
+                or 'out vec3 FragPos;' not in vertex
+                or 'void main() {' not in vertex):
+            return
+        vertex = vertex.replace('out vec3 FragPos;',
+                                self.GEO_FACE_ATTRS + 'out vec3 FragPos;', 1)
+        vertex = vertex.replace(
+            'void main() {',
+            'void main() {\n'
+            '    vec2 tex_scale = aFaceScale;\n'
+            '    float tex_angle = aFaceAngle;\n'
+            '    vec2 tex_shift = aFaceShift;\n', 1)
+        if self._register_instanced_shader('geo_textured', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse',
+                                                           'normalMatrix']):
+            print(f'{_RENDERER_PREFIX} Angled-brush face shader compiled successfully.')
 
     def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
         """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""

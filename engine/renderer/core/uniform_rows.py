@@ -80,6 +80,8 @@ _KINDS = {
     'mat4': ('glUniformMatrix4fv', True, 16),
     'mat3': ('glUniformMatrix3fv', True, 9),
     'vec3': ('glUniform3fv', False, 3),
+    'vec2': ('glUniform2fv', False, 2),
+    'float': ('glUniform1fv', False, 1),
 }
 
 #: name -> ctypes callable taking ``void *`` data, or None when the raw entry
@@ -161,9 +163,10 @@ def _wrapped(name, has_transpose, rows):
 def uniform_rows(kind, rows):
     """``upload(location, index)`` sending row *index* of *rows* as a uniform.
 
-    *kind* is ``'mat4'``, ``'mat3'`` or ``'vec3'``; *rows* is a 2-D float32
-    array with that many elements per row (a scratch-buffer view or a
-    gathered table column).  Matrices are sent untransposed: the arrays are
+    *kind* is ``'mat4'``, ``'mat3'``, ``'vec3'``, ``'vec2'`` or ``'float'``;
+    *rows* is a 2-D float32 array with that many elements per row (a
+    scratch-buffer view or a gathered table column; a 1-D array for
+    ``'float'``).  Matrices are sent untransposed: the arrays are
     already column-major, as ``engine.render_table.model_matrices`` builds
     them.  Call once per pass, then once per drawn row.
     """
