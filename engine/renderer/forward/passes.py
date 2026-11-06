@@ -182,7 +182,7 @@ class PassesMixin:
         for index in indices:
             slot = int(visible[index])
             upload_model(model_loc, index)
-            if normal_mat_loc > 0:
+            if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, index)
             row = int(bits[index])
             if row & render_table.CLASS_TRIGGER:
@@ -513,7 +513,7 @@ class PassesMixin:
                 row = int(rows[i])
                 if row != last_row:
                     upload_model(model_loc, row)
-                    if normal_mat_loc > 0:
+                    if normal_mat_loc != -1:
                         upload_normal(normal_mat_loc, row)
                     last_row = row
                 if tex_angle_loc != -1:
@@ -547,7 +547,7 @@ class PassesMixin:
                 continue
             row = int(geo_rows[geo_i])
             upload_model(model_loc, row)
-            if normal_mat_loc > 0:
+            if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, row)
             gl.glBindVertexArray(mesh.vao)
 
@@ -627,7 +627,7 @@ class PassesMixin:
         for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
             upload_model(model_loc, index)
-            if normal_mat_loc > 0:
+            if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, index)
             upload_colour(color_loc, index)
             has_geometry = bool(geometry[index])
@@ -2025,7 +2025,7 @@ class PassesMixin:
         for i, slot_value in enumerate(brushes):
             slot = int(slot_value)
             upload_model(model_loc, i)
-            if normal_mat_loc > 0:
+            if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, i)
             upload_colour(water_color_loc, i)
             gl.glUniform1f(distortion_loc, float(params[i, 1]))

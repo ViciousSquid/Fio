@@ -148,43 +148,6 @@ jobs:
               enabled = [s for s in np.asarray(table.light_slots).tolist() if table.light_enabled[s]]
               print('LIGHT_DIAG enabled light slots', enabled, flush=True)
 
-          def light_experiments(self):
-              # The renderer's own light list, reordered: does a light's place in
-              # the list decide whether it reaches the image on this platform?
-              import numpy as np
-              renderer = self.view_3d.renderer
-              original = renderer._get_active_lights
-              table_names = lambda table, slot: getattr(table.things[slot], 'name', '')
-              def order(mode):
-                  def lights(config):
-                      table, slots = original(config)
-                      slots = list(np.asarray(slots).tolist())
-                      effects = set(np.asarray(table.effect_slots).tolist())
-                      if mode == 'effects-first':
-                          slots = [x for x in slots if x in effects] + [x for x in slots if x not in effects]
-                      elif mode == 'effect2-only':
-                          slots = [x for x in slots if table_names(table, x) == 'Effect_2']
-                      return table, np.asarray(slots, dtype=np.int32)
-                  return lights
-              pending = ['effects-first', 'effect2-only']
-              def poll():
-                  if not pending:
-                      renderer._get_active_lights = original
-                      return
-                  mode = pending[0]
-                  if not os.path.exists(os.path.join(shots, 'lights-' + mode + '.go')):
-                      QTimer.singleShot(250, poll)
-                      return
-                  pending.pop(0)
-                  renderer._get_active_lights = order(mode)
-                  def ready():
-                      uploaded = (getattr(renderer, '_frame_lights_uploaded', {}) or {}).get('lit_brush_instanced')
-                      print('LIGHTS_READY', mode, 'lit_brush_instanced lights', list(uploaded[2]) if uploaded else None, flush=True)
-                      poll()
-                  # Software OpenGL on macOS draws about a frame a second.
-                  QTimer.singleShot(12000, ready)
-              poll()
-
           def show(self):
               shown(self)
               def load():
@@ -209,7 +172,6 @@ jobs:
                   QTimer.singleShot(15000, lambda: record_layout(self))
               QTimer.singleShot(3000, load)
               QTimer.singleShot(3000, wait_for_layout_request)
-              QTimer.singleShot(3000, lambda: light_experiments(self))
 
           main_window.MainWindow.showMaximized = show
           sys.argv = [os.path.join(root, 'main.py')]
@@ -291,15 +253,6 @@ jobs:
             # on macOS): let layout, textures and the 3D view settle.
             sleep 45
           }
-          light_experiments() {
-            # Re-render with the light list reordered and capture each result.
-            for mode in effects-first effect2-only; do
-              touch "$shots/lights-$mode.go"
-              for i in $(seq 1 90); do grep -q "LIGHTS_READY $mode" "$log" && break; sleep 1; done
-              grep "LIGHTS_READY $mode" "$log" || { echo "::warning::No light experiment $mode"; continue; }
-              snap "$shots/$SHOT-lights-$mode.png"
-            done
-          }
           record_layout() {
             touch "$shots/layout.go"
             for i in $(seq 1 120); do grep -q LAYOUT_RECORDED "$log" && break; sleep 1; done
@@ -311,12 +264,12 @@ jobs:
               export GALLIUM_DRIVER=llvmpipe QT_OPENGL=software QT_OPENGL_DLL="$pydir\\opengl32.dll"
               snap() { python -c "import ctypes; ctypes.windll.user32.SetProcessDPIAware(); from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$1')"; }
               launch; wait_for_map
-              snap "$raw"; light_experiments
+              snap "$raw"
               record_layout ;;
             macos)
               snap() { screencapture -x "$1"; }
               launch; wait_for_map
-              snap "$raw"; light_experiments
+              snap "$raw"
               record_layout ;;
             linux-x11)
               export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
@@ -324,7 +277,7 @@ jobs:
               openbox & sleep 1
               snap() { import -window root "$1"; }
               launch; wait_for_map
-              snap "$raw"; light_experiments
+              snap "$raw"
               record_layout ;;
             linux-wayland)
               export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
@@ -337,7 +290,7 @@ jobs:
               export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock | head -1)
               snap() { grim "$1"; }
               launch; wait_for_map
-              snap "$raw"; light_experiments
+              snap "$raw"
               # Sway tiles windows: float the editor at the layout size instead.
               swaymsg 'border none, floating enable, resize set width 1600 px height 900 px'
               record_layout ;;
