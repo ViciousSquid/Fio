@@ -10,6 +10,11 @@ name: Native editor screenshots
 # opened with MainWindow.load_level_file, exactly as File > Open does.
 # Each screenshot is named with the size actually captured: a runner whose
 # virtual display refuses a mode is reported, never silently substituted.
+#
+# After its screenshot each job also records every visible control of the
+# window (rectangle, text, font, tabs) and every dock at one fixed client
+# size, 1600x900. The Layout parity job fails unless Windows, macOS, Linux
+# X11 and Linux Wayland are identical (tools/compare_editor_layout.py).
 
 on:
   workflow_dispatch:
@@ -20,6 +25,8 @@ on:
   push:
     paths:
       - '.github/workflows/editor-screenshots.yml'
+      - 'tools/compare_editor_layout.py'
+      - 'editor/hierarchy_dock.py'
 
 permissions:
   contents: read
@@ -52,6 +59,7 @@ jobs:
     timeout-minutes: 30
     env:
       SHOT: ${{ matrix.platform.id }}-${{ matrix.size.name }}
+      PLATFORM_ID: ${{ matrix.platform.id }}
       WIDTH: ${{ matrix.size.width }}
       HEIGHT: ${{ matrix.size.height }}
     defaults:
@@ -70,14 +78,32 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/shots"
           cat > "$RUNNER_TEMP/launch_with_map.py" <<'PY'
-          import os, runpy, sys
+          import json, os, runpy, sys
           root = os.environ['GITHUB_WORKSPACE']
+          shots = os.path.join(os.environ['RUNNER_TEMP'], 'shots')
           os.chdir(root)
           sys.path.insert(0, root)
           from PyQt5.QtCore import QTimer
           from PyQt5.QtGui import QGuiApplication
+          from PyQt5.QtWidgets import QApplication, QDockWidget
           import editor.main_window as main_window
           shown = main_window.MainWindow.showMaximized
+          LAYOUT_SIZE = (1600, 900)
+
+          def record_layout(self):
+              # One client size on every platform, so every control can be compared.
+              sys.path.insert(0, os.path.join(root, 'tools'))
+              from editor_ui_audit import Audit
+              audit = Audit(QApplication.instance(), shots, {})
+              docks = {dock.objectName(): [dock.x(), dock.y(), dock.width(), dock.height()]
+                       for dock in self.findChildren(QDockWidget) if dock.isVisible()}
+              record = {'platform': os.environ['PLATFORM_ID'], 'qt_platform': QGuiApplication.platformName(),
+                        'size': [self.width(), self.height()], 'docks': docks,
+                        'widgets': audit.widgets(self)}
+              path = os.path.join(shots, os.environ['SHOT'] + '-layout.json')
+              with open(path, 'w', encoding='utf-8') as stream:
+                  json.dump(record, stream, indent=1, ensure_ascii=False)
+              print('LAYOUT_RECORDED', self.width(), 'x', self.height(), 'scene_hierarchy', docks.get('SceneDock'), flush=True)
 
           def show(self):
               shown(self)
@@ -87,8 +113,19 @@ jobs:
                   screen = QGuiApplication.primaryScreen()
                   print('MAP_LOADED', os.environ['FIO_MAP'], 'platform', QGuiApplication.platformName(),
                         'screen', screen.size().width(), 'x', screen.size().height(),
-                        'dpr', screen.devicePixelRatio(), flush=True)
+                        'dpr', screen.devicePixelRatio(),
+                        'scene_hierarchy', self.scene_hierarchy_dock.width(), flush=True)
+              def wait_for_layout_request():
+                  # The Capture step asks for the layout record after its screenshot.
+                  if not os.path.exists(os.path.join(shots, 'layout.go')):
+                      QTimer.singleShot(250, wait_for_layout_request)
+                      return
+                  if os.environ.get('LAYOUT_RESIZE', '1') == '1':
+                      self.showNormal()
+                      self.resize(*LAYOUT_SIZE)
+                  QTimer.singleShot(5000, lambda: record_layout(self))
               QTimer.singleShot(3000, load)
+              QTimer.singleShot(3000, wait_for_layout_request)
 
           main_window.MainWindow.showMaximized = show
           sys.argv = [os.path.join(root, 'main.py')]
@@ -170,21 +207,29 @@ jobs:
             # on macOS): let layout, textures and the 3D view settle.
             sleep 45
           }
+          record_layout() {
+            touch "$shots/layout.go"
+            for i in $(seq 1 90); do grep -q LAYOUT_RECORDED "$log" && break; sleep 1; done
+            grep LAYOUT_RECORDED "$log" || { echo "::error::No layout record"; cat "$log"; exit 1; }
+          }
           case "${{ matrix.platform.id }}" in
             windows)
               pydir=$(python -c "import os, sys; print(os.path.dirname(sys.executable))")
               export GALLIUM_DRIVER=llvmpipe QT_OPENGL=software QT_OPENGL_DLL="$pydir\\opengl32.dll"
               launch; wait_for_map
-              python -c "import ctypes; ctypes.windll.user32.SetProcessDPIAware(); from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$raw')" ;;
+              python -c "import ctypes; ctypes.windll.user32.SetProcessDPIAware(); from PIL import ImageGrab; ImageGrab.grab(all_screens=True).save(r'$raw')"
+              record_layout ;;
             macos)
               launch; wait_for_map
-              screencapture -x "$raw" ;;
+              screencapture -x "$raw"
+              record_layout ;;
             linux-x11)
               export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
               Xvfb :91 -screen 0 ${WIDTH}x${HEIGHT}x24 -nolisten tcp & sleep 2
               openbox & sleep 1
               launch; wait_for_map
-              import -window root "$raw" ;;
+              import -window root "$raw"
+              record_layout ;;
             linux-wayland)
               export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
               unset DISPLAY
@@ -192,9 +237,13 @@ jobs:
               WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$RUNNER_TEMP/sway.conf" &
               for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
               export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
-              export QT_QPA_PLATFORM=wayland LIBGL_ALWAYS_SOFTWARE=1
+              export QT_QPA_PLATFORM=wayland LIBGL_ALWAYS_SOFTWARE=1 LAYOUT_RESIZE=0
+              export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock | head -1)
               launch; wait_for_map
-              grim "$raw" ;;
+              grim "$raw"
+              # Sway tiles windows: float the editor at the layout size instead.
+              swaymsg 'border none, floating enable, resize set width 1600 px height 900 px'
+              record_layout ;;
           esac
           kill $app 2>/dev/null || true
           # Name the image by the size actually captured.
@@ -212,3 +261,22 @@ jobs:
           path: ${{ runner.temp }}/shots/
           retention-days: 30
           if-no-files-found: error
+
+  layout-parity:
+    name: Layout parity (1080p, every OS)
+    needs: capture
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: editor-screenshot-*-1080p
+          path: captures
+      - name: Every control and dock identical on Windows, macOS, X11 and Wayland
+        run: >-
+          python tools/compare_editor_layout.py captures
+          --expect windows macos linux-x11 linux-wayland
