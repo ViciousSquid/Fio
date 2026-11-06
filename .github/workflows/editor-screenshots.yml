@@ -88,7 +88,7 @@ jobs:
           sys.path.insert(0, root)
           from PyQt5.QtCore import QTimer
           from PyQt5.QtGui import QGuiApplication
-          from PyQt5.QtWidgets import QApplication, QDockWidget
+          from PyQt5.QtWidgets import QApplication, QDockWidget, QWidget
           import editor.main_window as main_window
           shown = main_window.MainWindow.showMaximized
           LAYOUT_SIZE = (1600, 900)
@@ -100,17 +100,53 @@ jobs:
               audit = Audit(QApplication.instance(), shots, {})
               docks = {dock.objectName(): [dock.x(), dock.y(), dock.width(), dock.height()]
                        for dock in self.findChildren(QDockWidget) if dock.isVisible()}
-              browser = self.asset_browser
+              grids = [{'columns': grid.current_cols, 'viewport_width': grid.scroll_area.viewport().width()}
+                       for grid in self.asset_browser.findChildren(QWidget)
+                       if hasattr(grid, 'current_cols') and grid.isVisible()]
               record = {'platform': os.environ['PLATFORM_ID'], 'qt_platform': QGuiApplication.platformName(),
-                        'size': [self.width(), self.height()], 'docks': docks,
-                        'asset_grid': {'columns': browser.current_cols,
-                                       'viewport_width': browser.scroll_area.viewport().width()},
+                        'size': [self.width(), self.height()], 'docks': docks, 'asset_grid': grids,
                         'widgets': audit.widgets(self)}
               path = os.path.join(shots, os.environ['SHOT'] + '-layout.json')
               with open(path, 'w', encoding='utf-8') as stream:
                   json.dump(record, stream, indent=1, ensure_ascii=False)
               print('LAYOUT_RECORDED', self.width(), 'x', self.height(), 'scene_hierarchy', docks.get('SceneDock'),
                     'asset_grid', record['asset_grid'], flush=True)
+
+          def report_lights(self):
+              # Release check for the 3D view: the lights each lit shader received,
+              # every Effect's light and the context's uniform limits.
+              import numpy as np
+              view = self.view_3d
+              table = (getattr(view, '_render_config', None) or {}).get('entity_table')
+              renderer = getattr(view, 'renderer', None)
+              try:
+                  from OpenGL import GL as gl
+                  view.makeCurrent()
+                  limits = {name: int(gl.glGetIntegerv(getattr(gl, name))) for name in (
+                      'GL_MAX_FRAGMENT_UNIFORM_COMPONENTS', 'GL_MAX_UNIFORM_BLOCK_SIZE',
+                      'GL_MAX_FRAGMENT_UNIFORM_BLOCKS', 'GL_MAX_TEXTURE_IMAGE_UNITS')}
+                  print('LIGHT_DIAG GL', gl.glGetString(gl.GL_RENDERER).decode(), '|',
+                        gl.glGetString(gl.GL_VERSION).decode(), limits, flush=True)
+                  view.doneCurrent()
+              except Exception as error:
+                  print('LIGHT_DIAG GL query failed:', error, flush=True)
+              if renderer is not None:
+                  print('LIGHT_DIAG lowpower', getattr(renderer, 'lowpower_mode', None),
+                        'shadows', getattr(renderer, 'shadows_enabled', None), flush=True)
+                  for shader, value in sorted((getattr(renderer, '_frame_lights_uploaded', {}) or {}).items()):
+                      print('LIGHT_DIAG uploaded', shader, 'lights', len(value[2]), list(value[2]), flush=True)
+              if table is None:
+                  print('LIGHT_DIAG no entity table', flush=True)
+                  return
+              for slot in np.asarray(table.effect_slots).tolist():
+                  thing = table.things[slot]
+                  print('LIGHT_DIAG effect', getattr(thing, 'name', '?'), 'slot', slot,
+                        'enabled', bool(table.light_enabled[slot]),
+                        'colour', np.round(table.light_color[slot], 3).tolist(),
+                        'params', np.round(table.light_params[slot], 3).tolist(),
+                        'type', int(table.effect_type[slot]), 'active', bool(table.effect_active[slot]), flush=True)
+              enabled = [s for s in np.asarray(table.light_slots).tolist() if table.light_enabled[s]]
+              print('LIGHT_DIAG enabled light slots', enabled, flush=True)
 
           def show(self):
               shown(self)
@@ -127,12 +163,13 @@ jobs:
                   if not os.path.exists(os.path.join(shots, 'layout.go')):
                       QTimer.singleShot(250, wait_for_layout_request)
                       return
+                  report_lights(self)
                   if os.environ.get('LAYOUT_RESIZE', '1') == '1':
                       self.showNormal()
                       self.resize(*LAYOUT_SIZE)
                   # Software OpenGL draws a frame every second or so on macOS:
-              # give debounced relayouts (the asset grid) time to run.
-              QTimer.singleShot(15000, lambda: record_layout(self))
+                  # give debounced relayouts (the asset grid) time to run.
+                  QTimer.singleShot(15000, lambda: record_layout(self))
               QTimer.singleShot(3000, load)
               QTimer.singleShot(3000, wait_for_layout_request)
 
