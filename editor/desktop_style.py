@@ -164,6 +164,9 @@ class EditorStyle(QProxyStyle):
             QStyle.PM_ToolBarSeparatorExtent: 8, QStyle.PM_ToolBarExtensionExtent: 16,
             QStyle.PM_DockWidgetFrameWidth: 1, QStyle.PM_DockWidgetTitleMargin: 4,
             QStyle.PM_DockWidgetSeparatorExtent: 4, QStyle.PM_SplitterWidth: 4,
+            # Qt scales this from 72 dpi on macOS and 96 elsewhere, which made
+            # dock title buttons 21px there and 20px everywhere else.
+            QStyle.PM_DockWidgetTitleBarButtonMargin: 4,
             QStyle.PM_HeaderMargin: 4, QStyle.PM_HeaderMarkSize: 12,
             QStyle.PM_SmallIconSize: 16, QStyle.PM_LargeIconSize: 32,
             QStyle.PM_MenuPanelWidth: 1, QStyle.PM_MenuHMargin: 0,

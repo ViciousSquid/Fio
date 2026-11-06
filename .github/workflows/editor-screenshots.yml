@@ -29,6 +29,7 @@ on:
       - '.github/workflows/editor-screenshots.yml'
       - 'tools/compare_editor_layout.py'
       - 'editor/hierarchy_dock.py'
+      - 'editor/desktop_style.py'
 
 permissions:
   contents: read
@@ -99,13 +100,17 @@ jobs:
               audit = Audit(QApplication.instance(), shots, {})
               docks = {dock.objectName(): [dock.x(), dock.y(), dock.width(), dock.height()]
                        for dock in self.findChildren(QDockWidget) if dock.isVisible()}
+              browser = self.asset_browser
               record = {'platform': os.environ['PLATFORM_ID'], 'qt_platform': QGuiApplication.platformName(),
                         'size': [self.width(), self.height()], 'docks': docks,
+                        'asset_grid': {'columns': browser.current_cols,
+                                       'viewport_width': browser.scroll_area.viewport().width()},
                         'widgets': audit.widgets(self)}
               path = os.path.join(shots, os.environ['SHOT'] + '-layout.json')
               with open(path, 'w', encoding='utf-8') as stream:
                   json.dump(record, stream, indent=1, ensure_ascii=False)
-              print('LAYOUT_RECORDED', self.width(), 'x', self.height(), 'scene_hierarchy', docks.get('SceneDock'), flush=True)
+              print('LAYOUT_RECORDED', self.width(), 'x', self.height(), 'scene_hierarchy', docks.get('SceneDock'),
+                    'asset_grid', record['asset_grid'], flush=True)
 
           def show(self):
               shown(self)
@@ -125,7 +130,9 @@ jobs:
                   if os.environ.get('LAYOUT_RESIZE', '1') == '1':
                       self.showNormal()
                       self.resize(*LAYOUT_SIZE)
-                  QTimer.singleShot(5000, lambda: record_layout(self))
+                  # Software OpenGL draws a frame every second or so on macOS:
+              # give debounced relayouts (the asset grid) time to run.
+              QTimer.singleShot(15000, lambda: record_layout(self))
               QTimer.singleShot(3000, load)
               QTimer.singleShot(3000, wait_for_layout_request)
 
@@ -211,7 +218,7 @@ jobs:
           }
           record_layout() {
             touch "$shots/layout.go"
-            for i in $(seq 1 90); do grep -q LAYOUT_RECORDED "$log" && break; sleep 1; done
+            for i in $(seq 1 120); do grep -q LAYOUT_RECORDED "$log" && break; sleep 1; done
             grep LAYOUT_RECORDED "$log" || { echo "::error::No layout record"; cat "$log"; exit 1; }
           }
           case "${{ matrix.platform.id }}" in

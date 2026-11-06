@@ -72,6 +72,21 @@ def test_spacing_and_indicator_metrics_are_explicit(qt_app):
     assert style.pixelMetric(QStyle.PM_ScrollBarExtent) == 12
 
 
+
+def test_dock_title_buttons_are_the_same_size_on_every_platform(qt_app):
+    # Unpinned, Qt scales this margin from 72 dpi on macOS (21px buttons)
+    # and 96 dpi elsewhere (20px).
+    from PyQt5.QtCore import QRect
+    from PyQt5.QtWidgets import QStyleOptionDockWidget
+    style = qt_app.style()
+    assert style.pixelMetric(QStyle.PM_DockWidgetTitleBarButtonMargin) == 4
+    option = QStyleOptionDockWidget()
+    option.rect = QRect(0, 0, 400, 28)
+    option.closable = option.floatable = True
+    for element in (QStyle.SE_DockWidgetCloseButton, QStyle.SE_DockWidgetFloatButton):
+        rect = style.subElementRect(element, option, None)
+        assert (rect.width(), rect.height()) == (20, 20)
+
 @pytest.mark.parametrize('points,pixels,height', [(11, 15, 20), (16, 21, 28)])
 def test_native_widget_fonts_use_windows_logical_metrics(qt_app, points, pixels, height):
     label = QLabel('Native widget metrics')
