@@ -74,6 +74,25 @@ def pytest_collection_modifyitems(config, items):
 # Collection isolation
 # ---------------------------------------------------------------------------
 
+def _module_marked_qt_or_gl(tree):
+    """True when a module-level ``pytestmark`` applies the ``qt`` or ``gl`` tier."""
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets):
+            continue
+        for sub in ast.walk(node.value):
+            if (isinstance(sub, ast.Attribute) and sub.attr in ("qt", "gl")
+                    and isinstance(sub.value, ast.Attribute)
+                    and sub.value.attr == "mark"):
+                return True
+    return False
+
+
 def pytest_ignore_collect(collection_path, config):
     """Do not import Qt/GL test modules in the dependency-light CI tier."""
     if not os.environ.get("FIO_HEADLESS_TIER"):
@@ -85,6 +104,11 @@ def pytest_ignore_collect(collection_path, config):
                          filename=str(collection_path))
     except (OSError, UnicodeDecodeError, SyntaxError):
         return None
+    # A module marked ``pytestmark = pytest.mark.qt`` (or ``gl``) as a whole has
+    # no test this tier would select, but it may still reach Qt transitively at
+    # import time (``editor.things`` imports PyQt5), so do not import it at all.
+    if _module_marked_qt_or_gl(tree):
+        return True
     nodes = ast.walk(tree)
     for node in nodes:
         if isinstance(node, ast.Import):

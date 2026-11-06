@@ -52,3 +52,18 @@ def editor_model_ray_distance(thing, origin, direction):
         if near > far:
             return None
     return near
+
+
+def editor_models_around(positions, camera_pos, half_extents, margin=1.0):
+    """Mask of editor-model rows whose bounds hold *camera_pos*.
+
+    The editor camera loads at the spawn, inside its player-sized sign; drawn
+    from in there the sign's panels fill the whole 3D view. Rows are the
+    models' centres, *half_extents* their world half-size (the sign keeps the
+    hull's world footprint at every heading), *margin* at least the near plane.
+    """
+    import numpy as np
+    positions = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+    reach = np.asarray(half_extents, dtype=np.float64) + float(margin)
+    offset = np.abs(positions - np.asarray(camera_pos, dtype=np.float64)[:3])
+    return np.all(offset <= reach, axis=1)

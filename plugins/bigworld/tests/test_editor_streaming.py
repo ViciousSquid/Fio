@@ -158,15 +158,21 @@ def test_temporary_wizard_actors_remain_live_and_do_not_leak_into_saved_maps():
     assert actor.properties['id'] not in saved_ids
 
 
+def _show_whole_world(action, shown):
+    """Toggle the View menu action the way a user does, if it needs to change."""
+    if action.isChecked() != shown:
+        action.trigger()
+    assert action.isChecked() is shown
+
+
 def test_whole_world_toggle_keeps_edits_and_history_and_returns_to_local_cells(main_window):
     main_window.state.load_from_data(level(), stream_editor=True)
     state = main_window.state
-    checkbox = main_window.show_whole_world_checkbox
-    assert checkbox.text() == 'Show whole world'
-    assert checkbox.x() > main_window.display_mode_combobox.x()
-    checkbox.setChecked(False)
+    action = main_window.show_whole_world_action
+    assert action.text() == 'Show whole world'
+    _show_whole_world(action, False)
     history = list(state.undo_stack)
-    checkbox.setChecked(True)
+    _show_whole_world(action, True)
     assert state.editor_stream.whole_world
     assert 'far-brush' in ids(state)
     state.find_entity_by_id('far-brush')['name'] = 'Edited while showing all'
@@ -174,7 +180,7 @@ def test_whole_world_toggle_keeps_edits_and_history_and_returns_to_local_cells(m
     checkpoint = state.snapshot()
     state.restore_state(checkpoint)
     assert state.editor_stream.whole_world
-    checkbox.setChecked(False)
+    _show_whole_world(action, False)
     assert not state.editor_stream.whole_world
     assert 'far-brush' not in ids(state)
     saved = state.get_level_data()
@@ -185,10 +191,10 @@ def test_whole_world_toggle_keeps_edits_and_history_and_returns_to_local_cells(m
 
 @pytest.mark.parametrize('show_whole_world', [True, False])
 def test_map_load_shows_the_whole_world_by_default_and_honours_opt_out(main_window, show_whole_world):
-    checkbox = main_window.show_whole_world_checkbox
-    assert checkbox.isChecked()
+    action = main_window.show_whole_world_action
+    assert action.isChecked()
     if not show_whole_world:
-        checkbox.setChecked(False)
+        _show_whole_world(action, False)
     assert main_window._load_level(level())
     assert main_window.state.editor_stream.whole_world is show_whole_world
     assert ('far-brush' in ids(main_window.state)) is show_whole_world

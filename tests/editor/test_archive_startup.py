@@ -12,14 +12,24 @@ def test_archive_only_assets_start_the_editor_with_the_same_icon_pixels(
         qt_app, tmp_path, monkeypatch):
     from PyQt5.QtGui import QIcon, QPixmap
     from editor.main_window import MainWindow
+    from engine.asset_archives import ASSET_CATEGORIES
+    from tools.pack_assets import pack_category
     root = Path(__file__).resolve().parents[2]
-    assets = tmp_path / 'assets'
-    assets.mkdir()
-    for archive in (root / 'assets').glob('*.fiopak'):
+    # The repository keeps loose assets and need not ship every category
+    # archive, so pack an archive-only installation from a copy of them.
+    source = tmp_path / 'source'
+    shutil.copytree(root / 'assets', source / 'assets',
+                    ignore=shutil.ignore_patterns('__pycache__', 'shaders'))
+    for category in ASSET_CATEGORIES:
+        pack_category(source, category)
+    install = tmp_path / 'install'
+    assets = install / 'assets'
+    assets.mkdir(parents=True)
+    for archive in (source / 'assets').glob('*.fiopak'):
         shutil.copy2(archive, assets / archive.name)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(install)
     assert not (assets / 'b_save.png').exists()
-    window = MainWindow(str(tmp_path))
+    window = MainWindow(str(install))
     try:
         assert not window.undo_action.icon().isNull()
         for name in ('b_save.png', 'b_undo.png', 'splash.png', 'sprites/logic_camera.png'):

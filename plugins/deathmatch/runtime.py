@@ -293,7 +293,7 @@ class DeathmatchSession:
             self.kill(victim, self._human_attacker or self.projectile_attacker())
         return result
 
-    def output(self, entity, name, value=None):
+    def fire_output(self, entity, name, value=None):
         if self.logic.io_manager is not None:
             self.logic.io_manager.fire_output(entity, name, value)
 
@@ -326,7 +326,7 @@ class DeathmatchSession:
             victim.entity.properties.update(dead=True, hidden=True, is_shooting=False)
         text = f"{killer.name if killer else 'World'} > {victim.name}"
         self.feed.append((self.clock + 5, text))
-        self.output(self.settings, "OnFrag", text)
+        self.fire_output(self.settings, "OnFrag", text)
         self.emit("deathmatch.frag", victim=victim.key,
                   killer=killer.key if killer else None)
         self.check_frag_limit()
@@ -348,7 +348,7 @@ class DeathmatchSession:
         leaders = self.leaders()
         winner = self.game.winner() or ("Draw" if len(leaders) != 1 else leaders[0].name)
         self.result_winner = winner
-        self.output(self.settings, "OnMatchEnd", winner)
+        self.fire_output(self.settings, "OnMatchEnd", winner)
         self.emit("deathmatch.end", winner=winner, reason=reason)
         self.publish()
 
@@ -375,7 +375,7 @@ class DeathmatchSession:
             fighter.frags = fighter.deaths = 0
         for fighter in self.fighters.values():
             self.respawn(fighter)
-        self.output(self.settings, "OnMatchStart")
+        self.fire_output(self.settings, "OnMatchStart")
         self.emit("deathmatch.start")
         self.publish()
 

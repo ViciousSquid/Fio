@@ -16,7 +16,9 @@ import OpenGL.GL as gl
 from engine import entity_table as entity_projection
 from engine import shaders
 from engine.constants import (
+    PLAYER_HULL_SIZE,
     RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX)
+from engine.entity_models import editor_models_around
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -516,6 +518,14 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                            & entity_projection.ENT_EDITOR_MODEL) != 0
             editor_model_slots = opaque_model_slots[editor_mask]
             opaque_model_slots = opaque_model_slots[~editor_mask]
+            if len(editor_model_slots):
+                # Not from inside: the camera loads at the spawn, and the
+                # sign's panels would cover the whole view.
+                inside = editor_models_around(
+                    etable.pos[editor_model_slots],
+                    (camera_pos[0], camera_pos[1], camera_pos[2]),
+                    [size / 2.0 for size in PLAYER_HULL_SIZE])
+                editor_model_slots = editor_model_slots[~inside]
             if len(opaque_model_slots):
                 if look == 'Wireframe':
                     gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)

@@ -1,5 +1,6 @@
 import contextlib
 import os
+import sys
 import numpy as np
 try:
     import OpenGL.GL as gl
@@ -18,6 +19,24 @@ import random
 from . import shaders
 from . import terrain_style
 from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
+
+
+def _no_current_gl_context():
+    """True only when macOS reports that no GL context is current.
+
+    A Terrain is built before any view's context exists (map load, the terrain
+    panel). Calling into GL then raises elsewhere, which _compile_program
+    handles, but crashes the process on macOS, so ask CGL first. Other
+    platforms may mix GLX and EGL, where the query could miss Qt's context.
+    """
+    if sys.platform != 'darwin':
+        return False
+    try:
+        from OpenGL import platform as gl_platform
+        return not gl_platform.PLATFORM.GetCurrentContext()
+    except Exception:
+        return False
+
 
 # Old maps keep their exact scatter/cap below the previous density ceiling.
 LEGACY_GRASS_DENSITY_MAX = 0.06
@@ -567,6 +586,8 @@ class Terrain:
         compile genuinely failed (reported).
         """
         if gl is None or compileProgram is None or compileShader is None:
+            return 0
+        if _no_current_gl_context():
             return 0
         if vertex_name in self._failed_programs:
             return 0

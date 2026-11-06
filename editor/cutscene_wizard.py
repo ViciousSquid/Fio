@@ -910,6 +910,10 @@ class CutsceneWizard(QtWidgets.QDialog):
                 event["defenders"] = defenders
             elif event.get("type") == "io" and str(event.get("source_id", "")) == aid:
                 continue
+            elif event.get("type") == "dialogue" and str(event.get("speaker_id", "")) == aid:
+                # Older cutscenes still carry dialogue speakers.
+                event = dict(event)
+                event["speaker_id"] = ""
             cleaned_events.append(event)
         self.events = cleaned_events
 

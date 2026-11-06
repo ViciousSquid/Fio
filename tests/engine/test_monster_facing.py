@@ -87,8 +87,9 @@ def test_missing_custom_view_uses_matching_builtin_direction():
     table = EntityTable()
     table.begin_frame([Monster([0, 96, 0], {
         'custom_idle': 'assets/sprites/monsters/custom_1.png'})], epoch=1)
-    renderer = SimpleNamespace(_scene={'package': Package()})
-    assert GLESRenderer._sprite_image(renderer, table, 0, (0, 96, -100)).endswith('human/idle_5.png')
+    renderer = GLESRenderer()
+    renderer._scene = {'package': Package()}
+    assert renderer._sprite_image(table, 0, (0, 96, -100)).endswith('human/idle_5.png')
 
 
 def test_corpse_retains_the_single_rotation_zero_frame():
@@ -128,19 +129,27 @@ def test_every_builtin_has_complete_packaged_rotation_images(appearance):
 
     root = Path(__file__).resolve().parents[2]
     expected_size = (256, 384) if appearance.startswith('human') else (256, 256)
-    with zipfile.ZipFile(root / 'assets/sprites.fiopak') as archive:
+    # The loose files are the source of truth; a shipped sprites.fiopak is
+    # optional, but when one is present it must carry the same bytes.
+    pak = root / 'assets/sprites.fiopak'
+    archive = zipfile.ZipFile(pak) if pak.is_file() else None
+    try:
         for state in ('idle', 'shoot'):
             images = []
             for rotation in range(1, 9):
                 name = f'assets/sprites/monsters/{appearance}/{state}_{rotation}.png'
                 data = (root / name).read_bytes()
-                assert archive.read(name) == data
+                if archive is not None:
+                    assert archive.read(name) == data
                 with Image.open(root / name) as image:
                     assert image.mode == 'RGBA' and image.size == expected_size
                     low, high = image.getchannel('A').getextrema()
                     assert low == 0 and high >= 250
                 images.append(data)
             assert len(set(images)) == 8
+    finally:
+        if archive is not None:
+            archive.close()
 
 
 @pytest.mark.qt
@@ -156,5 +165,6 @@ def test_standalone_player_uses_camera_relative_recipe(camera, expected):
     class Package:
         def has_asset(self, name):
             return True
-    renderer = SimpleNamespace(_scene={'package': Package()})
-    assert GLESRenderer._sprite_image(renderer, table, 0, camera).endswith(expected)
+    renderer = GLESRenderer()
+    renderer._scene = {'package': Package()}
+    assert renderer._sprite_image(table, 0, camera).endswith(expected)

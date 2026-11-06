@@ -54,6 +54,8 @@ def test_dense_classification_matches_every_scalar_bit_pattern_and_policy():
     def original_kind(bits, hidden, show):
         if bits & (et.ENT_SKIP | et.ENT_EFFECT):
             return 0
+        if bits & et.ENT_EDITOR_MODEL and not show:
+            return 0                    # editor presentation, e.g. hidden in Play
         if bits & et.ENT_ALWAYS_SPRITE:
             return 2
         has_model = bool(bits & et.ENT_HAS_MODEL)

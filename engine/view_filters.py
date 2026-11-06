@@ -85,7 +85,8 @@ def entity_group(thing):
         return 'monsters'
     if bits & et.ENT_LIGHT:
         return 'lights'
-    if bits & (et.ENT_PROP | et.ENT_HAS_MODEL):
+    # A private editor model (the spawn sign) is presentation, not a prop.
+    if bits & (et.ENT_PROP | et.ENT_HAS_MODEL) and not bits & et.ENT_EDITOR_MODEL:
         return 'props'
     name = type(thing).__name__
     if name == 'Trigger':

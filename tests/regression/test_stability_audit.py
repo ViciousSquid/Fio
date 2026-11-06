@@ -41,6 +41,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _CLOCK_COLUMNS = {"effect_elapsed", "effect_alive", "light_params",
                   "light_enabled", "portal_fade"}
 _INTERNED = {"tex_name_id": "texture_names", "sprite_key_id": "sprite_recipes",
+             "sprite_direction_ids": "sprite_recipes",
              "model_recipe_id": "model_recipes"}
 
 

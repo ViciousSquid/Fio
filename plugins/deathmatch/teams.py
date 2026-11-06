@@ -106,7 +106,7 @@ class TeamGame:
         self.draw(flag)
         if announce:
             self.session.feed.append((self.session.clock + 5, f"{flag.team.title()} flag returned"))
-            self.session.output(flag.entity, "OnReturn")
+            self.session.fire_output(flag.entity, "OnReturn")
             self.session.emit("deathmatch.flag_return", team=flag.team)
 
     def draw(self, flag):
@@ -167,7 +167,7 @@ class TeamGame:
         flag.pos = (pos[0], ground, pos[2])
         flag.return_at = self.session.clock + self.return_delay
         self.draw(flag)
-        self.session.output(flag.entity, "OnDrop")
+        self.session.fire_output(flag.entity, "OnDrop")
 
     def touch(self, fighter, flag):
         """Resolve a contact using flag state and team ownership."""
@@ -193,7 +193,7 @@ class TeamGame:
         fighter.protected_until = 0
         self.draw(flag)
         session = self.session
-        session.output(flag.entity, "OnTaken", fighter.name)
+        session.fire_output(flag.entity, "OnTaken", fighter.name)
         session.feed.append((session.clock + 5, f"{fighter.name} took the {flag.team} flag"))
 
     def _capture_flag(self, fighter, base):
@@ -205,7 +205,7 @@ class TeamGame:
         fighter.objective_score += CAPTURE_POINTS
         self.scores[fighter.team] += 1
         session = self.session
-        session.output(base.entity, "OnCapture", fighter.name)
+        session.fire_output(base.entity, "OnCapture", fighter.name)
         session.emit("deathmatch.capture", team=fighter.team, fighter=fighter.key)
         session.feed.append((session.clock + 5, f"{fighter.name} captured for {fighter.team}!"))
         if self.capture_limit > 0 and self.scores[fighter.team] >= self.capture_limit:

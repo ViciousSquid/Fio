@@ -1,7 +1,6 @@
 """Walkable surfaces and conditional platform transfers over live world geometry."""
 import math
 
-from engine.player import _blocks_player
 from .navigation import MoverTraversal, distance, ground_positions
 
 
@@ -10,6 +9,9 @@ class NavigationWorld:
         self.logic, self.hull, self.step_height = logic, hull, step_height
 
     def brushes(self, overrides=None, omit=(), static=False):
+        # Imported here: engine.player needs PyGLM, and plugin discovery must
+        # stay importable in the player process without it.
+        from engine.player import _blocks_player
         logic = self.logic
         collision = getattr(logic, 'collision_runtime', None)
         moving = getattr(logic, 'mover_runtime', None)
