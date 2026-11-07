@@ -419,6 +419,30 @@ class ConvexGeometry:
         lo, hi = self.bounds
         return hi - lo
 
+    def translated(self, offset):
+        """This solid moved by *offset*, without solving anything again:
+        the same faces, every corner and plane offset shifted. What a
+        placement does to a shape (Stage 2d: a brush's planes are in its
+        local frame and ``pos`` places them)."""
+        t = np.asarray(offset, dtype=np.float64)
+        out = ConvexGeometry.__new__(ConvexGeometry)
+        planes = []
+        for p in self.planes:
+            q = dict(p)
+            q['d'] = float(p['d']) + float(_v(p['n']) @ t)
+            planes.append(q)
+        out.planes = planes
+        out.verts = self.verts + t if len(self.verts) else self.verts.copy()
+        out.faces = self.faces
+        out._bounds = None
+        out._shape_box = None
+        out._plane_cache = None
+        out._coll_cache = None
+        out._edge_cache = self._edge_cache
+        out._material_cache = None
+        out._collision_shape = None
+        return out
+
     @property
     def shape_box(self):
         """``(cx, cy, cz, hx, hy, hz)``: the solid's AABB as a centre and
@@ -958,12 +982,16 @@ def geometry_signature(brush):
     ))
 
 
-def get_convex(brush):
-    """Return a cached :class:`ConvexGeometry` for ``brush`` (or ``None``).
+def local_convex(brush):
+    """The brush's shape: a cached :class:`ConvexGeometry` of its planes as
+    stored -- in the brush's **local frame**, centred on its own bounds
+    (Stage 2d) -- or ``None``.
 
-    The result is cached on the brush under the private ``_geo_cache`` key and
-    rebuilt only when the plane set changes.  Callers must not serialise that
-    key (see ``editor_state._RENDERER_PRIVATE_KEYS`` / ``_GEO_RUNTIME_KEYS``).
+    Cached on the brush under the private ``_geo_cache`` key and rebuilt only
+    when the plane set changes; a move (``pos``) never rebuilds it. What
+    rendering and collision use, carried to where the brush is by its
+    placement. Callers must not serialise that key (see
+    ``editor_state._RENDERER_PRIVATE_KEYS`` / ``_GEO_RUNTIME_KEYS``).
     """
     if not brush_has_geometry(brush):
         return None
@@ -975,6 +1003,25 @@ def get_convex(brush):
     brush['_geo_cache'] = convex
     brush['_geo_cache_sig'] = sig
     return convex
+
+
+def get_convex(brush):
+    """The brush's shape **in world space** at its authored placement: its
+    local shape (:func:`local_convex`) translated by ``pos`` -- a copy of the
+    solved shape, never solved again -- cached per placement. What editor
+    tools, picking, outlines and the world-space collision bake read.
+    ``None`` for a box."""
+    local = local_convex(brush)
+    if local is None:
+        return None
+    pos = brush.get('pos') or (0.0, 0.0, 0.0)
+    key = (float(pos[0]), float(pos[1]), float(pos[2]))
+    cached = brush.get('_world_cache')
+    if cached is not None and cached[0] is local and cached[1] == key:
+        return cached[2]
+    world = local.translated(key) if (key[0] or key[1] or key[2]) else local
+    brush['_world_cache'] = (local, key, world)
+    return world
 
 
 #: The texture basis the box path's cube VAO gives its two X-facing sides:
@@ -1011,7 +1058,9 @@ def box_to_geometry(brush):
     """
     if brush_has_geometry(brush):
         return brush
-    planes = box_face_planes(brush)
+    pos = brush.get('pos', [0, 0, 0])
+    # The box's planes in its own frame: centred on its pos, which stays.
+    planes = translate_planes(box_face_planes(brush), [-float(v) for v in pos])
     brush['geometry'] = {'planes': [_plane_to_json(p) for p in planes]}
     brush_faces.drop_tag_copies(brush)      # moved onto the planes
     _invalidate(brush)
@@ -1042,11 +1091,10 @@ def sync_brush_bounds(brush):
     :mod:`engine.brush_placement`, which takes them from the planes, so a
     stale or stray copy cannot move or stretch the brush.
     """
-    convex = get_convex(brush)
+    convex = local_convex(brush)
     if convex is None or not convex.is_valid:
         return
-    cx, cy, cz, hx, hy, hz = convex.shape_box
-    brush['pos'] = [cx, cy, cz]
+    _cx, _cy, _cz, hx, hy, hz = convex.shape_box
     brush['size'] = [hx * 2.0, hy * 2.0, hz * 2.0]
 
 
@@ -1069,8 +1117,13 @@ def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,
     """
     box_to_geometry(brush)
     existing = [_plane_from_json(p) for p in brush['geometry']['planes']]
+    # The cut is given in world space; the planes are in the brush's frame.
+    # (clip_planes reads the plane as n-hat . p <= clip_d.)
+    n = _normalize(clip_normal)
+    pos = _v(brush.get('pos', [0, 0, 0]))
+    local_d = float(clip_d) - float(n @ pos)
     new_planes = clip_planes(
-        existing, clip_normal, clip_d, keep_positive=keep_positive,
+        existing, n, local_d, keep_positive=keep_positive,
         texture=texture, uv_scale=uv_scale,
     )
     if len(new_planes) == len(existing):
@@ -1081,12 +1134,7 @@ def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,
     cut_index = len(new_planes) - 1
     if not any(face['plane'] == cut_index for face in trial.faces):
         return False        # bounds nothing: the plane missed the brush
-    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
-    _invalidate(brush)
-    brush['_geo_cache'] = trial
-    brush['_geo_cache_sig'] = geometry_signature(brush)
-    sync_brush_bounds(brush)
-    return True
+    return _commit_local_planes(brush, new_planes, trial=trial)
 
 
 def translate_planes(planes, delta):
@@ -1106,21 +1154,16 @@ def translate_planes(planes, delta):
 
 
 def translate_brush(brush, delta):
-    """Move an angled brush by ``delta`` in world space, keeping its geometry,
-    ``pos`` and cached surface all in sync.
+    """Move an angled brush by ``delta`` in world space.
 
-    Dragging a brush in the editor only rewrites ``pos``; for a brush that
-    carries a plane set that would leave the geometry (and its 2D silhouette,
-    3D mesh and collision planes) behind.  This shifts the planes too.  No-op
-    for plain box brushes (they have no geometry to move).  Returns ``True``
-    when geometry was translated.
+    Its planes are in its own frame (Stage 2d), so a move is its placement
+    alone: ``pos`` changes and nothing else -- no plane is rewritten, no
+    winding solved, no mesh rebuilt; the renderer sees a transform. No-op
+    for plain box brushes (their callers move ``pos`` themselves). Returns
+    ``True`` when the brush was moved.
     """
     if not brush_has_geometry(brush):
         return False
-    new_planes = translate_planes(
-        [_plane_from_json(p) for p in brush['geometry']['planes']], delta)
-    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
-    _invalidate(brush)
     d = _v(delta)
     pos = brush.get('pos', [0, 0, 0])
     brush['pos'] = [float(pos[0] + d[0]), float(pos[1] + d[1]), float(pos[2] + d[2])]
@@ -1180,17 +1223,11 @@ def fit_brush_to_bounds(brush, new_lo, new_hi):
             s[i] = 1e-9                             # never let a plane vanish
         # p' = s*(p - old_lo) + lo  =>  t = lo - s*old_lo
         t[i] = lo[i] - s[i] * old_lo[i]
-    new_planes = scale_planes(
-        [_plane_from_json(p) for p in brush['geometry']['planes']], s, t)
+    new_planes = scale_planes([dict(p) for p in convex.planes], s, t)   # world
     trial = ConvexGeometry(new_planes)
     if not trial.is_valid:
         return False
-    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
-    _invalidate(brush)
-    brush['_geo_cache'] = trial
-    brush['_geo_cache_sig'] = geometry_signature(brush)
-    sync_brush_bounds(brush)
-    return True
+    return _commit_world_planes(brush, new_planes)
 
 
 def rotate_brush(brush, angle_deg, axis, pivot=None):
@@ -1198,19 +1235,14 @@ def rotate_brush(brush, angle_deg, axis, pivot=None):
     box_to_geometry(brush)
     if pivot is None:
         pivot = brush.get('pos', [0, 0, 0])
+    # An editor rotation is a shape edit (Stage 2): the world planes turn
+    # about the pivot and are re-localised on the new bounds.
     new_planes = rotate_planes(
-        [_plane_from_json(p) for p in brush['geometry']['planes']],
-        angle_deg, axis, pivot,
-    )
+        [dict(p) for p in get_convex(brush).planes], angle_deg, axis, pivot)
     trial = ConvexGeometry(new_planes)
     if not trial.is_valid:
         return False
-    brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
-    _invalidate(brush)
-    brush['_geo_cache'] = trial
-    brush['_geo_cache_sig'] = geometry_signature(brush)
-    sync_brush_bounds(brush)
-    return True
+    return _commit_world_planes(brush, new_planes)
 
 
 def build_collision_mesh(brush):
@@ -1398,6 +1430,7 @@ def _invalidate(brush):
     brush['_geo_epoch'] = next(_epoch_counter)
     brush.pop('_geo_cache', None)
     brush.pop('_geo_cache_sig', None)
+    brush.pop('_world_cache', None)
     # The box-derived shape used by component picking is keyed off pos/size and
     # is meaningless once the brush carries a real plane set.
     brush.pop('_box_shape', None)
@@ -1422,7 +1455,7 @@ def _brush_epoch(brush):
 # Runtime-only keys written onto brush dicts by this module.  editor_state must
 # strip these before serialisation / undo / deepcopy-for-JSON.
 GEO_RUNTIME_KEYS = frozenset({
-    '_geo_cache', '_geo_cache_sig', '_geo_epoch',
+    '_geo_cache', '_geo_cache_sig', '_geo_epoch', '_world_cache',
     '_collision_mode', '_mesh_triangles', '_mesh_bounds', '_mesh_planes',
 })
 
@@ -1610,24 +1643,49 @@ def carry_plane_metadata(new_planes, old_planes):
     return new_planes
 
 
-def _commit_planes(brush, planes):
-    """Install a validated plane set on ``brush`` and refresh its caches.
+def _commit_local_planes(brush, planes, trial=None):
+    """Install a validated plane set, given in the brush's own frame, and
+    re-centre it: the shape is stored centred on its own bounds and ``pos``
+    is where that centre is (Stage 2d), so an edit that moved the bounds
+    moves ``pos`` by the same amount and the planes by the opposite.
 
     Returns ``True`` when the plane set encloses a real volume, ``False``
     (leaving the brush untouched) when it does not — the single place every
-    component edit funnels through so an invalid drag can never be committed.
+    geometry edit funnels through so an invalid one can never be committed.
     """
-    trial = ConvexGeometry(planes)
+    if trial is None:
+        trial = ConvexGeometry(planes)
     if not trial.is_valid:
         return False
     if float(np.max(trial.extents())) > MAX_BRUSH_EXTENT:
         return False
+    centre = trial.center()
+    if float(np.max(np.abs(centre))) > 0.0:
+        planes = translate_planes(planes, -centre)
+        trial = trial.translated(-centre)
+        pos = brush.get('pos', [0, 0, 0])
+        brush['pos'] = [float(pos[0]) + float(centre[0]), float(pos[1]) + float(centre[1]),
+                        float(pos[2]) + float(centre[2])]
     brush['geometry'] = {'planes': [_plane_to_json(p) for p in planes]}
     _invalidate(brush)
     brush['_geo_cache'] = trial
     brush['_geo_cache_sig'] = geometry_signature(brush)
     sync_brush_bounds(brush)
     return True
+
+
+def _commit_world_planes(brush, planes):
+    """:func:`_commit_local_planes` for a plane set given in world space (a
+    tool working on :func:`get_convex`): brought into the brush's frame
+    first."""
+    pos = brush.get('pos', [0, 0, 0])
+    return _commit_local_planes(
+        brush, translate_planes(planes, [-float(pos[0]), -float(pos[1]), -float(pos[2])]))
+
+
+#: The world-space commit, under its old name: every caller that rebuilt a
+#: brush from world geometry (component edits) goes through it.
+_commit_planes = _commit_world_planes
 
 
 def brush_points(brush):
@@ -1682,7 +1740,7 @@ def offset_brush_planes(brush, offsets):
             planes[idx]['d'] = float(new_d)
     if not changed:
         return False
-    return _commit_planes(brush, planes)
+    return _commit_local_planes(brush, planes)
 
 
 def plane_face_vertex_indices(brush, plane_index):

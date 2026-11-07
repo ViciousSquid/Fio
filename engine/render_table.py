@@ -501,13 +501,14 @@ class RenderTable:
         """
         if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
             return None
-        convex = brush_geometry.get_convex(brush)
+        convex = brush_geometry.local_convex(brush)
         if convex is None or not convex.is_valid:
             return None
-        # The anchor is the shape's own bounds (brush_placement), never the
-        # dict's pos/size copy: so the mesh is a function of the planes and
-        # their materials alone, and the row's transform (the same bounds,
-        # displaced by a mover) carries it to where it is.
+        # The anchor is the shape's own bounds in its local frame (Stage 2d:
+        # centred on the origin), never the dict's size copy: so the mesh --
+        # and its cache key -- is a function of the planes and their
+        # materials alone, the same wherever the brush is placed, and the
+        # row's transform (its placement, carried by a mover) puts it there.
         cx, cy, cz, hx, hy, hz = convex.shape_box
         origin = np.array((cx, cy, cz), dtype=np.float64)
         scale = np.array((hx * 2.0, hy * 2.0, hz * 2.0), dtype=np.float64)

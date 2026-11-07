@@ -22,13 +22,12 @@ The rules:
   start: no planes, ``_collision_mode == 'mesh'``): its world-space
   triangle mesh is the shape, so its box is ``_mesh_bounds`` -- not the
   entity's ``pos`` and a placeholder ``size``.
-* **Convex** (a valid plane set): the planes are world-space and are the
-  authority for where the brush is at rest, so its box is the planes' own
-  bounds -- never the ``pos``/``size`` copy the dict carries, which can drift
-  (two shipped brushes by 128 units) or be written on its own (a ``size``-only
-  write must not stretch what is drawn). A convex mover or door is displaced
-  from that rest by its runtime transform. An invalid plane set has no shape
-  of its own, so it falls back to ``pos``/``size``, exactly as it is drawn.
+* **Convex** (a valid plane set): the planes are in the brush's **local
+  frame**, centred on their own bounds, and ``pos`` places them (Stage 2d,
+  map version 5): its box is ``pos`` plus the planes' own bounds -- never the
+  ``size`` copy the dict carries (it is not saved, and a ``size``-only write
+  must not stretch what is drawn). An invalid plane set has no shape of its
+  own, so it falls back to ``pos``/``size``, exactly as it is drawn.
 * **Spin**: a turned brush's derived bounds are the AABB of its turned box,
   ``|R| . half`` about its centre -- conservative, and the same rotation
   (axis-angle about the centre, Rodrigues) the renderer draws it with.
@@ -78,17 +77,19 @@ def is_dynamic(brush):
 
 
 def shape_convex(brush):
-    """The brush's valid :class:`ConvexGeometry`, or ``None`` for a box.
+    """The brush's valid shape -- a :class:`ConvexGeometry` in its **local
+    frame** -- or ``None`` for a box.
 
-    The cached geometry when there is one (every geometry write drops it), so
-    a per-tick reader does not re-hash the planes.
+    The cached geometry when there is one (every geometry write drops it,
+    and a move never does), so a per-tick reader does not re-hash the
+    planes.
     """
     geo = brush.get('geometry')
     if not geo or not geo.get('planes'):
         return None
     convex = brush.get('_geo_cache')
     if convex is None:
-        convex = brush_geometry.get_convex(brush)
+        convex = brush_geometry.local_convex(brush)
     if convex is None or not convex.is_valid:
         return None
     return convex
@@ -117,13 +118,26 @@ def authored_box(brush):
     """``(cx, cy, cz, hx, hy, hz)``: the shape at its authored placement,
     unturned.
 
-    A box: ``pos``, ``size / 2``. A convex brush: its planes' bounds. A
-    mesh proxy: its triangles' bounds.
+    A box: ``pos``, ``size / 2``. A convex brush: ``pos`` plus its local
+    planes' bounds. A mesh proxy: its triangles' bounds.
     """
     convex = shape_convex(brush)
     if convex is None:
         return _mesh_box(brush) or _dict_box(brush)
-    return convex.shape_box
+    cx, cy, cz, hx, hy, hz = convex.shape_box
+    pos = brush.get('pos') or DEFAULT_POS
+    return (float(pos[0]) + cx, float(pos[1]) + cy, float(pos[2]) + cz, hx, hy, hz)
+
+
+def shape_origin(brush):
+    """Where the shape's centre is in the coordinates its planes are given
+    in: a convex brush's local centre (``~0``), or -- for a box, whose planes
+    are implied at its authored placement -- its authored centre. What
+    :class:`Frame` and :func:`ray_to_shape` carry a world query to."""
+    convex = shape_convex(brush)
+    if convex is not None:
+        return convex.shape_box[:3]
+    return authored_box(brush)[:3]
 
 
 def placed_box(brush):
@@ -462,14 +476,15 @@ def ray_to_shape(brush, ray_o, ray_d):
     """``(origin, direction)`` of a world ray in the frame the brush's shape
     is authored in -- its runtime transform undone.
 
-    A point ``s`` of the authored shape is drawn at ``P + R (s - A)``, with
-    ``A`` the authored centre, ``P`` the placed centre and ``R`` the spin; so
-    the ray maps by ``s = A + R^T (w - P)``, ``d' = R^T d``. Rigid, so a
-    distance along the ray is the same in both frames. A box tested against
-    :func:`authored_box`, or a convex brush against its planes, in this frame
-    is hit exactly where it is drawn.
+    A point ``s`` of the shape is drawn at ``P + R (s - A)``, with ``A`` the
+    shape's centre in its own coordinates (:func:`shape_origin`), ``P`` the
+    placed centre and ``R`` the spin; so the ray maps by
+    ``s = A + R^T (w - P)``, ``d' = R^T d``. Rigid, so a distance along the
+    ray is the same in both frames. A box tested against :func:`authored_box`,
+    or a convex brush against its local shape (:func:`shape_convex`), in this
+    frame is hit exactly where it is drawn.
     """
-    ax, ay, az = authored_box(brush)[:3]
+    ax, ay, az = shape_origin(brush)
     px, py, pz = placed_box(brush)[:3]
     ox = float(ray_o[0]) - px
     oy = float(ray_o[1]) - py
@@ -568,17 +583,27 @@ class Frame:
 
 
 def collision_frame(brush):
-    """The brush's :class:`Frame`, or ``None`` when nothing moves it (its
-    shape is where it was authored, so world space is its frame)."""
+    """The brush's :class:`Frame` -- world space to the coordinates its
+    shape is given in -- or ``None`` when those are world space (a box that
+    nothing moves). A convex brush's shape is local (Stage 2d), so it always
+    has one: a translation by its placement while it is still."""
     runtime = runtime_of(brush)
+    convex = shape_convex(brush)
     if runtime is None:
-        return None
+        if convex is None:
+            return None
+        key = authored_box(brush)[:3]
+    else:
+        key = runtime
     cached = brush.get('_collision_frame')
-    if cached is not None and cached[0] is runtime:
+    if cached is not None and (cached[0] is key or cached[0] == key):
         return cached[1]
-    frame = Frame(authored_box(brush)[:3], runtime[:3],
-                  rotation_matrix(runtime[3:6], runtime[6]))
-    brush['_collision_frame'] = (runtime, frame)
+    if runtime is None:
+        frame = Frame(shape_origin(brush), key, None)
+    else:
+        frame = Frame(shape_origin(brush), runtime[:3],
+                      rotation_matrix(runtime[3:6], runtime[6]))
+    brush['_collision_frame'] = (key, frame)
     return frame
 
 
@@ -616,9 +641,10 @@ def collision_shape(brush):
     * any other box -- static, or carried by a mover without turning --
       ``None``: its derived AABB is its exact shape.
 
-    *planes*, *triangles* and *bounds* are in the shape's frame; *frame*
-    (:func:`collision_frame`) carries a world query into it, ``None`` when
-    the shape is where it was authored.
+    *planes*, *triangles* and *bounds* are in the coordinates the shape is
+    given in (a convex brush's local frame); *frame*
+    (:func:`collision_frame`) carries a world query into them, ``None`` when
+    they are world space.
     """
     convex = shape_convex(brush)
     if convex is not None:
@@ -706,23 +732,86 @@ def drop_play_state(brush):
     return found
 
 
-def normalise_loaded(brush):
-    """Make a loaded convex brush's ``pos``/``size`` copy equal its planes'
-    bounds -- the planes are where it is.
+#: The map version whose angled brushes store their planes in their local
+#: frame (Stage 2d). Version 4 (Stage 1) and earlier store world-space planes
+#: and a ``pos``/``size`` copy of their bounds; loading localises them
+#: (:func:`localise_legacy`), and ``engine.brush_faces``'s legacy export
+#: writes them back.
+MAP_VERSION = 5
 
-    Returns the distance the stored centre moved (0.0 for a box, an invalid
-    plane set, or a copy that was already right). The planes are not
-    touched, so what is drawn does not change. A play-time rest
-    (``original_pos``) a map kept is left alone: no shipped convex brush
-    both carries one and has drifted, and Stage 2b stops play state being
-    kept in the dict at all.
+
+def normalise_loaded(brush):
+    """A loaded version-5 convex brush: re-derive the ``size`` copy (not
+    saved) from its local shape. ``pos`` is its authored placement and is
+    left alone. Returns 0.0."""
+    if shape_convex(brush) is not None:
+        brush_geometry.sync_brush_bounds(brush)
+    return 0.0
+
+
+def localise_legacy(brush):
+    """A convex brush from a map before version 5: its world-space planes are
+    re-expressed about their own bounds centre ``c`` (``d' = d - n . c``) and
+    ``pos`` becomes ``c``, so it draws exactly where it did -- a stale
+    ``pos``/``size`` copy (two shipped brushes, 128 units) cannot misplace it.
+    An invalid plane set has no centre: it keeps its ``pos`` and its planes
+    are taken relative to it. Returns the distance the stored ``pos`` moved
+    (0.0 for a box). Replaces the plane list; never mutates the input's.
     """
-    convex = shape_convex(brush)
-    if convex is None:
+    geo = brush.get('geometry')
+    if not geo or not geo.get('planes'):
         return 0.0
-    cx, cy, cz, hx, hy, hz = convex.shape_box
-    pos = brush.get('pos') or DEFAULT_POS
-    moved = math.sqrt((float(pos[0]) - cx) ** 2 + (float(pos[1]) - cy) ** 2
-                      + (float(pos[2]) - cz) ** 2)
-    brush_geometry.sync_brush_bounds(brush)
+    planes = [dict(p) for p in geo['planes']]
+    world = brush_geometry.ConvexGeometry(planes)
+    old = brush.get('pos') or DEFAULT_POS
+    if world.is_valid:
+        centre = world.center()
+        origin = [float(centre[0]), float(centre[1]), float(centre[2])]
+    else:
+        origin = [float(old[0]), float(old[1]), float(old[2])]
+    local = brush_geometry.translate_planes(planes, [-v for v in origin])
+    geometry = dict(geo)
+    geometry['planes'] = [brush_geometry._plane_to_json(p) for p in local]
+    brush['geometry'] = geometry
+    moved = math.sqrt(sum((float(old[i]) - origin[i]) ** 2 for i in range(3)))
+    brush['pos'] = origin
+    brush_geometry.invalidate_geometry_cache(brush)
+    if world.is_valid:
+        brush_geometry.sync_brush_bounds(brush)
     return moved
+
+def world_layout(record):
+    """A copy of a brush record laid out as map version 4 stores it: an
+    angled brush's planes in world space (its local planes carried by its
+    ``pos``) and its ``size`` -- what a build before Stage 2d (and the
+    Android player) reads. Runtime and cache keys are left out; a box is
+    copied as it is. For :func:`export_world_level` and the frozen reference
+    renderer's test bridge -- never for a normal save."""
+    import copy
+    out = copy.deepcopy({k: v for k, v in record.items() if not str(k).startswith('_')
+                         or k == '_io_connections'})
+    geo = out.get('geometry')
+    if not geo or not geo.get('planes'):
+        return out
+    pos = out.get('pos') or DEFAULT_POS
+    world = brush_geometry.translate_planes(
+        [dict(p) for p in geo['planes']], [float(pos[0]), float(pos[1]), float(pos[2])])
+    geo['planes'] = [brush_geometry._plane_to_json(p) for p in world]
+    convex = brush_geometry.ConvexGeometry(world)
+    if convex.is_valid:
+        cx, cy, cz, hx, hy, hz = convex.shape_box
+        out['pos'] = [cx, cy, cz]
+        out['size'] = [hx * 2.0, hy * 2.0, hz * 2.0]
+    return out
+
+
+def export_world_level(level):
+    """A copy of a version-5 level document for builds that read version 4
+    (and the Android player): every angled brush through
+    :func:`world_layout`, ``version`` set to 4. Lossless: version 4 holds
+    every face record and every placement."""
+    import copy
+    out = copy.deepcopy({k: v for k, v in level.items() if k != 'brushes'})
+    out['version'] = MAP_VERSION - 1
+    out['brushes'] = [world_layout(b) for b in level.get('brushes') or []]
+    return out

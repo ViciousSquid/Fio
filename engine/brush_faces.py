@@ -524,8 +524,19 @@ def legacy_layout(brush):
 def export_legacy_level(level):
     """A copy of a canonical level document for builds before Stage 1:
     every brush through :func:`legacy_layout`, ``version`` set back to 3.
-    Returns ``(level, lossy)`` with *lossy* as ``{brush id: [face, ...]}``."""
+    Returns ``(level, lossy)`` with *lossy* as ``{brush id: [face, ...]}``.
+
+    A version-5 level (an angled brush's planes in its local frame) is first
+    laid out as version 4 (``engine.brush_placement.export_world_level``):
+    every build before Stage 2d reads world-space planes."""
     import copy
+    try:
+        version = int(level.get('version') or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version >= 5:
+        from engine.brush_placement import export_world_level
+        level = export_world_level(level)
     out = copy.deepcopy({k: v for k, v in level.items() if k != 'brushes'})
     out['version'] = CANONICAL_MAP_VERSION - 1
     out['brushes'] = []

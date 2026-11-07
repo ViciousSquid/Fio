@@ -37,7 +37,8 @@ from engine.brush_faces import (
     migrate_legacy as _migrate_legacy_faces)
 from engine.brush_placement import (
     PLAY_STATE_KEYS as _PLAY_STATE_KEYS, RUNTIME_CACHE_KEYS as _PLACEMENT_CACHE_KEYS,
-    drop_play_state as _drop_play_state, normalise_loaded as _normalise_placement)
+    MAP_VERSION, drop_play_state as _drop_play_state, localise_legacy as _localise_legacy,
+    normalise_loaded as _normalise_placement)
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -491,7 +492,9 @@ class EditorState:
         data = {
             # 3: stable entity IDs and logic graph layout. 4: one material
             # record per brush face (engine.brush_faces.CANONICAL_MAP_VERSION).
-            'version': CANONICAL_MAP_VERSION,
+            # 5: an angled brush's planes in its local frame, placed by its
+            # pos, no size saved (engine.brush_placement.MAP_VERSION).
+            'version': MAP_VERSION,
             'brushes': self._serialize_brushes(),
             # Cutscene Wizard actors are live authoring entities. Their actual
             # definitions live in the cutscene JSON and must never leak into
@@ -506,6 +509,13 @@ class EditorState:
             data.update(self.editor_stream.all_data())
             data['things'] = [r for r in data['things']
                               if not r.get('properties', {}).get('_cutscene_temporary')]
+        # Version 5: an angled brush is its local planes and its pos; its size
+        # is derived from them on load, so it is not saved.
+        data['brushes'] = [
+            {k: v for k, v in record.items() if k != 'size'}
+            if isinstance(record, dict) and (record.get('geometry') or {}).get('planes')
+            else record
+            for record in data['brushes']]
 
         # When this map was first written. Set once and carried forward on every
         # later save, so it means "created" and not "saved most recently" — the
@@ -661,7 +671,8 @@ class EditorState:
 
         return serialized
 
-    def _deserialize_brushes(self, brushes_data, yield_hook=None, legacy=False):
+    def _deserialize_brushes(self, brushes_data, yield_hook=None, legacy=False,
+                             world_planes=False):
         """Deserialize brushes with I/O connections.
 
         *legacy* is true for brush records from a map saved before the
@@ -692,10 +703,15 @@ class EditorState:
                     _migrate_legacy_faces(brush)
                 else:
                     _drop_tag_copies(brush)
-                # The planes are where an angled brush is: its pos/size copy
-                # (and a play-time rest, if the map kept one) is re-derived
-                # from them, so a copy that drifted cannot misplace it.
-                _normalise_placement(brush)
+                # Before map version 5 an angled brush's planes are in world
+                # space: re-expressed in its local frame about their own
+                # centre, which becomes its pos (a stale pos/size copy cannot
+                # misplace it). From version 5 they are local already and
+                # only the size copy (not saved) is re-derived.
+                if world_planes:
+                    _localise_legacy(brush)
+                else:
+                    _normalise_placement(brush)
 
             # Restore I/O connections
             if IO_AVAILABLE and 'io_connections' in brush:
@@ -753,6 +769,17 @@ class EditorState:
         return version < CANONICAL_MAP_VERSION
 
     @staticmethod
+    def is_world_plane_layout(level_data):
+        """Whether *level_data* stores angled brushes' planes in world space
+        (map ``version`` below ``engine.brush_placement.MAP_VERSION``, or no
+        version at all): loading localises them."""
+        try:
+            version = int(level_data.get('version') or 0)
+        except (TypeError, ValueError):
+            version = 0
+        return version < MAP_VERSION
+
+    @staticmethod
     def validate_level_data(level_data):
         """Raise ``ValueError`` if *level_data* is not shaped like a map.
 
@@ -790,6 +817,7 @@ class EditorState:
             from plugins.bigworld.editor_streaming import EditorCellStream
             stream = EditorCellStream.for_level(level_data)
         legacy = self.is_legacy_face_layout(level_data)
+        world_planes = self.is_world_plane_layout(level_data)
         if stream is not None:
             # Every record of the streamed world is migrated now, resident or
             # not, so a later save writes the canonical layout throughout:
@@ -806,16 +834,26 @@ class EditorState:
                     record = dict(record)
                     _migrate_legacy_faces(record)
                     records[identity] = record
+                if world_planes and 'geometry' in record:
+                    record = dict(record)
+                    _localise_legacy(record)
+                    records[identity] = record
+                    # Filed before this ran, reading world planes as local:
+                    # re-filed below from where it is.
+                    replaced = True
             if replaced:
-                # A box saved mid-motion is back at its authored placement:
-                # file it there (its home cell).
+                # A box saved mid-motion is back at its authored placement, an
+                # angled brush is in its local frame: file each at home.
                 stream.reindex()
         local = stream.local_data() if stream is not None else level_data
         brushes_data = local.get('brushes') or []
         things_data = local.get('things') or []
 
+        # A streamed world's records were localised above; a plain map's are
+        # localised as they are deserialised.
         new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook,
-                                                legacy=legacy)
+                                                legacy=legacy,
+                                                world_planes=world_planes and stream is None)
         new_things = []
         for index, t_data in enumerate(things_data):
             if yield_hook is not None and index % 25 == 0:

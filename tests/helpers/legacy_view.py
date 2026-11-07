@@ -58,9 +58,10 @@ def for_frozen_reference(brushes, geometry_of=None):
     :func:`engine.brush_faces.legacy_layout`, with its derived bounds."""
     copies, remapped = [], {}
     for brush in brushes:
-        copy, lossy = brush_faces.legacy_layout(brush)
-        # A runtime source owns a live brush's transform by identity, so the
-        # copy is told its original (read by with_derived_bounds).
+        # World-space planes first (Stage 2d stores them locally). A runtime
+        # source owns a live brush's transform by identity, so the copy is
+        # told its original (read by with_derived_bounds).
+        copy, lossy = brush_faces.legacy_layout(_world(brush))
         copy['_runtime_of'] = brush
         assert not lossy, (
             "%s: %s cannot be expressed in the layout the frozen reference "
@@ -71,5 +72,16 @@ def for_frozen_reference(brushes, geometry_of=None):
             # The snapshot is the brush as its mesh was built -- at its
             # authored placement, so it names no original.
             remapped[id(copy)] = with_derived_bounds(
-                brush_faces.legacy_layout(geometry_of[id(brush)])[0])
+                brush_faces.legacy_layout(_world(geometry_of[id(brush)]))[0])
     return copies, remapped
+
+
+def _world(brush):
+    """*brush* with its planes in world space, as the frozen reference reads
+    them (``engine.brush_placement.world_layout``), the same dict when it is
+    a box. (A live brush's runtime transform is owned by a runtime source by
+    identity: each copy is told its original, ``_runtime_of``, which
+    :func:`with_derived_bounds` reads it from.)"""
+    if not brush_faces.has_geometry(brush):
+        return brush
+    return brush_placement.world_layout(brush)
