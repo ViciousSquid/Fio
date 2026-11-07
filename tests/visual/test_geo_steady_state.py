@@ -92,7 +92,7 @@ def test_a_steady_frame_reads_no_authored_state(renderer, context):
     # draw could reach: the brushes, the geometry records' contents, the
     # texture cache and every way of resolving or loading a texture or mesh.
     for record in table.geometry_records:
-        for name in ('convex', 'origin', 'scale', 'natural_scale', 'signature'):
+        for name in ('convex', 'origin', 'scale', 'materials', 'signature'):
             setattr(record, name, Tripwire('GeometryRecord.' + name))
     table.brushes = Tripwire('RenderTable.brushes')
     table.refs = Tripwire('RenderTable.refs')

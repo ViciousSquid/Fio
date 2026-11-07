@@ -73,7 +73,7 @@ from engine.constants import is_water_brush, normalize_color, water_high_quality
 from engine.spatial import authored_hidden
 import itertools
 
-from engine import brush_geometry
+from engine import brush_faces, brush_geometry
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
 
 #: Process-wide sources of :attr:`RenderTable.geometry_version` values (two
@@ -111,33 +111,44 @@ class GeometryRecord:
     a later ``pos``/``size`` change is a transform, as it always was for an
     AABB brush and as a mover needs.
 
+    ``materials`` maps each convex face (by ``id``) to the
+    :class:`engine.brush_faces.Material` it is drawn with -- its one material
+    record, resolved once here (a legacy brush's per-tag entries by
+    :data:`engine.brush_faces.PRECEDENCE`, brush-wide tiling applied).
+    ``natural_scale`` is the same record's Natural flag per face.
+
     ``surface`` is the complete input of the mesh built from this record, as
     one exact, hashable value -- every plane as authored (offset, normal,
-    texture, UV mapping, texture basis, face tag), each face's natural-scale
-    flag, and the anchor -- and nothing else. So a cache keyed by it holds
+    texture, UV mapping, texture basis, face tag), each face's resolved
+    material, and the anchor -- and nothing else. So a cache keyed by it holds
     the invariant both ways: equal keys build identical vertex data, whatever
     the brush's current position, and any change to what the mesh is built
     from is a different key. It carries no geometry epoch (an epoch belongs to
     a dict, and an undo restores every brush as a new dict), so a restored
     but unchanged brush finds its mesh again.
     """
-    __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale',
+    __slots__ = ('signature', 'convex', 'origin', 'scale', 'materials',
                  'serial', 'surface')
 
-    def __init__(self, signature, convex, origin, scale, natural_scale):
+    def __init__(self, signature, convex, origin, scale, materials):
         self.signature = signature
         self.convex = convex
         self.origin = origin
         self.scale = scale
-        self.natural_scale = natural_scale
+        self.materials = materials
         self.serial = next(_geometry_serials)
         self.surface = (
             tuple(_frozen(plane) for plane in convex.planes),
-            tuple(bool(natural_scale.get(id(face), False))
-                  for face in convex.faces),
+            tuple(materials[id(face)] for face in convex.faces),
             tuple(origin.tolist()), tuple(scale.tolist()))
 
-    def describes(self, signature, convex, natural_scale):
+    @property
+    def natural_scale(self):
+        """``{id(face): bool}``: each face's Natural flag (from
+        :attr:`materials`)."""
+        return {key: material.natural for key, material in self.materials.items()}
+
+    def describes(self, signature, convex, materials):
         """Whether this record already describes that surface.
 
         ``pos``/``size`` are deliberately not compared: while the surface is
@@ -146,7 +157,7 @@ class GeometryRecord:
         """
         return (self.convex is convex
                 and self.signature == signature
-                and self.natural_scale == natural_scale)
+                and self.materials == materials)
 
 #
 # One uint16 per brush replacing the chain of dict lookups, string comparisons
@@ -253,12 +264,16 @@ def _brush_class_bits(brush) -> int:
         bits |= CLASS_TEXTURE_TILING
     if brush_geometry.brush_has_geometry(brush):
         bits |= CLASS_HAS_GEOMETRY
-
-    textures = brush.get('textures') or {}
-    for tex in textures.values():
-        if tex and tex not in (TEX_DEFAULT, TEX_SKIP):
+        # A convex brush's faces are its planes: textured if any face's one
+        # material record names a real texture (engine.brush_faces).
+        if brush_faces.is_textured(brush):
             bits |= CLASS_TEXTURED
-            break
+    else:
+        textures = brush.get('textures') or {}
+        for tex in textures.values():
+            if tex and tex not in (TEX_DEFAULT, TEX_SKIP):
+                bits |= CLASS_TEXTURED
+                break
 
     # The shadow pass's caster filter, hoisted out of its per-frame Python walk.
     if not (bits & (CLASS_HIDDEN_AUTHORED | CLASS_TRIGGER | CLASS_FOG |
@@ -492,12 +507,12 @@ class RenderTable:
         size = brush.get('size') or (64.0, 64.0, 64.0)
         origin = np.asarray(pos, dtype=np.float64).copy()
         scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
-        natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
-            brush, face.get('face'), face)) for face in convex.faces}
+        materials = brush_faces.convex_materials(
+            convex, brush.get('texture_tiling', False))
         signature = brush_geometry.geometry_signature(brush)
-        if previous is not None and previous.describes(signature, convex, natural):
+        if previous is not None and previous.describes(signature, convex, materials):
             return previous
-        return GeometryRecord(signature, convex, origin, scale, natural)
+        return GeometryRecord(signature, convex, origin, scale, materials)
 
     # -- row resolution ----------------------------------------------------
 

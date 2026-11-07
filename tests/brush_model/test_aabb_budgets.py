@@ -20,10 +20,8 @@ rather than asserted here (``perf`` guards count work, they do not time it).
 
 import collections
 import copy
-import gc
 import json
 import sys
-import tracemalloc
 
 import numpy as np
 import pytest
@@ -54,22 +52,44 @@ def boxes():
     return out
 
 
-def _heap(make):
-    gc.collect()
-    tracemalloc.start()
-    try:
-        before = tracemalloc.get_traced_memory()[0]
-        made = make()
-        gc.collect()
-        after = tracemalloc.get_traced_memory()[0]
-    finally:
-        tracemalloc.stop()
-    return made, after - before
+#: Measured in a fresh interpreter: a long test session leaves threads
+#: (logic, audio) that allocate while tracemalloc is counting, and their
+#: allocations are nobody's per-box cost.
+_MEASURE = r"""
+import gc, json, sys, tracemalloc
+sys.path.insert(0, sys.argv[1])
+from engine.render_table import RenderTable
+with open(sys.argv[2]) as handle:
+    boxes = [b for b in json.load(handle)['brushes'] if not b.get('geometry')]
+encoded = json.dumps(boxes)
+gc.collect(); tracemalloc.start()
+before = tracemalloc.get_traced_memory()[0]
+copies = json.loads(encoded)
+gc.collect(); box_heap = tracemalloc.get_traced_memory()[0] - before
+tracemalloc.stop()
+gc.collect(); tracemalloc.start()
+before = tracemalloc.get_traced_memory()[0]
+table = RenderTable(); table.sync(copies, 1)
+gc.collect(); table_heap = tracemalloc.get_traced_memory()[0] - before
+tracemalloc.stop()
+print(json.dumps({"boxes": len(copies), "box_heap": box_heap,
+                  "table_heap": table_heap, "rows": table.count}))
+"""
 
 
-def test_a_box_dict_stays_within_its_heap_budget(boxes):
-    copies, used = _heap(lambda: json.loads(json.dumps(boxes)))
-    per_box = used / len(copies)
+@pytest.fixture(scope='module')
+def measured():
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, '-c', _MEASURE, repo_path(),
+         repo_path('maps', 'BigWorld_streaming_test.json')],
+        check=True, capture_output=True, text=True).stdout
+    return json.loads(out.strip().splitlines()[-1])
+
+
+def test_a_box_dict_stays_within_its_heap_budget(measured):
+    per_box = measured['box_heap'] / measured['boxes']
+    assert measured['boxes'] == 3604
     assert per_box <= _budget(BOX_HEAP_BYTES), "%.0f B per box" % per_box
 
 
@@ -79,17 +99,9 @@ def test_a_render_table_row_stays_within_its_column_budget():
     assert row <= ROW_COLUMN_BYTES, row
 
 
-def test_a_synced_table_retains_its_row_budget(boxes):
-    copies = json.loads(json.dumps(boxes))
-
-    def sync():
-        table = RenderTable()
-        table.sync(copies, 1)
-        return table
-
-    table, used = _heap(sync)
-    assert table.count == len(copies)
-    per_row = used / len(copies)
+def test_a_synced_table_retains_its_row_budget(measured):
+    assert measured['rows'] == measured['boxes']
+    per_row = measured['table_heap'] / measured['rows']
     assert per_row <= _budget(ROW_RETAINED_BYTES), "%.0f B per row" % per_row
 
 

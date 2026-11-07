@@ -1,15 +1,19 @@
-"""Fio's brush semantics as they are today -- an executable statement.
+"""Fio's brush semantics -- an executable statement, kept in step by hand.
 
-Stage 0 of the unified brush model (``docs/brush-model-proposal.md``) changes
-no behaviour; it pins what a brush *means* now, so every later stage is a
-deliberate, reviewed change rather than a silent one. A brush dict is read
-under two encodings that overlap:
+Pinned at Stage 0 of the unified brush model (``docs/brush-model-proposal.md``)
+and changed only by a stage that changes behaviour on purpose; Stage 1 (one
+face record) is the current statement. A brush dict has one of two
+encodings:
 
-* **box** (no ``geometry.planes``): ``pos``/``size`` are the geometry. Face
-  material lives in per-tag dicts -- ``textures``, ``uv_scale``, ``uv_angle``,
-  ``uv_shift``, ``uv_natural`` -- plus the brush-wide ``texture_tiling``.
+* **box** (no ``geometry.planes``): ``pos``/``size`` are the geometry. Each
+  face's material lives in the per-tag dicts -- ``textures``, ``uv_scale``,
+  ``uv_angle``, ``uv_shift``, ``uv_natural`` -- plus the brush-wide
+  ``texture_tiling``.
 * **convex** (``geometry.planes``): the plane set is the geometry, and each
-  plane carries its own face material. ``pos``/``size`` are a *derived bound*
+  face's material lives on its plane, tagged and cut faces alike. A legacy
+  brush may still carry per-tag copies for its tagged faces; the Stage 1
+  precedence settles them (restated independently in
+  :func:`_convex_material`). ``pos``/``size`` are a *derived bound*
   (``brush_geometry.sync_brush_bounds``); the renderer draws the planes and
   the bound-readers (collision AABBs, spatial grid, culling, picking) read
   ``pos``/``size``.
@@ -23,15 +27,17 @@ two cancel and the planes are drawn where they are.
 
 This module computes, from a brush dict alone and without GL: the pass that
 draws the brush, the faces it draws (world-space polygon + resolved
-material), the bound the bound-readers use, and the inconsistencies a brush
-carries. The tests anchor
-it to the engine -- the RenderTable columns the box pass consumes, the frozen
-copy of the convex path that the GL draw oracle proves against the GPU, and
-the GPU state itself -- so it states the engine's behaviour rather than an
-opinion of it. Do not "fix" it: a deliberate behaviour change updates it in
-the same commit, and the snapshot (``tests/brush_model``) shows the change.
+material), the bound the bound-readers use, and what a brush's data carries
+that its one record has to settle. The tests anchor it to the engine -- the
+RenderTable columns the box pass consumes, the convex records the renderer
+reads, the frozen copy of the convex path that the GL draw oracle proves
+against the GPU, and the GPU state itself -- so it states the engine's
+behaviour rather than an opinion of it. Do not "fix" it: a deliberate
+behaviour change updates it in the same commit, and the snapshot
+(``tests/brush_model``) shows the change.
 """
 
+import copy
 import glob
 import hashlib
 import json
@@ -57,7 +63,7 @@ UNTEXTURED = (DEFAULT_TEXTURE, 'caulk.jpg')
 RUNTIME_KEYS = ('original_pos', 'rotation_yaw', '_rot_angle')
 
 #: The per-tag material dicts and the plane field each one shadows on a
-#: tagged convex face. The plane is what renders.
+#: legacy tagged convex face.
 TAG_FIELDS = (('textures', 'texture'), ('uv_scale', 'uv_scale'),
               ('uv_shift', 'uv_shift'), ('uv_angle', 'uv_angle'))
 
@@ -82,13 +88,15 @@ def bound(brush):
 def draw_pass(brush):
     """``'textured'`` or ``'solid'``: which opaque pass draws the brush.
 
-    The engine's rule (``render_table._brush_class_bits``), for both
-    encodings: textured if any *per-tag* ``textures`` entry names a real
-    texture; otherwise the lit pass draws every face in the brush colour,
-    whatever the faces' own textures are. A convex brush is classified from
-    the per-tag copy too, not from its planes.
+    Textured if any face names a real texture -- a box's per-tag
+    ``textures``, a convex brush's planes (its faces' one record);
+    otherwise the lit pass draws every face in the brush colour.
     """
-    for name in (brush.get('textures') or {}).values():
+    if bg.brush_has_geometry(brush):
+        names = [plane.get('texture') for plane in brush['geometry']['planes']]
+    else:
+        names = list((brush.get('textures') or {}).values())
+    for name in names:
         if name and name not in UNTEXTURED:
             return 'textured'
     return 'solid'
@@ -146,19 +154,73 @@ def _box_material(brush, tag):
     }
 
 
+def _tag_entry(brush, key, tag):
+    entries = brush.get(key)
+    if not tag or not isinstance(entries, dict):
+        return None
+    return entries.get(tag)
+
+
 def _convex_material(brush, face, plane):
-    scale = face.get('uv_scale') or plane.get('uv_scale')
-    shift = plane.get('uv_shift', (0.0, 0.0)) or (0.0, 0.0)
-    # The renderer passes the convex *face* dict as ``plane`` here, and a face
-    # dict has no ``uv_natural``: only the brush's per-tag flag counts.
-    natural = bool(bg.face_uses_natural_scale(brush, face.get('face'), face))
+    """A convex face's material at run time: its plane alone (a per-tag dict
+    is never consulted for a convex face), with brush-wide tiling as for a
+    box."""
+    scale = plane.get('uv_scale')
+    shift = plane.get('uv_shift') or (0.0, 0.0)
+    natural = bool(plane.get('uv_natural'))
+    if scale is None and brush.get('texture_tiling', False):
+        natural = True
     return {
-        'texture': face.get('texture') or DEFAULT_TEXTURE,
+        'texture': plane.get('texture') or DEFAULT_TEXTURE,
         'uv_scale': None if scale is None else (float(scale[0]), float(scale[1])),
         'uv_angle': float(plane.get('uv_angle', 0.0)),
         'uv_shift': (float(shift[0]), float(shift[1])),
         'natural': natural,
     }
+
+
+#: The per-tag dict each plane field comes from in a legacy brush.
+_LEGACY_KEYS = (('texture', 'textures'), ('uv_scale', 'uv_scale'),
+                ('uv_shift', 'uv_shift'), ('uv_angle', 'uv_angle'),
+                ('uv_natural', 'uv_natural'))
+
+
+def migrated(brush):
+    """*brush* as the editor loads it from a map saved before the canonical
+    layout -- restated here, independently of ``engine.brush_faces``.
+
+    For each tagged face of a convex brush: texture from the plane; scale,
+    shift and angle from the per-tag entry when there is one, else the
+    plane; Natural if either home sets it. The result goes on the plane and
+    the per-tag entries of tags the planes carry are dropped. Boxes and the
+    input are left untouched.
+    """
+    out = copy.deepcopy(brush)
+    if not bg.brush_has_geometry(out):
+        return out
+    planes = out['geometry']['planes']
+    tags = {plane.get('face') for plane in planes if plane.get('face')}
+    for plane in planes:
+        tag = plane.get('face')
+        if not tag:
+            continue
+        for field, key in _LEGACY_KEYS[1:4]:
+            entry = _tag_entry(out, key, tag)
+            if entry is not None:
+                plane[field] = (float(entry) if field == 'uv_angle'
+                                else [float(entry[0]), float(entry[1])])
+        if _tag_entry(out, 'uv_natural', tag):
+            plane['uv_natural'] = True
+    for _field, key in _LEGACY_KEYS:
+        entries = out.get(key)
+        if isinstance(entries, dict):
+            kept = {k: v for k, v in entries.items() if k not in tags}
+            if kept:
+                out[key] = kept
+            else:
+                out.pop(key)
+    bg.invalidate_geometry_cache(out)
+    return out
 
 
 def render_faces(brush):
@@ -208,42 +270,45 @@ def geometry_bound(brush):
 
 
 def _plane_value(plane, field):
-    """A tagged convex face's rendered value of one per-tag field."""
-    if field == 'texture':
-        return plane.get('texture') or DEFAULT_TEXTURE
-    if field == 'uv_angle':
-        return float(plane.get('uv_angle', 0.0))
+    """A plane's own value of one per-tag field, or ``None``."""
     value = plane.get(field)
-    if field == 'uv_shift':
-        value = value or (0.0, 0.0)
-    return None if value is None else (float(value[0]), float(value[1]))
+    if value is None:
+        return None
+    if field in ('texture', 'uv_natural'):
+        return value or None
+    if field == 'uv_angle':
+        return float(value)
+    return (float(value[0]), float(value[1]))
+
+
+#: What a face draws when its record has no value for a field.
+_DRAWN_DEFAULT = {'texture': DEFAULT_TEXTURE, 'uv_scale': (1.0, 1.0),
+                  'uv_shift': (0.0, 0.0), 'uv_angle': 0.0}
 
 
 def _tag_value(entry, field):
-    if field in ('texture', 'uv_angle'):
-        return entry if field == 'texture' else float(entry)
+    if field in ('texture', 'uv_natural'):
+        return entry or None
+    if field == 'uv_angle':
+        return float(entry)
     return (float(entry[0]), float(entry[1]))
 
 
 def inconsistencies(brush):
-    """What this brush's two readings disagree on, as ``{kind: detail}``.
+    """What this brush's data carries that its one record has to settle, as
+    ``{kind: detail}``.
 
     * ``runtime_keys``: play's keys (:data:`RUNTIME_KEYS`) in the authored
       dict.
     * ``bound_drift``: a convex brush whose ``pos``/``size`` are not its
       planes' AABB (bit for bit); the detail is the largest difference.
-    * ``material_mismatch``: a tagged convex face whose per-tag dict entry
-      (texture, scale, shift, angle) differs from its plane's; the plane
-      renders, the Surface Inspector shows the per-tag entry. The detail
-      lists ``'tag.field'``.
-    * ``ignored_plane_natural``: a plane flagged ``uv_natural`` whose face
-      does not render natural (the renderer reads only the per-tag flag).
-    * ``untextured_planes``: a convex brush the solid pass draws (no real
-      texture in its per-tag dict) although planes name real textures; the
-      detail lists those plane indices, drawn in the brush colour.
-    * ``ignored_texture_tiling``: a convex brush with ``texture_tiling`` and
-      a face with no scale and no natural flag, which a box would draw
-      natural and the convex path draws stretched 0..1.
+    * ``resolved_from_tag``: a legacy tagged convex face whose per-tag entry
+      differs from its plane and is the authoritative value (scale, shift,
+      angle: what the Surface Inspector showed); the face draws it, where it
+      drew the plane's before Stage 1. The detail lists ``'tag.field'``.
+    * ``discarded_tag_value``: a legacy per-tag entry that differs from the
+      plane and is not authoritative (texture: the plane draws and always
+      did); load normalisation drops it.
     """
     found = {}
     runtime = [key for key in RUNTIME_KEYS if brush.get(key) is not None]
@@ -258,34 +323,29 @@ def inconsistencies(brush):
     if centre.tobytes() != pos.tobytes() or extent.tobytes() != size.tobytes():
         found['bound_drift'] = float(max(np.abs(centre - pos).max(),
                                          np.abs(extent - size).max()))
-    mismatched = []
+    resolved, discarded = [], []
     for plane in brush['geometry']['planes']:
         tag = plane.get('face')
         if not tag:
             continue
         for key, field in TAG_FIELDS:
-            entry = (brush.get(key) or {}).get(tag)
-            if entry is not None and _tag_value(entry, field) != _plane_value(plane, field):
-                mismatched.append('%s.%s' % (tag, field))
-    if mismatched:
-        found['material_mismatch'] = sorted(mismatched)
-    ignored = [index for index, plane in enumerate(convex.planes)
-               if plane.get('uv_natural')
-               and not bg.face_uses_natural_scale(brush, plane.get('face'))]
-    if ignored:
-        found['ignored_plane_natural'] = ignored
-    if draw_pass(brush) == 'solid':
-        lost = [index for index, plane in enumerate(brush['geometry']['planes'])
-                if plane.get('texture') and plane['texture'] not in UNTEXTURED
-                and plane['texture'] != 'nodraw.jpg']
-        if lost:
-            found['untextured_planes'] = lost
-    if brush.get('texture_tiling', False):
-        stretched = sorted({index for index, (_tag, _ring, material)
-                            in enumerate(render_faces(brush))
-                            if material['uv_scale'] is None and not material['natural']})
-        if stretched:
-            found['ignored_texture_tiling'] = stretched
+            entry = _tag_entry(brush, key, tag)
+            if entry is None:
+                continue
+            # Compared as drawn: a missing value is the default it stands for.
+            per_tag = _tag_value(entry, field)
+            own = _plane_value(plane, field)
+            if own is None:
+                own = _DRAWN_DEFAULT[field]
+            if per_tag == own:
+                continue
+            (discarded if field == 'texture' else resolved).append('%s.%s' % (tag, field))
+        # Natural is set by either home and never cleared by one: nothing to
+        # settle.
+    if resolved:
+        found['resolved_from_tag'] = sorted(resolved)
+    if discarded:
+        found['discarded_tag_value'] = sorted(discarded)
     return found
 
 
@@ -321,7 +381,10 @@ DRIFT_NOISE = 1e-6
 
 
 def map_snapshot(brushes):
-    """What :func:`snapshot` records for one map's brushes."""
+    """What :func:`snapshot` records for one map's brushes, as stored in the
+    file: the inventory of what the file's data carries, and the digest of
+    what the editor draws once it has loaded (and, for a legacy file,
+    migrated) them."""
     inventory = {}
     for index, brush in enumerate(brushes):
         found = inconsistencies(brush)
@@ -334,14 +397,15 @@ def map_snapshot(brushes):
     return json.loads(json.dumps({
         'brushes': len(brushes),
         'encodings': dict(sorted(counts.items())),
-        'digest': digest(brushes),
+        'digest': digest([migrated(brush) for brush in brushes]),
         'inconsistencies': dict(sorted(inventory.items())),
     }))
 
 
 def shipped_maps(root):
     """``{file name: brushes}`` for every map in ``maps/`` that has brushes,
-    each brush a shallow copy as ``EditorState._deserialize_brushes`` makes."""
+    each brush a shallow copy of the file's record (every shipped map is a
+    legacy, version 3 map: :func:`migrated` gives it as the editor loads it)."""
     out = {}
     for path in sorted(glob.glob(os.path.join(root, 'maps', '*.json'))):
         with open(path) as handle:

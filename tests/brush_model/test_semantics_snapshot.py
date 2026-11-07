@@ -27,6 +27,10 @@ with open(repo_path('tests', 'brush_model', 'semantics_snapshot.json')) as _hand
 
 MAPS = bs.shipped_maps(REPO_ROOT)
 
+#: The two _SHOWCASE brushes whose authored per-tag scale Stage 1 draws.
+SHOWCASE_QUARTER = '5b10b49b-9b6c-45d9-91ee-0b6f06970590'
+SHOWCASE_TEN_BY_EIGHT = '8c04e483-4d44-4217-a03d-32844a727043'
+
 REGENERATE = ("if this change is deliberate, regenerate with "
               "`python tools/brush_semantics_snapshot.py --write` and name it "
               "in docs/brush-model-proposal.md")
@@ -49,13 +53,16 @@ def test_a_shipped_map_draws_what_was_recorded(name):
 def test_the_recorded_inventory_is_the_known_one():
     """The inventory in words, so a reader need not decode the fixture.
 
-    * Bounds: five convex brushes in five maps whose ``pos``/``size`` are not
-      their planes' AABB by more than float noise -- 4.85e-5 in
+    * Bounds: three convex brushes whose ``pos``/``size`` are not their
+      planes' AABB by more than float noise -- 4.85e-5 in
       ``Angled_Brush_Test`` and 128 units in ``Terrain_Test_small`` and
-      ``Topdown_example`` (the others are within 1e-6 and not pinned).
-    * Material: four convex brushes in ``_SHOWCASE`` whose per-tag
-      ``uv_scale`` (what the Surface Inspector shows, and what a box would
-      draw) is not on their planes (what renders).
+      ``Topdown_example`` (four more are within 1e-6 and not pinned).
+    * Material (Stage 1): two convex brushes in ``_SHOWCASE`` whose authored
+      per-tag ``uv_scale`` -- what the Surface Inspector showed -- is not on
+      their planes. By the precedence rule it is their one record and is now
+      drawn: 0.25 on four faces of one brush, 10 x 8 on six faces of the
+      other. (Two more carry a per-tag scale of 1.0, which draws as their
+      planes' missing scale did: no change.)
     * Runtime keys: seven maps saved a mover's ``original_pos``, one also
       its ``rotation_yaw``.
     """
@@ -67,14 +74,21 @@ def test_the_recorded_inventory_is_the_known_one():
     assert kinds == {
         'bound_drift': {'Angled_Brush_Test.json', 'Terrain_Test_small.json',
                         'Topdown_example.json'},
-        'material_mismatch': {'_SHOWCASE.json'},
+        'resolved_from_tag': {'_SHOWCASE.json'},
         'runtime_keys': {'Key_Test.json', 'MonsterTest.json',
                          'Simple_Map_Test_Extended.json', '_SHOWCASE.json',
                          'button_test.json', 'dLight2_Test.json',
                          'dLight_Test.json'},
     }
     showcase = RECORDED['_SHOWCASE.json']['inconsistencies']
-    assert sum('material_mismatch' in f for f in showcase.values()) == 4
+    resolved = {bid: f['resolved_from_tag'] for bid, f in showcase.items()
+                if 'resolved_from_tag' in f}
+    assert resolved == {
+        SHOWCASE_QUARTER: ['down.uv_scale', 'north.uv_scale', 'south.uv_scale',
+                           'top.uv_scale', 'west.uv_scale'],
+        SHOWCASE_TEN_BY_EIGHT: ['down.uv_scale', 'east.uv_scale', 'north.uv_scale',
+                                'south.uv_scale', 'top.uv_scale', 'west.uv_scale'],
+    }
     drifts = sorted(f['bound_drift'] for e in RECORDED.values()
                     for f in e['inconsistencies'].values() if 'bound_drift' in f)
     assert drifts == [4.85e-05, 128.0, 128.0]

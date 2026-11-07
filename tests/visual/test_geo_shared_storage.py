@@ -32,6 +32,13 @@ import pytest
 from tests.helpers import gl as glh
 from tests.helpers.draw_oracle import DrawCapture, compare_geo_draws, convex_programs
 from tests.helpers.geo_reference import expected_geo_draws
+from tests.helpers.legacy_view import for_frozen_reference
+
+
+def _frozen(brushes, geometry_of, gl_texture, texture_pixel_size):
+    """Arguments for the frozen reference, in the layout it reads."""
+    copies, snapshots = for_frozen_reference(brushes, geometry_of)
+    return copies, False, gl_texture, texture_pixel_size, snapshots
 from tests.helpers.table_oracle import diff_rebuild
 
 pytestmark = [pytest.mark.gl, pytest.mark.integration, pytest.mark.slow]
@@ -138,9 +145,8 @@ class Session:
             finally:
                 self.game_state.release_render_state(frame)
             shown = [b for b in self.state.brushes if not b.get('hidden')]
-            expected = expected_geo_draws(shown, False, gl_texture,
-                                          renderer._texture_pixel_size,
-                                          self.geometry_of)
+            expected = expected_geo_draws(*_frozen(shown, self.geometry_of, gl_texture,
+                                                   renderer._texture_pixel_size))
             assert expected, step
             problems = compare_geo_draws(expected, cap.draws)
             assert problems == [], "%s:\n%s" % (step, "\n".join(problems))
@@ -516,8 +522,9 @@ def test_a_missing_convex_program_falls_back_with_parity(renderer, context, miss
     with DrawCapture(program=convex_programs(renderer),
                      skip_buffers=[renderer._cube_vbo]) as capture:
         _production(renderer, context, config, table, slots, camera, 'opaque')
-    expected = expected_geo_draws([brushes[int(s)] for s in slots], False,
-                                  _gl_texture(renderer), renderer._texture_pixel_size)
+    expected = expected_geo_draws(
+        for_frozen_reference([brushes[int(s)] for s in slots])[0], False,
+        _gl_texture(renderer), renderer._texture_pixel_size)
     import OpenGL.GL as gl
     assert compare_geo_draws(expected, capture.draws, cull=gl.GL_BACK) == []
     assert capture.calls > len({d['texture'] for d in expected}), (

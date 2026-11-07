@@ -8,11 +8,15 @@ synthetic brushes covering each material and transform variant:
 * **box faces** against the RenderTable columns the instanced box pass
   draws from (texture ids, UV scale/angle/shift, the natural-scale mode
   including brush-wide ``texture_tiling``);
-* **convex faces** against the frozen copy of the convex path
-  (``tests/helpers/geo_reference``) -- the vertices it hands the GPU, put
-  through the model matrix the RenderTable publishes, and the face state of
-  every run. ``tests/visual/test_geo_run_parity.py`` proves that frozen copy
-  against the GPU's own state, so the chain ends at the GPU;
+* **convex faces** against the material record the RenderTable resolves for
+  the renderer (``tests/visual/test_brush_semantics_gl.py`` reads that
+  record back from the GPU), and against the frozen copy of the convex path
+  (``tests/helpers/geo_reference``) for geometry -- the vertices it hands the
+  GPU, put through the model matrix the RenderTable publishes.
+  ``tests/visual/test_geo_run_parity.py`` proves that frozen copy against
+  the GPU's own state, so both chains end at the GPU;
+* **the load-time migration** of legacy brushes, restated in the helper,
+  against ``engine.brush_faces.migrate_legacy``;
 * **bounds** against the three bound-readers: the RenderTable's culling
   bounds, ``brush_aabb_bounds`` (physics, AI: the same bound rounded to
   float32) and the logic thread's collision rows;
@@ -28,6 +32,7 @@ import copy
 import numpy as np
 import pytest
 
+from engine import brush_faces
 from engine import brush_geometry as bg
 from engine import render_table as rt
 from engine.constants import brush_aabb_bounds
@@ -83,7 +88,17 @@ def _convex_variants():
     spun['rot_axis'] = [0.2, 1.0, 0.1]
     rotated = box_brush("rotated", (0, 60, -250), (90, 70, 110))
     bg.rotate_brush(rotated, 25.0, (0.0, 1.0, 0.0))
-    return [base, bare, tiled, spun, rotated]
+    # A legacy brush, as saved before Stage 1: per-tag copies beside the
+    # planes, settled by the precedence rule.
+    legacy = angled_brush("legacy", (250, 60, 250), (90, 70, 110),
+                          clip_normal=(-0.3, 1.0, 0.4))
+    legacy.update(uv_scale={'top': [0.25, 0.25], 'north': [10.0, 8.0]},
+                  uv_shift={'north': [0.5, 0.0]}, uv_angle={'west': 30.0},
+                  uv_natural={'down': True}, textures={'south': 'nodraw.jpg'})
+    cut = next(p for p in legacy['geometry']['planes'] if not p.get('face'))
+    cut['uv_natural'] = True
+    bg.invalidate_geometry_cache(legacy)
+    return [base, bare, tiled, spun, rotated, legacy]
 
 
 def _worlds():
@@ -137,7 +152,8 @@ def test_box_faces_are_what_the_box_pass_draws(world):
 
 
 def _drawn_faces(brush, table, slot):
-    """Per plane index: (world-space vertices, run) as the GPU draws them."""
+    """Per plane index: (world-space vertices, run) as the GPU draws them --
+    the frozen path's vertices through the RenderTable's model matrix."""
     mesh = ref.reference_mesh(brush)
     record = table.geometry_records[int(table.geometry_id[slot])]
     models, _normals = rt.model_matrices(table, np.array([slot]))
@@ -168,16 +184,22 @@ def test_convex_faces_are_what_the_convex_path_draws(world):
         assert len(faces) == len(convex.faces) == len(drawn)
         for face, (tag, ring, material) in zip(convex.faces, faces):
             label = "%s %s plane %d" % (world, brush.get('name'), face['plane'])
+            # The record the renderer resolves each face's run from.
+            resolved = record.materials[id(face)]
+            assert resolved.texture == material['texture'], label
+            assert resolved.uv_scale == material['uv_scale'], label
+            assert resolved.uv_shift == pytest.approx(material['uv_shift']), label
+            assert resolved.uv_angle == pytest.approx(material['uv_angle']), label
+            assert resolved.natural == material['natural'], label
+            # The frozen path (M1/M2's reference, not modified by Stage 1)
+            # supplies the geometry; it reads texture, scale, shift and angle
+            # from the plane, as the record does.
             world_points, run = drawn[face['plane']]
             assert run['face'] == tag, label
             assert ref.run_texture(run) == material['texture'], label
             angle, su, sv = ref.run_tex_transform(run)
             assert angle == pytest.approx(np.radians(material['uv_angle'])), label
             assert (su, sv) == pytest.approx(material['uv_shift']), label
-            assert run['natural_scale'] == material['natural'], label
-            if not run['natural_scale']:
-                expected = material['uv_scale'] or (1.0, 1.0)
-                assert ref.run_tex_scale(run, None, None) == pytest.approx(expected), label
             # Every drawn vertex is a corner of the polygon the oracle names,
             # and every corner is drawn: the planes are drawn where they are,
             # whatever pos/size say (float32 vertices: 1e-3 of a unit).
@@ -199,6 +221,20 @@ def test_bounds_are_what_the_collision_rows_use(world):
         label = "%s %s" % (world, brush.get('name'))
         assert np.array_equal(rows.lo[:, slot], centre - size * 0.5), label
         assert np.array_equal(rows.hi[:, slot], centre + size * 0.5), label
+
+
+@pytest.mark.parametrize("world", sorted(WORLDS))
+def test_the_load_time_migration_is_the_engines(world):
+    """Every legacy brush migrates (in the engine) to what the helper's own
+    restatement of the precedence rule says, face for face."""
+    for brush in WORLDS[world]:
+        engine_side = copy.deepcopy(brush)
+        brush_faces.migrate_legacy(engine_side)
+        helper_side = bs.migrated(brush)
+        assert bs.render_faces(engine_side) == bs.render_faces(helper_side), (
+            world, brush.get('name'))
+        for key, _field in bs.TAG_FIELDS + (('uv_natural', None),):
+            assert engine_side.get(key) == helper_side.get(key), (world, key)
 
 
 @pytest.mark.parametrize("world", sorted(WORLDS))

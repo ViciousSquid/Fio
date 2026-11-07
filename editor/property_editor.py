@@ -560,6 +560,10 @@ class PropertyEditor(QWidget):
     #: pure waste.
     _SIGNATURE_IGNORED = frozenset({
         'pos', 'size', 'geometry', '_flash_until', 'original_pos',
+        # Face material: the Surface Inspector shows it, not this panel, and it
+        # moves between the per-tag dicts and the planes when a box becomes an
+        # angled brush (engine.brush_faces).
+        'textures', 'uv_scale', 'uv_shift', 'uv_angle', 'uv_natural',
     # Derived-geometry bookkeeping the geometry layer writes onto brushes. None
     # of it is displayed, and it changes on every drag, rotate and clip, so a
     # panel that folded it in would rebuild itself for edits it does not show.
@@ -4834,9 +4838,13 @@ class PropertyEditor(QWidget):
             self.current_object.setdefault('trigger_type', 'Once')
             self.current_object.setdefault('trigger_filters', ['player'])
             self.current_object.setdefault('trigger_poll_interval', 1.0)
-            self.current_object.setdefault('textures', {})
-            for face in ['top', 'bottom', 'north', 'south', 'east', 'west']:
-                self.current_object['textures'][face] = 'trigger.jpg'
+            from engine import brush_faces
+            # Every face takes the trigger texture through its one record --
+            # a box's six sides (the bottom one included: the old list named
+            # it 'bottom', which no face is called), an angled brush's planes.
+            for face in brush_faces.face_keys(self.current_object):
+                brush_faces.set_face_material(self.current_object, face,
+                                              texture='trigger.jpg')
         if hasattr(self, 'trigger_tab_index'):
             self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
             if is_trigger:

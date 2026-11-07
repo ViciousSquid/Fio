@@ -162,14 +162,14 @@
  },
  "_SHOWCASE.json": {
   "brushes": 85,
-  "digest": "98c23a6eac5b68ebea7acb44a720779fcaef497f045ccc228178ea988e5d3947",
+  "digest": "6b40c7e7c94901adf487dba8e12a8ccac1e418130e94f45f20e1a4def455e166",
   "encodings": {
    "box": 68,
    "convex": 17
   },
   "inconsistencies": {
    "5b10b49b-9b6c-45d9-91ee-0b6f06970590": {
-    "material_mismatch": [
+    "resolved_from_tag": [
      "down.uv_scale",
      "north.uv_scale",
      "south.uv_scale",
@@ -178,31 +178,13 @@
     ]
    },
    "8c04e483-4d44-4217-a03d-32844a727043": {
-    "material_mismatch": [
+    "resolved_from_tag": [
      "down.uv_scale",
      "east.uv_scale",
      "north.uv_scale",
      "south.uv_scale",
      "top.uv_scale",
      "west.uv_scale"
-    ]
-   },
-   "908d6864-c3b1-4d27-95c0-ca87e02f4898": {
-    "material_mismatch": [
-     "down.uv_scale",
-     "east.uv_scale",
-     "north.uv_scale",
-     "south.uv_scale",
-     "top.uv_scale"
-    ]
-   },
-   "e4b232de-7658-4ea1-b47d-a36532d32063": {
-    "material_mismatch": [
-     "down.uv_scale",
-     "east.uv_scale",
-     "north.uv_scale",
-     "south.uv_scale",
-     "top.uv_scale"
     ]
    },
    "ef6fd889-8ba1-434f-8c1c-946b6c40403b": {

@@ -206,8 +206,14 @@ def test_cut_face_highlight_and_texturing_survive():
     inspector = _read("editor/surface_inspector.py")
     assert "face_texture" in inspector
 
+    # Applying the asset browser's texture to a face -- cut faces included
+    # -- goes through the face's one material record, which resolves a cut
+    # face's '#<plane>' key to its plane (behaviour: tests/editor/
+    # test_face_material_tools.py::test_applying_a_texture_reaches_a_cut_face).
     mw = _read("editor/main_window.py")
-    assert "brush_geometry.face_plane_index(brush, face_name)" in mw
+    assert "brush_faces.set_face_material(brush, face_name, texture=" in mw
+    faces = _read("engine/brush_faces.py")
+    assert "key.startswith('#')" in faces
 
 
 def test_procedural_map_generation_survives():

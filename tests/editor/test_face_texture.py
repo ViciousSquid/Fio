@@ -97,11 +97,14 @@ def test_a_cut_face_stores_its_transform_on_its_plane():
 
 
 def test_writing_a_texture_to_a_tagged_face_of_an_angled_brush():
-    """The plane draws the face, so it has to learn the new texture too."""
+    """An angled brush's face, tagged or cut, keeps its one material record
+    on its plane: that is what draws it and what the inspector reads back,
+    with no second copy in the brush's per-tag dicts."""
     brush = wedge()
     ft.set_transform(brush, 'west', texture='marble.png')
-    assert brush['textures']['west'] == 'marble.png'
     assert ft.face_plane(brush, 'west')['texture'] == 'marble.png'
+    assert ft.get_transform(brush, 'west')['texture'] == 'marble.png'
+    assert 'west' not in (brush.get('textures') or {})
 
 
 def test_writing_a_texture_to_a_cut_face():

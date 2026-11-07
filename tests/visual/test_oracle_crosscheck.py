@@ -24,6 +24,7 @@ import pytest
 from tests.helpers import gl as glh
 from tests.helpers.draw_oracle import DrawCapture, compare_geo_draws, convex_programs
 from tests.helpers.geo_reference import expected_geo_draws
+from tests.helpers.legacy_view import for_frozen_reference
 from tests.helpers.table_oracle import render_table_diff
 
 pytestmark = [pytest.mark.gl]
@@ -89,7 +90,7 @@ def _oracles(renderer, context, brushes, table, slots):
         return (renderer.texture_manager.get(renderer._tex_cache_path(name))
                 or renderer.load_texture_callback(name, 'textures'))
 
-    expected = expected_geo_draws(brushes, False, gl_texture,
+    expected = expected_geo_draws(for_frozen_reference(brushes)[0], False, gl_texture,
                                   renderer._texture_pixel_size)
     return render_table_diff(table), compare_geo_draws(expected, cap.draws)
 
@@ -236,8 +237,8 @@ def test_a_scripted_session_passes_both_oracles(renderer, context):
                         None, config, clear=False,
                         brush_slots=frame.all_brush_slots)
                 shown = [b for b in state.brushes if not b.get('hidden')]
-                expected = expected_geo_draws(shown, play, gl_texture,
-                                              renderer._texture_pixel_size)
+                expected = expected_geo_draws(for_frozen_reference(shown)[0], play,
+                                              gl_texture, renderer._texture_pixel_size)
                 assert expected, "%s: the session draws nothing" % step
                 problems = compare_geo_draws(expected, cap.draws)
                 assert problems == [], "%s:\n%s" % (step, "\n".join(problems))

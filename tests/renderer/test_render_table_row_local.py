@@ -19,6 +19,7 @@ import random
 import numpy as np
 import pytest
 
+from engine import brush_faces
 from engine import brush_geometry as bg
 from engine import render_table as rt
 from engine.render_table import RenderTable
@@ -48,7 +49,10 @@ def _edit(brush, rng):
     """One authored edit of the kind the editor journals."""
     kind = rng.randrange(5)
     if kind == 0:
-        brush['textures'][rng.choice(rt.CUBE_FACE_KEYS)] = rng.choice(TEXTURES)
+        # Through the face's one material record, as the editor writes it (a
+        # box's per-tag dict, an angled brush's plane).
+        brush_faces.set_face_material(brush, rng.choice(brush_faces.face_keys(brush)),
+                                      texture=rng.choice(TEXTURES))
     elif kind == 1:
         shader = rng.choice(SHADERS)
         if shader is None:
@@ -127,11 +131,14 @@ def test_a_journalled_edit_resolves_only_its_rows(monkeypatch):
                         lambda self, slots, b: (resolved.extend(slots),
                                                 real(self, slots, b)))
 
-    brushes[57]['textures']['top'] = 'brick.png'
-    table.begin_frame(brushes, 2, dirty_objects={id(brushes[57])})
+    # A box row: its face columns are what the box pass draws.
+    slot = next(i for i in range(57, len(brushes))
+                if not bg.brush_has_geometry(brushes[i]))
+    brush_faces.set_face_material(brushes[slot], 'top', texture='brick.png')
+    table.begin_frame(brushes, 2, dirty_objects={id(brushes[slot])})
 
-    assert resolved == [57]
-    assert table.texture_names()[table.tex_name_id[57, 5]] == 'brick.png'
+    assert resolved == [slot]
+    assert table.texture_names()[table.tex_name_id[slot, 5]] == 'brick.png'
 
 
 def test_convex_to_box_changes_fall_back_to_a_reconcile():

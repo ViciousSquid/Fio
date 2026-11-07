@@ -92,6 +92,15 @@ def is_water_brush(brush):
         return True
     if brush.get('shader') == 'Water':
         return True
+    # Every face's texture by its one material record (engine.brush_faces):
+    # an angled brush's planes, a box's per-tag dict.
+    geometry = brush.get('geometry')
+    if isinstance(geometry, dict) and geometry.get('planes'):
+        for plane in geometry['planes']:
+            tex = plane.get('texture')
+            if tex and 'water' in tex.lower():
+                return True
+        return False
     textures = brush.get('textures')
     if textures:
         for tex in textures.values():

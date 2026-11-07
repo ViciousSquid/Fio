@@ -5,10 +5,10 @@
   "engine/savegame.py": 1
  },
  "geometry": {
-  "editor/component_edit.py": 3,
-  "editor/editor_state.py": 2,
+  "editor/component_edit.py": 2,
   "editor/main_window.py": 1,
-  "engine/brush_geometry.py": 6,
+  "engine/brush_faces.py": 1,
+  "engine/brush_geometry.py": 7,
   "engine/renderer/core/geo_store.py": 1
  },
  "original_pos": {
@@ -39,26 +39,23 @@
   "engine/brush_geometry.py": 1,
   "engine/effect_entity.py": 1
  },
- "textures": {
-  "editor/face_texture.py": 1,
-  "editor/main_window.py": 6,
-  "editor/property_editor.py": 2
+ "texture_tiling": {
+  "editor/main_window.py": 1
  },
  "uv_angle": {
-  "editor/face_texture.py": 2,
-  "editor/main_window.py": 1,
-  "engine/brush_geometry.py": 1
+  "editor/face_texture.py": 1,
+  "engine/brush_geometry.py": 2
  },
  "uv_natural": {
-  "editor/face_texture.py": 3,
+  "editor/face_texture.py": 1,
   "engine/brush_geometry.py": 1
  },
  "uv_scale": {
-  "editor/face_texture.py": 2,
-  "engine/brush_geometry.py": 4
+  "editor/face_texture.py": 1,
+  "engine/brush_geometry.py": 3
  },
  "uv_shift": {
-  "editor/face_texture.py": 2,
+  "editor/face_texture.py": 1,
   "engine/brush_geometry.py": 1
  }
 }

@@ -30,8 +30,11 @@ except ImportError:
 from engine.brush_geometry import (
     GEO_RUNTIME_KEYS, clip_brush as _geo_clip_brush,
     rotate_brush as _geo_rotate_brush, brush_has_geometry as _geo_has_geometry,
-    is_axis_aligned_box as _geo_is_box,
+    is_axis_aligned_box as _geo_is_box, drop_geometry as _geo_drop_geometry,
 )
+from engine.brush_faces import (
+    CANONICAL_MAP_VERSION, drop_tag_copies as _drop_tag_copies,
+    migrate_legacy as _migrate_legacy_faces)
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -329,17 +332,15 @@ class EditorState:
         if not _geo_has_geometry(brush):
             return
         self.save_state()
-        brush.pop('geometry', None)
-        brush.pop('_geo_cache', None)
-        brush.pop('_geo_cache_sig', None)
+        # Tagged faces keep their material (it moves back to the per-tag
+        # dicts); the plane set and its caches go.
+        _geo_drop_geometry(brush)
         self.mark_lighting_dirty([brush])
 
     def simplify_brush_geometry(self, brush: dict) -> None:
         """If a geometry brush is really an axis-aligned box, drop to pos/size."""
         if _geo_has_geometry(brush) and _geo_is_box(brush):
-            brush.pop('geometry', None)
-            brush.pop('_geo_cache', None)
-            brush.pop('_geo_cache_sig', None)
+            _geo_drop_geometry(brush)
 
     # =========================================================================
     # SCENE MANAGEMENT
@@ -481,7 +482,9 @@ class EditorState:
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
         data = {
-            'version': 3,  # Version 3 adds stable entity IDs and logic graph layout
+            # 3: stable entity IDs and logic graph layout. 4: one material
+            # record per brush face (engine.brush_faces.CANONICAL_MAP_VERSION).
+            'version': CANONICAL_MAP_VERSION,
             'brushes': self._serialize_brushes(),
             # Cutscene Wizard actors are live authoring entities. Their actual
             # definitions live in the cutscene JSON and must never leak into
@@ -651,8 +654,16 @@ class EditorState:
 
         return serialized
 
-    def _deserialize_brushes(self, brushes_data, yield_hook=None):
-        """Deserialize brushes with I/O connections."""
+    def _deserialize_brushes(self, brushes_data, yield_hook=None, legacy=False):
+        """Deserialize brushes with I/O connections.
+
+        *legacy* is true for brush records from a map saved before the
+        canonical face layout (map ``version`` below
+        ``engine.brush_faces.CANONICAL_MAP_VERSION``): their angled brushes'
+        per-tag material copies are migrated onto the planes by the
+        precedence rule. Records from anywhere else are canonical already; a
+        stray per-tag copy on an angled brush is dropped, never consulted.
+        """
         result = []
 
         for index, brush_data in enumerate(brushes_data):
@@ -662,6 +673,14 @@ class EditorState:
 
             # Backfill stable ID for legacy maps
             brush.setdefault('id', str(uuid.uuid4()))
+
+            # One material record per face (engine.brush_faces). Boxes are
+            # untouched; nothing in *brushes_data* is modified.
+            if 'geometry' in brush:
+                if legacy:
+                    _migrate_legacy_faces(brush)
+                else:
+                    _drop_tag_copies(brush)
 
             # Restore I/O connections
             if IO_AVAILABLE and 'io_connections' in brush:
@@ -708,6 +727,17 @@ class EditorState:
             seen.add(tid)
 
     @staticmethod
+    def is_legacy_face_layout(level_data):
+        """Whether *level_data* predates the canonical face layout (an angled
+        face's material on its plane only): map ``version`` below
+        ``CANONICAL_MAP_VERSION``, or no version at all."""
+        try:
+            version = int(level_data.get('version') or 0)
+        except (TypeError, ValueError):
+            version = 0
+        return version < CANONICAL_MAP_VERSION
+
+    @staticmethod
     def validate_level_data(level_data):
         """Raise ``ValueError`` if *level_data* is not shaped like a map.
 
@@ -744,11 +774,22 @@ class EditorState:
                 for r in level_data.get('things', [])):
             from plugins.bigworld.editor_streaming import EditorCellStream
             stream = EditorCellStream.for_level(level_data)
+        legacy = self.is_legacy_face_layout(level_data)
+        if stream is not None and legacy:
+            # Every record of the streamed world is migrated now, resident or
+            # not, so a later save writes the canonical layout throughout.
+            records = stream.records['brushes']
+            for identity, record in list(records.items()):
+                if 'geometry' in record:
+                    record = dict(record)
+                    _migrate_legacy_faces(record)
+                    records[identity] = record
         local = stream.local_data() if stream is not None else level_data
         brushes_data = local.get('brushes') or []
         things_data = local.get('things') or []
 
-        new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook)
+        new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook,
+                                                legacy=legacy)
         new_things = []
         for index, t_data in enumerate(things_data):
             if yield_hook is not None and index % 25 == 0:

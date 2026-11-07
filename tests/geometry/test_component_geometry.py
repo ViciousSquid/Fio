@@ -315,16 +315,38 @@ def face_uvs(brush):
     return out
 
 
-def test_an_untouched_brush_keeps_the_world_axis_projection():
-    """Nothing changes for geometry that has never been rotated."""
+def test_an_untouched_angled_brush_keeps_the_world_axis_projection():
+    """Nothing changes for geometry that has never been rotated: planes with
+    no texture basis project along the world axes."""
     brush = make_box()
-    bg.box_to_geometry(brush)
+    brush['geometry'] = {'planes': [bg._plane_to_json(p) for p in
+                                    bg.box_planes(brush['pos'], brush['size'])]}
+    bg.invalidate_geometry_cache(brush)
     for face in bg.get_convex(brush).faces:
         assert face['uv_axes'] is None
         expected = bg.render_uv_axes(face['normal'])
         ring = bg.get_convex(brush).verts[face['indices']]
         us, _, _, _ = bg.face_uv_projection(ring, face)
         assert np.allclose(us, ring @ np.asarray(expected[0]))
+
+
+def test_a_converted_box_keeps_the_box_projection():
+    """Converting a box to a plane set keeps the cube's texture orientation:
+    the two X-facing sides, which the cube maps with U up the wall, carry
+    that basis; the other four match the world-axis default already."""
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    for face in bg.get_convex(brush).faces:
+        ring = bg.get_convex(brush).verts[face['indices']]
+        us, vs, (u0, eu), (v0, ev) = bg.face_uv_projection(ring, face)
+        if face['face'] in ('west', 'east'):
+            assert face['uv_axes'] == ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0))
+            # The cube VAO's west/east UVs: u = y + 0.5, v = 0.5 - z (unit cube).
+            local = (ring - np.asarray(brush['pos'])) / np.asarray(brush['size'])
+            assert np.allclose((us - u0) / eu, local[:, 1] + 0.5)
+            assert np.allclose((vs - v0) / ev, 0.5 - local[:, 2])
+        else:
+            assert face['uv_axes'] is None
 
 
 def test_rotation_leaves_every_face_uv_untouched():

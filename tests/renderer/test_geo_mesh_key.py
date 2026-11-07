@@ -16,10 +16,12 @@ surface is unchanged. ``pos``/``size`` therefore change the mesh of a *new*
 record (they are in its key) but are only a transform for an existing one.
 
 Conservative by design: every authored plane field is in the key, including
-two the tessellation ignores (the face tag, and a plane-level ``uv_natural``
-that the renderer reads from the brush's per-tag flags instead). Changing
-those rebuilds a mesh unnecessarily; it can never reuse a wrong one, and a
-plane field added later is covered without anyone remembering to add it.
+one the tessellation does not use for a brush in canonical form (the face
+tag, which only selects a legacy brush's per-tag entries). Changing it
+rebuilds a mesh unnecessarily; it can never reuse a wrong one, and a plane
+field added later is covered without anyone remembering to add it. Each
+face's resolved material (its one record, ``engine.brush_faces``) is in the
+key as well, so a legacy brush's per-tag entries are covered too.
 """
 
 import copy
@@ -32,7 +34,7 @@ from engine.render_table import RenderTable
 pytestmark = pytest.mark.qt          # imports the renderer core (PyOpenGL)
 
 #: Plane fields in the key that do not change the tessellation (see above).
-CONSERVATIVE = {'face tag', 'plane uv_natural'}
+CONSERVATIVE = {'face tag'}
 
 
 def _brush():
@@ -62,19 +64,13 @@ def _record(brush):
 
 def _mesh(record):
     """Everything the tessellation hands the GPU, comparable: vertex and edge
-    bytes, face layout, and each face's resolved state -- the inputs of the
-    renderer's per-face resolution (texture, scale, rotation, shift,
-    natural-scale flag and extent), not the raw plane dicts."""
+    bytes, face layout, and each face's resolved material and extent -- the
+    inputs of the renderer's per-face resolution, not the raw plane dicts."""
     from engine.renderer.core.geometry import tessellate_geo
     data = tessellate_geo(record)
     faces = []
-    for face, plane, first, count, extent in data.faces:
-        scale = face.get('uv_scale') or plane.get('uv_scale')
-        faces.append((first, count, extent, face.get('texture') or 'default.png',
-                       None if scale is None else tuple(scale),
-                       plane.get('uv_angle', 0.0),
-                       tuple(plane.get('uv_shift', (0.0, 0.0)) or (0.0, 0.0)),
-                       bool(record.natural_scale.get(id(face), False))))
+    for face, _plane, first, count, extent in data.faces:
+        faces.append((first, count, extent, record.materials[id(face)]))
     return (data.vertices.tobytes(), data.edges.tobytes(), data.side_count,
             data.edge_count, data.has_flat_top, tuple(faces))
 
@@ -92,8 +88,17 @@ def _nudge_offset(brush):
 
 
 def _natural(brush):
+    from engine import brush_faces
+    brush_faces.set_face_material(brush, brush['geometry']['planes'][0]['face'],
+                                  uv_natural=True)
+
+
+def _stray_per_tag(brush):
+    """A per-tag write on an angled brush (a plugin, a hand edit): not the
+    face's record, so nothing at run time reads it."""
     tag = brush['geometry']['planes'][0]['face']
     brush['uv_natural'] = {tag: True}
+    brush['uv_scale'] = {tag: [9.0, 9.0]}
 
 
 def _move(brush):
@@ -117,7 +122,7 @@ MESH_INPUTS = {
     'uv angle': _set_plane(1, 'uv_angle', 40.0),
     'uv shift': _set_plane(2, 'uv_shift', [0.75, 0.1]),
     'texture basis': _basis,
-    'natural scale (per-tag)': _natural,
+    'natural scale': _natural,
     'anchor position (new record)': _move,
     'anchor size (new record)': _resize,
     'face tag': _set_plane(0, 'face', 'renamed'),
@@ -130,6 +135,7 @@ TRANSFORM_ONLY = {
     'name': lambda b: b.update(name='other'),
     'hidden': lambda b: b.update(hidden=True),
     'mover flags': lambda b: b.update(is_mover=True),
+    'stray per-tag copy (ignored)': _stray_per_tag,
 }
 
 

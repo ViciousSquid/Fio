@@ -481,25 +481,27 @@ class GeometryMixin:
         Exactly what the per-frame loop used to work out for the face on
         every frame -- the texture name and its caulk/nodraw meaning, the GL
         texture, the scale (natural or authored), the angle in radians and the
-        shift -- worked out once, here, when the mesh is built. A caulk face
-        never draws, so its texture is not loaded.
+        shift -- worked out once, here, when the mesh is built, from the
+        face's one material record as the geometry record resolved it. A
+        caulk face never draws, so its texture is not loaded.
         """
-        name = face.get('texture') or render_table.TEX_DEFAULT
+        material = record.materials[id(face)]
+        name = material.texture
         bits = 0
         if name == render_table.TEX_SKIP:
             bits |= RUN_SKIP
         elif name == render_table.TEX_NODRAW:
             bits |= RUN_NODRAW
         texture = 0 if bits & RUN_SKIP else self._resolve_face_texture(name)
-        if record.natural_scale.get(id(face), False):
+        if material.natural:
             scale = brush_geometry.natural_repeats(
                 extent[0], extent[1], self._texture_pixel_size(name))
         else:
-            uv = face.get('uv_scale') or plane_meta.get('uv_scale')
+            uv = material.uv_scale
             scale = (1.0, 1.0) if uv is None else (float(uv[0]), float(uv[1]))
-        shift = plane_meta.get('uv_shift', (0.0, 0.0)) or (0.0, 0.0)
+        shift = material.uv_shift
         return (first, count, texture, bits, scale,
-                math.radians(float(plane_meta.get('uv_angle', 0.0))),
+                math.radians(float(material.uv_angle)),
                 (float(shift[0]), float(shift[1])))
 
     # --------------------------------------------------------------------------

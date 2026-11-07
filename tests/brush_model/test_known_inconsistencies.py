@@ -1,18 +1,19 @@
-"""Stage 0: the brush model's known inconsistencies, pinned in both directions.
+"""The brush model's known inconsistencies, pinned in both directions.
 
-Every inconsistency the unified brush model is meant to remove appears here
-twice:
+Every inconsistency the unified brush model is meant to remove appeared here
+twice at Stage 0:
 
-* a **characterisation** test asserting what Fio does today, exactly; and
+* a **characterisation** test asserting what Fio did, exactly; and
 * a **target** test asserting the unified contract, marked
   ``xfail(strict=True)`` with the stage expected to deliver it.
 
 So no stage can change one of these behaviours silently: the stage that
 fixes one makes its characterisation test fail (update it, and name the
-change) and its target test pass unexpectedly (remove the marker). Shipped
-maps are not modified here; the snapshot (``test_semantics_snapshot``)
-records which maps each behaviour reaches. See
-``docs/brush-model-proposal.md`` for the stages.
+change) and its target test pass unexpectedly (remove the marker). Stage 1
+(one face record) has done that for face material: its section now holds the
+fixed behaviour as regression tests. Shipped maps are not modified here; the
+snapshot (``test_semantics_snapshot``) records which maps each behaviour
+reaches. See ``docs/brush-model-proposal.md`` for the stages.
 
 What a face renders is read through ``tests/helpers/brush_semantics``, which
 ``test_semantics_anchor`` ties to the engine and
@@ -33,7 +34,6 @@ from tests.helpers.worlds import angled_brush, box_brush
 
 MAPS = bs.shipped_maps(REPO_ROOT)
 
-STAGE_1 = "Stage 1 (one face record) delivers this"
 STAGE_2 = "Stage 2 (unambiguous position) delivers this"
 
 
@@ -59,109 +59,73 @@ def _drawn_points(table, slot):
 
 
 # ---------------------------------------------------------------------------
-# Face material: two homes (Stage 1)
+# Face material: one record per face (Stage 1, delivered)
 # ---------------------------------------------------------------------------
 
-def test_converting_a_box_to_convex_drops_its_shift_and_angle():
-    """``box_to_geometry`` carries textures and scales onto the planes, not
-    shifts or angles, and the convex path reads those from the plane only.
-    The first clip, vertex drag or rotation of a mapped box therefore resets
-    the mapping on screen while the per-tag dicts still hold it."""
+def test_converting_a_box_to_convex_keeps_its_mapping():
+    """Every field of every face moves onto its plane (Stage 0: shift and
+    angle were dropped, so the first clip of a mapped box reset them)."""
     box = _mapped_box()
-    before = _face(box, 'top')
+    box['uv_natural'] = {'east': True}
     converted = copy.deepcopy(box)
     bg.box_to_geometry(converted)
-    after = _face(converted, 'top')
-    assert (before['uv_shift'], before['uv_angle']) == ((0.25, 0.5), 30.0)
-    assert (after['uv_shift'], after['uv_angle']) == ((0.0, 0.0), 0.0)
-    assert (after['texture'], after['uv_scale']) == (before['texture'], before['uv_scale'])
-    assert sorted(bs.inconsistencies(converted)['material_mismatch']) == [
-        'top.uv_angle', 'top.uv_shift']
+    for tag in bs.BOX_FACES:
+        assert _face(converted, tag[0]) == _face(box, tag[0]), tag[0]
+    assert 'material' not in str(bs.inconsistencies(converted))
+    for key in ('textures', 'uv_scale', 'uv_shift', 'uv_angle', 'uv_natural'):
+        assert key not in converted, "%s left as a second copy" % key
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_converting_a_box_to_convex_keeps_its_mapping():
+def test_returning_a_convex_brush_to_a_box_keeps_its_mapping():
     box = _mapped_box()
-    converted = copy.deepcopy(box)
-    bg.box_to_geometry(converted)
-    assert _face(converted, 'top') == _face(box, 'top')
+    round_trip = copy.deepcopy(box)
+    bg.box_to_geometry(round_trip)
+    bg.drop_geometry(round_trip)
+    assert bs.encoding(round_trip) == 'box'
+    for tag, _axis, _sign in bs.BOX_FACES:
+        assert _face(round_trip, tag) == _face(box, tag), tag
 
 
 @pytest.mark.qt
-def test_an_inspector_edit_of_a_tagged_convex_face_is_stored_where_it_does_not_render():
-    """The Surface Inspector writes a tagged face's shift, scale and angle to
-    the per-tag dicts and reads them back from there; the convex path draws
-    the plane's. The inspector shows the edit, the viewport does not. (Four
-    convex brushes in ``_SHOWCASE`` carry per-tag scales their planes lack.)"""
+def test_an_inspector_edit_of_a_tagged_convex_face_renders_and_reads_back():
+    """The Surface Inspector edits the face's one record, so the edit is
+    drawn and shown alike (Stage 0: stored in the per-tag dicts, shown by the
+    inspector, never drawn)."""
     from editor import face_texture as ft
     brush = _mapped_box()
     bg.box_to_geometry(brush)
-    drawn = _face(brush, 'top')
     ft.set_transform(brush, 'top', shift=(0.75, 0.0), angle=45.0, scale=(4.0, 4.0))
+    drawn = _face(brush, 'top')
     shown = ft.get_transform(brush, 'top')
-    assert (shown['shift'], shown['angle'], shown['scale']) == ((0.75, 0.0), 45.0, (4.0, 4.0))
-    assert _face(brush, 'top') == drawn
-    assert sorted(bs.inconsistencies(brush)['material_mismatch']) == [
-        'top.uv_angle', 'top.uv_scale', 'top.uv_shift']
-
-
-@pytest.mark.qt
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_an_inspector_edit_of_a_tagged_convex_face_renders():
-    from editor import face_texture as ft
-    brush = _mapped_box()
-    bg.box_to_geometry(brush)
-    ft.set_transform(brush, 'top', shift=(0.75, 0.0), angle=45.0, scale=(4.0, 4.0))
-    drawn = _face(brush, 'top')
     assert (drawn['uv_shift'], drawn['uv_angle'], drawn['uv_scale']) == (
         (0.75, 0.0), 45.0, (4.0, 4.0))
-
-
-def test_a_retexture_writes_both_homes_and_they_agree():
-    """Texture is the one field the editor keeps in step: a tagged convex
-    face's texture is written to the plane and the per-tag dict alike."""
-    brush = angled_brush("re", (0, 0, 0), (96, 96, 96))
-    tag = next(p['face'] for p in brush['geometry']['planes'] if p.get('face'))
-    plane = next(p for p in brush['geometry']['planes'] if p.get('face') == tag)
-    plane['texture'] = 'Dev/256.jpg'
-    brush.setdefault('textures', {})[tag] = 'Dev/256.jpg'
-    bg.invalidate_geometry_cache(brush)
-    assert _face(brush, tag)['texture'] == 'Dev/256.jpg'
-    assert 'material_mismatch' not in bs.inconsistencies(brush)
-
-
-def test_a_plane_natural_flag_does_not_render():
-    """The renderer resolves a convex face's natural-scale mode from the
-    brush's per-tag flags only (it hands the face dict, which has no
-    ``uv_natural``, as the plane). The editor writes the flag on the plane
-    for a cut face, so Natural on a cut face never shows."""
-    brush = angled_brush("cut", (0, 0, 0), (96, 96, 96), clip_normal=(0.3, 1.0, 0.2))
-    cut = next(i for i, p in enumerate(brush['geometry']['planes']) if not p.get('face'))
-    brush['geometry']['planes'][cut]['uv_natural'] = True
-    bg.invalidate_geometry_cache(brush)
-    convex = bg.get_convex(brush)
-    face = next(i for i, f in enumerate(convex.faces) if f['plane'] == cut)
-    assert bs.render_faces(brush)[face][2]['natural'] is False
-    assert bs.inconsistencies(brush)['ignored_plane_natural'] == [cut]
-    table = RenderTable()
-    table.sync([brush], 1)
-    record = table.geometry_records[0]
-    assert record.natural_scale[id(convex.faces[face])] is False
+    assert (shown['shift'], shown['angle'], shown['scale']) == (
+        (0.75, 0.0), 45.0, (4.0, 4.0))
+    assert not bs.inconsistencies(brush)
 
 
 @pytest.mark.qt
-def test_the_editor_writes_natural_for_a_cut_face_on_the_plane():
+def test_an_inspector_edit_of_a_legacy_face_leaves_one_record():
+    """A legacy brush's per-tag copy is replaced by the edit, not kept beside
+    it: the plane holds the value, the per-tag entry is gone."""
     from editor import face_texture as ft
-    brush = angled_brush("cut", (0, 0, 0), (96, 96, 96), clip_normal=(0.3, 1.0, 0.2))
-    cut = next(i for i, p in enumerate(brush['geometry']['planes']) if not p.get('face'))
-    ft.set_transform(brush, '#%d' % cut, natural=True)
-    assert brush['geometry']['planes'][cut].get('uv_natural') is True
-    assert ft.get_transform(brush, '#%d' % cut)['natural'] is True
-    assert bs.inconsistencies(brush)['ignored_plane_natural'] == [cut]
+    brush = angled_brush("legacy", (0, 0, 0), (96, 96, 96))
+    for plane in brush['geometry']['planes']:
+        plane.pop('uv_scale', None)
+    brush['uv_scale'] = {'top': [0.25, 0.25]}            # what _SHOWCASE carries
+    from engine import brush_faces
+    brush_faces.migrate_legacy(brush)                    # as the editor loads it
+    assert _face(brush, 'top')['uv_scale'] == (0.25, 0.25)
+    assert ft.get_transform(brush, 'top')['scale'] == (0.25, 0.25)
+    ft.set_transform(brush, 'top', scale=(2.0, 2.0))
+    assert 'uv_scale' not in brush
+    plane = next(p for p in brush['geometry']['planes'] if p.get('face') == 'top')
+    assert plane['uv_scale'] == [2.0, 2.0]
+    assert _face(brush, 'top')['uv_scale'] == (2.0, 2.0)
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_a_plane_natural_flag_renders():
+def test_a_plane_natural_flag_renders():
+    """Natural on a cut face is read from its plane (Stage 0: ignored)."""
     brush = angled_brush("cut", (0, 0, 0), (96, 96, 96), clip_normal=(0.3, 1.0, 0.2))
     cut = next(i for i, p in enumerate(brush['geometry']['planes']) if not p.get('face'))
     brush['geometry']['planes'][cut]['uv_natural'] = True
@@ -169,23 +133,38 @@ def test_target_a_plane_natural_flag_renders():
     convex = bg.get_convex(brush)
     face = next(i for i, f in enumerate(convex.faces) if f['plane'] == cut)
     assert bs.render_faces(brush)[face][2]['natural'] is True
+    table = RenderTable()
+    table.sync([brush], 1)
+    assert table.geometry_records[0].materials[id(convex.faces[face])].natural is True
 
 
-def test_texture_tiling_does_not_reach_convex_faces():
-    """Brush-wide ``texture_tiling`` makes every unscaled box face natural;
-    the convex path ignores it, so the same brush draws differently once it
-    is cut."""
-    box = box_brush("tiled", (0, 0, 0), (256, 32, 128), texture_tiling=True)
-    assert all(m['natural'] for _t, _r, m in bs.render_faces(box))
-    cut = angled_brush("tiled", (0, 0, 0), (256, 32, 128), texture_tiling=True)
-    assert not any(m['natural'] for _t, _r, m in bs.render_faces(cut))
-    assert bs.inconsistencies(cut)['ignored_texture_tiling']
+@pytest.mark.qt
+def test_the_editor_writes_natural_for_a_cut_face_and_it_renders():
+    from editor import face_texture as ft
+    brush = angled_brush("cut", (0, 0, 0), (96, 96, 96), clip_normal=(0.3, 1.0, 0.2))
+    cut = next(i for i, p in enumerate(brush['geometry']['planes']) if not p.get('face'))
+    ft.set_transform(brush, '#%d' % cut, natural=True)
+    assert brush['geometry']['planes'][cut].get('uv_natural') is True
+    assert ft.get_transform(brush, '#%d' % cut)['natural'] is True
+    convex = bg.get_convex(brush)
+    face = next(i for i, f in enumerate(convex.faces) if f['plane'] == cut)
+    assert bs.render_faces(brush)[face][2]['natural'] is True
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_texture_tiling_applies_to_convex_faces():
-    cut = angled_brush("tiled", (0, 0, 0), (256, 32, 128), texture_tiling=True)
-    assert all(m['natural'] for _t, _r, m in bs.render_faces(cut))
+def test_texture_tiling_applies_to_convex_faces_as_to_boxes():
+    """Brush-wide tiling makes every unscaled face Natural, cut or not
+    (Stage 0: convex faces ignored it)."""
+    box = box_brush("tiled", (0, 0, 0), (256, 32, 128), texture_tiling=True,
+                    uv_scale={'top': [2.0, 2.0]})
+    cut = angled_brush("tiled", (0, 0, 0), (256, 32, 128), texture_tiling=True,
+                       uv_scale={'top': [2.0, 2.0]})
+    box_faces = {t: m['natural'] for t, _r, m in bs.render_faces(box)}
+    assert box_faces == {tag: tag != 'top' for tag in box_faces}
+    cut_faces = [m for _t, _r, m in bs.render_faces(cut)]
+    # The cut face inherits the brush's dominant scale (the clip tool's rule),
+    # so only the faces without a scale tile.
+    assert all(m['natural'] == (m['uv_scale'] is None) for m in cut_faces)
+    assert sum(m['natural'] for m in cut_faces) >= 4
 
 
 def _plane_textured_only():
@@ -198,40 +177,45 @@ def _plane_textured_only():
     return brush
 
 
-def test_a_convex_brush_textured_only_on_its_planes_is_drawn_untextured():
-    """Whether a brush goes to the textured pass is decided from its per-tag
-    ``textures`` dict, for convex brushes too: a texture held only by a
-    plane does not count, and the solid pass draws every face in the brush
-    colour. No shipped map has such a brush; the editor can make one."""
+def test_a_convex_brush_textured_only_on_its_planes_draws_textured():
+    """The pass is decided by the faces' own records (Stage 0: by the
+    per-tag dict, so such a brush was drawn in its colour)."""
     brush = _plane_textured_only()
-    assert 'Dev/128.jpg' in [m['texture'] for _t, _r, m in bs.render_faces(brush)]
     table = RenderTable()
     table.sync([brush], 1)
-    assert not table.class_bits[0] & rt.CLASS_TEXTURED
-    assert bs.draw_pass(brush) == 'solid'
-    assert bs.inconsistencies(brush)['untextured_planes'] == [
-        len(brush['geometry']['planes']) - 1]
+    assert table.class_bits[0] & rt.CLASS_TEXTURED
+    assert bs.draw_pass(brush) == 'textured'
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_a_convex_brush_textured_on_its_planes_draws_textured():
-    assert bs.draw_pass(_plane_textured_only()) == 'textured'
+def test_a_per_tag_texture_never_decides_a_convex_face():
+    """Precedence for texture is the plane. The per-tag-only writers of a
+    convex brush's texture (autocaulk, the trigger toggle) judged faces by
+    the brush's AABB and were never drawn; they stay undrawn."""
+    brush = angled_brush("caulked", (0, 0, 0), (96, 96, 96))
+    plane = next(p for p in brush['geometry']['planes'] if p.get('face') == 'top')
+    plane['texture'] = 'Dev/256.jpg'
+    brush['textures'] = {'top': 'nodraw.jpg'}
+    bg.invalidate_geometry_cache(brush)
+    assert _face(brush, 'top')['texture'] == 'Dev/256.jpg'
+    assert bs.inconsistencies(brush)['discarded_tag_value'] == ['top.texture']
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_1)
-def test_target_a_shipped_convex_face_has_one_material_record():
-    """No tagged convex face in a shipped map also keeps a per-tag copy of
-    its material (the copy the Surface Inspector shows today)."""
-    doubled = []
+def test_every_loaded_shipped_convex_face_has_one_material_record():
+    """After the load-time migration (as ``EditorState`` loads a legacy map),
+    no tagged convex face keeps a per-tag copy -- and every face draws what
+    the precedence rule (restated in the helper) says."""
+    from engine import brush_faces
     for name, brushes in MAPS.items():
-        for brush in brushes:
-            if bs.encoding(brush) != 'convex':
+        for original in brushes:
+            if bs.encoding(original) != 'convex':
                 continue
+            brush = dict(original)
+            before = bs.render_faces(bs.migrated(original))
+            brush_faces.migrate_legacy(brush)
             tags = {p.get('face') for p in brush['geometry']['planes'] if p.get('face')}
             for key, _field in bs.TAG_FIELDS:
-                if tags & set(brush.get(key) or {}):
-                    doubled.append((name, brush.get('id'), key))
-    assert not doubled
+                assert not tags & set(brush.get(key) or {}), (name, key)
+            assert bs.render_faces(brush) == before, name
 
 
 # ---------------------------------------------------------------------------

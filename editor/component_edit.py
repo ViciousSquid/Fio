@@ -35,10 +35,12 @@ The module is deliberately Qt-free (NumPy only) so it can be unit-tested
 head-less and reused by both the 2D views and the 3D viewport.
 """
 
+import copy
 import math
 
 import numpy as np
 
+from engine import brush_faces
 from engine import brush_geometry as bg
 
 
@@ -539,6 +541,10 @@ class _DragBase:
             'planes': [dict(p) for p in (geo or {}).get('planes', [])],
             'pos': list(brush.get('pos', [0, 0, 0])),
             'size': list(brush.get('size', [64, 64, 64])),
+            # A box's faces keep their material in the per-tag dicts, which
+            # promoting it to a plane set moves onto the planes.
+            'tag_material': {key: copy.deepcopy(brush[key])
+                             for key in brush_faces.TAG_DICTS.values() if key in brush},
         }
 
     def _restore(self, entry):
@@ -547,6 +553,11 @@ class _DragBase:
             brush['geometry'] = {'planes': [dict(p) for p in entry['planes']]}
         else:
             brush.pop('geometry', None)
+        for key in brush_faces.TAG_DICTS.values():
+            if key in entry['tag_material']:
+                brush[key] = copy.deepcopy(entry['tag_material'][key])
+            else:
+                brush.pop(key, None)
         bg._invalidate(brush)
         brush['pos'] = list(entry['pos'])
         brush['size'] = list(entry['size'])
@@ -590,8 +601,7 @@ class _DragBase:
             if entry['had_geometry']:
                 continue
             if bg.brush_has_geometry(brush) and bg.is_axis_aligned_box(brush):
-                brush.pop('geometry', None)
-                bg._invalidate(brush)
+                bg.drop_geometry(brush)
         return self.changed
 
 

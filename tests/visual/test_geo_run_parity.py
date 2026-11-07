@@ -25,6 +25,13 @@ to what is drawn, with an oracle that does not read any table:
 
 Both run in the editor (nodraw visible) and in play (nodraw dropped), with
 back-face culling as the main view and the portal views set it, and without.
+
+This is M1/M2 *batching* parity, and the frozen path is not modified for
+later changes. Since Stage 1 of the unified brush model a face's material
+lives on its plane, so the frozen path is handed each brush in the layout
+it reads (``tests/helpers/legacy_view``: the explicit legacy export).
+Stage 1's own rendering changes are proved separately, against the GPU, in
+``test_brush_semantics_gl.py``.
 """
 
 import os
@@ -34,6 +41,7 @@ import numpy as np
 import pytest
 
 from tests.helpers import gl as glh
+from tests.helpers.legacy_view import for_frozen_reference
 
 pytestmark = [pytest.mark.gl]
 
@@ -107,8 +115,8 @@ def angled_scene():
     The field is the benchmark's generator (varied textures, caulk and nodraw
     faces, authored scale/angle/shift, natural-scale faces). Added: a brush
     rotated as a mover is (``_rot_angle``: a rotated model matrix), a brush
-    that is all caulk (draws nothing) and one with an untextured cut face
-    (``default.png``).
+    that is caulk but for one face (its caulk faces draw nothing) and one
+    with an untextured cut face (``default.png``).
     """
     from engine import brush_geometry as bg
     from tools.bench_geo_passes import angled_world
@@ -125,6 +133,14 @@ def angled_scene():
     caulked = angled_brush("caulked", (-300.0, 40.0, 300.0), (80.0, 80.0, 80.0))
     for plane in caulked['geometry']['planes']:
         plane['texture'] = 'caulk.jpg'
+    # Its purpose here is caulk faces inside the textured pass, so it needs a
+    # genuinely textured face: since Stage 1 the pass is decided by the faces'
+    # own records, and a brush whose every face is caulk goes to the solid
+    # pass like a caulk-only box (before, this fixture reached the textured
+    # pass only through the per-tag texture copy its planes contradicted).
+    # The caulk-only brush itself is tested on its own in
+    # test_brush_semantics_gl.py::test_a_caulk_only_angled_brush_*.
+    caulked['geometry']['planes'][-1]['texture'] = 'Dev/128.jpg'
     bg.invalidate_geometry_cache(caulked)
     bare = angled_brush("bare", (300.0, 60.0, 300.0), (100.0, 120.0, 90.0),
                         clip_normal=(-1.0, 0.8, 0.2))
@@ -224,8 +240,8 @@ def _reference(renderer, context, config, brushes, camera, cull, play_mode):
         gl.glCullFace(gl.GL_BACK)
     drawer = ReferenceGeoDrawer()
     try:
-        drawer.draw(renderer, brushes, play_mode, _gl_texture(renderer),
-                    renderer._texture_pixel_size)
+        drawer.draw(renderer, for_frozen_reference(brushes)[0], play_mode,
+                    _gl_texture(renderer), renderer._texture_pixel_size)
     finally:
         drawer.release()
         gl.glDisable(gl.GL_CULL_FACE)
@@ -256,8 +272,8 @@ def test_angled_brush_draws_match_the_frozen_old_path(renderer, context,
                      skip_buffers=[renderer._cube_vbo]) as capture:
         _production(renderer, context, config, table, slots, camera, cull)
     expected = expected_geo_draws(
-        [brushes[int(s)] for s in slots], play_mode, _gl_texture(renderer),
-        renderer._texture_pixel_size)
+        for_frozen_reference([brushes[int(s)] for s in slots])[0], play_mode,
+        _gl_texture(renderer), renderer._texture_pixel_size)
     assert expected, "the fixture draws nothing; the test exercises nothing"
     assert any(d['texture'] for d in expected)
     want_cull = gl.GL_BACK if cull else 0

@@ -33,7 +33,7 @@ from editor.user_paths import settings_path, writable_dir
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
-from engine import brush_geometry
+from engine import brush_faces, brush_geometry
 from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic, write_text_atomic
@@ -2375,31 +2375,13 @@ class MainWindow(QMainWindow):
         texture_name = os.path.basename(texture_path)
         self.save_state()
 
-        if 'textures' not in brush:
-            brush['textures'] = {}
-
-        from engine import brush_geometry
-        if brush_geometry.brush_has_geometry(brush):
-            # Angled brush: write straight to the plane that backs this face so
-            # the sloped cut face (which has no box tag) gets textured. Faces
-            # that kept a box tag also update brush['textures'] so the box-face
-            # render path stays in sync.
-            pidx = brush_geometry.face_plane_index(brush, face_name)
-            if pidx is not None:
-                planes = brush['geometry']['planes']
-                planes[pidx]['texture'] = texture_name
-                tag = planes[pidx].get('face')
-                if tag:
-                    brush['textures'][tag] = texture_name
-            else:
-                # Couldn't resolve (stale hover) — fall back to the tag path.
-                brush['textures'][face_name] = texture_name
-        else:
-            brush['textures'][face_name] = texture_name
-        if brush_geometry.brush_has_geometry(brush):
-            # The derived faces copied the old texture, and the GPU mesh is
-            # keyed by the geometry signature: both must move on.
-            brush_geometry.invalidate_geometry_cache(brush)
+        # The face's one material record: a box's per-tag dict, an angled
+        # brush's plane (tagged or cut). Invalidates an angled brush's
+        # derived faces and GPU mesh, which bake the texture.
+        if not brush_faces.set_face_material(brush, face_name, texture=texture_name):
+            self.state.discard_last_checkpoint()
+            self.show_toast("That face no longer exists", is_error=True)
+            return
         # The face may only be hovered, not selected, so the checkpoint above
         # did not journal it for the render projection.
         self.state.mark_lighting_dirty([brush])
@@ -2414,9 +2396,10 @@ class MainWindow(QMainWindow):
 
     def _bump_face_angle(self, brush, face_name, delta_deg):
         """Advance one face's texture rotation by ``delta_deg`` degrees."""
-        angles = brush.setdefault('uv_angle', {})
-        angles[face_name] = (angles.get(face_name, 0.0) + delta_deg) % 360.0
-        return angles[face_name]
+        current = brush_faces.face_record(brush, face_name).get('uv_angle') or 0.0
+        angle = (current + delta_deg) % 360.0
+        brush_faces.set_face_material(brush, face_name, uv_angle=angle)
+        return angle
 
     def rotate_textures(self, steps=1):
         """Rotate brush-face texture(s) by ``steps`` * 90 degrees (Page Up/Down).
@@ -2448,7 +2431,9 @@ class MainWindow(QMainWindow):
         selected = self.primary_selection()
         if isinstance(selected, dict):
             self.save_state()
-            for face_name in self.ALL_FACE_KEYS:
+            # Every face the brush has: a box's six sides, an angled brush's
+            # planes (cut faces included).
+            for face_name in brush_faces.face_keys(selected):
                 self._bump_face_angle(selected, face_name, delta)
             self.update_views()
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
@@ -3372,7 +3357,11 @@ class MainWindow(QMainWindow):
                 continue
                 
             fragments = []
-            base_textures = brush['textures'].copy()
+            # Each fragment takes the brush's whole face material -- every
+            # field of every tagged face, from its one record -- and its
+            # brush-wide tiling.
+            base_material = brush_faces.box_material_dicts(brush)
+            base_textures = base_material.get('textures', {})
             base_color = brush.get('color', None)
             base_name = brush.get('name', '')
             
@@ -3473,6 +3462,12 @@ class MainWindow(QMainWindow):
                     if base_name: frag['name'] = f"{base_name}_back"
                     fragments.append(frag)
             
+            for frag in fragments:
+                for key, entries in base_material.items():
+                    if key != 'textures':
+                        frag[key] = copy.deepcopy(entries)
+                if brush.get('texture_tiling'):
+                    frag['texture_tiling'] = True
             new_brushes.extend(fragments)
         
         new_brushes.append(subtract_brush)
@@ -3500,17 +3495,16 @@ class MainWindow(QMainWindow):
         caulked_faces = 0
         changed_brushes = []
         for brush in brushes:
-            # Ensure textures dict exists
-            if 'textures' not in brush:
-                brush['textures'] = {}
-
-            for face in ['north', 'south', 'east', 'west', 'top', 'down']:
-                current_tex = brush['textures'].get(face, '')
-                if current_tex == 'nodraw.jpg':
+            # The occlusion test samples the brush's AABB faces: an angled
+            # brush's faces are not those, so it is never caulked here.
+            if brush_geometry.brush_has_geometry(brush):
+                continue
+            for face in brush_faces.FACE_TAGS:
+                if brush_faces.box_record(brush, face).get('texture') == 'nodraw.jpg':
                     continue   # already set
 
                 if self._is_face_occluded(brush, face, brushes):
-                    brush['textures'][face] = 'nodraw.jpg'
+                    brush_faces.set_face_material(brush, face, texture='nodraw.jpg')
                     changed_brushes.append(brush)
                     caulked_faces += 1
 
@@ -3629,7 +3623,7 @@ class MainWindow(QMainWindow):
                 outer_size[2] - thickness * 2
             ],
             'operation': 'subtract',
-            'textures': outer_brush.get('textures', {}).copy(),
+            **brush_faces.box_material_dicts(outer_brush),
             'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"
         }
 
@@ -3708,7 +3702,7 @@ class MainWindow(QMainWindow):
             'pos': list(outer_pos),
             'size': [inner_width, inner_height, inner_depth],
             'operation': 'subtract',
-            'textures': outer_brush.get('textures', {}).copy(),
+            **brush_faces.box_material_dicts(outer_brush),
             'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"
         }
         

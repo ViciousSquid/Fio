@@ -40,6 +40,8 @@ import itertools
 import math
 import numpy as np
 
+from engine import brush_faces
+
 # --------------------------------------------------------------------------
 # Tunables
 # --------------------------------------------------------------------------
@@ -352,7 +354,7 @@ class ConvexGeometry:
     """Derived, cached surface of a convex brush (built from its plane set)."""
 
     __slots__ = ('planes', 'verts', 'faces', '_bounds',
-                 '_plane_cache', '_coll_cache', '_edge_cache')
+                 '_plane_cache', '_coll_cache', '_edge_cache', '_material_cache')
 
     def __init__(self, planes):
         # Store copies so later mutation of the source list can't corrupt us.
@@ -364,6 +366,8 @@ class ConvexGeometry:
         self._plane_cache = None   # (normals Nx3, offsets N)
         self._coll_cache = None    # (normals Mx3, offsets M) incl. bevels
         self._edge_cache = None    # [(i, j), ...] unique corner pairs
+        # (tiling, {id(face): Material}) -- engine.brush_faces.convex_materials
+        self._material_cache = None
 
     # -- validity ----------------------------------------------------------
     @property
@@ -906,23 +910,60 @@ def get_convex(brush):
     return convex
 
 
-def box_to_geometry(brush):
-    """Populate ``brush['geometry']`` from its ``pos``/``size``/textures.
+#: The texture basis the box path's cube VAO gives its two X-facing sides:
+#: U runs up the wall (+Y) and V along -Z. The convex default for an X-facing
+#: plane (:func:`render_uv_axes`) is U along +Z, V up, so a converted box
+#: would show those two faces' textures turned 90 degrees; writing the cube's
+#: basis onto them keeps the box's look. The other four faces' defaults
+#: already match the cube.
+_BOX_SIDE_BASIS = {'west': ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0)),
+                   'east': ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0))}
 
+
+def box_face_planes(brush):
+    """The six planes of a box brush, each carrying its face's whole
+    material record (texture, scale, shift, angle, Natural) from the
+    brush's per-tag dicts, and the cube's texture basis where the convex
+    default differs -- what converting the box to convex must keep for the
+    brush to look the same."""
+    planes = box_planes(brush.get('pos', [0, 0, 0]), brush.get('size', [64, 64, 64]))
+    for plane in planes:
+        basis = _BOX_SIDE_BASIS.get(plane.get('face'))
+        if basis is not None:
+            plane['uv_u'], plane['uv_v'] = list(basis[0]), list(basis[1])
+    return brush_faces.tag_material_onto_planes(brush, planes)
+
+
+def box_to_geometry(brush):
+    """Populate ``brush['geometry']`` from its ``pos``/``size`` and faces.
+
+    Each face's material moves onto its plane, which is a convex face's one
+    record (:mod:`engine.brush_faces`); the per-tag copies are dropped.
     Idempotent: a brush that already has geometry is left untouched.  Returns
     the brush for chaining.
     """
     if brush_has_geometry(brush):
         return brush
-    planes = box_planes(
-        brush.get('pos', [0, 0, 0]),
-        brush.get('size', [64, 64, 64]),
-        textures=brush.get('textures'),
-        uv_scale=brush.get('uv_scale'),
-    )
+    planes = box_face_planes(brush)
     brush['geometry'] = {'planes': [_plane_to_json(p) for p in planes]}
+    brush_faces.drop_tag_copies(brush)      # moved onto the planes
     _invalidate(brush)
     return brush
+
+
+def drop_geometry(brush):
+    """Return a convex brush to the compact box form (``pos``/``size``).
+
+    Its tagged faces' material moves back into the per-tag dicts first, so
+    the box draws as the convex brush did; the plane set and its caches go.
+    """
+    if not brush_has_geometry(brush):
+        return
+    brush_faces.planes_onto_tags(brush)
+    brush.pop('geometry', None)
+    brush.pop('_geo_cache', None)
+    brush.pop('_geo_cache_sig', None)
+    _invalidate(brush)
 
 
 def sync_brush_bounds(brush):
@@ -1494,14 +1535,15 @@ def carry_plane_metadata(new_planes, old_planes):
         best = int(np.argmax(dots))
         if float(dots[best]) >= _FACE_MATCH_DOT:
             src = old_planes[best]
-            if src.get('texture') is not None:
-                plane['texture'] = src['texture']
-            if src.get('uv_scale') is not None:
-                plane['uv_scale'] = list(src['uv_scale'])
-            # Keep a rotated face's texture basis when a component drag
-            # rebuilds the plane set, or the texture would snap back to the
-            # world-axis projection mid-edit.
-            for key in ('uv_u', 'uv_v'):
+            # The face's whole material record goes with it -- texture,
+            # scale, shift, angle and Natural -- and a rotated face's texture
+            # basis too, or the mapping would snap back mid-edit.
+            for key in ('texture', 'uv_natural'):
+                if src.get(key) is not None:
+                    plane[key] = src[key]
+            if src.get('uv_angle') is not None:
+                plane['uv_angle'] = float(src['uv_angle'])
+            for key in ('uv_scale', 'uv_shift', 'uv_u', 'uv_v'):
                 if src.get(key) is not None:
                     plane[key] = list(src[key])
             tag = src.get('face')
@@ -1555,14 +1597,17 @@ def rebuild_brush_from_points(brush, points):
     if not planes:
         return False
     old = list(brush.get('geometry', {}).get('planes') or [])
-    if not old:
+    was_box = not old
+    if was_box:
         # A box brush being edited for the first time: seed the metadata from
-        # its box faces so per-face textures survive the switch to geometry.
-        old = [_plane_to_json(p) for p in box_planes(
-            brush.get('pos', [0, 0, 0]), brush.get('size', [64, 64, 64]),
-            textures=brush.get('textures'), uv_scale=brush.get('uv_scale'))]
+        # its box faces so each face's material survives the switch.
+        old = [_plane_to_json(p) for p in box_face_planes(brush)]
     carry_plane_metadata(planes, old)
-    return _commit_planes(brush, planes)
+    if not _commit_planes(brush, planes):
+        return False
+    if was_box:
+        brush_faces.drop_tag_copies(brush)  # moved onto the planes
+    return True
 
 
 def offset_brush_planes(brush, offsets):

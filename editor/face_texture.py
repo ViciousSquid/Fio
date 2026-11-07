@@ -1,18 +1,16 @@
 """Reading and writing one brush face's texture transform.
 
-A face's mapping lives in two different places depending on what kind of face
-it is, which is the main reason texturing angled geometry has been awkward:
+Every face has one material record (:mod:`engine.brush_faces`):
 
-* a **box face** — one of the six tagged sides — keeps its transform in the
-  brush's per-tag dicts (``brush['uv_shift']['east']`` and friends), because
-  the renderer draws those from the shared cube VAO and passes the transform
-  as uniforms;
-* a **cut face** — produced by the clip tool, or any face of a brush that has
-  become an angled plane set — has no tag to key off, so its transform lives
-  on the plane itself.
+* a **box face** — one of the six tagged sides of a box brush — keeps it in
+  the brush's per-tag dicts (``brush['uv_shift']['east']`` and friends);
+* a face of an **angled brush** — tagged side or cut face alike — keeps it on
+  the plane that generates the face.
 
-Everything here presents those as one thing: give it a brush and a face key
-and it reads or writes the right place.  The module is deliberately Qt-free so
+The Surface Inspector shows that record and edits it, and the renderer draws
+it, so the two cannot disagree. A legacy angled brush that still carries a
+per-tag copy is read by :data:`engine.brush_faces.PRECEDENCE`, and an edit
+leaves the face with its one record. The module is deliberately Qt-free so
 the Surface Inspector's behaviour can be tested without a window, and so the
 same accessors can be reused by anything else that needs to touch a face's
 mapping.
@@ -20,6 +18,7 @@ mapping.
 
 import numpy as np
 
+from engine import brush_faces
 from engine import brush_geometry as bg
 
 
@@ -60,54 +59,31 @@ def is_cut_face(brush, face_key):
     return plane is not None and not plane.get('face')
 
 
-def _brush_dict(brush, key):
-    value = brush.get(key)
-    return value if isinstance(value, dict) else {}
-
-
 def is_natural(brush, face_key):
     """True when the face is in Natural mode (constant texel size)."""
-    plane = face_plane(brush, face_key)
-    cut = plane is not None and not plane.get('face')
-    return bg.face_uses_natural_scale(brush, None if cut else face_key, plane)
+    return bool(brush_faces.face_record(brush, face_key).get('uv_natural'))
 
 
 def get_transform(brush, face_key, texture_size=None):
     """The face's mapping as ``{'shift', 'scale', 'angle', 'texture', 'natural'}``.
 
-    Values are plain floats/tuples, defaulted when the face has never been
-    touched, so callers never have to know which storage a face uses.
+    Read from the face's one material record. Values are plain
+    floats/tuples, defaulted when the face has never been touched;
+    ``texture`` is ``None`` when the face names none.
 
     A face in Natural mode has no fixed scale — the renderer derives it from
     the face's current size — so pass ``texture_size`` to get the repeats it
     is *currently* drawing with rather than whatever was last written down.
     """
-    plane = face_plane(brush, face_key)
-    cut = plane is not None and not plane.get('face')
-
-    if cut:
-        texture = plane.get('texture')
-        scale = plane.get('uv_scale')
-        shift = plane.get('uv_shift')
-        angle = plane.get('uv_angle')
-    else:
-        texture = _brush_dict(brush, 'textures').get(face_key)
-        scale = _brush_dict(brush, 'uv_scale').get(face_key)
-        shift = _brush_dict(brush, 'uv_shift').get(face_key)
-        angle = _brush_dict(brush, 'uv_angle').get(face_key)
-        if scale is None and plane is not None:
-            # A tagged face of an angled brush may still carry its scale on the
-            # plane (that is where the clip tool puts inherited values).
-            scale = plane.get('uv_scale')
-
-    natural = bg.face_uses_natural_scale(brush, None if cut else face_key, plane)
-    scale = tuple(float(v) for v in (scale or DEFAULT_SCALE))
+    record = brush_faces.face_record(brush, face_key)
+    natural = bool(record.get('uv_natural'))
+    scale = tuple(float(v) for v in (record.get('uv_scale') or DEFAULT_SCALE))
     if natural and texture_size is not None:
         scale = natural_scale(brush, face_key, texture_size)
-
+    angle = record.get('uv_angle')
     return {
-        'texture': texture,
-        'shift': tuple(float(v) for v in (shift or DEFAULT_SHIFT)),
+        'texture': record.get('texture'),
+        'shift': tuple(float(v) for v in (record.get('uv_shift') or DEFAULT_SHIFT)),
         'scale': scale,
         'angle': float(DEFAULT_ANGLE if angle is None else angle),
         'natural': natural,
@@ -116,61 +92,30 @@ def get_transform(brush, face_key, texture_size=None):
 
 def set_transform(brush, face_key, shift=None, scale=None, angle=None,
                   texture=None, natural=None):
-    """Write any subset of a face's mapping to wherever that face keeps it.
+    """Write any subset of a face's mapping to its one material record.
 
-    Setting an explicit ``scale`` turns Natural mode off: the user has just
-    said what the repeats should be, so the face must stop deriving them from
-    its own size.  Pass ``natural`` explicitly to set the mode itself.
+    ``None`` leaves a value as it is. Setting an explicit ``scale`` turns
+    Natural mode off: the user has just said what the repeats should be, so
+    the face must stop deriving them from its own size.  Pass ``natural``
+    explicitly to set the mode itself. An angled brush's derived geometry —
+    and the GPU mesh the renderer built from it, which bakes every face's
+    mapping — is invalidated by the write.
     """
-    plane = face_plane(brush, face_key)
-    cut = plane is not None and not plane.get('face')
     if scale is not None and natural is None:
         natural = False
-
-    if cut:
-        if shift is not None:
-            plane['uv_shift'] = [float(shift[0]), float(shift[1])]
-        if scale is not None:
-            plane['uv_scale'] = [float(scale[0]), float(scale[1])]
-        if angle is not None:
-            plane['uv_angle'] = float(angle)
-        if texture is not None:
-            plane['texture'] = texture
-        if natural is not None:
-            if natural:
-                plane['uv_natural'] = True
-            else:
-                plane.pop('uv_natural', None)
-        # A face winding carries its own texture, UV scale and texture basis, so
-        # editing the plane's mapping makes the cached geometry — and the GPU
-        # mesh the renderer built from it — as stale as moving the plane would.
-        bg.invalidate_geometry_cache(brush)
-        return
-
+    fields = {}
     if shift is not None:
-        brush.setdefault('uv_shift', {})[face_key] = [float(shift[0]), float(shift[1])]
+        fields['uv_shift'] = shift
     if scale is not None:
-        brush.setdefault('uv_scale', {})[face_key] = [float(scale[0]), float(scale[1])]
+        fields['uv_scale'] = scale
     if angle is not None:
-        brush.setdefault('uv_angle', {})[face_key] = float(angle)
+        fields['uv_angle'] = angle
     if texture is not None:
-        brush.setdefault('textures', {})[face_key] = texture
-        # A tagged face of an angled brush is drawn from its plane, so the
-        # plane has to learn about the new texture as well — and the derived
-        # winding that copied the old one has to be dropped.
-        if plane is not None:
-            plane['texture'] = texture
+        fields['texture'] = texture
     if natural is not None:
-        if natural:
-            brush.setdefault('uv_natural', {})[face_key] = True
-        else:
-            brush.get('uv_natural', {}).pop(face_key, None)
-    if plane is not None:
-        # The GPU mesh of an angled brush bakes every face's mapping (texture,
-        # scale, shift, angle, Natural) into its runs, and is keyed by the
-        # brush's geometry signature -- so any mapping edit to a tagged face
-        # of such a brush has to move that signature, not just a retexture.
-        bg.invalidate_geometry_cache(brush)
+        fields['uv_natural'] = bool(natural)
+    if fields:
+        brush_faces.set_face_material(brush, face_key, **fields)
 
 
 def face_keys(brush):

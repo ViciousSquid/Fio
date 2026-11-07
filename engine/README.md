@@ -5,6 +5,7 @@
 | `__init__.py` | Package marker. |
 | `actor_pick.py` | Finds the actor under a screen ray, using the published tables. |
 | `animated_texture.py` | Decodes animated GIF textures and picks the frame for a play time. |
+| `brush_faces.py` | One material record per brush face: the precedence rule for legacy angled brushes, the reader and writer every face edit goes through, conversion between box and angled encodings. |
 | `brush_geometry.py` | Convex brush geometry from planes: faces, collision meshes, 2D outlines, bounds, component edits. |
 | `cell_cull.py` | Cell-group bucketing over the 512-unit grid, occlusion-probe bookkeeping, and the probe-budget governor that parks the probes when they stop paying for themselves. |
 | `camera.py` | Camera state and view/projection matrices. |
