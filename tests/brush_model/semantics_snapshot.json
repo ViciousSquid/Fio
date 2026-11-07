@@ -1,0 +1,259 @@
+{
+ "Angled_Brush_Test.json": {
+  "brushes": 6,
+  "digest": "62e949e19513cb923cc5664b51710b794096ce788f397b60c2accd8cdb3a84d4",
+  "encodings": {
+   "box": 2,
+   "convex": 4
+  },
+  "inconsistencies": {
+   "bcac8b00-8f0e-4012-9823-26a7f996e01a": {
+    "bound_drift": 4.85e-05
+   }
+  }
+ },
+ "BigWorld_streaming_test.json": {
+  "brushes": 3604,
+  "digest": "d87a76f7e0c968661dae283a121553abc0c2abe77aefc57c32e7494a7f65bfa9",
+  "encodings": {
+   "box": 3604
+  },
+  "inconsistencies": {}
+ },
+ "DevTest.json": {
+  "brushes": 4,
+  "digest": "3583076c9fde14c6641d2f87ebbf402d65259d34d0d807952b7989caf9666d8a",
+  "encodings": {
+   "box": 4
+  },
+  "inconsistencies": {}
+ },
+ "Fog_Test.json": {
+  "brushes": 7,
+  "digest": "cf2de7f6b57cf30ceb1075df4c0d27587f70b372f09b343d2a1b47306ead74b4",
+  "encodings": {
+   "box": 7
+  },
+  "inconsistencies": {}
+ },
+ "Glass_Test.json": {
+  "brushes": 2,
+  "digest": "03307537d635237445dfdf4a22e7effd74f30c85b67b1d2c8a590dcb1dcbe6f3",
+  "encodings": {
+   "box": 2
+  },
+  "inconsistencies": {}
+ },
+ "Key_Test.json": {
+  "brushes": 12,
+  "digest": "f0b32717cbdf9d3ead0fa7ea35f9c80a7c0c2c557c191cdd737cb57c9f83a96a",
+  "encodings": {
+   "box": 12
+  },
+  "inconsistencies": {
+   "4f8b6b41-3708-4133-ba7c-0b805b0ebf3f": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ },
+ "Light_Test.json": {
+  "brushes": 3,
+  "digest": "b399a01c4e5c6ce397055b2fe59c3fb61e9ebd351a9157a9a5c5894a6b424a94",
+  "encodings": {
+   "box": 3
+  },
+  "inconsistencies": {}
+ },
+ "MonsterTest.json": {
+  "brushes": 81,
+  "digest": "2dc56066600d36dfe2a3b5ea2d0ba5b5fa95e9ddf4d5c51455b8b41e987ae30b",
+  "encodings": {
+   "box": 81
+  },
+  "inconsistencies": {
+   "5a576a18-6a9c-46ab-ac80-db58f3eeeea0": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ },
+ "Office_Corridor.json": {
+  "brushes": 27,
+  "digest": "a122255881d0d5586993193eb9bfebb2c5683bc80e2562f4896233afc9cb1715",
+  "encodings": {
+   "box": 27
+  },
+  "inconsistencies": {}
+ },
+ "Portal_Test.json": {
+  "brushes": 15,
+  "digest": "17108d4b8561bbb9af6d722dfa00aad4aea18b8fd71b22a0ab53ff816b9acf32",
+  "encodings": {
+   "box": 15
+  },
+  "inconsistencies": {}
+ },
+ "Simple_Map_Test.json": {
+  "brushes": 9,
+  "digest": "4c6d6b45733f3d1ba6f3218817e9cdaa3b473bf72ac9352c0f3f458c3302d6ef",
+  "encodings": {
+   "box": 9
+  },
+  "inconsistencies": {}
+ },
+ "Simple_Map_Test_Extended.json": {
+  "brushes": 82,
+  "digest": "08bcb446c3e4335dd85c96c3b68620940fc7325b31e1a038dcc037c82244a34a",
+  "encodings": {
+   "box": 82
+  },
+  "inconsistencies": {
+   "5a576a18-6a9c-46ab-ac80-db58f3eeeea0": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ },
+ "Spawner_Test.json": {
+  "brushes": 9,
+  "digest": "8aee61195406b3cde53ff2ceb503b4a89c9045fad3e669621249f654bb745ed1",
+  "encodings": {
+   "box": 9
+  },
+  "inconsistencies": {}
+ },
+ "Speaker_Test.json": {
+  "brushes": 7,
+  "digest": "80ab0af64b15558fa13d0ede660b99e50f7d098fc708c7e1143ea340cd70e7b8",
+  "encodings": {
+   "box": 7
+  },
+  "inconsistencies": {}
+ },
+ "Terrain_Test_small.json": {
+  "brushes": 6,
+  "digest": "efb3c200c3d64821e25f735e6aa5d90d52d9c3abc2f9e29914a5aacc36ac49f0",
+  "encodings": {
+   "box": 5,
+   "convex": 1
+  },
+  "inconsistencies": {
+   "1a817c94-928c-4005-88c9-6619876b168c": {
+    "bound_drift": 128.0
+   }
+  }
+ },
+ "Topdown_example.json": {
+  "brushes": 6,
+  "digest": "401611d982bfc1f687f6a49b88e298703715ca1e825cb40c0262519187db11aa",
+  "encodings": {
+   "box": 5,
+   "convex": 1
+  },
+  "inconsistencies": {
+   "1a817c94-928c-4005-88c9-6619876b168c": {
+    "bound_drift": 128.0
+   }
+  }
+ },
+ "_SHOWCASE.json": {
+  "brushes": 85,
+  "digest": "98c23a6eac5b68ebea7acb44a720779fcaef497f045ccc228178ea988e5d3947",
+  "encodings": {
+   "box": 68,
+   "convex": 17
+  },
+  "inconsistencies": {
+   "5b10b49b-9b6c-45d9-91ee-0b6f06970590": {
+    "material_mismatch": [
+     "down.uv_scale",
+     "north.uv_scale",
+     "south.uv_scale",
+     "top.uv_scale",
+     "west.uv_scale"
+    ]
+   },
+   "8c04e483-4d44-4217-a03d-32844a727043": {
+    "material_mismatch": [
+     "down.uv_scale",
+     "east.uv_scale",
+     "north.uv_scale",
+     "south.uv_scale",
+     "top.uv_scale",
+     "west.uv_scale"
+    ]
+   },
+   "908d6864-c3b1-4d27-95c0-ca87e02f4898": {
+    "material_mismatch": [
+     "down.uv_scale",
+     "east.uv_scale",
+     "north.uv_scale",
+     "south.uv_scale",
+     "top.uv_scale"
+    ]
+   },
+   "e4b232de-7658-4ea1-b47d-a36532d32063": {
+    "material_mismatch": [
+     "down.uv_scale",
+     "east.uv_scale",
+     "north.uv_scale",
+     "south.uv_scale",
+     "top.uv_scale"
+    ]
+   },
+   "ef6fd889-8ba1-434f-8c1c-946b6c40403b": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ },
+ "button_test.json": {
+  "brushes": 11,
+  "digest": "4beef0e93b0adb61fb92cc4df40afcf8881e3d1e9b933220a9e4f591e060b022",
+  "encodings": {
+   "box": 11
+  },
+  "inconsistencies": {
+   "6f96b622-d7c4-4cd5-bf5e-c3bec611dfa9": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ },
+ "dLight2_Test.json": {
+  "brushes": 5,
+  "digest": "53e8bbfbab6bbbd64db183ff4c387493edf8400a5b629c269e2b12126bfe41f9",
+  "encodings": {
+   "box": 4,
+   "convex": 1
+  },
+  "inconsistencies": {
+   "ed4058d9-bf5e-4d23-8802-dbeb919b451a": {
+    "runtime_keys": [
+     "original_pos",
+     "rotation_yaw"
+    ]
+   }
+  }
+ },
+ "dLight_Test.json": {
+  "brushes": 8,
+  "digest": "3aabd99f6faf74e290c2583970248ab461ae998deda95a87387e621fa36f51d2",
+  "encodings": {
+   "box": 8
+  },
+  "inconsistencies": {
+   "27037c1a-7cb0-4061-8b20-4046320dab4a": {
+    "runtime_keys": [
+     "original_pos"
+    ]
+   }
+  }
+ }
+}

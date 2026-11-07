@@ -76,6 +76,7 @@ handful of tests that use real threads and real time.
 | `tests/spatial/` | The 512-unit cell convention and `SpatialGrid` |
 | `tests/monster_ai/` | Monster behaviour, patrol, combat, and the AI thread's lifetime |
 | `tests/renderer/` | Render-state construction, culling, double buffering, light budget |
+| `tests/brush_model/` | The unified brush model's guard rails: today's brush semantics pinned per shipped map, known inconsistencies (current and target), the write-site ratchet, AABB budgets (see `docs/brush-model-proposal.md`) |
 | `tests/plugins/` | The plugin API as a contract, driven by the fixture plugins in `tests/plugins/fixtures/` |
 | `tests/io/` | Connections, the reverse target index and its revision counter |
 | `tests/logic/` | The I/O execution path: dispatch, delays, chains, loops, failure |

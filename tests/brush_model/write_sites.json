@@ -1,0 +1,64 @@
+{
+ "_rot_angle": {
+  "editor/main_window.py": 2,
+  "engine/mover_table.py": 2,
+  "engine/savegame.py": 1
+ },
+ "geometry": {
+  "editor/component_edit.py": 3,
+  "editor/editor_state.py": 2,
+  "editor/main_window.py": 1,
+  "engine/brush_geometry.py": 6,
+  "engine/renderer/core/geo_store.py": 1
+ },
+ "original_pos": {
+  "editor/io_handlers.py": 1,
+  "editor/logic_wizard.py": 1,
+  "engine/logic_movers.py": 2,
+  "engine/mover_table.py": 1
+ },
+ "pos": {
+  "editor/component_edit.py": 1,
+  "editor/main_window.py": 12,
+  "editor/things.py": 1,
+  "editor/view_2d.py": 4,
+  "engine/brush_geometry.py": 2,
+  "engine/change_journal.py": 4,
+  "engine/logic_movers.py": 4,
+  "engine/mover_table.py": 3,
+  "engine/savegame.py": 1
+ },
+ "rotation_yaw": {
+  "engine/logic_movers.py": 1,
+  "engine/mover_table.py": 2,
+  "engine/savegame.py": 1
+ },
+ "size": {
+  "editor/component_edit.py": 1,
+  "editor/view_2d.py": 4,
+  "engine/brush_geometry.py": 1,
+  "engine/effect_entity.py": 1
+ },
+ "textures": {
+  "editor/face_texture.py": 1,
+  "editor/main_window.py": 6,
+  "editor/property_editor.py": 2
+ },
+ "uv_angle": {
+  "editor/face_texture.py": 2,
+  "editor/main_window.py": 1,
+  "engine/brush_geometry.py": 1
+ },
+ "uv_natural": {
+  "editor/face_texture.py": 3,
+  "engine/brush_geometry.py": 1
+ },
+ "uv_scale": {
+  "editor/face_texture.py": 2,
+  "engine/brush_geometry.py": 4
+ },
+ "uv_shift": {
+  "editor/face_texture.py": 2,
+  "engine/brush_geometry.py": 1
+ }
+}
