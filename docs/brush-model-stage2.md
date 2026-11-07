@@ -18,11 +18,12 @@ re-created as tools in the implementation (see Gates).
 ## 1. Baseline
 
 `56ec0e3` is clean and pushed (`origin/3.1.0.0611_CANARY` = local `HEAD`). The
-full suite on that exact commit, in a clean worktree: *see the end of this
-section once the run completes* — Stage 0 at `a820c40` had the five known
-failures (play-cycle leak, editor chrome, three portal-fade), and Stage 1's
-two intended guard updates were re-run only in their directories, which is
-why this run exists.
+full suite on that exact commit, in a clean worktree (llvmpipe):
+**6,907 passed, 150 skipped, 4 xfailed, 5 failed** — the five failures Stage 0
+at `a820c40` also has (play-cycle leak, editor chrome, three portal-fade), and
+nothing else. The 4 xfails are the Stage 2 targets. This settles the Stage 1
+result, whose two intended guard updates had been re-run only in their
+directories, and is the baseline Stage 2 is measured against.
 
 ## 2. Current architecture and confirmed defects
 
