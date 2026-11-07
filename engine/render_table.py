@@ -103,15 +103,23 @@ class GeometryRecord:
     state per geometry handle (the renderer's GPU meshes) recognises a record
     it has seen -- wherever a reconcile moved its handle -- by its serial.
 
-    ``surface`` is the brush's authored surface as one exact, hashable
-    value: every plane as authored (offset, normal, texture, UV mapping,
-    texture basis, face tag) and each face's natural-scale flag. It is what
-    ``signature`` stood for, minus the geometry epoch -- an epoch belongs to a
-    dict, and an undo restores every brush as a new dict -- so a renderer
-    keyed by it finds a restored but unchanged brush's mesh again, while any
-    real change to the surface, however small, is a different key. Like the
-    signature, it leaves out ``origin``/``scale``: a mover moves its ``pos``,
-    not its planes, and keeps the mesh it has.
+    ``origin``/``scale`` are the record's *anchor*: the AABB the mesh is
+    expressed in (Fio's angled brushes keep the AABB brushes' unit-cube
+    transform, so their vertices are stored relative to it). The anchor is
+    taken from ``pos``/``size`` when the brush's geometry is resolved and is
+    kept while its surface is unchanged (see ``RenderTable._geometry_record``):
+    a later ``pos``/``size`` change is a transform, as it always was for an
+    AABB brush and as a mover needs.
+
+    ``surface`` is the complete input of the mesh built from this record, as
+    one exact, hashable value -- every plane as authored (offset, normal,
+    texture, UV mapping, texture basis, face tag), each face's natural-scale
+    flag, and the anchor -- and nothing else. So a cache keyed by it holds
+    the invariant both ways: equal keys build identical vertex data, whatever
+    the brush's current position, and any change to what the mesh is built
+    from is a different key. It carries no geometry epoch (an epoch belongs to
+    a dict, and an undo restores every brush as a new dict), so a restored
+    but unchanged brush finds its mesh again.
     """
     __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale',
                  'serial', 'surface')
@@ -126,14 +134,18 @@ class GeometryRecord:
         self.surface = (
             tuple(_frozen(plane) for plane in convex.planes),
             tuple(bool(natural_scale.get(id(face), False))
-                  for face in convex.faces))
+                  for face in convex.faces),
+            tuple(origin.tolist()), tuple(scale.tolist()))
 
-    def describes(self, signature, convex, origin, scale, natural_scale):
-        """Whether a record built from these inputs would equal this one."""
+    def describes(self, signature, convex, natural_scale):
+        """Whether this record already describes that surface.
+
+        ``pos``/``size`` are deliberately not compared: while the surface is
+        unchanged the record -- and with it its anchor -- is kept, so a change
+        to them alone stays a transform.
+        """
         return (self.convex is convex
                 and self.signature == signature
-                and np.array_equal(self.origin, origin)
-                and np.array_equal(self.scale, scale)
                 and self.natural_scale == natural_scale)
 
 #
@@ -467,9 +479,9 @@ class RenderTable:
         existing dense entry in place.
 
         *previous* is the row's record before this refresh. When the surface
-        it describes is unchanged -- the brush was recoloured, renamed or
-        toggled, not reshaped or retextured -- it is returned as it is, so
-        nothing downstream sees a geometry change.
+        it describes is unchanged -- the brush was recoloured, renamed,
+        toggled or only moved, not reshaped or retextured -- it is returned as
+        it is, anchor included, so nothing downstream sees a geometry change.
         """
         if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
             return None
@@ -483,8 +495,7 @@ class RenderTable:
         natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
             brush, face.get('face'), face)) for face in convex.faces}
         signature = brush_geometry.geometry_signature(brush)
-        if previous is not None and previous.describes(
-                signature, convex, origin, scale, natural):
+        if previous is not None and previous.describes(signature, convex, natural):
             return previous
         return GeometryRecord(signature, convex, origin, scale, natural)
 

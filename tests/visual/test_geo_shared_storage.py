@@ -595,3 +595,49 @@ def test_teardown_releases_every_shared_gl_object(context):
     made.cleanup()
     assert not any(gl.glIsBuffer(b) for b in buffers), "a shared buffer outlived cleanup"
     assert not any(gl.glIsVertexArray(a) for a in arrays), "a VAO outlived cleanup"
+
+
+def test_position_is_a_transform_until_the_geometry_is_resolved_again(
+        renderer, context):
+    """Any brush, no mover involved: a pos-only change is drawn as a
+    transform of the mesh it has, through refreshes; an undo that restores
+    the brush as a new dict re-anchors it (one rebuild), drawing exactly what
+    the old path drew for that state."""
+    from editor.editor_state import EditorState  # noqa: F401  (Session uses it)
+    from engine.change_journal import moved
+    from tools.bench_geo_passes import angled_world
+    session = Session(renderer, context, angled_world(4, seed=21))
+    state = session.state
+    builds = {'n': 0}
+    build = renderer._build_geo_mesh
+
+    def counted(*args, **kwargs):
+        builds['n'] += 1
+        return build(*args, **kwargs)
+
+    try:
+        session.frames(2)
+        session.check("warm-up")
+        renderer._build_geo_mesh = counted
+        brush = state.brushes[5]
+        session.geometry_of[id(brush)] = copy.deepcopy(brush)
+        state.save_state()
+        brush['pos'] = [brush['pos'][0] + 48.0, brush['pos'][1] + 8.0, brush['pos'][2]]
+        moved(brush)
+        session.check("pos-only move: a transform")
+        brush['colour'] = [0.1, 0.8, 0.3]
+        state.mark_world_changed([brush])
+        session.check("refreshed while displaced: still a transform")
+        assert builds['n'] == 0
+        # Undo to the saved (undisplaced) state, then redo the displaced one:
+        # the restored dicts carry no geometry history, so the displaced one
+        # is anchored at its own pos -- exactly the old path's output.
+        state.undo()
+        session.geometry_of.clear()
+        session.check("undo")
+        state.redo()
+        session.check("redo of a displaced state")
+        assert builds['n'] == 1, "only the re-anchored brush may be rebuilt"
+    finally:
+        renderer._build_geo_mesh = build
+        session.stop()

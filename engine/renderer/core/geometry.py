@@ -80,6 +80,105 @@ class BrushGeoMesh:
         self.refs = 0
 
 
+class GeoMeshData:
+    """A convex record's tessellation: CPU data only, built by
+    :func:`tessellate_geo`. ``faces`` lists ``(face, plane, first, count,
+    extent)`` in vertex-buffer order."""
+    __slots__ = ('vertices', 'edges', 'count', 'side_count', 'edge_count',
+                 'has_flat_top', 'faces')
+
+
+def tessellate_geo(record):
+    """Fan-triangulate a GeometryRecord in its anchor's unit-cube space.
+
+    A pure function of the record's surface key -- planes, natural flags and
+    anchor (``origin``/``scale``) -- and of nothing else: in particular not
+    of the brush's current position, which reaches the GPU only as the
+    transform. GL-free, so the key's invariant is testable headlessly.
+
+    Faces are emitted sides first and any flat top face last (``side_count``
+    marks the split), so the water path can draw walls and surface apart.
+    """
+    convex = record.convex
+    if convex is None or not convex.is_valid:
+        return None
+    origin = record.origin
+    scale = record.scale
+
+    # A "top" face (flat, at the AABB top) is emitted last so water can
+    # draw walls and surface separately, like its box path does.
+    def is_top(face):
+        if face['normal'][1] < 0.999:
+            return False
+        ring_y = convex.verts[face['indices']][:, 1]
+        return bool(np.all((ring_y - origin[1]) / scale[1] > 0.5 - 1e-3))
+
+    flags = [is_top(f) for f in convex.faces]
+    ordered = ([(f, False) for f, t in zip(convex.faces, flags) if not t] +
+               [(f, True) for f, t in zip(convex.faces, flags) if t])
+
+    data = []
+    faces = []
+    vert_count = 0
+    side_count = 0
+    top_area = 0.0
+    for face, top in ordered:
+        idx = face['indices']
+        ring_w = convex.verts[idx]                    # world space
+        ring_l = (ring_w - origin) / scale            # local unit-cube space
+        n = np.array(face['normal'])
+        # Local-space normal chosen so normalMatrix (inverse-transpose of the
+        # translate*scale model matrix) maps it back to the world one.
+        ln = n * scale
+        ll = math.sqrt(float(ln @ ln))
+        ln = ln / ll if ll > 1e-9 else n
+        # Projection along the face's own texture basis when it has one (a
+        # rotated face carries a basis that turned with the brush), and along
+        # world axes when it does not.
+        us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
+            ring_w, face)
+        first = vert_count
+        for k in range(1, len(idx) - 1):
+            for j in (0, k, k + 1):
+                p = ring_l[j]
+                data.extend((p[0], p[1], p[2], ln[0], ln[1], ln[2],
+                             (us[j] - u0) / eu, (vs[j] - v0) / ev))
+        vert_count += (len(idx) - 2) * 3
+        faces.append((face, convex.planes[face['plane']], first,
+                      vert_count - first, (eu, ev)))
+        if top:
+            x, z = ring_l[:, 0], ring_l[:, 2]
+            top_area += 0.5 * abs(float(
+                np.dot(x, np.roll(z, -1)) - np.dot(np.roll(x, -1), z)))
+        else:
+            side_count = vert_count
+    if not data:
+        return None
+
+    edge_set = set()
+    for face in convex.faces:
+        idx = face['indices']
+        for a, b in zip(idx, idx[1:] + idx[:1]):
+            edge_set.add((a, b) if a < b else (b, a))
+    everts = []
+    for a, b in edge_set:
+        pa = (convex.verts[a] - origin) / scale
+        pb = (convex.verts[b] - origin) / scale
+        everts.extend((pa[0], pa[1], pa[2], pb[0], pb[1], pb[2]))
+
+    out = GeoMeshData()
+    out.vertices = np.asarray(data, dtype=np.float32).reshape(-1, 8)
+    out.edges = np.asarray(everts, dtype=np.float32)
+    out.count = vert_count
+    out.side_count = side_count
+    out.edge_count = 2 * len(edge_set)
+    # Full unit-square footprint (area 1) means the tessellated water surface
+    # grid still caps this brush exactly.
+    out.has_flat_top = top_area >= 0.999
+    out.faces = faces
+    return out
+
+
 class GeoHandles:
     """One RenderTable's geometry handles, resolved to cached meshes.
 
@@ -335,79 +434,25 @@ class GeometryMixin:
                    or self.load_texture_callback(name, 'textures') or 0)
 
     def _build_geo_mesh(self, record, convex, key):
-        origin = record.origin
-        scale = record.scale
-
-        # A "top" face (flat, at the AABB top) is emitted last so water can
-        # draw walls and surface separately, like its box path does.
-        def is_top(face):
-            if face['normal'][1] < 0.999:
-                return False
-            ring_y = convex.verts[face['indices']][:, 1]
-            return bool(np.all((ring_y - origin[1]) / scale[1] > 0.5 - 1e-3))
-
-        flags = [is_top(f) for f in convex.faces]
-        ordered = ([(f, False) for f, t in zip(convex.faces, flags) if not t] +
-                   [(f, True) for f, t in zip(convex.faces, flags) if t])
-
-        data = []
-        runs = []
-        vert_count = 0
-        side_count = 0
-        top_area = 0.0
-        for face, top in ordered:
-            idx = face['indices']
-            ring_w = convex.verts[idx]                    # world space
-            ring_l = (ring_w - origin) / scale            # local unit-cube space
-            n = np.array(face['normal'])
-            # Local-space normal chosen so normalMatrix (inverse-transpose of
-            # the translate*scale model matrix) maps it back to the world one.
-            ln = n * scale
-            ll = math.sqrt(float(ln @ ln))
-            ln = ln / ll if ll > 1e-9 else n
-            # Projection along the face's own texture basis when it has one
-            # (a rotated face carries a basis that turned with the brush), and
-            # along world axes when it does not — exactly as before.
-            us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
-                ring_w, face)
-            plane_meta = convex.planes[face['plane']]
-            first = vert_count
-            for k in range(1, len(idx) - 1):
-                for j in (0, k, k + 1):
-                    p = ring_l[j]
-                    data.extend((p[0], p[1], p[2], ln[0], ln[1], ln[2],
-                                 (us[j] - u0) / eu, (vs[j] - v0) / ev))
-            vert_count += (len(idx) - 2) * 3
-            runs.append(self._resolve_face_run(
-                face, plane_meta, record, first, vert_count - first, (eu, ev)))
-            if top:
-                x, z = ring_l[:, 0], ring_l[:, 2]
-                top_area += 0.5 * abs(float(
-                    np.dot(x, np.roll(z, -1)) - np.dot(np.roll(x, -1), z)))
-            else:
-                side_count = vert_count
-
-        if not data:
+        data = tessellate_geo(record)
+        if data is None:
             return None
-
+        runs = [self._resolve_face_run(face, plane, record, first, count, extent)
+                for face, plane, first, count, extent in data.faces]
         mesh = BrushGeoMesh()
         mesh.key = key
-        mesh.count = vert_count
-        mesh.side_count = side_count
-        # Full unit-square footprint (area 1) means the tessellated water
-        # surface grid still caps this brush exactly.
-        mesh.has_flat_top = top_area >= 0.999
+        mesh.count = data.count
+        mesh.side_count = data.side_count
+        mesh.has_flat_top = data.has_flat_top
         mesh.run_base, mesh.run_len = self._geo_runs().append(runs)
-
-        vertices = np.asarray(data, dtype=np.float32).reshape(-1, 8)
-        faces = np.empty((vert_count, 5), dtype=np.float32)
+        faces = np.empty((data.count, 5), dtype=np.float32)
         for first, count, _texture, _bits, uv_scale, angle, shift in runs:
             # float32 here: exactly what the per-face uniforms would hold.
             faces[first:first + count] = (uv_scale[0], uv_scale[1], angle,
                                           shift[0], shift[1])
         store = self._geo_store()
         mesh.slot = store.take_slot()
-        placed = store.place(vertices, faces, mesh.slot)
+        placed = store.place(data.vertices, faces, mesh.slot)
         if placed is None:
             store.give_slot(mesh.slot)
             self._geo_runs().release(mesh)
@@ -418,23 +463,13 @@ class GeometryMixin:
             mesh.face_vao = store.mesh_vao(mesh.page, mesh.start, face=True)
 
         # Edge lines (local space) for the selection outline.
-        edge_set = set()
-        for face in convex.faces:
-            idx = face['indices']
-            for a, b in zip(idx, idx[1:] + idx[:1]):
-                edge_set.add((a, b) if a < b else (b, a))
-        everts = []
-        for a, b in edge_set:
-            pa = (convex.verts[a] - origin) / scale
-            pb = (convex.verts[b] - origin) / scale
-            everts.extend((pa[0], pa[1], pa[2], pb[0], pb[1], pb[2]))
-        earr = np.asarray(everts, dtype=np.float32)
-        mesh.edge_count = 2 * len(edge_set)
+        mesh.edge_count = data.edge_count
         mesh.edge_vao = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(mesh.edge_vao)
         mesh.edge_vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.edge_vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, earr.nbytes, earr, gl.GL_STATIC_DRAW)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, data.edges.nbytes, data.edges,
+                        gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
         gl.glBindVertexArray(0)
