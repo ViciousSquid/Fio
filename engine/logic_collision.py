@@ -13,6 +13,7 @@ import os
 import numpy as np
 
 from .brush_geometry import build_collision_mesh, brush_has_geometry
+from .brush_placement import world_box
 from .constants import is_water_brush
 
 try:
@@ -38,11 +39,17 @@ class CollisionRows:
     loop over every brush. Two sets of boxes, because the two walks round
     differently:
 
-    * ``lo32``/``hi32``: the corners the hitscan walk tests, ``glm.vec3(pos)
-      -/+ glm.vec3(size) * 0.5`` -- rounded to float32 -- held as float64,
-      since the slab test itself then runs in Python floats;
-    * ``lo``/``hi``: the corners the projectile wall walk tests, ``pos -/+
-      size * 0.5`` in float64.
+    * ``lo32``/``hi32``: the corners the hitscan walk tests, the derived
+      bounds' centre -/+ half rounded to float32 (for a box, ``glm.vec3(pos)
+      -/+ glm.vec3(size) * 0.5``), held as float64, since the slab test
+      itself then runs in Python floats;
+    * ``lo``/``hi``: the corners the projectile wall walk tests, the same
+      bounds in float64.
+
+    Both are the brush's derived bounds (:mod:`engine.brush_placement`): a
+    convex brush's planes, not its ``pos``/``size`` copy, and a spinning
+    brush's turned box. Hitscan, projectiles and line of sight still test
+    every brush as this box (a true-shape narrow phase is Stage 2e).
 
     Only geometry lives here. Whether a brush blocks (``hidden``, water, fog,
     trigger) is asked of the brush itself, live, for the few rows a query
@@ -75,16 +82,27 @@ class CollisionRows:
         self.movers = [self.brushes[row] for row in movers]
 
     def _resolve(self, rows, brushes):
+        # Each brush's derived bounds (brush_placement.world_box): a convex
+        # brush's planes, a mover where it is now, a spinner's turned box.
+        # A plain box's are its pos/size, read in bulk as they always were;
+        # only the rest ask the resolver.
         count = len(brushes)
         pos = np.array([(p[0], p[1], p[2]) for p in (b['pos'] for b in brushes)],
                        dtype=np.float64).reshape(count, 3).T
         size = np.array([(s[0], s[1], s[2]) for s in (b['size'] for b in brushes)],
                         dtype=np.float64).reshape(count, 3).T
+        half = size * 0.5
+        for i, brush in enumerate(brushes):
+            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                cx, cy, cz, hx, hy, hz = world_box(brush)
+                pos[:, i] = (cx, cy, cz)
+                half[:, i] = (hx, hy, hz)
+        # Halving is exact, so float32(size * 0.5) == float32(size) * 0.5:
+        # the hitscan corners round exactly as glm.vec3(size) * 0.5 did.
         pos32 = pos.astype(np.float32)
-        half32 = size.astype(np.float32) * np.float32(0.5)
+        half32 = half.astype(np.float32)
         self.lo32[:, rows] = pos32 - half32
         self.hi32[:, rows] = pos32 + half32
-        half = size * 0.5
         self.lo[:, rows] = pos - half
         self.hi[:, rows] = pos + half
 

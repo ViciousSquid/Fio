@@ -241,13 +241,13 @@ def test_an_axis_parallel_ray_agrees():
         _agree(grid, start, end, what)
 
 
-def test_a_mesh_collision_brush_is_filed_by_mesh_but_tested_by_size():
-    """The grid's cell membership and the narrow phase read different boxes.
-
-    A mesh brush is inserted into the cells its *mesh* bounds cover, while both
-    line-of-sight paths test its pos/size box. The dense path takes its cells
-    from the same buckets and its box from the same columns, so it inherits
-    both halves -- this pins that it does.
+def test_a_mesh_collision_brush_is_filed_and_tested_by_its_mesh():
+    """A mesh proxy (an entity model's collision stand-in) has one shape for
+    every reader: its mesh bounds (``engine.brush_placement``). The grid
+    files it in the cells they cover and both line-of-sight paths test the
+    same box -- not its placeholder pos/size, which until Stage 2a the
+    narrow phase read while the grid filed by the mesh. Still a box: a
+    true-shape narrow phase is Stage 2e.
     """
     wall = box_brush("mesh_wall", (0.0, 0.0, 0.0), (64.0, 256.0, 64.0))
     wall["_collision_mode"] = "mesh"
@@ -260,7 +260,9 @@ def test_a_mesh_collision_brush_is_filed_by_mesh_but_tested_by_size():
         "the mesh bounds should span several cells; got %d" % occupied)
     assert _agree(grid, (-300, 0, 0), (300, 0, 0), "mesh brush, through") is False
     assert _agree(grid, (-300, 0, 600), (300, 0, 600),
-                  "mesh brush, past its pos/size box but inside its mesh bounds") is True
+                  "mesh brush, past its pos/size box but inside its mesh bounds") is False
+    assert _agree(grid, (-300, 0, 800), (300, 0, 800),
+                  "mesh brush, past its mesh bounds") is True
 
 
 def test_a_moved_mover_is_seen_live_by_both_paths():

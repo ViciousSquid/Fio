@@ -73,7 +73,7 @@ from engine.constants import is_water_brush, normalize_color, water_high_quality
 from engine.spatial import authored_hidden
 import itertools
 
-from engine import brush_faces, brush_geometry
+from engine import brush_faces, brush_geometry, brush_placement
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
 
 #: Process-wide sources of :attr:`RenderTable.geometry_version` values (two
@@ -106,10 +106,11 @@ class GeometryRecord:
     ``origin``/``scale`` are the record's *anchor*: the AABB the mesh is
     expressed in (Fio's angled brushes keep the AABB brushes' unit-cube
     transform, so their vertices are stored relative to it). The anchor is
-    taken from ``pos``/``size`` when the brush's geometry is resolved and is
-    kept while its surface is unchanged (see ``RenderTable._geometry_record``):
-    a later ``pos``/``size`` change is a transform, as it always was for an
-    AABB brush and as a mover needs.
+    the shape's own bounds (:attr:`ConvexGeometry.shape_box`, the box
+    :mod:`engine.brush_placement` derives for the brush), so it is a function
+    of the planes alone: the row's transform -- those bounds, displaced by a
+    mover and turned by its spin -- is what carries the mesh to where it is,
+    and the dict's ``pos``/``size`` copy is never read for it.
 
     ``materials`` maps each convex face (by ``id``) to the
     :class:`engine.brush_faces.Material` it is drawn with -- its one material
@@ -151,9 +152,9 @@ class GeometryRecord:
     def describes(self, signature, convex, materials):
         """Whether this record already describes that surface.
 
-        ``pos``/``size`` are deliberately not compared: while the surface is
-        unchanged the record -- and with it its anchor -- is kept, so a change
-        to them alone stays a transform.
+        ``pos``/``size`` are not compared: the anchor is derived from the
+        planes, so it cannot differ while the surface is unchanged, and a
+        mover's displacement is a transform.
         """
         return (self.convex is convex
                 and self.signature == signature
@@ -503,10 +504,13 @@ class RenderTable:
         convex = brush_geometry.get_convex(brush)
         if convex is None or not convex.is_valid:
             return None
-        pos = brush.get('pos') or (0.0, 0.0, 0.0)
-        size = brush.get('size') or (64.0, 64.0, 64.0)
-        origin = np.asarray(pos, dtype=np.float64).copy()
-        scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
+        # The anchor is the shape's own bounds (brush_placement), never the
+        # dict's pos/size copy: so the mesh is a function of the planes and
+        # their materials alone, and the row's transform (the same bounds,
+        # displaced by a mover) carries it to where it is.
+        cx, cy, cz, hx, hy, hz = convex.shape_box
+        origin = np.array((cx, cy, cz), dtype=np.float64)
+        scale = np.array((hx * 2.0, hy * 2.0, hz * 2.0), dtype=np.float64)
         materials = brush_faces.convex_materials(
             convex, brush.get('texture_tiling', False))
         signature = brush_geometry.geometry_signature(brush)
@@ -522,14 +526,10 @@ class RenderTable:
         if hidden != self.hidden[slot]:
             self.hidden[slot] = hidden
             self._shown_stale = True
-        pos = brush.get('pos') or (0.0, 0.0, 0.0)
-        size = brush.get('size') or (64.0, 64.0, 64.0)
-        self.center[slot] = pos
-        self.half[slot] = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
-        angle = brush.get('_rot_angle') or 0.0
-        if angle:
-            axis = brush.get('rot_axis') or (0.0, 1.0, 0.0)
-            self.rot[slot] = (axis[0], axis[1], axis[2], angle)
+        self.bounds[slot] = brush_placement.placed_box(brush)
+        spin = brush_placement.runtime_spin(brush)
+        if spin is not None:
+            self.rot[slot] = spin
         elif self.rot[slot, 3]:
             self.rot[slot] = 0.0
 
@@ -544,10 +544,15 @@ class RenderTable:
         for row, slot in enumerate(idx.tolist()):
             brush = brushes[slot]
             hidden[row] = bool(brush.get('hidden', False))
-            pos = brush.get('pos') or (0.0, 0.0, 0.0)
-            size = brush.get('size') or (64.0, 64.0, 64.0)
-            bounds[row] = (pos[0], pos[1], pos[2],
-                           size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+            if 'geometry' in brush:
+                bounds[row] = brush_placement.placed_box(brush)
+            else:
+                # brush_placement's box rule, inline: this loop runs over
+                # every row of a world on a cold build.
+                pos = brush.get('pos') or (0.0, 0.0, 0.0)
+                size = brush.get('size') or (64.0, 64.0, 64.0)
+                bounds[row] = (pos[0], pos[1], pos[2],
+                               size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
             angle = brush.get('_rot_angle') or 0.0
             if angle:
                 axis = brush.get('rot_axis') or (0.0, 1.0, 0.0)
@@ -1116,41 +1121,6 @@ def model_matrices(table, slots, out_model=None, out_normal=None):
     return models, normals
 
 
-def rotation_matrices(rot):
-    """The rows of a ``rot`` column block that rotate, and their 3x3 matrices.
-
-    *rot* is ``(n, 4)``: axis xyz and an angle in degrees, about the row's
-    centre. Returns ``(rows, R)`` with ``R`` shaped ``(len(rows), 3, 3)`` as
-    (row, col). A zero angle or a degenerate axis means no rotation, exactly
-    as the scalar path's ``if glm.length(axis) > 0.001`` guard decided, and
-    such rows are left out. Shared by the draw's model matrices and anything
-    else that must see a brush where the renderer drew it.
-    """
-    rot = np.asarray(rot)
-    rotated = np.flatnonzero(rot[:, 3] != 0.0)
-    if not len(rotated):
-        return rotated, np.empty((0, 3, 3), dtype=np.float64)
-    axis = rot[rotated, :3].astype(np.float64)
-    length = np.linalg.norm(axis, axis=1)
-    usable = length > 0.001
-    rotated = rotated[usable]
-    if not len(rotated):
-        return rotated, np.empty((0, 3, 3), dtype=np.float64)
-    axis = axis[usable] / length[usable, None]
-    angle = np.radians(rot[rotated, 3].astype(np.float64))
-    cos_a = np.cos(angle)[:, None]
-    sin_a = np.sin(angle)[:, None]
-    one_c = 1.0 - cos_a
-    ux, uy, uz = axis[:, 0:1], axis[:, 1:2], axis[:, 2:3]
-    # Rodrigues, as (rows, cols) of the 3x3 rotation.
-    r = np.empty((len(rotated), 3, 3), dtype=np.float64)
-    r[:, 0, 0] = (cos_a + ux * ux * one_c)[:, 0]
-    r[:, 0, 1] = (ux * uy * one_c - uz * sin_a)[:, 0]
-    r[:, 0, 2] = (ux * uz * one_c + uy * sin_a)[:, 0]
-    r[:, 1, 0] = (uy * ux * one_c + uz * sin_a)[:, 0]
-    r[:, 1, 1] = (cos_a + uy * uy * one_c)[:, 0]
-    r[:, 1, 2] = (uy * uz * one_c - ux * sin_a)[:, 0]
-    r[:, 2, 0] = (uz * ux * one_c - uy * sin_a)[:, 0]
-    r[:, 2, 1] = (uz * uy * one_c + ux * sin_a)[:, 0]
-    r[:, 2, 2] = (cos_a + uz * uz * one_c)[:, 0]
-    return rotated, r
+#: Shared with every consumer that must see a brush where the renderer drew
+#: it; defined by the placement resolver (GL-free) and re-exported here.
+rotation_matrices = brush_placement.rotation_matrices

@@ -165,17 +165,29 @@ def test_no_collision_body_still_falls():
     assert prop.pos[1] < 40.0
 
 
-def test_mesh_bounds_define_body_shape_relative_to_origin():
-    # _mesh_bounds are world-space (built from world-space mesh triangles).
-    prop = _prop((10.0, 20.0, 30.0))
-    brush = {
+def _convex_body_brush(prop, lo, hi):
+    """A physics-body brush whose planes enclose *lo*..*hi*, carrying a
+    stale ``pos``/``size`` copy that says otherwise: the planes are the
+    shape (Stage 2a, ``engine.brush_placement``)."""
+    from engine import brush_geometry as bg
+    lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
+    brush = {'pos': ((lo + hi) / 2).tolist(), 'size': (hi - lo).tolist()}
+    bg.box_to_geometry(brush)
+    brush.update({
         'pos': list(prop.pos),
         'size': [1.0, 1.0, 1.0],
         '_physics_body': True,
         '_physics_entity': prop,
         '_collision_mode': 'mesh',
-        '_mesh_bounds': ([5.0, 20.0, 27.0], [15.0, 30.0, 33.0]),
-    }
+    })
+    return brush
+
+
+def test_the_planes_define_body_shape_relative_to_origin():
+    # The planes are world-space; the body is their box, relative to the
+    # entity's origin -- never the stale pos/size copy.
+    prop = _prop((10.0, 20.0, 30.0))
+    brush = _convex_body_brush(prop, [5.0, 20.0, 27.0], [15.0, 30.0, 33.0])
 
     half, offset = PhysicsWorld._shape_from_brush(prop, brush)
 
@@ -206,14 +218,7 @@ def test_body_reports_its_shape_from_the_packed_row():
     world = _world()
     prop = _prop()
     prop.pos = [10.0, 20.0, 30.0]
-    brush = {
-        'pos': list(prop.pos),
-        'size': [1.0, 1.0, 1.0],
-        '_physics_body': True,
-        '_physics_entity': prop,
-        '_collision_mode': 'mesh',
-        '_mesh_bounds': ([-5.0, 0.0, -3.0], [5.0, 10.0, 3.0]),
-    }
+    brush = _convex_body_brush(prop, [-5.0, 0.0, -3.0], [5.0, 10.0, 3.0])
     body = world.register_body(prop, brush)
 
     # Bounds (-5,0,-3)..(5,10,3): full extent (10, 10, 6), centre (0, 5, 0);

@@ -39,6 +39,7 @@ from engine.constants import brush_aabb_bounds
 from engine.render_table import RenderTable
 from tests.helpers import brush_semantics as bs
 from tests.helpers import geo_reference as ref
+from tests.helpers import legacy_view
 from tests.helpers.paths import REPO_ROOT
 from tests.helpers.worlds import angled_brush, box_brush
 
@@ -154,7 +155,7 @@ def test_box_faces_are_what_the_box_pass_draws(world):
 def _drawn_faces(brush, table, slot):
     """Per plane index: (world-space vertices, run) as the GPU draws them --
     the frozen path's vertices through the RenderTable's model matrix."""
-    mesh = ref.reference_mesh(brush)
+    mesh = ref.reference_mesh(legacy_view.with_derived_bounds(brush))
     record = table.geometry_records[int(table.geometry_id[slot])]
     models, _normals = rt.model_matrices(table, np.array([slot]))
     model = models[0].reshape(4, 4).T.astype(np.float64)
@@ -177,9 +178,11 @@ def test_convex_faces_are_what_the_convex_path_draws(world):
         brush = brushes[slot]
         convex = bg.get_convex(brush)
         drawn, record = _drawn_faces(brush, table, slot)
-        # The mesh is anchored to pos/size when the record is made.
-        assert list(record.origin) == list(bs.bound(brush)[0])
-        assert list(record.scale) == [max(abs(v), 1e-6) for v in bs.bound(brush)[1]]
+        # The mesh is anchored to its planes' own AABB (Stage 2a), never to
+        # the pos/size copy.
+        rest_centre, rest_size = bs.geometry_rest(brush)
+        assert list(record.origin) == list(rest_centre)
+        assert list(record.scale) == list(rest_size)
         faces = bs.render_faces(brush)
         assert len(faces) == len(convex.faces) == len(drawn)
         for face, (tag, ring, material) in zip(convex.faces, faces):
@@ -219,8 +222,13 @@ def test_bounds_are_what_the_collision_rows_use(world):
     for slot, brush in enumerate(brushes):
         centre, size = (np.asarray(v) for v in bs.bound(brush))
         label = "%s %s" % (world, brush.get('name'))
-        assert np.array_equal(rows.lo[:, slot], centre - size * 0.5), label
-        assert np.array_equal(rows.hi[:, slot], centre + size * 0.5), label
+        if bs.transform(brush)[2] is None:
+            assert np.array_equal(rows.lo[:, slot], centre - size * 0.5), label
+            assert np.array_equal(rows.hi[:, slot], centre + size * 0.5), label
+        else:       # a spinning brush: the AABB of its turned box (Stage 2a)
+            lo, hi = bs.world_aabb(brush)
+            assert np.allclose(rows.lo[:, slot], lo, atol=1e-9), label
+            assert np.allclose(rows.hi[:, slot], hi, atol=1e-9), label
 
 
 @pytest.mark.parametrize("world", sorted(WORLDS))
@@ -247,11 +255,18 @@ def test_bounds_are_what_culling_physics_and_ai_use(world):
         assert np.array_equal(table.center[slot], centre), label
         assert np.array_equal(table.half[slot], size * 0.5), label
         # Physics and AI read the same bound rounded to float32 (computed
-        # through GLM, bit for bit as the old glm.vec3 path).
-        centre32, half32 = centre.astype(np.float32), size.astype(np.float32) * np.float32(0.5)
-        assert brush_aabb_bounds(copy.copy(brush)) == (
-            tuple(float(v) for v in centre32 - half32)
-            + tuple(float(v) for v in centre32 + half32)), label
+        # through GLM, bit for bit as the old glm.vec3 path) ...
+        got = brush_aabb_bounds(copy.copy(brush))
+        if not brush.get('_rot_angle'):
+            centre32, half32 = centre.astype(np.float32), size.astype(np.float32) * np.float32(0.5)
+            assert got == (tuple(float(v) for v in centre32 - half32)
+                           + tuple(float(v) for v in centre32 + half32)), label
+        # ... and a spinning brush as the AABB of its turned box (Stage 2a),
+        # stated independently by turning its corners.
+        lo, hi = bs.world_aabb(brush)
+        tolerance = 1e-5 * max(1.0, float(np.abs(np.concatenate((lo, hi))).max()))
+        assert np.allclose(got[:3], lo, atol=tolerance), label
+        assert np.allclose(got[3:], hi, atol=tolerance), label
 
 
 @pytest.mark.parametrize("world", sorted(WORLDS))

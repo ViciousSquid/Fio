@@ -1,8 +1,9 @@
 # Unified brush model — Stage 2: shape, placement and derived bounds
 
-Status: **investigation and design, for approval.** No engine change has been
-made for Stage 2. Builds on Stage 1 (`56ec0e3`, one material record per face);
-the overall plan is `docs/brush-model-proposal.md`.
+Status: **approved; being implemented in substages** (§11 records each as it
+lands). Builds on Stage 1 (`56ec0e3`, one material record per face); the
+overall plan is `docs/brush-model-proposal.md`. Sections 1–10 are the
+investigation and design as approved.
 
 The invariant Stage 2 has to make true:
 
@@ -298,3 +299,171 @@ largest step and the one that changes the file format.
 3. **2e** (true-shape hitscan/projectiles/line of sight/physics bodies) inside
    Stage 2, or as a follow-up.
 4. Angular carry on spinning platforms stays out of scope.
+
+## 11. Implementation
+
+Each substage is committed on its own, with its validation.
+
+### 11.1 Stage 2a — placement resolver and derived bounds
+
+#### The resolver
+
+`engine/brush_placement.py` (GL-free) is the one answer to "where is this
+brush and what does it cover". It gives, for any brush dict:
+
+* `authored_box` — the shape at its authored placement, unturned, as
+  `(cx, cy, cz, hx, hy, hz)`: a box's `pos`/`size`; a convex brush's planes'
+  bounds (`ConvexGeometry.shape_box`, cached on the shape); an entity
+  model's collision mesh proxy's `_mesh_bounds`; an invalid plane set's
+  `pos`/`size`, exactly as it is drawn;
+* `placed_box` — that box displaced by the runtime transform;
+* `runtime_spin` — the spin (axis, angle), the values the RenderTable's
+  `rot` column takes;
+* `world_box` / `world_bounds` — the derived bounds: the placed box, widened
+  to the AABB of the turned box (`|R| · half`) while it spins;
+* `authored_bounds` — no runtime transform, no spin: a brush's home;
+* `turned_bounds` — the same widening for a block of RenderTable rows
+  (returns the table's own view, uncopied, when no row turns);
+* `ray_to_shape` / `ray_box` — a world ray carried into the frame the shape
+  is authored in, so a pick hits a moved or spinning brush where it is drawn;
+* `normalise_loaded` — re-derive a loaded convex brush's `pos`/`size` copy
+  from its planes.
+
+Runtime transform in 2a is transitional: movers still write `pos` and
+`_rot_angle` into the dict, so a convex mover's displacement is read as its
+live `pos` against its planes' rest centre (equal at rest: kept so by
+`sync_brush_bounds` and by load normalisation). Stage 2b moves the runtime
+transform into `MoverTable`; the rules do not change, only where the
+displacement and spin are read from.
+
+Cost: a box is two dict reads. A convex brush reads its cached shape
+(`_geo_cache`, which every geometry invalidation drops); `get_convex`
+re-hashes every plane (~10 µs for 7 planes) and is only reached on a miss.
+
+#### Consumers
+
+| Consumer | Before | Stage 2a |
+|---|---|---|
+| RenderTable `bounds` (centre, half) | `pos`/`size` | `placed_box` (convex: planes; layout unchanged, 353 B/row) |
+| Convex mesh anchor (`GeometryRecord.origin/scale`, part of the M2 mesh key) | `pos`/`size` when the record was made | the planes' own bounds |
+| Main-view frustum cull | `table.bounds`, rotation ignored | `turned_bounds(table.bounds, table.rot)` |
+| Editor cordon (view filters) | `table.bounds`, rotation ignored | `turned_bounds` |
+| Collision rows (hitscan, projectiles, AI walls) | `pos`/`size` | `world_box` |
+| Physics grid filing | `pos`/`size`, or `_mesh_bounds` for mesh brushes | `world_bounds` |
+| Physics grid rows, wall overlap, floor ray, floor batch | `pos`/`size` | `world_bounds` |
+| Line-of-sight AABB cache (`brush_aabb_bounds`) | `pos`/`size` | `world_box` (key: pos, size, spin, shape, mesh bounds) |
+| Physics static cells, body shapes | `_mesh_bounds` or `pos`/`size` | `world_bounds` / `world_box` |
+| Player water, ledge, step tests | `pos`/`size` | `world_bounds` |
+| Big World filing (editor and play) | editor `pos`/`size`, play `_mesh_bounds` | `authored_bounds` (one rule) |
+| Editor 3D object pick, face pick | `pos`/`size` AABB; convex faces on world planes | ray in the shape's frame: authored box / convex faces |
+| Editor 2D pick, view cull, footprints | `pos`/`size` | `world_bounds` |
+| Combat and AI fallback walks | `pos`/`size` | `world_bounds` / `brush_aabb_bounds` |
+
+Already rotation-aware and unchanged: `actor_pick` (rays turned by the row's
+rotation), portal views (bounding spheres), occlusion grouping (rotated rows
+excluded), shadow casters (per-light reach from the table).
+
+#### Intended behaviour changes
+
+1. **Convex bounds come from the planes.** On shipped maps this changes
+   three bounds and nothing drawn: brush `1a817c94` in `Terrain_Test_small`
+   and `Topdown_example` (the copy was 128 units too wide on −X; culling,
+   collision rows, the grid, Big World and picking now stop at the solid),
+   and `bcac8b00` in `Angled_Brush_Test` (a copy rounded to three decimals,
+   4.85×10⁻⁵ smaller than the solid; now conservative). Pinned by
+   `tests/brush_model/test_stage2a_changes.py`; the semantics snapshot
+   records the two maps' new digests.
+2. **History independence (D5).** A `size`-only write (console `setprop`, a
+   plugin) or a stray `pos` write to a static convex brush changes nothing
+   drawn, collided or picked, before or after a reload.
+3. **Spinning rows (D3).** A spinning box or angled mover is culled, filed,
+   collided by every AABB consumer and picked as its turned box (the AABB of
+   it, for the AABB consumers) — before, as its unturned box, so a long bar
+   at 45° could be culled while visible and collided where it was not
+   drawn.
+4. **Mesh proxies.** An entity model's collision mesh proxy is one shape
+   for every reader (its mesh bounds); hitscan, projectiles and the AI's
+   wall tests used to read the entity's placeholder 1-unit box. No shipped
+   map has one: every shipped model is OBJ, which collides through box
+   proxies.
+
+#### Remaining approximations (recorded)
+
+* The player collides with a spinning box, and with an angled mover, as the
+  AABB of its turned box (previously the unturned box): Stage 2c makes it
+  the true shape.
+* Hitscan, projectiles, AI line of sight and walls, and physics bodies test
+  every brush as its derived AABB (Stage 2e, follow-up).
+* The editor's 2D resize/move handles still edit the stored `pos`/`size`
+  copy of a convex brush (kept in sync); Stage 2d moves editing to the
+  shape and its placement.
+
+#### Validation
+
+* **Full suite** (tests + plugins, llvmpipe, before the hot-path tuning
+  below): 7,077 passed, 150 skipped, 2 xfailed, 7 failed. Five failures are
+  the baseline's (play-cycle leak, editor chrome, three portal-fade); the
+  other two were GL tests restated in this stage after that run had
+  collected them (`test_geo_shared_storage`: a non-mover's `pos` write is no
+  longer a move — see behaviour change 2), which pass. 150 skipped as at the
+  baseline (the GL tier ran). The two Stage 2 targets 2a delivers — derived
+  bounds and history independence — now pass as regression tests (4 → 2
+  xfails). About 170 new tests (`test_placement`, `test_stage2a_changes`).
+  After the tuning: the brush-model, physics, spatial, logic, threading,
+  regression, AI, renderer, engine and Big World groups re-run, all passing.
+* **Pixel parity** (`tools/compare_map_pixels.py`, base `56ec0e3`): all 20
+  shipped maps identical in all 120 views, `Terrain_Test_small` and
+  `Topdown_example` included. (The tool now frames its cameras from the map
+  file's records, which both checkouts read alike.)
+* **Extreme orientations**: zero, 10⁻⁹°, half-degree, quarter, half and full
+  turns, 359.999°, −45°, 725°, the three principal axes, skew axes, an
+  unnormalised axis and two axes too short to rotate — the turned bounds
+  equal a quaternion turn of the box's corners to 10⁻⁹, every drawn vertex
+  of a spinning box or angled row lies inside them, and a box's are exactly
+  its drawn AABB.
+* **Bounds agreement**: RenderTable (as culled), physics grid rows and
+  filing, the AABB cache, collision rows, Big World filing, the cordon and
+  both editor pickers read the resolver's bounds, turned rows included.
+
+#### Measurements
+
+Same machine, interleaved with `56ec0e3`; best of three rounds (the host is
+noisy: medians move by up to 10 % between identical runs).
+
+| | Stage 1 | 2a |
+|---|---|---|
+| BigWorld heap per box (budget 1,359 B) | 1,358.2 B | 1,358.2 B |
+| RenderTable bytes per row | 353 B | 353 B |
+| RenderTable retained heap per row, BigWorld / `_SHOWCASE` | 540.9 / 3,048.9 B | 540.8 / 3,163.9 B |
+| warm sync, BigWorld (3,604 boxes) | 47.2 ms | 50.8 ms (rounds overlap: 47.3–55.5 vs 46.4–55.5) |
+| one-row refresh, BigWorld / `_SHOWCASE` | 0.082 / 0.068 ms | 0.081 / 0.071 ms |
+| still frame p50, BigWorld, two rounds | 11.0 / 11.8 ms | 11.0 / 10.6 ms |
+| still frame p50, `_SHOWCASE`, two rounds | 8.4 / 9.8 ms | 8.7 / 8.0 ms |
+| editor move p50, BigWorld | 16.2 / 16.6 ms | 15.8 / 16.3 ms |
+| physics grid populate, BigWorld | 21.2 ms | 21.6 ms |
+| collision rows build, BigWorld | 2.30 ms | 2.57 ms |
+| Big World index, BigWorld | 4.31 ms | 4.29 ms |
+| AABB cache hit: box / angled | 0.179 / 0.186 µs | 0.235 / 0.247 µs |
+| AABB cache miss: box | 0.935 µs | 0.962 µs |
+| AI wall test per query (`overlaps_wall`) | 2.20 µs | 2.29 µs |
+| player tick p50: floor / 8 box movers / 8 static angled | 7.7 / 24.2 / 21.0 µs | 7.7 / 26.6 / 21.2 µs |
+| player tick p50: 8 angled movers / 8 spinning boxes | 28.6 / 33.7 µs | 44.5 / 55.5 µs |
+
+Box paths are at Stage 1 levels: memory identical, rendering within noise.
+The costs that remain are the price of consistency, and are recorded: a
+cached AABB costs 0.05 µs more per query (three key tests decide whether a
+brush is a plain box — a spin starting in place changes nothing a cheaper
+key could see); building the collision rows walks every brush once more per
+world change (+0.27 ms on 3,604 brushes); the `_SHOWCASE` rows carry their
+shapes' cached bounds (+115 B per row on average) and angled brushes are
+solved at load rather than at their first draw. Angled movers and spinning
+boxes cost more per player tick: a spinner's turned AABB is larger (more
+contacts to resolve), and an angled mover resolves its shape through the
+resolver — both paths are replaced by Stage 2c's shape collision.
+
+To get there, the resolver has a plain-box fast path (two dict reads, the
+old arithmetic), a still angled brush's bounds are cached on its shape
+(`ConvexGeometry.shape_bounds`), and the hottest per-brush loops — the AI's
+wall and floor queries, grid filing, collision rows and Big World filing —
+test for a plain box inline and keep the old arithmetic for it, asking the
+resolver only for anything else.

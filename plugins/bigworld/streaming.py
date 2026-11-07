@@ -44,6 +44,7 @@ from engine.change_journal import touch
 
 from .cell import (CELL_SIZE, CellCoord, cell_distance_sq, cell_of_point,
                    cells_for_aabb)
+from .manager import brush_cells as _brush_cells
 from .manager import (DEFAULT_ACTIVATION_RADIUS, DEFAULT_DEACTIVATION_RADIUS,
                       DEFAULT_PERSISTENT_TYPES, _normalise_type)
 from .config import bound_view_horizon, effective_streaming_radii
@@ -61,20 +62,6 @@ def _obj_pos(obj):
     if isinstance(obj, dict):
         return obj.get("pos", (0.0, 0.0, 0.0))
     return getattr(obj, "pos", (0.0, 0.0, 0.0))
-
-
-def _brush_cells(brush: dict, cell_size: float) -> List[CellCoord]:
-    pos = brush.get("pos", (0.0, 0.0, 0.0))
-    size = brush.get("size", (0.0, 0.0, 0.0))
-    if brush.get("_collision_mode") == "mesh" and brush.get("_mesh_bounds"):
-        min_b, max_b = brush["_mesh_bounds"]
-        min_x, min_z = min_b[0], min_b[2]
-        max_x, max_z = max_b[0], max_b[2]
-    else:
-        hx, hz = size[0] * 0.5, size[2] * 0.5
-        min_x, max_x = pos[0] - hx, pos[0] + hx
-        min_z, max_z = pos[2] - hz, pos[2] + hz
-    return cells_for_aabb(min_x, min_z, max_x, max_z, cell_size)
 
 
 def _thing_uuid(thing) -> str:

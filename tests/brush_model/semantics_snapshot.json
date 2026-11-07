@@ -136,7 +136,7 @@
  },
  "Terrain_Test_small.json": {
   "brushes": 6,
-  "digest": "efb3c200c3d64821e25f735e6aa5d90d52d9c3abc2f9e29914a5aacc36ac49f0",
+  "digest": "d72e72b50c8440b2b5a35acd4ed8c7e18576c769fa6387b85d729312c270724d",
   "encodings": {
    "box": 5,
    "convex": 1
@@ -149,7 +149,7 @@
  },
  "Topdown_example.json": {
   "brushes": 6,
-  "digest": "401611d982bfc1f687f6a49b88e298703715ca1e825cb40c0262519187db11aa",
+  "digest": "9968a2c77fc5c6093f788bafeebda0bb43fdc7ba98fe1a07fdbdd6f66a8160b7",
   "encodings": {
    "box": 5,
    "convex": 1

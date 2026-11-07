@@ -2,8 +2,8 @@
 
 Pinned at Stage 0 of the unified brush model (``docs/brush-model-proposal.md``)
 and changed only by a stage that changes behaviour on purpose; Stage 1 (one
-face record) is the current statement. A brush dict has one of two
-encodings:
+face record) and Stage 2a (derived bounds, ``docs/brush-model-stage2.md``)
+are the current statement. A brush dict has one of two encodings:
 
 * **box** (no ``geometry.planes``): ``pos``/``size`` are the geometry. Each
   face's material lives in the per-tag dicts -- ``textures``, ``uv_scale``,
@@ -13,17 +13,19 @@ encodings:
   face's material lives on its plane, tagged and cut faces alike. A legacy
   brush may still carry per-tag copies for its tagged faces; the Stage 1
   precedence settles them (restated independently in
-  :func:`_convex_material`). ``pos``/``size`` are a *derived bound*
-  (``brush_geometry.sync_brush_bounds``); the renderer draws the planes and
-  the bound-readers (collision AABBs, spatial grid, culling, picking) read
-  ``pos``/``size``.
+  :func:`_convex_material`). Its bound is the planes' own AABB (extents
+  floored at 1e-3); the ``pos``/``size`` it stores are a copy
+  (:func:`stored_bound`) nothing reads for a bound, re-derived at load.
 
-Both encodings are drawn through one transform: ``pos``/``size`` and
-``_rot_angle``/``rot_axis`` (:func:`transform`). Movers write ``pos`` and
-``_rot_angle`` into the authored dict every tick; ``original_pos`` restores
-it. A convex mesh is expressed relative to the ``pos``/``size`` it had when
-its geometry was resolved (its *anchor*), so for a freshly loaded brush the
-two cancel and the planes are drawn where they are.
+Both encodings are drawn through one transform -- the bound (:func:`bound`)
+and ``_rot_angle``/``rot_axis`` (:func:`transform`) -- and every
+bound-reader (culling, collision rows, spatial grid, Big World, picking)
+reads the same bound, turned by the spin. Movers write ``pos`` and
+``_rot_angle`` into the authored dict every tick (Stage 2b moves them out);
+``original_pos`` restores it. A convex mover's bound is centred on its live
+``pos``, which equals its planes' centre at rest. A convex mesh is expressed
+relative to its planes' AABB (its *anchor*) and drawn back through the
+bound, so the planes are drawn where they are, displaced only by a mover.
 
 This module computes, from a brush dict alone and without GL: the pass that
 draws the brush, the faces it draws (world-space polygon + resolved
@@ -77,11 +79,38 @@ def encoding(brush):
     return 'convex' if convex is not None and convex.is_valid else 'convex-invalid'
 
 
-def bound(brush):
-    """``(centre, size)`` as the bound-readers use it: ``pos``/``size``."""
+def stored_bound(brush):
+    """``(centre, size)`` as the dict stores it: ``pos``/``size``."""
     pos = brush.get('pos') or (0.0, 0.0, 0.0)
     size = brush.get('size') or (64.0, 64.0, 64.0)
     return (tuple(float(v) for v in pos), tuple(float(v) for v in size))
+
+
+def geometry_rest(brush):
+    """``(centre, size)`` of a valid convex brush's planes' AABB, extents
+    floored at 1e-3; ``None`` for anything else."""
+    if encoding(brush) != 'convex':
+        return None
+    lo, hi = bg.get_convex(brush).bounds
+    centre = (lo + hi) * 0.5
+    extent = hi - lo
+    return (tuple(float(v) for v in centre),
+            tuple(max(float(v), 1e-3) for v in extent))
+
+
+def bound(brush):
+    """``(centre, size)`` the bound-readers use (Stage 2a): a box's
+    ``pos``/``size``; a convex brush's planes' AABB -- centred on its live
+    ``pos`` while it is a mover or a door; an invalid plane set's
+    ``pos``/``size``."""
+    rest = geometry_rest(brush)
+    if rest is None:
+        return stored_bound(brush)
+    if brush.get('is_mover') or brush.get('is_door'):
+        pos = brush.get('pos')
+        if pos is not None:
+            return tuple(float(v) for v in pos), rest[1]
+    return rest
 
 
 
@@ -114,10 +143,13 @@ def transform(brush):
 
 def posed(brush, points):
     """*points* (world space, as :func:`render_faces` gives them) where the
-    renderer draws them: rotated by ``_rot_angle`` about ``pos`` -- the
-    bound's centre, for a convex brush too, not its geometry's."""
+    renderer draws them: a convex mover's planes carried from their rest to
+    its bound, then rotated by ``_rot_angle`` about the bound's centre."""
     centre, _size, axis, angle = transform(brush)
     points = np.asarray(points, dtype=np.float64)
+    rest = geometry_rest(brush)
+    if rest is not None:
+        points = points + (np.asarray(centre) - np.asarray(rest[0]))
     if axis is None:
         return points
     axis = np.asarray(axis, dtype=np.float64)
@@ -134,6 +166,20 @@ def posed(brush, points):
         [uz * ux * k - uy * s, uz * uy * k + ux * s, c + uz * uz * k]])
     centre = np.asarray(centre)
     return (rotation @ (points - centre).T).T + centre
+
+
+def world_aabb(brush):
+    """``(lo, hi)`` every bound-reader uses (Stage 2a): the AABB of the
+    bound's eight corners where the renderer draws them -- turned about the
+    bound's centre by the spin."""
+    centre, size = (np.asarray(v, dtype=np.float64) for v in bound(brush))
+    corners = np.array([[sx, sy, sz] for sx in (-0.5, 0.5)
+                        for sy in (-0.5, 0.5) for sz in (-0.5, 0.5)]) * size + centre
+    rest = geometry_rest(brush)
+    if rest is not None:            # posed() carries a convex brush's planes
+        corners = corners - (centre - np.asarray(rest[0]))
+    turned = posed(brush, corners)
+    return turned.min(axis=0), turned.max(axis=0)
 
 
 def _box_material(brush, tag):
@@ -300,8 +346,10 @@ def inconsistencies(brush):
 
     * ``runtime_keys``: play's keys (:data:`RUNTIME_KEYS`) in the authored
       dict.
-    * ``bound_drift``: a convex brush whose ``pos``/``size`` are not its
-      planes' AABB (bit for bit); the detail is the largest difference.
+    * ``bound_drift``: a convex brush whose stored ``pos``/``size`` are not
+      its planes' AABB (bit for bit); the detail is the largest difference.
+      Nothing reads the copy for a bound since Stage 2a, and loading
+      re-derives it.
     * ``resolved_from_tag``: a legacy tagged convex face whose per-tag entry
       differs from its plane and is the authoritative value (scale, shift,
       angle: what the Surface Inspector showed); the face draws it, where it
@@ -319,7 +367,7 @@ def inconsistencies(brush):
     convex = bg.get_convex(brush)
     lo, hi = convex.bounds
     centre, extent = (lo + hi) * 0.5, hi - lo
-    pos, size = (np.asarray(v, dtype=np.float64) for v in bound(brush))
+    pos, size = (np.asarray(v, dtype=np.float64) for v in stored_bound(brush))
     if centre.tobytes() != pos.tobytes() or extent.tobytes() != size.tobytes():
         found['bound_drift'] = float(max(np.abs(centre - pos).max(),
                                          np.abs(extent - size).max()))

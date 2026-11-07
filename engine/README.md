@@ -7,6 +7,7 @@
 | `animated_texture.py` | Decodes animated GIF textures and picks the frame for a play time. |
 | `brush_faces.py` | One material record per brush face: the precedence rule for legacy angled brushes, the reader and writer every face edit goes through, conversion between box and angled encodings. |
 | `brush_geometry.py` | Convex brush geometry from planes: faces, collision meshes, 2D outlines, bounds, component edits. |
+| `brush_placement.py` | Where a brush is and what it covers: authored and live placement, spin, and the derived bounds every consumer (rendering, culling, collision, physics grid, Big World, picking) reads. GL-free. |
 | `cell_cull.py` | Cell-group bucketing over the 512-unit grid, occlusion-probe bookkeeping, and the probe-budget governor that parks the probes when they stop paying for themselves. |
 | `camera.py` | Camera state and view/projection matrices. |
 | `change_journal.py` | Records entity changes so the dense tables refresh only changed rows. |

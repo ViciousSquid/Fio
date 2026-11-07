@@ -35,6 +35,7 @@ from engine.brush_geometry import (
 from engine.brush_faces import (
     CANONICAL_MAP_VERSION, drop_tag_copies as _drop_tag_copies,
     migrate_legacy as _migrate_legacy_faces)
+from engine.brush_placement import normalise_loaded as _normalise_placement
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -681,6 +682,10 @@ class EditorState:
                     _migrate_legacy_faces(brush)
                 else:
                     _drop_tag_copies(brush)
+                # The planes are where an angled brush is: its pos/size copy
+                # (and a play-time rest, if the map kept one) is re-derived
+                # from them, so a copy that drifted cannot misplace it.
+                _normalise_placement(brush)
 
             # Restore I/O connections
             if IO_AVAILABLE and 'io_connections' in brush:

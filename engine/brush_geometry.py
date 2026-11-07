@@ -353,7 +353,7 @@ def compute_windings(planes, eps=EPS):
 class ConvexGeometry:
     """Derived, cached surface of a convex brush (built from its plane set)."""
 
-    __slots__ = ('planes', 'verts', 'faces', '_bounds',
+    __slots__ = ('planes', 'verts', 'faces', '_bounds', '_shape_box', '_shape_bounds',
                  '_plane_cache', '_coll_cache', '_edge_cache', '_material_cache')
 
     def __init__(self, planes):
@@ -361,6 +361,8 @@ class ConvexGeometry:
         self.planes = [dict(p) for p in planes]
         self.verts, self.faces = compute_windings(self.planes)
         self._bounds = None
+        self._shape_box = None
+        self._shape_bounds = None
         # Lazily-built, immutable-for-this-instance NumPy views of the plane
         # set, shared by the point/AABB queries so they never rebuild arrays.
         self._plane_cache = None   # (normals Nx3, offsets N)
@@ -414,6 +416,37 @@ class ConvexGeometry:
     def extents(self):
         lo, hi = self.bounds
         return hi - lo
+
+    @property
+    def shape_box(self):
+        """``(cx, cy, cz, hx, hy, hz)``: the solid's AABB as a centre and
+        half-extents, plain floats, built once.
+
+        The one source of a convex brush's derived bounds
+        (:mod:`engine.brush_placement`) and of the ``pos``/``size`` copy
+        :func:`sync_brush_bounds` writes, so the two agree bit for bit. An
+        extent is never below 1e-3, the floor that copy has always had.
+        """
+        if self._shape_box is None:
+            lo, hi = self.bounds
+            c = (lo + hi) * 0.5
+            e = hi - lo
+            self._shape_box = (
+                float(c[0]), float(c[1]), float(c[2]),
+                max(float(e[0]), 1e-3) * 0.5,
+                max(float(e[1]), 1e-3) * 0.5,
+                max(float(e[2]), 1e-3) * 0.5)
+        return self._shape_box
+
+    @property
+    def shape_bounds(self):
+        """``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)`` of :attr:`shape_box`
+        (centre -/+ half), built once: a still brush's derived bounds are
+        these, so a per-query reader takes them as they are."""
+        if self._shape_bounds is None:
+            cx, cy, cz, hx, hy, hz = self.shape_box
+            self._shape_bounds = (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
+        return self._shape_bounds
 
     # -- rendering (PR2) ---------------------------------------------------
     def triangulate(self):
@@ -969,19 +1002,18 @@ def drop_geometry(brush):
 def sync_brush_bounds(brush):
     """Keep ``pos``/``size`` equal to the geometry's AABB.
 
-    Frustum culling, the spatial grid, shadow casters, the 2D fallback draw and
-    ray-picking all read ``pos``/``size`` as a conservative bound; keeping them
-    in sync means those systems keep working unchanged for angled brushes.
+    For a convex brush ``pos``/``size`` are a copy of its derived bounds
+    (:attr:`ConvexGeometry.shape_box`), kept for readers that still take a
+    brush's box from the dict; bounds consumers read
+    :mod:`engine.brush_placement`, which takes them from the planes, so a
+    stale or stray copy cannot move or stretch the brush.
     """
     convex = get_convex(brush)
     if convex is None or not convex.is_valid:
         return
-    c = convex.center()
-    e = convex.extents()
-    brush['pos'] = [float(c[0]), float(c[1]), float(c[2])]
-    brush['size'] = [max(float(e[0]), 1e-3),
-                     max(float(e[1]), 1e-3),
-                     max(float(e[2]), 1e-3)]
+    cx, cy, cz, hx, hy, hz = convex.shape_box
+    brush['pos'] = [cx, cy, cz]
+    brush['size'] = [hx * 2.0, hy * 2.0, hz * 2.0]
 
 
 def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,

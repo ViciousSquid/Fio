@@ -11,7 +11,8 @@ So no stage can change one of these behaviours silently: the stage that
 fixes one makes its characterisation test fail (update it, and name the
 change) and its target test pass unexpectedly (remove the marker). Stage 1
 (one face record) has done that for face material: its section now holds the
-fixed behaviour as regression tests. Shipped maps are not modified here; the
+fixed behaviour as regression tests, and Stage 2a (derived bounds) has done
+the same for the position targets it delivers. Shipped maps are not modified here; the
 snapshot (``test_semantics_snapshot``) records which maps each behaviour
 reaches. See ``docs/brush-model-proposal.md`` for the stages.
 
@@ -26,6 +27,7 @@ import numpy as np
 import pytest
 
 from engine import brush_geometry as bg
+from engine import brush_placement
 from engine import render_table as rt
 from engine.render_table import RenderTable
 from tests.helpers import brush_semantics as bs
@@ -223,14 +225,13 @@ def test_every_loaded_shipped_convex_face_has_one_material_record():
 # ---------------------------------------------------------------------------
 
 def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
-    """Seven shipped convex brushes have ``pos``/``size`` that are not their
-    planes' AABB bit for bit: four by float noise, one by 4.85e-5 (its bound
-    is that much *smaller* than the geometry) and two by 128 units (bounds
-    that are larger). Within 1e-4 of a unit every bound contains the drawn
-    geometry, so culling, collision broad-phase and picking -- which read
-    the bound -- are conservative. A derived bound will be tighter: that is
-    a deliberate change of those maps' culling and broad-phase, not of their
-    pixels."""
+    """Seven shipped convex brushes *store* ``pos``/``size`` that are not
+    their planes' AABB bit for bit: four by float noise, one by 4.85e-5 (its
+    bound is that much *smaller* than the geometry) and two by 128 units
+    (bounds that are larger). Within 1e-4 of a unit every stored bound
+    contains the drawn geometry. Since Stage 2a nothing reads that copy for
+    a bound (``brush_placement`` derives it from the planes) and loading
+    re-derives it; the files themselves are not modified."""
     drifted = 0
     for name, brushes in MAPS.items():
         for brush in brushes:
@@ -238,27 +239,42 @@ def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
             if 'bound_drift' not in found:
                 continue
             drifted += 1
-            centre, size = (np.asarray(v) for v in bs.bound(brush))
+            centre, size = (np.asarray(v) for v in bs.stored_bound(brush))
             g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
             assert (g_centre - g_size / 2 >= centre - size / 2 - 1e-4).all(), name
             assert (g_centre + g_size / 2 <= centre + size / 2 + 1e-4).all(), name
     assert drifted == 7     # 3 above 1e-6 (pinned by the snapshot), 4 noise
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_2)
-def test_target_shipped_convex_bounds_are_derived_from_the_planes():
-    drifted = [(name, b.get('id')) for name, brushes in MAPS.items()
-               for b in brushes
-               if bs.inconsistencies(b).get('bound_drift', 0.0) > bs.DRIFT_NOISE]
-    assert not drifted
+def test_shipped_convex_bounds_are_derived_from_the_planes():
+    """Stage 2a: every shipped convex brush's derived bounds -- what culling,
+    collision rows, the physics grid, Big World and picking read -- are its
+    drawn geometry's AABB, the 128-unit brushes included; and loading
+    re-derives the dict's ``pos``/``size`` copy from the planes."""
+    checked = 0
+    for name, brushes in MAPS.items():
+        for raw in brushes:
+            if not bg.brush_has_geometry(raw):
+                continue
+            brush = copy.deepcopy(raw)
+            g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
+            lo = np.asarray(brush_placement.world_bounds(brush)[:3])
+            hi = np.asarray(brush_placement.world_bounds(brush)[3:])
+            assert np.allclose(lo, g_centre - g_size / 2, atol=1e-9), (name, brush['id'])
+            assert np.allclose(hi, g_centre + g_size / 2, atol=1e-9), (name, brush['id'])
+            brush_placement.normalise_loaded(brush)
+            assert 'bound_drift' not in bs.inconsistencies(brush), (name, brush['id'])
+            checked += 1
+    assert checked >= 7
 
 
-def test_size_of_an_existing_convex_brush_is_a_transform():
-    """A convex mesh is anchored to ``pos``/``size`` when its record is made
-    and kept while its planes are unchanged, so a ``size``-only change (the
-    console's ``setprop``, a plugin) stretches the drawn brush -- until the
-    map is reloaded, when the planes are drawn where they are. What is drawn
-    depends on the brush's history, not only on its dict."""
+def test_a_size_only_write_does_not_stretch_a_convex_brush():
+    """Stage 2a: a convex mesh is anchored to its own planes' bounds, and the
+    row's transform is those bounds too, so a ``size``-only write (the
+    console's ``setprop``, a plugin) changes nothing drawn: the record is
+    kept and the planes are drawn where they are, before and after a
+    reload. (Before Stage 2a the anchor was ``pos``/``size`` and the write
+    stretched the brush until the map was reloaded.)"""
     brush = angled_brush("anchored", (40, 30, -20), (96, 80, 112),
                          clip_normal=(0.4, 1.0, -0.3))
     planes = np.asarray(bg.get_convex(brush).verts, dtype=np.float64)
@@ -268,17 +284,14 @@ def test_size_of_an_existing_convex_brush_is_a_transform():
     brush['size'] = [brush['size'][0] * 1.5] + list(brush['size'][1:])
     live.sync([brush], 2, dirty_objects={id(brush)})
     assert live.geometry_records[0] is record
-    stretched = _drawn_points(live, 0)
+    assert np.allclose(_drawn_points(live, 0), planes, atol=1e-3)
     fresh = RenderTable()
     fresh.sync([copy.deepcopy({k: v for k, v in brush.items()
                                if k not in bg.GEO_RUNTIME_KEYS})], 1)
-    reloaded = _drawn_points(fresh, 0)
-    assert np.allclose(reloaded, planes, atol=1e-3)
-    assert not np.allclose(stretched, planes, atol=1.0)
+    assert np.allclose(_drawn_points(fresh, 0), planes, atol=1e-3)
 
 
-@pytest.mark.xfail(strict=True, reason=STAGE_2)
-def test_target_what_is_drawn_does_not_depend_on_edit_history():
+def test_what_is_drawn_does_not_depend_on_edit_history():
     brush = angled_brush("anchored", (40, 30, -20), (96, 80, 112),
                          clip_normal=(0.4, 1.0, -0.3))
     live = RenderTable()

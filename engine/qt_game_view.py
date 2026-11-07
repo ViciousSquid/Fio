@@ -56,7 +56,7 @@ def restore_default_pixel_store():
     gl.glPixelStorei(gl.GL_UNPACK_SKIP_ROWS, 0)
     gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
 
-from engine import brush_geometry
+from engine import brush_geometry, brush_placement
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.view_distance import ViewDistance
@@ -3650,27 +3650,13 @@ class QtGameView(QOpenGLWidget):
             if (brush.get('hidden', False) or brush.get('lock', False)
                     or filters.hides_brush(brush)):
                 continue
-            pos = glm.vec3(brush.get('pos', [0, 0, 0]))
-            size = glm.vec3(brush.get('size', [64, 64, 64]))
-            bmin, bmax = pos - size/2, pos + size/2
-            tmin, tmax = 0.0, float('inf')
-            hit = True
-            for i in range(3):
-                if abs(ray_d[i]) < 1e-6:
-                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]:
-                        hit = False
-                        break
-                else:
-                    t1 = (bmin[i] - ray_o[i]) / ray_d[i]
-                    t2 = (bmax[i] - ray_o[i]) / ray_d[i]
-                    if t1 > t2:
-                        t1, t2 = t2, t1
-                    tmin = max(tmin, t1)
-                    tmax = min(tmax, t2)
-                    if tmin > tmax:
-                        hit = False
-                        break
-            if hit:
+            # The brush's own box (brush_placement): an angled brush's
+            # planes' bounds, tested in the frame its shape is authored in,
+            # so a moved or spinning brush is picked where it is drawn.
+            o, d = brush_placement.ray_to_shape(brush, ray_o, ray_d)
+            tmin = brush_placement.ray_box(
+                brush_placement.authored_box(brush), o, d)
+            if tmin is not None:
                 hits.append((tmin, brush))
                 if tmin < best_t:
                     best_t = tmin
@@ -3733,47 +3719,31 @@ class QtGameView(QOpenGLWidget):
             # Angled (clipped) brushes: pick against their real convex faces so
             # the sloped cut face is selectable, not just the six sides of the
             # bounding box.  Plain box brushes stay on the fast AABB path below.
-            if brush_geometry.brush_has_geometry(brush):
-                convex = brush_geometry.get_convex(brush)
-                if convex is not None and convex.is_valid:
-                    hit = brush_geometry.ray_convex_face(convex, ray_o_t, ray_d_t)
-                    if hit is not None and hit[0] < best_t:
-                        best_t = hit[0]
-                        best_hit = (brush, brush_geometry.face_key(hit[1]))
-                    continue
-            pos = glm.vec3(brush.get('pos', [0, 0, 0]))
-            size = glm.vec3(brush.get('size', [64, 64, 64]))
-            bmin, bmax = pos - size/2, pos + size/2
-            tmin_b, tmax_b = 0.0, float('inf')
-            hit = True
-            for i in range(3):
-                if abs(ray_d[i]) < 1e-6:
-                    if ray_o[i] < bmin[i] or ray_o[i] > bmax[i]:
-                        hit = False
-                        break
-                else:
-                    t1 = (bmin[i] - ray_o[i]) / ray_d[i]
-                    t2 = (bmax[i] - ray_o[i]) / ray_d[i]
-                    if t1 > t2:
-                        t1, t2 = t2, t1
-                    tmin_b = max(tmin_b, t1)
-                    tmax_b = min(tmax_b, t2)
-                    if tmin_b > tmax_b:
-                        hit = False
-                        break
-            if not hit or tmin_b >= best_t:
+            # Tested in the frame the brush's shape is authored in
+            # (brush_placement), so a moved or spinning brush is picked where
+            # it is drawn.
+            o, d = brush_placement.ray_to_shape(brush, ray_o_t, ray_d_t)
+            convex = brush_placement.shape_convex(brush)
+            if convex is not None:
+                hit = brush_geometry.ray_convex_face(convex, o, d)
+                if hit is not None and hit[0] < best_t:
+                    best_t = hit[0]
+                    best_hit = (brush, brush_geometry.face_key(hit[1]))
                 continue
-            t_box = tmin_b
-            hit_pt = ray_o + ray_d * t_box
-            local = hit_pt - pos
-            rel = glm.abs(local) / size
+            box = brush_placement.authored_box(brush)
+            t_box = brush_placement.ray_box(box, o, d)
+            if t_box is None or t_box >= best_t:
+                continue
+            local = [o[i] + d[i] * t_box - box[i] for i in range(3)]
+            rel = [abs(local[i]) / (2.0 * box[i + 3]) if box[i + 3] else 0.0
+                   for i in range(3)]
             face = 'north'
-            if rel.x > rel.y and rel.x > rel.z:
-                face = 'east' if local.x > 0 else 'west'
-            elif rel.y > rel.x and rel.y > rel.z:
-                face = 'top' if local.y > 0 else 'down'
+            if rel[0] > rel[1] and rel[0] > rel[2]:
+                face = 'east' if local[0] > 0 else 'west'
+            elif rel[1] > rel[0] and rel[1] > rel[2]:
+                face = 'top' if local[1] > 0 else 'down'
             else:
-                face = 'north' if local.z > 0 else 'south'
+                face = 'north' if local[2] > 0 else 'south'
             best_t = t_box
             best_hit = (brush, face)
         return best_hit

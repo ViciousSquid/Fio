@@ -12,7 +12,8 @@ import time
 import glm
 import numpy as np
 
-from .constants import is_solid_world_brush, is_water_brush
+from .brush_placement import world_bounds
+from .constants import brush_aabb_bounds, is_solid_world_brush, is_water_brush
 from .change_journal import touch
 from .items import DEFAULT_REGISTRY, ITEM_IDS
 from .projectile_table import ProjectileStore
@@ -271,10 +272,10 @@ class LogicCombat:
         for brush in self.logic.collision_runtime._collision_brushes_cache:
             if not self._blocks_hitscan(brush):
                 continue
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
-            min_b = pos - size * 0.5
-            max_b = pos + size * 0.5
+            # The brush's derived bounds, rounded as CollisionRows.lo32 is.
+            b = brush_aabb_bounds(brush)
+            min_b = glm.vec3(b[0], b[1], b[2])
+            max_b = glm.vec3(b[3], b[4], b[5])
             hit, dist = self.intersect_ray_aabb(ray_origin, ray_dir, min_b, max_b, reach)
             if hit and dist < closest_brush_dist:
                 closest_brush_dist = dist
@@ -698,12 +699,11 @@ class LogicCombat:
                 for brush in collision_brushes:
                     if not is_solid_world_brush(brush):
                         continue
-                    bp = brush['pos']
-                    bs = brush['size']
+                    b = world_bounds(brush)
                     if (
-                        bp[0] - bs[0] * 0.5 <= px <= bp[0] + bs[0] * 0.5
-                        and bp[1] - bs[1] * 0.5 <= py <= bp[1] + bs[1] * 0.5
-                        and bp[2] - bs[2] * 0.5 <= pz <= bp[2] + bs[2] * 0.5
+                        b[0] <= px <= b[3]
+                        and b[1] <= py <= b[4]
+                        and b[2] <= pz <= b[5]
                     ):
                         hit_wall = True
                         break
@@ -850,12 +850,11 @@ class LogicCombat:
                 for brush in all_collision_brushes:
                     if not is_solid_world_brush(brush):
                         continue
-                    bp = brush['pos']
-                    bs = brush['size']
+                    b = world_bounds(brush)
                     if (
-                        bp[0] - bs[0] * 0.5 <= x <= bp[0] + bs[0] * 0.5
-                        and bp[1] - bs[1] * 0.5 <= y <= bp[1] + bs[1] * 0.5
-                        and bp[2] - bs[2] * 0.5 <= z <= bp[2] + bs[2] * 0.5
+                        b[0] <= x <= b[3]
+                        and b[1] <= y <= b[4]
+                        and b[2] <= z <= b[5]
                     ):
                         hit_wall = True
                         break

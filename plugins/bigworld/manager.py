@@ -35,6 +35,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from engine.brush_placement import authored_bounds
+
 from .cell import (CELL_SIZE, BigWorldCell, CellCoord, CellState,
                    cell_distance_sq, cell_of_point, cells_for_aabb,
                    cells_within)
@@ -59,6 +61,26 @@ DEFAULT_PERSISTENT_TYPES = frozenset({
 def _normalise_type(type_name) -> str:
     """Lowercase + strip underscores — matches ``editor.things.from_dict``."""
     return str(type_name or "").replace("_", "").lower()
+
+
+
+def brush_cells(brush: dict, cell_size: float) -> List[CellCoord]:
+    """The cells a brush's home footprint covers.
+
+    Its authored bounds (:func:`engine.brush_placement.authored_bounds`): an
+    angled brush's planes, never its ``pos``/``size`` copy, and no runtime
+    transform -- where it lives, not where a mover has carried it. One rule
+    for the editor's index and play's, so both file a brush in the same cells.
+    """
+    if 'geometry' in brush or '_mesh_bounds' in brush:
+        min_x, _min_y, min_z, max_x, _max_y, max_z = authored_bounds(brush)
+    else:   # a plain box: the box rule, inline (indexing walks every brush)
+        pos = brush.get("pos", (0.0, 0.0, 0.0))
+        size = brush.get("size", (0.0, 0.0, 0.0))
+        hx, hz = size[0] * 0.5, size[2] * 0.5
+        min_x, max_x = pos[0] - hx, pos[0] + hx
+        min_z, max_z = pos[2] - hz, pos[2] + hz
+    return cells_for_aabb(min_x, min_z, max_x, max_z, cell_size)
 
 
 class ActivationDelta:
@@ -252,18 +274,7 @@ class BigWorldManager:
         """Index one brush into every cell its XZ footprint overlaps."""
         uuid = self.brush_uuid(brush)
         self._brush_by_id[uuid] = brush
-        pos = brush.get("pos", (0.0, 0.0, 0.0))
-        size = brush.get("size", (0.0, 0.0, 0.0))
-        # Prefer real mesh bounds when present, matching SpatialGrid.populate.
-        if brush.get("_collision_mode") == "mesh" and brush.get("_mesh_bounds"):
-            min_b, max_b = brush["_mesh_bounds"]
-            min_x, min_z = min_b[0], min_b[2]
-            max_x, max_z = max_b[0], max_b[2]
-        else:
-            hx, hz = size[0] * 0.5, size[2] * 0.5
-            min_x, max_x = pos[0] - hx, pos[0] + hx
-            min_z, max_z = pos[2] - hz, pos[2] + hz
-        for coord in cells_for_aabb(min_x, min_z, max_x, max_z, self.cell_size):
+        for coord in brush_cells(brush, self.cell_size):
             self._cell(coord).brushes.append(brush)
 
     def add_thing(self, thing) -> None:

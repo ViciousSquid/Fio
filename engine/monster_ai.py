@@ -25,7 +25,8 @@ from .change_journal import JOURNAL, STATE, set_positions, touch
 from . import monster_table
 from .monster_facing import face_direction
 from .spatial import TIER_DORMANT, tier_of
-from .constants import is_solid_world_brush
+from .brush_placement import world_bounds
+from .constants import brush_aabb_bounds, is_solid_world_brush
 from .physics import world_gravity
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -2022,10 +2023,9 @@ the scalar fallback for callers that do not have the dense table.
         for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
-            b_min = pos - size * 0.5
-            b_max = pos + size * 0.5
+            b = brush_aabb_bounds(brush)
+            b_min = glm.vec3(b[0], b[1], b[2])
+            b_max = glm.vec3(b[3], b[4], b[5])
             hit, dist = self.lt.combat_runtime.intersect_ray_aabb(start, ray_dir, b_min, b_max)
             if hit and dist < ray_len - 0.1:
                 return False
@@ -2041,13 +2041,7 @@ the scalar fallback for callers that do not have the dense table.
         for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
-            pos = brush['pos']
-            size = brush['size']
-            bx_min = pos[0] - size[0] * 0.5
-            bx_max = pos[0] + size[0] * 0.5
-            bz_min = pos[2] - size[2] * 0.5
-            bz_max = pos[2] + size[2] * 0.5
-            by_max = pos[1] + size[1] * 0.5
+            bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
 
             if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
                 if by_max <= start_y:
@@ -2064,14 +2058,7 @@ the scalar fallback for callers that do not have the dense table.
         for brush in self.lt.editor_state.brushes:
             if not is_solid_world_brush(brush):
                 continue
-            pos = brush['pos']
-            size = brush['size']
-            bx_min = pos[0] - size[0] * 0.5
-            bx_max = pos[0] + size[0] * 0.5
-            by_min = pos[1] - size[1] * 0.5
-            by_max = pos[1] + size[1] * 0.5
-            bz_min = pos[2] - size[2] * 0.5
-            bz_max = pos[2] + size[2] * 0.5
+            bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
 
             m_xmin = mx - margin
             m_xmax = mx + margin

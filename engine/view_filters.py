@@ -26,6 +26,7 @@ GL-free and Qt-free.
 
 import numpy as np
 
+from engine import brush_placement
 from engine import entity_table as et
 from engine import render_table as rt
 
@@ -144,12 +145,10 @@ class Cordon:
 
 
 def brush_bounds(brush):
-    """``(lo, hi)`` corners of a brush dict's box."""
-    pos = brush.get('pos') or (0.0, 0.0, 0.0)
-    size = brush.get('size') or (64.0, 64.0, 64.0)
-    lo = [float(pos[i]) - float(size[i]) * 0.5 for i in range(3)]
-    hi = [float(pos[i]) + float(size[i]) * 0.5 for i in range(3)]
-    return lo, hi
+    """``(lo, hi)`` corners of a brush's derived bounds
+    (:func:`engine.brush_placement.world_bounds`)."""
+    b = brush_placement.world_bounds(brush)
+    return [float(b[0]), float(b[1]), float(b[2])], [float(b[3]), float(b[4]), float(b[5])]
 
 
 class ViewFilters:
@@ -310,7 +309,9 @@ class ViewFilters:
                                      for b in table.brushes[:count]),
                                     dtype=bool, count=count)
             if self.cordon.enabled:
-                bounds = np.asarray(table.bounds[:count], dtype=np.float64)
+                bounds = brush_placement.turned_bounds(
+                    np.asarray(table.bounds[:count], dtype=np.float64),
+                    table.rot[:count])
                 lo = bounds[:, :3] - bounds[:, 3:]
                 hi = bounds[:, :3] + bounds[:, 3:]
                 touches = ((hi >= self.cordon.lo) & (lo <= self.cordon.hi)).all(axis=1)

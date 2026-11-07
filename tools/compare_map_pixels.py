@@ -102,8 +102,11 @@ def render_tree(out_dir, expect):
         if hidden_ids:
             variants.append(('without', [b for b in state.brushes
                                          if b.get('id') not in hidden_ids]))
-        cameras = _cameras(state.brushes, width / height)
-        cameras += _focus_cameras(state.brushes, hidden_ids, width / height)
+        # Framed from the file's own records, which both checkouts read
+        # alike: a loader that re-derives a stored bound (Stage 2a) must not
+        # move the camera.
+        cameras = _cameras(data['brushes'], width / height)
+        cameras += _focus_cameras(data['brushes'], hidden_ids, width / height)
         images = {}
         for label, brushes in variants:
             renderer = ForwardRenderer(None)

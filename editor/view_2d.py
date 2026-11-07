@@ -9,6 +9,7 @@ from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
+from engine import brush_placement
 from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
 from engine.entity_models import (model_path as entity_model_path,
                                   model_rotation, model_scale)
@@ -538,9 +539,8 @@ class View2D(QWidget):
         """(min1, min2, max1, max2) footprint of a brush or point of a thing in
         the current view plane."""
         if isinstance(obj, dict):
-            pos, size = obj['pos'], obj['size']
-            return (pos[i1] - size[i1] / 2, pos[i2] - size[i2] / 2,
-                    pos[i1] + size[i1] / 2, pos[i2] + size[i2] / 2)
+            b = brush_placement.world_bounds(obj)
+            return (b[i1], b[i2], b[i1 + 3], b[i2 + 3])
         p = obj.pos
         return (p[i1], p[i2], p[i1], p[i2])
 
@@ -1254,19 +1254,16 @@ class View2D(QWidget):
         if self._hidden(brush):
             return False
         
-        # Get brush bounds in the 2D view's coordinate system
-        pos = brush.get('pos', [0, 0, 0])
+        # Derived bounds (brush_placement) in the view's two axes.
         size = brush.get('size', [0, 0, 0])
-        
+
         # Skip degenerate brushes
         if size[axis1_idx] <= 0 or size[axis2_idx] <= 0:
             return False
-        
-        # Calculate min/max in world coordinates for the two axes
-        min_x = pos[axis1_idx] - size[axis1_idx] / 2.0
-        max_x = pos[axis1_idx] + size[axis1_idx] / 2.0
-        min_y = pos[axis2_idx] - size[axis2_idx] / 2.0
-        max_y = pos[axis2_idx] + size[axis2_idx] / 2.0
+
+        b = brush_placement.world_bounds(brush)
+        min_x, max_x = b[axis1_idx], b[axis1_idx + 3]
+        min_y, max_y = b[axis2_idx], b[axis2_idx + 3]
         
         # Create brush bounds rect
         brush_bounds = QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
@@ -4366,16 +4363,15 @@ class View2D(QWidget):
             if self._hidden(brush):
                 continue
 
-            # FIX: Use .get() to avoid KeyError if 'pos' or 'size' are missing
-            pos = brush.get('pos')
-            size = brush.get('size')
-            
-            if pos is None or size is None:
+            if brush.get('pos') is None or brush.get('size') is None:
                 continue
 
-            p1 = QPointF(pos[ax_map[ax1]] - size[ax_map[ax1]]/2, pos[ax_map[ax2]] - size[ax_map[ax2]]/2)
-            p2 = QPointF(pos[ax_map[ax1]] + size[ax_map[ax1]]/2, pos[ax_map[ax2]] + size[ax_map[ax2]]/2)
-            brush_rect = QRectF(p1, p2).normalized()
+            # Derived bounds (brush_placement): an angled brush's planes, a
+            # previewed mover where it is drawn.
+            b = brush_placement.world_bounds(brush)
+            i1, i2 = ax_map[ax1], ax_map[ax2]
+            brush_rect = QRectF(QPointF(b[i1], b[i2]),
+                                QPointF(b[i1 + 3], b[i2 + 3])).normalized()
             
             if brush_rect.contains(world_pos):
                 # Track locked brushes separately if setting is enabled

@@ -222,7 +222,12 @@ def test_shared_storage_through_an_editing_session(renderer, context):
     from engine.spatial import set_authored_flag
     from engine.renderer.core import geo_store
 
-    session = Session(renderer, context, _world())
+    world = _world()
+    # Step 3 moves this brush as a mover does: since Stage 2a only a mover's
+    # (or door's) displacement moves an angled brush -- its planes are its
+    # placement otherwise.
+    world[200]['is_mover'] = True
+    session = Session(renderer, context, world)
     state = session.state
     try:
         # 1. Warm-up, then a still world uploads nothing at all.
@@ -604,12 +609,14 @@ def test_teardown_releases_every_shared_gl_object(context):
     assert not any(gl.glIsVertexArray(a) for a in arrays), "a VAO outlived cleanup"
 
 
-def test_position_is_a_transform_until_the_geometry_is_resolved_again(
-        renderer, context):
-    """Any brush, no mover involved: a pos-only change is drawn as a
-    transform of the mesh it has, through refreshes; an undo that restores
-    the brush as a new dict re-anchors it (one rebuild), drawing exactly what
-    the old path drew for that state."""
+def test_a_stray_pos_write_to_an_angled_brush_moves_nothing(renderer, context):
+    """No mover involved: an angled brush's planes are its placement (Stage
+    2a; Stage 2d makes ``pos`` the authored placement of every brush), so a
+    ``pos``-only write -- a console ``setprop``, a plugin -- is a stale copy
+    nothing draws from. Before Stage 2a it was drawn as a transform until an
+    undo re-anchored it (one rebuild): what was drawn depended on history.
+    Now it is drawn where its planes are through refreshes, undo and redo,
+    and the mesh -- keyed by the shape -- is never rebuilt."""
     from editor.editor_state import EditorState  # noqa: F401  (Session uses it)
     from engine.change_journal import moved
     from tools.bench_geo_passes import angled_world
@@ -631,20 +638,17 @@ def test_position_is_a_transform_until_the_geometry_is_resolved_again(
         state.save_state()
         brush['pos'] = [brush['pos'][0] + 48.0, brush['pos'][1] + 8.0, brush['pos'][2]]
         moved(brush)
-        session.check("pos-only move: a transform")
+        session.check("stray pos write: drawn where its planes are")
         brush['colour'] = [0.1, 0.8, 0.3]
         state.mark_world_changed([brush])
-        session.check("refreshed while displaced: still a transform")
+        session.check("refreshed with a stray pos: still where its planes are")
         assert builds['n'] == 0
-        # Undo to the saved (undisplaced) state, then redo the displaced one:
-        # the restored dicts carry no geometry history, so the displaced one
-        # is anchored at its own pos -- exactly the old path's output.
         state.undo()
         session.geometry_of.clear()
         session.check("undo")
         state.redo()
-        session.check("redo of a displaced state")
-        assert builds['n'] == 1, "only the re-anchored brush may be rebuilt"
+        session.check("redo of the stray write")
+        assert builds['n'] == 0, "the shape did not change: nothing may be rebuilt"
     finally:
         renderer._build_geo_mesh = build
         session.stop()

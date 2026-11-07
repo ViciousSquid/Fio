@@ -3,6 +3,7 @@ import glm
 import numpy as np
 
 from .change_journal import touch
+from .brush_placement import world_bounds, world_box
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
                       cells_of_points, tier_of)
@@ -51,7 +52,8 @@ class _CellRows:
     The grid's buckets as flat arrays: ``keys`` (sorted packed cell coords),
     ``starts`` (``keys[i]``'s rows are ``rows[starts[i]:starts[i+1]]``) and
     ``lo``/``hi`` float64 boxes computed exactly as :meth:`SpatialGrid.raycast_down`
-    and :meth:`SpatialGrid.overlaps_wall` compute them, ``pos -/+ size * 0.5``.
+    and :meth:`SpatialGrid.overlaps_wall` compute them: each brush's derived
+    bounds (:func:`engine.brush_placement.world_bounds`).
     Movers and doors keep their row but are re-read live on every query,
     which is what the per-brush queries do.
     """
@@ -103,6 +105,12 @@ class _CellRows:
                 self.movers.append((row, brush))
 
     def _resolve(self, row, brush):
+        if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+            bounds = world_bounds(brush)
+            self.lo[row] = bounds[0:3]
+            self.hi[row] = bounds[3:6]
+            return
+        # A plain box: brush_placement's box rule, inline (a hot loop).
         pos = brush['pos']
         size = brush['size']
         for axis in range(3):
@@ -339,20 +347,18 @@ class SpatialGrid:
 
             self._all_solid.append(brush)
 
-            pos = brush['pos']
-            size = brush['size']
-
-            # FIX: For mesh collision brushes, use the actual mesh bounds
-            if brush.get('_collision_mode') == 'mesh':
-                mesh_bounds = brush.get('_mesh_bounds')
-                if mesh_bounds:
-                    min_b, max_b = mesh_bounds
-                    pos = [(min_b[i] + max_b[i]) / 2.0 for i in range(3)]
-                    size = [max_b[i] - min_b[i] for i in range(3)]
-
-            self._index.insert(brush,
-                               pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
-                               pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
+            # Filed by its derived bounds (brush_placement): an angled
+            # brush's planes, a mover where it is now, a spinner's turned box
+            # -- one rule in the editor and in play.
+            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = world_bounds(brush)
+                self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
+            else:       # a plain box: the box rule, inline
+                pos = brush['pos']
+                size = brush['size']
+                self._index.insert(brush,
+                                   pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
+                                   pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
         self._los_rows = self._build_los_rows()
         self._cell_rows = _CellRows(self.cells)
@@ -433,14 +439,17 @@ class SpatialGrid:
         if min_cx == max_cx and min_cz == max_cz:
             # Single-cell fast path: no de-duplication set needed.
             for brush in cells.get((min_cx, min_cz), ()):
-                pos = brush['pos']
-                size = brush['size']
-                bx_min = pos[0] - size[0] * 0.5
-                bx_max = pos[0] + size[0] * 0.5
-                by_min = pos[1] - size[1] * 0.5
-                by_max = pos[1] + size[1] * 0.5
-                bz_min = pos[2] - size[2] * 0.5
-                bz_max = pos[2] + size[2] * 0.5
+                if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                    bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
+                else:   # a plain box: brush_placement's box rule, inline (per query)
+                    pos = brush['pos']
+                    size = brush['size']
+                    bx_min = pos[0] - size[0] * 0.5
+                    bx_max = pos[0] + size[0] * 0.5
+                    by_min = pos[1] - size[1] * 0.5
+                    by_max = pos[1] + size[1] * 0.5
+                    bz_min = pos[2] - size[2] * 0.5
+                    bz_max = pos[2] + size[2] * 0.5
                 if (m_xmax > bx_min and m_xmin < bx_max and
                         m_ymax > by_min and m_ymin < by_max and
                         m_zmax > bz_min and m_zmin < bz_max):
@@ -456,14 +465,17 @@ class SpatialGrid:
                         continue
                     seen.add(bid)
 
-                    pos = brush['pos']
-                    size = brush['size']
-                    bx_min = pos[0] - size[0] * 0.5
-                    bx_max = pos[0] + size[0] * 0.5
-                    by_min = pos[1] - size[1] * 0.5
-                    by_max = pos[1] + size[1] * 0.5
-                    bz_min = pos[2] - size[2] * 0.5
-                    bz_max = pos[2] + size[2] * 0.5
+                    if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                        bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
+                    else:   # a plain box: brush_placement's box rule, inline (per query)
+                        pos = brush['pos']
+                        size = brush['size']
+                        bx_min = pos[0] - size[0] * 0.5
+                        bx_max = pos[0] + size[0] * 0.5
+                        by_min = pos[1] - size[1] * 0.5
+                        by_max = pos[1] + size[1] * 0.5
+                        bz_min = pos[2] - size[2] * 0.5
+                        bz_max = pos[2] + size[2] * 0.5
 
                     if (m_xmax > bx_min and m_xmin < bx_max and
                         m_ymax > by_min and m_ymin < by_max and
@@ -651,13 +663,16 @@ class SpatialGrid:
 
         best_y = None
         for brush in brushes:
-            pos = brush['pos']
-            size = brush['size']
-            bx_min = pos[0] - size[0] * 0.5
-            bx_max = pos[0] + size[0] * 0.5
-            bz_min = pos[2] - size[2] * 0.5
-            bz_max = pos[2] + size[2] * 0.5
-            by_max = pos[1] + size[1] * 0.5
+            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
+            else:   # a plain box: brush_placement's box rule, inline (per query)
+                pos = brush['pos']
+                size = brush['size']
+                bx_min = pos[0] - size[0] * 0.5
+                bx_max = pos[0] + size[0] * 0.5
+                by_max = pos[1] + size[1] * 0.5
+                bz_min = pos[2] - size[2] * 0.5
+                bz_max = pos[2] + size[2] * 0.5
 
             if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
                 if by_max <= start_y:
@@ -1234,29 +1249,16 @@ class PhysicsWorld:
 
     @staticmethod
     def _shape_from_brush(entity, brush):
-        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
-        if bounds:
-            min_v, max_v = bounds
-            center = np.array(
-                [(float(min_v[i]) + float(max_v[i])) * 0.5 for i in range(3)],
-                dtype=np.float32,
-            )
-            size = np.array(
-                [float(max_v[i]) - float(min_v[i]) for i in range(3)],
-                dtype=np.float32,
-            )
-        else:
-            center = np.asarray(
-                brush.get('pos', (0.0, 0.0, 0.0)), dtype=np.float32
-            )
-            size = np.asarray(
-                brush.get('size', (64.0, 64.0, 64.0)), dtype=np.float32
-            )
-
+        # The body is the brush's derived box (brush_placement) -- an angled
+        # brush's planes, not its pos/size copy. Still a box: a true-shape
+        # body is Stage 2e.
+        box = world_box(brush)
+        center = np.asarray(box[0:3], dtype=np.float32)
+        half = np.asarray(box[3:6], dtype=np.float32)
         origin = np.asarray(
             getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32
         )
-        return size * np.float32(0.5), center - origin
+        return half, center - origin
 
     def register_body(self, entity, brush, rest_callback=None):
         """Register one body; state is packed once before the next tick."""
@@ -1621,24 +1623,7 @@ class PhysicsWorld:
             for brush in brushes:
                 if brush.get('_physics_body'):
                     continue
-                bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
-                if bounds:
-                    lo, hi = bounds
-                    rows.append([
-                        float(lo[0]), float(lo[1]), float(lo[2]),
-                        float(hi[0]), float(hi[1]), float(hi[2]),
-                    ])
-                else:
-                    pos = brush.get('pos', (0.0, 0.0, 0.0))
-                    size = brush.get('size', (0.0, 0.0, 0.0))
-                    rows.append([
-                        float(pos[0]) - float(size[0]) * 0.5,
-                        float(pos[1]) - float(size[1]) * 0.5,
-                        float(pos[2]) - float(size[2]) * 0.5,
-                        float(pos[0]) + float(size[0]) * 0.5,
-                        float(pos[1]) + float(size[1]) * 0.5,
-                        float(pos[2]) + float(size[2]) * 0.5,
-                    ])
+                rows.append(world_bounds(brush))
             if rows:
                 cells[key] = np.asarray(rows, dtype=np.float32)
         self._static_cells = cells
@@ -2009,17 +1994,14 @@ class PhysicsWorld:
         kept = 0
         for brush in brushes:
             try:
-                pos = brush['pos']
-                size = brush['size']
-                x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
-                sx, sy, sz = float(size[0]), float(size[1]), float(size[2])
+                b = world_bounds(brush)
             except (KeyError, TypeError, ValueError, IndexError):
                 continue
-            lo_x[kept] = x - sx * 0.5
-            hi_x[kept] = x + sx * 0.5
-            lo_z[kept] = z - sz * 0.5
-            hi_z[kept] = z + sz * 0.5
-            top_y[kept] = y + sy * 0.5
+            lo_x[kept] = b[0]
+            hi_x[kept] = b[3]
+            lo_z[kept] = b[2]
+            hi_z[kept] = b[5]
+            top_y[kept] = b[4]
             kept += 1
         if kept == 0:
             return None

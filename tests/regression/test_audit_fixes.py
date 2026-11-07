@@ -100,6 +100,7 @@ def test_reader_interleaved_between_the_two_stores_never_sees_a_torn_pair():
 
     # The signature visible mid-update is still the OLD one, so any reader
     # comparing it against the new pos/size mismatches and recomputes.
+    # (pos, size, and nothing else: a plain box.)
     old_sig = (0.0, 0.0, 0.0, 64.0, 64.0, 64.0)
     assert observed_sig == old_sig
     # The bounds were already the new ones — the pairing is never

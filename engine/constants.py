@@ -160,23 +160,50 @@ AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds')
 def brush_aabb_bounds(brush):
     """Return a brush's world-space AABB as ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``.
 
-    PERF: the AABB (``pos +/- size*0.5``) is invariant for static brushes and
-    only changes when a mover/door writes a new ``pos``. Every physics/AI hot
-    path used to rebuild two ``glm.vec3`` objects (plus a subtract and an add)
-    per brush per query -- thousands of throwaway GLM allocations per second on
-    a busy level. Here the result is computed once *through GLM* (so its float32
-    rounding is bit-for-bit identical to the old ``glm.vec3(pos) +/- ...`` path)
-    and cached on the brush dict, keyed by the current pos/size values so a
-    moved brush is transparently refreshed. Cache keys start with ``_`` and are
-    stripped by the serialisers, matching the renderer's own matrix cache.
+    The brush's derived bounds (:func:`engine.brush_placement.world_box`): a
+    box's ``pos +/- size*0.5``, a convex brush's planes' bounds, displaced by
+    a mover and widened to the AABB of the turned box while it spins.
+
+    PERF: the AABB is invariant for static brushes and only changes when a
+    mover/door moves or spins it. Every physics/AI hot path used to rebuild
+    two ``glm.vec3`` objects (plus a subtract and an add) per brush per query
+    -- thousands of throwaway GLM allocations per second on a busy level.
+    Here the result is computed once *through GLM* (so its float32 rounding is
+    bit-for-bit identical to the old ``glm.vec3(pos) +/- glm.vec3(size)*0.5``
+    path: halving is exact) and cached on the brush dict, keyed by everything
+    it is derived from -- a plain box's ``pos`` and ``size`` (Stage 1's own
+    key), and for anything else the spin, the cached shape (``_geo_cache``,
+    which every geometry edit drops) and a mesh proxy's bounds too -- so a moved,
+    turned or reshaped brush is transparently refreshed. Cache keys start
+    with ``_`` and are stripped by the serialisers, matching the renderer's
+    own matrix cache.
     """
     pos = brush['pos']
     size = brush['size']
-    sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
+    if '_rot_angle' in brush or 'geometry' in brush or '_mesh_bounds' in brush:
+        # Not a plain box: what else its bounds are derived from is in the
+        # key -- a spin, a convex brush's cached shape (dropped by every
+        # geometry edit), a mesh proxy's bounds.
+        angle = brush.get('_rot_angle')
+        if angle:
+            extra = (angle, brush.get('rot_axis'), brush.get('_geo_cache'),
+                     brush.get('_mesh_bounds'))
+        else:
+            extra = brush.get('_geo_cache') or brush.get('_mesh_bounds') or 'unresolved'
+        sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2], extra)
+    else:
+        extra = None            # a plain box: its key is its pos and size
+        sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
     if brush.get('_aabb_sig') == sig:
         return brush['_aabb_bounds']
-    bp = glm.vec3(pos)
-    bh = glm.vec3(size) * 0.5
+    if extra is None:
+        bp = glm.vec3(pos)
+        bh = glm.vec3(size) * 0.5
+    else:
+        from engine import brush_placement
+        cx, cy, cz, hx, hy, hz = brush_placement.world_box(brush)
+        bp = glm.vec3(cx, cy, cz)
+        bh = glm.vec3(hx, hy, hz)
     lo = bp - bh
     hi = bp + bh
     bounds = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)

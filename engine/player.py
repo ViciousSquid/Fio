@@ -30,6 +30,7 @@ from .constants import (
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
+from .brush_placement import world_bounds
 from .physics import world_gravity
 
 
@@ -559,14 +560,9 @@ class Player:
         for brush in water_brushes:
             if brush.get('hidden'):
                 continue
-            bpos = brush['pos']
-            bsize = brush['size']
-            hx, hz = bsize[0] * 0.5, bsize[2] * 0.5
-            if not (bpos[0] - hx <= px <= bpos[0] + hx and
-                    bpos[2] - hz <= pz <= bpos[2] + hz):
+            b_lo_x, b_bot, b_lo_z, b_hi_x, b_top, b_hi_z = world_bounds(brush)
+            if not (b_lo_x <= px <= b_hi_x and b_lo_z <= pz <= b_hi_z):
                 continue
-            b_top = bpos[1] + bsize[1] * 0.5
-            b_bot = bpos[1] - bsize[1] * 0.5
 
             overlap_top = min(eye_y, b_top)
             overlap_bot = max(feet_y, b_bot)
@@ -661,12 +657,11 @@ class Player:
             # Highest climbable ledge at this probe point
             ledge_top = None
             for brush in aabb_brushes:
-                bpos, bsize = brush['pos'], brush['size']
-                if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
-                        abs(pz - bpos[2]) <= bsize[2] * 0.5):
+                b = world_bounds(brush)
+                if not (b[0] <= px <= b[3] and b[2] <= pz <= b[5]):
                     continue
-                top = bpos[1] + bsize[1] * 0.5
-                bottom = bpos[1] - bsize[1] * 0.5
+                top = b[4]
+                bottom = b[1]
                 if bottom > feet_y + 8.0:
                     continue  # floating overhang, not a wall rising from below
                 if top <= feet_y + 4.0:
@@ -684,12 +679,11 @@ class Player:
             # Headroom: the player must fit standing on the ledge
             blocked = False
             for brush in aabb_brushes:
-                bpos, bsize = brush['pos'], brush['size']
-                if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
-                        abs(pz - bpos[2]) <= bsize[2] * 0.5):
+                b = world_bounds(brush)
+                if not (b[0] <= px <= b[3] and b[2] <= pz <= b[5]):
                     continue
-                top = bpos[1] + bsize[1] * 0.5
-                bottom = bpos[1] - bsize[1] * 0.5
+                top = b[4]
+                bottom = b[1]
                 if top > ledge_top + 4.0 and bottom < ledge_top + self.height:
                     blocked = True
                     break
@@ -778,7 +772,7 @@ class Player:
         for brush in aabb_brushes:
             if self._has_headroom(brush, p_min, p_max):
                 continue
-            top = brush['pos'][1] + brush['size'][1] * 0.5
+            top = world_bounds(brush)[4]
             rise = top - feet_y
             if rise <= 0.0 or rise > self.step_height:
                 return False

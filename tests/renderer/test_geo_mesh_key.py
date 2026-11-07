@@ -10,10 +10,11 @@ cache is correct under every state transition only if:
   authored property is mutated below and the tessellation compared.
 
 Fio's angled brushes keep the AABB brushes' unit-cube transform, so a mesh is
-expressed relative to an *anchor* AABB (``origin``/``scale``), taken from
-``pos``/``size`` when the brush's geometry is resolved and kept while its
-surface is unchanged. ``pos``/``size`` therefore change the mesh of a *new*
-record (they are in its key) but are only a transform for an existing one.
+expressed relative to an *anchor* AABB (``origin``/``scale``). Since Stage 2a
+(``docs/brush-model-stage2.md``) the anchor is the shape's own bounds, derived
+from the planes, so it is in the key but cannot change on its own: the
+``pos``/``size`` a convex brush stores are a copy nothing reads for drawing,
+and a mover's displacement is the row's transform.
 
 Conservative by design: every authored plane field is in the key, including
 one the tessellation does not use for a brush in canonical form (the face
@@ -123,8 +124,6 @@ MESH_INPUTS = {
     'uv shift': _set_plane(2, 'uv_shift', [0.75, 0.1]),
     'texture basis': _basis,
     'natural scale': _natural,
-    'anchor position (new record)': _move,
-    'anchor size (new record)': _resize,
     'face tag': _set_plane(0, 'face', 'renamed'),
     'plane uv_natural': _set_plane(2, 'uv_natural', True),
 }
@@ -136,6 +135,8 @@ TRANSFORM_ONLY = {
     'hidden': lambda b: b.update(hidden=True),
     'mover flags': lambda b: b.update(is_mover=True),
     'stray per-tag copy (ignored)': _stray_per_tag,
+    'stored pos copy (ignored)': _move,
+    'stored size copy (ignored)': _resize,
 }
 
 
@@ -172,17 +173,18 @@ def test_equal_keys_build_identical_meshes_from_different_records():
     assert _mesh(a) == _mesh(b)
 
 
-def test_moving_an_existing_brush_is_a_transform_not_a_new_mesh():
-    """Same dict, pos and size changed, surface not: the record -- anchor
-    and key -- is kept, and its mesh is identical although the brush is
-    elsewhere. Then a real surface change re-anchors."""
+def test_moving_a_mover_is_a_transform_not_a_new_mesh():
+    """Same dict, a mover carried elsewhere, surface not: the record --
+    anchor and key -- is kept, and its mesh is identical although the brush
+    is elsewhere. Then a real surface change re-anchors on the new shape's
+    own bounds."""
     brush = _brush()
+    brush['is_mover'] = True
     table = RenderTable()
     table.sync([brush], 1)
     record = table.geometry_records[0]
     mesh = _mesh(record)
     _move(brush)
-    _resize(brush)
     brush['colour'] = [0.2, 0.3, 0.4]           # a STATE refresh as well
     table.sync([brush], 2, dirty_objects={id(brush)})
     assert table.geometry_records[0] is record
@@ -192,4 +194,4 @@ def test_moving_an_existing_brush_is_a_transform_not_a_new_mesh():
     table.sync([brush], 3, dirty_objects={id(brush)})
     moved = table.geometry_records[0]
     assert moved is not record and moved.surface != record.surface
-    assert list(moved.origin) == brush['pos']       # re-anchored
+    assert tuple(moved.origin) == bg.get_convex(brush).shape_box[:3]   # re-anchored

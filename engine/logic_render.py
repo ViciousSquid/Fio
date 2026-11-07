@@ -13,6 +13,7 @@ import time
 import glm
 import numpy as np
 
+from . import brush_placement
 from .change_journal import JOURNAL, STATE
 from .entity_table import ENT_PROP
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
@@ -516,11 +517,14 @@ class LogicRender:
                 table.class_bits[:total_count], table)
             all_slots = np.flatnonzero(keep)
         if self.culling_enabled and total_count:
+            # Derived bounds (brush_placement): a spinning row is tested as
+            # the AABB of its turned box, so it is never culled while drawn.
             visible_slots = np.flatnonzero(
                 keep
                 & self.aabb_in_frustum_bounds(
                     frustum_planes,
-                    table.bounds[:total_count],
+                    brush_placement.turned_bounds(
+                        table.bounds[:total_count], table.rot[:total_count]),
                 )
             )
         else:

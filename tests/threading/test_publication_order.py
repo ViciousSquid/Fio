@@ -82,12 +82,36 @@ def test_an_unchanged_brush_writes_nothing_at_all():
         "churn for no reason" % (brush.write_log,))
 
 
-def test_the_signature_is_exactly_the_pos_and_size_it_validates():
+def test_the_signature_is_exactly_what_it_validates():
+    """``pos`` and ``size`` -- and, for anything but a plain box, the spin
+    (angle and axis), the cached convex shape or a mesh proxy's bounds:
+    everything the derived bounds are computed from
+    (``engine.brush_placement``), and nothing else."""
     brush = box_brush("b", (1, 2, 3), (4, 5, 6))
     brush_aabb_bounds(brush)
     assert brush["_aabb_sig"] == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0), (
-        "the signature %r does not name the pos/size it was computed from"
+        "the signature %r does not name what it was computed from"
         % (brush["_aabb_sig"],))
+
+
+def test_a_spin_invalidates_the_cache_through_the_signature():
+    brush = box_brush("spinner", (0, 0, 0), (128, 8, 8))
+    assert brush_aabb_bounds(brush)[0] == pytest.approx(-64.0)
+    brush["_rot_angle"] = 90.0          # about +Y: the bar now runs along Z
+    lo_x, _, lo_z, hi_x, _, hi_z = brush_aabb_bounds(brush)
+    assert (lo_x, hi_x) == pytest.approx((-4.0, 4.0), abs=1e-4)
+    assert (lo_z, hi_z) == pytest.approx((-64.0, 64.0), abs=1e-4)
+
+
+def test_a_reshape_invalidates_the_cache_through_the_signature():
+    from engine import brush_geometry as bg
+    brush = box_brush("cut", (0, 0, 0), (64, 64, 64))
+    bg.box_to_geometry(brush)
+    assert brush_aabb_bounds(brush)[4] == pytest.approx(32.0)
+    # A clip moves the planes (and re-syncs pos/size); a geometry edit that
+    # left the copy alone would still be caught by the shape in the key.
+    assert bg.clip_brush(brush, (0.0, 1.0, 0.0), 0.0)
+    assert brush_aabb_bounds(brush)[4] == pytest.approx(0.0)
 
 
 def test_the_cached_bounds_are_the_box_the_brush_describes():
