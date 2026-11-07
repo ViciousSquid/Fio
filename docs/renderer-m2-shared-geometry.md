@@ -5,7 +5,8 @@ build, sorted submission), M2 `2928554` + `0564458` + `5b26ede` (shared vertex
 pages, buffer-texture transforms, batched draws; storage bounded under undo
 and churn; mesh cache keyed by the mesh's complete input). Base is `126f8bb`.
 Benchmarks were taken on `0564458`; `5b26ede` changes only which records a
-mesh is shared between (see "Mesh cache key").
+mesh is shared between (see "Mesh cache key"). M2 status: accepted with
+follow-up (see the end).
 
 All timings are **Mesa software GL on x86-64** (llvmpipe, one run per
 configuration, 960×540). They show CPU-side submission cost and relative
@@ -114,9 +115,13 @@ hide, unhide, reorder, undo, redo, delete and reuse, mode switches); faults
 injected after the table (handle arrays, face columns, shared pages, the
 transform buffer) fail the draw oracle only.
 
-Full suite (`5b26ede` pending; `0564458`): 6,579 passed, 135 skipped,
-5 failed — the same five as the untouched base (play-cycle leak, editor
-chrome, three portal-fade), none new.
+Full suite on `5b26ede`: 6,601 passed, 135 skipped, 5 failed — the same
+five as the untouched base (play-cycle leak, editor chrome, three
+portal-fade), none new. (`0564458`: 6,579 passed, the same five failures.)
+
+Recommendation: **accept, with follow-up** — measure `elements` against
+`multidraw` (and against `off`) on Snapdragon 8cx Gen 3 / Adreno before
+choosing the default there; `off` stays as the M1 baseline until then.
 
 ## Open for ARM / Adreno
 
