@@ -114,12 +114,13 @@ def angled_scene():
 
     The field is the benchmark's generator (varied textures, caulk and nodraw
     faces, authored scale/angle/shift, natural-scale faces). Added: a brush
-    rotated as a mover is (``_rot_angle``: a rotated model matrix), a brush
+    rotated as a mover is (its runtime spin: a rotated model matrix), a brush
     that is caulk but for one face (its caulk faces draw nothing) and one
     with an untextured cut face (``default.png``).
     """
     from engine import brush_geometry as bg
     from tools.bench_geo_passes import angled_world
+    from tests.helpers import runtime
     from tests.helpers.worlds import angled_brush
     from editor.things import Light
     from tests.helpers.worlds import make_thing
@@ -128,8 +129,8 @@ def angled_scene():
                if b.get('geometry')]
     spun = angled_brush("spun", (40.0, 260.0, -60.0), (90.0, 70.0, 110.0),
                         clip_normal=(0.3, 1.0, -0.4))
-    spun['_rot_angle'] = 33.0
     spun['rot_axis'] = [0.2, 1.0, 0.1]
+    runtime.drive(spun, spin=((0.2, 1.0, 0.1), 33.0))
     caulked = angled_brush("caulked", (-300.0, 40.0, 300.0), (80.0, 80.0, 80.0))
     for plane in caulked['geometry']['planes']:
         plane['texture'] = 'caulk.jpg'

@@ -2,8 +2,9 @@
 
 Pinned at Stage 0 of the unified brush model (``docs/brush-model-proposal.md``)
 and changed only by a stage that changes behaviour on purpose; Stage 1 (one
-face record) and Stage 2a (derived bounds, ``docs/brush-model-stage2.md``)
-are the current statement. A brush dict has one of two encodings:
+face record), Stage 2a (derived bounds) and Stage 2b (runtime transforms
+owned by a runtime source, ``docs/brush-model-stage2.md``) are the current
+statement. A brush dict has one of two encodings:
 
 * **box** (no ``geometry.planes``): ``pos``/``size`` are the geometry. Each
   face's material lives in the per-tag dicts -- ``textures``, ``uv_scale``,
@@ -18,14 +19,16 @@ are the current statement. A brush dict has one of two encodings:
   (:func:`stored_bound`) nothing reads for a bound, re-derived at load.
 
 Both encodings are drawn through one transform -- the bound (:func:`bound`)
-and ``_rot_angle``/``rot_axis`` (:func:`transform`) -- and every
-bound-reader (culling, collision rows, spatial grid, Big World, picking)
-reads the same bound, turned by the spin. Movers write ``pos`` and
-``_rot_angle`` into the authored dict every tick (Stage 2b moves them out);
-``original_pos`` restores it. A convex mover's bound is centred on its live
-``pos``, which equals its planes' centre at rest. A convex mesh is expressed
-relative to its planes' AABB (its *anchor*) and drawn back through the
-bound, so the planes are drawn where they are, displaced only by a mover.
+and the spin (:func:`transform`) -- and every bound-reader (culling,
+collision rows, spatial grid, Big World, picking) reads the same bound,
+turned by the spin. A mover's or door's displacement and spin are its
+*runtime transform*, owned by a runtime source (the mover table in play, the
+editor's preview, a test's driver) and read here as an input, through
+``engine.brush_placement.runtime_of``; nothing play does is written into
+the dict, whose ``pos`` is the authored placement. A convex mesh is
+expressed relative to its planes' AABB (its *anchor*) and drawn back through
+the bound, so the planes are drawn where they are, displaced only by a
+runtime transform.
 
 This module computes, from a brush dict alone and without GL: the pass that
 draws the brush, the faces it draws (world-space polygon + resolved
@@ -59,9 +62,10 @@ DEFAULT_TEXTURE = 'default.png'
 #: Texture names that do not make a brush "textured" (``_brush_class_bits``).
 UNTEXTURED = (DEFAULT_TEXTURE, 'caulk.jpg')
 
-#: Keys play writes into the authored dict that the map serialiser keeps:
-#: the mover's restore point and its spin (``_rot_angle``, mirrored to
-#: ``rotation_yaw``).
+#: Keys play wrote into the authored dict before Stage 2b, and the map
+#: serialiser kept: the mover's restore point and its spin (``_rot_angle``,
+#: mirrored to ``rotation_yaw``). Shipped map files still carry them; loading
+#: drops them, and nothing writes them.
 RUNTIME_KEYS = ('original_pos', 'rotation_yaw', '_rot_angle')
 
 #: The per-tag material dicts and the plane field each one shadows on a
@@ -98,19 +102,23 @@ def geometry_rest(brush):
             tuple(max(float(v), 1e-3) for v in extent))
 
 
+def _runtime(brush):
+    """The brush's runtime transform -- an input, like the dict: its centre
+    now and spin, ``(cx, cy, cz, ax, ay, az, angle)``, or ``None``."""
+    from engine.brush_placement import runtime_of
+    return runtime_of(brush)
+
+
 def bound(brush):
-    """``(centre, size)`` the bound-readers use (Stage 2a): a box's
-    ``pos``/``size``; a convex brush's planes' AABB -- centred on its live
-    ``pos`` while it is a mover or a door; an invalid plane set's
-    ``pos``/``size``."""
+    """``(centre, size)`` the bound-readers use: a box's ``pos``/``size``,
+    a convex brush's planes' AABB, an invalid plane set's ``pos``/``size``
+    -- centred where the runtime transform has carried it."""
     rest = geometry_rest(brush)
-    if rest is None:
-        return stored_bound(brush)
-    if brush.get('is_mover') or brush.get('is_door'):
-        pos = brush.get('pos')
-        if pos is not None:
-            return tuple(float(v) for v in pos), rest[1]
-    return rest
+    centre, size = stored_bound(brush) if rest is None else rest
+    runtime = _runtime(brush)
+    if runtime is not None:
+        centre = tuple(float(v) for v in runtime[:3])
+    return centre, size
 
 
 
@@ -135,16 +143,16 @@ def transform(brush):
     """``(centre, size, axis, angle_degrees)`` both encodings are drawn
     through; *axis* is ``None`` for an unrotated brush."""
     centre, size = bound(brush)
-    angle = float(brush.get('_rot_angle') or 0.0)
-    axis = (tuple(float(v) for v in (brush.get('rot_axis') or (0.0, 1.0, 0.0)))
-            if angle else None)
+    runtime = _runtime(brush)
+    angle = float(runtime[6]) if runtime is not None else 0.0
+    axis = tuple(float(v) for v in runtime[3:6]) if angle else None
     return centre, size, axis, angle
 
 
 def posed(brush, points):
     """*points* (world space, as :func:`render_faces` gives them) where the
     renderer draws them: a convex mover's planes carried from their rest to
-    its bound, then rotated by ``_rot_angle`` about the bound's centre."""
+    its bound, then rotated by the spin about the bound's centre."""
     centre, _size, axis, angle = transform(brush)
     points = np.asarray(points, dtype=np.float64)
     rest = geometry_rest(brush)
@@ -273,12 +281,12 @@ def render_faces(brush):
     """The faces the renderer draws, before the run-time transform.
 
     A list of ``(tag, polygon, material)``: *polygon* is the world-space
-    corner ring (a box's from ``pos``/``size``, a convex brush's from its
-    planes -- the convex mesh is stored relative to ``pos``/``size`` and
-    drawn back through them, so they cancel), *material* the face state the
+    corner ring (a box's from its bound, a convex brush's from its planes --
+    the convex mesh is stored relative to the planes' AABB and drawn back
+    through the bound, so they cancel), *material* the face state the
     textured pass draws it with. A brush :func:`draw_pass` sends to the
-    solid pass is drawn in its colour instead. ``_rot_angle``/``rot_axis``
-    are applied on top (:func:`posed`).
+    solid pass is drawn in its colour instead. A convex mover's
+    displacement and every spin are applied on top (:func:`posed`).
     """
     kind = encoding(brush)
     if kind == 'convex-invalid':

@@ -33,17 +33,28 @@ approximately, and that is most of what is here:
   rows are built. They are copied again only for rows the change journal says
   were touched, and every I/O input journals its target.
 
-Brush dicts are still written, but only for rows that actually moved: collision,
-parented lights and portals, and saved games all read ``brush['pos']``.
+**The table owns the runtime transform** (unified brush model, Stage 2b). A
+row's ``original`` is its brush's authored centre, from
+:mod:`engine.brush_placement`; ``pos`` is where it is now; a mover's spin
+lives in ``rot_angle``. Nothing is written into the brush dict: ``pos`` stays
+the authored placement, and ``original_pos``, ``_rot_angle`` and
+``rotation_yaw`` are not written at all. The table is a registered runtime
+source (:func:`engine.brush_placement.register_runtime`): every reader --
+rendering, collision, picking, parented lights and portals, saved games,
+plugins -- asks the resolver, which answers from the per-brush
+``(centre, spin)`` the table refreshes for the rows that moved
+(:meth:`MoverTable.runtime_of`).
 """
 
 from __future__ import annotations
 
 import weakref
 from collections.abc import MutableMapping
+from itertools import repeat
 
 import numpy as np
 
+from engine import brush_placement
 from engine.change_journal import JOURNAL, OVERFLOW
 
 # Door states. OTHER keeps any unrecognised string as-is.
@@ -54,6 +65,10 @@ _DOOR_NAMES = {code: name for name, code in _DOOR_CODES.items()}
 
 # Events a tentative step can produce.
 _NO_EVENT, _FULLY_OPEN, _FULLY_CLOSED, _CLOSE = range(4)
+
+#: The axis a runtime transform names when it does not turn.
+_UP = np.array([0.0, 1.0, 0.0])
+
 _EVENT_NAMES = {_FULLY_OPEN: 'OnFullyOpen', _FULLY_CLOSED: 'OnFullyClosed',
                 _CLOSE: 'OnClose'}
 
@@ -180,6 +195,8 @@ class _Group:
         self.fallback = {}
         self.dirty = set()
         self.states = StateView(self)
+        #: The MoverTable this group belongs to (its runtime source).
+        self.table = None
         self._build([])
 
     # -- rows ----------------------------------------------------------------
@@ -202,9 +219,14 @@ class _Group:
         #: both a mover and a door), or -1; see MoverTable._link.
         self.twin_row = np.full(n, -1, dtype=np.intp)
         self.twin = None
+        #: Whether any row has a twin (almost never): the publish skips the
+        #: twin gather without it.
+        self.any_twin = False
         self._build_columns(n)
         for row in range(n):
             self.resync(row)
+        if self.table is not None:
+            self.table._adopt(self)
         #: Moves each time the rows are rebuilt, so a renderer slot map built
         #: against the old rows is recognised as stale.
         self.version = getattr(self, 'version', 0) + 1
@@ -218,11 +240,23 @@ class _Group:
         if entries is self.source and len(entries) == len(self.index):
             return
         kept = {i: dict(state) for i, state in self.states.items()}
+        # Where each surviving brush has got to: a rebuild must not snap a
+        # path mover (whose position is no function of its state) home.
+        placed = {id(brush): (brush, self.pos[row] - self.original[row])
+                  for row, brush in enumerate(self.brushes)}
         self.fallback = {}
         self._build(list(entries))
         self.source = entries
         for i, state in kept.items():
             self.states[i] = state
+        moved = []
+        for row, brush in enumerate(self.brushes):
+            entry = placed.get(id(brush))
+            if entry is not None and entry[0] is brush and entry[1].any():
+                self.pos[row] = self.original[row] + entry[1]
+                moved.append(row)
+        if moved and self.table is not None:
+            self.table._publish(self, moved)
         self.dirty.clear()
 
     def replace_states(self, entries, states):
@@ -235,12 +269,16 @@ class _Group:
         self.dirty.clear()
 
     def resync(self, row):
-        """Copy row *row*'s brush parameters and position into the columns."""
+        """Copy row *row*'s brush parameters and authored centre into the
+        columns. Only an authored centre that has changed (an edit in play)
+        rebases the row, keeping the displacement it has travelled; an
+        unchanged one leaves its position exactly as it is."""
         brush = self.brushes[row]
-        self.pos[row] = brush['pos']
-        original = brush.get('original_pos')
-        if original is not None:
-            self.original[row] = original
+        authored = brush_placement.authored_box(brush)[:3]
+        if tuple(self.original[row].tolist()) != authored:
+            travelled = self.pos[row] - self.original[row]
+            self.original[row] = authored
+            self.pos[row] = self.original[row] + travelled
 
     # -- state as a mapping ----------------------------------------------------
 
@@ -311,40 +349,66 @@ class _Group:
         dirty, self.dirty = self.dirty, set()
         return dirty
 
-    def _write_positions(self, rows, new_pos, ride):
-        """Store *new_pos* for *rows*, and in each brush dict that moved.
+    def _place(self, row, position, angle):
+        """Put a freshly built row where a saved game left it (its centre;
+        *angle* is a mover's spin)."""
+        self.pos[row] = position
+        if hasattr(self, 'rot_angle'):
+            self.rot_angle[row] = angle
+
+    def _write_positions(self, rows, new_pos, ride, spun=None):
+        """Store *new_pos* for the *rows* that moved, and publish them and
+        the *spun* rows (whose angle the caller has just stored) together.
 
         *ride* is ``(player, ground row)`` or None: the player standing on a
         processed row is carried by its movement, as the loop did.
         """
-        brushes = self.brushes
         if ride is not None:
             player, ground = ride
             hit = np.flatnonzero(rows == ground)
             if len(hit):
                 self._carry(player, ground, new_pos[hit[0]])
         changed = np.flatnonzero((new_pos != self.pos[rows]).any(axis=1))
+        moved = rows[changed]
+        values = new_pos[changed]
         if len(changed):
-            moved = rows[changed]
-            values = new_pos[changed]
-            self._store(moved, values)
-            for row, value in zip(moved.tolist(), values.tolist()):
-                brushes[row]['pos'] = value
+            self._store(moved, values, publish=False)
+        if self.table is None:
+            return
+        if spun is not None and len(spun):
+            moved = np.union1d(moved, spun) if len(moved) else spun
+            if len(moved):
+                self.table._publish(self, moved)
+        elif len(moved):
+            self.table._publish(self, moved, here=values)
 
-    def _store(self, rows, values):
-        """The mirror of ``brush['pos']``, kept for both groups a brush is in."""
+    def _store_one(self, row, new, rest):
+        """:meth:`_store` for one row: *new* its position and *rest* its
+        authored centre, in Python floats."""
+        self._store(np.array([row]), np.array([new]), publish=False)
+        table = self.table
+        if table is not None:
+            table._publish_row(self, row, table.runtime_entries, new, rest)
+
+    def _store(self, rows, values, publish=True):
+        """Where *rows* are now, kept for both groups a brush is in, and
+        published to the resolver (:meth:`MoverTable.runtime_of`)."""
         self.pos[rows] = values
         twins = self.twin_row[rows]
         shared = twins >= 0
         if shared.any():
             mirror = self.twin.pos          # an array, not an entity
             mirror[twins[shared]] = np.asarray(values)[shared]
+        if publish and self.table is not None:
+            self.table._publish(self, np.atleast_1d(rows).tolist())
 
     def _carry(self, player, row, new):
+        """Carry *player* by the row's move from where it is to *new*."""
         import glm
-        cur = self.brushes[row]['pos']
-        player.pos += glm.vec3(float(new[0]) - cur[0], float(new[1]) - cur[1],
-                               float(new[2]) - cur[2])
+        cur = self.pos[row]
+        player.pos += glm.vec3(float(new[0]) - float(cur[0]),
+                               float(new[1]) - float(cur[1]),
+                               float(new[2]) - float(cur[2]))
 
     def _ride(self, logic):
         player = logic.player_runtime.player
@@ -444,7 +508,8 @@ class LinearMovers(_Group):
         self.speed[row] = brush.get('speed', 64.0)
         self.spin_speed[row] = brush.get('speed', 45.0)
         self.distance[row] = brush.get('distance', 128.0)
-        self.rot_angle[row] = brush.get('_rot_angle', 0.0) or 0.0
+        # The spin angle is runtime state, kept in the column (a rebuild
+        # starts it at zero, a saved game restores it); the axis is authored.
         self.rot_axis[row] = brush.get('rot_axis') or (0.0, 1.0, 0.0)
 
     def _reset_fields(self, row):
@@ -532,17 +597,14 @@ class LinearMovers(_Group):
         pick = slice(lo, hi)
         rows = rows[pick]
         spin = plan['spin'][pick]
+        spun = None
         if spin.any():
             spun = rows[spin]
-            angles = plan['angle'][pick][spin]
-            self.rot_angle[spun] = angles
-            for row, angle in zip(spun.tolist(), angles.tolist()):
-                brush = self.brushes[row]
-                brush['_rot_angle'] = angle
-                brush['rotation_yaw'] = angle
+            self.rot_angle[spun] = plan['angle'][pick][spin]
         self.progress[rows] = plan['progress'][pick]
         self.forward[rows] = plan['forward'][pick]
-        self._write_positions(rows, plan['pos'][pick], ride)
+        # The spun rows are published with the moved ones, once.
+        self._write_positions(rows, plan['pos'][pick], ride, spun)
 
     # -- one row, in order ---------------------------------------------------
 
@@ -552,20 +614,18 @@ class LinearMovers(_Group):
         brush = self.brushes[row]
         i = self.index[row]
         if i in logic.mover_runtime.mover_path_states:
+            # Moves the row itself (MoverTable.move_to).
             logic.mover_runtime._update_mover_path(i, brush, delta)
-            self.resync(row)
-            self._store(np.array([row]), self.pos[[row]])
             return True
 
+        # A new spin is published with the new position below, or before an
+        # output fires if one does first (an input may read the brush).
+        spun = False
         if self.rotate[row]:
             angle = (float(self.rot_angle[row]) + float(self.spin_speed[row]) * delta) % 360.0
             self.rot_angle[row] = angle
-            brush['_rot_angle'] = angle
-            brush['rotation_yaw'] = angle
+            spun = self.table is not None
         if not self.has_state[row]:
-            if 'original_pos' not in brush:
-                brush['original_pos'] = list(brush['pos'])
-                self.original[row] = brush['original_pos']
             self.load_state(row, {'progress': 0.0, 'forward': True})
         speed = float(self.speed[row])
         distance = float(self.distance[row])
@@ -584,6 +644,8 @@ class LinearMovers(_Group):
                 self.progress[row] = 1.0
                 self.forward[row] = False
                 if not was_end and io:
+                    if spun:
+                        self.table._publish(self, [row])
                     io.fire_output(brush, 'OnFullyOpen')
                     fired = True
         else:
@@ -593,18 +655,19 @@ class LinearMovers(_Group):
                 self.progress[row] = 0.0
                 self.forward[row] = True
                 if not was_start and io:
+                    if spun:
+                        self.table._publish(self, [row])
                     io.fire_output(brush, 'OnFullyClosed')
                     fired = True
         t = float(self.progress[row])
         eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-        original = brush['original_pos']
+        original = self.original[row].tolist()
         new = (original[0] + (direction[0] * distance) * eased,
                original[1] + (direction[1] * distance) * eased,
                original[2] + (direction[2] * distance) * eased)
         if ride is not None and ride[1] == row:
             self._carry(ride[0], row, new)
-        brush['pos'] = list(new)
-        self._store(np.array([row]), np.array([new]))
+        self._store_one(row, new, original)
         return fired
 
 
@@ -786,14 +849,13 @@ class Doors(_Group):
         if event and io:
             io.fire_output(brush, event)
         progress = float(self.progress[row])
-        original = brush['original_pos']
+        original = self.original[row].tolist()
         new = (original[0] + (direction[0] * distance) * progress,
                original[1] + (direction[1] * distance) * progress,
                original[2] + (direction[2] * distance) * progress)
         if ride is not None and ride[1] == row:
             self._carry(ride[0], row, new)
-        brush['pos'] = list(new)
-        self._store(np.array([row]), np.array([new]))
+        self._store_one(row, new, original)
         return bool(event and io)
 
 
@@ -807,11 +869,173 @@ class MoverTable:
     def __init__(self):
         self.movers = LinearMovers()
         self.doors = Doors()
+        self.movers.table = self
+        self.doors.table = self
         # render table -> ((its generation, mover version, door version),
         # slots). One entry per table: frames alternate between the two render
         # buffers' tables, so a single entry would miss on every frame.
         self._slot_cache = weakref.WeakKeyDictionary()
+        #: id(brush) -> (brush, (cx, cy, cz, ax, ay, az, angle)): the runtime
+        #: transform of every row that is displaced or turned -- its position
+        #: column as it is, and its spin -- refreshed for the rows that move
+        #: (:meth:`_publish`). What the resolver reads.
+        self.runtime_entries = {}
+        #: id(brush) -> (brush, position, angle): saved-game placements
+        #: restored before the brush's row exists (:meth:`restore_placement`).
+        self._pending = {}
         JOURNAL.subscribe(self)
+        brush_placement.register_runtime(self)
+
+    # -- the runtime transform -----------------------------------------------
+
+    def runtime_of(self, brush):
+        """``(cx, cy, cz, ax, ay, az, angle)`` -- the row's position column
+        as it is, and its spin -- for a displaced or turned row, or ``None``:
+        the runtime source contract of :mod:`engine.brush_placement`."""
+        entry = self.runtime_entries.get(id(brush))
+        if entry is None or entry[0] is not brush:
+            return None
+        return entry[1]
+
+    #: Below this many rows :meth:`_publish` goes row by row in scalars: the
+    #: NumPy pack costs more than the few reads it saves.
+    PUBLISH_ROWS_BELOW = 4
+
+    def _publish(self, group, rows, entries=None, here=None):
+        """Refresh the runtime transform of *group*'s *rows*, in
+        :attr:`runtime_entries` or the dict *entries* being built. *here* is
+        the rows' positions when the caller holds them.
+
+        This runs on every tick for every moving row, so the per-row work --
+        one ``(brush, transform)`` entry each -- is iterated in C
+        (``dict.update`` over ``zip``/``map``) after one NumPy pack."""
+        count = len(rows)
+        if not count:
+            return
+        runtime = self.runtime_entries if entries is None else entries
+        if count < self.PUBLISH_ROWS_BELOW:
+            centres = (None if here is None
+                       else np.asarray(here, dtype=np.float64).tolist())
+            for k, row in enumerate(rows):
+                self._publish_row(group, int(row), runtime,
+                                  None if centres is None else centres[k])
+            return
+        pick = np.asarray(rows, dtype=np.intp)
+        here = group.pos[pick] if here is None else np.asarray(here, dtype=np.float64)
+        movers = self.movers
+        angle = spin_at = None
+        if group is movers:
+            angle, spin_at = movers.rot_angle[pick], pick
+        elif group.any_twin:
+            twins = group.twin_row[pick]
+            spin_at = np.where(twins >= 0, twins, 0)
+            angle = np.where(twins >= 0, movers.rot_angle[spin_at], 0.0)
+        live = (here != group.original[pick]).any(axis=1)
+        x, y, z = here.T.tolist()
+        turned = None if angle is None else angle != 0.0
+        if turned is None or not turned.any():
+            # Nothing turns: the default axis, and each row's angle (0).
+            values = zip(x, y, z, repeat(0.0), repeat(1.0), repeat(0.0),
+                         repeat(0.0) if angle is None else angle.tolist())
+        else:
+            live |= turned
+            ax, ay, az = np.where(turned[:, None], movers.rot_axis[spin_at], _UP).T.tolist()
+            values = zip(x, y, z, ax, ay, az, angle.tolist())
+        brushes = group.brushes
+        chosen = [brushes[row] for row in pick.tolist()]
+        if live.all():
+            # Tuples built and stored in C: no bytecode per row.
+            runtime.update(zip(map(id, chosen), zip(chosen, values)))
+            return
+        for brush, transform, keep in zip(chosen, values, live.tolist()):
+            if keep:
+                runtime[id(brush)] = (brush, transform)
+            else:
+                runtime.pop(id(brush), None)
+
+    def _publish_row(self, group, row, runtime, centre=None, rest=None):
+        """:meth:`_publish` for one row, in scalars (*centre* and *rest*:
+        its position and authored centre, when the caller holds them)."""
+        brush = group.brushes[row]
+        if centre is None:
+            cx, cy, cz = group.pos[row].tolist()
+        else:
+            cx, cy, cz = centre
+        movers = self.movers
+        if group is movers:
+            spin_row = row
+        elif group.any_twin:
+            spin_row = int(group.twin_row[row])
+        else:
+            spin_row = -1
+        angle = float(movers.rot_angle[spin_row]) if spin_row >= 0 else 0.0
+        if angle:
+            ax, ay, az = movers.rot_axis[spin_row].tolist()
+        else:
+            rx, ry, rz = group.original[row].tolist() if rest is None else rest
+            if cx == rx and cy == ry and cz == rz:
+                runtime.pop(id(brush), None)
+                return
+            ax, ay, az = 0.0, 1.0, 0.0
+        runtime[id(brush)] = (brush, (cx, cy, cz, ax, ay, az, angle))
+
+    def _adopt(self, group):
+        """*group* was rebuilt: apply any pending restores to its rows and
+        re-derive the runtime transforms from both groups' rows."""
+        if self._pending:
+            for row, brush in enumerate(group.brushes):
+                entry = self._pending.get(id(brush))
+                if entry is None or entry[0] is not brush:
+                    continue
+                group._place(row, entry[1], entry[2])
+        # Built aside and swapped in whole: a reader on another thread never
+        # sees a half-built dict (every mover momentarily at home).
+        entries = {}
+        for each in (self.movers, self.doors):
+            if each.brushes:
+                self._publish(each, list(range(len(each.brushes))), entries)
+        self.runtime_entries = entries
+
+    def position_of(self, brush):
+        """Where *brush* is now (its centre): its row's position, or its
+        authored centre when it has no row."""
+        for group in (self.doors, self.movers):
+            row = group.row_of_obj.get(id(brush))
+            if row is not None and group.brushes[row] is brush:
+                return tuple(group.pos[row].tolist())
+        return tuple(brush_placement.authored_box(brush)[:3])
+
+    def move_to(self, brush, position):
+        """Put *brush*'s row (a path mover) at *position*, its centre."""
+        movers = self.movers
+        row = movers.row_of_obj.get(id(brush))
+        if row is None or movers.brushes[row] is not brush:
+            return False
+        movers._store(np.array([row]), np.array([position], dtype=np.float64))
+        return True
+
+    def restore_placement(self, brush, position, angle=0.0):
+        """A saved game's placement for *brush*: its centre and spin angle.
+
+        Applied to its row now, or -- when play has not built the rows yet --
+        when the row is built."""
+        position = [float(position[0]), float(position[1]), float(position[2])]
+        found = False
+        for group in (self.movers, self.doors):
+            row = group.row_of_obj.get(id(brush))
+            if row is None or group.brushes[row] is not brush:
+                continue
+            found = True
+            if group is self.movers:
+                group.rot_angle[row] = float(angle)
+            group._store(np.array([row]), np.array([position]))
+        if not found:
+            self._pending[id(brush)] = (brush, position, float(angle))
+
+    def reset(self):
+        """Play stopped: no row is displaced or turned any more."""
+        self.runtime_entries = {}
+        self._pending = {}
 
     def sync(self):
         """Re-read the brush parameters of every row the journal names."""
@@ -847,6 +1071,7 @@ class MoverTable:
         movers, doors = self.movers, self.doors
         movers.ensure(logic.mover_runtime.movers)
         doors.ensure(logic.mover_runtime.doors)
+        self._pending = {}
         key = (movers.version, doors.version)
         if getattr(self, '_linked', None) == key:
             return
@@ -859,6 +1084,7 @@ class MoverTable:
             if other is not None:
                 movers.twin_row[row] = other
                 doors.twin_row[other] = row
+        movers.any_twin = doors.any_twin = bool((movers.twin_row >= 0).any())
 
     def publish(self, logic, table):
         """Store every mover's and door's position (and a mover's spin) in

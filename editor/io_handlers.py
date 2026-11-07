@@ -277,8 +277,8 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         
         if idx not in logic.mover_runtime.door_states:
-            if 'original_pos' not in entity:
-                entity['original_pos'] = list(entity['pos'])
+            # The door's rest is its authored placement; its travel lives in
+            # the mover table (unified brush model, Stage 2b).
             logic.mover_runtime.door_states[idx] = {
                 'progress': 0.0,
                 'state': 'closed',
@@ -468,7 +468,8 @@ def register_all_input_handlers(io_manager: IOManager):
             logic.mover_runtime.mover_path_states[idx] = {
                 'current_node': target,
                 'lerp_t':       0.0,
-                'origin':       list(entity['pos']),
+                # Where it is now (its runtime transform, Stage 2b).
+                'origin':       list(logic.mover_runtime._movers().position_of(entity)),
                 'waiting':      False,
                 'wait_remaining': 0.0,
             }
@@ -509,16 +510,15 @@ def register_all_input_handlers(io_manager: IOManager):
         if not logic.player_runtime.player:
             return
         
-        pos = glm.vec3(entity['pos'])
-        size = glm.vec3(entity['size'])
-        half_size = size / 2.0
-        min_b = pos - half_size
-        max_b = pos + half_size
-        
+        # The trigger's derived bounds (engine.brush_placement): where a
+        # moving trigger is now, an angled one's planes.
+        from engine.brush_placement import world_bounds
+        lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = world_bounds(entity)
+
         player_pos = logic.player_runtime.player.pos
-        if (min_b.x <= player_pos.x <= max_b.x and
-            min_b.y <= player_pos.y <= max_b.y and
-            min_b.z <= player_pos.z <= max_b.z):
+        if (lo_x <= player_pos.x <= hi_x and
+            lo_y <= player_pos.y <= hi_y and
+            lo_z <= player_pos.z <= hi_z):
             logic.io_manager.fire_output(entity, 'OnTrigger')
     
     io_manager.register_input_handler('trigger', 'enable', trigger_enable)

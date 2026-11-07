@@ -11,7 +11,7 @@ from .runtime import DeathmatchSession
 class DeathmatchPlugin(FioPlugin):
     name = "deathmatch"
     version = "2.0.0"
-    api_version = "1.7.0"
+    api_version = "1.8.0"
     description = "Free-for-all arena combat with tactical bot opponents."
     category = "Deathmatch"
     enabled = False

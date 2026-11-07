@@ -117,7 +117,9 @@ def test_logic_movers_indexes_real_editor_brushes(logic):
 
     assert logic.mover_runtime.movers == [(0, mover)]
     assert logic.mover_runtime.mover_states[0]["progress"] == pytest.approx(0.0)
-    assert mover["original_pos"] == [0, 0, 0]
+    # Its rest is its authored placement; nothing is written into it (Stage 2b).
+    assert "original_pos" not in mover
+    assert logic.mover_runtime._movers().position_of(mover) == (0.0, 0.0, 0.0)
 
 
 def test_logic_parenting_updates_a_real_light_entity(logic):

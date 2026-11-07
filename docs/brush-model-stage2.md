@@ -467,3 +467,185 @@ old arithmetic), a still angled brush's bounds are cached on its shape
 wall and floor queries, grid filing, collision rows and Big World filing —
 test for a plain box inline and keep the old arithmetic for it, asking the
 resolver only for anything else.
+
+### 11.2 Stage 2b — the mover table owns runtime transforms
+
+#### Ownership
+
+A mover's or door's travel and spin are its *runtime transform*. They are
+owned by a **runtime source** registered with the resolver
+(`brush_placement.register_runtime`, held weakly) and are never written into
+the brush: `pos` is the authored placement, always, and `original_pos`,
+`_rot_angle` and `rotation_yaw` are neither written nor read. Two sources
+exist:
+
+* `MoverTable` during play. A row's `original` column is the brush's
+  authored centre (from the resolver, so an angled mover's rest is its planes'
+  centre), `pos` is where it is now, a mover's spin is `rot_angle`. After
+  every step it refreshes a per-brush `(centre, axis, angle)` tuple for the
+  rows that moved or turned, which is what the resolver hands every reader;
+  a row back at rest (its position its authored centre, no spin) has no
+  entry. A source answers with the **absolute** centre, not a displacement:
+  `authored + (now − authored)` is not always `now` in floating point, and
+  the table's position column must reach every reader exactly as it reaches
+  the renderer (`MoverTable.publish`).
+* `brush_placement.PREVIEW`, the editor's mover preview, a
+  `RuntimeOverrides` (tests use their own: `tests/helpers/runtime.py`).
+
+A source keeps a dict, `runtime_entries`: `id(brush) → (brush, transform)`
+(the brush itself, so a reused id never answers for another brush). The
+resolver reads it directly, since the question is asked in every broad
+phase; a source changes it only by single dict operations or by replacing
+the whole dict (the mover table builds a rebuilt group's entries aside and
+swaps them in), so a reader on the AI thread never sees half of an update.
+Only a brush flagged `is_mover` or `is_door` is looked up, so every other
+brush pays two dict reads. `runtime_of(brush)` returns the first source's
+answer or `None`.
+
+#### Writers removed and readers moved
+
+| Before | Stage 2b |
+|---|---|
+| `MoverTable` wrote `pos` per moved row, `_rot_angle`/`rotation_yaw` per spun row, `original_pos` lazily | columns only; `_publish` refreshes the runtime tuple |
+| path movers wrote `pos` (`LogicMovers._update_mover_path`) and the `FollowPath` input read it | `MoverTable.move_to` / `position_of` |
+| `_init_movers`/`_init_doors`, the `Open` input and the logic wizard wrote `original_pos`; stop restored `pos` from it | nothing written; stop drops the runtime transforms (`MoverTable.reset`) and journals the move |
+| savegame capture read `pos`/`_rot_angle`; restore wrote them | capture reads the resolver; restore calls `MoverTable.restore_placement` (applied now, or when the row is built). Older saves carry the same `pos` (the centre in play) and `rot`: same mapping |
+| parented lights and portals read `pos` and `rotation_yaw` | `placed_box` and the runtime spin |
+| editor mover preview wrote `pos` and `_rot_angle` | `PREVIEW.set(brush, centre=…, spin=…)`; stop clears it; the 2D views draw a previewed mover at its runtime centre (an angled one too, which before did not move in 2D) |
+| deathmatch plugin read `pos` (live) and `original_pos` | `plugins.api.placement` (live centre / authored); its navigation hands its box tests view copies at the live centre |
+| `trigger` `TouchTest` input read `pos`/`size` | `world_bounds` |
+| serialiser kept the play keys | dropped on save and undo; dropped at load (`drop_play_state`: a box saved mid-motion goes back to its `original_pos`; a streamed world's dormant records too, and are re-filed) |
+
+The write-site ratchet (`tests/brush_model/write_sites.json`) goes down:
+`_rot_angle`, `original_pos` and `rotation_yaw` writes 12 → 0; `pos` writes
+in the mover and play paths 20 → 2 (the editor's own placement tools). One
+write is new: `drop_play_state` putting a box saved mid-motion back at
+`original_pos` when an older map is loaded.
+
+#### Plugin API 1.8.0
+
+`plugins.api.placement(brush)` → `Placement(authored, centre, spin, half,
+bounds)`. A plugin that read a moving brush's live position from
+`brush['pos']`, its rest from `original_pos` or its spin from
+`_rot_angle`/`rotation_yaw` reads `placement` instead (documented in
+`plugins/API.md`); every other plugin is unaffected. The deathmatch plugin
+declares 1.8.0.
+
+#### Big World
+
+A mover parked mid-motion keeps its runtime transform in the mover table;
+its record (and Big World's cell delta) carries only its authored `pos`, so
+its home cell never follows it. Parking and reactivation change visibility
+only; no second copy of where it is exists anywhere.
+
+#### Keeping the hot paths at their old cost
+
+Publishing a transform instead of writing a list into the brush, and asking
+a source instead of reading `pos`, are both per-row costs on paths that run
+every tick, so each was measured and trimmed:
+
+* **Publication.** One row (the small groups' row-by-row pass, a path
+  mover, a restore) is published from the scalars the step already holds
+  (0.9 µs; through NumPy it was 6.7 µs). Many rows are packed with a few
+  NumPy calls and stored by `dict.update` over `zip`/`map`, so the tuples
+  are built and stored in C; a row that spins and moves is published once,
+  not once for each. A mover's output fired mid-step still sees its new spin
+  (it is published before the output, as the old loop wrote `_rot_angle`
+  first).
+* **The turned box.** `turned_half` keeps `|R|` per `(axis, angle)`
+  (bounded at 4,096 entries), so a spinner's trigonometry runs once per
+  angle however many broad phases ask for its box. Same values to the bit.
+* **Collision rows.** `CollisionRows` (logic thread only, rebuilt whenever
+  the world epoch moves) keeps each mover's authored box and re-derives a
+  mover's row only when its runtime tuple changes (sources replace the tuple
+  whenever a brush moves, so `is` decides). A second hitscan or projectile
+  query in the same tick costs 15 µs for 64 movers instead of Stage 1's
+  53 µs. The physics cell rows are refreshed from both the logic and the AI
+  thread, so they keep no such state; their refresh is one gather of
+  `world_bounds` instead of per-element NumPy writes.
+* **The AABB cache.** A box mover's key is its runtime tuple (or `'still'`);
+  a plain box's key and its four flag tests are unchanged from 2a, with the
+  flags tested by membership first.
+
+Tests hold the fast paths to the plain ones:
+`test_publication_is_the_same_row_by_row_or_in_bulk` (movers, doors and a
+brush that is both, turned, displaced and at rest; values and types),
+`test_collision_rows_follow_movers_and_skip_when_nothing_moved` (bit-equal
+to a fresh build after 1, 13 and 40 ticks; no work when nothing moved; only
+moved rows re-derived), `test_stopping_and_rebuilding_rows_swaps_the_transforms_whole`
+and `test_a_turned_box_is_the_same_from_the_turn_memo`.
+
+#### Validation
+
+* `tests/brush_model/test_runtime_transform.py` (18 tests): play writes
+  nothing into any brush (linear movers, spinners, doors, path movers,
+  angled movers); rendering (published and re-resolved), the AABB cache,
+  collision rows, the physics grid, saved games and parented lights see a
+  mover where the table put it, to the bit; stop returns everything home;
+  saved games round-trip mid-motion, older saves restore through the same
+  mapping, including a restore before the rows exist; a map saved in play
+  carries no play state and an older one that did loads as authored; Big
+  World parks a mover mid-motion and wakes it where the table has carried
+  it, its home cell unchanged; the editor preview; the plugin accessor and
+  the deathmatch navigation; and the fast paths above.
+* The mover-table equivalence oracle
+  (`tests/logic/test_mover_table_equivalence.py`) still compares the table
+  with the per-brush loop it replaced, now through the resolver, and asserts
+  the table writes no brush.
+* GPU: the frozen M1/M2 reference is unchanged; its bridge
+  (`tests/helpers/legacy_view.py`) tells each layout copy its original, so a
+  runtime source answers for the copy as for the live brush, and hands a
+  geometry snapshot over at its authored placement. Angled-brush draw and
+  pixel parity (36 + 18 cases), the shared-storage editing session (a
+  transform-only move uploads 0 geometry and 0 indices, one transform slot)
+  and the shared-cube and projection equivalence tests pass.
+* The write-site ratchet and the semantics snapshot of the two 128-unit
+  maps are lowered and re-recorded (above).
+
+#### Measurements
+
+Same machine; interleaved with `56ec0e3` (Stage 1) and `a9a5340` (2a), best
+of three rounds, one pinned core.
+
+| | Stage 1 | 2a | 2b |
+|---|---|---|---|
+| mover tick: 8 + 8 doors | 120.9 µs | 122.1 µs | 140.6 µs |
+| mover tick: 32 + 32 doors | 167.1 µs | 169.8 µs | 212.5 µs |
+| mover tick: 128 + 128 doors | 234.6 µs | 226.1 µs | 335.6 µs |
+| publish to the render table, 8 / 32 / 128 | 19.1 / 22.6 / 33.5 µs | 19.1 / 22.5 / 32.9 µs | 19.8 / 23.4 / 37.0 µs |
+| collision rows refresh after a tick, 64 movers | 53.0 µs | 90.4 µs | 99.5 µs |
+| … a further query in the same tick | 53.0 µs | 90.4 µs | 15 µs |
+| AABB cache, moving box mover: hit / miss | 0.16 / 0.69 µs | — | 0.46 / 1.47 µs |
+| AABB cache hit, plain box / angled | 0.18 / 0.18 µs | 0.22 / 0.28 µs | 0.25 / 0.34 µs (micro: 0.168 vs 0.218) |
+| AABB cache miss, plain box | 0.87 µs | 0.92 µs | 0.99 µs |
+| AI wall test per query | 2.12 µs | 2.30 µs | 2.38 µs |
+| RenderTable warm sync / one row, BigWorld | 47.6 / 0.08 ms | 46.2 / 0.08 ms | 47.2 / 0.08 ms |
+| grid populate / collision rows build / Big World index, BigWorld | 19.6 / 2.31 / 4.37 ms | 20.1 / 2.53 / 4.24 ms | 20.9 / 2.71 / 4.31 ms |
+| player tick p50: floor / 8 static angled | 7.6 / 21.2 µs | 7.7 / 21.1 µs | 7.7 / 21.0 µs |
+| player tick p50 near 8 moving box movers / angled movers / spinning boxes | 24.5 / 28.2 / 33.2 µs | 26.9 / 42.5 / 57.2 µs | 38.3 / 44.7 / 48.1 µs |
+| BigWorld heap per box; RenderTable bytes per row | 1,358.2 B; 353 B | 1,358.2 B; 353 B | 1,358.2 B; 353 B |
+| still frame p50, BigWorld / `_SHOWCASE` (two rounds each) | 8.1, 10.7 / 10.1 ms | — | 10.3, 11.1 / 9.6 ms |
+
+The mover tick is the one real cost: 0.35 µs more per moving row, 20 µs at
+the size of a typical level's movers. It is what replacing a write of the
+moved brush's `pos` list with a published transform tuple costs (building
+the tuple and freeing the last tick's, through `dict.update`) plus a few
+NumPy calls per group; the tick is otherwise unchanged. Every reader that
+asks for a moving brush pays one dict lookup per source instead of reading
+`pos` (a moving mover's cached AABB: +0.3 µs), and repeated queries within a
+tick are cheaper than before. The player is the reader that feels it most:
+near 8 moving box movers its tick is 14 µs slower than Stage 1's (19 runtime
+lookups and 8 cache refreshes per tick, at 0.46 µs a hit and 1.47 µs a miss
+against 0.16 / 0.69 µs). Stage 2c replaces the player's mover collision
+(each moving brush collides by its shape in its own frame), so the lookup is
+re-measured there rather than tuned here. (The benchmark drives 2b's movers
+through a runtime source, as the mover table does; Stages 1 and 2a are driven
+by writing `pos` and `_rot_angle`, as their movers were.) Box paths are at
+Stage 1 levels: memory
+identical, sync and rendering within noise (Stage 1's own still frame varies
+from 8.1 to 10.7 ms between identical runs). The bench's "loader adds"
+figure for `_SHOWCASE` doubled in 2a (1,373 → 2,870 B per brush) because
+the loader now resolves each angled brush's shape, which the first frame
+built anyway: after the load and the first table sync the heap is 4,904 B
+per brush on Stage 1 and 5,065 B on 2b (+3 %, the shape's cached box and
+bounds); box maps are unchanged (352.9 / 352.7 B).

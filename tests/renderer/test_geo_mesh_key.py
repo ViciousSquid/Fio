@@ -31,6 +31,7 @@ import pytest
 
 from engine import brush_geometry as bg
 from engine.render_table import RenderTable
+from tests.helpers import runtime
 
 pytestmark = pytest.mark.qt          # imports the renderer core (PyOpenGL)
 
@@ -129,7 +130,8 @@ MESH_INPUTS = {
 }
 
 TRANSFORM_ONLY = {
-    'rotation angle': lambda b: b.update(_rot_angle=30.0, rot_axis=[0, 1, 0]),
+    'rotation angle': lambda b: runtime.drive(b, spin=((0, 1, 0), 30.0)),
+    'runtime displacement': lambda b: runtime.drive(b, offset=(32.0, 0.0, 0.0)),
     'colour': lambda b: b.update(colour=[0.9, 0.1, 0.2]),
     'name': lambda b: b.update(name='other'),
     'hidden': lambda b: b.update(hidden=True),
@@ -178,18 +180,19 @@ def test_moving_a_mover_is_a_transform_not_a_new_mesh():
     anchor and key -- is kept, and its mesh is identical although the brush
     is elsewhere. Then a real surface change re-anchors on the new shape's
     own bounds."""
+    from engine import brush_placement
     brush = _brush()
     brush['is_mover'] = True
     table = RenderTable()
     table.sync([brush], 1)
     record = table.geometry_records[0]
     mesh = _mesh(record)
-    _move(brush)
+    runtime.drive(brush, offset=(32.0, 0.0, 0.0))  # its runtime transform
     brush['colour'] = [0.2, 0.3, 0.4]           # a STATE refresh as well
     table.sync([brush], 2, dirty_objects={id(brush)})
     assert table.geometry_records[0] is record
     assert _mesh(table.geometry_records[0]) == mesh
-    assert list(table.center[0]) == brush['pos']   # the transform moved
+    assert tuple(table.center[0]) == brush_placement.placed_box(brush)[:3]   # moved
     _nudge_offset(brush)
     table.sync([brush], 3, dirty_objects={id(brush)})
     moved = table.geometry_records[0]

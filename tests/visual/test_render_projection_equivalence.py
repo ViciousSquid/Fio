@@ -217,9 +217,10 @@ def test_the_two_paths_draw_the_same_scene(renderer, context):
 
 def test_the_two_paths_agree_with_a_rotated_brush(renderer, context):
     """The batched Rodrigues build against the glm one, through real pixels."""
+    from tests.helpers import runtime
     brushes, things = _scene()
-    brushes[1]["_rot_angle"] = 35.0
     brushes[1]["rot_axis"] = [0.3, 1.0, 0.2]
+    runtime.drive(brushes[1], spin=((0.3, 1.0, 0.2), 35.0))   # a mover's spin
     objects_img = _render(renderer, context, brushes, things, numeric=False)
     slots_img = _render(renderer, context, brushes, things, numeric=True)
     _assert_same_picture(objects_img, slots_img, "rotated brush")

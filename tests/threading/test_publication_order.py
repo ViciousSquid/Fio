@@ -83,10 +83,11 @@ def test_an_unchanged_brush_writes_nothing_at_all():
 
 
 def test_the_signature_is_exactly_what_it_validates():
-    """``pos`` and ``size`` -- and, for anything but a plain box, the spin
-    (angle and axis), the cached convex shape or a mesh proxy's bounds:
-    everything the derived bounds are computed from
-    (``engine.brush_placement``), and nothing else."""
+    """``pos`` and ``size`` -- and, for anything but a plain box, its runtime
+    transform (a mover's centre and spin, from its runtime source), the
+    cached convex shape or a mesh proxy's bounds: everything the derived
+    bounds are computed from (``engine.brush_placement``), and nothing
+    else."""
     brush = box_brush("b", (1, 2, 3), (4, 5, 6))
     brush_aabb_bounds(brush)
     assert brush["_aabb_sig"] == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0), (
@@ -95,9 +96,10 @@ def test_the_signature_is_exactly_what_it_validates():
 
 
 def test_a_spin_invalidates_the_cache_through_the_signature():
-    brush = box_brush("spinner", (0, 0, 0), (128, 8, 8))
+    from tests.helpers import runtime
+    brush = box_brush("spinner", (0, 0, 0), (128, 8, 8), is_mover=True)
     assert brush_aabb_bounds(brush)[0] == pytest.approx(-64.0)
-    brush["_rot_angle"] = 90.0          # about +Y: the bar now runs along Z
+    runtime.drive(brush, spin=((0, 1, 0), 90.0))   # the bar now runs along Z
     lo_x, _, lo_z, hi_x, _, hi_z = brush_aabb_bounds(brush)
     assert (lo_x, hi_x) == pytest.approx((-4.0, 4.0), abs=1e-4)
     assert (lo_z, hi_z) == pytest.approx((-64.0, 64.0), abs=1e-4)

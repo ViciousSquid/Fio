@@ -73,19 +73,16 @@ class LogicMovers:
         states = {}
         for i, brush in enumerate(logic.editor_state.brushes):
             if brush.get("is_mover"):
+                # Its runtime transform lives in the mover table; nothing
+                # is written into the brush (unified brush model, Stage 2b).
                 self.movers.append((i, brush))
-                if "original_pos" not in brush:
-                    brush["original_pos"] = list(brush["pos"])
-
-                if brush.get("rotate", False) and "rotation_yaw" not in brush:
-                    brush["rotation_yaw"] = 0.0
 
                 path_target = brush.get("path_target", "")
                 if path_target and brush.get("start_on", False):
                     self.mover_path_states[i] = {
                         "current_node": path_target,
                         "lerp_t": 0.0,
-                        "origin": list(brush["pos"]),
+                        "origin": list(self._movers().position_of(brush)),
                         "waiting": False,
                         "wait_remaining": 0.0,
                     }
@@ -96,14 +93,16 @@ class LogicMovers:
         self._mover_brush_list = [b for _, b in self.movers]
 
     def _reset_movers(self):
+        """Play stopped: every mover is where it was authored again. Nothing
+        to put back -- play never moved the dict -- but the tables are told."""
         logic = self.logic
         self.movers = []
-        for _i, brush in enumerate(logic.editor_state.brushes):
-            if brush.get("is_mover") and "original_pos" in brush:
-                brush["pos"] = list(brush["original_pos"])
-                moved(brush)
         self.mover_states = {}
         self._mover_brush_list = []
+        self._movers().reset()
+        for brush in logic.editor_state.brushes:
+            if brush.get("is_mover"):
+                moved(brush)
 
     def _init_doors(self):
         logic = self.logic
@@ -121,8 +120,6 @@ class LogicMovers:
                     distance = max(1.0, distance - lip)
 
                 self.doors.append((i, brush))
-                if "original_pos" not in brush:
-                    brush["original_pos"] = list(brush["pos"])
 
                 states[i] = {
                     "progress": 0.0,
@@ -145,12 +142,12 @@ class LogicMovers:
     def _reset_doors(self):
         logic = self.logic
         self.doors = []
-        for _i, brush in enumerate(logic.editor_state.brushes):
-            if brush.get("is_door") and "original_pos" in brush:
-                brush["pos"] = list(brush["original_pos"])
-                moved(brush)
         self.door_states = {}
         self._door_brush_list = []
+        self._movers().reset()
+        for brush in logic.editor_state.brushes:
+            if brush.get("is_door"):
+                moved(brush)
 
     def _trigger_door_open(self, door_idx: int, brush: dict):
         """Start opening a door if it is currently closed or closing."""
@@ -234,7 +231,7 @@ class LogicMovers:
                 state["waiting"] = False
                 next_name = node.get_next_node_name()
                 if next_name:
-                    state["origin"] = list(brush["pos"])
+                    state["origin"] = list(self._movers().position_of(brush))
                     state["current_node"] = next_name
                     state["lerp_t"] = 0.0
                 else:
@@ -255,11 +252,12 @@ class LogicMovers:
             speed = brush.get("speed", 64.0) * node.get_speed()
             state["lerp_t"] += (speed * delta) / segment_len
 
+        table = self._movers()
         if state["lerp_t"] >= 1.0:
             state["lerp_t"] = 1.0
             new_pos = target
-            move_delta = new_pos - np.array(brush["pos"])
-            brush["pos"] = new_pos.tolist()
+            move_delta = new_pos - np.array(table.position_of(brush))
+            table.move_to(brush, new_pos)
 
             if logic.player_runtime.player and logic.player_runtime.player.ground_object == brush:
                 logic.player_runtime.player.pos += glm.vec3(
@@ -281,7 +279,7 @@ class LogicMovers:
             else:
                 next_name = node.get_next_node_name()
                 if next_name:
-                    state["origin"] = list(brush["pos"])
+                    state["origin"] = list(table.position_of(brush))
                     state["current_node"] = next_name
                     state["lerp_t"] = 0.0
                 else:
@@ -296,8 +294,8 @@ class LogicMovers:
                 else 1 - pow(-2 * t + 2, 3) / 2
             )
             new_pos = origin + segment_vec * eased
-            move_delta = new_pos - np.array(brush["pos"])
-            brush["pos"] = new_pos.tolist()
+            move_delta = new_pos - np.array(table.position_of(brush))
+            table.move_to(brush, new_pos)
 
             if logic.player_runtime.player and logic.player_runtime.player.ground_object == brush:
                 logic.player_runtime.player.pos += glm.vec3(

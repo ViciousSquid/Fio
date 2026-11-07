@@ -15,7 +15,7 @@ culling, collision rows, the physics grid, Big World filing and picking. It
 is GL-free (plain floats and NumPy) so the logic thread, the AI thread and
 headless tests can all call it.
 
-The rules (Stage 2a):
+The rules:
 
 * **Box**: shape = ``size``; placement = ``pos``. Its box is ``pos +/- size/2``.
 * **Mesh proxy** (an entity model's collision stand-in, built at play
@@ -35,14 +35,16 @@ The rules (Stage 2a):
 * **Authored bounds** carry no runtime transform and no spin: where a brush
   lives when nothing is moving it -- Big World's home cell.
 
-Runtime transform (transitional, Stage 2a): movers still write their position
-and spin into the brush dict (``pos``, ``_rot_angle``) as they always have,
-so the runtime displacement of a convex mover is read as its ``pos`` against
-its planes' rest centre (they are equal at rest: ``sync_brush_bounds`` keeps
-them so, and a loaded map is normalised by :func:`normalise_loaded`), and a
-spin from ``_rot_angle``/``rot_axis``. Stage 2b moves both into
-:class:`~engine.mover_table.MoverTable`; the rules above do not change, only
-where :func:`runtime_spin` and the displacement are read from.
+**Runtime transform** (Stage 2b). Where a mover's or door's centre is now,
+and its spin, are owned by a *runtime source* and never written into the
+brush dict: ``pos`` is the authored placement, always. The
+sources are registered here (:func:`register_runtime`): the logic thread's
+:class:`~engine.mover_table.MoverTable` during play, and the editor's mover
+preview (:data:`PREVIEW`, a :class:`RuntimeOverrides`). Only a brush flagged
+``is_mover`` or ``is_door`` is looked up, so every other brush pays two dict
+reads for the question. The play-time keys movers used to write into the
+dict (:data:`PLAY_STATE_KEYS`) are no longer read; :func:`drop_play_state`
+removes them from a loaded record and the serialiser never writes them.
 
 Cost: a box costs two dict reads. A convex brush reads its cached
 :class:`~engine.brush_geometry.ConvexGeometry` (``_geo_cache``, dropped by
@@ -116,9 +118,7 @@ def authored_box(brush):
     unturned.
 
     A box: ``pos``, ``size / 2``. A convex brush: its planes' bounds. A
-    mesh proxy: its triangles' bounds. (During
-    Stage 2a a box mover's ``pos`` is still its runtime position; Stage 2b
-    stops movers writing it.)
+    mesh proxy: its triangles' bounds.
     """
     convex = shape_convex(brush)
     if convex is None:
@@ -127,35 +127,124 @@ def authored_box(brush):
 
 
 def placed_box(brush):
-    """``(cx, cy, cz, hx, hy, hz)``: the shape where it is now, unturned.
-
-    The authored box displaced by the runtime transform: a convex mover's
-    centre is its live ``pos`` (see the module docstring), every other
-    convex brush stays on its planes.
-    """
-    convex = shape_convex(brush)
-    if convex is None:
-        return _mesh_box(brush) or _dict_box(brush)
-    box = convex.shape_box
-    if is_dynamic(brush):
-        pos = brush.get('pos')
-        if pos is not None:
-            return (float(pos[0]), float(pos[1]), float(pos[2]),
-                    box[3], box[4], box[5])
-    return box
+    """``(cx, cy, cz, hx, hy, hz)``: the shape where it is now, unturned --
+    the authored box carried to the runtime transform's centre."""
+    box = authored_box(brush)
+    runtime = runtime_of(brush)
+    if runtime is None:
+        return box
+    return (runtime[0], runtime[1], runtime[2], box[3], box[4], box[5])
 
 
 def runtime_spin(brush):
     """``(ax, ay, az, angle_degrees)`` of a turned brush, or ``None``.
 
-    The same values, and the same defaults, the RenderTable's ``rot`` column
-    takes for the row.
+    The values the RenderTable's ``rot`` column takes for the row.
     """
-    angle = brush.get('_rot_angle') or 0.0
-    if not angle:
+    runtime = runtime_of(brush)
+    if runtime is None or not runtime[6]:
         return None
-    axis = brush.get('rot_axis') or DEFAULT_AXIS
-    return (axis[0], axis[1], axis[2], angle)
+    return runtime[3:7]
+
+
+# ---------------------------------------------------------------------------
+# Runtime sources
+# ---------------------------------------------------------------------------
+
+#: Weak references to the registered runtime sources. Replaced, never
+#: mutated, so a reader on another thread (line of sight runs on the AI
+#: thread) always iterates a whole tuple.
+_sources = ()
+
+
+def register_runtime(source):
+    """Add *source* to the sources the resolver consults. Held weakly: a
+    source that is garbage collected is dropped.
+
+    A source keeps ``runtime_entries``, a dict ``id(brush) -> (brush,
+    (cx, cy, cz, ax, ay, az, angle))`` -- the brush itself, so a reused id
+    never answers for another, and its runtime transform. The resolver reads
+    it directly (the question is asked in every broad phase), so a source
+    changes it only by single dict operations or by replacing the whole
+    dict, either of which a reader on another thread sees whole.
+
+    ``(cx, cy, cz)`` is where the shape's centre is *now*, absolute rather
+    than a displacement: the mover table hands over its position column as
+    it is, so every reader sees the exact value the renderer is published
+    (``authored + (now - authored)`` is not always ``now`` in floating
+    point)."""
+    import weakref
+    global _sources
+    live = tuple(ref for ref in _sources if ref() is not None and ref() is not source)
+    _sources = live + (weakref.ref(source),)
+
+
+def unregister_runtime(source):
+    global _sources
+    _sources = tuple(ref for ref in _sources
+                     if ref() is not None and ref() is not source)
+
+
+def runtime_of(brush):
+    """``(cx, cy, cz, ax, ay, az, angle_degrees)``: a mover's or door's
+    runtime transform -- its centre now and its spin -- or ``None`` when
+    nothing moves it. The first registered source that knows the brush
+    answers."""
+    if not (brush.get('is_mover') or brush.get('is_door')):
+        return None
+    key = id(brush)
+    for ref in _sources:
+        source = ref()
+        if source is None:
+            continue
+        entry = source.runtime_entries.get(key)
+        if entry is not None and entry[0] is brush:
+            return entry[1]
+    return None
+
+
+class RuntimeOverrides:
+    """A runtime source holding explicit transforms by brush.
+
+    The editor's mover preview drives one (:data:`PREVIEW`) instead of
+    writing the brush's ``pos`` or spin; tests drive their own. Entries keep
+    their brush alive, so an id is never reused while it is answered for.
+    """
+
+    def __init__(self):
+        self.runtime_entries = {}
+
+    def set(self, brush, offset=(0.0, 0.0, 0.0), spin=None, centre=None):
+        """Carry *brush* to *centre* (or its authored centre plus *offset*)
+        and turn it by *spin* (``(axis, angle_degrees)``) about it."""
+        if centre is None:
+            home = authored_box(brush)
+            centre = (home[0] + float(offset[0]), home[1] + float(offset[1]),
+                      home[2] + float(offset[2]))
+        axis, angle = spin if spin is not None else ((0.0, 1.0, 0.0), 0.0)
+        self.runtime_entries[id(brush)] = (brush, (
+            float(centre[0]), float(centre[1]), float(centre[2]),
+            float(axis[0]), float(axis[1]), float(axis[2]), float(angle)))
+
+    def clear(self, brush=None):
+        if brush is None:
+            self.runtime_entries.clear()
+        else:
+            self.runtime_entries.pop(id(brush), None)
+
+    def runtime_of(self, brush):
+        entry = self.runtime_entries.get(id(brush))
+        if entry is None or entry[0] is not brush:
+            return None
+        return entry[1]
+
+    def __len__(self):
+        return len(self.runtime_entries)
+
+
+#: The editor's mover preview: registered for the life of the process.
+PREVIEW = RuntimeOverrides()
+register_runtime(PREVIEW)
 
 
 # ---------------------------------------------------------------------------
@@ -181,16 +270,38 @@ def rotation_matrix(axis, angle_degrees):
             (az * ax * t - ay * s, az * ay * t + ax * s, c + az * az * t))
 
 
+#: ``(ax, ay, az, angle) -> |R|`` (nine floats, or ``()`` when it does not
+#: turn), so a spinner's trig runs once per angle however many broad phases
+#: ask for its box. Bounded; cleared whole when full. Values only, so a
+#: reader on another thread can never see a wrong one.
+_TURNS = {}
+_TURNS_LIMIT = 4096
+
+
+def _abs_rotation(axis, angle_degrees):
+    key = (axis[0], axis[1], axis[2], angle_degrees)
+    turn = _TURNS.get(key)
+    if turn is None:
+        r = rotation_matrix(axis, angle_degrees)
+        turn = () if r is None else tuple(abs(v) for row in r for v in row)
+        if len(_TURNS) >= _TURNS_LIMIT:
+            _TURNS.clear()
+        _TURNS[key] = turn
+    return turn
+
+
 def turned_half(hx, hy, hz, axis, angle_degrees):
     """Half-extents of the AABB of a ``(hx, hy, hz)`` box turned about its
     centre: ``|R| . half``."""
-    r = rotation_matrix(axis, angle_degrees)
-    if r is None:
+    if not angle_degrees:
         return hx, hy, hz
-    (r00, r01, r02), (r10, r11, r12), (r20, r21, r22) = r
-    return (abs(r00) * hx + abs(r01) * hy + abs(r02) * hz,
-            abs(r10) * hx + abs(r11) * hy + abs(r12) * hz,
-            abs(r20) * hx + abs(r21) * hy + abs(r22) * hz)
+    turn = _abs_rotation(axis, angle_degrees)
+    if not turn:
+        return hx, hy, hz
+    r00, r01, r02, r10, r11, r12, r20, r21, r22 = turn
+    return (r00 * hx + r01 * hy + r02 * hz,
+            r10 * hx + r11 * hy + r12 * hz,
+            r20 * hx + r21 * hy + r22 * hz)
 
 
 def rotation_matrices(rot):
@@ -255,34 +366,66 @@ def turned_bounds(bounds, rot):
 
 def is_plain_box(brush):
     """A box with nothing but ``pos``/``size`` to say where it is: no plane
-    set, no mesh, no spin -- most of a level. Its derived bounds are
+    set, no mesh, and not a mover or a door (only those have a runtime
+    transform) -- most of a level. Its derived bounds are
     ``pos +/- size/2``, which the hot paths below compute with no further
     lookups (and callers in tight loops may compute inline, as the box rule
     is exactly that)."""
     return ('geometry' not in brush and '_mesh_bounds' not in brush
-            and not brush.get('_rot_angle'))
+            and not (brush.get('is_mover') or brush.get('is_door')))
 
 
 def world_box(brush):
     """``(cx, cy, cz, hx, hy, hz)``: the derived world AABB as centre and
     half -- where the brush is now, its spin included."""
-    if is_plain_box(brush):
+    if ('geometry' not in brush and '_mesh_bounds' not in brush
+            and not (brush.get('is_mover') or brush.get('is_door'))):
+        # is_plain_box: no runtime source answers for it.
         pos = brush.get('pos') or DEFAULT_POS
         size = brush.get('size') or DEFAULT_SIZE
         return (float(pos[0]), float(pos[1]), float(pos[2]),
                 size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
-    cx, cy, cz, hx, hy, hz = placed_box(brush)
-    spin = runtime_spin(brush)
-    if spin is not None:
-        hx, hy, hz = turned_half(hx, hy, hz, spin[:3], spin[3])
-    return (cx, cy, cz, hx, hy, hz)
+    return world_box_at(brush, runtime_of(brush))
+
+
+def world_box_at(brush, runtime):
+    """:func:`world_box` given the brush's :func:`runtime_of`, for a caller
+    that has just asked for it."""
+    if 'geometry' not in brush and '_mesh_bounds' not in brush:
+        # A box (a mover or door, or no runtime): authored_box, inline.
+        pos = brush.get('pos') or DEFAULT_POS
+        size = brush.get('size') or DEFAULT_SIZE
+        if runtime is None:
+            return (float(pos[0]), float(pos[1]), float(pos[2]),
+                    size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+        hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
+    else:
+        box = authored_box(brush)
+        if runtime is None:
+            return box
+        hx, hy, hz = box[3], box[4], box[5]
+    if runtime[6]:
+        hx, hy, hz = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
+    return (runtime[0], runtime[1], runtime[2], hx, hy, hz)
+
+
+def carried_box(box, runtime):
+    """An :func:`authored_box` *box* where *runtime* puts it: what
+    :func:`world_box_at` returns, for a caller holding the authored box."""
+    if runtime is None:
+        return box
+    hx, hy, hz = box[3], box[4], box[5]
+    if runtime[6]:
+        hx, hy, hz = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
+    return (runtime[0], runtime[1], runtime[2], hx, hy, hz)
 
 
 def world_bounds(brush):
     """``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``: the derived world AABB --
     where the brush is now, its spin included. The bound every broad phase,
     cull and index uses."""
-    if not brush.get('_rot_angle'):
+    if not (brush.get('is_mover') or brush.get('is_door')):
+        # No runtime transform: where it was authored.
         if 'geometry' not in brush:
             if '_mesh_bounds' not in brush:             # is_plain_box, inline
                 pos = brush.get('pos') or DEFAULT_POS
@@ -290,7 +433,7 @@ def world_bounds(brush):
                 hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
                 return (pos[0] - hx, pos[1] - hy, pos[2] - hz,
                         pos[0] + hx, pos[1] + hy, pos[2] + hz)
-        elif not (brush.get('is_mover') or brush.get('is_door')):
+        else:
             # A still convex brush: its shape's own bounds, cached on it.
             convex = brush.get('_geo_cache')
             if convex is not None and convex.is_valid:
@@ -373,8 +516,76 @@ def ray_box(box, ray_o, ray_d, eps=1e-6):
 
 
 # ---------------------------------------------------------------------------
+# Plugins
+# ---------------------------------------------------------------------------
+
+class Placement(tuple):
+    """What :func:`placement` answers, read by name.
+
+    ``authored`` -- the authored centre ``(x, y, z)`` (a box's ``pos``, a
+    convex brush's planes' centre); ``centre`` -- where it is now, displaced
+    by its runtime transform; ``spin`` -- ``(ax, ay, az, angle_degrees)`` or
+    ``None``; ``half`` -- the shape's unturned half-extents; ``bounds`` --
+    the derived world AABB ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``.
+    """
+    __slots__ = ()
+    _fields = ('authored', 'centre', 'spin', 'half', 'bounds')
+
+    def __new__(cls, authored, centre, spin, half, bounds):
+        return tuple.__new__(cls, (authored, centre, spin, half, bounds))
+
+    authored = property(lambda self: self[0])
+    centre = property(lambda self: self[1])
+    spin = property(lambda self: self[2])
+    half = property(lambda self: self[3])
+    bounds = property(lambda self: self[4])
+
+    def __repr__(self):
+        return 'Placement(%s)' % ', '.join(
+            '%s=%r' % (name, value) for name, value in zip(self._fields, self))
+
+
+def placement(brush):
+    """Where *brush* is: authored and live, its spin and its bounds -- the
+    accessor plugins read a moving brush through (Plugin API 1.8.0), since
+    ``brush['pos']`` is the authored placement and never moves in play."""
+    authored = authored_box(brush)
+    placed = placed_box(brush)
+    return Placement(tuple(authored[:3]), tuple(placed[:3]), runtime_spin(brush),
+                     tuple(placed[3:]), world_bounds(brush))
+
+
+# ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+
+#: Keys play used to write into the authored dict, which the serialiser kept
+#: (seven shipped maps carry ``original_pos``, one ``rotation_yaw``). No
+#: longer written or read.
+PLAY_STATE_KEYS = ('original_pos', '_rot_angle', 'rotation_yaw')
+
+
+def drop_play_state(brush):
+    """Remove the play-time keys from a loaded record (in place).
+
+    A box saved mid-motion (``pos`` differs from ``original_pos``) is put
+    back where it was authored, at ``original_pos``; a convex brush's planes
+    are its authored placement, so its ``pos`` is re-derived from them by
+    :func:`normalise_loaded`. Returns the keys that were present.
+    """
+    found = [key for key in PLAY_STATE_KEYS if key in brush]
+    if not found:
+        return found
+    rest = brush.get('original_pos')
+    if rest is not None and 'geometry' not in brush:
+        try:
+            brush['pos'] = [float(rest[0]), float(rest[1]), float(rest[2])]
+        except (TypeError, ValueError, IndexError):
+            pass
+    for key in found:
+        brush.pop(key, None)
+    return found
+
 
 def normalise_loaded(brush):
     """Make a loaded convex brush's ``pos``/``size`` copy equal its planes'

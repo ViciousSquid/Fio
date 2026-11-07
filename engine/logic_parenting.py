@@ -9,6 +9,20 @@ from __future__ import annotations
 
 import math
 
+from .brush_placement import placed_box, runtime_spin
+
+
+def _mover_centre(brush):
+    """Where a mover's centre is now: its authored placement carried by the
+    runtime transform the mover table owns (Stage 2b)."""
+    return placed_box(brush)[:3]
+
+
+def _mover_yaw(brush):
+    """A mover's spin angle in degrees (0 while it does not turn)."""
+    spin = runtime_spin(brush)
+    return float(spin[3]) if spin is not None else 0.0
+
 
 class LogicParenting:
     """Runtime for lights and portals parented to mover brushes."""
@@ -51,10 +65,11 @@ class LogicParenting:
             thing.properties["_original_pos"] = list(thing.pos)
             offset = thing.properties.get("parent_offset")
             if not offset or offset == [0.0, 0.0, 0.0]:
+                centre = _mover_centre(brush)
                 offset = [
-                    thing.pos[0] - brush["pos"][0],
-                    thing.pos[1] - brush["pos"][1],
-                    thing.pos[2] - brush["pos"][2],
+                    thing.pos[0] - centre[0],
+                    thing.pos[1] - centre[1],
+                    thing.pos[2] - centre[2],
                 ]
                 thing.properties["parent_offset"] = offset
 
@@ -71,7 +86,7 @@ class LogicParenting:
     def _update_parented_lights(self):
         logic = self.logic
         for light, brush, offset in self._parented_lights:
-            bpos = brush["pos"]
+            bpos = _mover_centre(brush)
             light.pos = [
                 bpos[0] + offset[0],
                 bpos[1] + offset[1],
@@ -110,8 +125,8 @@ class LogicParenting:
             thing.properties["_original_yaw"] = thing.get_yaw_degrees()
 
             if thing.properties.get("parent_local_pos") is None:
-                mover_yaw = brush.get("rotation_yaw", 0.0)
-                thing.set_parent_local_transform(brush["pos"], mover_yaw)
+                thing.set_parent_local_transform(
+                    list(_mover_centre(brush)), _mover_yaw(brush))
 
             local_pos = thing.get_parent_local_pos()
             local_yaw = thing.get_parent_local_yaw()
@@ -136,8 +151,8 @@ class LogicParenting:
     def _update_parented_portals(self):
         logic = self.logic
         for portal, brush, local_pos, local_yaw in self._parented_portals:
-            mover_pos = brush["pos"]
-            mover_yaw = brush.get("rotation_yaw", 0.0)
+            mover_pos = _mover_centre(brush)
+            mover_yaw = _mover_yaw(brush)
 
             yaw_rad = math.radians(mover_yaw)
             cos_y = math.cos(yaw_rad)

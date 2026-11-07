@@ -11,6 +11,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="editor state and console are editor-tier")
 
+from engine.brush_placement import placed_box                   # noqa: E402
 from tests.helpers.worlds import box_brush                      # noqa: E402
 from tests.regression.test_final_audit import _playing          # noqa: E402
 
@@ -55,13 +56,13 @@ def _assert_doors_follow_their_brushes(state, logic, door_a, door_b, lift,
         assert state.brushes[index] is brush, (
             f"door/mover {brush['name']} is keyed by index {index}, which now "
             f"holds {state.brushes[index]['name'] if index < len(state.brushes) else 'nothing'}")
-    closed_a = list(door_a["pos"])
+    closed_a = list(placed_box(door_a)[:3])
     logic.io_manager._execute_input("door_b", "Open", "", "test",
                                     target_id=door_b["id"])
     for _ in range(30):
         logic._tick(logic.TICK_DURATION)
-    assert door_a["pos"] == closed_a, "Open aimed at door_b opened door_a"
-    assert door_b["pos"][1] > 64.0 + 100.0, "the aimed door did not open"
+    assert list(placed_box(door_a)[:3]) == closed_a, "Open aimed at door_b opened door_a"
+    assert placed_box(door_b)[1] > 64.0 + 100.0, "the aimed door did not open"
     assert (logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"]
             >= lift_progress), "the lift lost its progress in the re-key"
 

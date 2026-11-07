@@ -12,7 +12,7 @@ import random
 
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
 from .navigation import Navigation, MoverTraversal, distance
-from .moving_navigation import NavigationWorld
+from .moving_navigation import NavigationWorld, live_centre
 from .supplies import BotSupplies
 from .spawning import choose_spawn
 from .teams import TeamGame
@@ -178,7 +178,7 @@ class DeathmatchSession:
 
     def _engine_tick(self, original, delta):
         was_dead = self.logic.player_runtime.player_dead
-        riders = [(f, f.actor.ground_object, tuple(f.actor.ground_object['pos']))
+        riders = [(f, f.actor.ground_object, tuple(live_centre(f.actor.ground_object)))
                   for f in self.fighters.values() if f.entity is not None and f.alive
                   and f.actor.on_ground and isinstance(f.actor.ground_object, dict)
                   and (f.actor.ground_object.get('is_mover') or f.actor.ground_object.get('is_door'))]
@@ -192,7 +192,7 @@ class DeathmatchSession:
         for fighter, support, before in riders:
             if (fighter.alive and id(support) in live and fighter.actor.on_ground
                     and fighter.actor.ground_object is support):
-                fighter.actor.pos += glm.vec3(support['pos']) - glm.vec3(before)
+                fighter.actor.pos += glm.vec3(live_centre(support)) - glm.vec3(before)
                 self.sync_entity_position(fighter)
         if self.network is not None:
             with self.logic.session_runtime.monster_lock:
@@ -577,7 +577,7 @@ class DeathmatchSession:
                 fighter.mode = 'approaching mover'
                 return action.landing if self.walkable(pos, action.landing) else None
             action.stage = 'wait'
-        current = tuple(mover['pos'])
+        current = tuple(live_centre(mover))
         standing = (current[0]+action.offset[0], current[1]+mover['size'][1]/2,
                     current[2]+action.offset[2])
         if action.stage in ('wait', 'board'):

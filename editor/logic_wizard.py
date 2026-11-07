@@ -1176,7 +1176,6 @@ class EntitiesPage(QWizardPage):
                 new_brush.setdefault('door_distance', 128.0)
                 new_brush.setdefault('door_speed', 64.0)
                 new_brush.setdefault('door_lip', 0.0)
-                new_brush.setdefault('original_pos', list(pos))
 
             self.editor_state.brushes.append(new_brush)
             created_name = new_brush['name']

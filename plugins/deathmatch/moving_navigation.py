@@ -1,7 +1,15 @@
 """Walkable surfaces and conditional platform transfers over live world geometry."""
 import math
 
+from plugins.api import placement
+
 from .navigation import MoverTraversal, distance, ground_positions
+
+
+def live_centre(brush):
+    """Where a brush's centre is now: a mover's or door's runtime transform
+    applied (API 1.8.0 -- its ``pos`` is where it was authored)."""
+    return placement(brush).centre
 
 
 class NavigationWorld:
@@ -24,10 +32,16 @@ class NavigationWorld:
                 if key in found or key in omit or not _blocks_player(brush):
                     continue
                 found.add(key)
-                if static and (brush.get('is_mover') or brush.get('is_door')):
+                dynamic = brush.get('is_mover') or brush.get('is_door')
+                if static and dynamic:
                     continue
                 if overrides and key in overrides:
                     brush = dict(brush, pos=overrides[key])
+                elif dynamic:
+                    # A view at its live centre: the box tests below read pos.
+                    centre = list(live_centre(brush))
+                    if centre != list(brush['pos']):
+                        brush = dict(brush, pos=centre)
                 result.append(brush)
         return result
 
@@ -104,7 +118,7 @@ class NavigationWorld:
             return []
         if not authored and not brush.get('start_on', False):
             return []
-        current = tuple(brush['pos'])
+        current = tuple(live_centre(brush))
         path = brush.get('path_target')
         runtime = getattr(self.logic, 'mover_runtime', None)
         if path:
@@ -125,7 +139,7 @@ class NavigationWorld:
             return points
         if brush.get('move_once'):
             return []  # Do not invent a return trip for one-shot scripted motion.
-        origin = tuple(brush.get('original_pos', current))
+        origin = tuple(placement(brush).authored)
         raw = brush.get('direction', (0, 1, 0))
         length = math.sqrt(sum(float(v)**2 for v in raw))
         reach = max(0, float(brush.get('distance', 128)))

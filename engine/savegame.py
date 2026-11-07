@@ -323,6 +323,7 @@ def _capture_moving_brushes(logic) -> dict:
     mover, whose position is not a function of any saved state, stayed
     wherever it had got to.
     """
+    from engine import brush_placement
     out = {}
     for brush in logic.editor_state.brushes:
         if not (brush.get("is_mover") or brush.get("is_door")):
@@ -330,9 +331,12 @@ def _capture_moving_brushes(logic) -> dict:
         bid = brush.get("id")
         if not bid or brush.get("pos") is None:
             continue
+        # Where it is now -- its authored centre carried by its runtime
+        # transform, which the mover table owns (Stage 2b) -- and its spin.
+        spin = brush_placement.runtime_spin(brush)
         out[str(bid)] = {
-            "pos": _vec3(brush["pos"]),
-            "rot": float(brush.get("_rot_angle") or 0.0),
+            "pos": _vec3(brush_placement.placed_box(brush)[:3]),
+            "rot": float(spin[3]) if spin is not None else 0.0,
             "start_on": bool(brush.get("start_on", False)),
         }
     return out
@@ -340,20 +344,21 @@ def _capture_moving_brushes(logic) -> dict:
 
 def _restore_moving_brushes(logic, saved) -> None:
     """Put mover and door brushes back where :func:`_capture_moving_brushes`
-    found them. Journalled as moves, which is how the mover table and the
-    render tables learn of a move made outside the tick."""
+    found them: into the mover table, which owns their runtime transform
+    (the brush keeps its authored ``pos``). A save's ``pos`` was always the
+    brush's centre in play, so older saves restore the same way. Journalled
+    as moves, which is how the render tables learn of a move made outside
+    the tick."""
     if not saved:
         return
+    table = logic.mover_runtime._movers()
     for brush in logic.editor_state.brushes:
         entry = saved.get(str(brush.get("id")))
         if not entry:
             continue
         try:
-            brush["pos"] = _vec3(entry["pos"])
-            rot = float(entry.get("rot", 0.0))
-            if rot or brush.get("_rot_angle"):
-                brush["_rot_angle"] = rot
-                brush["rotation_yaw"] = rot
+            table.restore_placement(brush, _vec3(entry["pos"]),
+                                    float(entry.get("rot", 0.0)))
             if "start_on" in entry:
                 brush["start_on"] = bool(entry["start_on"])
         except (KeyError, TypeError, ValueError, IndexError):

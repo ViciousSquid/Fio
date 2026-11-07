@@ -701,12 +701,31 @@ class _Side:
         self.io._execute_input(brush["name"], input_name, param, "test",
                                target_id=brush["id"])
 
+    def placement(self, brush):
+        """Where *brush* is, its spin and its rest, as each side keeps them.
+
+        The loop wrote them into the brush (``pos``, ``_rot_angle``,
+        ``original_pos``); since Stage 2b the table owns them and every
+        reader asks ``engine.brush_placement``. The values must agree bit for
+        bit: the resolver hands over the table's position column as it is.
+        """
+        if self.reference:
+            return {"centre": brush.get("pos"),
+                    "spin": brush.get("_rot_angle", 0.0) or 0.0,
+                    "rest": brush.get("original_pos")}
+        from engine import brush_placement
+        spin = brush_placement.runtime_spin(brush)
+        dynamic = brush.get("is_mover") or brush.get("is_door")
+        rest = list(brush_placement.authored_box(brush)[:3]) if dynamic else None
+        return {"centre": list(brush_placement.placed_box(brush)[:3]),
+                "spin": float(spin[3]) if spin is not None else 0.0,
+                "rest": rest}
+
     def snapshot(self, states=True):
         logic = self.logic
         moving = {
-            "brushes": [{k: b.get(k) for k in ("pos", "_rot_angle", "rotation_yaw",
-                                               "start_on", "original_pos", "speed",
-                                               "path_target")}
+            "brushes": [dict(self.placement(b),
+                             **{k: b.get(k) for k in ("start_on", "speed", "path_target")})
                         for b in self.brushes],
             "player": tuple(logic.player_runtime.player.pos),
         }
@@ -773,6 +792,7 @@ def _run(seed, ticks=700, ride=True, script=None, io=True):
     ride_index = rng.choice(movable) if ride and movable else None
     ref = _Side(True, brushes, things, ride_index)
     new = _Side(False, brushes, things, ride_index)
+    authored = [list(b["pos"]) for b in new.brushes]
     if not io:
         ref.logic.io_manager = new.logic.io_manager = None
     for tick in range(ticks):
@@ -797,6 +817,11 @@ def _run(seed, ticks=700, ride=True, script=None, io=True):
             if repr(a) != repr(b):
                 found = _first_difference(a, b, label) or "%s: %r != %r" % (label, a, b)
                 raise AssertionError("seed %d, tick %d: %s" % (seed, tick, found))
+    # The table never wrote a brush: each kept the placement it was authored
+    # with, and none carries play state.
+    for brush, pos in zip(new.brushes, authored):
+        assert list(brush["pos"]) == pos, brush.get("name")
+        assert not {"original_pos", "_rot_angle", "rotation_yaw"} & set(brush), brush.get("name")
     return ref, new
 
 

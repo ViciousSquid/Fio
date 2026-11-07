@@ -9,7 +9,9 @@ refactor changes what gets drawn.
 import numpy as np
 import pytest
 
+from engine import brush_placement
 from engine import render_table as rt
+from tests.helpers import runtime
 from engine.render_table import RenderTable
 from engine.spatial import PARKED_HIDDEN_KEY
 
@@ -214,9 +216,14 @@ def test_transforms_refresh_without_touching_cold_columns():
     assert t.class_bits[0] == cold
 
 
+def _spinning(angle, axis, **fields):
+    """A brush turned by its runtime transform (Stage 2b: owned by a runtime
+    source, never a key in the dict)."""
+    return runtime.drive(_brush(rot_axis=list(axis), **fields), spin=(axis, angle))
+
+
 def test_rotation_is_zero_for_an_unrotated_brush():
-    t = _synced([_brush(id='a'), _brush(id='r', _rot_angle=45.0,
-                                        rot_axis=[0, 1, 0])])
+    t = _synced([_brush(id='a'), _spinning(45.0, [0, 1, 0], id='r')])
     assert not t.rot[0].any()
     assert t.rot[1, 3] == 45.0
 
@@ -281,9 +288,10 @@ def _glm_reference(brush):
     produce for a brush, flattened column-major as value_ptr would give them."""
     import glm
     m = glm.translate(glm.mat4(1.0), glm.vec3(*brush['pos']))
-    angle = brush.get('_rot_angle')
+    spin = brush_placement.runtime_of(brush)
+    angle = spin[6] if spin is not None else 0.0
     if angle:
-        axis = glm.vec3(*brush.get('rot_axis', [0, 1, 0]))
+        axis = glm.vec3(*spin[3:6])
         if glm.length(axis) > 0.001:
             m = glm.rotate(m, glm.radians(float(angle)), glm.normalize(axis))
     m = glm.scale(m, glm.vec3(*brush['size']))
@@ -305,14 +313,11 @@ def test_model_matrices_match_the_glm_path_they_replace():
     """
     brushes = [
         _brush(id='plain', pos=[10, 20, 30], size=[64, 128, 32]),
-        _brush(id='yaw', pos=[-5, 0, 7], size=[100, 100, 100],
-               _rot_angle=45.0, rot_axis=[0, 1, 0]),
-        _brush(id='diag', pos=[0, 0, 0], size=[16, 16, 16],
-               _rot_angle=30.0, rot_axis=[1, 1, 0]),
-        _brush(id='roll', pos=[3, 4, 5], size=[8, 8, 8],
-               _rot_angle=90.0, rot_axis=[0, 0, 1]),
-        _brush(id='degenerate', pos=[1, 2, 3], size=[64, 64, 64],
-               _rot_angle=12.0, rot_axis=[0.0, 0.0, 0.0]),
+        _spinning(45.0, [0, 1, 0], id='yaw', pos=[-5, 0, 7], size=[100, 100, 100]),
+        _spinning(30.0, [1, 1, 0], id='diag', pos=[0, 0, 0], size=[16, 16, 16]),
+        _spinning(90.0, [0, 0, 1], id='roll', pos=[3, 4, 5], size=[8, 8, 8]),
+        _spinning(12.0, [0.0, 0.0, 0.0], id='degenerate', pos=[1, 2, 3],
+                  size=[64, 64, 64]),
     ]
     t = _synced(brushes)
     models, normals = rt.model_matrices(t, np.arange(len(brushes), dtype=np.int32))

@@ -13,7 +13,9 @@ import os
 import numpy as np
 
 from .brush_geometry import build_collision_mesh, brush_has_geometry
-from .brush_placement import world_box
+from operator import is_
+
+from .brush_placement import authored_box, carried_box, runtime_of, world_box
 from .constants import is_water_brush
 
 try:
@@ -63,7 +65,7 @@ class CollisionRows:
     """
 
     __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi',
-                 'mover_rows', 'movers')
+                 'mover_rows', 'movers', '_mover_home', '_mover_seen')
 
     def __init__(self, brushes, epoch):
         self.source = brushes
@@ -80,6 +82,14 @@ class CollisionRows:
                   if b.get('is_mover') or b.get('is_door')]
         self.mover_rows = np.asarray(movers, dtype=np.intp)
         self.movers = [self.brushes[row] for row in movers]
+        # A mover's authored box is fixed for the life of these rows (an
+        # edit moves the world epoch, which rebuilds them; play writes no
+        # placement), so a refresh carries it by the runtime transform.
+        self._mover_home = [authored_box(brush) for brush in self.movers]
+        #: Each mover's runtime transform when its row was last stored;
+        #: None until the first refresh. Sources replace the tuple whenever
+        #: a brush moves, so an unchanged one (``is``) needs no new row.
+        self._mover_seen = None
 
     def _resolve(self, rows, brushes):
         # Each brush's derived bounds (brush_placement.world_box): a convex
@@ -92,11 +102,17 @@ class CollisionRows:
         size = np.array([(s[0], s[1], s[2]) for s in (b['size'] for b in brushes)],
                         dtype=np.float64).reshape(count, 3).T
         half = size * 0.5
-        for i, brush in enumerate(brushes):
-            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
-                cx, cy, cz, hx, hy, hz = world_box(brush)
-                pos[:, i] = (cx, cy, cz)
-                half[:, i] = (hx, hy, hz)
+        special = [i for i, brush in enumerate(brushes)
+                   if 'geometry' in brush or '_mesh_bounds' in brush
+                   or brush.get('is_mover') or brush.get('is_door')]
+        if special:
+            boxes = np.array([world_box(brushes[i]) for i in special],
+                             dtype=np.float64).reshape(len(special), 6).T
+            pos[:, special] = boxes[:3]
+            half[:, special] = boxes[3:]
+        self._store(rows, pos, half)
+
+    def _store(self, rows, pos, half):
         # Halving is exact, so float32(size * 0.5) == float32(size) * 0.5:
         # the hitscan corners round exactly as glm.vec3(size) * 0.5 did.
         pos32 = pos.astype(np.float32)
@@ -107,8 +123,24 @@ class CollisionRows:
         self.hi[:, rows] = pos + half
 
     def refresh_movers(self):
-        if self.movers:
-            self._resolve(self.mover_rows, self.movers)
+        """Re-derive the rows of the movers and doors that moved since the
+        last call (every query calls this; most find nothing to do)."""
+        movers = self.movers
+        if not movers:
+            return
+        now = list(map(runtime_of, movers))
+        seen = self._mover_seen
+        if seen is None:
+            changed = list(range(len(movers)))
+        elif all(map(is_, now, seen)):
+            return
+        else:
+            changed = [i for i, (new, old) in enumerate(zip(now, seen)) if new is not old]
+        home = self._mover_home
+        boxes = np.array([carried_box(home[i], now[i]) for i in changed],
+                         dtype=np.float64).reshape(len(changed), 6).T
+        self._store(self.mover_rows[changed], boxes[:3], boxes[3:])
+        self._mover_seen = now
 
     def ray_hits(self, origin, direction, reach):
         """Rows whose box the ray meets within *reach*, nearest first.

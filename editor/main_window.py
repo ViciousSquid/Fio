@@ -33,7 +33,7 @@ from editor.user_paths import settings_path, writable_dir
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
-from engine import brush_faces, brush_geometry
+from engine import brush_faces, brush_geometry, brush_placement
 from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic, write_text_atomic
@@ -1838,7 +1838,7 @@ class MainWindow(QMainWindow):
                 'obj': brush,
                 'is_rotate': True,
                 'speed': brush.get('speed', 45.0),
-                'angle': brush.get('_rot_angle', 0.0),
+                'angle': 0.0,
             }
             self.preview_timer.start(16)
             return
@@ -1862,7 +1862,7 @@ class MainWindow(QMainWindow):
                 self._start_oscillation_preview(brush)
                 return
 
-            original_pos = list(brush['pos'])
+            original_pos = list(brush_placement.authored_box(brush)[:3])
 
             # As in Play: from where the mover is, to the first node, then
             # along the chain. (It snapped the mover to the first node and then
@@ -1919,7 +1919,7 @@ class MainWindow(QMainWindow):
         self.preview_data = {
             'obj': brush,
             'is_path': False,
-            'original_pos': list(brush['pos']),
+            'original_pos': list(brush_placement.authored_box(brush)[:3]),
             'direction': np.array(direction, dtype=float),
             'distance': distance,
             'speed': speed,
@@ -1943,22 +1943,9 @@ class MainWindow(QMainWindow):
         if self.preview_timer.isActive():
             self.preview_timer.stop()
             if self.preview_data and self.preview_data.get('obj'):
-                if self.preview_data.get('is_rotate'):
-                    self.preview_data['obj'].pop('_rot_angle', None)
-                elif self.preview_data.get('is_path'):
-                    # Restore the original position that was saved before preview started
-                    original_pos = self.preview_data.get('original_pos')
-                    if original_pos is not None:
-                        self.preview_data['obj']['pos'] = original_pos
-                    else:
-                        # Fallback (should not happen) – use first node or origin
-                        chain = self.preview_data.get('chain', [])
-                        if chain:
-                            self.preview_data['obj']['pos'] = list(chain[0].pos)
-                        else:
-                            self.preview_data['obj']['pos'] = [0, 0, 0]
-                else:
-                    self.preview_data['obj']['pos'] = self.preview_data['original_pos']
+                # The preview drove the brush's runtime transform, never its
+                # authored pos or spin: dropping it puts the brush back.
+                brush_placement.PREVIEW.clear(self.preview_data['obj'])
                 moved(self.preview_data['obj'])
                 self.preview_data = {}
                 self.update_views()
@@ -1987,6 +1974,13 @@ class MainWindow(QMainWindow):
             if brush is not None:
                 moved(brush)
 
+    @staticmethod
+    def _preview_place(brush, centre):
+        """Show the previewed mover centred at *centre*: its runtime
+        transform (unified brush model, Stage 2b), never a write to its
+        ``pos``."""
+        brush_placement.PREVIEW.set(brush, centre=centre)
+
     def _advance_mover_preview(self):
         if not self.preview_data:
             return
@@ -1997,7 +1991,8 @@ class MainWindow(QMainWindow):
 
         if data.get('is_rotate'):
             data['angle'] = (data['angle'] + data['speed'] * dt) % 360.0
-            brush['_rot_angle'] = data['angle']
+            brush_placement.PREVIEW.set(
+                brush, spin=(brush.get('rot_axis') or (0.0, 1.0, 0.0), data['angle']))
             self.update_views()
             return
 
@@ -2027,7 +2022,7 @@ class MainWindow(QMainWindow):
                         data['lerp_t'] = 0.0
                     else:
                         # End of chain reached
-                        brush['pos'] = target_pos.tolist()
+                        self._preview_place(brush, target_pos)
                         self.update_views()
                         self.stop_mover_preview()
                         return
@@ -2044,7 +2039,7 @@ class MainWindow(QMainWindow):
             if segment_len < 1.0:
                 # Already at the node – snap and start waiting (or advance immediately)
                 data['lerp_t'] = 1.0
-                brush['pos'] = target.tolist()
+                self._preview_place(brush, target)
                 wait_time = current_node.properties.get('wait_time', 0.0)
                 if wait_time > 0.0:
                     data['waiting'] = True
@@ -2057,7 +2052,7 @@ class MainWindow(QMainWindow):
                         data['target'] = np.array(chain[idx].pos, dtype=float)
                         data['lerp_t'] = 0.0
                     else:
-                        brush['pos'] = target.tolist()
+                        self._preview_place(brush, target)
                         self.update_views()
                         self.stop_mover_preview()
                         return
@@ -2067,7 +2062,7 @@ class MainWindow(QMainWindow):
                 data['lerp_t'] += (speed * dt) / segment_len
                 t = min(data['lerp_t'], 1.0)
                 new_pos = origin + segment_vec * t
-                brush['pos'] = new_pos.tolist()
+                self._preview_place(brush, new_pos)
 
                 if t >= 1.0:
                     # Arrived at the node
@@ -2083,7 +2078,7 @@ class MainWindow(QMainWindow):
                             data['target'] = np.array(chain[idx].pos, dtype=float)
                             data['lerp_t'] = 0.0
                         else:
-                            brush['pos'] = target.tolist()
+                            self._preview_place(brush, target)
                             self.update_views()
                             self.stop_mover_preview()
                             return
@@ -2106,7 +2101,7 @@ class MainWindow(QMainWindow):
             movement_vector = data['direction'] * current_offset
             original_pos = np.array(data['original_pos'])
             new_pos = original_pos + movement_vector
-            brush['pos'] = new_pos.tolist()
+            self._preview_place(brush, new_pos)
             self.update_views()
 
     def load_config(self):

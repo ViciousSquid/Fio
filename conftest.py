@@ -417,6 +417,22 @@ _STYLED_QT_APP = None
 
 
 @pytest.fixture(autouse=True)
+def _no_runtime_transform_outlives_its_test():
+    """A brush's runtime transform (unified brush model, Stage 2b) lives in a
+    process-wide runtime source -- the editor's mover preview, the tests'
+    :mod:`tests.helpers.runtime` -- not in the brush; clear them so a moved or
+    spinning brush never leaks into the next test."""
+    yield
+    from engine import brush_placement
+    brush_placement.PREVIEW.clear()
+    try:
+        from tests.helpers import runtime
+    except ImportError:
+        return
+    runtime.release()
+
+
+@pytest.fixture(autouse=True)
 def _qt_callback_errors_fail_the_test():
     """Fail the test during which an exception escaped a Qt callback."""
     _QT_CALLBACK_ERRORS.clear()

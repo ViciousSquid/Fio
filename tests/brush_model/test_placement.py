@@ -36,6 +36,7 @@ from engine.view_filters import brush_bounds
 from plugins.bigworld.cell import cells_for_aabb
 from plugins.bigworld.manager import brush_cells
 from tests.helpers import brush_semantics as bs
+from tests.helpers import runtime
 from tests.helpers.paths import REPO_ROOT
 from tests.helpers.worlds import angled_brush, box_brush
 
@@ -104,12 +105,12 @@ def _oracle_bounds(centre, half, axis, angle):
 
 
 def _spun(brush, axis, angle):
+    """A copy of *brush* spinning by *angle* about *axis*: its runtime
+    transform (Stage 2b), never a key in the dict."""
     brush = copy.deepcopy(brush)
-    brush['is_mover'] = True
     brush['rotate'] = True
     brush['rot_axis'] = list(axis)
-    brush['_rot_angle'] = angle
-    return brush
+    return runtime.drive(brush, spin=(axis, angle))
 
 
 def _close(a, b, scale=1.0):
@@ -152,15 +153,18 @@ def test_a_mesh_proxy_is_its_mesh():
     assert bp.world_bounds(proxy) == (-700.0, 0.0, -50.0, 700.0, 100.0, 50.0)
 
 
-def test_a_convex_mover_is_displaced_by_its_live_pos():
+def test_a_convex_mover_is_displaced_by_its_runtime_transform():
     brush = angled_brush("lift", (0, 64, 0), (128, 32, 128),
                          clip_normal=(0.2, 1.0, 0.0), is_mover=True)
     rest = bp.world_bounds(brush)
-    brush['pos'] = [brush['pos'][0], brush['pos'][1] + 96.0, brush['pos'][2]]
+    authored = copy.deepcopy(brush['pos'])
+    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
     moved = bp.world_bounds(brush)
     assert _close(np.subtract(moved, rest), [0, 96, 0, 0, 96, 0], 200)
-    # Its home -- what Big World files it under -- does not move.
+    # Its home -- what Big World files it under -- does not move, and
+    # nothing was written into the brush.
     assert _close(bp.authored_bounds(brush), rest, 200)
+    assert brush['pos'] == authored
 
 
 def test_a_static_convex_brush_ignores_a_stray_pos_write():
@@ -279,9 +283,9 @@ def _world(axis=(0.0, 1.0, 0.0), angle=37.0):
                            clip_normal=(0.3, 1.0, 0.2))
     drifted['pos'] = [drifted['pos'][0] - 64.0] + drifted['pos'][1:]
     drifted['size'] = [drifted['size'][0] + 128.0] + drifted['size'][1:]
-    lift = angled_brush("lift", (-900, 64, 300), (128, 32, 128),
-                        clip_normal=(0.2, 1.0, 0.0), is_mover=True)
-    lift['pos'] = [lift['pos'][0], lift['pos'][1] + 96.0, lift['pos'][2]]
+    lift = runtime.drive(angled_brush("lift", (-900, 64, 300), (128, 32, 128),
+                                      clip_normal=(0.2, 1.0, 0.0), is_mover=True),
+                         offset=(0.0, 96.0, 0.0))
     return [
         box_brush("floor", (0, -16, 0), (4096, 32, 4096)),
         angled_brush("ramp", (600, 40, -700), (256, 80, 256), clip_normal=(0.5, 1.0, 0.1)),
@@ -387,7 +391,7 @@ def test_a_ray_hits_a_displaced_convex_mover_where_it_is_drawn():
     brush = angled_brush("lift", (0, 64, 0), (128, 32, 128),
                          clip_normal=(0.2, 1.0, 0.0), is_mover=True)
     top_before = bp.world_bounds(brush)[4]
-    brush['pos'] = [brush['pos'][0], brush['pos'][1] + 96.0, brush['pos'][2]]
+    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
     o, d = bp.ray_to_shape(brush, (0.0, 1000.0, 0.0), (0.0, -1.0, 0.0))
     hit = bg.ray_convex_face(bp.shape_convex(brush), o, d)
     assert hit is not None
@@ -479,3 +483,26 @@ def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
     y, z = (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0
     assert not alone.overlaps_wall((stored_lo_x + lo[0]) / 2.0, y, z, 1.0)
     assert alone.overlaps_wall(lo[0] + 8.0, y, z, 1.0)
+
+
+def test_a_turned_box_is_the_same_from_the_turn_memo():
+    """``turned_half`` keeps ``|R|`` per (axis, angle) so a spinner's trig
+    runs once per angle; the memo must change no bit, and stays bounded."""
+    import random
+    rng = random.Random(7)
+    bp._TURNS.clear()
+    for _ in range(500):
+        axis = (rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1))
+        angle = rng.choice((0.0, 90.0, 45.0, rng.uniform(-720, 720)))
+        half = (rng.uniform(1, 500), rng.uniform(1, 500), rng.uniform(1, 500))
+        r = bp.rotation_matrix(axis, angle)
+        if r is None:
+            expected = half
+        else:
+            expected = tuple(abs(r[i][0]) * half[0] + abs(r[i][1]) * half[1]
+                             + abs(r[i][2]) * half[2] for i in range(3))
+        for _again in range(2):                 # a miss, then a hit
+            assert bp.turned_half(*half, axis, angle) == expected
+    for k in range(bp._TURNS_LIMIT + 10):
+        bp.turned_half(1.0, 1.0, 1.0, (0.0, 1.0, 0.0), 0.001 * (k + 1))
+    assert len(bp._TURNS) <= bp._TURNS_LIMIT

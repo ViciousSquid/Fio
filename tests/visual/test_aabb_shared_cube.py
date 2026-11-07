@@ -42,8 +42,9 @@ def box_world(count):
     """*count* ordinary boxes covering the box material and transform rules:
     two textures (so the instanced passes have more than one run), authored
     UV scale/angle/shift, natural scale, brush-wide tiling, caulk and
-    nodraw faces, rotation (a spinning mover's ``_rot_angle``), movers and
+    nodraw faces, rotation (a spinning mover's runtime spin), movers and
     doors."""
+    from tests.helpers import runtime
     from tests.helpers.worlds import box_brush
     out = []
     for i in range(count):
@@ -55,7 +56,8 @@ def box_world(count):
             box.update(uv_scale={'north': [2.0, 0.5]}, uv_angle={'north': 30.0},
                        uv_shift={'west': [0.5, 0.25]})
         if i % 7 == 0:
-            box.update(_rot_angle=20.0, rot_axis=[0.0, 1.0, 0.0], is_mover=True)
+            box.update(rot_axis=[0.0, 1.0, 0.0], is_mover=True)
+            runtime.drive(box, spin=((0.0, 1.0, 0.0), 20.0))
         if i % 11 == 0:
             box['texture_tiling'] = True
         if i % 13 == 0:

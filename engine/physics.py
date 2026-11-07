@@ -59,7 +59,7 @@ class _CellRows:
     """
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
-                 '_unpacked_cells')
+                 '_unpacked_cells', '_mover_rows')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -103,9 +103,11 @@ class _CellRows:
             self._resolve(row, brush)
             if brush.get('is_mover') or brush.get('is_door'):
                 self.movers.append((row, brush))
+        self._mover_rows = np.asarray([row for row, _brush in self.movers],
+                                      dtype=np.intp)
 
     def _resolve(self, row, brush):
-        if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+        if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
             bounds = world_bounds(brush)
             self.lo[row] = bounds[0:3]
             self.hi[row] = bounds[3:6]
@@ -119,8 +121,14 @@ class _CellRows:
             self.hi[row, axis] = pos[axis] + half
 
     def refresh_movers(self):
-        for row, brush in self.movers:
-            self._resolve(row, brush)
+        movers = self.movers
+        if movers:
+            # One gather of their derived bounds, one store per corner.
+            bounds = np.array([world_bounds(brush) for _row, brush in movers],
+                              dtype=np.float64).reshape(len(movers), 6)
+            rows = self._mover_rows
+            self.lo[rows] = bounds[:, 0:3]
+            self.hi[rows] = bounds[:, 3:6]
 
     def pairs(self, cx, cz):
         """``(query, row)`` for every brush filed in each query's cell."""
@@ -350,7 +358,7 @@ class SpatialGrid:
             # Filed by its derived bounds (brush_placement): an angled
             # brush's planes, a mover where it is now, a spinner's turned box
             # -- one rule in the editor and in play.
-            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+            if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
                 lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = world_bounds(brush)
                 self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
             else:       # a plain box: the box rule, inline
@@ -439,7 +447,7 @@ class SpatialGrid:
         if min_cx == max_cx and min_cz == max_cz:
             # Single-cell fast path: no de-duplication set needed.
             for brush in cells.get((min_cx, min_cz), ()):
-                if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
                     bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
                 else:   # a plain box: brush_placement's box rule, inline (per query)
                     pos = brush['pos']
@@ -465,7 +473,7 @@ class SpatialGrid:
                         continue
                     seen.add(bid)
 
-                    if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+                    if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
                         bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
                     else:   # a plain box: brush_placement's box rule, inline (per query)
                         pos = brush['pos']
@@ -663,7 +671,7 @@ class SpatialGrid:
 
         best_y = None
         for brush in brushes:
-            if 'geometry' in brush or '_mesh_bounds' in brush or '_rot_angle' in brush:
+            if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
                 bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
             else:   # a plain box: brush_placement's box rule, inline (per query)
                 pos = brush['pos']

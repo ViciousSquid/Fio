@@ -33,6 +33,7 @@ import numpy as np
 import pytest
 
 from engine import brush_faces
+from engine import brush_placement
 from engine import brush_geometry as bg
 from engine import render_table as rt
 from engine.constants import brush_aabb_bounds
@@ -62,10 +63,25 @@ def _box_variants():
                         uv_scale={'east': [3.0, 3.0]})
     tiled = box_brush("tiled", (300, 0, 300), (256, 16, 128), texture_tiling=True,
                       uv_scale={'top': [1.5, 1.5]})
-    spun = box_brush("spun", (-300, 0, -300), (64, 96, 32), _rot_angle=40.0,
-                     rot_axis=[0.0, 1.0, 0.0])
-    tilted = box_brush("tilted", (-300, 0, 300), (64, 96, 32), _rot_angle=15.0)
+    spun = _spinning(box_brush("spun", (-300, 0, -300), (64, 96, 32),
+                               rot_axis=[0.0, 1.0, 0.0]), (0.0, 1.0, 0.0), 40.0)
+    tilted = _spinning(box_brush("tilted", (-300, 0, 300), (64, 96, 32)),
+                       (0.0, 1.0, 0.0), 15.0)
     return [plain, textured, mapped, natural, tiled, spun, tilted]
+
+
+#: The synthetic world's spins. A spin is a runtime transform (Stage 2b),
+#: owned by a runtime source -- never a key in the brush -- and this world is
+#: built once for the module, so it has a source of its own that lives as
+#: long as the module does.
+SPINS = brush_placement.RuntimeOverrides()
+brush_placement.register_runtime(SPINS)
+
+
+def _spinning(brush, axis, angle):
+    brush['is_mover'] = True
+    SPINS.set(brush, spin=(axis, angle))
+    return brush
 
 
 def _convex_variants():
@@ -83,10 +99,9 @@ def _convex_variants():
     bare['geometry']['planes'][-1].pop('texture', None)
     bg.invalidate_geometry_cache(bare)
     tiled = angled_brush("tiled", (-200, 60, 0), (100, 120, 90), texture_tiling=True)
-    spun = angled_brush("spun", (0, 60, 250), (90, 70, 110),
-                        clip_normal=(0.3, 1.0, -0.4))
-    spun['_rot_angle'] = 33.0
-    spun['rot_axis'] = [0.2, 1.0, 0.1]
+    spun = _spinning(angled_brush("spun", (0, 60, 250), (90, 70, 110),
+                                  clip_normal=(0.3, 1.0, -0.4),
+                                  rot_axis=[0.2, 1.0, 0.1]), (0.2, 1.0, 0.1), 33.0)
     rotated = box_brush("rotated", (0, 60, -250), (90, 70, 110))
     bg.rotate_brush(rotated, 25.0, (0.0, 1.0, 0.0))
     # A legacy brush, as saved before Stage 1: per-tag copies beside the
@@ -256,8 +271,10 @@ def test_bounds_are_what_culling_physics_and_ai_use(world):
         assert np.array_equal(table.half[slot], size * 0.5), label
         # Physics and AI read the same bound rounded to float32 (computed
         # through GLM, bit for bit as the old glm.vec3 path) ...
-        got = brush_aabb_bounds(copy.copy(brush))
-        if not brush.get('_rot_angle'):
+        # The brush itself, not a copy: its runtime transform (a spin) is
+        # owned by a runtime source, by brush (Stage 2b).
+        got = brush_aabb_bounds(brush)
+        if bs.transform(brush)[2] is None:
             centre32, half32 = centre.astype(np.float32), size.astype(np.float32) * np.float32(0.5)
             assert got == (tuple(float(v) for v in centre32 - half32)
                            + tuple(float(v) for v in centre32 + half32)), label

@@ -61,8 +61,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.7.0"` |
-| `API_VERSION_INFO` | `(1, 7, 0)` |
+| `API_VERSION` | `"1.8.0"` |
+| `API_VERSION_INFO` | `(1, 8, 0)` |
 
 History:
 
@@ -91,6 +91,15 @@ History:
 - **1.7.0** — the [pause menu](#pause-menu-api-170-play-mode):
   `register_pause_menu_item`, the `pause_menu_opened` / `pause_menu_closed`
   events, and `main_window.open_pause_menu()` / `close_pause_menu()`. Additive.
+- **1.8.0** — [`placement(brush)`](#placement--where-a-brush-is-api-180): where a
+  brush is, authored and live, its spin and its derived bounds. **One
+  behaviour change for plugins that read movers:** a mover's or door's `pos` is
+  its *authored* placement and no longer changes in play, and the play-time
+  keys `original_pos`, `_rot_angle` and `rotation_yaw` are no longer written
+  into brushes (or saved in maps). A plugin that read a moving brush's live
+  position from `brush['pos']`, its rest from `original_pos` or its spin from
+  `_rot_angle`/`rotation_yaw` reads `placement(brush).centre`, `.authored` and
+  `.spin` instead. Every other plugin loads and behaves unchanged.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -896,6 +905,29 @@ def keys(self, store="plugins") -> list
 
 Reach it via `api.globals` / `host.globals`, or the `global_get` / `global_set`
 shortcuts on `EditorAPI` and `RuntimeAPI`.
+
+---
+
+## `placement` — where a brush is (API 1.8.0)
+
+```python
+from plugins.api import placement
+
+p = placement(brush)
+p.authored   # (x, y, z): a box's pos, an angled brush's planes' centre
+p.centre     # (x, y, z): where it is now (a mover's runtime transform applied)
+p.spin       # (axis_x, axis_y, axis_z, angle_degrees) while it spins, else None
+p.half       # the shape's unturned half-extents
+p.bounds     # (lo_x, lo_y, lo_z, hi_x, hi_y, hi_z): its derived world AABB
+```
+
+The engine keeps one placement per brush: `pos` is where the mapper put it,
+and a mover's or door's runtime transform (its travel and spin) is owned by
+the engine's mover table, never written into the brush. `placement` reads both
+through the same resolver culling, collision and picking use, so a plugin sees
+a moving brush exactly where it is drawn and collides. Before 1.8.0 movers
+overwrote `pos` every tick and kept `original_pos`, `_rot_angle` and
+`rotation_yaw` in the brush (and in saved maps); those keys are gone.
 
 ---
 

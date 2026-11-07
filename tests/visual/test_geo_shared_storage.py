@@ -221,6 +221,7 @@ def test_shared_storage_through_an_editing_session(renderer, context):
     from engine.change_journal import moved
     from engine.spatial import set_authored_flag
     from engine.renderer.core import geo_store
+    from tests.helpers import runtime
 
     world = _world()
     # Step 3 moves this brush as a mover does: since Stage 2a only a mover's
@@ -294,7 +295,8 @@ def test_shared_storage_through_an_editing_session(renderer, context):
         mirror = renderer._geo_store().mirror.copy()
         lists = _index_lists(renderer)
         before = _uploads(renderer)
-        mover['pos'] = [mover['pos'][0] + 40.0, mover['pos'][1], mover['pos'][2] - 25.0]
+        # Its runtime transform (Stage 2b): the brush itself is not written.
+        runtime.drive(mover, offset=(40.0, 0.0, -25.0))
         moved(mover)
         session.frames(2)
         cost = _delta(before, _uploads(renderer))
@@ -307,11 +309,11 @@ def test_shared_storage_through_an_editing_session(renderer, context):
         assert differs.tolist() == [mesh.slot]
         assert _index_lists(renderer) == lists
         session.check("moved one brush (transform only)")
-        # Back home, as Stop puts every mover (pos = original_pos). A brush
-        # whose pos differs from its planes exists only during Play, where
-        # there is no undo; meshes are keyed by surface, not pos, so a mover
-        # keeps its mesh across record refreshes, as it always did.
-        mover['pos'] = list(session.geometry_of.pop(id(mover))['pos'])
+        # Back home, as Stop puts every mover: its runtime transform is
+        # dropped. Meshes are keyed by the shape, so a mover keeps its mesh
+        # across record refreshes, as it always did.
+        session.geometry_of.pop(id(mover))
+        runtime.release(mover)
         moved(mover)
         session.frames(2)
 

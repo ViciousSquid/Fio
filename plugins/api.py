@@ -76,8 +76,13 @@ from typing import Any, Callable, List, Optional, Tuple
 #: * 1.7.0 — the pause menu: :meth:`EditorAPI.register_pause_menu_item`, the
 #:   ``pause_menu_opened`` / ``pause_menu_closed`` events, and
 #:   ``main_window.open_pause_menu()`` / ``close_pause_menu()``.
-API_VERSION = "1.7.0"
-API_VERSION_INFO = (1, 7, 0)
+#: * 1.8.0 — :func:`placement`: where a brush is (authored and live), its spin
+#:   and its derived bounds. A moving brush's ``pos`` is its *authored*
+#:   placement and no longer changes in play; ``original_pos``, ``_rot_angle``
+#:   and ``rotation_yaw`` are no longer written. A plugin that read a mover's
+#:   live position from ``brush['pos']`` reads :func:`placement` instead.
+API_VERSION = "1.8.0"
+API_VERSION_INFO = (1, 8, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -97,6 +102,28 @@ def version_tuple(value: str) -> tuple:
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+def placement(brush):
+    """Where *brush* is: a :class:`engine.brush_placement.Placement` with
+
+    * ``authored`` -- its authored centre ``(x, y, z)``: a box's ``pos``, an
+      angled brush's planes' centre;
+    * ``centre`` -- where it is now: the authored centre carried by a mover's
+      or door's runtime transform (the same as ``authored`` for anything
+      that is not moving);
+    * ``spin`` -- ``(axis_x, axis_y, axis_z, angle_degrees)`` while a mover
+      spins, else ``None``;
+    * ``half`` -- the shape's unturned half-extents;
+    * ``bounds`` -- the derived world AABB
+      ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``, a spinning brush's turned box
+      included: what culling, collision and picking use.
+
+    Since API 1.8.0 a brush's ``pos`` is its authored placement and does not
+    change while a mover moves it; read a moving brush through this.
+    """
+    from engine.brush_placement import placement as _placement
+    return _placement(brush)
+
 
 def io_def(name: str, description: str = "", param_type: str = ""):
     """Build an :class:`editor.io_system.IODef`.

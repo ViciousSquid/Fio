@@ -157,6 +157,18 @@ def is_solid_world_brush(brush):
 AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds')
 
 
+#: engine.brush_placement, bound on first use: it imports the geometry
+#: module (NumPy), which this module must not pull in at import time.
+_brush_placement = None
+
+
+def _bind_brush_placement():
+    global _brush_placement
+    from engine import brush_placement
+    _brush_placement = brush_placement
+    return brush_placement
+
+
 def brush_aabb_bounds(brush):
     """Return a brush's world-space AABB as ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``.
 
@@ -172,24 +184,35 @@ def brush_aabb_bounds(brush):
     bit-for-bit identical to the old ``glm.vec3(pos) +/- glm.vec3(size)*0.5``
     path: halving is exact) and cached on the brush dict, keyed by everything
     it is derived from -- a plain box's ``pos`` and ``size`` (Stage 1's own
-    key), and for anything else the spin, the cached shape (``_geo_cache``,
-    which every geometry edit drops) and a mesh proxy's bounds too -- so a moved,
+    key), and for anything else its runtime transform (a mover's centre and
+    spin, from its runtime source, replaced whenever it moves), the cached
+    shape (``_geo_cache``, which every geometry edit drops) or a mesh proxy's
+    bounds too -- so a moved,
     turned or reshaped brush is transparently refreshed. Cache keys start
     with ``_`` and are stripped by the serialisers, matching the renderer's
     own matrix cache.
     """
     pos = brush['pos']
     size = brush['size']
-    if '_rot_angle' in brush or 'geometry' in brush or '_mesh_bounds' in brush:
+    if 'geometry' in brush or '_mesh_bounds' in brush:
+        placement = _brush_placement or _bind_brush_placement()
         # Not a plain box: what else its bounds are derived from is in the
-        # key -- a spin, a convex brush's cached shape (dropped by every
-        # geometry edit), a mesh proxy's bounds.
-        angle = brush.get('_rot_angle')
-        if angle:
-            extra = (angle, brush.get('rot_axis'), brush.get('_geo_cache'),
-                     brush.get('_mesh_bounds'))
+        # key -- its runtime transform, a convex brush's cached shape
+        # (dropped by every geometry edit), a mesh proxy's bounds.
+        runtime = placement.runtime_of(brush)
+        if runtime is not None:
+            extra = (runtime, brush.get('_geo_cache'), brush.get('_mesh_bounds'))
         else:
             extra = brush.get('_geo_cache') or brush.get('_mesh_bounds') or 'unresolved'
+        sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2], extra)
+    elif ('is_mover' in brush and brush['is_mover']) or ('is_door' in brush and brush['is_door']):
+        # A box mover or door: its runtime transform, a tuple its source
+        # replaces whenever it moves (compared by identity first), or
+        # 'still' while nothing moves it. (Membership first: most brushes
+        # carry neither flag, and this is the hot path of every broad phase.)
+        placement = _brush_placement or _bind_brush_placement()
+        runtime = placement.runtime_of(brush)
+        extra = runtime or 'still'
         sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2], extra)
     else:
         extra = None            # a plain box: its key is its pos and size
@@ -200,8 +223,7 @@ def brush_aabb_bounds(brush):
         bp = glm.vec3(pos)
         bh = glm.vec3(size) * 0.5
     else:
-        from engine import brush_placement
-        cx, cy, cz, hx, hy, hz = brush_placement.world_box(brush)
+        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
         bp = glm.vec3(cx, cy, cz)
         bh = glm.vec3(hx, hy, hz)
     lo = bp - bh

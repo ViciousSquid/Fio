@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import QApplication             # noqa: E402
 from editor.things import Light, Monster             # noqa: E402
 from engine.actor_pick import NO_SLOT, nearest_wall, pick_actor  # noqa: E402
 from engine.entity_table import EntityTable          # noqa: E402
+from tests.helpers import runtime                     # noqa: E402
 from engine.qt_game_view import QtGameView           # noqa: E402
 from engine.render_table import RenderTable          # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing  # noqa: E402
@@ -112,8 +113,9 @@ def test_a_turned_brush_occludes_where_it_is_drawn():
     door = box_brush("door", (300.0, 64.0, 0.0), (16.0, 128.0, 512.0))
     assert _picked([actor], [door], (0.0, 64.0, 200.0), EAST) is None
     # ... swung 90 degrees it lies along X at z ~ 0, out of the ray's way ...
-    door['rot_axis'] = [0.0, 1.0, 0.0]
-    door['_rot_angle'] = 90.0
+    # (A swing is the door's runtime transform -- Stage 2b: owned by a
+    # runtime source, not written into the brush.)
+    runtime.drive(door, spin=((0.0, 1.0, 0.0), 90.0))
     assert _picked([actor], [door], (0.0, 64.0, 200.0), EAST) is actor
     # ... and now blocks a ray it used to miss.
     behind = _actor("b", [300.0, 64.0, 600.0])

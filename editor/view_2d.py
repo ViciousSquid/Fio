@@ -1854,7 +1854,17 @@ class View2D(QWidget):
 
             pos = brush['pos']
             size = brush['size']
-            
+            # A previewed mover is drawn where the preview carries it: its
+            # runtime displacement (brush_placement), not a write to pos.
+            shift = None
+            if is_mover or brush.get('is_door'):
+                runtime = brush_placement.runtime_of(brush)
+                if runtime is not None:
+                    home = brush_placement.authored_box(brush)
+                    shift = (runtime[0] - home[0], runtime[1] - home[1],
+                             runtime[2] - home[2])
+                    pos = [pos[0] + shift[0], pos[1] + shift[1], pos[2] + shift[2]]
+
             screen_rect = self._brush_screen_rect(
                 pos, size, axis1_idx, axis2_idx, transform)
 
@@ -1867,6 +1877,8 @@ class View2D(QWidget):
                 if convex is not None and convex.is_valid:
                     hull = convex.silhouette(axis1_idx, axis2_idx)
             if hull:
+                if shift is not None:
+                    hull = [(a + shift[axis1_idx], b + shift[axis2_idx]) for a, b in hull]
                 poly = QPolygonF([self.world_to_screen(QPointF(a, b)) for a, b in hull])
                 painter.drawPolygon(poly)
             else:

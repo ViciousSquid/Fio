@@ -11,12 +11,14 @@ reads, in which the old loop draws exactly what the new path draws for the
 canonical brush.
 
 The old loop also anchored an angled brush's mesh, and built its model
-matrix, from the brush's ``pos``/``size``. Since Stage 2a both come from
-the planes' own bounds (``engine.brush_placement``), which is what the
-loader writes into ``pos``/``size``; so each copy's ``pos``/``size`` are
-the brush's derived box (:func:`with_derived_bounds`), and a brush whose
-stored copy has drifted (two shipped brushes, by 128 units) is handed to
-the reference as the loader leaves it.
+matrix, from the brush's ``pos``/``size`` and ``_rot_angle``. Since Stage 2a
+the box comes from the planes' own bounds (``engine.brush_placement``),
+which is what the loader writes into ``pos``/``size``, and since Stage 2b a
+runtime source owns the displacement and spin, by the live brush's
+identity; so each copy names its original (``_runtime_of``) and carries the
+brush's derived box and spin (:func:`with_derived_bounds`), and a brush
+whose stored copy has drifted (two shipped brushes, by 128 units) is handed
+to the reference as the loader leaves it.
 
 Only faces the old layout can express may be compared this way: a scene
 with a Natural cut face or a tiled angled brush (Stage 1 behaviours the old
@@ -31,13 +33,22 @@ from engine import brush_faces, brush_placement
 def with_derived_bounds(brush):
     """A shallow copy of *brush* whose ``pos``/``size`` are its derived box
     (:func:`engine.brush_placement.placed_box`) -- what the renderer anchors
-    and transforms an angled brush by. A box is returned as it is."""
-    if brush_placement.shape_convex(brush) is None:
+    and transforms an angled brush by -- and whose ``_rot_angle``/``rot_axis``
+    are its runtime spin, which the old loop read from the dict (since
+    Stage 2b a runtime source owns it). A box with no runtime transform is
+    returned as it is."""
+    source = brush.get('_runtime_of', brush)   # a layout copy's original
+    runtime = brush_placement.runtime_of(source)
+    if brush_placement.shape_convex(brush) is None and runtime is None:
         return brush
-    cx, cy, cz, hx, hy, hz = brush_placement.placed_box(brush)
+    cx, cy, cz, hx, hy, hz = brush_placement.placed_box(source)
     view = dict(brush)
     view['pos'] = [cx, cy, cz]
     view['size'] = [hx * 2.0, hy * 2.0, hz * 2.0]
+    spin = brush_placement.runtime_spin(source)
+    if spin is not None:
+        view['rot_axis'] = list(spin[:3])
+        view['_rot_angle'] = spin[3]
     return view
 
 
@@ -48,12 +59,17 @@ def for_frozen_reference(brushes, geometry_of=None):
     copies, remapped = [], {}
     for brush in brushes:
         copy, lossy = brush_faces.legacy_layout(brush)
+        # A runtime source owns a live brush's transform by identity, so the
+        # copy is told its original (read by with_derived_bounds).
+        copy['_runtime_of'] = brush
         assert not lossy, (
             "%s: %s cannot be expressed in the layout the frozen reference "
             "reads; compare it against the GPU instead" % (brush.get('name'), lossy))
         copy = with_derived_bounds(copy)
         copies.append(copy)
         if geometry_of and id(brush) in geometry_of:
+            # The snapshot is the brush as its mesh was built -- at its
+            # authored placement, so it names no original.
             remapped[id(copy)] = with_derived_bounds(
                 brush_faces.legacy_layout(geometry_of[id(brush)])[0])
     return copies, remapped

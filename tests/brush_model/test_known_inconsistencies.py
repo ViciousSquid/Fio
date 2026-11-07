@@ -11,8 +11,8 @@ So no stage can change one of these behaviours silently: the stage that
 fixes one makes its characterisation test fail (update it, and name the
 change) and its target test pass unexpectedly (remove the marker). Stage 1
 (one face record) has done that for face material: its section now holds the
-fixed behaviour as regression tests, and Stage 2a (derived bounds) has done
-the same for the position targets it delivers. Shipped maps are not modified here; the
+fixed behaviour as regression tests, and Stage 2 has done the same for the
+position targets as each substage delivered them. Shipped maps are not modified here; the
 snapshot (``test_semantics_snapshot``) records which maps each behaviour
 reaches. See ``docs/brush-model-proposal.md`` for the stages.
 
@@ -31,6 +31,7 @@ from engine import brush_placement
 from engine import render_table as rt
 from engine.render_table import RenderTable
 from tests.helpers import brush_semantics as bs
+from tests.helpers import runtime
 from tests.helpers.paths import REPO_ROOT
 from tests.helpers.worlds import angled_brush, box_brush
 
@@ -312,16 +313,15 @@ def _convex_mover():
 
 
 def test_a_convex_movers_collision_mesh_stays_where_play_started():
-    """Movers move a brush by writing ``pos``. The drawn convex brush follows
-    (``pos`` is its transform); its collision triangles, baked in world space
-    at play start, do not."""
+    """A mover's runtime transform (Stage 2b: owned by a runtime source,
+    never written into the brush) moves the drawn convex brush; its
+    collision triangles, baked in world space at play start, do not."""
     brush = _convex_mover()
     triangles = copy.deepcopy(brush['_mesh_triangles'])
     table = RenderTable()
     table.sync([brush], 1)
     before = _drawn_points(table, 0)
-    brush['original_pos'] = list(brush['pos'])
-    brush['pos'] = [brush['pos'][0], brush['pos'][1] + 96.0, brush['pos'][2]]
+    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
     table.refresh_transforms([brush], np.array([0]))
     after = _drawn_points(table, 0)
     assert np.allclose(after - before, [0.0, 96.0, 0.0], atol=1e-3)
@@ -332,29 +332,16 @@ def test_a_convex_movers_collision_mesh_stays_where_play_started():
 def test_target_a_convex_movers_collision_follows_its_transform():
     brush = _convex_mover()
     lowest = min(v[1] for tri in brush['_mesh_triangles'] for v in tri)
-    brush['original_pos'] = list(brush['pos'])
-    brush['pos'] = [brush['pos'][0], brush['pos'][1] + 96.0, brush['pos'][2]]
+    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
     moved = min(v[1] for tri in brush['_mesh_triangles'] for v in tri)
     assert moved == pytest.approx(lowest + 96.0)
 
 
 @pytest.mark.qt
-def test_a_saved_map_keeps_plays_keys_in_the_authored_dict():
-    """Play writes ``original_pos`` (and a spinner's ``_rot_angle`` and
-    ``rotation_yaw``) into the brush dict; the map serialiser keeps them --
-    which is how seven shipped maps came to carry them."""
-    from editor.editor_state import EditorState
-    state = EditorState()
-    brush = box_brush("mover", (0, 0, 0), (64, 64, 64), is_mover=True)
-    brush.update(original_pos=[0.0, 0.0, 0.0], _rot_angle=12.0, rotation_yaw=12.0)
-    state.brushes = [brush]
-    saved = state._serialize_brushes()[0]
-    assert {k for k in bs.RUNTIME_KEYS if k in saved} == set(bs.RUNTIME_KEYS)
-
-
-@pytest.mark.qt
-@pytest.mark.xfail(strict=True, reason=STAGE_2)
-def test_target_a_saved_map_carries_no_play_state():
+def test_a_saved_map_carries_no_play_state():
+    """Stage 2b: play writes nothing into the brush dict, and the serialiser
+    drops the keys older builds wrote (``original_pos``, ``_rot_angle``,
+    ``rotation_yaw`` -- how seven shipped maps came to carry them)."""
     from editor.editor_state import EditorState
     state = EditorState()
     brush = box_brush("mover", (0, 0, 0), (64, 64, 64), is_mover=True)

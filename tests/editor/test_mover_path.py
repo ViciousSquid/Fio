@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("PyQt5")
 
 from editor.things import PathNode, PlayerStart                 # noqa: E402
+from engine.brush_placement import placed_box                   # noqa: E402
 from tests.helpers.worlds import box_brush, level_data, make_thing, room  # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -34,6 +35,12 @@ def _near(pos, point, tol=1.0):
     return all(abs(float(a) - b) <= tol for a, b in zip(pos, point))
 
 
+def _where(mover):
+    """Where the mover is now: its runtime transform (the preview's, or the
+    mover table's in play) -- its pos stays where it was authored."""
+    return list(placed_box(mover)[:3])
+
+
 def test_preview_movement_follows_the_chain_and_puts_the_mover_back(main_window):
     mover = _mover()
     main_window.state.brushes.append(mover)
@@ -42,20 +49,21 @@ def test_preview_movement_follows_the_chain_and_puts_the_mover_back(main_window)
     main_window.start_mover_preview(mover)
     data = main_window.preview_data
     assert data.get("is_path") and main_window.preview_timer.isActive()
-    assert mover["pos"] == START                         # starts where it is
+    assert _where(mover) == START                        # starts where it is
 
     path = []
     for _ in range(600):
         if not main_window.preview_timer.isActive():
             break
         main_window._advance_mover_preview()
-        path.append(list(mover["pos"]))
+        path.append(_where(mover))
+        assert mover["pos"] == START                     # never written
     assert not main_window.preview_timer.isActive(), "the preview never finished"
     assert any(_near(p, P1) for p in path), "never reached pathnode1"
     # On to pathnode2: the last leg runs from pathnode1 towards it.
     last_leg = [p for p in path if abs(p[0] - P1[0]) <= 1.0 and p[2] > 1.0]
     assert last_leg and max(p[2] for p in last_leg) > 0.9 * P2[2], "stopped at pathnode1"
-    assert mover["pos"] == START                         # put back where it was
+    assert _where(mover) == START                        # put back where it was
 
 
 def test_stopping_the_preview_midway_puts_the_mover_back(main_window):
@@ -65,9 +73,9 @@ def test_stopping_the_preview_midway_puts_the_mover_back(main_window):
     main_window.start_mover_preview(mover)
     for _ in range(10):
         main_window._advance_mover_preview()
-    assert mover["pos"] != START
+    assert _where(mover) != START and mover["pos"] == START
     main_window.stop_mover_preview()
-    assert mover["pos"] == START
+    assert _where(mover) == START
 
 
 def test_in_play_the_mover_goes_to_pathnode1_then_pathnode2(fio_session):
@@ -79,9 +87,10 @@ def test_in_play_the_mover_goes_to_pathnode1_then_pathnode2(fio_session):
     seen_p1 = seen_p2 = False
     for _ in range(300):
         session.step(1)
-        seen_p1 = seen_p1 or _near(mover["pos"], P1)
-        seen_p2 = seen_p2 or _near(mover["pos"], P2)
+        seen_p1 = seen_p1 or _near(_where(mover), P1)
+        seen_p2 = seen_p2 or _near(_where(mover), P2)
         if seen_p2:
             break
     assert seen_p1, "never reached pathnode1"
     assert seen_p2, "stopped at pathnode1"
+    assert mover["pos"] == START                         # play wrote nothing

@@ -35,7 +35,9 @@ from engine.brush_geometry import (
 from engine.brush_faces import (
     CANONICAL_MAP_VERSION, drop_tag_copies as _drop_tag_copies,
     migrate_legacy as _migrate_legacy_faces)
-from engine.brush_placement import normalise_loaded as _normalise_placement
+from engine.brush_placement import (
+    PLAY_STATE_KEYS as _PLAY_STATE_KEYS, drop_play_state as _drop_play_state,
+    normalise_loaded as _normalise_placement)
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -53,7 +55,10 @@ _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer)
     '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer)
-}) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS)
+}) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS) | frozenset(_PLAY_STATE_KEYS)
+# _PLAY_STATE_KEYS: what play used to write into a brush (original_pos,
+# _rot_angle, rotation_yaw). Since Stage 2b of the unified brush model play
+# writes none of them; a map or undo checkpoint never carries them.
 
 class _HistoryBase(str):
     """The bottom entry of the undo stack after a load: where history begins.
@@ -675,6 +680,10 @@ class EditorState:
             # Backfill stable ID for legacy maps
             brush.setdefault('id', str(uuid.uuid4()))
 
+            # Play state an older build saved into the map (Stage 2b):
+            # dropped, a box saved mid-motion put back where it was authored.
+            _drop_play_state(brush)
+
             # One material record per face (engine.brush_faces). Boxes are
             # untouched; nothing in *brushes_data* is modified.
             if 'geometry' in brush:
@@ -780,15 +789,26 @@ class EditorState:
             from plugins.bigworld.editor_streaming import EditorCellStream
             stream = EditorCellStream.for_level(level_data)
         legacy = self.is_legacy_face_layout(level_data)
-        if stream is not None and legacy:
+        if stream is not None:
             # Every record of the streamed world is migrated now, resident or
-            # not, so a later save writes the canonical layout throughout.
+            # not, so a later save writes the canonical layout throughout:
+            # no play state (Stage 2b), and a legacy file's faces.
             records = stream.records['brushes']
+            replaced = False
             for identity, record in list(records.items()):
-                if 'geometry' in record:
+                if any(key in record for key in _PLAY_STATE_KEYS):
+                    record = dict(record)
+                    _drop_play_state(record)
+                    records[identity] = record
+                    replaced = True
+                if legacy and 'geometry' in record:
                     record = dict(record)
                     _migrate_legacy_faces(record)
                     records[identity] = record
+            if replaced:
+                # A box saved mid-motion is back at its authored placement:
+                # file it there (its home cell).
+                stream.reindex()
         local = stream.local_data() if stream is not None else level_data
         brushes_data = local.get('brushes') or []
         things_data = local.get('things') or []

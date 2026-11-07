@@ -17,6 +17,7 @@ pytest.importorskip("PyQt5", reason="editor state and console are editor-tier")
 from editor.editor_state import EditorState                    # noqa: E402
 from editor.things import Monster, Thing                        # noqa: E402
 from engine.entity_table import EntityTable                     # noqa: E402
+from engine.brush_placement import placed_box
 from engine.render_table import RenderTable                     # noqa: E402
 from tests.helpers.worlds import box_brush                      # noqa: E402
 
@@ -593,8 +594,15 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
                      direction=[0, 1, 0])
     state, logic = _playing(brushes=[box_brush("ground", (0, -16, 0), (4096, 32, 4096)),
                                      door, lift])
+    from engine.brush_placement import placed_box
+
+    def where(brush):
+        # Where it is now: its runtime transform (Stage 2b), not its pos.
+        return list(placed_box(brush)[:3])
+
     try:
-        saved_door, saved_lift = list(door["pos"]), list(lift["pos"])
+        saved_door, saved_lift = where(door), where(lift)
+        authored = list(door["pos"]), list(lift["pos"])
         path = str(tmp_path / "s.fiosave")
         assert logic.session_runtime.save_session(path)[0]
 
@@ -608,13 +616,14 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
         lift["start_on"] = False                    # I/O Stop, mid-travel
         moved(lift)
         logic._tick(logic.TICK_DURATION)
-        assert door["pos"] != saved_door and lift["pos"] != saved_lift
+        assert where(door) != saved_door and where(lift) != saved_lift
+        assert (list(door["pos"]), list(lift["pos"])) == authored
 
         assert logic.session_runtime.load_session(path)[0]
         for _ in range(30):                         # and it stays there
             logic._tick(logic.TICK_DURATION)
-        assert door["pos"] == pytest.approx(saved_door)
-        assert lift["pos"] == pytest.approx(saved_lift)
+        assert where(door) == pytest.approx(saved_door)
+        assert where(lift) == pytest.approx(saved_lift)
         assert logic.mover_runtime.door_states[door_idx]["state"] == "closed"
         assert lift["start_on"] is False
     finally:
@@ -676,13 +685,13 @@ def test_deleting_a_brush_in_play_keeps_io_aimed_at_the_right_door():
         state.brushes.remove(crate)                  # editor Delete during play
         logic._tick(logic.TICK_DURATION)
 
-        closed_a = list(door_a["pos"])
+        closed_a = list(placed_box(door_a)[:3])
         logic.io_manager._execute_input("door_b", "Open", "", "test",
                                         target_id=door_b["id"])
         for _ in range(30):
             logic._tick(logic.TICK_DURATION)
-        assert door_a["pos"] == closed_a, "the wrong door opened"
-        assert door_b["pos"][1] > 64.0 + 100.0, "the aimed door did not open"
+        assert list(placed_box(door_a)[:3]) == closed_a, "the wrong door opened"
+        assert placed_box(door_b)[1] > 64.0 + 100.0, "the aimed door did not open"
         # The mover carried its progress across the re-index.
         assert logic.mover_runtime.mover_states[state.brushes.index(lift)]["progress"] >= lift_progress
     finally:

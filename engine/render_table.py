@@ -544,19 +544,20 @@ class RenderTable:
         for row, slot in enumerate(idx.tolist()):
             brush = brushes[slot]
             hidden[row] = bool(brush.get('hidden', False))
-            if 'geometry' in brush:
+            if ('geometry' in brush or brush.get('is_mover')
+                    or brush.get('is_door')):
                 bounds[row] = brush_placement.placed_box(brush)
+                spin = brush_placement.runtime_spin(brush)
+                if spin is not None:
+                    rot[row] = spin
             else:
                 # brush_placement's box rule, inline: this loop runs over
-                # every row of a world on a cold build.
+                # every row of a world on a cold build, and a box that is
+                # neither a mover nor a door has no runtime transform.
                 pos = brush.get('pos') or (0.0, 0.0, 0.0)
                 size = brush.get('size') or (64.0, 64.0, 64.0)
                 bounds[row] = (pos[0], pos[1], pos[2],
                                size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
-            angle = brush.get('_rot_angle') or 0.0
-            if angle:
-                axis = brush.get('rot_axis') or (0.0, 1.0, 0.0)
-                rot[row] = (axis[0], axis[1], axis[2], angle)
         if not np.array_equal(self.hidden[idx], hidden):
             self._shown_stale = True
         self.hidden[idx] = hidden

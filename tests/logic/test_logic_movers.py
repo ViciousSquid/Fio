@@ -32,7 +32,9 @@ def test_logic_movers_initializes_repeatable_mover_state(logic):
 
     assert runtime.movers == [(0, mover)]
     assert runtime.mover_states[0] == {"progress": 0.0, "forward": True}
-    assert mover["original_pos"] == [0, 10, 0]
+    # Its rest is its authored placement, read where it is needed; play
+    # writes nothing into the brush (unified brush model, Stage 2b).
+    assert "original_pos" not in mover
 
 
 def test_logic_movers_does_not_create_repeat_state_for_move_once(logic):
@@ -77,27 +79,41 @@ def test_logic_movers_unknown_door_direction_defaults_up(logic):
     assert runtime.door_states[0]["direction"] == [0, 1, 0]
 
 
-def test_logic_movers_reset_restores_original_mover_position(logic):
+def test_logic_movers_reset_returns_a_moved_mover_to_its_authored_placement(logic):
+    """Play moves a mover through its runtime transform (the mover table),
+    never its ``pos``; stopping drops the transform, so the brush is back
+    where it was authored with nothing to restore."""
+    from engine import brush_placement
     mover = {"is_mover": True, "pos": [10, 20, 30]}
     runtime = _brush(logic, mover)
     runtime._init_movers()
+    table = runtime._movers()
+    table._link(logic)
+    table.move_to(mover, (100.0, 200.0, 300.0))
+    assert brush_placement.placed_box(mover)[:3] == (100.0, 200.0, 300.0)
+    assert mover["pos"] == [10, 20, 30]
 
-    mover["pos"] = [100, 200, 300]
     runtime._reset_movers()
 
+    assert brush_placement.placed_box(mover)[:3] == (10.0, 20.0, 30.0)
     assert mover["pos"] == [10, 20, 30]
     assert runtime.movers == []
     assert runtime.mover_states == {}
 
 
-def test_logic_movers_reset_restores_original_door_position(logic):
+def test_logic_movers_reset_returns_an_open_door_to_its_authored_placement(logic):
+    from engine import brush_placement
     door = {"is_door": True, "pos": [1, 2, 3]}
     runtime = _brush(logic, door)
     runtime._init_doors()
+    table = runtime._movers()
+    table._link(logic)
+    table.restore_placement(door, (50.0, 60.0, 70.0))
+    assert brush_placement.placed_box(door)[:3] == (50.0, 60.0, 70.0)
 
-    door["pos"] = [50, 60, 70]
     runtime._reset_doors()
 
+    assert brush_placement.placed_box(door)[:3] == (1.0, 2.0, 3.0)
     assert door["pos"] == [1, 2, 3]
     assert runtime.doors == []
     assert runtime.door_states == {}
