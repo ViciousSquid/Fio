@@ -2,7 +2,8 @@
 
 Status: **Stage 0 implemented** (guard rails, characterisation tests and
 baselines; no behaviour change) and **Stage 1 implemented** (one material
-record per face). Stages 2–4 are proposals. Written after M2 (`5b26ede`),
+record per face). Stage 2 is designed (`docs/brush-model-stage2.md`, awaiting
+approval); Stages 3–4 are proposals. Written after M2 (`5b26ede`),
 which exposed the problem while keying convex GPU meshes.
 
 Goal: one authoritative definition of every brush, two efficient geometry
@@ -136,9 +137,13 @@ Measured on this branch; "shipped" means one of the 20 maps in `maps/`.
    unchanged, so a `size`-only change to an existing convex brush (console
    `setprop`, a plugin) stretches it until the map is reloaded, when the
    planes are drawn where they are.
-9. *Convex movers' collision stays behind.* Movers write `pos`; the drawn
-   brush follows, but its collision triangles (world space, baked at play
-   start) do not. No shipped map has a convex mover.
+9. *Convex movers do not collide as their shape.* Movers write `pos`; the
+   drawn brush follows. (Corrected in the Stage 2 investigation: play builds
+   no mesh collision for movers — `angled_brush_is_solid` excludes them — so
+   an angled mover collides as its `pos`/`size` box, which follows it but has
+   the wrong shape; the triangles are absent, not stale. The Stage 0
+   characterisation test builds them by hand and is replaced in Stage 2.)
+   No shipped map has a convex mover.
 10. *Play state is saved.* Movers write `original_pos`, `_rot_angle` and
     `rotation_yaw` into the authored dict and the serialiser keeps them:
     seven shipped maps carry `original_pos`, one `rotation_yaw`.
@@ -229,7 +234,8 @@ Each stage ships on its own and must meet the gates before the next starts.
 
 0. **Guard rails, no behaviour change.** Done (above).
 1. **One face record.** Done (below).
-2. **Unambiguous position.** Movers stop writing `pos`: their displacement
+2. **Unambiguous position** — investigated and designed in
+   `docs/brush-model-stage2.md` (awaiting approval). Movers stop writing `pos`: their displacement
    is a runtime transform column (the MoverTable already owns dense
    positions), applied to drawing and convex collision alike. Convex
    `pos`/`size` become derived and read-only; a convex mesh depends on its
