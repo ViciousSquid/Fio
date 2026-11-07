@@ -166,7 +166,9 @@ def test_unavailable_mover_cancels_an_active_trip(arena):
 def test_reaching_a_landing_node_starts_waiting_for_an_absent_platform(arena):
     logic, session, bot, lift = lift_world(arena)
     logic.editor_state.brushes[0].update(pos=[-600, -25, 0], size=[1040, 50, 4000])
-    lift['pos'] = [0, 290, 0]
+    # The lift is up at the far landing: where it is now belongs to the
+    # mover table (Stage 2b), its authored rest stays at the bottom.
+    assert logic.mover_runtime._movers().move_to(lift, (0.0, 290.0, 0.0))
     place(bot, [-160, 0, 0])
     action = session.nav_world.transfer(session.feet(bot), (220, 300, 0))
     assert action is not None

@@ -482,9 +482,9 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
         for name in ('lo32', 'hi32', 'lo', 'hi'):
             assert np.array_equal(getattr(rows, name), getattr(fresh, name)), name
     calls = []
-    real = logic_collision.carried_box
-    monkeypatch.setattr(logic_collision, 'carried_box',
-                        lambda *a: calls.append(a) or real(*a))
+    real = logic_collision.world_box_at
+    monkeypatch.setattr(logic_collision, 'world_box_at',
+                        lambda *a: calls.append(a[0]['name']) or real(*a))
     before = rows.lo.copy()
     rows.refresh_movers()                       # nothing moved since
     assert calls == [] and np.array_equal(rows.lo, before)
@@ -492,6 +492,18 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
     rows.refresh_movers()                       # only the rows that moved
     moving = sum(1 for b in rows.movers if bp.runtime_of(b) is not None)
     assert 0 < len(calls) <= moving
+    # A write nothing journals (a console setprop, a plugin) is followed, in
+    # place or as a new list, as every other reader follows it.
+    still = next(b for b in rows.movers if bp.runtime_of(b) is None)
+    del calls[:]
+    still['pos'][1] += 64.0
+    rows.refresh_movers()
+    assert calls == [still['name']]
+    still['size'] = [s * 2.0 for s in still['size']]
+    rows.refresh_movers()
+    fresh = CollisionRows(brushes, 1)
+    for name in ('lo32', 'hi32', 'lo', 'hi'):
+        assert np.array_equal(getattr(rows, name), getattr(fresh, name)), name
 
 
 def test_stopping_and_rebuilding_rows_swaps_the_transforms_whole(crowd):

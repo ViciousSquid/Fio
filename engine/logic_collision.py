@@ -15,7 +15,7 @@ import numpy as np
 from .brush_geometry import build_collision_mesh, brush_has_geometry
 from operator import is_
 
-from .brush_placement import authored_box, carried_box, runtime_of, world_box
+from .brush_placement import runtime_of, world_box, world_box_at
 from .constants import is_water_brush
 
 try:
@@ -65,7 +65,7 @@ class CollisionRows:
     """
 
     __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi',
-                 'mover_rows', 'movers', '_mover_home', '_mover_seen')
+                 'mover_rows', 'movers', '_mover_seen')
 
     def __init__(self, brushes, epoch):
         self.source = brushes
@@ -82,13 +82,9 @@ class CollisionRows:
                   if b.get('is_mover') or b.get('is_door')]
         self.mover_rows = np.asarray(movers, dtype=np.intp)
         self.movers = [self.brushes[row] for row in movers]
-        # A mover's authored box is fixed for the life of these rows (an
-        # edit moves the world epoch, which rebuilds them; play writes no
-        # placement), so a refresh carries it by the runtime transform.
-        self._mover_home = [authored_box(brush) for brush in self.movers]
-        #: Each mover's runtime transform when its row was last stored;
-        #: None until the first refresh. Sources replace the tuple whenever
-        #: a brush moves, so an unchanged one (``is``) needs no new row.
+        #: What each mover's row was last derived from -- its runtime
+        #: transforms, cached shapes, and pos/size -- or None until the first
+        #: refresh (see refresh_movers).
         self._mover_seen = None
 
     def _resolve(self, rows, brushes):
@@ -123,24 +119,42 @@ class CollisionRows:
         self.hi[:, rows] = pos + half
 
     def refresh_movers(self):
-        """Re-derive the rows of the movers and doors that moved since the
-        last call (every query calls this; most find nothing to do)."""
+        """Re-derive the rows of the movers and doors whose bounds' inputs
+        changed since the last call (every query calls this; most find
+        nothing to do).
+
+        A row's inputs are its runtime transform (sources replace the tuple
+        whenever a brush moves, so ``is`` decides), its cached shape
+        (dropped by every geometry edit) and its ``pos``/``size`` -- compared
+        by value, in bulk, so a write the editor did not journal (a console
+        ``setprop``, a plugin) is followed here as it is by every other
+        reader.
+        """
         movers = self.movers
         if not movers:
             return
         now = list(map(runtime_of, movers))
+        shapes = [brush.get('_geo_cache') for brush in movers]
+        pos = np.array([brush['pos'] for brush in movers], dtype=np.float64)
+        size = np.array([brush['size'] for brush in movers], dtype=np.float64)
         seen = self._mover_seen
         if seen is None:
-            changed = list(range(len(movers)))
-        elif all(map(is_, now, seen)):
-            return
+            changed = np.arange(len(movers))
         else:
-            changed = [i for i, (new, old) in enumerate(zip(now, seen)) if new is not old]
-        home = self._mover_home
-        boxes = np.array([carried_box(home[i], now[i]) for i in changed],
+            seen_now, seen_shapes, seen_pos, seen_size = seen
+            placed = ((pos != seen_pos).any(axis=1) | (size != seen_size).any(axis=1))
+            if (not placed.any() and all(map(is_, now, seen_now))
+                    and all(map(is_, shapes, seen_shapes))):
+                return
+            placed |= np.fromiter(
+                (a is not b or c is not d
+                 for a, b, c, d in zip(now, seen_now, shapes, seen_shapes)),
+                dtype=bool, count=len(movers))
+            changed = np.flatnonzero(placed)
+        boxes = np.array([world_box_at(movers[i], now[i]) for i in changed.tolist()],
                          dtype=np.float64).reshape(len(changed), 6).T
         self._store(self.mover_rows[changed], boxes[:3], boxes[3:])
-        self._mover_seen = now
+        self._mover_seen = (now, shapes, pos, size)
 
     def ray_hits(self, origin, direction, reach):
         """Rows whose box the ray meets within *reach*, nearest first.
