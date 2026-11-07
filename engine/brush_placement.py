@@ -516,6 +516,125 @@ def ray_box(box, ray_o, ray_d, eps=1e-6):
 
 
 # ---------------------------------------------------------------------------
+# Collision in the shape's frame (Stage 2c)
+# ---------------------------------------------------------------------------
+
+class Frame:
+    """The map from world space into the frame a brush's shape is authored
+    in, for one runtime transform: ``s = A + R^T (w - P)``, and back for a
+    direction, ``n_w = R n``.
+
+    Built once per runtime transform and cached on the brush (the mover
+    table hands over a new transform tuple only when the row moves), so a
+    collision query costs a few float operations and allocates no matrix.
+    """
+
+    __slots__ = ('ax', 'ay', 'az', 'px', 'py', 'pz', 'r')
+
+    def __init__(self, authored, centre, rotation):
+        self.ax, self.ay, self.az = authored
+        self.px, self.py, self.pz = centre
+        #: The rotation's nine entries row by row, or None for a translation.
+        self.r = (None if rotation is None
+                  else tuple(v for row in rotation for v in row))
+
+    def to_shape(self, x, y, z):
+        """A world point in the shape's frame."""
+        dx, dy, dz = x - self.px, y - self.py, z - self.pz
+        r = self.r
+        if r is not None:
+            dx, dy, dz = (r[0] * dx + r[3] * dy + r[6] * dz,
+                          r[1] * dx + r[4] * dy + r[7] * dz,
+                          r[2] * dx + r[5] * dy + r[8] * dz)
+        return self.ax + dx, self.ay + dy, self.az + dz
+
+    def dir_to_shape(self, x, y, z):
+        """A world direction in the shape's frame (``R^T d``)."""
+        r = self.r
+        if r is None:
+            return x, y, z
+        return (r[0] * x + r[3] * y + r[6] * z,
+                r[1] * x + r[4] * y + r[7] * z,
+                r[2] * x + r[5] * y + r[8] * z)
+
+    def to_world_dir(self, x, y, z):
+        """A direction in the shape's frame, in world space (``R n``)."""
+        r = self.r
+        if r is None:
+            return x, y, z
+        return (r[0] * x + r[1] * y + r[2] * z,
+                r[3] * x + r[4] * y + r[5] * z,
+                r[6] * x + r[7] * y + r[8] * z)
+
+
+def collision_frame(brush):
+    """The brush's :class:`Frame`, or ``None`` when nothing moves it (its
+    shape is where it was authored, so world space is its frame)."""
+    runtime = runtime_of(brush)
+    if runtime is None:
+        return None
+    cached = brush.get('_collision_frame')
+    if cached is not None and cached[0] is runtime:
+        return cached[1]
+    frame = Frame(authored_box(brush)[:3], runtime[:3],
+                  rotation_matrix(runtime[3:6], runtime[6]))
+    brush['_collision_frame'] = (runtime, frame)
+    return frame
+
+
+def _box_collision_planes(brush):
+    """A box's six face planes ``(nx, ny, nz, d)`` at its authored placement,
+    cached on the brush by its box (a spinning box collides as its turned
+    box through the same path as an angled brush)."""
+    box = authored_box(brush)
+    cached = brush.get('_box_collision')
+    if cached is not None and cached[0] == box:
+        return cached[1]
+    cx, cy, cz, hx, hy, hz = box
+    planes = [(1.0, 0.0, 0.0, cx + hx), (-1.0, 0.0, 0.0, -(cx - hx)),
+              (0.0, 1.0, 0.0, cy + hy), (0.0, -1.0, 0.0, -(cy - hy)),
+              (0.0, 0.0, 1.0, cz + hz), (0.0, 0.0, -1.0, -(cz - hz))]
+    shape = (planes, None, ([cx - hx, cy - hy, cz - hz], [cx + hx, cy + hy, cz + hz]))
+    brush['_box_collision'] = (box, shape)
+    return shape
+
+
+#: Runtime-only keys this module caches on a brush dict (stripped on save,
+#: like the geometry and AABB caches).
+RUNTIME_CACHE_KEYS = ('_collision_frame', '_box_collision')
+
+
+def collision_shape(brush):
+    """What the player collides with when *brush* is a solid shape:
+    ``(planes, triangles, bounds, frame)``, or ``None`` for the AABB fast
+    path.
+
+    * a convex brush, static or moving: its shape's collision data
+      (:meth:`ConvexGeometry.collision_shape`), cached on the shape;
+    * a spinning box: its six planes, cached on the brush;
+    * an entity model's collision mesh proxy: its world-space mesh;
+    * any other box -- static, or carried by a mover without turning --
+      ``None``: its derived AABB is its exact shape.
+
+    *planes*, *triangles* and *bounds* are in the shape's frame; *frame*
+    (:func:`collision_frame`) carries a world query into it, ``None`` when
+    the shape is where it was authored.
+    """
+    convex = shape_convex(brush)
+    if convex is not None:
+        planes, triangles, bounds = convex.collision_shape()
+        return planes, triangles, bounds, collision_frame(brush)
+    runtime = runtime_of(brush)
+    if runtime is not None and runtime[6] and rotation_matrix(runtime[3:6], runtime[6]):
+        planes, triangles, bounds = _box_collision_planes(brush)
+        return planes, triangles, bounds, collision_frame(brush)
+    if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
+        return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),
+                brush.get('_mesh_bounds'), None)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
 

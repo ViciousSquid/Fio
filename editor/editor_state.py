@@ -36,8 +36,8 @@ from engine.brush_faces import (
     CANONICAL_MAP_VERSION, drop_tag_copies as _drop_tag_copies,
     migrate_legacy as _migrate_legacy_faces)
 from engine.brush_placement import (
-    PLAY_STATE_KEYS as _PLAY_STATE_KEYS, drop_play_state as _drop_play_state,
-    normalise_loaded as _normalise_placement)
+    PLAY_STATE_KEYS as _PLAY_STATE_KEYS, RUNTIME_CACHE_KEYS as _PLACEMENT_CACHE_KEYS,
+    drop_play_state as _drop_play_state, normalise_loaded as _normalise_placement)
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -55,7 +55,8 @@ _RENDERER_PRIVATE_KEYS = frozenset({
     '_mat_cache_key', '_mat_cache',      # model matrix cache (renderer)
     '_nmat_cache_key', '_nmat_cache',    # normal matrix cache (renderer)
     '_render_mesh', '_render_sig',       # angled-brush GPU mesh cache (renderer)
-}) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS) | frozenset(_PLAY_STATE_KEYS)
+}) | GEO_RUNTIME_KEYS | frozenset(AABB_RUNTIME_KEYS) | frozenset(_PLAY_STATE_KEYS) \
+    | frozenset(_PLACEMENT_CACHE_KEYS)
 # _PLAY_STATE_KEYS: what play used to write into a brush (original_pos,
 # _rot_angle, rotation_yaw). Since Stage 2b of the unified brush model play
 # writes none of them; a map or undo checkpoint never carries them.

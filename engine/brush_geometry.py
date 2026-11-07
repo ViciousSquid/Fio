@@ -354,7 +354,8 @@ class ConvexGeometry:
     """Derived, cached surface of a convex brush (built from its plane set)."""
 
     __slots__ = ('planes', 'verts', 'faces', '_bounds', '_shape_box', '_shape_bounds',
-                 '_plane_cache', '_coll_cache', '_edge_cache', '_material_cache')
+                 '_plane_cache', '_coll_cache', '_edge_cache', '_material_cache',
+                 '_collision_shape')
 
     def __init__(self, planes):
         # Store copies so later mutation of the source list can't corrupt us.
@@ -363,6 +364,7 @@ class ConvexGeometry:
         self._bounds = None
         self._shape_box = None
         self._shape_bounds = None
+        self._collision_shape = None
         # Lazily-built, immutable-for-this-instance NumPy views of the plane
         # set, shared by the point/AABB queries so they never rebuild arrays.
         self._plane_cache = None   # (normals Nx3, offsets N)
@@ -522,6 +524,38 @@ class ConvexGeometry:
         lo, hi = self.bounds
         return ([float(lo[0]), float(lo[1]), float(lo[2])],
                 [float(hi[0]), float(hi[1]), float(hi[2])])
+
+    def collision_shape(self):
+        """``(planes, triangles, bounds)``: what the player collides with,
+        built once per shape and shared.
+
+        *planes* are ``(nx, ny, nz, d)`` with unit normals (inside:
+        ``n . p <= d``) for sphere depenetration; *triangles* the
+        swept-sphere format of :meth:`collision_triangles`; *bounds*
+        ``([lo], [hi])``. All in the frame the planes are authored in: a query
+        is carried into it (``engine.brush_placement.collision_shape``), so a
+        mover or a spinning brush collides by its true shape with nothing
+        rebuilt per tick.
+        """
+        if self._collision_shape is None:
+            src = self.planes
+            if src:
+                # Batch-normalise every plane normal at once, then pack the
+                # (nx, ny, nz, d) tuples the collision path consumes.
+                raw = np.array([p['n'] for p in src], dtype=np.float64)
+                lengths = np.sqrt(np.einsum('ij,ij->i', raw, raw))
+                safe = lengths >= 1e-12
+                unit = np.where(safe[:, None],
+                                raw / np.where(safe[:, None], lengths[:, None], 1.0),
+                                np.array([0.0, 1.0, 0.0]))
+                offsets = [float(p['d']) for p in src]
+                planes = [(float(unit[i, 0]), float(unit[i, 1]), float(unit[i, 2]),
+                           offsets[i]) for i in range(len(src))]
+            else:
+                planes = []
+            self._collision_shape = (planes, self.collision_triangles(),
+                                     self.collision_bounds())
+        return self._collision_shape
 
     # -- point / AABB queries ---------------------------------------------
     def _plane_arrays_cached(self):
@@ -1190,27 +1224,13 @@ def build_collision_mesh(brush):
     convex = get_convex(brush)
     if convex is None or not convex.is_valid:
         return False
+    # The shape's own collision data (ConvexGeometry.collision_shape), shared
+    # rather than copied: the player reads the shape directly; these keys are
+    # the world view other readers (bot navigation) take of a static brush.
+    planes, triangles, bounds = convex.collision_shape()
     brush['_collision_mode'] = 'mesh'
-    brush['_mesh_triangles'] = convex.collision_triangles()
-    brush['_mesh_bounds'] = convex.collision_bounds()
-    # Half-space planes (unit normal + offset, inside = dot(n,p) <= d) for the
-    # player's sphere-vs-convex depenetration.  Baking them here keeps the
-    # collision thread free of any geometry rebuild and lets it push a capsule
-    # out of a solid convex brush even when the sphere centre is fully inside.
-    src = convex.planes
-    if src:
-        # Batch-normalise every plane normal at once, then pack the (nx, ny, nz,
-        # d) tuples the collision thread consumes.
-        raw = np.array([p['n'] for p in src], dtype=np.float64)
-        lengths = np.sqrt(np.einsum('ij,ij->i', raw, raw))
-        safe = lengths >= 1e-12
-        unit = np.where(safe[:, None], raw / np.where(safe[:, None], lengths[:, None], 1.0),
-                        np.array([0.0, 1.0, 0.0]))
-        offsets = [float(p['d']) for p in src]
-        planes = [(float(unit[i, 0]), float(unit[i, 1]), float(unit[i, 2]), offsets[i])
-                  for i in range(len(src))]
-    else:
-        planes = []
+    brush['_mesh_triangles'] = triangles
+    brush['_mesh_bounds'] = bounds
     brush['_mesh_planes'] = planes
     return True
 

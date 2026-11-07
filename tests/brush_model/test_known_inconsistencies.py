@@ -312,29 +312,37 @@ def _convex_mover():
     return brush
 
 
-def test_a_convex_movers_collision_mesh_stays_where_play_started():
-    """A mover's runtime transform (Stage 2b: owned by a runtime source,
-    never written into the brush) moves the drawn convex brush; its
-    collision triangles, baked in world space at play start, do not."""
+def test_a_convex_movers_collision_follows_its_transform():
+    """Stage 2c: the player collides with a convex mover's *shape*, carried
+    into the frame its runtime transform puts it in -- not a world-space
+    copy baked at play start (which, until Stage 2c, an angled mover did
+    not even have: it collided as its box). A capsule resting on the lift's
+    top is held up where the lift is now, and nothing holds it where the
+    lift was."""
+    import glm
+    from engine.player import Player
     brush = _convex_mover()
-    triangles = copy.deepcopy(brush['_mesh_triangles'])
+    top = max(v[1] for verts, _normal in brush['_mesh_triangles'] for v in verts)
+    baked = copy.deepcopy(brush['_mesh_triangles'])
+    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
     table = RenderTable()
     table.sync([brush], 1)
-    before = _drawn_points(table, 0)
-    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
-    table.refresh_transforms([brush], np.array([0]))
-    after = _drawn_points(table, 0)
-    assert np.allclose(after - before, [0.0, 96.0, 0.0], atol=1e-3)
-    assert brush['_mesh_triangles'] == triangles
+    assert max(p[1] for p in _drawn_points(table, 0)) == pytest.approx(top + 96.0, abs=1e-3)
 
+    def settle(y):
+        player = Player(0.0, 0.0, angle=0.0)
+        player.pos = glm.vec3(-40.0, y, 0.0)
+        player.velocity = glm.vec3(0.0)
+        player._resolve_mesh_capsule([brush])
+        return player
 
-@pytest.mark.xfail(strict=True, reason=STAGE_2)
-def test_target_a_convex_movers_collision_follows_its_transform():
-    brush = _convex_mover()
-    lowest = min(v[1] for tri in brush['_mesh_triangles'] for v in tri)
-    runtime.drive(brush, offset=(0.0, 96.0, 0.0))
-    moved = min(v[1] for tri in brush['_mesh_triangles'] for v in tri)
-    assert moved == pytest.approx(lowest + 96.0)
+    feet = lambda p: float(p.pos.y) - float(p._half.y)   # noqa: E731
+    sunk = settle(top + 96.0 + float(Player(0.0, 0.0)._half.y) - 4.0)
+    assert sunk.on_ground and sunk.ground_object is brush
+    assert feet(sunk) >= top + 96.0 - 1.0          # pushed up onto the lift
+    old = settle(top + float(Player(0.0, 0.0)._half.y) - 4.0)
+    assert not old.on_ground                        # nothing where it was
+    assert brush['_mesh_triangles'] == baked         # nothing rebuilt
 
 
 @pytest.mark.qt

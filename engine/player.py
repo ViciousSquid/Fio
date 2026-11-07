@@ -30,7 +30,7 @@ from .constants import (
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
-from .brush_placement import world_bounds
+from .brush_placement import collision_shape, world_bounds
 from .physics import world_gravity
 
 
@@ -336,8 +336,11 @@ class Player:
 
         # One pass over everything that could collide this frame: drop what the
         # player does not collide with at all (see _blocks_player) and split the
-        # rest by collision mode.  Movers and doors are always included since
-        # they're dynamic and the static grid never sees them.
+        # rest by shape (brush_placement.collision_shape). Movers and doors are
+        # always included since they're dynamic and the static grid never sees
+        # them. A solid shape -- an angled brush, static or moving, a spinning
+        # box, a model's collision mesh -- is resolved in its own frame; any
+        # other box keeps the AABB fast path, its derived bounds being exact.
         mesh_brushes = []
         aabb_brushes = []
         for source in (colliders, movers, doors):
@@ -346,7 +349,12 @@ class Player:
             for b in source:
                 if not _blocks_player(b):
                     continue
-                if b.get('_collision_mode') == 'mesh':
+                # A static box -- most of a level -- is told by three dict
+                # reads; only a brush with planes, a mesh or a runtime
+                # transform asks for its shape.
+                if (('geometry' in b or b.get('_collision_mode') == 'mesh'
+                     or b.get('is_mover') or b.get('is_door'))
+                        and collision_shape(b) is not None):
                     mesh_brushes.append(b)
                 else:
                     aabb_brushes.append(b)
@@ -831,10 +839,27 @@ class Player:
         if not mesh_brushes:
             return
 
+        # Each shape once per resolve: its planes and bounds in its own frame
+        # and the frame a world query is carried into (None: world space).
+        shapes = []
+        for brush in mesh_brushes:
+            shape = collision_shape(brush)
+            if shape is None or not shape[0]:
+                continue
+            planes, _triangles, bounds, frame = shape
+            shapes.append((brush, planes, bounds, frame))
+        if not shapes:
+            return
+
         offsets, radius = self._capsule_offsets()
         ground_normal = None      # steepest-up contact this resolve
+        ground_brush = None       # ... and the shape it came from
         wall_normal = None        # last horizontal contact, for velocity slide
         hit_ceiling = False
+        half = self._half
+        # The capsule's box turned into a shape's frame is no longer axis
+        # aligned there: bound it by its circumscribed radius instead.
+        reach = math.sqrt(float(half.x) ** 2 + float(half.y) ** 2 + float(half.z) ** 2)
 
         # A few relaxation passes: each pushes out of the deepest overlap, then
         # re-tests, so a capsule touching several faces settles cleanly.
@@ -842,23 +867,30 @@ class Player:
             deepest = 1e-4
             push = None
             push_n = None
-            for brush in mesh_brushes:
-                planes = brush.get('_mesh_planes')
-                if not planes:
-                    continue
-                bounds = brush.get('_mesh_bounds')
+            push_brush = None
+            for brush, planes, bounds, frame in shapes:
                 if bounds:
                     mn, mx = bounds
-                    pmn = self.pos - self._half
-                    pmx = self.pos + self._half
-                    if (pmx.x < mn[0] - radius or pmn.x > mx[0] + radius or
-                        pmx.y < mn[1] - radius or pmn.y > mx[1] + radius or
-                        pmx.z < mn[2] - radius or pmn.z > mx[2] + radius):
-                        continue
+                    if frame is None:
+                        pmn = self.pos - half
+                        pmx = self.pos + half
+                        if (pmx.x < mn[0] - radius or pmn.x > mx[0] + radius or
+                            pmx.y < mn[1] - radius or pmn.y > mx[1] + radius or
+                            pmx.z < mn[2] - radius or pmn.z > mx[2] + radius):
+                            continue
+                    else:
+                        px, py, pz = frame.to_shape(self.pos.x, self.pos.y, self.pos.z)
+                        e = reach + radius
+                        if (px < mn[0] - e or px > mx[0] + e or
+                            py < mn[1] - e or py > mx[1] + e or
+                            pz < mn[2] - e or pz > mx[2] + e):
+                            continue
                 for off in offsets:
                     cx = self.pos.x + off.x
                     cy = self.pos.y + off.y
                     cz = self.pos.z + off.z
+                    if frame is not None:
+                        cx, cy, cz = frame.to_shape(cx, cy, cz)
                     # Sphere vs convex: largest signed distance across faces.
                     best_sd = -1e30
                     best_n = None
@@ -875,9 +907,12 @@ class Player:
                         continue
                     pen = radius - best_sd
                     if pen > deepest:
+                        if frame is not None:   # the face normal, in world space
+                            best_n = frame.to_world_dir(*best_n)
                         deepest = pen
                         push = (best_n[0] * pen, best_n[1] * pen, best_n[2] * pen)
                         push_n = best_n
+                        push_brush = brush
 
             if push is None:
                 break
@@ -889,6 +924,7 @@ class Player:
             if push_n[1] >= PM_GROUND_NORMAL:
                 if ground_normal is None or push_n[1] > ground_normal[1]:
                     ground_normal = push_n
+                    ground_brush = push_brush
             elif push_n[1] < -0.3:
                 hit_ceiling = True
             else:
@@ -899,10 +935,8 @@ class Player:
             if self.velocity.y < 0.0:
                 self.velocity.y = 0.0
             self.on_ground = True
-            for brush in mesh_brushes:
-                if brush.get('_mesh_triangles'):
-                    self.ground_object = brush
-                    break
+            # The shape the player stands on: a mover carries what it holds.
+            self.ground_object = ground_brush
         if hit_ceiling and self.velocity.y > 0.0:
             self.velocity.y = 0.0
         if wall_normal is not None:
@@ -914,8 +948,8 @@ class Player:
                 self.velocity.z -= wall_normal[2] * vn
 
     def _has_headroom(self, brush, player_min, player_max):
-        # Mesh collision: use mesh bounds for broad-phase AABB check
-        if brush.get('_collision_mode') == 'mesh':
+        # Model collision mesh (a proxy with no planes): its mesh bounds.
+        if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
             bounds = brush.get('_mesh_bounds')
             if bounds:
                 min_b, max_b = bounds
@@ -925,6 +959,14 @@ class Player:
                     player_max.z > min_b[2] and player_min.z < max_b[2]):
                     return False  # Overlapping mesh bounds → collision
             return True  # No bounds or no overlap → pass through
+
+        # A solid shape -- an angled brush, static or moving, a spinning box:
+        # its derived bounds (brush_placement), where it is now.
+        if collision_shape(brush) is not None:
+            b = world_bounds(brush)
+            return not (player_max.x > b[0] and player_min.x < b[3] and
+                        player_max.y > b[1] and player_min.y < b[4] and
+                        player_max.z > b[2] and player_min.z < b[5])
 
         # Standard AABB check for solid world brushes.
         # PERF: cached float32 bounds (bit-identical to glm.vec3(pos) +/- size*0.5)
