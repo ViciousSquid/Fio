@@ -1233,16 +1233,20 @@ def fit_brush_to_bounds(brush, new_lo, new_hi):
 def rotate_brush(brush, angle_deg, axis, pivot=None):
     """Rotate ``brush`` about ``pivot`` (defaults to its centre); makes it angled."""
     box_to_geometry(brush)
+    pos = brush.get('pos', [0, 0, 0])
     if pivot is None:
-        pivot = brush.get('pos', [0, 0, 0])
-    # An editor rotation is a shape edit (Stage 2): the world planes turn
-    # about the pivot and are re-localised on the new bounds.
+        pivot = pos
+    # An editor rotation is a shape edit (Stage 2): the planes turn about the
+    # pivot -- in the brush's own frame, where it is pivot - pos -- and are
+    # re-centred on the new bounds if the turn moved them (about the brush's
+    # own centre it does not, so this is one solve, as before Stage 2d).
+    local_pivot = [float(pivot[i]) - float(pos[i]) for i in range(3)]
     new_planes = rotate_planes(
-        [dict(p) for p in get_convex(brush).planes], angle_deg, axis, pivot)
+        [dict(p) for p in local_convex(brush).planes], angle_deg, axis, local_pivot)
     trial = ConvexGeometry(new_planes)
     if not trial.is_valid:
         return False
-    return _commit_world_planes(brush, new_planes)
+    return _commit_local_planes(brush, new_planes, trial=trial)
 
 
 def build_collision_mesh(brush):
@@ -1660,7 +1664,10 @@ def _commit_local_planes(brush, planes, trial=None):
     if float(np.max(trial.extents())) > MAX_BRUSH_EXTENT:
         return False
     centre = trial.center()
-    recentred = float(np.max(np.abs(centre))) > 0.0
+    # Re-centred only when the edit really moved the bounds: a turn about the
+    # centre leaves ~1e-14 of rounding, which is no reason to re-solve (or to
+    # nudge pos on every step of a rotation drag).
+    recentred = float(np.max(np.abs(centre))) > 1e-9 * max(1.0, float(np.max(trial.extents())))
     if recentred:
         planes = translate_planes(planes, -centre)
         pos = brush.get('pos', [0, 0, 0])
