@@ -13,8 +13,7 @@ import os
 import numpy as np
 
 from .brush_geometry import build_collision_mesh, brush_has_geometry
-from operator import is_
-
+from . import brush_placement as _placement
 from .brush_placement import runtime_of, turned_half, world_box, world_box_at
 from .constants import is_water_brush
 
@@ -56,9 +55,10 @@ class CollisionRows:
     Only geometry lives here. Whether a brush blocks (``hidden``, water, fog,
     trigger) is asked of the brush itself, live, for the few rows a query
     returns: a streaming layer or an I/O input can change those at any time.
-    Movers and doors are the only brushes whose ``pos`` changes during play,
-    and their rows are re-read on every query (:meth:`refresh_movers`), which
-    is what the walks do.
+    Movers and doors are the only brushes that move during play (by their
+    runtime transform, Stage 2b), and their rows are re-derived when a
+    placement stamp says something may have moved (:meth:`refresh_movers`);
+    a query that changes nothing pays two integer reads.
 
     Rebuilt when the cache list is replaced or the editor's world epoch moves;
     see :meth:`LogicCollision.collision_rows`.
@@ -82,9 +82,8 @@ class CollisionRows:
                   if b.get('is_mover') or b.get('is_door')]
         self.mover_rows = np.asarray(movers, dtype=np.intp)
         self.movers = [self.brushes[row] for row in movers]
-        #: What each mover's row was last derived from -- its runtime
-        #: transforms, cached shapes, and pos/size -- or None until the first
-        #: refresh (see refresh_movers).
+        #: The placement stamps the mover rows were last derived at (None
+        #: until the first refresh): see refresh_movers.
         self._mover_seen = None
         #: The movers whose box is not their pos/size (an angled brush, a
         #: mesh proxy): resolved one by one; the rest in bulk.
@@ -123,38 +122,29 @@ class CollisionRows:
         self.hi[:, rows] = pos + half
 
     def refresh_movers(self):
-        """Re-derive the rows of the movers and doors whose bounds' inputs
-        changed since the last call (every query calls this; most find
-        nothing to do).
+        """Re-derive the movers' and doors' rows if anything they are derived
+        from may have changed since the last call.
 
-        A row's inputs are its runtime transform (sources replace the tuple
-        whenever a brush moves, so ``is`` decides), its cached shape
-        (dropped by every geometry edit) and its ``pos``/``size`` -- compared
-        by value, in bulk, so a write the editor did not journal (a console
-        ``setprop``, a plugin) is followed here as it is by every other
-        reader.
+        Every query calls this, so the common answer -- nothing moved -- is
+        two integer reads: the resolver's placement stamps
+        (``brush_placement.runtime_generation``, moved on by every runtime
+        source after every change, and ``authored_generation``, by every
+        edit the editor journals). Only when one has moved are the movers
+        looked at, once, in bulk.
         """
         movers = self.movers
         if not movers:
             return
-        now = list(map(runtime_of, movers))
-        shapes = [brush.get('_geo_cache') for brush in movers]
-        pos = np.array([brush['pos'] for brush in movers], dtype=np.float64)
-        size = np.array([brush['size'] for brush in movers], dtype=np.float64)
+        runtime_stamp = _placement.runtime_generation
+        authored_stamp = _placement.authored_generation
         seen = self._mover_seen
-        if seen is None:
-            changed = np.arange(len(movers))
-        else:
-            seen_now, seen_shapes, seen_pos, seen_size = seen
-            placed = ((pos != seen_pos).any(axis=1) | (size != seen_size).any(axis=1))
-            if (not placed.any() and all(map(is_, now, seen_now))
-                    and all(map(is_, shapes, seen_shapes))):
-                return
-        # Something moved: every row again, from the arrays just read --
-        # a box mover's derived box (brush_placement.world_box_at) is its
-        # pos (or its runtime centre) and size / 2, turned while it spins.
-        centre = pos.copy()
-        half = size * 0.5
+        if seen is not None and seen[0] == runtime_stamp and seen[1] == authored_stamp:
+            return
+        # A box mover's derived box (brush_placement.world_box_at) is its pos
+        # (or its runtime centre) and size / 2, turned while it spins.
+        now = list(map(runtime_of, movers))
+        centre = np.array([brush['pos'] for brush in movers], dtype=np.float64)
+        half = np.array([brush['size'] for brush in movers], dtype=np.float64) * 0.5
         carried = [(i, rt) for i, rt in enumerate(now) if rt is not None]
         if carried:
             centre[[i for i, _rt in carried]] = [rt[:3] for _i, rt in carried]
@@ -167,7 +157,9 @@ class CollisionRows:
             centre[i] = box[:3]
             half[i] = box[3:]
         self._store(self.mover_rows, centre.T, half.T)
-        self._mover_seen = (now, shapes, pos, size)
+        # The stamps read before the movers were: a change that lands while
+        # this ran moves a stamp past them, and the next query looks again.
+        self._mover_seen = (runtime_stamp, authored_stamp)
 
     def ray_hits(self, origin, direction, reach):
         """Rows whose box the ray meets within *reach*, nearest first.

@@ -388,7 +388,7 @@ class _Group:
         self._store(np.array([row]), np.array([new]), publish=False)
         table = self.table
         if table is not None:
-            table._publish_row(self, row, table.runtime_entries, new, rest)
+            table._publish_row_now(self, row, new, rest)
 
     def _store(self, rows, values, publish=True):
         """Where *rows* are now, kept for both groups a brush is in, and
@@ -902,6 +902,14 @@ class MoverTable:
     PUBLISH_ROWS_BELOW = 4
 
     def _publish(self, group, rows, entries=None, here=None):
+        """:meth:`_publish_into`, then the resolver's stamp
+        (:func:`engine.brush_placement.note_runtime_change`), so a reader
+        that caches derived bounds knows to look again."""
+        self._publish_into(group, rows, entries, here)
+        if entries is None:
+            brush_placement.note_runtime_change()
+
+    def _publish_into(self, group, rows, entries=None, here=None):
         """Refresh the runtime transform of *group*'s *rows*, in
         :attr:`runtime_entries` or the dict *entries* being built. *here* is
         the rows' positions when the caller holds them.
@@ -979,6 +987,11 @@ class MoverTable:
             ax, ay, az = 0.0, 1.0, 0.0
         runtime[id(brush)] = (brush, (cx, cy, cz, ax, ay, az, angle))
 
+    def _publish_row_now(self, group, row, centre=None, rest=None):
+        """:meth:`_publish_row` into :attr:`runtime_entries`, stamped."""
+        self._publish_row(group, row, self.runtime_entries, centre, rest)
+        brush_placement.note_runtime_change()
+
     def _adopt(self, group):
         """*group* was rebuilt: apply any pending restores to its rows and
         re-derive the runtime transforms from both groups' rows."""
@@ -995,6 +1008,7 @@ class MoverTable:
             if each.brushes:
                 self._publish(each, list(range(len(each.brushes))), entries)
         self.runtime_entries = entries
+        brush_placement.note_runtime_change()
 
     def position_of(self, brush):
         """Where *brush* is now (its centre): its row's position, or its
@@ -1036,6 +1050,7 @@ class MoverTable:
         """Play stopped: no row is displaced or turned any more."""
         self.runtime_entries = {}
         self._pending = {}
+        brush_placement.note_runtime_change()
 
     def sync(self):
         """Re-read the brush parameters of every row the journal names."""

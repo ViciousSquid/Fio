@@ -227,15 +227,24 @@ def test_a_brush_hidden_after_the_rows_were_built_does_not_block(logic):
 
 
 def test_a_mover_is_hit_where_it_is_now(logic):
+    """Where a mover is now is its runtime transform (Stage 2b: a runtime
+    source owns it; pos is its authored placement), and an editor edit of
+    that placement is journaled: the rows follow both."""
+    from tests.helpers import runtime
     floor = [box_brush("f%d" % i, (5000 + i * 100, 0, 0), (10, 10, 10)) for i in range(3)]
     door = box_brush("door", (0, 0, 100), (64, 64, 16), is_mover=True)
     thread = logic([*floor, door])
     origin, direction = glm.vec3(0, 0, 0), glm.vec3(0, 0, 1)
     assert _trace(thread, origin, direction, 1000.0)[0] == 92.0
-    door['pos'] = [0.0, 0.0, 200.0]    # the mover pass assigns a new list
+    runtime.drive(door, centre=(0.0, 0.0, 200.0))
     assert _trace(thread, origin, direction, 1000.0)[0] == 192.0
-    door['pos'] = [0.0, 500.0, 200.0]
+    runtime.drive(door, centre=(0.0, 500.0, 200.0))
     assert _trace(thread, origin, direction, 1000.0) == (INF, None)
+    runtime.release(door)
+    assert _trace(thread, origin, direction, 1000.0)[0] == 92.0
+    door['pos'] = [0.0, 0.0, 300.0]           # an editor edit, journaled
+    thread.editor_state.mark_world_changed([door])
+    assert _trace(thread, origin, direction, 1000.0)[0] == 292.0
 
 
 def test_the_rows_follow_the_cache_and_the_world_epoch(logic):

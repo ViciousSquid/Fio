@@ -53,6 +53,7 @@ every geometry invalidation) and only re-solves on a miss, through
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
@@ -171,6 +172,37 @@ def runtime_spin(brush):
 _sources = ()
 
 
+#: Stamps for readers that cache what they derive from placements (the
+#: collision rows, the physics grid's rows): compared with what they last
+#: saw, two integer reads tell them nothing has moved -- an O(1) answer for
+#: a query that changes nothing, instead of a look at every mover.
+#:
+#: ``runtime_generation`` moves on after every change a runtime source makes
+#: (:func:`note_runtime_change`); ``authored_generation`` after every
+#: authored edit the editor journals (``EditorState.mark_world_changed``,
+#: which the console's ``setprop`` goes through too; :func:`note_authored_change`).
+#: Each is set from one counter, so two writers on different threads never
+#: produce the same value twice: a reader compares for inequality, and an
+#: older value written late only makes it look again. A writer changes what
+#: it owns first and stamps after, so a reader that sees a new stamp sees the
+#: change.
+runtime_generation = 0
+authored_generation = 0
+_stamps = itertools.count(1)
+
+
+def note_runtime_change():
+    """A runtime source changed its ``runtime_entries``: stamp it."""
+    global runtime_generation
+    runtime_generation = next(_stamps)
+
+
+def note_authored_change():
+    """An authored placement or shape may have changed: stamp it."""
+    global authored_generation
+    authored_generation = next(_stamps)
+
+
 def register_runtime(source):
     """Add *source* to the sources the resolver consults. Held weakly: a
     source that is garbage collected is dropped.
@@ -180,7 +212,8 @@ def register_runtime(source):
     never answers for another, and its runtime transform. The resolver reads
     it directly (the question is asked in every broad phase), so a source
     changes it only by single dict operations or by replacing the whole
-    dict, either of which a reader on another thread sees whole.
+    dict, either of which a reader on another thread sees whole, and calls
+    :func:`note_runtime_change` after every change.
 
     ``(cx, cy, cz)`` is where the shape's centre is *now*, absolute rather
     than a displacement: the mover table hands over its position column as
@@ -239,12 +272,14 @@ class RuntimeOverrides:
         self.runtime_entries[id(brush)] = (brush, (
             float(centre[0]), float(centre[1]), float(centre[2]),
             float(axis[0]), float(axis[1]), float(axis[2]), float(angle)))
+        note_runtime_change()
 
     def clear(self, brush=None):
         if brush is None:
             self.runtime_entries.clear()
         else:
             self.runtime_entries.pop(id(brush), None)
+        note_runtime_change()
 
     def runtime_of(self, brush):
         entry = self.runtime_entries.get(id(brush))

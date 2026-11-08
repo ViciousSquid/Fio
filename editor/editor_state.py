@@ -38,7 +38,7 @@ from engine.brush_faces import (
 from engine.brush_placement import (
     PLAY_STATE_KEYS as _PLAY_STATE_KEYS, RUNTIME_CACHE_KEYS as _PLACEMENT_CACHE_KEYS,
     MAP_VERSION, drop_play_state as _drop_play_state, localise_legacy as _localise_legacy,
-    normalise_loaded as _normalise_placement)
+    normalise_loaded as _normalise_placement, note_authored_change as _note_authored_change)
 
 # Keys written to brush dicts by the renderer/geometry layer at runtime.
 # They hold GLM/NumPy objects (not JSON-serialisable) and must be stripped
@@ -254,6 +254,9 @@ class EditorState:
         Deliberately coarse.  It says *something* changed, not what; a consumer
         that wants to be finer-grained tracks its own per-row dirty set on top.
         """
+        # Readers caching derived bounds (collision rows, the physics grid's
+        # rows) check this stamp instead of looking at every mover per query.
+        _note_authored_change()
         with self._render_dirty_lock:
             self.world_epoch += 1
             if objects is None or not objects:

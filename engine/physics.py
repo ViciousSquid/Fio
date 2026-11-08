@@ -1,8 +1,11 @@
 import math
+import threading
+
 import glm
 import numpy as np
 
 from .change_journal import touch
+from . import brush_placement as _placement
 from .brush_placement import world_bounds, world_box
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
@@ -54,12 +57,12 @@ class _CellRows:
     ``lo``/``hi`` float64 boxes computed exactly as :meth:`SpatialGrid.raycast_down`
     and :meth:`SpatialGrid.overlaps_wall` compute them: each brush's derived
     bounds (:func:`engine.brush_placement.world_bounds`).
-    Movers and doors keep their row but are re-read live on every query,
-    which is what the per-brush queries do.
+    Movers and doors keep their row, re-derived when a placement stamp says
+    something may have moved (:meth:`refresh_movers`).
     """
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
-                 '_unpacked_cells', '_mover_rows')
+                 '_unpacked_cells', '_mover_rows', '_seen', '_lock')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -105,6 +108,10 @@ class _CellRows:
                 self.movers.append((row, brush))
         self._mover_rows = np.asarray([row for row, _brush in self.movers],
                                       dtype=np.intp)
+        #: The placement stamps the mover rows were last derived at; the
+        #: constructor just derived them, but at no recorded stamp.
+        self._seen = None
+        self._lock = threading.Lock()
 
     def _resolve(self, row, brush):
         if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
@@ -121,14 +128,29 @@ class _CellRows:
             self.hi[row, axis] = pos[axis] + half
 
     def refresh_movers(self):
+        """Re-derive the movers' and doors' rows if anything they are derived
+        from may have changed (see :meth:`CollisionRows.refresh_movers`): two
+        integer reads when nothing has. Both the logic thread and the AI
+        thread query these rows, so the work is done under a lock and the
+        stamps it was done at are published last, as one tuple."""
         movers = self.movers
-        if movers:
+        if not movers:
+            return
+        seen = self._seen
+        if (seen is not None and seen[0] == _placement.runtime_generation
+                and seen[1] == _placement.authored_generation):
+            return
+        with self._lock:
+            stamps = (_placement.runtime_generation, _placement.authored_generation)
+            if self._seen == stamps:
+                return
             # One gather of their derived bounds, one store per corner.
             bounds = np.array([world_bounds(brush) for _row, brush in movers],
                               dtype=np.float64).reshape(len(movers), 6)
             rows = self._mover_rows
             self.lo[rows] = bounds[:, 0:3]
             self.hi[rows] = bounds[:, 3:6]
+            self._seen = stamps
 
     def pairs(self, cx, cz):
         """``(query, row)`` for every brush filed in each query's cell."""

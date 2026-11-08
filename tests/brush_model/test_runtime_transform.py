@@ -469,7 +469,15 @@ def test_publication_is_the_same_row_by_row_or_in_bulk(crowd):
                 assert table.runtime_entries[key] == entry
 
 
+def _same_rows(rows, fresh, names=('lo32', 'hi32', 'lo', 'hi')):
+    for name in names:
+        assert np.array_equal(getattr(rows, name), getattr(fresh, name)), name
+
+
 def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeypatch):
+    """An unchanged query does no work per mover -- not one runtime lookup
+    -- because the resolver's placement stamps say nothing moved; a tick of
+    movement and a journaled editor edit are followed, bit for bit."""
     from engine import logic_collision
     from engine.logic_collision import CollisionRows
     brushes = crowd.editor_state.brushes
@@ -478,32 +486,102 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
     for ticks in (1, 13, 40):
         _tick(crowd, ticks)
         rows.refresh_movers()
-        fresh = CollisionRows(brushes, 1)
-        for name in ('lo32', 'hi32', 'lo', 'hi'):
-            assert np.array_equal(getattr(rows, name), getattr(fresh, name)), name
-    calls = []
-    real = logic_collision.world_box_at
-    monkeypatch.setattr(logic_collision, 'world_box_at',
-                        lambda *a: calls.append(a[0]['name']) or real(*a))
+        _same_rows(rows, CollisionRows(brushes, 1))
+    looked = {'runtime': 0, 'box': 0}
+    real_runtime, real_box = logic_collision.runtime_of, logic_collision.world_box_at
+
+    def runtime_of(brush):
+        looked['runtime'] += 1
+        return real_runtime(brush)
+
+    def world_box_at(*a):
+        looked['box'] += 1
+        return real_box(*a)
+
+    monkeypatch.setattr(logic_collision, 'runtime_of', runtime_of)
+    monkeypatch.setattr(logic_collision, 'world_box_at', world_box_at)
     before = rows.lo.copy()
-    rows.refresh_movers()                       # nothing moved since
-    assert calls == [] and np.array_equal(rows.lo, before)
+    for _ in range(100):
+        rows.refresh_movers()                   # nothing moved since
+    assert looked == {'runtime': 0, 'box': 0}
+    assert np.array_equal(rows.lo, before)
     _tick(crowd, 1)
-    rows.refresh_movers()                       # only the rows that moved
-    moving = sum(1 for b in rows.movers if bp.runtime_of(b) is not None)
-    assert 0 < len(calls) <= moving
-    # A write nothing journals (a console setprop, a plugin) is followed, in
-    # place or as a new list, as every other reader follows it.
+    rows.refresh_movers()                       # one look, then quiet again
+    assert looked['runtime'] == len(rows.movers)
+    rows.refresh_movers()
+    assert looked['runtime'] == len(rows.movers)
+    _same_rows(rows, CollisionRows(brushes, 1))
+    # An editor edit of a placement is journaled (mark_world_changed, as the
+    # console's setprop does), and followed, in place or as a new list.
     still = next(b for b in rows.movers if bp.runtime_of(b) is None)
     still['pos'][1] += 64.0
+    crowd.editor_state.mark_world_changed([still])
     rows.refresh_movers()
-    fresh = CollisionRows(brushes, 1)
-    assert np.array_equal(rows.lo, fresh.lo) and np.array_equal(rows.lo32, fresh.lo32)
-    still['size'] = [s * 2.0 for s in still['size']]
+    _same_rows(rows, CollisionRows(brushes, 1))
+    still['size'] = [v * 2.0 for v in still['size']]
+    crowd.editor_state.mark_world_changed([still])
     rows.refresh_movers()
-    fresh = CollisionRows(brushes, 1)
-    for name in ('lo32', 'hi32', 'lo', 'hi'):
-        assert np.array_equal(getattr(rows, name), getattr(fresh, name)), name
+    _same_rows(rows, CollisionRows(brushes, 1))
+
+
+def test_the_physics_rows_skip_an_unchanged_query_too(crowd, monkeypatch):
+    """The physics grid's rows (queried by the logic and the AI threads)
+    follow the same stamps: no work per mover while nothing moves."""
+    from engine import physics
+    brushes = crowd.editor_state.brushes
+    grid = SpatialGrid()
+    grid.populate(brushes)
+    rows = grid._cell_rows
+    rows.refresh_movers()
+
+    def fresh_rows():
+        other = SpatialGrid()
+        other.populate(brushes)
+        other._cell_rows.refresh_movers()
+        return other._cell_rows
+
+    calls = {'n': 0}
+    real = physics.world_bounds
+
+    def world_bounds(brush):
+        calls['n'] += 1
+        return real(brush)
+
+    monkeypatch.setattr(physics, 'world_bounds', world_bounds)
+    for _ in range(100):
+        rows.refresh_movers()
+    assert calls['n'] == 0
+    _tick(crowd, 7)
+    rows.refresh_movers()
+    assert calls['n'] == len(rows.movers)
+    monkeypatch.setattr(physics, 'world_bounds', real)
+    _same_rows(rows, fresh_rows(), ('lo', 'hi'))
+    still = next(b for _row, b in rows.movers if bp.runtime_of(b) is None)
+    still['pos'] = [still['pos'][0], still['pos'][1] + 32.0, still['pos'][2]]
+    crowd.editor_state.mark_world_changed([still])
+    rows.refresh_movers()
+    _same_rows(rows, fresh_rows(), ('lo', 'hi'))
+
+
+def test_every_runtime_source_stamps_its_changes(crowd):
+    """The O(1) skip is only sound if every change to a runtime transform
+    moves the stamp: the mover table's ticks, saved-game restores and stop,
+    and every RuntimeOverrides set and clear (the editor preview, tests)."""
+    table = crowd.mover_runtime._movers()
+    lift = next(b for b in crowd.editor_state.brushes if b['name'] == 'm0')
+    stamp = lambda: bp.runtime_generation   # noqa: E731
+    for change in (lambda: _tick(crowd, 1),
+                   lambda: table.restore_placement(lift, (5.0, 60.0, 0.0), 10.0),
+                   lambda: table.move_to(lift, (5.0, 70.0, 0.0)),
+                   lambda: bp.PREVIEW.set(lift, offset=(0.0, 8.0, 0.0)),
+                   lambda: bp.PREVIEW.clear(lift),
+                   lambda: table.reset()):
+        before = stamp()
+        change()
+        assert stamp() != before
+    before = stamp()
+    bp.world_bounds(lift)                       # reading moves nothing
+    assert stamp() == before
 
 
 def test_stopping_and_rebuilding_rows_swaps_the_transforms_whole(crowd):
