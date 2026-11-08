@@ -250,6 +250,89 @@ def runtime_of(brush):
     return None
 
 
+def runtime_sources():
+    """The live runtime sources, in the order :func:`runtime_of` asks them."""
+    return [source for source in (ref() for ref in _sources) if source is not None]
+
+
+class BulkBoxes:
+    """:func:`world_box` for a fixed list of brushes -- the movers and doors
+    a collision structure keeps rows for -- in bulk, from the tables that
+    already hold the answers.
+
+    Their authored boxes are kept, and re-derived only when
+    :data:`authored_generation` moves. Each query asks the runtime sources
+    in :func:`runtime_of`'s order: a source with ``fill_boxes`` (the mover
+    table) gathers its live rows by index from its own columns -- position
+    and turned half-extents, kept by its publication with this module's own
+    rules -- and any other source (the editor preview, a test) claims the
+    few brushes in its ``runtime_entries``. A brush no source claims is
+    where it was authored. Same values as :func:`world_box`, to the bit.
+    """
+
+    __slots__ = ('brushes', 'index', '_home', '_authored', '__weakref__')
+
+    def __init__(self, brushes):
+        self.brushes = brushes
+        self.index = {id(brush): i for i, brush in enumerate(brushes)}
+        self._home = None
+        self._authored = None
+
+    def homes(self):
+        """``(centre (n, 3), half (n, 3))`` of the authored boxes."""
+        stamp = authored_generation
+        if self._home is None or self._authored != stamp:
+            brushes = self.brushes
+            count = len(brushes)
+            centre = np.array([b.get('pos') or DEFAULT_POS for b in brushes],
+                              dtype=np.float64).reshape(count, 3)
+            half = np.array([b.get('size') or DEFAULT_SIZE for b in brushes],
+                            dtype=np.float64).reshape(count, 3) * 0.5
+            for i, brush in enumerate(brushes):
+                if 'geometry' in brush or '_mesh_bounds' in brush:
+                    box = authored_box(brush)
+                    centre[i] = box[:3]
+                    half[i] = box[3:]
+            self._home = (centre, half)
+            self._authored = stamp
+        return self._home
+
+    def claim(self, i, entry, centre, half, claimed):
+        """Brush *i* answered by a runtime *entry* (``(brush, transform)``
+        or None): its centre and turned half-extents, as world_box_at."""
+        if entry is None:
+            return
+        brush, runtime = entry
+        if brush is not self.brushes[i] or not (brush.get('is_mover') or brush.get('is_door')):
+            return
+        claimed[i] = True
+        centre[i] = runtime[:3]
+        if runtime[6]:
+            hx, hy, hz = self.homes()[1][i].tolist()
+            half[i] = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
+
+    def boxes(self):
+        """``(centre (n, 3), half (n, 3))``: each brush's world box now."""
+        home_centre, home_half = self.homes()
+        centre = home_centre.copy()
+        half = home_half.copy()
+        claimed = np.zeros(len(self.brushes), dtype=bool)
+        index = self.index
+        for source in runtime_sources():
+            fill = getattr(source, 'fill_boxes', None)
+            if fill is not None:
+                fill(self, centre, half, claimed)
+                continue
+            entries = source.runtime_entries
+            if not entries:
+                continue
+            for key, entry in list(entries.items()):
+                i = index.get(key)
+                if i is not None and not claimed[i]:
+                    self.claim(i, entry, centre, half, claimed)
+        return centre, half
+
+
 class RuntimeOverrides:
     """A runtime source holding explicit transforms by brush.
 
@@ -333,7 +416,12 @@ def _abs_rotation(axis, angle_degrees):
     if turn is None:
         # The same rotation a collision frame uses (one trig per angle).
         r = _rotation(axis, angle_degrees)
-        turn = () if r is None else tuple(abs(v) for row in r for v in row)
+        if r is None:
+            turn = ()
+        else:
+            (r00, r01, r02), (r10, r11, r12), (r20, r21, r22) = r
+            turn = (abs(r00), abs(r01), abs(r02), abs(r10), abs(r11), abs(r12),
+                    abs(r20), abs(r21), abs(r22))
         if len(_TURNS) >= _TURNS_LIMIT:
             _TURNS.clear()
         _TURNS[key] = turn

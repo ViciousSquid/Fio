@@ -209,6 +209,14 @@ class _Group:
         self.row_of_obj = {id(brush): row for row, brush in enumerate(self.brushes)}
         self.pos = np.zeros((n, 3))
         self.original = np.zeros((n, 3))
+        #: The authored box's half-extents (brush_placement.authored_box),
+        #: and the half-extents of its AABB as the row is turned now: what
+        #: brush_placement.world_box answers, kept here so readers gather it
+        #: by row (MoverTable.fill_boxes) instead of asking per brush.
+        self.half = np.zeros((n, 3))
+        self.turned = np.zeros((n, 3))
+        #: Whether the row has a runtime entry (displaced or turned).
+        self.live = np.zeros(n, dtype=bool)
         self.has_state = np.zeros(n, dtype=bool)
         self.progress = np.zeros(n)
         self.direction = np.zeros((n, 3))
@@ -274,7 +282,10 @@ class _Group:
         rebases the row, keeping the displacement it has travelled; an
         unchanged one leaves its position exactly as it is."""
         brush = self.brushes[row]
-        authored = brush_placement.authored_box(brush)[:3]
+        box = brush_placement.authored_box(brush)
+        authored = box[:3]
+        self.half[row] = box[3:]
+        self.turned[row] = box[3:]
         if tuple(self.original[row].tolist()) != authored:
             travelled = self.pos[row] - self.original[row]
             self.original[row] = authored
@@ -511,6 +522,19 @@ class LinearMovers(_Group):
         # The spin angle is runtime state, kept in the column (a rebuild
         # starts it at zero, a saved game restores it); the axis is authored.
         self.rot_axis[row] = brush.get('rot_axis') or (0.0, 1.0, 0.0)
+        self._turn(row)
+
+    def _turn(self, row):
+        """The row's turned half-extents from its spin: the resolver's own
+        scalar rule (brush_placement.turned_half, memoised per angle), so
+        what a reader gathers here is world_box to the bit."""
+        angle = float(self.rot_angle[row])
+        if angle:
+            hx, hy, hz = self.half[row].tolist()
+            self.turned[row] = brush_placement.turned_half(
+                hx, hy, hz, self.rot_axis[row].tolist(), angle)
+        else:
+            self.turned[row] = self.half[row]
 
     def _reset_fields(self, row):
         self.progress[row] = 0.0
@@ -880,6 +904,9 @@ class MoverTable:
         #: column as it is, and its spin -- refreshed for the rows that move
         #: (:meth:`_publish`). What the resolver reads.
         self.runtime_entries = {}
+        #: id(BulkBoxes) -> (weak ref to that query, row versions, row maps,
+        #: twins): see fill_boxes.
+        self._box_maps = {}
         #: id(brush) -> (brush, position, angle): saved-game placements
         #: restored before the brush's row exists (:meth:`restore_placement`).
         self._pending = {}
@@ -949,6 +976,20 @@ class MoverTable:
             live |= turned
             ax, ay, az = np.where(turned[:, None], movers.rot_axis[spin_at], _UP).T.tolist()
             values = zip(x, y, z, ax, ay, az, angle.tolist())
+        group.live[pick] = live
+        if group is movers:
+            if turned is None or not turned.any():
+                group.turned[pick] = group.half[pick]
+            else:
+                group.turned[pick[~turned]] = group.half[pick[~turned]]
+                # One trig per spinner per move, by the resolver's own scalar
+                # rule (memoised: every reader of this angle then hits it).
+                spun = pick[turned]
+                turn = brush_placement.turned_half
+                group.turned[spun] = [
+                    turn(h[0], h[1], h[2], a, angle) for h, a, angle in zip(
+                        group.half[spun].tolist(), group.rot_axis[spun].tolist(),
+                        group.rot_angle[spun].tolist())]
         brushes = group.brushes
         chosen = [brushes[row] for row in pick.tolist()]
         if live.all():
@@ -977,14 +1018,18 @@ class MoverTable:
         else:
             spin_row = -1
         angle = float(movers.rot_angle[spin_row]) if spin_row >= 0 else 0.0
+        if group is movers:
+            group._turn(row)
         if angle:
             ax, ay, az = movers.rot_axis[spin_row].tolist()
         else:
             rx, ry, rz = group.original[row].tolist() if rest is None else rest
             if cx == rx and cy == ry and cz == rz:
+                group.live[row] = False
                 runtime.pop(id(brush), None)
                 return
             ax, ay, az = 0.0, 1.0, 0.0
+        group.live[row] = True
         runtime[id(brush)] = (brush, (cx, cy, cz, ax, ay, az, angle))
 
     def _publish_row_now(self, group, row, centre=None, rest=None):
@@ -1009,6 +1054,49 @@ class MoverTable:
                 self._publish(each, list(range(len(each.brushes))), entries)
         self.runtime_entries = entries
         brush_placement.note_runtime_change()
+
+    def fill_boxes(self, bulk, centre, half, claimed):
+        """Fill a :class:`engine.brush_placement.BulkBoxes` query from the
+        columns: for each of its brushes this table holds a live row for
+        (one with a runtime entry) and no earlier source has claimed, its
+        world box -- the row's position and turned half-extents, gathered by
+        index. A brush in both groups (rare) is answered from its runtime
+        entry instead. The row map is rebuilt only when the rows are."""
+        key = (self.movers.version, self.doors.version, getattr(self, '_linked', None))
+        entry = self._box_maps.get(id(bulk))
+        if entry is None or entry[0]() is not bulk or entry[1] != key:
+            maps, twins = [], []
+            for group in (self.movers, self.doors):
+                at, rows = [], []
+                for i, brush in enumerate(bulk.brushes):
+                    row = group.row_of_obj.get(id(brush))
+                    if row is None or group.brushes[row] is not brush:
+                        continue
+                    if group.twin_row[row] >= 0:
+                        if group is self.movers:
+                            twins.append(i)
+                        continue
+                    at.append(i)
+                    rows.append(row)
+                maps.append((group, np.asarray(at, dtype=np.intp),
+                             np.asarray(rows, dtype=np.intp)))
+            if len(self._box_maps) > 8:
+                self._box_maps.clear()
+            # The query is held weakly: the table must not keep a collision
+            # structure's brushes alive (after Stop, or a rebuild).
+            entry = self._box_maps[id(bulk)] = (weakref.ref(bulk), key, maps, twins)
+        for group, at, rows in entry[2]:
+            if not len(at):
+                continue
+            take = group.live[rows] & ~claimed[at]
+            if take.any():
+                at_t, rows_t = at[take], rows[take]
+                centre[at_t] = group.pos[rows_t]
+                half[at_t] = group.turned[rows_t]
+                claimed[at_t] = True
+        for i in entry[3]:
+            if not claimed[i]:
+                bulk.claim(i, self.runtime_entries.get(id(bulk.brushes[i])), centre, half, claimed)
 
     def position_of(self, brush):
         """Where *brush* is now (its centre): its row's position, or its
@@ -1050,6 +1138,9 @@ class MoverTable:
         """Play stopped: no row is displaced or turned any more."""
         self.runtime_entries = {}
         self._pending = {}
+        self.movers.live[:] = False
+        self.doors.live[:] = False
+        self._box_maps = {}
         brush_placement.note_runtime_change()
 
     def sync(self):
@@ -1058,18 +1149,26 @@ class MoverTable:
         groups = (self.movers, self.doors)
         if changes is OVERFLOW:
             for group in groups:
-                for row in range(len(group.index)):
+                rows = list(range(len(group.index)))
+                for row in rows:
                     group.resync(row)
                     group.dirty.add(row)
+                # An authored edit can rebase a row (resync): its runtime
+                # transform is republished, not left at the old position.
+                self._publish(group, rows)
             return
         if not changes:
             return
-        for oid in changes:
-            for group in groups:
+        for group in groups:
+            rows = []
+            for oid in changes:
                 row = group.row_of_obj.get(oid)
                 if row is not None:
                     group.resync(row)
                     group.dirty.add(row)
+                    rows.append(row)
+            if rows:
+                self._publish(group, rows)
 
     def tick_movers(self, logic, delta):
         self._link(logic)

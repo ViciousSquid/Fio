@@ -475,10 +475,9 @@ def _same_rows(rows, fresh, names=('lo32', 'hi32', 'lo', 'hi')):
 
 
 def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeypatch):
-    """An unchanged query does no work per mover -- not one runtime lookup
-    -- because the resolver's placement stamps say nothing moved; a tick of
-    movement and a journaled editor edit are followed, bit for bit."""
-    from engine import logic_collision
+    """An unchanged query does no work per mover -- the rows are not even
+    gathered -- because the resolver's placement stamps say nothing moved; a
+    tick of movement and a journaled editor edit are followed, bit for bit."""
     from engine.logic_collision import CollisionRows
     brushes = crowd.editor_state.brushes
     rows = CollisionRows(brushes, 1)
@@ -487,29 +486,23 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
         _tick(crowd, ticks)
         rows.refresh_movers()
         _same_rows(rows, CollisionRows(brushes, 1))
-    looked = {'runtime': 0, 'box': 0}
-    real_runtime, real_box = logic_collision.runtime_of, logic_collision.world_box_at
+    gathers = {'n': 0}
+    real_boxes = bp.BulkBoxes.boxes
 
-    def runtime_of(brush):
-        looked['runtime'] += 1
-        return real_runtime(brush)
+    def boxes(bulk):
+        gathers['n'] += 1
+        return real_boxes(bulk)
 
-    def world_box_at(*a):
-        looked['box'] += 1
-        return real_box(*a)
-
-    monkeypatch.setattr(logic_collision, 'runtime_of', runtime_of)
-    monkeypatch.setattr(logic_collision, 'world_box_at', world_box_at)
+    monkeypatch.setattr(bp.BulkBoxes, 'boxes', boxes)
     before = rows.lo.copy()
     for _ in range(100):
         rows.refresh_movers()                   # nothing moved since
-    assert looked == {'runtime': 0, 'box': 0}
+    assert gathers['n'] == 0
     assert np.array_equal(rows.lo, before)
     _tick(crowd, 1)
-    rows.refresh_movers()                       # one look, then quiet again
-    assert looked['runtime'] == len(rows.movers)
+    rows.refresh_movers()                       # one gather, then quiet again
     rows.refresh_movers()
-    assert looked['runtime'] == len(rows.movers)
+    assert gathers['n'] == 1
     _same_rows(rows, CollisionRows(brushes, 1))
     # An editor edit of a placement is journaled (mark_world_changed, as the
     # console's setprop does), and followed, in place or as a new list.
@@ -527,7 +520,6 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
 def test_the_physics_rows_skip_an_unchanged_query_too(crowd, monkeypatch):
     """The physics grid's rows (queried by the logic and the AI threads)
     follow the same stamps: no work per mover while nothing moves."""
-    from engine import physics
     brushes = crowd.editor_state.brushes
     grid = SpatialGrid()
     grid.populate(brushes)
@@ -540,27 +532,72 @@ def test_the_physics_rows_skip_an_unchanged_query_too(crowd, monkeypatch):
         other._cell_rows.refresh_movers()
         return other._cell_rows
 
-    calls = {'n': 0}
-    real = physics.world_bounds
+    gathers = {'n': 0}
+    real_boxes = bp.BulkBoxes.boxes
 
-    def world_bounds(brush):
-        calls['n'] += 1
-        return real(brush)
+    def boxes(bulk):
+        gathers['n'] += 1
+        return real_boxes(bulk)
 
-    monkeypatch.setattr(physics, 'world_bounds', world_bounds)
+    monkeypatch.setattr(bp.BulkBoxes, 'boxes', boxes)
     for _ in range(100):
         rows.refresh_movers()
-    assert calls['n'] == 0
+    assert gathers['n'] == 0
     _tick(crowd, 7)
     rows.refresh_movers()
-    assert calls['n'] == len(rows.movers)
-    monkeypatch.setattr(physics, 'world_bounds', real)
+    rows.refresh_movers()
+    assert gathers['n'] == 1
     _same_rows(rows, fresh_rows(), ('lo', 'hi'))
     still = next(b for _row, b in rows.movers if bp.runtime_of(b) is None)
     still['pos'] = [still['pos'][0], still['pos'][1] + 32.0, still['pos'][2]]
     crowd.editor_state.mark_world_changed([still])
     rows.refresh_movers()
     _same_rows(rows, fresh_rows(), ('lo', 'hi'))
+
+
+def test_bulk_boxes_are_world_box_from_the_tables_columns(crowd, monkeypatch):
+    """The movers' world boxes gathered from the mover table's columns
+    (brush_placement.BulkBoxes) are world_box brush by brush, to the bit --
+    spinners, a brush that is both mover and door, an angled mover, rows at
+    rest -- including when an earlier runtime source (the editor preview)
+    answers for a brush the table also holds, after a saved-game restore,
+    after an authored edit in play, and after stop. A gather asks no brush
+    for its runtime transform."""
+    table = crowd.mover_runtime._movers()
+    movers = [b for b in crowd.editor_state.brushes
+              if b.get('is_mover') or b.get('is_door')]
+    bulk = bp.BulkBoxes(movers)
+
+    def check(label):
+        centre, half = bulk.boxes()
+        for i, brush in enumerate(movers):
+            want = bp.world_box(brush)
+            got = tuple(centre[i].tolist()) + tuple(half[i].tolist())
+            assert got == want, (label, brush['name'])
+
+    check('at rest')
+    for ticks in (1, 9, 31):
+        _tick(crowd, ticks)
+        check('after %d ticks' % ticks)
+    lookups = {'n': 0}
+    real = bp.runtime_of
+    monkeypatch.setattr(bp, 'runtime_of', lambda b: lookups.__setitem__('n', lookups['n'] + 1) or real(b))
+    bulk.boxes()
+    assert lookups['n'] == 0
+    monkeypatch.setattr(bp, 'runtime_of', real)
+    spinner = next(b for b in movers if b['name'] == 'm3')
+    bp.PREVIEW.set(spinner, offset=(0.0, 500.0, 0.0), spin=((1.0, 0.0, 0.0), 45.0))
+    check('preview over the table')
+    bp.PREVIEW.clear()
+    table.restore_placement(spinner, (600.0, 90.0, 0.0), 77.0)
+    check('restored')
+    door = next(b for b in movers if b['name'] == 'd2')
+    door['pos'] = [door['pos'][0] + 16.0] + list(door['pos'][1:])
+    crowd.editor_state.mark_world_changed([door])
+    _tick(crowd, 1)
+    check('authored edit in play')
+    table.reset()
+    check('stopped')
 
 
 def test_every_runtime_source_stamps_its_changes(crowd):

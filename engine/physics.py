@@ -6,7 +6,7 @@ import numpy as np
 
 from .change_journal import touch
 from . import brush_placement as _placement
-from .brush_placement import world_bounds, world_box
+from .brush_placement import BulkBoxes, world_bounds, world_box
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
                       cells_of_points, tier_of)
@@ -62,7 +62,7 @@ class _CellRows:
     """
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
-                 '_unpacked_cells', '_mover_rows', '_seen', '_lock')
+                 '_unpacked_cells', '_mover_rows', '_seen', '_lock', '_mover_boxes')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -112,6 +112,7 @@ class _CellRows:
         #: constructor just derived them, but at no recorded stamp.
         self._seen = None
         self._lock = threading.Lock()
+        self._mover_boxes = BulkBoxes([brush for _row, brush in self.movers])
 
     def _resolve(self, row, brush):
         if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
@@ -144,12 +145,12 @@ class _CellRows:
             stamps = (_placement.runtime_generation, _placement.authored_generation)
             if self._seen == stamps:
                 return
-            # One gather of their derived bounds, one store per corner.
-            bounds = np.array([world_bounds(brush) for _row, brush in movers],
-                              dtype=np.float64).reshape(len(movers), 6)
+            # Gathered from the tables that hold them (brush_placement.BulkBoxes);
+            # world_bounds' arithmetic: centre -/+ half.
+            centre, half = self._mover_boxes.boxes()
             rows = self._mover_rows
-            self.lo[rows] = bounds[:, 0:3]
-            self.hi[rows] = bounds[:, 3:6]
+            self.lo[rows] = centre - half
+            self.hi[rows] = centre + half
             self._seen = stamps
 
     def pairs(self, cx, cz):
