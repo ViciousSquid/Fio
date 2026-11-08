@@ -859,7 +859,8 @@ class Player:
         half = self._half
         # The capsule's box turned into a shape's frame is no longer axis
         # aligned there: bound it by its circumscribed radius instead.
-        reach = math.sqrt(float(half.x) ** 2 + float(half.y) ** 2 + float(half.z) ** 2)
+        hx, hy, hz = float(half.x), float(half.y), float(half.z)
+        reach = math.sqrt(hx * hx + hy * hy + hz * hz)
 
         # A few relaxation passes: each pushes out of the deepest overlap, then
         # re-tests, so a capsule touching several faces settles cleanly.
@@ -880,10 +881,16 @@ class Player:
                             continue
                     else:
                         px, py, pz = frame.to_shape(self.pos.x, self.pos.y, self.pos.z)
-                        e = reach + radius
-                        if (px < mn[0] - e or px > mx[0] + e or
-                            py < mn[1] - e or py > mx[1] + e or
-                            pz < mn[2] - e or pz > mx[2] + e):
+                        if frame.r is None:
+                            # Only translated (a still angled brush in its
+                            # local frame, a carried one): the box stays
+                            # axis aligned, so the tight test applies.
+                            ex, ey, ez = hx + radius, hy + radius, hz + radius
+                        else:
+                            ex = ey = ez = reach + radius
+                        if (px < mn[0] - ex or px > mx[0] + ex or
+                            py < mn[1] - ey or py > mx[1] + ey or
+                            pz < mn[2] - ez or pz > mx[2] + ez):
                             continue
                 for off in offsets:
                     cx = self.pos.x + off.x
@@ -960,9 +967,12 @@ class Player:
                     return False  # Overlapping mesh bounds → collision
             return True  # No bounds or no overlap → pass through
 
-        # A solid shape -- an angled brush, static or moving, a spinning box:
-        # its derived bounds (brush_placement), where it is now.
-        if collision_shape(brush) is not None:
+        # An angled brush, static or moving: its derived bounds
+        # (brush_placement), where it is now. (Callers pass the brushes the
+        # per-tick gather left on the AABB path, so this is for a caller
+        # that hands one in directly; a spinning box's turned bounds come
+        # from the AABB cache below, without asking for its shape again.)
+        if 'geometry' in brush and collision_shape(brush) is not None:
             b = world_bounds(brush)
             return not (player_max.x > b[0] and player_min.x < b[3] and
                         player_max.y > b[1] and player_min.y < b[4] and

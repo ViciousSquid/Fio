@@ -582,51 +582,28 @@ class Frame:
                 r[6] * x + r[7] * y + r[8] * z)
 
 
-def collision_frame(brush):
-    """The brush's :class:`Frame` -- world space to the coordinates its
-    shape is given in -- or ``None`` when those are world space (a box that
-    nothing moves). A convex brush's shape is local (Stage 2d), so it always
-    has one: a translation by its placement while it is still."""
-    runtime = runtime_of(brush)
-    convex = shape_convex(brush)
-    if runtime is None:
-        if convex is None:
-            return None
-        key = authored_box(brush)[:3]
-    else:
-        key = runtime
-    cached = brush.get('_collision_frame')
-    if cached is not None and (cached[0] is key or cached[0] == key):
-        return cached[1]
-    if runtime is None:
-        frame = Frame(shape_origin(brush), key, None)
-    else:
-        frame = Frame(shape_origin(brush), runtime[:3],
-                      rotation_matrix(runtime[3:6], runtime[6]))
-    brush['_collision_frame'] = (key, frame)
-    return frame
+#: ``(ax, ay, az, angle) -> rotation rows`` (or ``None``), memoised as
+#: :data:`_TURNS` is: a spinner's frame is rebuilt once per angle, however
+#: many queries ask, and its trigonometry runs once.
+_ROTATIONS = {}
+_MISSING = object()
 
 
-def _box_collision_planes(brush):
-    """A box's six face planes ``(nx, ny, nz, d)`` at its authored placement,
-    cached on the brush by its box (a spinning box collides as its turned
-    box through the same path as an angled brush)."""
-    box = authored_box(brush)
-    cached = brush.get('_box_collision')
-    if cached is not None and cached[0] == box:
-        return cached[1]
-    cx, cy, cz, hx, hy, hz = box
-    planes = [(1.0, 0.0, 0.0, cx + hx), (-1.0, 0.0, 0.0, -(cx - hx)),
-              (0.0, 1.0, 0.0, cy + hy), (0.0, -1.0, 0.0, -(cy - hy)),
-              (0.0, 0.0, 1.0, cz + hz), (0.0, 0.0, -1.0, -(cz - hz))]
-    shape = (planes, None, ([cx - hx, cy - hy, cz - hz], [cx + hx, cy + hy, cz + hz]))
-    brush['_box_collision'] = (box, shape)
-    return shape
+def _rotation(axis, angle_degrees):
+    key = (axis[0], axis[1], axis[2], angle_degrees)
+    rotation = _ROTATIONS.get(key, _MISSING)
+    if rotation is _MISSING:
+        rotation = rotation_matrix(axis, angle_degrees)
+        if len(_ROTATIONS) >= _TURNS_LIMIT:
+            _ROTATIONS.clear()
+        _ROTATIONS[key] = rotation
+    return rotation
 
 
-#: Runtime-only keys this module caches on a brush dict (stripped on save,
-#: like the geometry and AABB caches).
-RUNTIME_CACHE_KEYS = ('_collision_frame', '_box_collision')
+#: Runtime-only key this module caches on a brush dict (stripped on save,
+#: like the geometry and AABB caches): its collision shape and frame, with
+#: what they were built from.
+RUNTIME_CACHE_KEYS = ('_collision_entry',)
 
 
 def collision_shape(brush):
@@ -636,28 +613,66 @@ def collision_shape(brush):
 
     * a convex brush, static or moving: its shape's collision data
       (:meth:`ConvexGeometry.collision_shape`), cached on the shape;
-    * a spinning box: its six planes, cached on the brush;
+    * a spinning box: its six planes;
     * an entity model's collision mesh proxy: its world-space mesh;
     * any other box -- static, or carried by a mover without turning --
       ``None``: its derived AABB is its exact shape.
 
     *planes*, *triangles* and *bounds* are in the coordinates the shape is
-    given in (a convex brush's local frame); *frame*
-    (:func:`collision_frame`) carries a world query into them, ``None`` when
-    they are world space.
+    given in (a convex brush's local frame); *frame* (a :class:`Frame`)
+    carries a world query into them, ``None`` when they are world space.
+
+    The answer is cached on the brush against what it is built from -- the
+    runtime transform (a tuple its source replaces whenever the brush
+    moves), the cached shape (dropped by every geometry edit) and the
+    placement -- so the player's several questions per tick build it once,
+    and a brush that does not move never builds it again.
     """
     convex = shape_convex(brush)
-    if convex is not None:
-        planes, triangles, bounds = convex.collision_shape()
-        return planes, triangles, bounds, collision_frame(brush)
     runtime = runtime_of(brush)
-    if runtime is not None and runtime[6] and rotation_matrix(runtime[3:6], runtime[6]):
-        planes, triangles, bounds = _box_collision_planes(brush)
-        return planes, triangles, bounds, collision_frame(brush)
+    entry = brush.get('_collision_entry')
+    if convex is not None:
+        if runtime is None:
+            pos = brush.get('pos') or DEFAULT_POS
+            key = (pos[0], pos[1], pos[2])
+        else:
+            key = runtime
+        if entry is not None and entry[1] is convex and (entry[0] is key or entry[0] == key):
+            return entry[2]
+        planes, triangles, bounds = convex.collision_shape()
+        origin = convex.shape_box[:3]
+        if runtime is None:
+            frame = Frame(origin, authored_box(brush)[:3], None)
+        else:
+            frame = Frame(origin, runtime[:3], _rotation(runtime[3:6], runtime[6]))
+        result = (planes, triangles, bounds, frame)
+        brush['_collision_entry'] = (key, convex, result)
+        return result
+    if runtime is not None and runtime[6]:
+        rotation = _rotation(runtime[3:6], runtime[6])
+        if rotation is not None:
+            box = authored_box(brush)
+            if entry is not None and entry[0] is runtime and entry[1] == box:
+                return entry[2]
+            cx, cy, cz, hx, hy, hz = box
+            planes = [(1.0, 0.0, 0.0, cx + hx), (-1.0, 0.0, 0.0, -(cx - hx)),
+                      (0.0, 1.0, 0.0, cy + hy), (0.0, -1.0, 0.0, -(cy - hy)),
+                      (0.0, 0.0, 1.0, cz + hz), (0.0, 0.0, -1.0, -(cz - hz))]
+            bounds = ([cx - hx, cy - hy, cz - hz], [cx + hx, cy + hy, cz + hz])
+            result = (planes, None, bounds, Frame(box[:3], runtime[:3], rotation))
+            brush['_collision_entry'] = (runtime, box, result)
+            return result
     if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
         return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),
                 brush.get('_mesh_bounds'), None)
     return None
+
+
+def collision_frame(brush):
+    """The :class:`Frame` of the brush's :func:`collision_shape`, or
+    ``None`` (no shape, or one given in world space)."""
+    shape = collision_shape(brush)
+    return None if shape is None else shape[3]
 
 
 # ---------------------------------------------------------------------------
