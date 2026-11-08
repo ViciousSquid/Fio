@@ -495,10 +495,10 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
     # A write nothing journals (a console setprop, a plugin) is followed, in
     # place or as a new list, as every other reader follows it.
     still = next(b for b in rows.movers if bp.runtime_of(b) is None)
-    del calls[:]
     still['pos'][1] += 64.0
     rows.refresh_movers()
-    assert calls == [still['name']]
+    fresh = CollisionRows(brushes, 1)
+    assert np.array_equal(rows.lo, fresh.lo) and np.array_equal(rows.lo32, fresh.lo32)
     still['size'] = [s * 2.0 for s in still['size']]
     rows.refresh_movers()
     fresh = CollisionRows(brushes, 1)

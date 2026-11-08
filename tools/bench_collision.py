@@ -206,6 +206,7 @@ def main():
     parser.add_argument('--json')
     args = parser.parse_args()
     tree = os.path.abspath(args.tree or os.path.join(os.path.dirname(__file__), '..'))
+    out_path = os.path.abspath(args.json) if args.json else None
     os.chdir(tree)
     sys.path.insert(0, tree)
     if args.core is not None and hasattr(os, 'sched_setaffinity'):
@@ -219,8 +220,8 @@ def main():
             row['collision_shape_builds'], row['frame_builds'],
             '' if 'retained_blocks_per_tick' not in row
             else ' | retained blocks/tick %.2f' % row['retained_blocks_per_tick']))
-    if args.json:
-        with open(args.json, 'w') as fh:
+    if out_path:
+        with open(out_path, 'w') as fh:
             json.dump(result, fh, indent=1)
 
 

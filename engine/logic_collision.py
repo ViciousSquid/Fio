@@ -15,7 +15,7 @@ import numpy as np
 from .brush_geometry import build_collision_mesh, brush_has_geometry
 from operator import is_
 
-from .brush_placement import runtime_of, world_box, world_box_at
+from .brush_placement import runtime_of, turned_half, world_box, world_box_at
 from .constants import is_water_brush
 
 try:
@@ -65,7 +65,7 @@ class CollisionRows:
     """
 
     __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi',
-                 'mover_rows', 'movers', '_mover_seen')
+                 'mover_rows', 'movers', '_mover_seen', '_mover_shaped')
 
     def __init__(self, brushes, epoch):
         self.source = brushes
@@ -86,6 +86,10 @@ class CollisionRows:
         #: transforms, cached shapes, and pos/size -- or None until the first
         #: refresh (see refresh_movers).
         self._mover_seen = None
+        #: The movers whose box is not their pos/size (an angled brush, a
+        #: mesh proxy): resolved one by one; the rest in bulk.
+        self._mover_shaped = [i for i, b in enumerate(self.movers)
+                              if 'geometry' in b or '_mesh_bounds' in b]
 
     def _resolve(self, rows, brushes):
         # Each brush's derived bounds (brush_placement.world_box): a convex
@@ -146,14 +150,23 @@ class CollisionRows:
             if (not placed.any() and all(map(is_, now, seen_now))
                     and all(map(is_, shapes, seen_shapes))):
                 return
-            placed |= np.fromiter(
-                (a is not b or c is not d
-                 for a, b, c, d in zip(now, seen_now, shapes, seen_shapes)),
-                dtype=bool, count=len(movers))
-            changed = np.flatnonzero(placed)
-        boxes = np.array([world_box_at(movers[i], now[i]) for i in changed.tolist()],
-                         dtype=np.float64).reshape(len(changed), 6).T
-        self._store(self.mover_rows[changed], boxes[:3], boxes[3:])
+        # Something moved: every row again, from the arrays just read --
+        # a box mover's derived box (brush_placement.world_box_at) is its
+        # pos (or its runtime centre) and size / 2, turned while it spins.
+        centre = pos.copy()
+        half = size * 0.5
+        carried = [(i, rt) for i, rt in enumerate(now) if rt is not None]
+        if carried:
+            centre[[i for i, _rt in carried]] = [rt[:3] for _i, rt in carried]
+            for i, rt in carried:
+                if rt[6]:
+                    hx, hy, hz = half[i].tolist()
+                    half[i] = turned_half(hx, hy, hz, rt[3:6], rt[6])
+        for i in self._mover_shaped:
+            box = world_box_at(movers[i], now[i])
+            centre[i] = box[:3]
+            half[i] = box[3:]
+        self._store(self.mover_rows, centre.T, half.T)
         self._mover_seen = (now, shapes, pos, size)
 
     def ray_hits(self, origin, direction, reach):

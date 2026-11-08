@@ -296,7 +296,8 @@ def _abs_rotation(axis, angle_degrees):
     key = (axis[0], axis[1], axis[2], angle_degrees)
     turn = _TURNS.get(key)
     if turn is None:
-        r = rotation_matrix(axis, angle_degrees)
+        # The same rotation a collision frame uses (one trig per angle).
+        r = _rotation(axis, angle_degrees)
         turn = () if r is None else tuple(abs(v) for row in r for v in row)
         if len(_TURNS) >= _TURNS_LIMIT:
             _TURNS.clear()
