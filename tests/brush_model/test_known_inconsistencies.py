@@ -250,20 +250,21 @@ def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
 def test_shipped_convex_bounds_are_derived_from_the_planes():
     """Stage 2a: every shipped convex brush's derived bounds -- what culling,
     collision rows, the physics grid, Big World and picking read -- are its
-    drawn geometry's AABB, the 128-unit brushes included; and loading
-    re-derives the dict's ``pos``/``size`` copy from the planes."""
+    drawn geometry's AABB, the 128-unit brushes included. Since Stage 2d the
+    load re-expresses the file's world planes about their own centre, which
+    becomes ``pos``, and re-derives the ``size`` copy: nothing it holds
+    drifts from the planes."""
     checked = 0
     for name, brushes in MAPS.items():
         for raw in brushes:
             if not bg.brush_has_geometry(raw):
                 continue
-            brush = copy.deepcopy(raw)
-            g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
+            g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(raw))
+            brush = bs.loaded(raw)
             lo = np.asarray(brush_placement.world_bounds(brush)[:3])
             hi = np.asarray(brush_placement.world_bounds(brush)[3:])
             assert np.allclose(lo, g_centre - g_size / 2, atol=1e-9), (name, brush['id'])
             assert np.allclose(hi, g_centre + g_size / 2, atol=1e-9), (name, brush['id'])
-            brush_placement.normalise_loaded(brush)
             assert 'bound_drift' not in bs.inconsistencies(brush), (name, brush['id'])
             checked += 1
     assert checked >= 7

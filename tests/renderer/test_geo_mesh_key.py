@@ -197,4 +197,5 @@ def test_moving_a_mover_is_a_transform_not_a_new_mesh():
     table.sync([brush], 3, dirty_objects={id(brush)})
     moved = table.geometry_records[0]
     assert moved is not record and moved.surface != record.surface
-    assert tuple(moved.origin) == bg.get_convex(brush).shape_box[:3]   # re-anchored
+    # Re-anchored on the new shape's own bounds, in its local frame (Stage 2d).
+    assert tuple(moved.origin) == bg.local_convex(brush).shape_box[:3]

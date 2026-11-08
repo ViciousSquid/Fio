@@ -296,7 +296,7 @@ def _triangles_of_capture(draw):
     stride = draw['stride']
     out = []
     for tri in range(draw['count'] // 3):
-        vertices = draw['vertices'][3 * tri * stride:3 * (tri + 1) * stride]
+        vertices = _snapped(draw['vertices'][3 * tri * stride:3 * (tri + 1) * stride])
         state = tuple(_per_triangle(draw, name, tri)
                       for _location, name in FACE_ATTRIBUTES)
         out.append(((vertices, draw['texture'], draw['cull']) + state,
@@ -305,10 +305,22 @@ def _triangles_of_capture(draw):
     return out
 
 
+#: A vertex value this close to zero is zero (see :func:`compare_geo_draws`).
+ZERO = 1e-9
+
+
+def _snapped(vertices):
+    """*vertices* (float32 bytes) with every value within :data:`ZERO` of
+    zero -- including ``-0.0`` -- written as ``0.0``."""
+    values = np.frombuffer(vertices, dtype=np.float32).copy()
+    values[np.abs(values) <= ZERO] = 0.0
+    return values.tobytes()
+
+
 def _triangles_of_expected(draw, stride, cull):
     out = []
     for tri in range(draw['count'] // 3):
-        vertices = draw['vertices'][3 * tri * stride:3 * (tri + 1) * stride]
+        vertices = _snapped(draw['vertices'][3 * tri * stride:3 * (tri + 1) * stride])
         out.append(((vertices, draw['texture'], cull, draw['tex_scale'],
                      draw['tex_angle'], draw['tex_shift']),
                     draw['model'], draw['normal']))
@@ -327,6 +339,15 @@ def compare_geo_draws(expected, captured, cull=None, stride=32,
     the program reads -- must be identical; the model and normal matrices,
     which the reference derives independently from the brush dict, must agree
     to float32 precision. An empty list is a pass.
+
+    One canonicalisation: a vertex value within ``1e-9`` of zero is zero.
+    Since Stage 2d the engine builds an angled mesh from the brush's local
+    planes while the frozen reference projects its world-space corners (the
+    old path's arithmetic), and a texture coordinate that is exactly 0 by
+    construction (a corner on the face's UV origin line) comes out as
+    anything up to ``~1e-12`` in either. ``1e-9`` is two orders below
+    float32's resolution at 1.0 (4e-6 of a texel on a 4,096-texel texture)
+    and draws the same pixels; any visible difference still fails.
     """
     problems = []
     got = [t for draw in captured for t in _triangles_of_capture(draw)]

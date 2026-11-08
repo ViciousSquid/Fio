@@ -311,8 +311,9 @@ def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
     raw = []
     for number, bid in enumerate(('5b10b49b-9b6c-45d9-91ee-0b6f06970590',
                                   '8c04e483-4d44-4217-a03d-32844a727043')):
-        brush = copy.deepcopy({k: v for k, v in showcase[bid].items()
-                               if k not in bg.GEO_RUNTIME_KEYS})
+        # In the frame the editor holds it in (Stage 2d), materials as stored.
+        brush = {k: v for k, v in bs.localised(showcase[bid]).items()
+                 if k not in bg.GEO_RUNTIME_KEYS}
         brush['name'] = 'showcase%d' % number
         for plane in brush['geometry']['planes']:
             tag = plane.get('face')
@@ -324,8 +325,10 @@ def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
         assert 'resolved_from_tag' in bs.inconsistencies(brush)
         raw.append({k: v for k, v in brush.items() if k not in bg.GEO_RUNTIME_KEYS})
     state = EditorState()
-    state.load_from_data({'version': 3, 'brushes': copy.deepcopy(raw), 'things': []},
-                         stream_editor=False, save_undo=False)
+    # Saved as a version 3 file stores it: world-space planes.
+    from engine.brush_placement import world_layout
+    state.load_from_data({'version': 3, 'brushes': [world_layout(b) for b in raw],
+                          'things': []}, stream_editor=False, save_undo=False)
     loaded = state.brushes
     drawn = _drawn_state(renderer, context, loaded, names)
     assert _check(renderer, loaded, drawn) > 0
@@ -370,7 +373,8 @@ def test_save_and_reload_draw_the_same_geometry_and_uvs(renderer, context):
     # The same material classification (pass, water, tiling ...) per brush.
     assert np.array_equal(tables[0].class_bits[:tables[0].count],
                           tables[1].class_bits[:tables[1].count])
-    assert saved['version'] == bf.CANONICAL_MAP_VERSION
+    from engine.brush_placement import MAP_VERSION
+    assert saved['version'] == MAP_VERSION
     for first, second in zip(state.brushes, again.brushes):
         assert bf.face_keys(first) == bf.face_keys(second), first.get('name')
         for key in bf.face_keys(first):

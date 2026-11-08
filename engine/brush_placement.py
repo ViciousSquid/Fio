@@ -448,10 +448,16 @@ def world_bounds(brush):
                 return (pos[0] - hx, pos[1] - hy, pos[2] - hz,
                         pos[0] + hx, pos[1] + hy, pos[2] + hz)
         else:
-            # A still convex brush: its shape's own bounds, cached on it.
+            # A still convex brush: its local shape's cached box placed at
+            # pos (authored_box's arithmetic, inline: a hot loop).
             convex = brush.get('_geo_cache')
             if convex is not None and convex.is_valid:
-                return convex.shape_bounds
+                lx, ly, lz, hx, hy, hz = convex.shape_box
+                pos = brush.get('pos') or DEFAULT_POS
+                cx = float(pos[0]) + lx
+                cy = float(pos[1]) + ly
+                cz = float(pos[2]) + lz
+                return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
     cx, cy, cz, hx, hy, hz = world_box(brush)
     return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
 

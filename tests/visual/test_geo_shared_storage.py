@@ -353,7 +353,8 @@ def test_shared_storage_through_an_editing_session(renderer, context):
             'geometry': 0, 'transforms': 0, 'indices': 0}
         session.check("reordered")
         # 4d. Undo and redo a move: parity holds, and although every brush is
-        # restored as a new dict, only the moved brush is rebuilt.
+        # restored as a new dict, nothing is rebuilt -- since Stage 2d a move
+        # is a placement, so the restored brush has the same surface.
         state.save_state()
         edited = state.brushes[10]
         bg.translate_brush(edited, (16.0, 0.0, 0.0))
@@ -366,17 +367,15 @@ def test_shared_storage_through_an_editing_session(renderer, context):
         state.undo()
         session.frames(2)
         # Every brush comes back as a new dict; meshes are found by surface,
-        # so only the brush the undo really changed is built again.
-        assert builds['n'] == 1, "undo rebuilt %d meshes" % builds['n']
-        moved_back = _mesh_of(renderer, state.brushes[10])
-        assert _delta(before, _uploads(renderer))['geometry'] == (
-            moved_back.count * geo_store.STRIDE)
+        # and the undo changed only a placement: no mesh is built again.
+        assert builds['n'] == 0, "undo rebuilt %d meshes" % builds['n']
+        assert _delta(before, _uploads(renderer))['geometry'] == 0
         assert [p.capacity if p is not None else 0 for p in store.pages] == capacity
         session.check("undo")
         builds['n'] = 0
         state.redo()
         session.frames(2)
-        assert builds['n'] == 1, "redo rebuilt %d meshes" % builds['n']
+        assert builds['n'] == 0, "redo rebuilt %d meshes" % builds['n']
         session.check("redo")
         renderer._build_geo_mesh = build
 
@@ -611,14 +610,16 @@ def test_teardown_releases_every_shared_gl_object(context):
     assert not any(gl.glIsVertexArray(a) for a in arrays), "a VAO outlived cleanup"
 
 
-def test_a_stray_pos_write_to_an_angled_brush_moves_nothing(renderer, context):
-    """No mover involved: an angled brush's planes are its placement (Stage
-    2a; Stage 2d makes ``pos`` the authored placement of every brush), so a
-    ``pos``-only write -- a console ``setprop``, a plugin -- is a stale copy
-    nothing draws from. Before Stage 2a it was drawn as a transform until an
-    undo re-anchored it (one rebuild): what was drawn depended on history.
-    Now it is drawn where its planes are through refreshes, undo and redo,
-    and the mesh -- keyed by the shape -- is never rebuilt."""
+def test_a_pos_write_moves_an_angled_brush_as_a_transform(renderer, context):
+    """No mover involved: since Stage 2d ``pos`` is the authored placement of
+    every brush and an angled brush's planes are in its local frame, so a
+    ``pos``-only write -- a console ``setprop``, a plugin, the editor's own
+    move -- carries the brush, drawn as a transform. (Before Stage 2a it was
+    drawn as a transform until an undo re-anchored it, one rebuild: what was
+    drawn depended on history; in Stage 2a it was a stale copy nothing drew
+    from.) Through refreshes, undo and redo it is drawn where its placement
+    puts its planes, and the mesh -- keyed by the shape -- is never
+    rebuilt."""
     from editor.editor_state import EditorState  # noqa: F401  (Session uses it)
     from engine.change_journal import moved
     from tools.bench_geo_passes import angled_world
@@ -640,17 +641,86 @@ def test_a_stray_pos_write_to_an_angled_brush_moves_nothing(renderer, context):
         state.save_state()
         brush['pos'] = [brush['pos'][0] + 48.0, brush['pos'][1] + 8.0, brush['pos'][2]]
         moved(brush)
-        session.check("stray pos write: drawn where its planes are")
+        session.check("pos write: drawn where it now places its planes")
         brush['colour'] = [0.1, 0.8, 0.3]
         state.mark_world_changed([brush])
-        session.check("refreshed with a stray pos: still where its planes are")
+        session.check("refreshed after the pos write: still placed there")
         assert builds['n'] == 0
         state.undo()
         session.geometry_of.clear()
         session.check("undo")
         state.redo()
-        session.check("redo of the stray write")
+        session.check("redo of the pos write")
         assert builds['n'] == 0, "the shape did not change: nothing may be rebuilt"
     finally:
         renderer._build_geo_mesh = build
+        session.stop()
+
+
+def test_a_thousand_moves_upload_no_geometry_and_rebuild_nothing(renderer, context,
+                                                                 monkeypatch):
+    """1,000 consecutive brush movements after the first frames -- editor
+    translations (Stage 2d: a placement, the planes untouched) and movers'
+    runtime transforms (Stage 2b), alternately, each one published and drawn
+    through the real pipeline, each moved brush asked for its collision
+    shape as the player would -- solve no convex brush, upload no geometry
+    and no index list, allocate no mesh and build no collision shape: the
+    GPU sees only transform slots. Both oracles hold at the end."""
+    from engine import brush_geometry as bg
+    from engine import brush_placement as bp
+    from engine.change_journal import moved
+    from engine.renderer.core import geo_store
+    from tests.helpers import runtime
+
+    world = _world()
+    edited = [world[50], world[400]]
+    movers = [world[120], world[333]]
+    for brush in movers:
+        brush['is_mover'] = True
+    session = Session(renderer, context, world)
+    try:
+        session.frames(4)
+        for brush in edited + movers:
+            bp.collision_shape(brush)                 # prepared once
+        allocations = _allocations(renderer)
+        lists = _index_lists(renderer)
+        before = _uploads(renderer)
+        counts = {'solves': 0, 'shapes': 0}
+        real_windings = bg.compute_windings
+        real_shape = bg.ConvexGeometry.collision_shape
+
+        def windings(*a, **k):
+            counts['solves'] += 1
+            return real_windings(*a, **k)
+
+        def shape(geo):
+            if geo._collision_shape is None:
+                counts['shapes'] += 1
+            return real_shape(geo)
+
+        monkeypatch.setattr(bg, 'compute_windings', windings)
+        monkeypatch.setattr(bg.ConvexGeometry, 'collision_shape', shape)
+        for step in range(1000):
+            sign = 1.0 if (step // 4) % 2 == 0 else -1.0
+            if step % 2 == 0:
+                brush = edited[(step // 2) % 2]
+                bg.translate_brush(brush, (6.0 * sign, 0.0, -3.0 * sign))
+                session.state.mark_world_changed([brush])
+            else:
+                brush = movers[(step // 2) % 2]
+                runtime.drive(brush, offset=(0.0, 2.0 * (step % 40), 0.0),
+                              spin=((0.0, 1.0, 0.0), float(step % 360)))
+                moved(brush)
+            session.frames(1)
+            assert bp.collision_shape(brush) is not None
+        cost = _delta(before, _uploads(renderer))
+        assert counts == {'solves': 0, 'shapes': 0}, counts
+        assert cost['geometry'] == 0 and cost['indices'] == 0, cost
+        # One transform slot per moved brush per frame, at most.
+        assert 0 < cost['transforms'] <= 1000 * geo_store.TEXELS_PER_SLOT * 16, cost
+        assert _allocations(renderer) == allocations
+        assert _index_lists(renderer) == lists
+        session.check("after a thousand moves")
+    finally:
+        runtime.release()
         session.stop()

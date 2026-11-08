@@ -13,6 +13,7 @@ import json
 import os
 import zipfile
 
+import numpy as np
 import pytest
 
 from editor.package_exporter import PackageExporter
@@ -341,3 +342,63 @@ def test_player_world_carries_implicit_gameplay_assets_without_a_monster(project
     with zipfile.ZipFile(out) as package:
         assert package.read('assets/sprites/pickup.png') == b'engine default'
         assert package.read('assets/sounds/beep.wav') == b'beep'
+
+
+def _saved_v5_level():
+    """A level as this editor saves it (map version 5): a box, an angled
+    brush moved after it was cut, and a rotated angled brush."""
+    from editor.editor_state import EditorState
+    from engine import brush_geometry as bg
+    from tests.helpers.worlds import angled_brush, box_brush
+    cut = angled_brush("cut", (100, 40, -60), (128, 80, 96), clip_normal=(0.3, 1.0, 0.2))
+    bg.translate_brush(cut, (512.0, 0.0, -256.0))
+    turned = angled_brush("turned", (-300, 64, 200), (96, 128, 64))
+    bg.rotate_brush(turned, 30.0, (0.0, 1.0, 0.0))
+    state = EditorState()
+    state.brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048)), cut, turned]
+    return state, state.get_level_data()
+
+
+def test_a_version_5_map_is_packaged_as_the_world_layout_the_player_reads(project, tmp_path):
+    """Stage 2d saves an angled brush's planes in its local frame (version
+    5); the Android player reads world-space planes and is not updated, so
+    the package carries the explicit version-4 export of the map instead --
+    every angled brush's planes where it is in the world, its size, and
+    every face record -- read back with the player's own reader."""
+    from engine import brush_geometry as bg
+    from engine.brush_placement import MAP_VERSION
+    state, level = _saved_v5_level()
+    assert level["version"] == MAP_VERSION == 5
+    current = _write_json(project / "maps" / "start.json", level)
+    out = tmp_path / "game.fiopak"
+
+    ok, errors = _export(project, current, out)
+
+    assert ok, errors
+    with FioPackage.open(str(out)) as pak:
+        packaged = pak.load_start_map()
+    assert packaged["version"] == 4
+    assert [b["id"] for b in packaged["brushes"]] == [b["id"] for b in level["brushes"]]
+    for live, record in zip(state.brushes, packaged["brushes"]):
+        if not bg.brush_has_geometry(live):
+            assert record["pos"] == live["pos"] and record["size"] == live["size"]
+            continue
+        # World-space planes: solved as they are, they are the live solid.
+        world = bg.ConvexGeometry(record["geometry"]["planes"])
+        assert np.allclose(world.verts, bg.get_convex(live).verts, atol=1e-9)
+        lo, hi = world.bounds
+        assert np.allclose(record["pos"], (lo + hi) / 2, atol=1e-9)
+        assert np.allclose(record["size"], hi - lo, atol=1e-9)
+        assert ([p.get("texture") for p in record["geometry"]["planes"]]
+                == [p.get("texture") for p in live["geometry"]["planes"]])
+    # The project's own map is untouched: still the version-5 save.
+    assert json.loads(current.read_text())["version"] == 5
+
+
+def test_an_older_map_is_packaged_byte_for_byte(project, tmp_path):
+    current = _write_json(project / "maps" / "start.json", _level())
+    out = tmp_path / "game.fiopak"
+    ok, errors = _export(project, current, out)
+    assert ok, errors
+    with zipfile.ZipFile(out) as zf:
+        assert zf.read("maps/start.json") == current.read_bytes()

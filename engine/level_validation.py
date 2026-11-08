@@ -106,6 +106,11 @@ def _validate_items(items, where):
             raise ValueError(f"items['{item_id}'] must be an object")
 
 
+def _has_planes(item):
+    geometry = item.get('geometry')
+    return isinstance(geometry, dict) and bool(geometry.get('planes'))
+
+
 def _validate_record(item, kind, label, partial):
     if not isinstance(item, dict):
         raise ValueError(f"{label} is not an object")
@@ -114,7 +119,11 @@ def _validate_record(item, kind, label, partial):
     for field in fields:
         value = item.get(field)
         if value is None:
-            # Every brush ever written has both; play start indexes them.
+            # Every brush has a pos; play start indexes it. Every box has a
+            # size; an angled brush's is derived from its planes and is not
+            # saved from map version 5 on (engine.brush_placement).
+            if field == 'size' and _has_planes(item):
+                continue
             if kind == 'brushes' and not partial:
                 raise ValueError(f"{label} has no '{field}'")
             continue

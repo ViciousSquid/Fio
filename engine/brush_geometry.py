@@ -1660,14 +1660,19 @@ def _commit_local_planes(brush, planes, trial=None):
     if float(np.max(trial.extents())) > MAX_BRUSH_EXTENT:
         return False
     centre = trial.center()
-    if float(np.max(np.abs(centre))) > 0.0:
+    recentred = float(np.max(np.abs(centre))) > 0.0
+    if recentred:
         planes = translate_planes(planes, -centre)
-        trial = trial.translated(-centre)
         pos = brush.get('pos', [0, 0, 0])
         brush['pos'] = [float(pos[0]) + float(centre[0]), float(pos[1]) + float(centre[1]),
                         float(pos[2]) + float(centre[2])]
     brush['geometry'] = {'planes': [_plane_to_json(p) for p in planes]}
     _invalidate(brush)
+    if recentred:
+        # The cached shape is the stored planes solved, exactly as a reload
+        # solves them -- not the trial carried by -centre, whose corners can
+        # differ in the last bits: what is drawn must not depend on history.
+        trial = ConvexGeometry(brush['geometry']['planes'])
     brush['_geo_cache'] = trial
     brush['_geo_cache_sig'] = geometry_signature(brush)
     sync_brush_bounds(brush)

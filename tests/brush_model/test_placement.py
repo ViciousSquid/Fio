@@ -134,10 +134,14 @@ def test_a_convex_brush_is_its_planes_not_its_stored_copy():
     lo, hi = bg.get_convex(brush).bounds
     expected = tuple(lo.tolist()) + tuple(hi.tolist())
     assert _close(bp.world_bounds(brush), expected, 100)
-    brush['pos'] = [9999.0, 9999.0, 9999.0]       # a stray write to the copy
-    brush['size'] = [1.0, 1.0, 1.0]
+    brush['size'] = [1.0, 1.0, 1.0]               # a stray write to the copy
     assert _close(bp.world_bounds(brush), expected, 100)
     assert _close(bp.authored_bounds(brush), expected, 100)
+    # Since Stage 2d pos is the placement: a write carries the planes.
+    brush['pos'] = [p + 1000.0 for p in brush['pos']]
+    moved = tuple(v + 1000.0 for v in expected)
+    assert _close(bp.world_bounds(brush), moved, 100)
+    assert _close(bp.authored_bounds(brush), moved, 100)
 
 
 def test_an_invalid_plane_set_falls_back_to_pos_and_size_as_it_is_drawn():
@@ -167,13 +171,21 @@ def test_a_convex_mover_is_displaced_by_its_runtime_transform():
     assert brush['pos'] == authored
 
 
-def test_a_static_convex_brush_ignores_a_stray_pos_write():
-    """Its planes are where it is; a raw ``pos`` write moves nothing
-    (Stage 2d makes ``pos`` the authored placement of every brush)."""
+def test_a_pos_write_carries_a_convex_brush_rigidly():
+    """Stage 2d: ``pos`` is the authored placement of every brush, so a raw
+    ``pos`` write (a console ``setprop``, a plugin) moves an angled brush as
+    it moves a box -- its shape, bounds and draw transform together -- and
+    re-solves nothing. (Before Stage 2d its planes were in world space and
+    the write moved nothing.)"""
     brush = angled_brush("still", (0, 0, 0), (64, 64, 64))
+    shape = bp.shape_convex(brush)
     before = bp.world_bounds(brush)
-    brush['pos'] = [500.0, 0.0, 0.0]
-    assert bp.world_bounds(brush) == before
+    brush['pos'] = [brush['pos'][0] + 500.0] + list(brush['pos'][1:])
+    after = bp.world_bounds(brush)
+    assert after[0] - before[0] == pytest.approx(500.0)
+    assert after[3] - before[3] == pytest.approx(500.0)
+    assert after[1:3] == before[1:3] and after[4:6] == before[4:6]
+    assert bp.shape_convex(brush) is shape
 
 
 def test_authored_bounds_carry_no_spin():
@@ -185,15 +197,18 @@ def test_authored_bounds_carry_no_spin():
 
 
 def test_normalise_loaded_rederives_the_copy_and_leaves_the_planes():
+    # Stage 2d: a version-5 brush's size is a copy of its local planes'
+    # extents and is re-derived; pos is its placement and is left alone.
     brush = angled_brush("drifted", (10, 0, 0), (64, 64, 64))
     planes = copy.deepcopy(brush['geometry']['planes'])
-    centre = list(brush['pos'])
-    brush['pos'] = [centre[0] - 64.0, centre[1], centre[2]]
+    size = list(brush['size'])
+    brush['pos'] = [brush['pos'][0] - 64.0] + list(brush['pos'][1:])
+    placed = list(brush['pos'])
     brush['size'] = [brush['size'][0] + 128.0] + brush['size'][1:]
-    assert bp.normalise_loaded(brush) == pytest.approx(64.0)
-    assert brush['pos'] == pytest.approx(centre)
-    assert brush['geometry']['planes'] == planes
     assert bp.normalise_loaded(brush) == 0.0
+    assert brush['size'] == pytest.approx(size)
+    assert brush['pos'] == placed
+    assert brush['geometry']['planes'] == planes
     box = box_brush("box", (5, 5, 5), (10, 10, 10))
     assert bp.normalise_loaded(box) == 0.0 and box['pos'] == [5.0, 5.0, 5.0]
 
@@ -425,9 +440,9 @@ def test_the_editor_pickers_hit_a_spinning_bar_where_it_is_drawn(main_window, mo
 @pytest.mark.qt
 def test_the_editor_pickers_ignore_a_stale_copy(main_window, monkeypatch):
     view = main_window.view_3d
+    # Since Stage 2d pos places the planes; size is the copy that can go stale.
     brush = angled_brush("drifted", (0, 0, 0), (128, 64, 128))
-    brush['pos'] = [brush['pos'][0] - 64.0] + brush['pos'][1:]
-    brush['size'] = [brush['size'][0] + 128.0] + brush['size'][1:]
+    brush['size'] = [brush['size'][0] + 256.0] + brush['size'][1:]
     main_window.state.brushes[:] = [brush]
     main_window.state.things[:] = []
     lo_x = bp.world_bounds(brush)[0]
@@ -447,14 +462,20 @@ CLIPPED_TERRAIN = '1a817c94'
 
 @pytest.mark.parametrize("name", ["Terrain_Test_small.json", "Topdown_example.json"])
 def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
-    brushes = [bs.migrated(b) for b in bs.shipped_maps(REPO_ROOT)[name]]
+    raws = bs.shipped_maps(REPO_ROOT)[name]
+    brushes = [bs.loaded(b) for b in raws]
     slot = next(i for i, b in enumerate(brushes)
                 if str(b.get('id')).startswith(CLIPPED_TERRAIN))
     brush = brushes[slot]
-    stored_lo_x = brush['pos'][0] - brush['size'][0] / 2
+    raw = raws[slot]
+    stored_lo_x = raw['pos'][0] - raw['size'][0] / 2      # the file's copy
     planes = bg.get_convex(brush)
     lo, hi = planes.bounds
     assert lo[0] - stored_lo_x == pytest.approx(128.0)
+    assert np.allclose(lo, bs.world_convex(raw).bounds[0], atol=1e-9)
+    # Since Stage 2d the load places the planes about their own centre, so
+    # what the editor holds no longer drifts from them.
+    assert brush['pos'][0] - brush['size'][0] / 2 == pytest.approx(lo[0], abs=1e-9)
 
     # Drawn exactly where its planes are.
     table = RenderTable()

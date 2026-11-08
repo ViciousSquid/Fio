@@ -493,7 +493,8 @@ class EditorState:
             # 3: stable entity IDs and logic graph layout. 4: one material
             # record per brush face (engine.brush_faces.CANONICAL_MAP_VERSION).
             # 5: an angled brush's planes in its local frame, placed by its
-            # pos, no size saved (engine.brush_placement.MAP_VERSION).
+            # pos; its size is a copy, re-derived from the planes on load
+            # (engine.brush_placement.MAP_VERSION).
             'version': MAP_VERSION,
             'brushes': self._serialize_brushes(),
             # Cutscene Wizard actors are live authoring entities. Their actual
@@ -509,13 +510,6 @@ class EditorState:
             data.update(self.editor_stream.all_data())
             data['things'] = [r for r in data['things']
                               if not r.get('properties', {}).get('_cutscene_temporary')]
-        # Version 5: an angled brush is its local planes and its pos; its size
-        # is derived from them on load, so it is not saved.
-        data['brushes'] = [
-            {k: v for k, v in record.items() if k != 'size'}
-            if isinstance(record, dict) and (record.get('geometry') or {}).get('planes')
-            else record
-            for record in data['brushes']]
 
         # When this map was first written. Set once and carried forward on every
         # later save, so it means "created" and not "saved most recently" — the

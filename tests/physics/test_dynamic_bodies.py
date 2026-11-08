@@ -167,14 +167,13 @@ def test_no_collision_body_still_falls():
 
 def _convex_body_brush(prop, lo, hi):
     """A physics-body brush whose planes enclose *lo*..*hi*, carrying a
-    stale ``pos``/``size`` copy that says otherwise: the planes are the
-    shape (Stage 2a, ``engine.brush_placement``)."""
+    stale ``size`` copy that says otherwise: the planes are the shape
+    (Stage 2a, ``engine.brush_placement``), placed by ``pos`` (Stage 2d)."""
     from engine import brush_geometry as bg
     lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
     brush = {'pos': ((lo + hi) / 2).tolist(), 'size': (hi - lo).tolist()}
     bg.box_to_geometry(brush)
     brush.update({
-        'pos': list(prop.pos),
         'size': [1.0, 1.0, 1.0],
         '_physics_body': True,
         '_physics_entity': prop,
@@ -184,8 +183,8 @@ def _convex_body_brush(prop, lo, hi):
 
 
 def test_the_planes_define_body_shape_relative_to_origin():
-    # The planes are world-space; the body is their box, relative to the
-    # entity's origin -- never the stale pos/size copy.
+    # The body is the planes' box where pos places them, relative to the
+    # entity's origin -- never the stale size copy.
     prop = _prop((10.0, 20.0, 30.0))
     brush = _convex_body_brush(prop, [5.0, 20.0, 27.0], [15.0, 30.0, 33.0])
 

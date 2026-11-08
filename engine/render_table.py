@@ -118,30 +118,39 @@ class GeometryRecord:
     :data:`engine.brush_faces.PRECEDENCE`, brush-wide tiling applied).
     ``natural_scale`` is the same record's Natural flag per face.
 
+    ``owner`` is the brush's stable ``id``. Since Stage 2d the planes are in
+    the brush's local frame, so two brushes of the same shape and materials
+    would otherwise have the same surface and share one GPU mesh -- and with
+    it one GPU transform slot, which the batched path cannot draw (it falls
+    back to a draw per mesh). Keying by owner too keeps M2's one mesh and one
+    slot per brush, while a move or an undo of a move -- the same brush, the
+    same surface -- still finds its mesh and builds nothing.
+
     ``surface`` is the complete input of the mesh built from this record, as
     one exact, hashable value -- every plane as authored (offset, normal,
     texture, UV mapping, texture basis, face tag), each face's resolved
-    material, and the anchor -- and nothing else. So a cache keyed by it holds
-    the invariant both ways: equal keys build identical vertex data, whatever
+    material, the anchor and the owner -- and nothing else. So a cache keyed
+    by it holds the invariant both ways: equal keys build identical vertex data, whatever
     the brush's current position, and any change to what the mesh is built
     from is a different key. It carries no geometry epoch (an epoch belongs to
     a dict, and an undo restores every brush as a new dict), so a restored
     but unchanged brush finds its mesh again.
     """
     __slots__ = ('signature', 'convex', 'origin', 'scale', 'materials',
-                 'serial', 'surface')
+                 'serial', 'surface', 'owner')
 
-    def __init__(self, signature, convex, origin, scale, materials):
+    def __init__(self, signature, convex, origin, scale, materials, owner=None):
         self.signature = signature
         self.convex = convex
         self.origin = origin
         self.scale = scale
         self.materials = materials
+        self.owner = owner
         self.serial = next(_geometry_serials)
         self.surface = (
             tuple(_frozen(plane) for plane in convex.planes),
             tuple(materials[id(face)] for face in convex.faces),
-            tuple(origin.tolist()), tuple(scale.tolist()))
+            tuple(origin.tolist()), tuple(scale.tolist()), owner)
 
     @property
     def natural_scale(self):
@@ -149,16 +158,17 @@ class GeometryRecord:
         :attr:`materials`)."""
         return {key: material.natural for key, material in self.materials.items()}
 
-    def describes(self, signature, convex, materials):
+    def describes(self, signature, convex, materials, owner=None):
         """Whether this record already describes that surface.
 
         ``pos``/``size`` are not compared: the anchor is derived from the
         planes, so it cannot differ while the surface is unchanged, and a
-        mover's displacement is a transform.
+        placement or a mover's displacement is a transform.
         """
         return (self.convex is convex
                 and self.signature == signature
-                and self.materials == materials)
+                and self.materials == materials
+                and self.owner == owner)
 
 #
 # One uint16 per brush replacing the chain of dict lookups, string comparisons
@@ -515,9 +525,10 @@ class RenderTable:
         materials = brush_faces.convex_materials(
             convex, brush.get('texture_tiling', False))
         signature = brush_geometry.geometry_signature(brush)
-        if previous is not None and previous.describes(signature, convex, materials):
+        owner = brush.get('id')
+        if previous is not None and previous.describes(signature, convex, materials, owner):
             return previous
-        return GeometryRecord(signature, convex, origin, scale, materials)
+        return GeometryRecord(signature, convex, origin, scale, materials, owner)
 
     # -- row resolution ----------------------------------------------------
 

@@ -149,7 +149,11 @@ class PackageExporter:
                 with zipfile.ZipFile(handle, 'w', zipfile.ZIP_DEFLATED) as zf:
                     zf.writestr('metadata.json', json.dumps(manifest, indent=2))
                     for map_file, archive_path in map_archive_paths.items():
-                        zf.write(map_file, archive_path)
+                        player_copy = self._player_layout(map_file)
+                        if player_copy is None:
+                            zf.write(map_file, archive_path)
+                        else:
+                            zf.writestr(archive_path, json.dumps(player_copy, indent=2))
                     for arcname, src_path in sorted(cutscene_entries.items()):
                         zf.write(src_path, arcname)
                     for arcname, source in sorted(asset_entries.items()):
@@ -175,6 +179,29 @@ class PackageExporter:
     # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
+
+    def _player_layout(self, map_file) -> Optional[dict]:
+        """The copy of a map the packaged player reads, or ``None`` to copy
+        the file as it is.
+
+        Since Stage 2d of the unified brush model the editor saves version 5
+        (an angled brush's planes in its local frame, placed by ``pos``); the
+        Android player reads world-space planes (version 4 and earlier) and
+        is not updated yet, so a version-5 map is packaged as its explicit
+        version-4 export (``engine.brush_placement.export_world_level``:
+        lossless, every face record and placement kept). Older maps are
+        copied byte for byte."""
+        data = self._read_map(map_file)
+        if data is None:
+            return None
+        try:
+            version = int(data.get('version') or 0)
+        except (TypeError, ValueError):
+            return None
+        from engine.brush_placement import MAP_VERSION, export_world_level
+        if version < MAP_VERSION:
+            return None
+        return export_world_level(data)
 
     def _read_map(self, map_file) -> Optional[dict]:
         try:

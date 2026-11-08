@@ -17,6 +17,11 @@ statement. A brush dict has one of two encodings:
   :func:`_convex_material`). Its bound is the planes' own AABB (extents
   floored at 1e-3); the ``pos``/``size`` it stores are a copy
   (:func:`stored_bound`) nothing reads for a bound, re-derived at load.
+  Since Stage 2d the planes are stored in the brush's local frame, centred
+  on their own bounds, and ``pos`` places them; a shipped map (version 3)
+  stores world-space planes, so a record read straight from a file is
+  marked (:data:`WORLD_PLANES`) and :func:`migrated` localises it as the
+  loader does.
 
 Both encodings are drawn through one transform -- the bound (:func:`bound`)
 and the spin (:func:`transform`) -- and every bound-reader (culling,
@@ -74,12 +79,26 @@ TAG_FIELDS = (('textures', 'texture'), ('uv_scale', 'uv_scale'),
               ('uv_shift', 'uv_shift'), ('uv_angle', 'uv_angle'))
 
 
+#: Set on a record read straight from a shipped file (:func:`shipped_maps`):
+#: its planes are in world space, as every map before version 5 stores them.
+WORLD_PLANES = '_shipped_world_planes'
+
+
+def world_convex(brush):
+    """The brush's solid in world space at its authored placement: a file
+    record's planes as stored, a live (version 5) brush's local planes
+    carried by its ``pos`` (``engine.brush_geometry.get_convex``)."""
+    if brush.get(WORLD_PLANES):
+        return bg.ConvexGeometry(brush['geometry']['planes'])
+    return bg.get_convex(brush)
+
+
 def encoding(brush):
     """``'box'``, ``'convex'``, or ``'convex-invalid'`` (planes enclosing no
     volume: the renderer draws nothing for its textured faces)."""
     if not bg.brush_has_geometry(brush):
         return 'box'
-    convex = bg.get_convex(brush)
+    convex = world_convex(brush)
     return 'convex' if convex is not None and convex.is_valid else 'convex-invalid'
 
 
@@ -95,7 +114,20 @@ def geometry_rest(brush):
     floored at 1e-3; ``None`` for anything else."""
     if encoding(brush) != 'convex':
         return None
-    lo, hi = bg.get_convex(brush).bounds
+    lo, hi = world_convex(brush).bounds
+    centre = (lo + hi) * 0.5
+    extent = hi - lo
+    return (tuple(float(v) for v in centre),
+            tuple(max(float(v), 1e-3) for v in extent))
+
+
+def local_rest(brush):
+    """``(centre, size)`` of a valid convex brush's planes *as stored* -- its
+    local frame since Stage 2d, where the renderer builds its mesh (the
+    mesh's anchor) -- extents floored at 1e-3; ``None`` for anything else."""
+    if encoding(brush) != 'convex':
+        return None
+    lo, hi = bg.ConvexGeometry(brush['geometry']['planes']).bounds
     centre = (lo + hi) * 0.5
     extent = hi - lo
     return (tuple(float(v) for v in centre),
@@ -111,10 +143,19 @@ def _runtime(brush):
 
 def bound(brush):
     """``(centre, size)`` the bound-readers use: a box's ``pos``/``size``,
-    a convex brush's planes' AABB, an invalid plane set's ``pos``/``size``
-    -- centred where the runtime transform has carried it."""
+    a convex brush's planes' AABB (since Stage 2d: its stored, local planes'
+    box placed by ``pos``), an invalid plane set's ``pos``/``size`` --
+    centred where the runtime transform has carried it."""
     rest = geometry_rest(brush)
-    centre, size = stored_bound(brush) if rest is None else rest
+    if rest is None:
+        centre, size = stored_bound(brush)
+    elif brush.get(WORLD_PLANES):
+        centre, size = rest                     # a file record: world planes
+    else:
+        # Stage 2d: the stored planes' own box (local), placed by pos.
+        local_centre, size = local_rest(brush)
+        pos = stored_bound(brush)[0]
+        centre = tuple(pos[i] + local_centre[i] for i in range(3))
     runtime = _runtime(brush)
     if runtime is not None:
         centre = tuple(float(v) for v in runtime[:3])
@@ -277,6 +318,26 @@ def migrated(brush):
     return out
 
 
+def localised(brush):
+    """A copy of a file record (:data:`WORLD_PLANES`) in the frame the editor
+    holds it in since Stage 2d: its world-space planes re-expressed about
+    their own centre, which becomes ``pos`` -- the loader's own step
+    (``engine.brush_placement.localise_legacy``), so the result is exactly
+    what a load holds. Materials are left as stored. Any other brush is
+    copied as it is."""
+    out = copy.deepcopy(brush)
+    if out.pop(WORLD_PLANES, None):
+        from engine.brush_placement import localise_legacy
+        localise_legacy(out)
+    return out
+
+
+def loaded(brush):
+    """*brush* as the editor holds it after loading a shipped map:
+    :func:`migrated` (materials) then :func:`localised` (frame)."""
+    return localised(migrated(brush))
+
+
 def render_faces(brush):
     """The faces the renderer draws, before the run-time transform.
 
@@ -306,7 +367,7 @@ def render_faces(brush):
                 ring.append(tuple(float(c) for c in point))
             faces.append((tag, tuple(ring), _box_material(brush, tag)))
         return faces
-    convex = bg.get_convex(brush)
+    convex = world_convex(brush)
     return [(face.get('face'),
              tuple(tuple(float(c) for c in convex.verts[i]) for i in face['indices']),
              _convex_material(brush, face, convex.planes[face['plane']]))
@@ -354,10 +415,12 @@ def inconsistencies(brush):
 
     * ``runtime_keys``: play's keys (:data:`RUNTIME_KEYS`) in the authored
       dict.
-    * ``bound_drift``: a convex brush whose stored ``pos``/``size`` are not
+    * ``bound_drift``: a convex brush whose stored copy of its bounds is not
       its planes' AABB (bit for bit); the detail is the largest difference.
-      Nothing reads the copy for a bound since Stage 2a, and loading
-      re-derives it.
+      In a file record the copy is ``pos``/``size``; since Stage 2d ``pos``
+      is the placement and only ``size`` is a copy (of the local planes'
+      extents). Nothing reads the copy for a bound since Stage 2a, and
+      loading re-derives it.
     * ``resolved_from_tag``: a legacy tagged convex face whose per-tag entry
       differs from its plane and is the authoritative value (scale, shift,
       angle: what the Surface Inspector showed); the face draws it, where it
@@ -372,13 +435,21 @@ def inconsistencies(brush):
         found['runtime_keys'] = runtime
     if encoding(brush) != 'convex':
         return found
-    convex = bg.get_convex(brush)
-    lo, hi = convex.bounds
-    centre, extent = (lo + hi) * 0.5, hi - lo
     pos, size = (np.asarray(v, dtype=np.float64) for v in stored_bound(brush))
-    if centre.tobytes() != pos.tobytes() or extent.tobytes() != size.tobytes():
-        found['bound_drift'] = float(max(np.abs(centre - pos).max(),
-                                         np.abs(extent - size).max()))
+    if brush.get(WORLD_PLANES):
+        # A file record: pos/size are a copy of the world planes' box.
+        lo, hi = world_convex(brush).bounds
+        centre, extent = (lo + hi) * 0.5, hi - lo
+        if centre.tobytes() != pos.tobytes() or extent.tobytes() != size.tobytes():
+            found['bound_drift'] = float(max(np.abs(centre - pos).max(),
+                                             np.abs(extent - size).max()))
+    else:
+        # Stage 2d: pos is the placement, not a copy; size copies the
+        # stored (local) planes' extents.
+        lo, hi = bg.ConvexGeometry(brush['geometry']['planes']).bounds
+        extent = hi - lo
+        if extent.tobytes() != size.tobytes():
+            found['bound_drift'] = float(np.abs(extent - size).max())
     resolved, discarded = [], []
     for plane in brush['geometry']['planes']:
         tag = plane.get('face')
@@ -466,7 +537,8 @@ def shipped_maps(root):
     for path in sorted(glob.glob(os.path.join(root, 'maps', '*.json'))):
         with open(path) as handle:
             data = json.load(handle)
-        brushes = [dict(brush) for brush in data.get('brushes') or []]
+        brushes = [dict(brush, **{WORLD_PLANES: True}) if bg.brush_has_geometry(brush)
+                   else dict(brush) for brush in data.get('brushes') or []]
         if brushes:
             out[os.path.basename(path)] = brushes
     return out

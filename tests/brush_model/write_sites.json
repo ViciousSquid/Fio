@@ -3,7 +3,8 @@
   "editor/component_edit.py": 2,
   "editor/main_window.py": 1,
   "engine/brush_faces.py": 1,
-  "engine/brush_geometry.py": 7,
+  "engine/brush_geometry.py": 3,
+  "engine/brush_placement.py": 1,
   "engine/renderer/core/geo_store.py": 1
  },
  "pos": {
@@ -12,13 +13,14 @@
   "editor/things.py": 1,
   "editor/view_2d.py": 4,
   "engine/brush_geometry.py": 2,
-  "engine/brush_placement.py": 1,
+  "engine/brush_placement.py": 3,
   "engine/change_journal.py": 4
  },
  "size": {
   "editor/component_edit.py": 1,
   "editor/view_2d.py": 4,
   "engine/brush_geometry.py": 1,
+  "engine/brush_placement.py": 1,
   "engine/effect_entity.py": 1
  },
  "texture_tiling": {

@@ -19,6 +19,7 @@ import sys
 import pytest
 
 from engine import brush_faces as bf
+from engine.brush_placement import MAP_VERSION, world_layout
 from engine import brush_geometry as bg
 from tests.helpers import brush_semantics as bs
 from tests.helpers.paths import REPO_ROOT, repo_path
@@ -39,7 +40,8 @@ def _legacy_brush(name='legacy', pos=(0.0, 40.0, 0.0)):
     bg.invalidate_geometry_cache(brush)
     brush.update(textures={t: 'Dev/128.jpg' for t in bf.FACE_TAGS},
                  uv_scale={'top': [0.25, 0.25]}, uv_natural={'north': True})
-    return {k: v for k, v in brush.items() if k not in bg.GEO_RUNTIME_KEYS}
+    # Saved as such a build wrote it: planes in world space (before Stage 2d).
+    return world_layout({k: v for k, v in brush.items() if k not in bg.GEO_RUNTIME_KEYS})
 
 
 def _load(level, **kwargs):
@@ -62,7 +64,7 @@ def test_a_legacy_map_is_migrated_and_saved_canonical():
     assert bf.face_material(brush, 'top').uv_scale == (0.25, 0.25)
     assert bf.face_material(brush, 'north').natural
     saved = state.get_level_data()
-    assert saved['version'] == bf.CANONICAL_MAP_VERSION
+    assert saved['version'] == MAP_VERSION
     assert all(_one_record(b) for b in saved['brushes'] if b.get('geometry'))
 
 
@@ -166,8 +168,8 @@ def test_every_shipped_map_loads_and_saves_canonical_with_the_same_faces():
             level = json.load(handle)
         state = _load(level)
         saved = state.get_level_data()
-        assert saved['version'] == bf.CANONICAL_MAP_VERSION
+        assert saved['version'] == MAP_VERSION
         for raw, loaded in zip(brushes, state.brushes):
-            assert bs.render_faces(loaded) == bs.render_faces(bs.migrated(raw)), name
+            assert bs.render_faces(loaded) == bs.render_faces(bs.loaded(raw)), name
             if loaded.get('geometry'):
                 assert _one_record(loaded), name

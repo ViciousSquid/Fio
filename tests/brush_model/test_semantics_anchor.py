@@ -118,7 +118,9 @@ def _convex_variants():
 
 
 def _worlds():
-    worlds = {name: brushes for name, brushes in MAPS.items()}
+    # Each shipped record in the frame the engine holds it in (Stage 2d:
+    # local planes placed by pos), as a load leaves it; materials as stored.
+    worlds = {name: [bs.localised(b) for b in brushes] for name, brushes in MAPS.items()}
     worlds['synthetic'] = _box_variants() + _convex_variants()
     return worlds
 
@@ -195,7 +197,9 @@ def test_convex_faces_are_what_the_convex_path_draws(world):
         drawn, record = _drawn_faces(brush, table, slot)
         # The mesh is anchored to its planes' own AABB (Stage 2a), never to
         # the pos/size copy.
-        rest_centre, rest_size = bs.geometry_rest(brush)
+        # The mesh is built in the brush's local frame (Stage 2d), anchored
+        # on its stored planes' AABB; pos places it.
+        rest_centre, rest_size = bs.local_rest(brush)
         assert list(record.origin) == list(rest_centre)
         assert list(record.scale) == list(rest_size)
         faces = bs.render_faces(brush)
