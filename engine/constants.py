@@ -282,30 +282,36 @@ def _brush_aabb_runtime(brush, placement, sig):
     stored: a change that landed meanwhile (on another thread) either finds
     the brush registered and drops the key itself, or has moved a stamp,
     and this drops it -- never a stale box under a live key."""
-    runtime_stamp = placement.runtime_generation
-    authored_stamp = placement.authored_generation
-    # brush_placement.runtime_of, inline: the first source that knows it.
+    # Its transform as resolved for the current placement stamps -- shared
+    # with every other reader this tick (brush_placement.resolved_runtime)
+    # -- read after the stamps it is checked against below.
+    stamps = placement.placement_stamps
+    cache = placement._runtime_cache          # resolved_runtime, inline
     key = id(brush)
-    runtime = None
-    for ref in placement._sources:
-        source = ref()
-        if source is not None:
-            entries = source.runtime_entries
-            if entries:
-                entry = entries.get(key)
-                if entry is not None and entry[0] is brush:
-                    runtime = entry[1]
-                    break
+    entry = cache.get(key)
+    if entry is not None and entry[0] is brush:
+        runtime = entry[1]
+    else:
+        # brush_placement.runtime_of, inline: the first source that knows it.
+        runtime = None
+        for ref in placement._sources:
+            source = ref()
+            if source is not None:
+                entries = source.runtime_entries
+                if entries:
+                    found = entries.get(key)
+                    if found is not None and found[0] is brush:
+                        runtime = found[1]
+                        break
+        cache[key] = (brush, runtime)
     if runtime is not None and 'geometry' not in brush and '_mesh_bounds' not in brush:
         # A box carried (and turned): world_box_at's box rule, inline.
-        size = brush.get('size') or placement.DEFAULT_SIZE
+        size = brush['size']
+        hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
         if runtime[6]:
-            bh = glm.vec3(placement.turned_half_now(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5,
-                                                    runtime[3], runtime[4], runtime[5],
-                                                    runtime[6]))
-        else:
-            bh = glm.vec3(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+            hx, hy, hz = placement.turned_half(hx, hy, hz, runtime[3:6], runtime[6])
         bp = glm.vec3(runtime[0], runtime[1], runtime[2])
+        bh = glm.vec3(hx, hy, hz)
     else:
         cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
         bp = glm.vec3(cx, cy, cz)
@@ -318,8 +324,7 @@ def _brush_aabb_runtime(brush, placement, sig):
     brush['_aabb_bounds'] = bounds          # publication order: see above
     brush['_aabb_sig'] = _MoverKey(sig)
     placement._runtime_cached[key] = brush        # remember_runtime_cached
-    if (placement.runtime_generation != runtime_stamp
-            or placement.authored_generation != authored_stamp):
+    if placement.placement_stamps is not stamps:
         brush.pop('_aabb_sig', None)
     return bounds
 

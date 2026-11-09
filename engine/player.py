@@ -28,7 +28,7 @@ from .constants import (
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
-    is_solid_world_brush, is_water_brush, brush_aabb_bounds, brush_aabb_runtime,
+    is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
 from .brush_placement import collision_shape, collision_shape_at, world_bounds
 from .physics import world_gravity
@@ -373,7 +373,8 @@ class Player:
                     # A box mover or door: a solid shape only while it is
                     # turned. Its transform is the one its cached box was
                     # placed by, which the AABB passes then read as a hit.
-                    runtime = brush_aabb_runtime(b)
+                    brush_aabb_bounds(b)        # (brush_aabb_runtime, inline)
+                    runtime = b.get('_aabb_runtime')
                     if runtime is None or not runtime[6]:
                         aabb_brushes.append(b)
                         continue
@@ -887,8 +888,16 @@ class Player:
         """
         if not mesh_brushes:
             return
-        offsets, radius = self._capsule_offsets()
-        offsets = [(float(o.x), float(o.y), float(o.z)) for o in offsets]
+        # The capsule's spheres as plain floats, worked out again only when
+        # the hull changes (a duck): _capsule_offsets' values.
+        half = self._half
+        hull = (half.x, half.y, half.z)
+        cached = getattr(self, '_capsule_cache', None)
+        if cached is None or cached[0] != hull:
+            offsets, radius = self._capsule_offsets()
+            cached = self._capsule_cache = (
+                hull, [(float(o.x), float(o.y), float(o.z)) for o in offsets], radius)
+        offsets, radius = cached[1], cached[2]
 
         # Each shape once per resolve (*mesh_shapes*: what the tick's gather
         # already asked collision_shape for these brushes): its planes and
@@ -983,7 +992,9 @@ class Player:
                         continue
                     pen = radius - best_sd
                     if pen > deepest:
-                        if frame is not None:   # the face normal, in world space
+                        if frame is not None and frame.r is not None:
+                            # The face normal, in world space (a translation
+                            # leaves a direction as it is).
                             best_n = frame.to_world_dir(*best_n)
                         deepest = pen
                         push = (best_n[0] * pen, best_n[1] * pen, best_n[2] * pen)

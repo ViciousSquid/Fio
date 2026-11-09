@@ -191,6 +191,12 @@ _sources = ()
 #: change.
 runtime_generation = 0
 authored_generation = 0
+#: Both stamps as one tuple, replaced (a new object) whenever either moves:
+#: a reader that must see both unchanged compares this by identity.
+placement_stamps = (0, 0)
+#: id(brush) -> (brush, runtime transform) resolved under the current
+#: stamps (resolved_runtime); every stamp starts a new, empty one.
+_runtime_cache = {}
 _stamps = itertools.count(1)
 
 
@@ -222,15 +228,19 @@ def _drop_runtime_cached():
 def note_runtime_change():
     """A runtime source changed its ``runtime_entries``: stamp it (and drop
     the cached AABBs that may follow it)."""
-    global runtime_generation
+    global runtime_generation, placement_stamps, _runtime_cache
     runtime_generation = next(_stamps)
+    placement_stamps = (runtime_generation, authored_generation)
+    _runtime_cache = {}
     _drop_runtime_cached()
 
 
 def note_authored_change():
     """An authored placement or shape may have changed: stamp it."""
-    global authored_generation
+    global authored_generation, placement_stamps, _runtime_cache
     authored_generation = next(_stamps)
+    placement_stamps = (runtime_generation, authored_generation)
+    _runtime_cache = {}
     _drop_runtime_cached()
 
 
@@ -713,7 +723,31 @@ def world_box(brush):
         size = brush.get('size') or DEFAULT_SIZE
         return (float(pos[0]), float(pos[1]), float(pos[2]),
                 size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
-    return world_box_at(brush, runtime_of(brush))
+    return world_box_at(brush, resolved_runtime(brush))
+
+
+def resolved_runtime(brush):
+    """:func:`runtime_of` for a mover or door, resolved once per pair of
+    placement stamps: every subsystem that asks during a tick (the AABB
+    cache, broad phases, the player's passes, collision shapes) shares one
+    lookup instead of each asking the runtime sources again.
+
+    Kept in :data:`_runtime_cache`, which every stamp replaces with a new,
+    empty dict -- the dict is the stamp: nothing is written to the brush and
+    nothing has to be dropped row by row. A reader takes the dict before it
+    looks: a change that lands meanwhile has already replaced it, so what
+    the reader stores goes into a dict no one reads again. Only the
+    transform is kept; a box is derived from it and the brush's live
+    ``pos``/``size`` by whoever needs one."""
+    if not (brush.get('is_mover') or brush.get('is_door')):
+        return None
+    cache = _runtime_cache
+    entry = cache.get(id(brush))
+    if entry is not None and entry[0] is brush:
+        return entry[1]
+    runtime = runtime_of(brush)
+    cache[id(brush)] = (brush, runtime)
+    return runtime
 
 
 def world_box_at(brush, runtime):
@@ -772,6 +806,25 @@ def world_bounds(brush):
                 cy = float(pos[1]) + ly
                 cz = float(pos[2]) + lz
                 return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
+    else:
+        # A mover or door: its transform as resolved under the current
+        # stamps (resolved_runtime, inline), and a box's rule inline.
+        cache = _runtime_cache
+        entry = cache.get(id(brush))
+        if entry is not None and entry[0] is brush:
+            runtime = entry[1]
+        else:
+            runtime = runtime_of(brush)
+            cache[id(brush)] = (brush, runtime)
+        if runtime is not None and 'geometry' not in brush and '_mesh_bounds' not in brush:
+            size = brush.get('size') or DEFAULT_SIZE
+            hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
+            if runtime[6]:
+                hx, hy, hz = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
+            cx, cy, cz = runtime[0], runtime[1], runtime[2]
+        else:
+            cx, cy, cz, hx, hy, hz = world_box_at(brush, runtime)
+        return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
     cx, cy, cz, hx, hy, hz = world_box(brush)
     return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
 
@@ -963,7 +1016,7 @@ def collision_shape(brush):
             pos = brush.get('pos') or DEFAULT_POS
             if entry[0] == (pos[0], pos[1], pos[2]):
                 return entry[2]
-    return collision_shape_at(brush, runtime_of(brush))
+    return collision_shape_at(brush, resolved_runtime(brush))
 
 
 def collision_shape_at(brush, runtime):

@@ -1197,7 +1197,9 @@ class MoverTable:
         row = movers.row_of_obj.get(id(brush))
         if row is None or movers.brushes[row] is not brush:
             return False
-        movers._store(np.array([row]), np.array([position], dtype=np.float64))
+        # One row, in scalars (_store_one), as the per-row walk stores it.
+        movers._store_one(row, [float(position[0]), float(position[1]), float(position[2])],
+                          movers.original[row].tolist())
         return True
 
     def restore_placement(self, brush, position, angle=0.0):
