@@ -1,7 +1,7 @@
 """Interleaved performance gate: one checkout against another.
 
     python tools/perf_gate.py --base PATH --head PATH [--rounds 5] [--core 2]
-        [--probes movers,aabb,static,ai,player,frames,gameplay] [--json out.json]
+        [--probes movers,aabb,static,ai,player,table,frames,gameplay] [--json out.json]
 
 Runs every probe of ``tools/perf_probes.py`` -- the same measuring code for
 both checkouts -- in a fresh process pinned to one core, alternating base and
@@ -28,7 +28,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROBES = ('movers', 'aabb', 'static', 'ai', 'player', 'frames', 'gameplay')
+PROBES = ('movers', 'aabb', 'static', 'ai', 'player', 'table', 'frames', 'gameplay')
 
 
 def percentile(values, q):

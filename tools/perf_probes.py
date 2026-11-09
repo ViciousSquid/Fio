@@ -9,8 +9,8 @@ the way each tree does: through a runtime source where the tree has one
 (Stage 2), by writing ``pos`` / ``_rot_angle`` before that -- so the same
 workload is measured on both.
 
-Probes: movers, aabb, static, ai, player, frames and gameplay (the last two
-need GL: xvfb-run).
+Probes: movers, aabb, static, ai, player, table, frames and gameplay (the
+last two need GL: xvfb-run).
 """
 
 import argparse
@@ -21,7 +21,7 @@ import os
 import sys
 import time
 
-PROBES = ('movers', 'aabb', 'static', 'ai', 'player', 'frames', 'gameplay')
+PROBES = ('movers', 'aabb', 'static', 'ai', 'player', 'table', 'frames', 'gameplay')
 
 
 def _now():
@@ -336,6 +336,26 @@ def probe_player(out, ticks=900):
         out['player_' + kind] = values
         if source is not None:
             source.clear()
+
+
+# ---------------------------------------------------------------------------
+# The player beside movers driven by the mover table (the production path)
+# ---------------------------------------------------------------------------
+
+def probe_table(out):
+    """tools/bench_player_table.py's scenarios: each tree's own mover table
+    ticked as the logic thread ticks it (Stage 2's publication included),
+    then the player updated with the level's mover and door lists -- the
+    tick, the player, both, and the player's Python calls a tick (exact)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import bench_player_table as bt
+    for kind in bt.KINDS:
+        result = bt.measure(kind, False)
+        for key in ('tick', 'player', 'total'):
+            out['table_%s_%s' % (kind, key)] = result[key]
+        out['table_%s_player_calls' % kind] = [result['player_calls']]
+        gc.collect()
 
 
 # ---------------------------------------------------------------------------

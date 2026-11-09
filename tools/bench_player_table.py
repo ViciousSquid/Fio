@@ -157,7 +157,14 @@ class World:
             self.player.pos.x = -760.0
 
     def close(self):
+        """Stop play as the game does (every mover and door home, the
+        mover table's entries dropped), so the next world is the only one
+        a runtime source answers for, and let this one go."""
+        self.runtime._reset_movers()
+        self.runtime._reset_doors()
         self.logic.stop()
+        self.logic = self.runtime = self.player = self.grid = None
+        gc.collect()
 
 
 def measure(kind, calls):
@@ -236,13 +243,16 @@ def main():
 def trace(out):
     """The player's state every tick, through every scenario from three
     lanes (through, beside and past the shapes), jumping and ducking now and
-    then -- including a long fall onto the movers and a fast dash, so the
-    rare paths run too."""
+    then -- including a long fall onto the movers, dashes (one of a hundred
+    units a tick) and the player put inside the nearest mover (pushed out
+    a long way), so the rare paths run too."""
+    from engine import brush_placement
     res = {}
     for kind in KINDS:
         for start_z in (120.0, 60.0, 180.0):
             world = World(kind, start_z)
             player = world.player
+            runtime = world.runtime
             ticks = []
             for tick in range(960):
                 world.tick()
@@ -252,6 +262,15 @@ def trace(out):
                 if tick % 300 == 150:
                     # A dash: far more than a tick's walk.
                     player.velocity.x = 2400.0
+                if tick % 300 == 250:
+                    player.velocity.x = 6000.0
+                if tick % 160 == 60:
+                    # Inside the nearest mover or door, where it is now.
+                    shapes = runtime._mover_brush_list + runtime._door_brush_list
+                    if shapes:
+                        centres = [brush_placement.world_box(b)[:3] for b in shapes]
+                        best = min(centres, key=lambda c: abs(c[0] - player.pos.x))
+                        player.pos.x, player.pos.y, player.pos.z = best
                 world.update(jump=tick % 37 == 0, crouch=(tick // 50) % 5 == 3)
                 g = player.ground_object
                 ticks.append([player.pos.x, player.pos.y, player.pos.z, player.velocity.x,
