@@ -9,13 +9,19 @@ from __future__ import annotations
 
 import math
 import os
+from itertools import chain
 
 import numpy as np
 
 from .brush_geometry import build_collision_mesh, brush_has_geometry
 from . import brush_placement as _placement
-from .brush_placement import BulkBoxes, world_box
-from .constants import is_water_brush
+from .brush_placement import shared_bulk_boxes, world_box
+from .constants import brush_still_box, is_water_brush
+
+_chain = chain.from_iterable
+
+#: (-1, +1) as a (2, 1, 1) column: half-extents to the low and high corner.
+_SIGNS = np.array([-1.0, 1.0]).reshape(2, 1, 1)
 
 try:
     from editor.debug_console import debug_log
@@ -30,6 +36,17 @@ COLLISION_KEYS = (
     "_mesh_bounds",
     "_mesh_planes",
 )
+
+
+def _vectors(vectors):
+    """``(n, 3)`` float64 of *n* 3-vectors (lists, tuples): one flat pass,
+    Stage 1's values; any vector of another length falls back to reading
+    each one's first three."""
+    count = len(vectors)
+    flat = np.fromiter(_chain(vectors), dtype=np.float64)
+    if flat.size != 3 * count:
+        flat = np.array([(v[0], v[1], v[2]) for v in vectors], dtype=np.float64)
+    return flat.reshape(count, 3)
 
 
 class CollisionRows:
@@ -64,8 +81,8 @@ class CollisionRows:
     see :meth:`LogicCollision.collision_rows`.
     """
 
-    __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi',
-                 'mover_rows', 'movers', '_mover_seen', '_mover_boxes')
+    __slots__ = ('source', 'epoch', 'brushes', 'lo32', 'hi32', 'lo', 'hi', '_by_row',
+                 'mover_rows', 'movers', '_mover_seen', '_mover_boxes', '_mover_at')
 
     def __init__(self, brushes, epoch):
         self.source = brushes
@@ -73,51 +90,66 @@ class CollisionRows:
         self.brushes = list(brushes)
         count = len(self.brushes)
         # One contiguous row per axis: every query reads a whole axis at once.
-        self.lo32 = np.empty((3, count), dtype=np.float64)
-        self.hi32 = np.empty((3, count), dtype=np.float64)
-        self.lo = np.empty((3, count), dtype=np.float64)
-        self.hi = np.empty((3, count), dtype=np.float64)
-        self._resolve(slice(None), self.brushes)
-        movers = [row for row, b in enumerate(self.brushes)
-                  if b.get('is_mover') or b.get('is_door')]
+        # The four bounds are views of one block, so a refresh puts a row's
+        # twelve numbers in place with one store (_store).
+        block = np.empty((4, 3, count), dtype=np.float64)
+        self.lo32, self.hi32, self.lo, self.hi = block
+        #: The block indexed by row: ``(4, count, 3)``.
+        self._by_row = block.transpose(0, 2, 1)
+        movers = self._resolve(slice(None), self.brushes)
         self.mover_rows = np.asarray(movers, dtype=np.intp)
         self.movers = [self.brushes[row] for row in movers]
         #: The placement stamps the mover rows were last derived at (None
         #: until the first refresh): see refresh_movers.
         self._mover_seen = None
-        #: Their world boxes, in bulk, from the tables that hold them.
-        self._mover_boxes = BulkBoxes(self.movers)
+        #: Their world boxes, in bulk, from the tables that hold them -- the
+        #: gather shared with any other structure keeping rows for the same
+        #: brushes -- and the rows to put each one in.
+        bulk, rows, at = shared_bulk_boxes(self.movers, self.mover_rows)
+        self._mover_boxes = bulk
+        self._mover_at = (rows, at)
 
     def _resolve(self, rows, brushes):
         # Each brush's derived bounds (brush_placement.world_box): a convex
         # brush's planes, a mover where it is now, a spinner's turned box.
-        # A plain box's are its pos/size, read in bulk as they always were;
-        # only the rest ask the resolver.
-        count = len(brushes)
-        pos = np.array([(p[0], p[1], p[2]) for p in (b['pos'] for b in brushes)],
-                       dtype=np.float64).reshape(count, 3).T
-        size = np.array([(s[0], s[1], s[2]) for s in (b['size'] for b in brushes)],
-                        dtype=np.float64).reshape(count, 3).T
-        half = size * 0.5
+        # A plain box's are its pos/size. One pass finds the rest
+        # (membership tests: most brushes carry none of these keys); a still
+        # angled brush's box is the one remembered with its AABB
+        # (constants.brush_still_box), a mover's is asked of the resolver,
+        # and each is put in place of the brush's pos/size before the
+        # columns are read in bulk -- its half-extent doubled, which the
+        # halving below undoes exactly. Returns the movers' and doors' rows.
+        pos = [b['pos'] for b in brushes]
+        size = [b['size'] for b in brushes]
         special = [i for i, brush in enumerate(brushes)
                    if 'geometry' in brush or '_mesh_bounds' in brush
-                   or brush.get('is_mover') or brush.get('is_door')]
-        if special:
-            boxes = np.array([world_box(brushes[i]) for i in special],
-                             dtype=np.float64).reshape(len(special), 6).T
-            pos[:, special] = boxes[:3]
-            half[:, special] = boxes[3:]
-        self._store(rows, pos, half)
+                   or 'is_mover' in brush or 'is_door' in brush]
+        movers = []
+        for i in special:
+            brush = brushes[i]
+            if brush.get('is_mover') or brush.get('is_door'):
+                movers.append(i)
+                cx, cy, cz, hx, hy, hz = world_box(brush)
+            elif 'geometry' in brush or '_mesh_bounds' in brush:
+                cx, cy, cz, hx, hy, hz = brush_still_box(brush)
+            else:
+                continue                # a flag set false: a plain box
+            pos[i] = (cx, cy, cz)
+            size[i] = (hx * 2.0, hy * 2.0, hz * 2.0)
+        self._store(rows, _vectors(pos), _vectors(size) * 0.5)
+        return movers
 
     def _store(self, rows, pos, half):
-        # Halving is exact, so float32(size * 0.5) == float32(size) * 0.5:
-        # the hitscan corners round exactly as glm.vec3(size) * 0.5 did.
-        pos32 = pos.astype(np.float32)
-        half32 = half.astype(np.float32)
-        self.lo32[:, rows] = pos32 - half32
-        self.hi32[:, rows] = pos32 + half32
-        self.lo[:, rows] = pos - half
-        self.hi[:, rows] = pos + half
+        # *pos* and *half* are (k, 3), one row per brush. The corners are
+        # pos + (-half, +half) -- a + (-b) is a - b exactly, and negation and
+        # halving are exact, so float32(size * 0.5) == float32(size) * 0.5:
+        # the hitscan corners round exactly as glm.vec3(size) * 0.5 did --
+        # in float32 and in float64, stacked as the block is and stored at
+        # once.
+        signed = half * _SIGNS
+        corners = np.concatenate((pos.astype(np.float32) + signed.astype(np.float32),
+                                  pos + signed))
+        self._by_row[:, rows] = corners
 
     def refresh_movers(self):
         """Re-derive the movers' and doors' rows if anything they are derived
@@ -141,7 +173,10 @@ class CollisionRows:
         # Gathered from the tables that hold them (the mover table's columns),
         # not rediscovered brush by brush: brush_placement.BulkBoxes.
         centre, half = self._mover_boxes.boxes()
-        self._store(self.mover_rows, centre.T, half.T)
+        rows, at = self._mover_at
+        if at is not None:
+            centre, half = centre[at], half[at]
+        self._store(rows, centre, half)
         # The stamps read before the movers were: a change that lands while
         # this ran moves a stamp past them, and the next query looks again.
         self._mover_seen = (runtime_stamp, authored_stamp)

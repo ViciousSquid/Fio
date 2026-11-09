@@ -555,14 +555,17 @@ def test_the_physics_rows_skip_an_unchanged_query_too(crowd, monkeypatch):
     _same_rows(rows, fresh_rows(), ('lo', 'hi'))
 
 
-def test_bulk_boxes_are_world_box_from_the_tables_columns(crowd, monkeypatch):
+@pytest.mark.parametrize('scalar_below', [0, 10 ** 6], ids=['by-columns', 'by-brush'])
+def test_bulk_boxes_are_world_box_from_the_tables_columns(crowd, monkeypatch, scalar_below):
     """The movers' world boxes gathered from the mover table's columns
     (brush_placement.BulkBoxes) are world_box brush by brush, to the bit --
     spinners, a brush that is both mover and door, an angled mover, rows at
     rest -- including when an earlier runtime source (the editor preview)
     answers for a brush the table also holds, after a saved-game restore,
     after an authored edit in play, and after stop. A gather asks no brush
-    for its runtime transform."""
+    for its runtime transform. Both ways of gathering: by the table's
+    columns, and (a short list) brush by brush from the runtime entries."""
+    monkeypatch.setattr(bp.BulkBoxes, 'SCALAR_BELOW', scalar_below)
     table = crowd.mover_runtime._movers()
     movers = [b for b in crowd.editor_state.brushes
               if b.get('is_mover') or b.get('is_door')]

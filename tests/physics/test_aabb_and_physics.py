@@ -109,7 +109,15 @@ def test_runtime_keys_are_declared_for_stripping():
     b = _brush([1, 2, 3], [4, 5, 6])
     brush_aabb_bounds(b)
     private = [k for k in b if k.startswith("_")]
-    assert set(private) == set(AABB_RUNTIME_KEYS)
+    assert set(private) == {"_aabb_sig", "_aabb_bounds"}
+    # A still angled brush also keeps its derived box (brush_still_box).
+    from engine import brush_geometry as bg
+    from engine.constants import brush_still_box
+    cut = _brush([1, 2, 3], [4, 5, 6])
+    bg.clip_brush(cut, [1.0, 1.0, 0.0], 3.0)
+    brush_still_box(cut)
+    cached = {k for k in cut if k.startswith("_aabb")}
+    assert cached == set(AABB_RUNTIME_KEYS)
 
 
 def test_editor_state_strips_the_cache_keys():

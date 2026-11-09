@@ -6,7 +6,7 @@ import numpy as np
 
 from .change_journal import touch
 from . import brush_placement as _placement
-from .brush_placement import BulkBoxes, world_bounds, world_box
+from .brush_placement import shared_bulk_boxes, world_bounds, world_box
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
                       cells_of_points, tier_of)
@@ -62,7 +62,8 @@ class _CellRows:
     """
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
-                 '_unpacked_cells', '_mover_rows', '_seen', '_lock', '_mover_boxes')
+                 '_unpacked_cells', '_mover_rows', '_seen', '_lock', '_mover_boxes',
+                 '_mover_at')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -112,7 +113,9 @@ class _CellRows:
         #: constructor just derived them, but at no recorded stamp.
         self._seen = None
         self._lock = threading.Lock()
-        self._mover_boxes = BulkBoxes([brush for _row, brush in self.movers])
+        # The gather shared with the collision rows (the same movers).
+        self._mover_boxes, self._mover_rows, self._mover_at = shared_bulk_boxes(
+            [brush for _row, brush in self.movers], self._mover_rows)
 
     def _resolve(self, row, brush):
         if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
@@ -149,6 +152,8 @@ class _CellRows:
             # world_bounds' arithmetic: centre -/+ half.
             centre, half = self._mover_boxes.boxes()
             rows = self._mover_rows
+            if self._mover_at is not None:
+                centre, half = centre[self._mover_at], half[self._mover_at]
             self.lo[rows] = centre - half
             self.hi[rows] = centre + half
             self._seen = stamps

@@ -1272,6 +1272,7 @@ def build_collision_mesh(brush):
     # (engine.constants.brush_aabb_bounds); its derived box comes from the
     # planes, so this changes nothing there, but the mesh keys are an input.
     brush.pop('_aabb_sig', None)
+    brush.pop('_aabb_box', None)
     return True
 
 
@@ -1444,8 +1445,10 @@ def _invalidate(brush):
     brush.pop('_box_shape', None)
     brush.pop('_box_shape_sig', None)
     # The AABB cache keys a still brush by pos/size alone
-    # (engine.constants.brush_aabb_bounds): a new shape must drop it.
+    # (engine.constants.brush_aabb_bounds): a new shape must drop it, and
+    # the derived box kept with it (brush_still_box).
     brush.pop('_aabb_sig', None)
+    brush.pop('_aabb_box', None)
 
 
 # Process-wide monotonic counter behind every brush's geometry epoch.  A number

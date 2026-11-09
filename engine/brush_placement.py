@@ -55,10 +55,13 @@ from __future__ import annotations
 
 import itertools
 import math
+import weakref
 
 import numpy as np
 
 from engine import brush_geometry
+
+_chain = itertools.chain.from_iterable
 
 DEFAULT_POS = (0.0, 0.0, 0.0)
 DEFAULT_SIZE = (64.0, 64.0, 64.0)
@@ -220,16 +223,23 @@ def register_runtime(source):
     it is, so every reader sees the exact value the renderer is published
     (``authored + (now - authored)`` is not always ``now`` in floating
     point)."""
-    import weakref
     global _sources
     live = tuple(ref for ref in _sources if ref() is not None and ref() is not source)
-    _sources = live + (weakref.ref(source),)
+    _sources = live + (weakref.ref(source, _source_gone),)
+    # Who answers may have changed: readers keyed by the stamp look again.
+    note_runtime_change()
 
 
 def unregister_runtime(source):
     global _sources
     _sources = tuple(ref for ref in _sources
                      if ref() is not None and ref() is not source)
+    note_runtime_change()
+
+
+def _source_gone(_ref):
+    # A source collected with entries still in it no longer answers.
+    note_runtime_change()
 
 
 def runtime_of(brush):
@@ -268,15 +278,31 @@ class BulkBoxes:
     rules -- and any other source (the editor preview, a test) claims the
     few brushes in its ``runtime_entries``. A brush no source claims is
     where it was authored. Same values as :func:`world_box`, to the bit.
+
+    A short list (fewer than :attr:`SCALAR_BELOW` brushes) is answered from
+    the sources' ``runtime_entries`` brush by brush, in scalars -- what
+    :func:`world_box` does, without the lookups it repeats for every brush
+    -- as a dozen NumPy calls cost more than a few rows do.
     """
 
-    __slots__ = ('brushes', 'index', '_home', '_authored', '__weakref__')
+    __slots__ = ('brushes', 'index', '_home', '_home_rows', '_authored', '_answer',
+                 '__weakref__')
+
+    #: Below this many brushes :meth:`boxes` goes brush by brush. Measured
+    #: (CPython 3.13, NumPy 2.5, the gate's mover worlds): ~5 us + 0.5 us a
+    #: brush that way against ~35 us + 0.27 us a brush by columns -- 64
+    #: brushes 38 against 49 us, 256 brushes 135 against 103 us.
+    SCALAR_BELOW = 128
 
     def __init__(self, brushes):
         self.brushes = brushes
         self.index = {id(brush): i for i, brush in enumerate(brushes)}
         self._home = None
+        self._home_rows = None
         self._authored = None
+        #: ``((runtime stamp, authored stamp), (centre, half))``: the last
+        #: answer and the placement stamps it was worked out at.
+        self._answer = None
 
     def homes(self):
         """``(centre (n, 3), half (n, 3))`` of the authored boxes."""
@@ -294,6 +320,13 @@ class BulkBoxes:
                     centre[i] = box[:3]
                     half[i] = box[3:]
             self._home = (centre, half)
+            # For the brush-by-brush gather: each authored box as one tuple,
+            # its half-extents, and the brushes a source may answer for.
+            halves = [tuple(h) for h in half.tolist()]
+            self._home_rows = (
+                [tuple(c) + h for c, h in zip(centre.tolist(), halves)], halves,
+                [(i, id(brush), brush) for i, brush in enumerate(brushes)
+                 if brush.get('is_mover') or brush.get('is_door')])
             self._authored = stamp
         return self._home
 
@@ -312,7 +345,24 @@ class BulkBoxes:
             half[i] = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
 
     def boxes(self):
-        """``(centre (n, 3), half (n, 3))``: each brush's world box now."""
+        """``(centre (n, 3), half (n, 3))``: each brush's world box now.
+
+        Worked out once per pair of placement stamps (read first: a change
+        that lands meanwhile moves one past the answer, and the next call
+        works it out again); the arrays are shared by every caller and are
+        not to be written to."""
+        stamps = (runtime_generation, authored_generation)
+        answer = self._answer
+        if answer is not None and answer[0] == stamps:
+            return answer[1]
+        if len(self.brushes) < self.SCALAR_BELOW:
+            boxes = self._boxes_by_brush()
+        else:
+            boxes = self._boxes_by_columns()
+        self._answer = (stamps, boxes)
+        return boxes
+
+    def _boxes_by_columns(self):
         home_centre, home_half = self.homes()
         centre = home_centre.copy()
         half = home_half.copy()
@@ -331,6 +381,73 @@ class BulkBoxes:
                 if i is not None and not claimed[i]:
                     self.claim(i, entry, centre, half, claimed)
         return centre, half
+
+    def _boxes_by_brush(self):
+        """:meth:`boxes` for a short list: each brush asked of the sources'
+        entries in :func:`runtime_of`'s order (the first that knows it
+        answers), then :func:`world_box_at`'s rule -- its centre now, and
+        its authored half-extents turned by its spin."""
+        self.homes()
+        rows, halves, pending = self._home_rows
+        rows = list(rows)
+        turn = turned_half_now
+        for source in runtime_sources():
+            entries = source.runtime_entries
+            if not entries:
+                continue
+            get = entries.get
+            left = []
+            for item in pending:
+                entry = get(item[1])
+                if entry is None or entry[0] is not item[2]:
+                    left.append(item)
+                    continue
+                runtime = entry[1]
+                i = item[0]
+                if runtime[6]:
+                    h = halves[i]
+                    rows[i] = runtime[:3] + turn(h[0], h[1], h[2], runtime[3],
+                                                 runtime[4], runtime[5], runtime[6])
+                else:
+                    rows[i] = runtime[:3] + halves[i]
+            pending = left
+            if not pending:
+                break
+        out = np.fromiter(_chain(rows), np.float64, 6 * len(rows)).reshape(len(rows), 6)
+        return out[:, :3], out[:, 3:]
+
+
+#: Key: the ids of a set of brushes, in id order -> the BulkBoxes shared by
+#: every structure that keeps rows for that set (see shared_bulk_boxes).
+_SHARED_BULK = weakref.WeakValueDictionary()
+
+
+def shared_bulk_boxes(brushes, rows):
+    """``(bulk, rows, at)``: the :class:`BulkBoxes` for this set of brushes
+    -- shared by every structure that keeps rows for the same movers and
+    doors (the collision rows, the grid's cell rows), so their world boxes
+    are gathered once per placement stamp, not once per structure -- and how
+    a structure that keeps ``brushes[i]`` in row ``rows[i]`` stores the
+    answers: ``bulk.boxes()[k]`` belongs in row ``rows[k]`` when *at* is
+    None (each brush once: the usual case, and no picking), otherwise the
+    answers picked by *at* belong in *rows*."""
+    unique = {id(brush): brush for brush in brushes}
+    key = tuple(sorted(unique))
+    ordered = [unique[k] for k in key]
+    bulk = _SHARED_BULK.get(key)
+    if bulk is None or any(a is not b for a, b in zip(bulk.brushes, ordered)):
+        bulk = BulkBoxes(ordered)
+        _SHARED_BULK[key] = bulk
+    index = bulk.index
+    at = np.asarray([index[id(brush)] for brush in brushes], dtype=np.intp)
+    rows = np.asarray(rows, dtype=np.intp)
+    count = len(ordered)
+    if len(at) == count:
+        # Each brush once: put the rows in the gather's order instead.
+        ordered_rows = np.empty(count, dtype=np.intp)
+        ordered_rows[at] = rows
+        return bulk, ordered_rows, None
+    return bulk, rows, at
 
 
 class RuntimeOverrides:

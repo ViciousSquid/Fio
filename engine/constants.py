@@ -152,9 +152,10 @@ def is_solid_world_brush(brush):
     return not is_water_brush(brush)
 
 
-# Runtime-only keys written to brush dicts by the cached-AABB helper below.
+# Runtime-only keys written to brush dicts by the cached-AABB helpers below
+# (brush_aabb_bounds, and brush_still_box for a still angled brush).
 # Stripped on serialisation alongside the renderer's own private keys.
-AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds')
+AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds', '_aabb_box')
 
 
 #: engine.brush_placement, bound on first use: it imports the geometry
@@ -242,7 +243,11 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
         bh = glm.vec3(hx, hy, hz)
     elif 'geometry' in brush or '_mesh_bounds' in brush:
         sig = plain_sig
-        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, None)
+        box = placement.world_box_at(brush, None)
+        # Kept for brush_still_box under the same key (stored first: a
+        # reader that sees the new key finds the box that goes with it).
+        brush['_aabb_box'] = box
+        cx, cy, cz, hx, hy, hz = box
         bp = glm.vec3(cx, cy, cz)
         bh = glm.vec3(hx, hy, hz)
     else:
@@ -267,6 +272,31 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
     brush['_aabb_bounds'] = bounds
     brush['_aabb_sig'] = sig
     return bounds
+
+def brush_still_box(brush):
+    """``(cx, cy, cz, hx, hy, hz)``: :func:`engine.brush_placement.world_box`
+    of a still angled brush or mesh proxy -- one with no runtime transform
+    (not a mover or a door) -- remembered under :func:`brush_aabb_bounds`'
+    pos/size key, so the invalidation that covers that cache covers this
+    (every geometry edit drops both).
+
+    What a structure built over the whole level (the collision rows) reads
+    for each such brush: a derived box is a function of the planes and the
+    placement, which a rebuild does not change.
+    """
+    pos = brush['pos']
+    size = brush['size']
+    if brush.get('_aabb_sig') == (pos[0], pos[1], pos[2], size[0], size[1], size[2]):
+        box = brush.get('_aabb_box')
+        if box is not None:
+            return box
+    brush_aabb_bounds(brush)
+    box = brush.get('_aabb_box')
+    if box is None:            # not an angled brush or mesh proxy after all
+        placement = _brush_placement or _bind_brush_placement()
+        box = placement.world_box_at(brush, None)
+    return box
+
 
 def normalize_color(rgb, default=None):
     """Normalise an RGB colour to 0.0-1.0 floats.
