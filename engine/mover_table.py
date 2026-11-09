@@ -426,7 +426,8 @@ class _Group:
         if self.any_twin:
             twin = int(self.twin_row[row])
             if twin >= 0:
-                self.twin.pos[twin] = new
+                mirror = self.twin.pos          # an array, not an entity
+                mirror[twin] = new
         table = self.table
         if table is not None:
             table._publish_row(self, row, table.runtime_entries, new, rest)
