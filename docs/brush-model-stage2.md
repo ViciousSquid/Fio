@@ -1,7 +1,8 @@
 # Unified brush model — Stage 2: shape, placement and derived bounds
 
-Status: **approved; being implemented in substages** (§11 records each as it
-lands). Builds on Stage 1 (`56ec0e3`, one material record per face); the
+Status: **implemented** (2a–2d; §11 records each substage, its validation
+and measurements, and §11.5 the integrated result). Stage 2e (true-shape
+hitscan, projectiles, AI line of sight and physics bodies) is a follow-up. Builds on Stage 1 (`56ec0e3`, one material record per face); the
 overall plan is `docs/brush-model-proposal.md`. Sections 1–10 are the
 investigation and design as approved.
 
@@ -577,6 +578,18 @@ and `test_a_turned_box_is_the_same_from_the_turn_memo`.
 
 #### Validation
 
+* **Full suite** (tests + plugins, llvmpipe, `50a4f32`): 7,099 passed, 150
+  skipped, 1 xfailed, 8 failed. Five failures are the baseline's (play-cycle
+  leak, editor chrome, three portal-fade). The other three were 2b's: one
+  test reading the mover table's old attribute name (fixed in `50a4f32`
+  itself, after the run had collected it), and two found by the run and
+  fixed in `c4551b0` -- the collision rows skipped a mover whose runtime
+  transform had not changed, so a `pos` written during play without an
+  editor transaction (a console `setprop`, a plugin) was missed by hitscan
+  while every other reader followed it; and a deathmatch test put its lift
+  at the far landing by writing `pos` (it now asks the mover table). On
+  `50a4f32` + `c4551b0` those three pass; the five baseline failures remain.
+  One more Stage 2 target is a regression test (2 → 1 xfail).
 * `tests/brush_model/test_runtime_transform.py` (18 tests): play writes
   nothing into any brush (linear movers, spinners, doors, path movers,
   angled movers); rendering (published and re-resolved), the AABB cache,
@@ -649,3 +662,309 @@ the loader now resolves each angled brush's shape, which the first frame
 built anyway: after the load and the first table sync the heap is 4,904 B
 per brush on Stage 1 and 5,065 B on 2b (+3 %, the shape's cached box and
 bounds); box maps are unchanged (352.9 / 352.7 B).
+
+### 11.3 Stage 2c — collision by the shape, in its frame
+
+#### What collides how
+
+`brush_placement.collision_shape(brush)` is the one answer to "what does
+the player collide with": `(planes, triangles, bounds, frame)`, or `None`
+for the AABB fast path.
+
+| Brush | Collides as | Frame |
+|---|---|---|
+| angled, still | its planes (`ConvexGeometry.collision_shape`, built once per shape) | a translation by its placement (Stage 2d: local planes) |
+| angled mover or door | its planes | its runtime transform: `s = A + Rᵀ(w − P)` |
+| spinning box | its six planes at its authored placement | its runtime transform |
+| entity model's collision mesh proxy | its world-space mesh | none |
+| any other box -- static, or carried without turning | its derived AABB, which is its exact shape | -- |
+
+A world query (the capsule's spheres) is carried into the shape's frame,
+tested against the shape's planes there, and the push-out normal is carried
+back (`Frame.to_shape`, `Frame.to_world_dir`: a few float operations; no
+matrix is built per query). Stage 1 collided an angled mover as its box
+(the triangles were baked only for still brushes) and a spinning box as its
+unturned box; 2a made both the AABB of the turned box. The player now
+stands on, walks into and is carried by each as the shape it is drawn as. The brush that pushed the player up is its ground
+object, so a mover carries what it holds (linear carry, unchanged; angular
+carry is out of scope).
+
+#### No rebuild per tick, no allocation per query
+
+* The shape's collision data (planes with unit normals, swept-sphere
+  triangles, bounds) is built once per `ConvexGeometry` and shared;
+  `build_collision_mesh` hands out the same lists.
+* `collision_shape` caches its whole answer on the brush
+  (`_collision_entry`, stripped on save) against what it is built from: the
+  runtime transform tuple (which a source replaces whenever the brush
+  moves, so `is` decides), the cached shape (dropped by every geometry
+  edit) and the placement. The player's several questions per tick build
+  it once per move; a brush that does not move never builds it again.
+  Rotations are memoised per `(axis, angle)`.
+* The capsule's broad reject is the tight axis-aligned test whenever the
+  frame only translates, and the circumscribed-radius bound only for a
+  turned frame.
+
+`tools/bench_collision.py` counts the rebuilds while it times the player:
+over 900 ticks next to eight shapes, **no convex solve and no collision-shape
+build in any scenario**; a frame is built once per moving shape per tick
+(once per move), never per query.
+
+#### Remaining approximations (recorded; Stage 2e)
+
+Hitscan, projectiles, AI line of sight and walls, and physics bodies still
+test every brush as its derived AABB -- the turned box's AABB for a spinner,
+the planes' AABB for an angled brush, both where the brush is now. The
+player's step-up and un-duck headroom tests also use those AABBs. These are
+shape approximations on a correct placement, not disagreements about where
+a brush is.
+
+#### Validation
+
+* `tests/brush_model/test_collision_oracle.py`: an oracle independent of the
+  collision code builds each effective world shape from the authored shape
+  and the runtime transform with unit quaternions (not the engine's
+  matrices). Along a mover's whole path, translating and spinning, for
+  angled brushes and boxes: the player's depenetration in the shape's frame
+  lands the capsule where the same rule on the oracle's world half-spaces
+  does and never moves a capsule the solid does not touch; a point inside a
+  moving ramp's AABB but outside the ramp is not pushed; every AABB consumer
+  contains the true shape; the editor's face pick enters where the oracle's
+  ray does; frames are built once per move and no rotation per query.
+* The known-inconsistency target "a convex mover's collision follows its
+  transform" is a regression test (1 → 0 xfail).
+
+#### Measurements
+
+Player tick next to eight shapes (`tools/bench_collision.py`, one pinned
+core, best of three, interleaved with Stage 1):
+
+| next to | Stage 1 p50 / p99 | Stage 2 p50 / p99 | solves | shape builds | frames per tick |
+|---|---|---|---|---|---|
+| 8 static boxes | 11.2 / 29.8 µs | 12.6 / 36.7 µs | 0 | 0 | 0 |
+| 8 still angled brushes | 20.1 / 43.5 µs | 29.0 / 63.9 µs | 0 | 0 | 0 |
+| 8 box movers | 24.9 / 48.4 µs | 43.6 / 74.4 µs | 0 | 0 | 0 |
+| 8 angled movers | 29.1 / 53.7 µs | 71.0 / 109.0 µs | 0 | 0 | 8 |
+| 8 spinning boxes | 33.0 / 57.2 µs | 80.8 / 128.0 µs | 0 | 0 | 8 |
+| 8 spinning angled brushes | 28.6 / 51.9 µs | 72.8 / 113.7 µs | 0 | 0 | 8 |
+
+(Stage 2 is the head of the branch, 2c and 2d together: a still angled
+brush collides through its local frame. Retained allocations per tick:
+0.04–0.24 blocks in every scenario on both.)
+
+The moving and spinning rows are where the cost is: they now collide by
+their true shape -- sphere against planes, in the shape's frame -- where
+Stage 1 collided an angled mover as its box and a spinner as its unturned
+box. Box movers pay 2b's runtime lookups (19 per tick) and per-tick cache
+refreshes. Static boxes are within 1.4 µs of Stage 1; still angled brushes
+cost 9 µs more (+44 %): since 2d each is collided through its translation
+frame and its cached collision answer is looked up every tick. On a slow core (the Snapdragon 8cx Gen 3 target)
+these scale with single-thread speed; the collision path is pure Python on
+the logic thread and allocates nothing per query, so the counts above, not
+the x86 timings, are the portable result.
+
+### 11.4 Stage 2d — local-frame planes, map version 5
+
+#### The layout
+
+An angled brush's planes are stored in its **local frame**, about their own
+centre, and `pos` places them: the shape is `ConvexGeometry(planes)` and the
+world solid is that solid carried by `pos`. So a translation is a placement
+and never a shape edit -- the same rule as a box. `brush_geometry.local_convex`
+is the shape (cached, `_geo_cache`, rebuilt only when the planes change);
+`get_convex` is the world view, the shape translated (`ConvexGeometry.translated`:
+no solve), cached per placement.
+
+* `translate_brush` writes `pos` and nothing else: no plane rewrite, no
+  winding solve, no mesh rebuild; the renderer sees a transform.
+* `clip_brush` takes a world plane and cuts in the local frame
+  (`d′ = d − n̂·pos`); rotate, fit, component edits and CSG commit world or
+  local planes explicitly. A commit re-centres the planes on their new
+  bounds when the edit moved them (beyond 10⁻⁹ of the extent), moving `pos`
+  by the same amount, and the cached shape is then the stored planes solved
+  -- exactly what a reload solves -- so what is drawn never depends on edit
+  history.
+* The mesh is built in the local frame (its anchor is the local shape's
+  bounds), so its key is placement-free. The key also carries the brush's
+  id (`GeometryRecord.owner`): two brushes of one shape keep two GPU meshes
+  and two transform slots, as M2 batches them, while a move, an undo of a
+  move or a reload of the same brush finds its mesh.
+* **D7 is fixed**: an angled brush is solved about the origin, so one at
+  9×10⁵ units solves (world-space planes solved to nothing beyond ~2.6×10⁵).
+
+#### Map version 5
+
+`EditorState.get_level_data` writes `version: 5`. Loading a map below
+version 5 localises each angled brush (`brush_placement.localise_legacy`):
+its world planes are re-expressed about their solved centre `c`
+(`d′ = d − n·c`) and `pos` becomes `c`, so it draws exactly where it did and
+a stale `pos`/`size` copy (two shipped brushes, 128 units) cannot misplace
+it. A streamed Big World map's records are localised resident or not, and
+re-filed at home. Every shipped map (version 3) loads to the solids its file
+describes (corners within 10⁻¹² of their magnitude), and its version-5 save
+reloads bit for bit.
+
+One deviation from §7: version 5 **keeps `size`** for an angled brush, as a
+derived copy re-derived from the planes on load and never read for a bound.
+Dropping it broke loading (the validator, now relaxed, required it), would
+lose the fallback box an invalid plane set is drawn by, and gains nothing
+since the loader ignores it.
+
+#### Older builds and the Android player
+
+* `brush_placement.export_world_level` writes the version-4 layout
+  (world-space planes and `size`): lossless. `brush_faces.export_legacy_level`
+  goes on to version 3 (Stage 1's per-tag layout) from it.
+  `tools/export_legacy_map.py --version 4|3` writes either; a map already at
+  or below the requested version is copied unchanged.
+* **Android**: the player (not modified) reads world-space planes. The
+  desktop package exporter writes a version-5 map into the `.fiopak` as its
+  version-4 export; older maps are copied byte for byte. Tested with the
+  player's own package reader: the packaged map is version 4 and its planes
+  solve to the editor's world solids. Release dependency: the player needs
+  this exporter (or an update) before it is handed version-5 files directly.
+
+#### Behaviour changes
+
+1. A `pos` write moves an angled brush (it moved nothing in 2a, where `pos`
+   was a copy): the editor's own move, a console `setprop`, a plugin.
+   `size` is the copy now.
+2. An editor move, an undo or redo of a move and a save/reload rebuild no
+   mesh and upload no geometry (2a rebuilt the moved brush's mesh).
+3. Rotating a brush about its centre is one solve, as before Stage 2d
+   (0.79 ms for 7 planes against Stage 1's 1.03 ms); an asymmetric brush whose
+   box centre moves as it turns is re-centred, two solves (2.40 ms against
+   1.32 ms for 10 planes).
+4. The two clipped terrain brushes' `pos`/`size` are their planes' bounds
+   once loaded (they were 128 units off in the file).
+
+#### Validation
+
+* `tests/brush_model/test_local_frame.py` (32 tests): the version-5 layout;
+  save → load → save gives the same document and bit-identical solids; every
+  shipped map migrates to its file's solids and its v5 save reloads bit for
+  bit; the stale terrain copies; 1,000 editor moves with no solve and the
+  same shape, collision data and mesh record; the mesh key; clip and
+  rotation after a move against world-space references; undo of a move
+  restores the placement alone; the v4 and v3 exports and the tool.
+* **1,000 consecutive movements** (`tests/visual/test_geo_shared_storage.py`):
+  editor translations and movers' runtime transforms, alternately, each
+  published and drawn through the real pipeline, each moved brush asked for
+  its collision shape as the player would. After the first frames: no
+  convex solve, no geometry upload, no index-list upload, no mesh
+  allocation, no collision-shape build -- only transform slots -- and both
+  oracles hold at the end.
+* GPU parity: the frozen reference's bridge hands it each brush's stored
+  planes (it reads geometry through `get_convex`, which places them); its
+  draw oracle treats a vertex value within 10⁻⁹ of zero as zero, since the
+  engine projects local corners and the reference world ones and an exactly
+  zero texture coordinate comes out as up to ~10⁻¹² in either. The pixel
+  oracle is unchanged and exact: 0 differing pixels.
+* Package export (`tests/persistence/test_package_export.py`), map
+  round trip and compatibility tests updated to version 5.
+* Tests that pinned 2a's "pos is a copy" are restated for 2d (named in the
+  commit), and the semantics helpers learnt that a shipped record's planes
+  are world space (`localised`, `loaded`, `local_rest`).
+
+### 11.5 Stage 2 integrated
+
+The branch from Stage 1 (`56ec0e3`): 2a `a9a5340`; 2b `50a4f32` (+ `1e88a24`,
+two stray e2e maps removed, and `c4551b0`); 2c `040ac72` (+ `6edf6db`); 2d
+`fe1385f` (+ `a445d9b`, `f0d83ef`); `e6c80ad` (mover refresh, one rotation
+memo).
+
+#### Validation
+
+* **Full suite**: re-run on the final commit after the performance gate
+  (§11.5 is the state at `e6c80ad`; the gate and its optimisations follow).
+
+* **Pixel parity** (`tools/compare_map_pixels.py --base` Stage 1): all 20
+  shipped maps identical in all 120 views -- every angled brush loaded
+  through the local-frame migration, the two 128-unit terrain brushes
+  included.
+* **GPU draw and pixel oracles** against the frozen M1/M2 reference
+  (unmodified): angled-brush draws and pixels in every cull mode, editor and
+  play, elements / multidraw / off (54 cases); the shared-storage editing
+  session; the shared-cube and projection equivalence tests; the Stage 1
+  face-semantics GL tests.
+* **Collision oracle** (§11.3) along translating and spinning paths.
+* **1,000 consecutive movements** (§11.4): no convex solve, no geometry or
+  index upload, no mesh allocation, no collision-shape build after the first
+  frames; both oracles hold.
+* **Save/reload, map compatibility, legacy export and Android**: version-5
+  round trip bit for bit; every shipped map migrates to its file's solids;
+  v4/v3 exports load back to the same solids; the package exporter hands
+  the player version 4.
+* **Big World**: records localised resident or not and filed at home; a
+  mover parked mid-motion keeps its transform in the mover table and its
+  home cell; saved games restore runtime transforms mid-motion.
+
+#### Mandatory requirements
+
+| Requirement | Result |
+|---|---|
+| Shared cube VBO, instanced AABB path | unchanged; `test_aabb_shared_cube` passes |
+| M2 batching unchanged | one mesh and one transform slot per brush (the mesh key carries the brush's id); batched draw counts asserted in the run-parity tests |
+| AABB memory at Stage 1 levels | BigWorld heap per box 1,358.2 B and RenderTable 353 B per row, as Stage 1 |
+| AABB CPU at Stage 1 levels | plain box cache hit 0.17 → 0.23 µs (the four flag tests that make angled and moving bounds right); miss 0.86 → 0.95 µs |
+| Mesh cache hits and misses identical | a reorder, undo or redo rebuilds nothing; an editor move or undo of one rebuilds nothing (2a rebuilt one) |
+| GPU draw oracle and collision oracle pass | yes |
+| Big World authored home cell vs live occupancy | home cell from authored bounds; a parked mover keeps its runtime transform |
+| Runtime transforms survive saved games and streaming | yes (mid-motion save/restore, parking and reactivation) |
+
+#### Measurements against Stage 1
+
+Same machine, interleaved, best of three on one pinned core (`56ec0e3` vs
+the head):
+
+| | Stage 1 | Stage 2 |
+|---|---|---|
+| BigWorld heap per box; RenderTable bytes per row | 1,358.2 B; 353 B | 1,358.2 B; 353 B |
+| `_SHOWCASE` heap per brush, parsed, loaded and first sync | 6,885 B | 7,100 B (+3.1 %) |
+| RenderTable warm sync / one row, BigWorld | 46.7 / 0.080 ms | 46.4 / 0.080 ms |
+| physics grid populate, BigWorld / `_SHOWCASE` | 19.9 / 0.92 ms | 20.8 / 1.21 ms |
+| collision rows build, BigWorld | 2.33 ms | 2.71 ms |
+| Big World index, BigWorld | 4.22 ms | 4.28 ms |
+| still frame p50, BigWorld / `_SHOWCASE` (draw calls 1 / 47) | 12.7 / 11.1 ms | 12.5 / 12.5 ms (within noise) |
+| editor move / undo p50, BigWorld | 16.7 / 87.8 ms | 17.7 / 92.5 ms |
+| AABB cache hit: plain box / angled; miss | 0.17 / 0.17; 0.86 µs | 0.23 / 0.33; 0.95 µs |
+| AI wall test per query | 2.10 µs | 2.58 µs |
+| mover tick, 8 / 32 / 128 movers and as many doors | 121 / 171 / 225 µs | 135 / 211 / 317 µs |
+| publish to the render table, 8 / 32 / 128 | 19.0 / 22.6 / 33.0 µs | 19.6 / 23.3 / 35.7 µs |
+| moving mover's cached AABB, per query (20 per tick) | 0.32 µs | 0.88 µs |
+| collision rows refresh, 64 movers: first after a tick / again | 57 / 51 µs | ~150 / 62 µs |
+| editor rotation step, 7 / 10 planes | 1.03 / 1.32 ms | 0.79 / 2.40 ms |
+| player tick next to 8 moving / spinning shapes | §11.3 | §11.3 |
+
+#### Remaining regressions
+
+1. **Mover tick**: +14 / +40 / +91 µs at 8 / 32 / 128 movers (and as many
+   doors) -- publishing a runtime transform per moving row instead of a
+   `pos` list.
+2. **Readers of a moving brush** pay a runtime lookup: a moving mover's
+   cached AABB 0.32 → 0.88 µs per query; the collision rows' first refresh
+   after a tick ~150 µs against 57 (runtime lookups, and every spinner's
+   turned box, which Stage 1 ignored); a repeated query in the tick 62
+   against 51.
+3. **Player collision** next to moving and spinning shapes is 2–3× Stage 1
+   (true-shape collision where Stage 1 used the wrong box); next to box
+   movers +75 %, next to still angled brushes +44 %.
+4. **Static paths**: a plain box's cached AABB +0.05 µs, the AI wall test
+   +0.5 µs, grid populate +4 % (BigWorld) and +31 % (`_SHOWCASE`, angled
+   brushes placed through their local box), collision rows build +16 %.
+5. **Editor rotation** of an asymmetric angled brush is two solves (2.40 ms
+   against 1.32 ms for 10 planes); about its centre a symmetric one is one
+   solve and faster than Stage 1.
+6. **Memory**: +3.1 % per brush on the angled-heavy `_SHOWCASE`; box maps
+   unchanged.
+
+#### Limitations
+
+* Stage 2e (follow-up): hitscan, projectiles, AI line of sight and walls,
+  physics bodies, and the player's step-up/un-duck headroom tests use each
+  brush's derived AABB (correctly placed and turned) rather than its shape.
+* Angular carry is out of scope: a spinning platform carries its rider
+  linearly only.
+* Version-5 maps are not read by builds before Stage 2d: such a build (and
+  the Android player) is given the version-4 export
+  (`tools/export_legacy_map.py --version 4`; the package exporter does it).
