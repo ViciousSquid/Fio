@@ -194,16 +194,44 @@ authored_generation = 0
 _stamps = itertools.count(1)
 
 
+#: id -> brush: the movers and doors whose AABB was cached
+#: (constants.brush_aabb_bounds, under its plain pos/size key) since the last
+#: stamp. Each stamp drops their keys, so a moving brush costs a broad phase
+#: what a still one does, and a runtime source pays, per change, only for the
+#: brushes that were asked about -- not for every row it moved.
+_runtime_cached = {}
+
+
+def remember_runtime_cached(brush):
+    """*brush*'s AABB was just cached from its runtime transform: the next
+    stamp drops it."""
+    _runtime_cached[id(brush)] = brush
+
+
+def _drop_runtime_cached():
+    global _runtime_cached
+    if _runtime_cached:
+        # Swapped out whole, then each key dropped: a reader that registers
+        # meanwhile lands in one dict or the other, and also re-reads the
+        # stamp, which has already moved.
+        cached, _runtime_cached = _runtime_cached, {}
+        for brush in list(cached.values()):
+            brush.pop('_aabb_sig', None)
+
+
 def note_runtime_change():
-    """A runtime source changed its ``runtime_entries``: stamp it."""
+    """A runtime source changed its ``runtime_entries``: stamp it (and drop
+    the cached AABBs that may follow it)."""
     global runtime_generation
     runtime_generation = next(_stamps)
+    _drop_runtime_cached()
 
 
 def note_authored_change():
     """An authored placement or shape may have changed: stamp it."""
     global authored_generation
     authored_generation = next(_stamps)
+    _drop_runtime_cached()
 
 
 def register_runtime(source):

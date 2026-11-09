@@ -183,37 +183,29 @@ def brush_aabb_bounds(brush):
     -- thousands of throwaway GLM allocations per second on a busy level.
     Here the result is computed once *through GLM* (so its float32 rounding is
     bit-for-bit identical to the old ``glm.vec3(pos) +/- glm.vec3(size)*0.5``
-    path: halving is exact) and cached on the brush dict, keyed by everything
-    it is derived from -- a plain box's ``pos`` and ``size`` (Stage 1's own
-    key), and for anything else its runtime transform (a mover's centre and
-    spin, from its runtime source, replaced whenever it moves), the cached
-    shape (``_geo_cache``, which every geometry edit drops) or a mesh proxy's
-    bounds too -- so a moved,
-    turned or reshaped brush is transparently refreshed. Cache keys start
-    with ``_`` and are stripped by the serialisers, matching the renderer's
-    own matrix cache.
+    path: halving is exact) and cached on the brush dict, keyed by its
+    ``pos`` and ``size`` -- Stage 1's key and Stage 1's cost, for every
+    brush. What could change a box without changing them drops the key:
+    every geometry edit (brush_geometry's invalidation), the mover table
+    taking a brush into its rows, a collision mesh being built, and -- for a
+    mover or door, whose box follows its runtime transform -- every change a
+    runtime source stamps (``brush_placement.note_runtime_change`` drops the
+    keys of the movers cached since the last stamp: a source pays for the
+    ones a broad phase asked about, not for every row it moved). Cache keys
+    start with ``_`` and are stripped by the serialisers, matching the
+    renderer's own matrix cache.
     """
     pos = brush['pos']
     size = brush['size']
     sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
     cached = brush.get('_aabb_sig')
     if cached == sig:
-        # Stage 1's key and Stage 1's cost. A (pos, size) key is stored only
-        # for a brush that cannot have a runtime transform (no mover or door
-        # flag when it was cached): a plain box, a still angled brush (its
-        # derived box placed by pos), a mesh proxy. What could change such a
-        # brush's box without changing pos or size drops the key: every
-        # geometry edit (brush_geometry's invalidation), a runtime override
-        # being set for it, the mover table taking it into its rows.
+        # Stage 1's key and Stage 1's cost (see above for what drops it).
         return brush['_aabb_bounds']
-    if cached is None or len(cached) != 6:
-        # No still key to go by (first query, a dropped key, a mover):
-        # anything but a plain box goes the long way.
-        if ('geometry' in brush or '_mesh_bounds' in brush
-                or 'is_mover' in brush or 'is_door' in brush):
-            return _brush_aabb_slow(brush, pos, size, sig)
-    elif 'geometry' in brush or '_mesh_bounds' in brush:
-        # A still angled brush or mesh proxy that was moved: its box again.
+    if ('is_mover' in brush and brush['is_mover']) or ('is_door' in brush and brush['is_door']):
+        return _brush_aabb_runtime(brush, _brush_placement or _bind_brush_placement(), sig)
+    if 'geometry' in brush or '_mesh_bounds' in brush:
+        # An angled brush or mesh proxy: its derived box.
         return _brush_aabb_slow(brush, pos, size, sig)
     # A plain box's miss, inline: Stage 1's computation.
     bp = glm.vec3(pos)
@@ -230,19 +222,9 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
     """:func:`brush_aabb_bounds` past its fast path: a miss, or a mover."""
     placement = _brush_placement or _bind_brush_placement()
     if brush.get('is_mover') or brush.get('is_door'):
-        # Its runtime transform leads the key -- a tuple its source replaces
-        # whenever it moves, compared by identity first, or 'still' -- so the
-        # fast path's plain key fails on the first element.
-        runtime = placement.runtime_of(brush)
-        sig = (runtime or 'still', brush.get('_geo_cache'), brush.get('_mesh_bounds'),
-               pos[0], pos[1], pos[2], size[0], size[1], size[2])
-        if brush.get('_aabb_sig') == sig:
-            return brush['_aabb_bounds']
-        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
-        bp = glm.vec3(cx, cy, cz)
-        bh = glm.vec3(hx, hy, hz)
-    elif 'geometry' in brush or '_mesh_bounds' in brush:
-        sig = plain_sig
+        return _brush_aabb_runtime(brush, placement, plain_sig)
+    sig = plain_sig
+    if 'geometry' in brush or '_mesh_bounds' in brush:
         box = placement.world_box_at(brush, None)
         # Kept for brush_still_box under the same key (stored first: a
         # reader that sees the new key finds the box that goes with it).
@@ -251,7 +233,6 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
         bp = glm.vec3(cx, cy, cz)
         bh = glm.vec3(hx, hy, hz)
     else:
-        sig = plain_sig
         bp = glm.vec3(pos)
         bh = glm.vec3(size) * 0.5
     lo = bp - bh
@@ -272,6 +253,55 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
     brush['_aabb_bounds'] = bounds
     brush['_aabb_sig'] = sig
     return bounds
+
+
+def _brush_aabb_runtime(brush, placement, sig):
+    """A mover's or door's AABB: where its runtime transform puts it now,
+    cached under the plain pos/size key and registered with the resolver so
+    the next stamped runtime change drops the key.
+
+    The stamps are read before the transform, and again after the key is
+    stored: a change that landed meanwhile (on another thread) either finds
+    the brush registered and drops the key itself, or has moved a stamp,
+    and this drops it -- never a stale box under a live key."""
+    runtime_stamp = placement.runtime_generation
+    authored_stamp = placement.authored_generation
+    # brush_placement.runtime_of, inline: the first source that knows it.
+    key = id(brush)
+    runtime = None
+    for ref in placement._sources:
+        source = ref()
+        if source is not None:
+            entries = source.runtime_entries
+            if entries:
+                entry = entries.get(key)
+                if entry is not None and entry[0] is brush:
+                    runtime = entry[1]
+                    break
+    if runtime is not None and 'geometry' not in brush and '_mesh_bounds' not in brush:
+        # A box carried (and turned): world_box_at's box rule, inline.
+        size = brush.get('size') or placement.DEFAULT_SIZE
+        if runtime[6]:
+            bh = glm.vec3(placement.turned_half(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5,
+                                                runtime[3:6], runtime[6]))
+        else:
+            bh = glm.vec3(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+        bp = glm.vec3(runtime[0], runtime[1], runtime[2])
+    else:
+        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
+        bp = glm.vec3(cx, cy, cz)
+        bh = glm.vec3(hx, hy, hz)
+    lo = bp - bh
+    hi = bp + bh
+    bounds = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
+    brush['_aabb_bounds'] = bounds          # publication order: see above
+    brush['_aabb_sig'] = sig
+    placement._runtime_cached[key] = brush        # remember_runtime_cached
+    if (placement.runtime_generation != runtime_stamp
+            or placement.authored_generation != authored_stamp):
+        brush.pop('_aabb_sig', None)
+    return bounds
+
 
 def brush_still_box(brush):
     """``(cx, cy, cz, hx, hy, hz)``: :func:`engine.brush_placement.world_box`
