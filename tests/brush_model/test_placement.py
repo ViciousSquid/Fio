@@ -508,7 +508,8 @@ def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
 
 def test_a_turned_box_is_the_same_from_the_turn_memo():
     """``turned_half`` keeps ``|R|`` per (axis, angle) so a spinner's trig
-    runs once per angle; the memo must change no bit, and stays bounded."""
+    runs once per angle; the memo must change no bit, and stays bounded.
+    ``turned_half_now`` (no memo) must agree with it to the bit."""
     import random
     rng = random.Random(7)
     bp._TURNS.clear()
@@ -524,6 +525,18 @@ def test_a_turned_box_is_the_same_from_the_turn_memo():
                              + abs(r[i][2]) * half[2] for i in range(3))
         for _again in range(2):                 # a miss, then a hit
             assert bp.turned_half(*half, axis, angle) == expected
+        # Worked out now, remembering nothing (the mover table's spinners,
+        # whose angle is new every tick): the same bits.
+        assert bp.turned_half_now(*half, *axis, angle) == expected
     for k in range(bp._TURNS_LIMIT + 10):
         bp.turned_half(1.0, 1.0, 1.0, (0.0, 1.0, 0.0), 0.001 * (k + 1))
     assert len(bp._TURNS) <= bp._TURNS_LIMIT
+    # The vertical axis (turned_half_now's short form): the general rule's
+    # bits, at every scale of axis and angle.
+    for _ in range(20000):
+        ay = rng.choice((1.0, -1.0, 2.0, 0.25, -7.5, 0.0015, rng.uniform(-50, 50)))
+        angle = rng.choice((rng.uniform(-1e5, 1e5), rng.uniform(-360, 360),
+                            float(rng.randint(-720, 720)), 90.0, 180.0, 1e-9))
+        half = (rng.uniform(0, 600), rng.uniform(0, 600), rng.uniform(0, 600))
+        assert bp.turned_half_now(*half, 0.0, ay, 0.0, angle) == bp.turned_half(
+            *half, (0.0, ay, 0.0), angle)

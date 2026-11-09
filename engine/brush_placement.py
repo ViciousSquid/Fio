@@ -445,6 +445,44 @@ def turned_half(hx, hy, hz, axis, angle_degrees):
             r20 * hx + r21 * hy + r22 * hz)
 
 
+def turned_half_now(hx, hy, hz, ax, ay, az, angle_degrees):
+    """:func:`turned_half` worked out now, in scalars, remembering nothing:
+    :func:`rotation_matrix`'s operations in the same order, so the result
+    is :func:`turned_half`'s to the bit.
+
+    For a writer that turns each box once per angle -- the mover table's
+    publication, where a moving spinner's angle is new every tick, so a memo
+    would only grow (and hand the garbage collector tuples to scan) without
+    ever being hit.
+    """
+    if not angle_degrees:
+        return hx, hy, hz
+    if ax == 0.0 and az == 0.0 and abs(ay) > MIN_AXIS:
+        # About the vertical (a spinner's usual axis). The general rule's
+        # terms, to the bit: sqrt(ay * ay) is |ay| exactly in IEEE double, so
+        # the unit axis is (0, +/-1, 0); every term with a zero factor is
+        # zero and adds nothing; the middle entry stays c + (1 - c).
+        theta = math.radians(angle_degrees)
+        c = math.cos(theta)
+        s = abs(math.sin(theta))
+        a = abs(c)
+        return (a * hx + s * hz, abs(c + (1.0 - c)) * hy, s * hx + a * hz)
+    length = math.sqrt(ax * ax + ay * ay + az * az)
+    if length <= MIN_AXIS:
+        return hx, hy, hz
+    ax, ay, az = ax / length, ay / length, az / length
+    theta = math.radians(angle_degrees)
+    c = math.cos(theta)
+    s = math.sin(theta)
+    t = 1.0 - c
+    return (abs(c + ax * ax * t) * hx + abs(ax * ay * t - az * s) * hy
+            + abs(ax * az * t + ay * s) * hz,
+            abs(ay * ax * t + az * s) * hx + abs(c + ay * ay * t) * hy
+            + abs(ay * az * t - ax * s) * hz,
+            abs(az * ax * t - ay * s) * hx + abs(az * ay * t + ax * s) * hy
+            + abs(c + az * az * t) * hz)
+
+
 def rotation_matrices(rot):
     """The rows of a ``rot`` column block that rotate, and their 3x3 matrices.
 

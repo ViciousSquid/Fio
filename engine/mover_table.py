@@ -50,7 +50,8 @@ from __future__ import annotations
 
 import weakref
 from collections.abc import MutableMapping
-from itertools import repeat
+from itertools import compress, repeat
+from operator import itemgetter
 
 import numpy as np
 
@@ -71,6 +72,20 @@ _UP = np.array([0.0, 1.0, 0.0])
 
 _EVENT_NAMES = {_FULLY_OPEN: 'OnFullyOpen', _FULLY_CLOSED: 'OnFullyClosed',
                 _CLOSE: 'OnClose'}
+
+
+#: An empty row list.
+_NO_ROWS = np.zeros(0, dtype=np.intp)
+
+
+def _sequence_points(parts):
+    """The sorted, distinct rows of *parts* (row arrays) as intp: where the
+    pass must stop and run a row in order. Usually there are none -- no path
+    movers, no rows to set up, no events this tick -- and then no NumPy
+    sort runs."""
+    if not any(len(part) for part in parts):
+        return _NO_ROWS
+    return np.unique(np.concatenate(parts)).astype(np.intp)
 
 
 def _eased(t):
@@ -371,9 +386,10 @@ class _Group:
         if hasattr(self, 'rot_angle'):
             self.rot_angle[row] = angle
 
-    def _write_positions(self, rows, new_pos, ride, spun=None):
+    def _write_positions(self, rows, new_pos, ride, spin=None):
         """Store *new_pos* for the *rows* that moved, and publish them and
-        the *spun* rows (whose angle the caller has just stored) together.
+        the rows *spin* marks (a mask over *rows*: their angle the caller has
+        just stored) together.
 
         *ride* is ``(player, ground row)`` or None: the player standing on a
         processed row is carried by its movement, as the loop did.
@@ -383,37 +399,49 @@ class _Group:
             hit = np.flatnonzero(rows == ground)
             if len(hit):
                 self._carry(player, ground, new_pos[hit[0]])
-        changed = np.flatnonzero((new_pos != self.pos[rows]).any(axis=1))
-        moved = rows[changed]
-        values = new_pos[changed]
-        if len(changed):
-            self._store(moved, values, publish=False)
+        changed = (new_pos != self.pos[rows]).any(axis=1)
+        if changed.all():
+            # Every row moved (the usual tick): no picking.
+            self._store(rows, new_pos, publish=False)
+            if self.table is not None:
+                self.table._publish(self, rows, here=new_pos)
+            return
+        any_changed = changed.any()
+        if any_changed:
+            self._store(rows[changed], new_pos[changed], publish=False)
         if self.table is None:
             return
-        if spun is not None and len(spun):
-            moved = np.union1d(moved, spun) if len(moved) else spun
-            if len(moved):
-                self.table._publish(self, moved)
-        elif len(moved):
-            self.table._publish(self, moved, here=values)
+        if spin is not None:
+            # The moved and the spun rows, in row order, with where they are.
+            changed |= spin
+            any_changed = True
+        if any_changed:
+            self.table._publish(self, rows[changed], here=new_pos[changed])
 
     def _store_one(self, row, new, rest):
         """:meth:`_store` for one row: *new* its position and *rest* its
-        authored centre, in Python floats."""
-        self._store(np.array([row]), np.array([new]), publish=False)
+        authored centre, in Python floats. In scalars: the per-row walk calls
+        this for every row it moves."""
+        self.pos[row] = new
+        if self.any_twin:
+            twin = int(self.twin_row[row])
+            if twin >= 0:
+                self.twin.pos[twin] = new
         table = self.table
         if table is not None:
-            table._publish_row_now(self, row, new, rest)
+            table._publish_row(self, row, table.runtime_entries, new, rest)
+            brush_placement.note_runtime_change()
 
     def _store(self, rows, values, publish=True):
         """Where *rows* are now, kept for both groups a brush is in, and
         published to the resolver (:meth:`MoverTable.runtime_of`)."""
         self.pos[rows] = values
-        twins = self.twin_row[rows]
-        shared = twins >= 0
-        if shared.any():
-            mirror = self.twin.pos          # an array, not an entity
-            mirror[twins[shared]] = np.asarray(values)[shared]
+        if self.any_twin:
+            twins = self.twin_row[rows]
+            shared = twins >= 0
+            if shared.any():
+                mirror = self.twin.pos          # an array, not an entity
+                mirror[twins[shared]] = np.asarray(values)[shared]
         if publish and self.table is not None:
             self.table._publish(self, np.atleast_1d(rows).tolist())
 
@@ -497,6 +525,9 @@ class LinearMovers(_Group):
 
     KEYS = ('progress', 'forward', '_direction_np')
 
+    #: Below this many stale rows settle_turns goes row by row.
+    SETTLE_ROWS_BELOW = 8
+
     #: Measured (CPython 3.13, NumPy 2.5.3, quiet cores): one tick of 1 / 2 /
     #: 4 / 8 / 12 moving rows costs 10 / 18 / 31 / 63 / 92 us walked and 77 /
     #: 82 / 86 / 80 / 82 us planned; the plan wins from 12 rows (32: 233 vs
@@ -512,6 +543,9 @@ class LinearMovers(_Group):
         self.distance = np.zeros(n)
         self.rot_angle = np.zeros(n)
         self.rot_axis = np.zeros((n, 3))
+        #: The spin angle each row's ``turned`` half-extents were last worked
+        #: out for (NaN: not yet): see :meth:`settle_turns`.
+        self.turn_angle = np.full(n, np.nan)
         self.forward = np.ones(n, dtype=bool)
 
     def resync(self, row):
@@ -526,19 +560,48 @@ class LinearMovers(_Group):
         # The spin angle is runtime state, kept in the column (a rebuild
         # starts it at zero, a saved game restores it); the axis is authored.
         self.rot_axis[row] = brush.get('rot_axis') or (0.0, 1.0, 0.0)
-        self._turn(row)
+        # Its half-extents and axis are new: its turned box is worked out
+        # again when next gathered.
+        self.turn_angle[row] = np.nan
 
-    def _turn(self, row):
-        """The row's turned half-extents from its spin: the resolver's own
-        scalar rule (brush_placement.turned_half, memoised per angle), so
-        what a reader gathers here is world_box to the bit."""
-        angle = float(self.rot_angle[row])
-        if angle:
-            hx, hy, hz = self.half[row].tolist()
-            self.turned[row] = brush_placement.turned_half(
-                hx, hy, hz, self.rot_axis[row].tolist(), angle)
-        else:
-            self.turned[row] = self.half[row]
+    def settle_turns(self, rows):
+        """Bring the turned half-extents of *rows* up to date: worked out
+        -- by the resolver's own scalar rule, so what a reader gathers is
+        world_box to the bit -- only for the rows whose spin angle has
+        changed since they last were, and only when a reader gathers boxes.
+        The publication records the angle and nothing more: a spinner's
+        angle is new every tick, and most ticks nothing asks for its box.
+
+        Each result is stored with the angle it was worked out for, after
+        it (a reader on another thread that sees the angle sees its box);
+        the angles are read once, so a change that lands meanwhile leaves
+        the row stale for the next reader."""
+        angle = self.rot_angle[rows]
+        stale = self.turn_angle[rows] != angle         # NaN: never matches
+        if not stale.any():
+            return
+        rows = rows[stale]
+        angle = angle[stale]
+        if len(rows) < self.SETTLE_ROWS_BELOW:
+            # A few rows: in scalars (each NumPy call costs more than a row).
+            turn = brush_placement.turned_half_now
+            self.turned[rows] = [
+                turn(h[0], h[1], h[2], a[0], a[1], a[2], g)
+                for h, a, g in zip(self.half[rows].tolist(),
+                                   self.rot_axis[rows].tolist(), angle.tolist())]
+            self.turn_angle[rows] = angle
+            return
+        turned = self.half[rows]
+        spin = np.flatnonzero(angle != 0.0)
+        if len(spin):
+            turn = brush_placement.turned_half_now
+            turned[spin] = [
+                turn(h[0], h[1], h[2], a[0], a[1], a[2], g)
+                for h, a, g in zip(turned[spin].tolist(),
+                                   self.rot_axis[rows[spin]].tolist(),
+                                   angle[spin].tolist())]
+        self.turned[rows] = turned
+        self.turn_angle[rows] = angle
 
     def _reset_fields(self, row):
         self.progress[row] = 0.0
@@ -574,20 +637,26 @@ class LinearMovers(_Group):
     def _plan(self, logic, start, delta, io):
         rows = np.arange(start, len(self.index))
         active = rows[~self.move_once[start:] & self.start_on[start:]]
-        on_path = np.zeros(len(self.index), dtype=bool)
-        for i in logic.mover_runtime.mover_path_states:
-            row = self.row_of_index.get(i)
-            if row is not None:
-                on_path[row] = True
-        path_rows = active[on_path[active]]
-        rest = active[~on_path[active]]
-        special = rest[~(self.has_state[rest] & self.dir_valid[rest])]
-        simple = rest[self.has_state[rest] & self.dir_valid[rest]]
+        paths = logic.mover_runtime.mover_path_states
+        if paths:
+            on_path = np.zeros(len(self.index), dtype=bool)
+            for i in paths:
+                row = self.row_of_index.get(i)
+                if row is not None:
+                    on_path[row] = True
+            path_rows = active[on_path[active]]
+            rest = active[~on_path[active]]
+        else:
+            path_rows = _NO_ROWS
+            rest = active
+        ready = self.has_state[rest] & self.dir_valid[rest]
+        special = rest[~ready]
+        simple = rest[ready]
         step = self._step(simple, delta)
         seq = [path_rows, special]
         if io:
             seq.append(simple[step['event'] != _NO_EVENT])
-        step['seq'] = np.unique(np.concatenate(seq)).astype(np.intp)
+        step['seq'] = _sequence_points(seq)
         step['rows'] = simple
         return step
 
@@ -625,14 +694,14 @@ class LinearMovers(_Group):
         pick = slice(lo, hi)
         rows = rows[pick]
         spin = plan['spin'][pick]
-        spun = None
         if spin.any():
-            spun = rows[spin]
-            self.rot_angle[spun] = plan['angle'][pick][spin]
+            self.rot_angle[rows[spin]] = plan['angle'][pick][spin]
+        else:
+            spin = None
         self.progress[rows] = plan['progress'][pick]
         self.forward[rows] = plan['forward'][pick]
         # The spun rows are published with the moved ones, once.
-        self._write_positions(rows, plan['pos'][pick], ride, spun)
+        self._write_positions(rows, plan['pos'][pick], ride, spin)
 
     # -- one row, in order ---------------------------------------------------
 
@@ -659,7 +728,7 @@ class LinearMovers(_Group):
         distance = float(self.distance[row])
         if not self.dir_valid[row]:
             self._set_direction(row, _unit_direction(brush.get('direction', [0, 1, 0])))
-        direction = tuple(float(v) for v in self.direction[row])
+        direction = self.direction[row].tolist()
         step = (speed * delta) / distance if distance > 0 else 0
         progress = float(self.progress[row])
         was_end = progress >= 1.0
@@ -793,7 +862,7 @@ class Doors(_Group):
         seq = [special]
         if io:
             seq.append(simple[step['event'] != _NO_EVENT])
-        step['seq'] = np.unique(np.concatenate(seq)).astype(np.intp)
+        step['seq'] = _sequence_points(seq)
         step['rows'] = simple
         return step
 
@@ -852,7 +921,7 @@ class Doors(_Group):
         if not self.dir_valid[row]:
             raw = self.raw_direction[row]
             self._set_direction(row, _unit_direction([0, 1, 0] if raw is None else raw))
-        direction = tuple(float(v) for v in self.direction[row])
+        direction = self.direction[row].tolist()
         step = (speed * delta) / distance if distance > 0 else 0
         code = int(self.code[row])
         event = None
@@ -978,33 +1047,23 @@ class MoverTable:
                          repeat(0.0) if angle is None else angle.tolist())
         else:
             live |= turned
-            ax, ay, az = np.where(turned[:, None], movers.rot_axis[spin_at], _UP).T.tolist()
+            axes = movers.rot_axis[spin_at]
+            axes[~turned] = _UP
+            ax, ay, az = axes.T.tolist()
             values = zip(x, y, z, ax, ay, az, angle.tolist())
         group.live[pick] = live
-        if group is movers:
-            if turned is None or not turned.any():
-                group.turned[pick] = group.half[pick]
-            else:
-                group.turned[pick[~turned]] = group.half[pick[~turned]]
-                # One trig per spinner per move, by the resolver's own scalar
-                # rule (memoised: every reader of this angle then hits it).
-                spun = pick[turned]
-                turn = brush_placement.turned_half
-                group.turned[spun] = [
-                    turn(h[0], h[1], h[2], a, angle) for h, a, angle in zip(
-                        group.half[spun].tolist(), group.rot_axis[spun].tolist(),
-                        group.rot_angle[spun].tolist())]
-        brushes = group.brushes
-        chosen = [brushes[row] for row in pick.tolist()]
+        # A spinner's turned box is not worked out here: the angle is in its
+        # column, and a reader that gathers boxes settles it (settle_turns).
+        # Tuples built and stored in C: no bytecode per row (count >= 2, so
+        # the getter hands back a tuple).
+        chosen = itemgetter(*pick.tolist())(group.brushes)
         if live.all():
-            # Tuples built and stored in C: no bytecode per row.
             runtime.update(zip(map(id, chosen), zip(chosen, values)))
             return
-        for brush, transform, keep in zip(chosen, values, live.tolist()):
-            if keep:
-                runtime[id(brush)] = (brush, transform)
-            else:
-                runtime.pop(id(brush), None)
+        runtime.update(compress(zip(map(id, chosen), zip(chosen, values)), live.tolist()))
+        # The rows that are back where they were authored, unturned: no entry.
+        for brush in compress(chosen, (~live).tolist()):
+            runtime.pop(id(brush), None)
 
     def _publish_row(self, group, row, runtime, centre=None, rest=None):
         """:meth:`_publish` for one row, in scalars (*centre* and *rest*:
@@ -1022,8 +1081,6 @@ class MoverTable:
         else:
             spin_row = -1
         angle = float(movers.rot_angle[spin_row]) if spin_row >= 0 else 0.0
-        if group is movers:
-            group._turn(row)
         if angle:
             ax, ay, az = movers.rot_axis[spin_row].tolist()
         else:
@@ -1089,15 +1146,26 @@ class MoverTable:
             # The query is held weakly: the table must not keep a collision
             # structure's brushes alive (after Stop, or a rebuild).
             entry = self._box_maps[id(bulk)] = (weakref.ref(bulk), key, maps, twins)
+        # Nothing claimed yet (the usual case: the editor preview, asked
+        # first, is empty): the claimed mask need not be consulted.
+        fresh = not claimed.any()
         for group, at, rows in entry[2]:
             if not len(at):
                 continue
-            take = group.live[rows] & ~claimed[at]
-            if take.any():
+            take = group.live[rows]
+            if not fresh:
+                take &= ~claimed[at]
+            if take.all():
+                at_t, rows_t = at, rows             # every row moving: no picks
+            elif take.any():
                 at_t, rows_t = at[take], rows[take]
-                centre[at_t] = group.pos[rows_t]
-                half[at_t] = group.turned[rows_t]
-                claimed[at_t] = True
+            else:
+                continue
+            centre[at_t] = group.pos[rows_t]
+            if group is self.movers:
+                group.settle_turns(rows_t)
+            half[at_t] = group.turned[rows_t]
+            claimed[at_t] = True
         for i in entry[3]:
             if not claimed[i]:
                 bulk.claim(i, self.runtime_entries.get(id(bulk.brushes[i])), centre, half, claimed)
