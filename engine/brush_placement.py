@@ -860,14 +860,19 @@ class Frame:
     collision query costs a few float operations and allocates no matrix.
     """
 
-    __slots__ = ('ax', 'ay', 'az', 'px', 'py', 'pz', 'r')
+    __slots__ = ('ax', 'ay', 'az', 'px', 'py', 'pz', 'r', 'ox', 'oy', 'oz')
 
     def __init__(self, authored, centre, rotation):
         self.ax, self.ay, self.az = authored
         self.px, self.py, self.pz = centre
         #: The rotation's nine entries row by row, or None for a translation.
-        self.r = (None if rotation is None
-                  else tuple(v for row in rotation for v in row))
+        self.r = None if rotation is None else rotation[0] + rotation[1] + rotation[2]
+        #: For a translation, the whole map is ``s = w + (A - P)``: the
+        #: offset, so a per-query caller adds three numbers (the same point
+        #: as :meth:`to_shape` up to rounding in the last place).
+        self.ox = self.ax - self.px
+        self.oy = self.ay - self.py
+        self.oz = self.az - self.pz
 
     def to_shape(self, x, y, z):
         """A world point in the shape's frame."""
@@ -919,7 +924,7 @@ def _rotation(axis, angle_degrees):
 #: Runtime-only key this module caches on a brush dict (stripped on save,
 #: like the geometry and AABB caches): its collision shape and frame, with
 #: what they were built from.
-RUNTIME_CACHE_KEYS = ('_collision_entry',)
+RUNTIME_CACHE_KEYS = ('_collision_entry', '_collision_box')
 
 
 def collision_shape(brush):
@@ -944,8 +949,23 @@ def collision_shape(brush):
     placement -- so the player's several questions per tick build it once,
     and a brush that does not move never builds it again.
     """
+    entry = brush.get('_collision_entry')
+    if entry is not None and 'is_mover' not in brush and 'is_door' not in brush:
+        # A still convex brush asked again (most of a tick's questions): its
+        # entry is keyed by its cached shape -- which every geometry edit
+        # drops -- and its pos, so those two say it is current.
+        convex = brush.get('_geo_cache')
+        if convex is not None and entry[1] is convex:
+            pos = brush.get('pos') or DEFAULT_POS
+            if entry[0] == (pos[0], pos[1], pos[2]):
+                return entry[2]
+    return collision_shape_at(brush, runtime_of(brush))
+
+
+def collision_shape_at(brush, runtime):
+    """:func:`collision_shape` given the brush's :func:`runtime_of`, for a
+    caller that has just found it."""
     convex = shape_convex(brush)
-    runtime = runtime_of(brush)
     entry = brush.get('_collision_entry')
     if convex is not None:
         if runtime is None:
@@ -967,16 +987,31 @@ def collision_shape(brush):
     if runtime is not None and runtime[6]:
         rotation = _rotation(runtime[3:6], runtime[6])
         if rotation is not None:
-            box = authored_box(brush)
-            if entry is not None and entry[0] is runtime and entry[1] == box:
+            # What the solid is placed by: a box's pos/size (its authored
+            # box), a mesh proxy's authored box.
+            if '_mesh_bounds' in brush:
+                placed = authored_box(brush)
+            else:
+                pos = brush.get('pos') or DEFAULT_POS
+                size = brush.get('size') or DEFAULT_SIZE
+                placed = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
+            if entry is not None and entry[0] is runtime and entry[1] == placed:
                 return entry[2]
-            cx, cy, cz, hx, hy, hz = box
-            planes = [(1.0, 0.0, 0.0, cx + hx), (-1.0, 0.0, 0.0, -(cx - hx)),
-                      (0.0, 1.0, 0.0, cy + hy), (0.0, -1.0, 0.0, -(cy - hy)),
-                      (0.0, 0.0, 1.0, cz + hz), (0.0, 0.0, -1.0, -(cz - hz))]
-            bounds = ([cx - hx, cy - hy, cz - hz], [cx + hx, cy + hy, cz + hz])
-            result = (planes, None, bounds, Frame(box[:3], runtime[:3], rotation))
-            brush['_collision_entry'] = (runtime, box, result)
+            # The six planes are the authored box's, in its own coordinates,
+            # whatever turns it: built once per placement, and only the frame
+            # follows the spin.
+            solid = brush.get('_collision_box')
+            if solid is None or solid[0] != placed:
+                box = authored_box(brush)
+                cx, cy, cz, hx, hy, hz = box
+                planes = [(1.0, 0.0, 0.0, cx + hx), (-1.0, 0.0, 0.0, -(cx - hx)),
+                          (0.0, 1.0, 0.0, cy + hy), (0.0, -1.0, 0.0, -(cy - hy)),
+                          (0.0, 0.0, 1.0, cz + hz), (0.0, 0.0, -1.0, -(cz - hz))]
+                bounds = ([cx - hx, cy - hy, cz - hz], [cx + hx, cy + hy, cz + hz])
+                solid = (placed, planes, bounds, box[:3])
+                brush['_collision_box'] = solid
+            result = (solid[1], None, solid[2], Frame(solid[3], runtime[:3], rotation))
+            brush['_collision_entry'] = (runtime, placed, result)
             return result
     if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
         return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),

@@ -117,7 +117,14 @@ def test_runtime_keys_are_declared_for_stripping():
     bg.clip_brush(cut, [1.0, 1.0, 0.0], 3.0)
     brush_still_box(cut)
     cached = {k for k in cut if k.startswith("_aabb")}
-    assert cached == set(AABB_RUNTIME_KEYS)
+    assert cached == {"_aabb_sig", "_aabb_bounds", "_aabb_box"}
+    # A mover also keeps the runtime transform its box was placed by.
+    mover = _brush([1, 2, 3], [4, 5, 6])
+    mover["is_mover"] = True
+    brush_aabb_bounds(mover)
+    moved = {k for k in mover if k.startswith("_")}
+    assert moved == {"_aabb_sig", "_aabb_bounds", "_aabb_runtime"}
+    assert cached | moved == set(AABB_RUNTIME_KEYS)
 
 
 def test_editor_state_strips_the_cache_keys():

@@ -28,9 +28,9 @@ from .constants import (
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
-    is_solid_world_brush, is_water_brush, brush_aabb_bounds,
+    is_solid_world_brush, is_water_brush, brush_aabb_bounds, brush_aabb_runtime,
 )
-from .brush_placement import collision_shape, world_bounds
+from .brush_placement import collision_shape, collision_shape_at, world_bounds
 from .physics import world_gravity
 
 
@@ -342,6 +342,7 @@ class Player:
         # box, a model's collision mesh -- is resolved in its own frame; any
         # other box keeps the AABB fast path, its derived bounds being exact.
         mesh_brushes = []
+        mesh_shapes = []
         aabb_brushes = []
         for source in (colliders, movers, doors):
             if not source:
@@ -351,13 +352,33 @@ class Player:
                     continue
                 # A static box -- most of a level -- is told by three dict
                 # reads; only a brush with planes, a mesh or a runtime
-                # transform asks for its shape.
-                if (('geometry' in b or b.get('_collision_mode') == 'mesh'
-                     or b.get('is_mover') or b.get('is_door'))
-                        and collision_shape(b) is not None):
-                    mesh_brushes.append(b)
-                else:
-                    aabb_brushes.append(b)
+                # transform asks for its shape (once: the resolve below is
+                # handed what it answered).
+                if ('geometry' not in b and '_collision_mode' not in b
+                        and (('is_mover' in b and b['is_mover'])
+                             or ('is_door' in b and b['is_door']))):
+                    # A box mover or door: a solid shape only while it is
+                    # turned. Its transform is the one its cached box was
+                    # placed by, which the AABB passes then read as a hit.
+                    runtime = brush_aabb_runtime(b)
+                    if runtime is None or not runtime[6]:
+                        aabb_brushes.append(b)
+                        continue
+                    shape = collision_shape_at(b, runtime)
+                    if shape is not None:
+                        mesh_brushes.append(b)
+                        mesh_shapes.append(shape)
+                    else:
+                        aabb_brushes.append(b)
+                    continue
+                if ('geometry' in b or '_collision_mode' in b
+                        or 'is_mover' in b or 'is_door' in b):
+                    shape = collision_shape(b)
+                    if shape is not None:
+                        mesh_brushes.append(b)
+                        mesh_shapes.append(shape)
+                        continue
+                aabb_brushes.append(b)
 
         # --- Water immersion (before movement so swim physics can use it) ---
         if spatial_grid is not None:
@@ -470,7 +491,7 @@ class Player:
 
         # 2. Angled (mesh) brushes: capsule depenetration for X/Y/Z together —
         #    pushes the player out of ramps/wedges and lands them on slopes.
-        self._resolve_mesh_capsule(mesh_brushes)
+        self._resolve_mesh_capsule(mesh_brushes, mesh_shapes)
 
         # 2. Terrain collision
         if terrain and terrain.is_solid():
@@ -780,7 +801,12 @@ class Player:
         for brush in aabb_brushes:
             if self._has_headroom(brush, p_min, p_max):
                 continue
-            top = world_bounds(brush)[4]
+            if ('geometry' in brush or '_mesh_bounds' in brush
+                    or 'is_mover' in brush or 'is_door' in brush):
+                top = world_bounds(brush)[4]
+            else:
+                # A plain box -- most steps: world_bounds' box rule, inline.
+                top = brush['pos'][1] + brush['size'][1] * 0.5
             rise = top - feet_y
             if rise <= 0.0 or rise > self.step_height:
                 return False
@@ -817,7 +843,7 @@ class Player:
                    glm.vec3(0.0, span, 0.0))
         return offsets, r
 
-    def _resolve_mesh_capsule(self, mesh_brushes):
+    def _resolve_mesh_capsule(self, mesh_brushes, mesh_shapes=None):
         """Resolve the player capsule against angled (mesh) brushes by pushing
         it out of any penetration, and set ground/ceiling state from the
         contact normals.
@@ -838,20 +864,29 @@ class Player:
         """
         if not mesh_brushes:
             return
+        offsets, radius = self._capsule_offsets()
+        offsets = [(float(o.x), float(o.y), float(o.z)) for o in offsets]
 
-        # Each shape once per resolve: its planes and bounds in its own frame
-        # and the frame a world query is carried into (None: world space).
+        # Each shape once per resolve (*mesh_shapes*: what the tick's gather
+        # already asked collision_shape for these brushes): its planes and
+        # bounds in its own frame, the frame a world query is carried into
+        # (None: world space), and the capsule's sphere offsets as that frame
+        # sees them -- a direction is only turned, never moved -- so a pass
+        # carries the player's centre into the frame once, not every sphere.
+        if mesh_shapes is None:
+            mesh_shapes = [collision_shape(brush) for brush in mesh_brushes]
         shapes = []
-        for brush in mesh_brushes:
-            shape = collision_shape(brush)
+        for brush, shape in zip(mesh_brushes, mesh_shapes):
             if shape is None or not shape[0]:
                 continue
             planes, _triangles, bounds, frame = shape
-            shapes.append((brush, planes, bounds, frame))
+            # A turned frame's offsets are worked out when a sphere first
+            # reaches its bounds (most shapes in reach never are).
+            turned = offsets if frame is None or frame.r is None else None
+            shapes.append([brush, planes, bounds, frame, turned])
         if not shapes:
             return
 
-        offsets, radius = self._capsule_offsets()
         ground_normal = None      # steepest-up contact this resolve
         ground_brush = None       # ... and the shape it came from
         wall_normal = None        # last horizontal contact, for velocity slide
@@ -869,7 +904,17 @@ class Player:
             push = None
             push_n = None
             push_brush = None
-            for brush, planes, bounds, frame in shapes:
+            wx, wy, wz = self.pos.x, self.pos.y, self.pos.z
+            for shape in shapes:
+                brush, planes, bounds, frame, turned = shape
+                if frame is None:
+                    px, py, pz = wx, wy, wz
+                elif frame.r is None:
+                    # Only translated (a still angled brush in its local
+                    # frame, a carried one): one offset.
+                    px, py, pz = wx + frame.ox, wy + frame.oy, wz + frame.oz
+                else:
+                    px, py, pz = frame.to_shape(wx, wy, wz)
                 if bounds:
                     mn, mx = bounds
                     if frame is None:
@@ -880,7 +925,6 @@ class Player:
                             pmx.z < mn[2] - radius or pmn.z > mx[2] + radius):
                             continue
                     else:
-                        px, py, pz = frame.to_shape(self.pos.x, self.pos.y, self.pos.z)
                         if frame.r is None:
                             # Only translated (a still angled brush in its
                             # local frame, a carried one): the box stays
@@ -892,12 +936,14 @@ class Player:
                             py < mn[1] - ey or py > mx[1] + ey or
                             pz < mn[2] - ez or pz > mx[2] + ez):
                             continue
-                for off in offsets:
-                    cx = self.pos.x + off.x
-                    cy = self.pos.y + off.y
-                    cz = self.pos.z + off.z
-                    if frame is not None:
-                        cx, cy, cz = frame.to_shape(cx, cy, cz)
+                if turned is None:
+                    turned = shape[4] = [frame.dir_to_shape(ox, oy, oz)
+                                         for ox, oy, oz in offsets]
+                for ox, oy, oz in turned:
+                    # The sphere's centre in the shape's frame.
+                    cx = px + ox
+                    cy = py + oy
+                    cz = pz + oz
                     # Sphere vs convex: largest signed distance across faces.
                     best_sd = -1e30
                     best_n = None

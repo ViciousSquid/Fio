@@ -153,9 +153,10 @@ def is_solid_world_brush(brush):
 
 
 # Runtime-only keys written to brush dicts by the cached-AABB helpers below
-# (brush_aabb_bounds, and brush_still_box for a still angled brush).
+# (brush_aabb_bounds -- and for a mover or door the runtime transform its
+# box was placed by -- and brush_still_box for a still angled brush).
 # Stripped on serialisation alongside the renderer's own private keys.
-AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds', '_aabb_box')
+AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds', '_aabb_box', '_aabb_runtime')
 
 
 #: engine.brush_placement, bound on first use: it imports the geometry
@@ -282,8 +283,9 @@ def _brush_aabb_runtime(brush, placement, sig):
         # A box carried (and turned): world_box_at's box rule, inline.
         size = brush.get('size') or placement.DEFAULT_SIZE
         if runtime[6]:
-            bh = glm.vec3(placement.turned_half(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5,
-                                                runtime[3:6], runtime[6]))
+            bh = glm.vec3(placement.turned_half_now(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5,
+                                                    runtime[3], runtime[4], runtime[5],
+                                                    runtime[6]))
         else:
             bh = glm.vec3(size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
         bp = glm.vec3(runtime[0], runtime[1], runtime[2])
@@ -294,6 +296,8 @@ def _brush_aabb_runtime(brush, placement, sig):
     lo = bp - bh
     hi = bp + bh
     bounds = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
+    # The transform it was placed by, kept with it (brush_aabb_runtime).
+    brush['_aabb_runtime'] = runtime
     brush['_aabb_bounds'] = bounds          # publication order: see above
     brush['_aabb_sig'] = sig
     placement._runtime_cached[key] = brush        # remember_runtime_cached
@@ -301,6 +305,16 @@ def _brush_aabb_runtime(brush, placement, sig):
             or placement.authored_generation != authored_stamp):
         brush.pop('_aabb_sig', None)
     return bounds
+
+
+def brush_aabb_runtime(brush):
+    """A mover's or door's runtime transform as its cached AABB was placed
+    by -- ``(cx, cy, cz, ax, ay, az, angle)`` or ``None`` -- found with the
+    box (:func:`brush_aabb_bounds`), so a caller that needs both asks the
+    runtime sources once: a hit is the transform the last miss found, and no
+    change has been stamped since."""
+    brush_aabb_bounds(brush)
+    return brush.get('_aabb_runtime')
 
 
 def brush_still_box(brush):
