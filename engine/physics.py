@@ -208,6 +208,43 @@ class _CellRows:
 _EMPTY_CELL_ROWS = _CellRows({})
 
 
+class _BoxRows:
+    """What the per-query wall and floor tests read: for each cell, its
+    static brushes' float64 boxes as plain tuples ``(id, x0, y0, z0, x1, y1,
+    z1)`` -- copied from :class:`_CellRows`, so the per-query and the batched
+    tests read the same numbers -- and its movers and doors, resolved live.
+    Built with the cell rows and again when ``authored_generation`` moves
+    (an editor edit during play), so no query classifies a brush or works
+    out a static box again."""
+
+    __slots__ = ('stamp', 'statics', 'moving')
+
+    def __init__(self, cells, cell_rows, stamp):
+        self.stamp = stamp
+        lo = cell_rows.lo.tolist()
+        hi = cell_rows.hi.tolist()
+        row_of = {id(brush): row for row, brush in enumerate(cell_rows.brushes)}
+        statics, moving = {}, {}
+        for coord, bucket in cells.items():
+            still, live = [], []
+            for brush in bucket:
+                if brush.get('is_mover') or brush.get('is_door'):
+                    live.append(brush)
+                    continue
+                row = row_of[id(brush)]
+                a, b = lo[row], hi[row]
+                still.append((id(brush), a[0], a[1], a[2], b[0], b[1], b[2]))
+            if still:
+                statics[coord] = tuple(still)
+            if live:
+                moving[coord] = tuple(live)
+        self.statics = statics
+        self.moving = moving
+
+
+_EMPTY_BOX_ROWS = _BoxRows({}, _EMPTY_CELL_ROWS, None)
+
+
 class SpatialGrid:
     """
     A 2D spatial partitioning grid to optimize collision detection.
@@ -278,6 +315,8 @@ class SpatialGrid:
         self._los_rows = _EMPTY_LOS_ROWS
         # What the batched point/box queries read, built with it.
         self._cell_rows = _EMPTY_CELL_ROWS
+        # What the per-query wall and floor tests read (see _BoxRows).
+        self._box_rows = _EMPTY_BOX_ROWS
 
     def clear(self):
         self.cells.clear()
@@ -285,6 +324,19 @@ class SpatialGrid:
         self.water_brushes.clear()
         self._los_rows = _EMPTY_LOS_ROWS
         self._cell_rows = _EMPTY_CELL_ROWS
+        self._box_rows = _EMPTY_BOX_ROWS
+
+    def _boxes(self):
+        """The current :class:`_BoxRows`: rebuilt, with the cell rows, after
+        an authored edit (one integer read when there has been none)."""
+        rows = self._box_rows
+        stamp = _placement.authored_generation
+        if rows.stamp != stamp:
+            cell_rows = _CellRows(self.cells)
+            rows = _BoxRows(self.cells, cell_rows, stamp)
+            self._cell_rows = cell_rows
+            self._box_rows = rows
+        return rows
 
     # ------------------------------------------------------------------
     # Line-of-sight rows
@@ -392,7 +444,9 @@ class SpatialGrid:
                                    pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
         self._los_rows = self._build_los_rows()
-        self._cell_rows = _CellRows(self.cells)
+        cell_rows = _CellRows(self.cells)
+        self._box_rows = _BoxRows(self.cells, cell_rows, _placement.authored_generation)
+        self._cell_rows = cell_rows
 
     # ------------------------------------------------------------------
     # Player queries  (unchanged API)
@@ -453,7 +507,11 @@ class SpatialGrid:
 
     def overlaps_wall(self, mx, my, mz, margin):
         """Check if a monster-sized box at (mx, my, mz) overlaps any solid brush.
-        Uses the grid to limit the search to nearby cells only."""
+        Uses the grid to limit the search to nearby cells only.
+
+        Static brushes are tested as the plain float64 boxes resolved for
+        their cells (:class:`_BoxRows`, the same numbers the batched query
+        reads); movers and doors are resolved now."""
         m_xmin = mx - margin
         m_xmax = mx + margin
         m_ymin = my
@@ -466,21 +524,18 @@ class SpatialGrid:
         min_cz = int(math.floor(m_zmin / self.cell_size))
         max_cz = int(math.floor(m_zmax / self.cell_size))
 
-        cells = self.cells
+        rows = self._boxes()
+        statics, moving = rows.statics, rows.moving
         if min_cx == max_cx and min_cz == max_cz:
             # Single-cell fast path: no de-duplication set needed.
-            for brush in cells.get((min_cx, min_cz), ()):
-                if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
-                    bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
-                else:   # a plain box: brush_placement's box rule, inline (per query)
-                    pos = brush['pos']
-                    size = brush['size']
-                    bx_min = pos[0] - size[0] * 0.5
-                    bx_max = pos[0] + size[0] * 0.5
-                    by_min = pos[1] - size[1] * 0.5
-                    by_max = pos[1] + size[1] * 0.5
-                    bz_min = pos[2] - size[2] * 0.5
-                    bz_max = pos[2] + size[2] * 0.5
+            cell = (min_cx, min_cz)
+            for _bid, bx_min, by_min, bz_min, bx_max, by_max, bz_max in statics.get(cell, ()):
+                if (m_xmax > bx_min and m_xmin < bx_max and
+                        m_ymax > by_min and m_ymin < by_max and
+                        m_zmax > bz_min and m_zmin < bz_max):
+                    return True
+            for brush in moving.get(cell, ()):
+                bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
                 if (m_xmax > bx_min and m_xmin < bx_max and
                         m_ymax > by_min and m_ymin < by_max and
                         m_zmax > bz_min and m_zmin < bz_max):
@@ -490,27 +545,24 @@ class SpatialGrid:
         seen = set()
         for cx in range(min_cx, max_cx + 1):
             for cz in range(min_cz, max_cz + 1):
-                for brush in cells.get((cx, cz), ()):
+                cell = (cx, cz)
+                for bid, bx_min, by_min, bz_min, bx_max, by_max, bz_max in statics.get(cell, ()):
+                    if bid in seen:
+                        continue
+                    seen.add(bid)
+                    if (m_xmax > bx_min and m_xmin < bx_max and
+                            m_ymax > by_min and m_ymin < by_max and
+                            m_zmax > bz_min and m_zmin < bz_max):
+                        return True
+                for brush in moving.get(cell, ()):
                     bid = id(brush)
                     if bid in seen:
                         continue
                     seen.add(bid)
-
-                    if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
-                        bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
-                    else:   # a plain box: brush_placement's box rule, inline (per query)
-                        pos = brush['pos']
-                        size = brush['size']
-                        bx_min = pos[0] - size[0] * 0.5
-                        bx_max = pos[0] + size[0] * 0.5
-                        by_min = pos[1] - size[1] * 0.5
-                        by_max = pos[1] + size[1] * 0.5
-                        bz_min = pos[2] - size[2] * 0.5
-                        bz_max = pos[2] + size[2] * 0.5
-
+                    bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
                     if (m_xmax > bx_min and m_xmin < bx_max and
-                        m_ymax > by_min and m_ymin < by_max and
-                        m_zmax > bz_min and m_zmin < bz_max):
+                            m_ymax > by_min and m_ymin < by_max and
+                            m_zmax > bz_min and m_zmin < bz_max):
                         return True
         return False
 
@@ -686,25 +738,19 @@ class SpatialGrid:
 
     def raycast_down(self, x, z, start_y=10000.0):
         """Return Y of the highest solid brush surface below (x, z), or None.
-        Uses the grid — only checks brushes in the cell containing (x, z)."""
-        cx = int(math.floor(x / self.cell_size))
-        cz = int(math.floor(z / self.cell_size))
-        cell = (cx, cz)
-        brushes = self.cells.get(cell, [])
-
+        Uses the grid — only checks brushes in the cell containing (x, z).
+        Static brushes are read as their cell's resolved boxes
+        (:class:`_BoxRows`); movers and doors are resolved now."""
+        cell = (int(math.floor(x / self.cell_size)), int(math.floor(z / self.cell_size)))
+        rows = self._boxes()
         best_y = None
-        for brush in brushes:
-            if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
-                bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
-            else:   # a plain box: brush_placement's box rule, inline (per query)
-                pos = brush['pos']
-                size = brush['size']
-                bx_min = pos[0] - size[0] * 0.5
-                bx_max = pos[0] + size[0] * 0.5
-                by_max = pos[1] + size[1] * 0.5
-                bz_min = pos[2] - size[2] * 0.5
-                bz_max = pos[2] + size[2] * 0.5
-
+        for _bid, bx_min, _by_min, bz_min, bx_max, by_max, bz_max in rows.statics.get(cell, ()):
+            if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
+                if by_max <= start_y:
+                    if best_y is None or by_max > best_y:
+                        best_y = by_max
+        for brush in rows.moving.get(cell, ()):
+            bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
             if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
                 if by_max <= start_y:
                     if best_y is None or by_max > best_y:

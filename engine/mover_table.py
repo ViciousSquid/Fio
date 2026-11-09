@@ -232,6 +232,10 @@ class _Group:
         self.any_twin = False
         self._build_columns(n)
         for row in range(n):
+            # A brush cached as still before it had a mover's flag
+            # (constants.brush_aabb_bounds keys that by pos/size alone) is
+            # one now: drop the key once, here.
+            self.brushes[row].pop('_aabb_sig', None)
             self.resync(row)
         if self.table is not None:
             self.table._adopt(self)

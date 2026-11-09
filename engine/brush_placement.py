@@ -352,6 +352,9 @@ class RuntimeOverrides:
             centre = (home[0] + float(offset[0]), home[1] + float(offset[1]),
                       home[2] + float(offset[2]))
         axis, angle = spin if spin is not None else ((0.0, 1.0, 0.0), 0.0)
+        # A brush cached as still (constants.brush_aabb_bounds keys it by
+        # pos/size alone) is not still any more.
+        brush.pop('_aabb_sig', None)
         self.runtime_entries[id(brush)] = (brush, (
             float(centre[0]), float(centre[1]), float(centre[2]),
             float(axis[0]), float(axis[1]), float(axis[2]), float(angle)))
