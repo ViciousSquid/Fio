@@ -676,11 +676,14 @@ class LinearMovers(_Group):
         new = np.where(forward, progress + step_size, progress - step_size)
         hit_end = forward & (new >= 1.0)
         hit_start = ~forward & (new <= 0.0)
-        new[hit_end] = 1.0
-        new[hit_start] = 0.0
         event = np.full(len(rows), _NO_EVENT, dtype=np.int8)
-        event[hit_end & ~was_end] = _FULLY_OPEN
-        event[hit_start & ~was_start] = _FULLY_CLOSED
+        # An end of travel is rare: its stores run only when one happens.
+        if hit_end.any():
+            new[hit_end] = 1.0
+            event[hit_end & ~was_end] = _FULLY_OPEN
+        if hit_start.any():
+            new[hit_start] = 0.0
+            event[hit_start & ~was_start] = _FULLY_CLOSED
         eased = _eased(new)
         pos = self.original[rows] + (self.direction[rows] * distance[:, None]) * eased[:, None]
         return {'spin': spin, 'angle': new_angle, 'progress': new,
@@ -872,31 +875,39 @@ class Doors(_Group):
         step_size = np.zeros(len(rows))
         np.divide(self.speed[rows] * delta, distance, out=step_size,
                   where=distance > 0)
-        code = self.code[rows].copy()
-        progress = self.progress[rows].copy()
-        timer = self.open_timer[rows].copy()
+        # Fancy indexing already copies: these are the tentative new state.
+        was = self.code[rows]
+        code = was.copy()
+        progress = self.progress[rows]
+        timer = self.open_timer[rows]
         event = np.full(len(rows), _NO_EVENT, dtype=np.int8)
 
-        opening = code == OPENING
+        # Each phase reads the codes as they were (a door that just finished
+        # opening does not also start waiting this tick). A transition is
+        # rare, so its stores run only when one happens.
+        opening = was == OPENING
         progress[opening] += step_size[opening]
         done = opening & (progress >= 1.0)
-        progress[done] = 1.0
-        code[done] = OPEN
-        timer[done] = self.open_time[rows][done]
-        event[done] = _FULLY_OPEN
+        if done.any():
+            progress[done] = 1.0
+            code[done] = OPEN
+            timer[done] = self.open_time[rows][done]
+            event[done] = _FULLY_OPEN
 
-        waiting = self.code[rows] == OPEN
+        waiting = was == OPEN
         timer[waiting] -= delta
         done = waiting & (timer <= 0)
-        code[done] = CLOSING
-        event[done] = _CLOSE
+        if done.any():
+            code[done] = CLOSING
+            event[done] = _CLOSE
 
-        closing = self.code[rows] == CLOSING
+        closing = was == CLOSING
         progress[closing] -= step_size[closing]
         done = closing & (progress <= 0.0)
-        progress[done] = 0.0
-        code[done] = CLOSED
-        event[done] = _FULLY_CLOSED
+        if done.any():
+            progress[done] = 0.0
+            code[done] = CLOSED
+            event[done] = _FULLY_CLOSED
 
         pos = self.original[rows] + (self.direction[rows] * distance[:, None]) * progress[:, None]
         return {'code': code, 'progress': progress, 'timer': timer,

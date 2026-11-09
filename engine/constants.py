@@ -171,6 +171,17 @@ def _bind_brush_placement():
     return brush_placement
 
 
+class _ShapeKey(tuple):
+    """An angled brush's or mesh proxy's AABB key: its pos/size, equal to the
+    plain key, tagged so a miss knows it was not cached as a plain box."""
+    __slots__ = ()
+
+
+class _MoverKey(tuple):
+    """A mover's or door's AABB key: its pos/size, tagged likewise."""
+    __slots__ = ()
+
+
 def brush_aabb_bounds(brush):
     """Return a brush's world-space AABB as ``(lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``.
 
@@ -203,9 +214,14 @@ def brush_aabb_bounds(brush):
     if cached == sig:
         # Stage 1's key and Stage 1's cost (see above for what drops it).
         return brush['_aabb_bounds']
-    if ('is_mover' in brush and brush['is_mover']) or ('is_door' in brush and brush['is_door']):
+    if cached.__class__ is tuple:
+        # Cached as a plain box (an angled brush's and a mover's keys are
+        # tagged _ShapeKey / _MoverKey), and still one -- what would make it
+        # otherwise drops the key -- that has moved: Stage 1's miss, below.
+        pass
+    elif ('is_mover' in brush and brush['is_mover']) or ('is_door' in brush and brush['is_door']):
         return _brush_aabb_runtime(brush, _brush_placement or _bind_brush_placement(), sig)
-    if 'geometry' in brush or '_mesh_bounds' in brush:
+    elif 'geometry' in brush or '_mesh_bounds' in brush:
         # An angled brush or mesh proxy: its derived box.
         return _brush_aabb_slow(brush, pos, size, sig)
     # A plain box's miss, inline: Stage 1's computation.
@@ -226,6 +242,7 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
         return _brush_aabb_runtime(brush, placement, plain_sig)
     sig = plain_sig
     if 'geometry' in brush or '_mesh_bounds' in brush:
+        sig = _ShapeKey(plain_sig)
         box = placement.world_box_at(brush, None)
         # Kept for brush_still_box under the same key (stored first: a
         # reader that sees the new key finds the box that goes with it).
@@ -299,7 +316,7 @@ def _brush_aabb_runtime(brush, placement, sig):
     # The transform it was placed by, kept with it (brush_aabb_runtime).
     brush['_aabb_runtime'] = runtime
     brush['_aabb_bounds'] = bounds          # publication order: see above
-    brush['_aabb_sig'] = sig
+    brush['_aabb_sig'] = _MoverKey(sig)
     placement._runtime_cached[key] = brush        # remember_runtime_cached
     if (placement.runtime_generation != runtime_stamp
             or placement.authored_generation != authored_stamp):
