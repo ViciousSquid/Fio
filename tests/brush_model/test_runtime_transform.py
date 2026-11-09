@@ -644,3 +644,20 @@ def test_stopping_and_rebuilding_rows_swaps_the_transforms_whole(crowd):
         del table._publish
     assert seen and all(seen)
     assert table.runtime_entries == before
+
+
+def test_stopping_play_with_a_brush_that_is_both_returns_it_home(crowd):
+    """Stop empties the movers' rows before the doors' (logic_session): the
+    doors' rows, republished as the movers' are rebuilt, must not reach for
+    the twin's spin in rows that are gone (Stage 1 stopped such a level;
+    Stage 2b raised IndexError)."""
+    both = _named(crowd, "both")
+    homes = [bp.authored_box(b)[:3] for b in crowd.editor_state.brushes]
+    _tick(crowd, 40)
+    assert bp.runtime_of(both) is not None
+    crowd.mover_runtime._reset_movers()
+    crowd.mover_runtime._reset_doors()
+    for brush, home in zip(crowd.editor_state.brushes, homes):
+        assert bp.placed_box(brush)[:3] == home, brush['name']
+        assert bp.runtime_spin(brush) is None, brush['name']
+    assert not crowd.mover_runtime._movers().runtime_entries

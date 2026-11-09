@@ -1119,6 +1119,11 @@ class MoverTable:
                 if entry is None or entry[0] is not brush:
                     continue
                 group._place(row, entry[1], entry[2])
+        # The other group's twin rows name this group's old rows (and this
+        # group's are unset): link them to the rows as they are now before
+        # either group is published -- stopping play empties one group
+        # before the other.
+        self._link_twins()
         # Built aside and swapped in whole: a reader on another thread never
         # sees a half-built dict (every mover momentarily at home).
         entries = {}
@@ -1276,6 +1281,13 @@ class MoverTable:
         if getattr(self, '_linked', None) == key:
             return
         self._linked = key
+        self._link_twins()
+
+    def _link_twins(self):
+        """Which row of the other group holds the same brush (a brush that
+        is both a mover and a door), worked out from both groups' rows as
+        they are now."""
+        movers, doors = self.movers, self.doors
         movers.twin, doors.twin = doors, movers
         movers.twin_row[:] = -1
         doors.twin_row[:] = -1
