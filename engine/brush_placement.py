@@ -676,6 +676,10 @@ def turned_bounds(bounds, rot):
     the cost of one comparison over the ``rot`` angles -- and copied
     otherwise, so a table's own column is never written.
     """
+    if not rot[:, 3].any():
+        # No row turns (every still frame of most maps): one pass over the
+        # angles, not rotation_matrices' set-up.
+        return bounds
     rows, r = rotation_matrices(rot)
     if not len(rows):
         return bounds

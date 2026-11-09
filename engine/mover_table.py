@@ -1318,5 +1318,7 @@ class MoverTable:
             rot[spun, :3] = movers.rot_axis[mover_rows][spun]
             rot[spun, 3] = angle[spun]
             table.rot[mover_slots] = rot
+            if not table.turning and spun.any():
+                table.turning = True    # the column's other writer
         if len(door_rows):
             table.bounds[door_slots, :3] = doors.pos[door_rows]

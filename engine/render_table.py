@@ -383,7 +383,7 @@ class RenderTable:
         '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
         '_shown_mask', '_shown_slots', '_shown_stale',
-        '_occlusion_index', '_occlusion_dirty', '__weakref__'))
+        '_occlusion_index', '_occlusion_dirty', 'turning', '__weakref__'))
 
     @property
     def center(self):
@@ -436,6 +436,12 @@ class RenderTable:
         # journals only the rows it was going to refresh anyway.
         self._occlusion_index = None
         self._occlusion_dirty = None
+        #: Whether any row has ever been given a spin (a non-zero ``rot``
+        #: angle) -- by this table's row resolution or the mover table's
+        #: publication, the column's writers. Never cleared: until it is set,
+        #: no row turns and a row's AABB is its ``bounds`` (the frustum cull
+        #: skips the resolver's turned bounds).
+        self.turning = False
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -542,6 +548,7 @@ class RenderTable:
         spin = brush_placement.runtime_spin(brush)
         if spin is not None:
             self.rot[slot] = spin
+            self.turning = True
         elif self.rot[slot, 3]:
             self.rot[slot] = 0.0
 
@@ -562,6 +569,7 @@ class RenderTable:
                 spin = brush_placement.runtime_spin(brush)
                 if spin is not None:
                     rot[row] = spin
+                    self.turning = True
             else:
                 # brush_placement's box rule, inline: this loop runs over
                 # every row of a world on a cold build, and a box that is

@@ -519,14 +519,13 @@ class LogicRender:
         if self.culling_enabled and total_count:
             # Derived bounds (brush_placement): a spinning row is tested as
             # the AABB of its turned box, so it is never culled while drawn.
+            # Until any row has turned (RenderTable.turning) every row's box
+            # is its bounds, and the resolver is not asked.
+            bounds = table.bounds[:total_count]
+            if table.turning:
+                bounds = brush_placement.turned_bounds(bounds, table.rot[:total_count])
             visible_slots = np.flatnonzero(
-                keep
-                & self.aabb_in_frustum_bounds(
-                    frustum_planes,
-                    brush_placement.turned_bounds(
-                        table.bounds[:total_count], table.rot[:total_count]),
-                )
-            )
+                keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
         else:
             visible_slots = all_slots
 

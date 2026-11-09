@@ -150,6 +150,19 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
 # Player Class
 # =============================================================================
 
+def _water_bounds(brush):
+    """A water volume's derived bounds (world_bounds): almost always a plain
+    box, whose bounds are its pos -/+ size/2 -- the box rule, inline, as
+    Stage 1 read it -- and the resolver's for anything else."""
+    if ('geometry' in brush or '_mesh_bounds' in brush
+            or 'is_mover' in brush or 'is_door' in brush):
+        return world_bounds(brush)
+    pos = brush['pos']
+    size = brush['size']
+    hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
+    return (pos[0] - hx, pos[1] - hy, pos[2] - hz, pos[0] + hx, pos[1] + hy, pos[2] + hz)
+
+
 def _blocks_player(brush):
     """Single source of truth for "does the player collide with this brush?".
 
@@ -589,7 +602,17 @@ class Player:
         for brush in water_brushes:
             if brush.get('hidden'):
                 continue
-            b_lo_x, b_bot, b_lo_z, b_hi_x, b_top, b_hi_z = world_bounds(brush)
+            if ('geometry' in brush or '_mesh_bounds' in brush
+                    or 'is_mover' in brush or 'is_door' in brush):
+                b_lo_x, b_bot, b_lo_z, b_hi_x, b_top, b_hi_z = world_bounds(brush)
+            else:
+                # A plain water box (almost every one): the box rule, inline.
+                bpos = brush['pos']
+                bsize = brush['size']
+                hx, hy, hz = bsize[0] * 0.5, bsize[1] * 0.5, bsize[2] * 0.5
+                b_lo_x, b_hi_x = bpos[0] - hx, bpos[0] + hx
+                b_lo_z, b_hi_z = bpos[2] - hz, bpos[2] + hz
+                b_bot, b_top = bpos[1] - hy, bpos[1] + hy
             if not (b_lo_x <= px <= b_hi_x and b_lo_z <= pz <= b_hi_z):
                 continue
 
@@ -686,7 +709,7 @@ class Player:
             # Highest climbable ledge at this probe point
             ledge_top = None
             for brush in aabb_brushes:
-                b = world_bounds(brush)
+                b = _water_bounds(brush)
                 if not (b[0] <= px <= b[3] and b[2] <= pz <= b[5]):
                     continue
                 top = b[4]
@@ -708,7 +731,7 @@ class Player:
             # Headroom: the player must fit standing on the ledge
             blocked = False
             for brush in aabb_brushes:
-                b = world_bounds(brush)
+                b = _water_bounds(brush)
                 if not (b[0] <= px <= b[3] and b[2] <= pz <= b[5]):
                     continue
                 top = b[4]
