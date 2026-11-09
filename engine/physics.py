@@ -1,5 +1,6 @@
 import math
 import threading
+from itertools import chain
 
 import glm
 import numpy as np
@@ -8,6 +9,8 @@ from .change_journal import touch
 from . import brush_placement as _placement
 from .brush_placement import shared_bulk_boxes, world_bounds, world_box
 from .constants import is_water_brush, brush_aabb_bounds
+
+_chain = chain.from_iterable
 from .spatial import (CELL_SIZE, TIER_NEAR, CellIndex, authored_hidden,
                       cells_of_points, tier_of)
 
@@ -47,6 +50,16 @@ _CELL_STRIDE = 1 << 21
 def _cell_keys(cx, cz):
     return ((np.asarray(cx, dtype=np.int64) + _CELL_OFFSET) * _CELL_STRIDE
             + (np.asarray(cz, dtype=np.int64) + _CELL_OFFSET))
+
+
+def _vectors(vectors):
+    """``(n, 3)`` float64 of *n* 3-vectors: one flat pass; any vector of
+    another length falls back to reading each one's first three."""
+    count = len(vectors)
+    flat = np.fromiter(_chain(vectors), dtype=np.float64)
+    if flat.size != 3 * count:
+        flat = np.array([(v[0], v[1], v[2]) for v in vectors], dtype=np.float64)
+    return flat.reshape(count, 3)
 
 
 class _CellRows:
@@ -97,16 +110,25 @@ class _CellRows:
         self.keys = np.asarray(keys, dtype=np.int64)
         self.starts = np.asarray(starts, dtype=np.int64)
         self.rows = np.asarray(rows, dtype=np.int64)
+        # Every brush's derived bounds (world_bounds): a plain box's pos -/+
+        # size/2 read in bulk (one flat pass per column), then the few that
+        # need more -- planes, a mesh, a runtime transform -- in place.
         count = len(brushes)
-        self.lo = np.empty((count, 3), dtype=np.float64)
-        self.hi = np.empty((count, 3), dtype=np.float64)
+        centre = _vectors([b['pos'] for b in brushes])
+        half = _vectors([b['size'] for b in brushes]) * 0.5
+        self.lo = centre - half
+        self.hi = centre + half
         #: row -> the brush, for the per-brush predicates a caller still asks.
         self.brushes = brushes
         self.movers = []
         for row, brush in enumerate(brushes):
-            self._resolve(row, brush)
-            if brush.get('is_mover') or brush.get('is_door'):
-                self.movers.append((row, brush))
+            if ('geometry' in brush or '_mesh_bounds' in brush
+                    or 'is_mover' in brush or 'is_door' in brush):
+                if brush.get('is_mover') or brush.get('is_door'):
+                    self.movers.append((row, brush))
+                elif 'geometry' not in brush and '_mesh_bounds' not in brush:
+                    continue            # a flag set false: a plain box
+                self._resolve(row, brush)
         self._mover_rows = np.asarray([row for row, _brush in self.movers],
                                       dtype=np.intp)
         #: The placement stamps the mover rows were last derived at; the
@@ -118,18 +140,10 @@ class _CellRows:
             [brush for _row, brush in self.movers], self._mover_rows)
 
     def _resolve(self, row, brush):
-        if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
-            bounds = world_bounds(brush)
-            self.lo[row] = bounds[0:3]
-            self.hi[row] = bounds[3:6]
-            return
-        # A plain box: brush_placement's box rule, inline (a hot loop).
-        pos = brush['pos']
-        size = brush['size']
-        for axis in range(3):
-            half = size[axis] * 0.5
-            self.lo[row, axis] = pos[axis] - half
-            self.hi[row, axis] = pos[axis] + half
+        # Planes, a mesh or a runtime transform: the resolver's bounds.
+        bounds = world_bounds(brush)
+        self.lo[row] = bounds[0:3]
+        self.hi[row] = bounds[3:6]
 
     def refresh_movers(self):
         """Re-derive the movers' and doors' rows if anything they are derived
@@ -320,6 +334,7 @@ class SpatialGrid:
         self._los_rows = _EMPTY_LOS_ROWS
         # What the batched point/box queries read, built with it.
         self._cell_rows = _EMPTY_CELL_ROWS
+        self._cell_stamp = None
         # What the per-query wall and floor tests read (see _BoxRows).
         self._box_rows = _EMPTY_BOX_ROWS
 
@@ -329,6 +344,7 @@ class SpatialGrid:
         self.water_brushes.clear()
         self._los_rows = _EMPTY_LOS_ROWS
         self._cell_rows = _EMPTY_CELL_ROWS
+        self._cell_stamp = None
         self._box_rows = _EMPTY_BOX_ROWS
 
     def _boxes(self):
@@ -337,9 +353,12 @@ class SpatialGrid:
         rows = self._box_rows
         stamp = _placement.authored_generation
         if rows.stamp != stamp:
-            cell_rows = _CellRows(self.cells)
+            cell_rows = self._cell_rows
+            if self._cell_stamp != stamp:
+                cell_rows = _CellRows(self.cells)
+                self._cell_rows = cell_rows
+                self._cell_stamp = stamp
             rows = _BoxRows(self.cells, cell_rows, stamp)
-            self._cell_rows = cell_rows
             self._box_rows = rows
         return rows
 
@@ -438,7 +457,10 @@ class SpatialGrid:
             # Filed by its derived bounds (brush_placement): an angled
             # brush's planes, a mover where it is now, a spinner's turned box
             # -- one rule in the editor and in play.
-            if 'geometry' in brush or '_mesh_bounds' in brush or brush.get('is_mover') or brush.get('is_door'):
+            # (Membership tests first: most brushes carry none of these keys,
+            # and world_bounds itself handles a flag that is set false.)
+            if ('geometry' in brush or '_mesh_bounds' in brush
+                    or 'is_mover' in brush or 'is_door' in brush):
                 lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = world_bounds(brush)
                 self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
             else:       # a plain box: the box rule, inline
@@ -449,9 +471,10 @@ class SpatialGrid:
                                    pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
         self._los_rows = self._build_los_rows()
-        cell_rows = _CellRows(self.cells)
-        self._box_rows = _BoxRows(self.cells, cell_rows, _placement.authored_generation)
-        self._cell_rows = cell_rows
+        # The per-query box rows are built from these when first asked for.
+        self._cell_rows = _CellRows(self.cells)
+        self._cell_stamp = _placement.authored_generation
+        self._box_rows = _EMPTY_BOX_ROWS
 
     # ------------------------------------------------------------------
     # Player queries  (unchanged API)
