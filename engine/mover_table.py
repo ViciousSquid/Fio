@@ -212,6 +212,10 @@ class _Group:
         self.states = StateView(self)
         #: The MoverTable this group belongs to (its runtime source).
         self.table = None
+        #: Moves whenever what bounds a row's reach may change -- its
+        #: half-extents or whether it can turn (resync, a restored spin):
+        #: MoverTable.near_rows keeps its per-row reaches against it.
+        self.reach_version = 0
         self._build([])
 
     # -- rows ----------------------------------------------------------------
@@ -305,6 +309,7 @@ class _Group:
         authored = box[:3]
         self.half[row] = box[3:]
         self.turned[row] = box[3:]
+        self.reach_version += 1
         if tuple(self.original[row].tolist()) != authored:
             travelled = self.pos[row] - self.original[row]
             self.original[row] = authored
@@ -385,6 +390,7 @@ class _Group:
         self.pos[row] = position
         if hasattr(self, 'rot_angle'):
             self.rot_angle[row] = angle
+            self.reach_version += 1         # it may turn now (near_rows)
 
     def _write_positions(self, rows, new_pos, ride, spin=None):
         """Store *new_pos* for the *rows* that moved, and publish them and
@@ -1187,6 +1193,121 @@ class MoverTable:
             if not claimed[i]:
                 bulk.claim(i, self.runtime_entries.get(id(bulk.brushes[i])), centre, half, claimed)
 
+    # -- the broad phase -----------------------------------------------------
+
+    #: From this many rows a group is tested in one vectorised pass;
+    #: below it, a scan of the column in scalars. Measured in the frame (the
+    #: tick and the player around it, CPython 3.13, NumPy 2.5.3): the NumPy
+    #: pass costs 6-11 us from 8 to 128 rows (each call 1-2 us on caches the
+    #: tick has just used), the scan about 1 us plus 0.15 us a row -- level
+    #: at about 48 rows (docs/brush-model-stage2.md §11.7).
+    NEAR_VECTOR_FROM = 48
+
+    #: Each row's four compare results, read as one integer: all true.
+    _ALL_NEAR = np.uint32(0x01010101)
+
+    def near_rows(self, lists, x, y, z, pad, pad_turned):
+        """The broad phase over the table's columns: for *lists* -- the
+        mover list and the door list a reader was handed, in the order of
+        this table's rows -- the brushes whose box can come within *pad*
+        (per axis) of the point ``(x, y, z)``, each list's in its order.
+
+        A row's box is its centre now (the ``pos`` column: where its runtime
+        entry puts it, or, with no entry, its authored centre, which the
+        publication leaves it at) and its authored half-extents; a row that
+        can turn is bounded by the radius of its box instead, and its
+        distance taken against *pad_turned*. Rows whose box the columns
+        cannot bound (a brush in both groups, a mesh proxy) are always
+        near. The reaches are worked out once per row rebuild or resync,
+        never per tick; each tick reads the centres in one go and compares
+        (:attr:`NEAR_VECTOR_FROM`).
+
+        The lists must be this table's rows (:meth:`holds_rows`)."""
+        out = []
+        for brushes, group in zip(lists, (self.movers, self.doors)):
+            if not brushes:
+                out.append(brushes)
+                continue
+            reach = self._reach(group, pad, pad_turned)
+            if len(brushes) < self.NEAR_VECTOR_FROM:
+                out.append([b for b, (px, py, pz), (rx, ry, rz)
+                            in zip(brushes, group.pos.tolist(), reach[1])
+                            if -rx <= px - x <= rx and -ry <= py - y <= ry
+                            and -rz <= pz - z <= rz])
+                continue
+            # |centre - point| <= reach, a fourth column always true, and
+            # each row's four results read as one integer.
+            limit, gap, near = reach[2], reach[3], reach[4]
+            np.subtract(group.pos, (x, y, z), out=gap[:, :3])
+            np.abs(gap, out=gap)
+            np.less_equal(gap, limit, out=near)
+            out.append(list(compress(
+                brushes, (near.view(np.uint32).ravel() == self._ALL_NEAR).tolist())))
+        return out
+
+    def holds_rows(self, lists):
+        """Whether *lists* -- a mover list and a door list -- are this
+        table's rows, brush for brush (an empty list always is)."""
+        for brushes, group in zip(lists, (self.movers, self.doors)):
+            if brushes and not self._is_rows(brushes, group):
+                return False
+        return True
+
+    def _is_rows(self, brushes, group):
+        """Whether the list *brushes* is *group*'s rows, brush for brush.
+        Checked once per list object and row build (the lists a reader is
+        handed are replaced, never edited in place)."""
+        seen = group.__dict__.get('_near_list')
+        if (seen is not None and seen[0] is brushes and seen[1] == group.version
+                and seen[2] == len(brushes)):
+            return True
+        rows = group.brushes
+        if len(brushes) != len(rows) or any(a is not b for a, b in zip(brushes, rows)):
+            return False
+        group._near_list = (brushes, group.version, len(brushes))
+        return True
+
+    def _reach(self, group, pad, pad_turned):
+        """``(key, rows, limit, gap, near)``: per row, how far its centre
+        may be from a point (per axis) for its box to come within *pad* /
+        *pad_turned* of it -- as tuples for the scan, and as an ``(n, 4)``
+        array (a fourth column always passing) with the scratch arrays the
+        vectorised pass fills -- kept until the rows, their reach inputs or
+        the pads change."""
+        cached = group.__dict__.get('_near_reach')
+        if cached is not None:
+            key = cached[0]
+            if ((key[0] is pad or key[0] == pad)
+                    and (key[1] is pad_turned or key[1] == pad_turned)
+                    and key[2] == group.reach_version
+                    and key[3] == self.movers.version and key[4] == self.doors.version):
+                return cached
+        half = group.half
+        reach = half + np.asarray(pad)
+        turns = group.twin_row >= 0
+        if group is self.movers:
+            turns = turns | group.rotate | (group.rot_angle != 0.0)
+        if turns.any():
+            # Turned any way about its centre, a box stays inside the sphere
+            # through its corners.
+            radius = np.sqrt(np.einsum('ij,ij->i', half[turns], half[turns]))
+            reach[turns] = radius[:, None] + np.asarray(pad_turned)
+        # A brush in both groups (its spin is the other group's) and a mesh
+        # proxy (collided by its world-space mesh, which no row moves): near
+        # wherever they are.
+        reach[group.twin_row >= 0] = np.inf
+        for row, brush in enumerate(group.brushes):
+            if '_mesh_bounds' in brush or '_collision_mode' in brush:
+                reach[row] = np.inf
+        count = len(reach)
+        limit = np.ones((count, 4))
+        limit[:, :3] = reach
+        cached = group._near_reach = (
+            (pad, pad_turned, group.reach_version, self.movers.version, self.doors.version),
+            [tuple(r) for r in reach.tolist()], limit,
+            np.zeros((count, 4)), np.zeros((count, 4), dtype=bool))
+        return cached
+
     def position_of(self, brush):
         """Where *brush* is now (its centre): its row's position, or its
         authored centre when it has no row."""
@@ -1221,6 +1342,7 @@ class MoverTable:
             found = True
             if group is self.movers:
                 group.rot_angle[row] = float(angle)
+                group.reach_version += 1    # it may turn now (near_rows)
             group._store(np.array([row]), np.array([position]))
         if not found:
             self._pending[id(brush)] = (brush, position, float(angle))

@@ -30,7 +30,7 @@ from .constants import (
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
-from .brush_placement import collision_shape, collision_shape_at, world_bounds
+from .brush_placement import collision_shape, collision_shape_at, movers_near, world_bounds
 from .physics import world_gravity
 
 
@@ -189,6 +189,107 @@ def _blocks_player(brush):
     return is_solid_world_brush(brush)
 
 
+def _gather(colliders, movers, doors):
+    """``(aabb_brushes, mesh_brushes, mesh_shapes)``: one pass over
+    everything that could collide this tick, dropping what the player does
+    not collide with at all (see _blocks_player) and splitting the rest by
+    shape (brush_placement.collision_shape). A solid shape -- an angled
+    brush, static or moving, a spinning box, a model's collision mesh -- is
+    resolved in its own frame; any other box keeps the AABB fast path, its
+    derived bounds being exact."""
+    mesh_brushes = []
+    mesh_shapes = []
+    aabb_brushes = []
+    for source in (colliders, movers, doors):
+        if not source:
+            continue
+        for b in source:
+            if not _blocks_player(b):
+                continue
+            # A static box -- most of a level -- is told by three dict
+            # reads; only a brush with planes, a mesh or a runtime
+            # transform asks for its shape (once: the resolve below is
+            # handed what it answered).
+            if ('geometry' not in b and '_collision_mode' not in b
+                    and (('is_mover' in b and b['is_mover'])
+                         or ('is_door' in b and b['is_door']))):
+                # A box mover or door: a solid shape only while it is
+                # turned. Its transform is the one its cached box was
+                # placed by, which the AABB passes then read as a hit.
+                brush_aabb_bounds(b)        # (brush_aabb_runtime, inline)
+                runtime = b.get('_aabb_runtime')
+                if runtime is None or not runtime[6]:
+                    aabb_brushes.append(b)
+                    continue
+                shape = collision_shape_at(b, runtime)
+                if shape is not None:
+                    mesh_brushes.append(b)
+                    mesh_shapes.append(shape)
+                else:
+                    aabb_brushes.append(b)
+                continue
+            if ('geometry' in b or '_collision_mode' in b
+                    or 'is_mover' in b or 'is_door' in b):
+                shape = collision_shape(b)
+                if shape is not None:
+                    mesh_brushes.append(b)
+                    mesh_shapes.append(shape)
+                    continue
+            aabb_brushes.append(b)
+    return aabb_brushes, mesh_brushes, mesh_shapes
+
+
+class _Reach:
+    """What the tick's mover broad phase (brush_placement.movers_near)
+    covers: the movers and doors near the player where the tick began, and
+    how far the player may move from there before a pass could test beyond
+    them.
+
+    The broad phase keeps every mover whose box can come within the
+    player's standing hull, plus the capsule's reach and :attr:`room`, of
+    ``(x, y, z)``. A pass tests boxes centred on where the player is (a
+    step-up and an un-duck a step or a duck higher), so while the player is
+    within :attr:`room` of where it began, a mover the broad phase left out
+    touches nothing a pass tests: the passes run on the near lists alone and
+    answer what they would over every mover. :meth:`holds` is asked before
+    each pass and after each push; once it fails, the rest of the tick runs
+    on the full lists (:attr:`full`)."""
+
+    __slots__ = ('x', 'y', 'z', 'room', 'full')
+
+    def holds(self, x, y, z):
+        room = self.room
+        return (-room <= x - self.x <= room and -room <= y - self.y <= room
+                and -room <= z - self.z <= room)
+
+
+def _reach_pads(width, height, depth, step, room):
+    """``(pad, pad_turned, allowed)`` for a standing hull of *width* x
+    *height* x *depth*: how close (per axis) a mover's box must come to the
+    player's centre for any pass to test it while the player stays within
+    *room* of that centre, and how far the centre itself may then move.
+
+    * An AABB test (a pass, a step-up, an un-duck) overlaps the hull, at most
+      the standing one; the capsule's broad reject in a translated frame
+      widens it by the capsule's radius. So *pad* is the standing half-extents
+      plus that radius plus *room*.
+    * In a turned frame the capsule's broad reject is a cube of half-width
+      ``e`` (the hull's circumscribed radius plus the capsule's) about the
+      player's centre in the shape's frame; whatever the turn, that keeps the
+      centre within ``|half + e|`` of the shape's centre, which is at most
+      ``|half| + e * sqrt(3)`` -- the box's radius (the table's measure for a
+      row that can turn) plus *pad_turned*. It also covers an AABB test of
+      the turned box, whose half-extents never exceed its radius.
+    * The centre may move *room*, less a step up (a step-up tests the hull a
+      step higher than where the pass put it) and a margin for rounding
+      (float32 boxes, an un-turned frame's offsets): *allowed*."""
+    hx, hy, hz = width * 0.5, height * 0.5, depth * 0.5
+    radius = min(hx, hz)
+    pad = (hx + radius + room, hy + radius + room, hz + radius + room)
+    turned = (math.sqrt(hx * hx + hy * hy + hz * hz) + radius) * math.sqrt(3.0) + room
+    return pad, (turned, turned, turned), room - (step + 0.001) - 1.0
+
+
 class Player:
     def __init__(self, x, z, angle=math.pi, physics_enabled=True):
         # Initialize position (Y is set to 2 tiles high by default)
@@ -286,6 +387,44 @@ class Player:
         self.height = height
         self._half = glm.vec3(self.width / 2.0, height / 2.0, self.depth / 2.0)
 
+    #: How far (per axis) a tick's mover broad phase reaches past the
+    #: player's hull: what the player may move in a tick from where it began
+    #: and still have its passes covered (a step-up and a rounding margin
+    #: come off it: _reach_pads) -- well past a tick of terminal fall (13
+    #: units at 60 Hz) or of a run (5). A move beyond it (a dash, a long
+    #: push) runs that pass on every mover instead.
+    MOVER_ROOM = 80.0
+
+    #: Fewer movers and doors than this are each looked at, as before: the
+    #: broad phase costs a few microseconds a tick to ask, about what two
+    #: rows cost the passes (measured: tools/bench_player_table.py).
+    MOVER_NEAR_FROM = 3
+
+    def _near_movers(self, colliders, movers, doors):
+        """``(cover, movers, doors)``: this tick's mover broad phase
+        (brush_placement.movers_near) about where the player is -- the
+        movers and doors near enough for a pass to reach, and the
+        :class:`_Reach` that says how far that holds -- or None when nothing
+        can say which are near (every one is then looked at)."""
+        lists = (movers, doors)
+        near_rows = movers_near(lists)
+        if near_rows is None:
+            return None
+        hull = (self.width, self.stand_height, self.depth, self.step_height)
+        pads = getattr(self, '_reach_pads', None)
+        if pads is None or pads[0] != hull:
+            pads = self._reach_pads = (hull,) + _reach_pads(*hull, self.MOVER_ROOM)
+        x, y, z = self.pos.x, self.pos.y, self.pos.z
+        near = near_rows(lists, x, y, z, pads[1], pads[2])
+        cover = _Reach()
+        cover.x = x
+        cover.y = y
+        cover.z = z
+        # Far from the origin a float32 box is coarser: keep a margin for it.
+        cover.room = pads[3] - 1e-6 * max(abs(x), abs(y), abs(z))
+        cover.full = (colliders, movers, doors)
+        return cover, near[0], near[1]
+
     def _check_duck(self, crouch, aabb_brushes):
         """Duck on the ground with crouch held; stand up only where there is room."""
         if crouch and self.on_ground:
@@ -347,52 +486,19 @@ class Player:
             # Fallback: all brushes (old behaviour)
             colliders = list(brushes)
 
-        # One pass over everything that could collide this frame: drop what the
-        # player does not collide with at all (see _blocks_player) and split the
-        # rest by shape (brush_placement.collision_shape). Movers and doors are
-        # always included since they're dynamic and the static grid never sees
-        # them. A solid shape -- an angled brush, static or moving, a spinning
-        # box, a model's collision mesh -- is resolved in its own frame; any
-        # other box keeps the AABB fast path, its derived bounds being exact.
-        mesh_brushes = []
-        mesh_shapes = []
-        aabb_brushes = []
-        for source in (colliders, movers, doors):
-            if not source:
-                continue
-            for b in source:
-                if not _blocks_player(b):
-                    continue
-                # A static box -- most of a level -- is told by three dict
-                # reads; only a brush with planes, a mesh or a runtime
-                # transform asks for its shape (once: the resolve below is
-                # handed what it answered).
-                if ('geometry' not in b and '_collision_mode' not in b
-                        and (('is_mover' in b and b['is_mover'])
-                             or ('is_door' in b and b['is_door']))):
-                    # A box mover or door: a solid shape only while it is
-                    # turned. Its transform is the one its cached box was
-                    # placed by, which the AABB passes then read as a hit.
-                    brush_aabb_bounds(b)        # (brush_aabb_runtime, inline)
-                    runtime = b.get('_aabb_runtime')
-                    if runtime is None or not runtime[6]:
-                        aabb_brushes.append(b)
-                        continue
-                    shape = collision_shape_at(b, runtime)
-                    if shape is not None:
-                        mesh_brushes.append(b)
-                        mesh_shapes.append(shape)
-                    else:
-                        aabb_brushes.append(b)
-                    continue
-                if ('geometry' in b or '_collision_mode' in b
-                        or 'is_mover' in b or 'is_door' in b):
-                    shape = collision_shape(b)
-                    if shape is not None:
-                        mesh_brushes.append(b)
-                        mesh_shapes.append(shape)
-                        continue
-                aabb_brushes.append(b)
+        # Movers and doors are dynamic, so the static grid does not answer for
+        # them: the mover broad phase does (_near_movers), from the columns
+        # that hold where they are, and the gather sees only those near the
+        # player. A pass that would test beyond what it covers switches to
+        # every mover first (_Reach), so the passes answer what they would
+        # over every mover and door in the level.
+        cover = None
+        if ((len(movers) if movers else 0) + (len(doors) if doors else 0)
+                >= self.MOVER_NEAR_FROM):
+            near = self._near_movers(colliders, movers, doors)
+            if near is not None:
+                cover, movers, doors = near
+        aabb_brushes, mesh_brushes, mesh_shapes = _gather(colliders, movers, doors)
 
         # --- Water immersion (before movement so swim physics can use it) ---
         if spatial_grid is not None:
@@ -442,6 +548,12 @@ class Player:
             self.pos += self.velocity * delta
             return
 
+        # The un-duck test stands the hull up a duck higher (still where the
+        # tick began: nothing has moved the player since the gather).
+        if cover is not None and self.ducked and not cover.holds(
+                self.pos.x, self.pos.y + self._duck_drop(), self.pos.z):
+            full, cover = cover.full, None
+            aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
         self._check_duck(crouch, aabb_brushes + mesh_brushes)
 
         if swimming:
@@ -480,6 +592,11 @@ class Player:
         # Works while wading AND swimming; without it, any pool whose rim is
         # taller than a normal jump becomes an inescapable trap.
         if self.in_water and jump:
+            # Probes a body's width ahead and a climb above the feet: on
+            # every mover (rare enough not to bound it).
+            if cover is not None:
+                full, cover = cover.full, None
+                aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
             self._try_water_jump(aabb_brushes, wish_dir)
 
         # --- 3. Collision Resolution ---
@@ -490,7 +607,17 @@ class Player:
         # A. Horizontal movement with AABB collision.  This integrates X/Z
         # once (it advances pos even with an empty brush list), so mesh brushes
         # must NOT integrate again — they are resolved by depenetration below.
+        # (Each pass tests where its move puts the player, and a step up
+        # from there: the broad phase must cover that first.)
+        if cover is not None and not cover.holds(
+                self.pos.x + self.velocity.x * delta, self.pos.y, self.pos.z):
+            full, cover = cover.full, None
+            aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
         self._move_with_collision(delta, aabb_brushes, axis='x')
+        if cover is not None and not cover.holds(
+                self.pos.x, self.pos.y, self.pos.z + self.velocity.z * delta):
+            full, cover = cover.full, None
+            aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
         self._move_with_collision(delta, aabb_brushes, axis='z')
 
         # B. Vertical Y Movement
@@ -501,11 +628,30 @@ class Player:
         self.ground_object = None
 
         # 1. AABB / mover collision for Y
-        self._resolve_collision(aabb_brushes, axis='y', delta=delta)
+        if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+            full, cover = cover.full, None
+            aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
+        if cover is None:
+            self._resolve_collision(aabb_brushes, axis='y', delta=delta)
+        else:
+            # A push can carry the player past what the broad phase covers:
+            # then the pass runs again from where it began, on every mover.
+            saved = (self.pos.y, self.velocity.y)
+            if self._resolve_collision(aabb_brushes, axis='y', delta=delta, cover=cover):
+                self.pos.y, self.velocity.y = saved
+                self.on_ground = False
+                self.ground_object = None
+                full, cover = cover.full, None
+                aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
+                self._resolve_collision(aabb_brushes, axis='y', delta=delta)
 
         # 2. Angled (mesh) brushes: capsule depenetration for X/Y/Z together —
         #    pushes the player out of ramps/wedges and lands them on slopes.
-        self._resolve_mesh_capsule(mesh_brushes, mesh_shapes)
+        #    (Likewise: a push past the broad phase runs it again in full.)
+        if self._resolve_mesh_capsule(mesh_brushes, mesh_shapes, cover):
+            full, cover = cover.full, None
+            aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
+            self._resolve_mesh_capsule(mesh_brushes, mesh_shapes)
 
         # 2. Terrain collision
         if terrain and terrain.is_solid():
@@ -867,7 +1013,7 @@ class Player:
                    glm.vec3(0.0, span, 0.0))
         return offsets, r
 
-    def _resolve_mesh_capsule(self, mesh_brushes, mesh_shapes=None):
+    def _resolve_mesh_capsule(self, mesh_brushes, mesh_shapes=None, cover=None):
         """Resolve the player capsule against angled (mesh) brushes by pushing
         it out of any penetration, and set ground/ceiling state from the
         contact normals.
@@ -885,9 +1031,14 @@ class Player:
         minimum push out.  That works whether the sphere merely clips a face or
         has its centre fully inside the solid (which the earlier triangle test
         missed, letting the player tunnel through angled walls).
+
+        With *cover* (the tick's mover broad phase, :class:`_Reach`), a
+        relaxation pass that would start where the broad phase no longer
+        covers it puts the player back where this began and returns True,
+        with nothing else changed: the caller runs it again on every mover.
         """
         if not mesh_brushes:
-            return
+            return False
         # The capsule's spheres as plain floats, worked out again only when
         # the hull changes (a duck): _capsule_offsets' values.
         half = self._half
@@ -917,7 +1068,7 @@ class Player:
             turned = offsets if frame is None or frame.r is None else None
             shapes.append([brush, planes, bounds, frame, turned])
         if not shapes:
-            return
+            return False
 
         ground_normal = None      # steepest-up contact this resolve
         ground_brush = None       # ... and the shape it came from
@@ -931,7 +1082,12 @@ class Player:
 
         # A few relaxation passes: each pushes out of the deepest overlap, then
         # re-tests, so a capsule touching several faces settles cleanly.
+        if cover is not None:
+            start = (self.pos.x, self.pos.y, self.pos.z)
         for _ in range(4):
+            if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+                self.pos.x, self.pos.y, self.pos.z = start
+                return True
             deepest = 1e-4
             push = None
             push_n = None
@@ -1033,6 +1189,7 @@ class Player:
             if vn < 0.0:
                 self.velocity.x -= wall_normal[0] * vn
                 self.velocity.z -= wall_normal[2] * vn
+        return False
 
     def _has_headroom(self, brush, player_min, player_max):
         # Model collision mesh (a proxy with no planes): its mesh bounds.
@@ -1070,10 +1227,15 @@ class Player:
             
         return True
 
-    def _resolve_collision(self, brushes, axis, delta, ignore_brush=None):
+    def _resolve_collision(self, brushes, axis, delta, ignore_brush=None, cover=None):
         """Push the player out of any overlapping brush on one axis.
 
         Takes brushes the caller has already filtered with ``_blocks_player``.
+
+        With *cover* (the tick's mover broad phase, :class:`_Reach`), a push
+        that leaves the player where the broad phase no longer covers the
+        tests that follow stops the pass and returns True: the caller puts
+        the player back and runs it again on every mover.
         """
         half = self._half
 
@@ -1146,7 +1308,9 @@ class Player:
                             self.pos.y += nearest_normal.y * penetration
                             if self.velocity.y > 0:
                                 self.velocity.y = 0
-                
+                    if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+                        return True
+
                 continue  # Done with this mesh brush
 
             # === AABB COLLISION ===
@@ -1194,3 +1358,7 @@ class Player:
                     self.velocity.y    = 0
                     self.on_ground     = True
                     self.ground_object = brush
+
+            if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+                return True
+        return False
