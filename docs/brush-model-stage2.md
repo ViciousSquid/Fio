@@ -1,8 +1,11 @@
 # Unified brush model — Stage 2: shape, placement and derived bounds
 
 Status: **implemented** (2a–2d; §11 records each substage, its validation
-and measurements, and §11.5 the integrated result). Stage 2e (true-shape
-hitscan, projectiles, AI line of sight and physics bodies) is a follow-up. Builds on Stage 1 (`56ec0e3`, one material record per face); the
+and measurements, §11.5 the integrated result and §11.6 the performance
+gate against Stage 1). **The performance gate is not passed** (§11.6):
+representative gameplay is level with Stage 1, the player next to moving
+shapes is not. Stage 2e (true-shape hitscan, projectiles, AI line of sight
+and physics bodies) is a follow-up. Builds on Stage 1 (`56ec0e3`, one material record per face); the
 overall plan is `docs/brush-model-proposal.md`. Sections 1–10 are the
 investigation and design as approved.
 
@@ -875,8 +878,16 @@ memo).
 
 #### Validation
 
-* **Full suite**: re-run on the final commit after the performance gate
-  (§11.5 is the state at `e6c80ad`; the gate and its optimisations follow).
+* **Full suite** on `f1556d0` (after the performance work of §11.6), under
+  xvfb with llvmpipe: 7,221 passed, 150 skipped, 5 failed. The five are
+  the known baseline -- `test_repeated_play_sessions_leak_no_threads_or_memory`,
+  `test_p_opens_the_position_window_from_anywhere` and three
+  `test_the_portal_view_shows_at_the_fades_opacity` cases -- and fail the
+  same way on Stage 1 (`56ec0e3`) in this environment. Included: 318
+  GL-marked tests (the draw and pixel oracles among them), 541 brush-model
+  tests (map compatibility, the collision oracle, local frames), 277
+  persistence tests (save/load, package and Android export), 146 Big World
+  tests.
 
 * **Pixel parity** (`tools/compare_map_pixels.py --base` Stage 1): all 20
   shipped maps identical in all 120 views -- every angled brush loaded
@@ -914,7 +925,8 @@ memo).
 
 #### Measurements against Stage 1
 
-Same machine, interleaved, best of three on one pinned core (`56ec0e3` vs
+The state at `e6c80ad`, before the performance work: §11.6 supersedes these
+figures. Same machine, interleaved, best of three on one pinned core (`56ec0e3` vs
 the head):
 
 | | Stage 1 | Stage 2 |
@@ -937,6 +949,8 @@ the head):
 | player tick next to 8 moving / spinning shapes | §11.3 | §11.3 |
 
 #### Remaining regressions
+
+At `e6c80ad`; for the state after the performance work see §11.6.
 
 1. **Mover tick**: +14 / +40 / +91 µs at 8 / 32 / 128 movers (and as many
    doors) -- publishing a runtime transform per moving row instead of a
@@ -968,3 +982,307 @@ the head):
 * Version-5 maps are not read by builds before Stage 2d: such a build (and
   the Android player) is given the version-4 export
   (`tools/export_legacy_map.py --version 4`; the package exporter does it).
+
+### 11.6 Performance gate against Stage 1
+
+Correctness alone is not the acceptance criterion: Stage 2 must show no
+statistically meaningful CPU regression against Stage 1 (`56ec0e3`) in
+comparable workloads, with every Stage 2 correctness improvement kept --
+true-shape collision, local-frame geometry, the shared cube VBO, OpenGL 3.3
+core, and authored placement never written during play.
+
+**Verdict at `f1556d0`: not passed.** Stationary scenes, representative
+gameplay, static builds, AI queries and the collision structures are level
+with or faster than Stage 1; the player next to moving shapes and a moving
+mover's first AABB query after each move are not (§ What remains).
+
+#### Method
+
+`tools/perf_probes.py` measures seven families of workload on a checkout
+and keeps every sample; `tools/perf_gate.py` runs them for both checkouts
+in fresh processes pinned to one core, alternating base and head (the order
+flips every round), and reports p50 / p95 / p99 over all samples, the p50
+ratio, and a one-sided exact Mann–Whitney test of "head slower" on the
+per-round medians (rounds are the independent unit). A metric **regresses**
+when p < 0.05 and the head's p50 is more than 2 % (the noise floor) above
+the base's. With five rounds the smallest attainable p is 0.004.
+
+    xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 \
+        python tools/perf_gate.py --base STAGE1_TREE --head . --rounds 5 --core 3
+
+| Probe | What it measures |
+|---|---|
+| movers | 8 / 32 / 128 movers and as many doors, 300 ticks: the tick, publication to the render table, the collision rows' and the grid's cell rows' refresh (first after a tick, and again), a moving mover's cached AABB (20 queries a tick), the frame total |
+| aabb | `brush_aabb_bounds`: plain and angled hits, plain misses |
+| static | BigWorld and `_SHOWCASE`: render-table sync, grid populate, collision-row build, Big World index |
+| ai | wall and floor queries, batched point/box queries, line of sight |
+| player | the six `tools/bench_collision.py` scenarios: still boxes, still angled brushes, and 8 box, angled, spinning-box and spinning-angled movers beside the player's path (the movers driven by a runtime source; the source's own update is not timed, in either tree) |
+| frames | `render_scene`, still and with 32 box movers, BigWorld and `_SHOWCASE` (GL) |
+| gameplay | `tools/bench_compare.py`'s production path (load, play, the logic thread stepped by hand with scripted input, the monster AI every other frame, `paintGL`) on `_SHOWCASE`, MonsterTest, BigWorld (34 movers, 40 monsters) and Office_Corridor: per-frame logic, AI, paint and frame time, and Python calls per logic frame |
+
+Measured on the session's x86-64 VM (4 vCPU Xeon @ 2.1 GHz, CPython 3.13,
+NumPy 2.5, llvmpipe software GL). **The Snapdragon 8cx Gen 3 / Adreno target
+was not available; nothing here is a measurement on it.** The tools run
+unchanged on the device.
+
+#### Measurement noise
+
+The VM's timing noise is large, and part of it is systematic, so the
+verdicts were calibrated:
+
+* **A/A run** -- Stage 1 against itself, the movers, player, AABB and
+  frames probes (37 metrics), five rounds: p50 ratios range 0.84–1.09 with
+  no code difference; the test called one metric a regression
+  (`player_static_angled`, 1.07, p = 0.048) and sixteen "faster" (a
+  consistent 6–16 % bias on the movers probe). A difference below ~10–15 %
+  at p ≈ 0.02–0.05 is therefore not evidence on this machine.
+* **Per-round spread**: the five round medians of one metric on one tree
+  vary by 10–120 % (the Noise column below).
+* **Run to run**: two full gates an hour apart, on commits that differ only
+  in the carried convex brush's AABB path, flagged 5 and 14 regressions;
+  every extra flag was at p 0.008–0.048 and ratio 1.07–1.25, in code the
+  change does not touch.
+* **Nine rounds** (Stage 1 against `f1556d0`, the same four probes)
+  separate the robust results from the noisy ones (§ What remains).
+* Python call counts per logic frame are exact (no noise): their round
+  medians are identical, so their p-value is the test's floor whatever
+  the difference; only the 2 % floor decides them.
+
+#### Where Stage 2 stood (`0c6e6f2`)
+
+The first gate found 21 regressions: the AABB hits (plain 1.29×, angled
+1.54×), the AI wall and floor queries (1.26×, 1.34×), the mover tick (1.43 /
+1.64 / 2.25× at 8 / 32 / 128), a moving mover's AABB (2.4–2.8×), publication
+at 128 (1.11×), the collision rows' and cell rows' first refresh at 8 movers
+(1.28×, 1.93×) and the frame total there (1.25×), the static collision-row
+build (1.49×), and the player next to still boxes (1.10×), still angled
+brushes (1.43×), box movers (1.80×), angled movers (2.30×) and spinners
+(2.41–2.48×).
+
+#### What each was, and what removed it
+
+| Regression | Cause (profiled) | Fix | Commit |
+|---|---|---|---|
+| AABB hit 1.3–1.5× | every call classified the brush and built a key with a runtime lookup before comparing | every brush keyed by pos/size (Stage 1's key); whatever changes a box without changing them drops the key | `2741be4` |
+| AI wall / floor queries 1.3× | each query re-classified its cells' brushes and re-derived angled boxes | per-cell static box tuples from the cell rows; movers resolved live | `2741be4` |
+| Mover tick at 128: 2.25× | each spinner's turned box through two memo dicts keyed by angle -- always missing | `turned_half_now` (same bits, no memo; a vertical-axis short form); the turned box worked out only when a reader gathers boxes | `951f1c8` |
+| Mover tick at 8: 1.43× | the per-row walk stored each row through two one-element arrays, a twin gather and a mask | scalar single-row store | `951f1c8`, `8aa31b6` |
+| Mover tick at 32: 1.64× | `union1d`, picks when every row moved, a Python loop for rows back home, `np.unique` on empty sequence points | masks, `compress`, no sort without sequence points | `951f1c8`, `8f37273` |
+| Collision-row build 1.49× | the resolver asked for every angled box; the level classified twice | one pass; angled boxes remembered with their AABB; one flat read per column | `8299bf1` |
+| Rows / cells first refresh 1.3–1.9× | both structures gathered the same movers every tick through ~20 NumPy calls each | one shared gather per placement stamp; brush by brush below 128 brushes; one block store | `8299bf1` |
+| Moving mover's AABB 2.4–2.8× | the key led with the runtime transform, so a hit asked every runtime source | pos/size key for every brush; each stamped runtime change drops the keys of the movers cached since the last | `c3534f7` |
+| Grid populate (+10–30 %, from `2741be4`) | the per-cell box rows built eagerly; scalar NumPy stores per brush | built on first query; bulk bounds | `be1673f` |
+| Player 1.1–2.5× | shapes asked for twice a tick; every sphere carried into every frame on every pass; a spinner's planes rebuilt every tick; box movers looked up twice | shapes handed on; the player carried in once per shape per pass; planes per placement; one runtime lookup a tick | `08863b5` |
+| AABB plain miss (1.1×, from `c3534f7`) | movers sharing the plain key meant four membership tests per miss | tagged keys for angled brushes and movers | `8f37273` |
+| Python calls per logic frame (+16 Office_Corridor, +29 `_SHOWCASE`) | the frustum cull's turned-bounds pass every frame with nothing turning; water volumes through the resolver | `RenderTable.turning`; plain water boxes inline | `bad8171` |
+| A moving brush resolved by every subsystem separately (+11 calls MonsterTest) | AABB cache, broad phases, step-up and collision shapes each asked the runtime sources | one resolution per placement stamp, in a resolver dict the stamp replaces (nothing written to brushes); hot readers inline | `2cf2734` |
+| Carried convex AABB derived its whole authored box | only the shape's half-extents are needed with a transform | read from the cached shape | `f1556d0` |
+
+#### Gate runs
+
+| Head | Regressions | Faster | Same |
+|---|---|---|---|
+| `0c6e6f2` (before) | 21 | -- | -- |
+| `8651c02` | 12 | 19 | 42 |
+| `2cf2734` | 5 | 23 | 45 |
+| `f1556d0` (final) | 14 | 21 | 38 |
+
+`2cf2734` and `f1556d0` differ only in the carried convex brush's AABB
+path, yet the second run flags nine more metrics, all at p between 0.008
+and 0.048 and in code the change does not touch (the mover tick and
+publication, still boxes, BigWorld frames): see the noise calibration.
+
+#### Final gate, `f1556d0` (all 73 metrics)
+
+Noise is the spread of the five per-round medians (max / min − 1) for each
+side.
+
+| Metric | Stage 1 p50 / p95 / p99 | Stage 2 p50 / p95 / p99 | Ratio | p | Noise S1 / S2 | Verdict |
+|---|---|---|---|---|---|---|
+| `aabb_angled_hit` (µs) | 0.136 / 0.164 / 0.202 | 0.143 / 0.169 / 0.19 | 1.05 | 0.210 | 35 % / 22 % | same |
+| `aabb_plain_hit` (µs) | 0.133 / 0.193 / 0.276 | 0.138 / 0.156 / 0.171 | 1.04 | 0.345 | 29 % / 16 % | same |
+| `aabb_plain_miss` (µs) | 0.617 / 0.931 / 1.15 | 0.695 / 0.877 / 1.11 | 1.13 | 0.155 | 53 % / 12 % | same |
+| `ai_big_batch32` (µs) | 196 / 275 / 624 | 145 / 210 / 628 | 0.74 | 1.000 | 36 % / 18 % | faster |
+| `ai_big_line_of_sight` (µs) | 9.49 / 12.2 / 14.3 | 9.68 / 13.5 / 16.1 | 1.02 | 0.345 | 23 % / 17 % | same |
+| `ai_big_overlaps_wall` (µs) | 2.25 / 2.88 / 3.38 | 1.05 / 1.41 / 16.4 | 0.47 | 1.000 | 33 % / 17 % | faster |
+| `ai_big_raycast_down` (µs) | 1.74 / 2.18 / 2.6 | 0.636 / 0.933 / 1.11 | 0.37 | 1.000 | 30 % / 15 % | faster |
+| `ai_show_batch32` (µs) | 182 / 254 / 481 | 177 / 259 / 422 | 0.97 | 0.655 | 36 % / 32 % | same |
+| `ai_show_line_of_sight` (µs) | 3.2 / 4.31 / 5.32 | 3.24 / 4.43 / 5.84 | 1.01 | 0.500 | 24 % / 17 % | same |
+| `ai_show_overlaps_wall` (µs) | 1.69 / 2.12 / 2.36 | 0.802 / 1.14 / 1.58 | 0.48 | 1.000 | 26 % / 21 % | faster |
+| `ai_show_raycast_down` (µs) | 1.94 / 2.31 / 2.49 | 0.72 / 1 / 1.27 | 0.37 | 1.000 | 24 % / 23 % | faster |
+| `frame_big_moving_ms` (ms) | 8.01 / 10.7 / 12.8 | 8.6 / 12.3 / 16.7 | 1.07 | 0.048 | 22 % / 15 % | **regression** |
+| `frame_big_still_ms` (ms) | 8.29 / 9.94 / 12.3 | 8.43 / 12.6 / 16.2 | 1.02 | 0.421 | 27 % / 43 % | same |
+| `frame_show_moving_ms` (ms) | 6.65 / 8.82 / 10.8 | 6.67 / 9.14 / 10.3 | 1.00 | 0.726 | 22 % / 31 % | same |
+| `frame_show_still_ms` (ms) | 6.67 / 8.68 / 9.94 | 6.4 / 10.2 / 12.9 | 0.96 | 0.655 | 21 % / 39 % | same |
+| `gameplay_big_ai_ms` (ms) | 0.217 / 0.325 / 0.466 | 0.219 / 0.305 / 0.38 | 1.01 | 0.274 | 17 % / 10 % | same |
+| `gameplay_big_frame_ms` (ms) | 122 / 148 / 161 | 121 / 143 / 163 | 0.99 | 0.421 | 12 % / 8 % | same |
+| `gameplay_big_logic_calls` (calls) | 1248 / 1248 / 1248 | 1241 / 1242 / 1242 | 1.00 | 1.000 | 0 % / 0 % | same |
+| `gameplay_big_logic_ms` (ms) | 0.926 / 1.35 / 1.82 | 0.922 / 1.28 / 1.75 | 0.99 | 0.579 | 22 % / 21 % | same |
+| `gameplay_big_paint_ms` (ms) | 121 / 147 / 160 | 120 / 142 / 162 | 0.99 | 0.421 | 11 % / 8 % | same |
+| `gameplay_monster_ai_ms` (ms) | 0.669 / 1.02 / 1.29 | 0.712 / 1.11 / 1.46 | 1.06 | 0.274 | 33 % / 49 % | same |
+| `gameplay_monster_frame_ms` (ms) | 16 / 22.1 / 25.3 | 16.7 / 23.9 / 30.3 | 1.04 | 0.500 | 26 % / 30 % | same |
+| `gameplay_monster_logic_calls` (calls) | 942 / 942 / 942 | 944 / 944 / 944 | 1.00 | 0.004 | 0 % / 0 % | same |
+| `gameplay_monster_logic_ms` (ms) | 0.609 / 0.96 / 1.21 | 0.628 / 0.976 / 1.15 | 1.03 | 0.345 | 56 % / 74 % | same |
+| `gameplay_monster_paint_ms` (ms) | 15.4 / 21.2 / 24.2 | 16 / 23 / 29.2 | 1.04 | 0.500 | 25 % / 28 % | same |
+| `gameplay_office_ai_ms` (ms) | 0.00675 / 0.0116 / 0.0218 | 0.00762 / 0.0136 / 0.0265 | 1.13 | 0.210 | 80 % / 65 % | same |
+| `gameplay_office_frame_ms` (ms) | 9.55 / 12.1 / 15 | 10.3 / 14.7 / 18.1 | 1.07 | 0.155 | 38 % / 45 % | same |
+| `gameplay_office_logic_calls` (calls) | 451 / 451 / 451 | 449 / 449 / 449 | 1.00 | 1.000 | 0 % / 0 % | same |
+| `gameplay_office_logic_ms` (ms) | 0.315 / 0.48 / 0.636 | 0.336 / 0.535 / 0.631 | 1.06 | 0.155 | 52 % / 38 % | same |
+| `gameplay_office_paint_ms` (ms) | 9.24 / 11.8 / 14.3 | 9.92 / 14.2 / 17.5 | 1.07 | 0.155 | 36 % / 46 % | same |
+| `gameplay_show_ai_ms` (ms) | 0.128 / 0.21 / 0.307 | 0.129 / 0.205 / 0.281 | 1.01 | 0.421 | 26 % / 23 % | same |
+| `gameplay_show_frame_ms` (ms) | 19.9 / 27 / 32.7 | 20.9 / 26 / 29.9 | 1.05 | 0.500 | 19 % / 20 % | same |
+| `gameplay_show_logic_calls` (calls) | 485 / 485 / 485 | 488 / 488 / 489 | 1.01 | 0.004 | 0 % / 0 % | same |
+| `gameplay_show_logic_ms` (ms) | 0.414 / 0.653 / 0.879 | 0.417 / 0.637 / 0.804 | 1.01 | 0.726 | 49 % / 51 % | same |
+| `gameplay_show_paint_ms` (ms) | 19.5 / 26.2 / 32 | 20.4 / 25.3 / 29.4 | 1.05 | 0.500 | 19 % / 20 % | same |
+| `movers128_aabb_moving` (µs) | 0.349 / 0.579 / 1.09 | 0.47 / 0.913 / 2.07 | 1.35 | 0.004 | 18 % / 36 % | **regression** |
+| `movers128_cells_again` (µs) | 129 / 178 / 234 | 0.335 / 0.465 / 0.698 | 0.00 | 1.000 | 17 % / 24 % | faster |
+| `movers128_cells_first` (µs) | 132 / 179 / 221 | 11.3 / 19.8 / 31.5 | 0.09 | 1.000 | 16 % / 29 % | faster |
+| `movers128_frame_total` (µs) | 766 / 1.03e+03 / 1.42e+03 | 430 / 777 / 1.39e+03 | 0.56 | 1.000 | 14 % / 35 % | faster |
+| `movers128_publish` (µs) | 27.1 / 46.7 / 74.3 | 30.6 / 61.6 / 95.4 | 1.13 | 0.155 | 12 % / 31 % | same |
+| `movers128_rows_again` (µs) | 119 / 166 / 222 | 0.555 / 0.82 / 1.39 | 0.00 | 1.000 | 14 % / 25 % | faster |
+| `movers128_rows_first` (µs) | 127 / 190 / 266 | 111 / 192 / 319 | 0.87 | 0.996 | 14 % / 30 % | faster |
+| `movers128_tick` (µs) | 207 / 328 / 465 | 259 / 520 / 952 | 1.25 | 0.016 | 14 % / 36 % | **regression** |
+| `movers32_aabb_moving` (µs) | 0.256 / 0.569 / 0.797 | 0.401 / 0.734 / 1.31 | 1.57 | 0.004 | 27 % / 24 % | **regression** |
+| `movers32_cells_again` (µs) | 32.3 / 49.2 / 69.3 | 0.315 / 0.424 / 0.598 | 0.01 | 1.000 | 31 % / 13 % | faster |
+| `movers32_cells_first` (µs) | 34.2 / 53.8 / 82.5 | 8.58 / 14.2 / 23.1 | 0.25 | 1.000 | 31 % / 23 % | faster |
+| `movers32_frame_total` (µs) | 318 / 556 / 673 | 252 / 439 / 595 | 0.79 | 0.992 | 30 % / 30 % | faster |
+| `movers32_publish` (µs) | 17.9 / 36.4 / 61.1 | 20 / 37.7 / 59.9 | 1.11 | 0.048 | 27 % / 25 % | **regression** |
+| `movers32_rows_again` (µs) | 38.5 / 65.3 / 97.4 | 0.46 / 0.658 / 0.851 | 0.01 | 1.000 | 27 % / 14 % | faster |
+| `movers32_rows_first` (µs) | 42.4 / 72.9 / 108 | 48.8 / 85.8 / 133 | 1.15 | 0.008 | 29 % / 23 % | **regression** |
+| `movers32_tick` (µs) | 139 / 276 / 393 | 163 / 277 / 399 | 1.17 | 0.016 | 27 % / 33 % | **regression** |
+| `movers8_aabb_moving` (µs) | 0.25 / 0.365 / 0.829 | 0.356 / 0.545 / 0.753 | 1.42 | 0.004 | 17 % / 32 % | **regression** |
+| `movers8_cells_again` (µs) | 8.76 / 13 / 24.5 | 0.289 / 0.383 / 0.659 | 0.03 | 1.000 | 22 % / 19 % | faster |
+| `movers8_cells_first` (µs) | 10.2 / 14.6 / 26.6 | 5.69 / 9.13 / 15.4 | 0.56 | 1.000 | 18 % / 46 % | faster |
+| `movers8_frame_total` (µs) | 187 / 284 / 340 | 108 / 169 / 244 | 0.58 | 1.000 | 22 % / 41 % | faster |
+| `movers8_publish` (µs) | 16 / 25.5 / 44.9 | 17.3 / 32.6 / 50.1 | 1.08 | 0.210 | 22 % / 48 % | same |
+| `movers8_rows_again` (µs) | 17.9 / 27.5 / 47.8 | 0.41 / 0.582 / 0.861 | 0.02 | 1.000 | 21 % / 15 % | faster |
+| `movers8_rows_first` (µs) | 21.4 / 34.6 / 54.6 | 22.3 / 37.2 / 63.8 | 1.05 | 0.274 | 22 % / 41 % | same |
+| `movers8_tick` (µs) | 104 / 169 / 207 | 52.7 / 83.9 / 132 | 0.51 | 1.000 | 22 % / 34 % | faster |
+| `player_angled_movers` (µs) | 23.8 / 35.9 / 50.4 | 51.2 / 72.5 / 94.3 | 2.15 | 0.004 | 13 % / 14 % | **regression** |
+| `player_box_movers` (µs) | 20.3 / 40.1 / 56.2 | 35.8 / 56.6 / 77.9 | 1.77 | 0.004 | 23 % / 26 % | **regression** |
+| `player_spinning_angled` (µs) | 24.2 / 39.6 / 59 | 50.7 / 74 / 95.6 | 2.09 | 0.004 | 16 % / 11 % | **regression** |
+| `player_spinning_boxes` (µs) | 26.2 / 39.7 / 55.9 | 61.5 / 89.6 / 122 | 2.34 | 0.004 | 16 % / 11 % | **regression** |
+| `player_static_angled` (µs) | 16.4 / 23.3 / 40.7 | 20.2 / 36.3 / 77.7 | 1.23 | 0.004 | 19 % / 45 % | **regression** |
+| `player_static_boxes` (µs) | 9.26 / 13.6 / 30.3 | 9.86 / 15.5 / 33.9 | 1.07 | 0.028 | 14 % / 32 % | **regression** |
+| `static_big_bigworld_index_ms` (ms) | 3.85 / 4.65 / 5.33 | 3.87 / 4.3 / 4.41 | 1.00 | 0.655 | 19 % / 32 % | same |
+| `static_big_collision_rows_ms` (ms) | 2.28 / 2.72 / 3.36 | 1.41 / 1.65 / 1.83 | 0.62 | 1.000 | 17 % / 29 % | faster |
+| `static_big_grid_populate_ms` (ms) | 17.5 / 24 / 28 | 16.6 / 20.1 / 21.6 | 0.95 | 0.984 | 39 % / 26 % | faster |
+| `static_big_rt_sync_ms` (ms) | 42.4 / 58.4 / 59.6 | 41 / 56.9 / 58.7 | 0.97 | 0.655 | 16 % / 42 % | same |
+| `static_show_bigworld_index_ms` (ms) | 0.129 / 0.178 / 0.194 | 0.143 / 0.2 / 0.239 | 1.10 | 0.111 | 24 % / 35 % | same |
+| `static_show_collision_rows_ms` (ms) | 0.0502 / 0.0837 / 0.0965 | 0.0503 / 0.091 / 0.126 | 1.00 | 0.726 | 29 % / 34 % | same |
+| `static_show_grid_populate_ms` (ms) | 0.695 / 0.857 / 0.903 | 0.713 / 0.902 / 0.92 | 1.03 | 0.274 | 30 % / 35 % | same |
+| `static_show_rt_sync_ms` (ms) | 1.75 / 2.04 / 2.08 | 1.83 / 2.12 / 2.2 | 1.04 | 0.274 | 30 % / 35 % | same |
+
+
+73 metrics: 14 regressions, 21 faster, 38 same
+regressions: frame_big_moving_ms, movers128_aabb_moving, movers128_tick, movers32_aabb_moving, movers32_publish, movers32_rows_first, movers32_tick, movers8_aabb_moving, player_angled_movers, player_box_movers, player_spinning_angled, player_spinning_boxes, player_static_angled, player_static_boxes
+
+#### Collision ablation
+
+The player scenarios in three configurations, interleaved, best of five
+rounds (p50 µs per player tick): Stage 1; Stage 2 with movers and doors
+collided as their derived AABB (Stage 1's semantics for moving shapes --
+true shape is kept for still angled brushes, as Stage 1 kept it); Stage 2
+as shipped, true shape throughout. The ablation is an experiment only: no
+production path collides a moving shape as its box.
+
+| Scenario | Stage 1 | Stage 2, moving shapes as AABB | Stage 2, true shape | Engine overhead (AABB − Stage 1) | True-shape work (true shape − AABB) |
+|---|---|---|---|---|---|
+| static boxes | 9.8 | 10.2 | 10.4 | +0.4 | +0.2 |
+| static angled | 15.3 | 18.2 | 17.9 | +2.9 | -0.3 |
+| box movers | 18.3 | 31.5 | 33.0 | +13.2 | +1.5 |
+| angled movers | 22.3 | 30.8 | 40.3 | +8.5 | +9.5 |
+| spinning boxes | 25.6 | 42.6 | 59.8 | +17.0 | +17.2 |
+| spinning angled | 22.2 | 37.2 | 42.0 | +15.0 | +4.8 |
+
+(best of five interleaved rounds, `f1556d0`; medians in the session's
+records.) Read across:
+
+* **The larger share next to moving shapes is engine overhead, not the
+  correctness work.** With every moving shape collided as its box, Stage 2
+  is still 8.5–17 µs a tick slower than Stage 1 beside 8 movers: each moved
+  brush's AABB is derived through the runtime layer once per tick (the
+  transform found in its source, its box worked out and cached, the cache
+  entry registered for invalidation) where Stage 1 read the `pos` the mover
+  had written into the brush. Per moved brush, the first AABB query after a
+  move costs 1.2–1.6 µs for a box and 1.65–1.94 µs for a convex mover,
+  against 0.51–0.64 µs; later queries are hits at Stage 1's cost
+  (0.12–0.15 µs).
+* **True-shape work** is ~0 for still boxes, still angled brushes (Stage 1
+  collided those by shape too) and non-turning box movers; +9.5 µs for 8
+  angled movers and +4.8 µs for 8 spinning angled movers (a collision frame
+  per moved convex brush per tick, and the player carried into it);
+  +17 µs for 8 spinning boxes (a new rotated frame and six planes' tests
+  per spinner per tick).
+* For the spinners the middle column is not Stage 1's work either: Stage 2
+  collides a spinner's *turned* AABB (its true bound, larger than Stage 1's
+  unturned box), so the player touches it more often.
+
+#### What remains, and why
+
+Each metric flagged in the final gate, with the nine-round run where it
+was repeated, classified: **engine overhead** (avoidable in principle),
+**true-shape work** (the correctness Stage 2 adds), or **not demonstrated**
+(inside the measured noise).
+
+| Metric | Final gate | 9 rounds | Classification and cause |
+|---|---|---|---|
+| `player_spinning_boxes` | 2.34×, p .004 | 2.47×, p < .001 | Overhead +17 µs (runtime AABB derivation per spinner per tick, and the turned AABB colliding more) and true-shape work +17 µs (a rotated frame and plane tests per spinner per tick) |
+| `player_angled_movers` | 2.15×, p .004 | 2.26×, p < .001 | Overhead +8.5 µs, true-shape work +9.5 µs |
+| `player_spinning_angled` | 2.09×, p .004 | 2.26×, p < .001 | Overhead +15 µs, true-shape work +4.8 µs |
+| `player_box_movers` | 1.77×, p .004 | 1.76×, p < .001 | Overhead +13 µs: no true-shape work for boxes that do not turn |
+| `movers8_aabb_moving`, `movers32_aabb_moving` | 1.42×, 1.57× | 1.40×, 1.38×, p < .001 | Overhead: the first query of a moved mover after each move resolves it through the runtime layer (+0.6–0.9 µs once per move; hits at parity); averaged over the probe's 20 queries a tick |
+| `movers128_aabb_moving` | 1.35×, p .004 | 1.22×, p .020 | The same mechanism; not significant in the `2cf2734` run (1.11×) |
+| `player_static_angled` | 1.23×, p .004 | 1.16×, p .057 | Not demonstrated (the A/A run flagged this metric at 1.07×); the ablation puts +2.9 µs on the local-frame path, which Stage 1 did not have |
+| `player_static_boxes` | 1.07×, p .028 | 1.01×, p .218 | Not demonstrated |
+| `movers128_tick`, `movers32_tick` | 1.25×, 1.17× | 1.17× (p .016), 1.05× (p .081) | Not demonstrated: 1.02× and 0.93× in the `2cf2734` run with the same tick code. Publishing a runtime transform per moved row costs more than Stage 1's `pos` write (measured 28.5 µs a tick at 32 movers + 32 doors and 77 µs at 128 + 128, against ~12 µs per 128 rows for `pos` writes in a microbenchmark); the step code is faster than Stage 1's (the 8-mover tick is 0.50×) |
+| `movers32_publish`, `movers128_publish` | 1.11×, 1.13× | 1.03×, 1.07× (p .039) | Not demonstrated; the publish code is Stage 1's apart from one flag check |
+| `movers32_rows_first` | 1.15×, p .008 | 1.08×, p .047 | Not demonstrated: 0.96× in the `2cf2734` run. Whichever structure refreshes first pays the shared mover gather; rows + cells together are 0.75× Stage 1 (57 against 77 µs) |
+| `frame_big_moving_ms` | 1.07×, p .048 | 1.00×, p .302 | Not demonstrated |
+
+What has been tried and why the remaining overhead is still there:
+
+* The runtime transform is resolved **once per placement stamp per brush,
+  by whoever asks first** (`resolved_runtime`, a resolver dict each stamp
+  replaces: nothing is written to the brush), and the AABB cache keeps
+  Stage 1's hit cost. What is left is the miss: finding the transform in
+  its source, deriving the box, and registering the cached key so the next
+  stamp drops it.
+* **Pushing derived AABBs into the brush caches at publication** (the
+  writer pays instead of the reader) was estimated (not measured) at ~0.45 µs per moved
+  row per tick for every moved row, queried or not -- about +115 µs a tick
+  at 128 movers and doors, against a saving only for the rows a reader asks
+  about. Not adopted.
+* **Dense row indices** into the mover table's columns replace a ~0.25 µs
+  dictionary probe with NumPy scalar reads of about the same cost in
+  CPython (estimated from single-element read timings). Not adopted.
+* **Building a moving shape's collision frame only when the player comes
+  near it**, behind a world-space test proven no stricter than the existing
+  one (trajectories bit-identical over 18 runs × 960 ticks), cut frame
+  builds from 10 to 2 a tick but added more calls than it saved (522 → 575
+  calls a tick, spinning boxes 51 → 58 µs). Reverted.
+* None of the above writes runtime positions into authored `pos`, and none
+  collides a moving shape as its box in production.
+
+Representative gameplay -- the four maps, with their movers, doors,
+monsters and the player -- shows no regression: frame, logic, paint and AI
+time are level (ratios 0.99–1.13, the highest the AI on Office_Corridor at 7 µs a frame; none significant, p ≥ 0.155), and Python calls per logic
+frame are within 0.6 % of Stage 1 (Office_Corridor 449 against 451,
+BigWorld 1,241 against 1,248, MonsterTest 944 against 942, `_SHOWCASE` 488
+against 485). The regressions above are in synthetic worst cases: eight
+shapes all moving every tick beside the player's path.
+
+#### Not yet measured on the target
+
+Everything above is x86-64 with software GL. On the Snapdragon 8cx Gen 3
+(Adreno 690), still to be measured:
+
+* the whole gate (`tools/perf_gate.py`, all seven probes) under CPython on
+  the ARM cores: the remaining overheads are per-call Python costs in
+  microseconds, which scale with single-thread speed;
+* `frames` and `gameplay` on the Adreno driver through OpenGL 3.3 core:
+  shader compilation, the texture-buffer transforms of M2, the shared cube
+  VBO, and whether GPU time (zero here: llvmpipe charges rasterising to the
+  CPU) moves the bottleneck;
+* memory and allocation behaviour under the device's memory;
+* the visual oracles on the Adreno driver (validated here only on llvmpipe).
