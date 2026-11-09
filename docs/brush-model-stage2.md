@@ -1,8 +1,9 @@
 # Unified brush model — Stage 2: shape, placement and derived bounds
 
 Status: **implemented** (2a–2d; §11 records each substage, its validation
-and measurements, §11.5 the integrated result and §11.6 the performance
-gate against Stage 1). **The performance gate is not passed** (§11.6):
+and measurements, §11.5 the integrated result, §11.6 the performance gate
+against Stage 1 and §11.7 the dense mover broad phase that followed it).
+**The performance gate is not passed** (§11.6, §11.7):
 representative gameplay is level with Stage 1, the player next to moving
 shapes is not. Stage 2e (true-shape hitscan, projectiles, AI line of sight
 and physics bodies) is a follow-up. Builds on Stage 1 (`56ec0e3`, one material record per face); the
@@ -1017,6 +1018,7 @@ the base's. With five rounds the smallest attainable p is 0.004.
 | static | BigWorld and `_SHOWCASE`: render-table sync, grid populate, collision-row build, Big World index |
 | ai | wall and floor queries, batched point/box queries, line of sight |
 | player | the six `tools/bench_collision.py` scenarios: still boxes, still angled brushes, and 8 box, angled, spinning-box and spinning-angled movers beside the player's path (the movers driven by a runtime source; the source's own update is not timed, in either tree) |
+| table | (added in §11.7) `tools/bench_player_table.py`'s scenarios: each tree's own mover table ticked as the logic thread ticks it, then the player with the level's mover and door lists -- 8 box, angled, spinning-box and spinning-angled movers beside the path, 34 doors away from it, 1 mover; the tick, the player, both, and the player's calls |
 | frames | `render_scene`, still and with 32 box movers, BigWorld and `_SHOWCASE` (GL) |
 | gameplay | `tools/bench_compare.py`'s production path (load, play, the logic thread stepped by hand with scripted input, the monster AI every other frame, `paintGL`) on `_SHOWCASE`, MonsterTest, BigWorld (34 movers, 40 monsters) and Office_Corridor: per-frame logic, AI, paint and frame time, and Python calls per logic frame |
 
@@ -1289,8 +1291,9 @@ Everything above is x86-64 with software GL. On the Snapdragon 8cx Gen 3
 
 ### 11.7 Stage 2 optimisation: a dense mover broad phase for the player
 
-Status: **proposed** (this section is written before the implementation and
-updated with its measurements). Stage 2 is not accepted.
+Status: **implemented** (`051b165`; proposal recorded first, `371e1a8`).
+**Stage 2 is not accepted**: that is the user's decision, and the player
+beside moving shapes is still slower than Stage 1 (§ Against Stage 1).
 
 #### The production path, measured
 
@@ -1301,57 +1304,211 @@ thread ticks the `MoverTable` (Stage 1 writes `pos` into each brush; Stage 2
 publishes runtime transforms, once a tick) and then hands the player every
 mover and door in the level. `tools/bench_player_table.py` does exactly
 that on any checkout, with each tree's own table and player, and times the
-tick (publication included), the player update, and both together.
+tick (publication included), the player update, and both together; the
+gate runs the same scenarios as its `table` probe.
 
-Baseline, `8d42dfc` (HEAD's code is `f1556d0`) against Stage 1 `56ec0e3`:
-five interleaved rounds, one pinned core, median of the per-round medians
-(µs per tick); calls are exact.
+At `8d42dfc` (the code of `f1556d0`) a box mover nowhere near the player
+cost the player's update 2.9–4.6 µs a tick (Stage 1: 1.6 µs): classified,
+its AABB derived through the runtime layer on the first query after every
+move, and tested by every pass. Thirty-four doors away from the player
+cost it ~100 µs a tick. The work scaled with movers, not with contacts.
 
-| Scenario | Player calls S1 / HEAD | Player S1 / HEAD | Tick S1 / HEAD | Total S1 / HEAD |
+#### Proposal (as recorded before the implementation)
+
+1. `MoverTable.near_rows`: one test per group over the `pos` column --
+   the dense projection the step already writes and publishes -- against
+   per-row reaches kept per row rebuild or resync; nothing added to the
+   tick or to publication, nothing written to a brush.
+2. `brush_placement.movers_near`: the resolver's entry point, answering
+   only when the mover table is the one source with entries.
+3. `Player.update` gathers only the movers and doors near it; a guard
+   proves every pass's tests lie inside what the broad phase covered, and
+   a pass that would test beyond it runs on every mover: bit-identical.
+4. Below a few rows, the per-brush path.
+
+#### What was built
+
+* **`MoverTable.near_rows`.** A row's box is its `pos` (its centre now:
+  where its runtime entry puts it, or, with no entry, its authored
+  centre, where publication leaves it) and its authored half-extents; a
+  row that can turn (`rotate`, a restored spin, a twin) is bounded by the
+  sphere through its corners; a brush in both groups or a mesh proxy is
+  always near. The reaches (`_reach`) are kept as an array and as tuples
+  until the rows, `reach_version` (moved by `resync`, `_place` and
+  `restore_placement`) or the pads change. Each tick reads the `pos`
+  column once. **Nothing is added to the tick or to publication, and
+  nothing is written to a brush.**
+* **`brush_placement.movers_near(lists)`** returns the table's
+  `near_rows` only when the lists are its rows (`holds_rows`, checked once
+  per list object and row build) and no other source has entries;
+  otherwise `None`, and the reader looks at every mover. It is asked
+  before the reader works anything out, so a refusal is cheap.
+* **`Player.update`** gathers (`_gather`, the old loop as a function)
+  only what comes back; every pass then runs as before, brush by brush.
+  Fewer than three movers and doors are looked at as before
+  (`MOVER_NEAR_FROM`).
+
+**Exactness.** The broad phase keeps every row whose box can come within
+the player's standing half-extents, the capsule's radius and
+`MOVER_ROOM` (80 units) of the player's centre where the tick began; for
+a row that can turn, within `e·√3 + MOVER_ROOM`, *e* being the hull's
+circumscribed radius plus the capsule's: the capsule's broad reject in a
+turned frame is a cube of half-width *e* about the player's centre in the
+shape's frame, which keeps that centre within `|half + e| ≤ |half| + e·√3`
+of the shape's (`_reach_pads`). A pass tests boxes on where the player
+is, so while the player stays within `MOVER_ROOM` less a step and a
+rounding margin (61 units) of where the tick began, a row left out
+touches nothing a pass tests. `_Reach.holds` is asked before the un-duck
+test, before the x and z moves (where each move puts the player), before
+the y pass, after each push of the y pass and before each relaxation of
+the capsule. When it fails -- a dash, a long push, the floor-safety reset
+-- the rest of the tick runs on every mover, and a pass a push carried out
+(y: it changes only `pos.y`, `velocity.y` and the ground flags; the
+capsule: only `pos` until it ends) is put back to where it began and run
+again in full. The water jump, which probes a body's width ahead and a
+climb above the feet, always runs on every mover. The result is what the
+passes give over every mover, bit for bit.
+
+#### How the column is read, measured in the frame
+
+The first implementation was all NumPy. It cost **13 µs a tick in the
+frame** for 8 rows, against 5.2 µs in a `timeit` loop: each call costs
+1–4 µs on caches the mover tick has just used. The 8-mover player came out
+slower than before despite 100 fewer calls a tick, and the 1-mover player
+7 µs slower. The broad phase per tick, measured in the frame (34 doors and
+more, all away from the player):
+
+| Rows | NumPy, first form | NumPy, kept form | Scan of the column |
+|---|---|---|---|
+| 8 | 8.45 µs | 6.05 µs | 2.35 µs |
+| 16 | 7.98 | 6.42 | 3.57 |
+| 24 | 8.28 | 6.69 | 4.79 |
+| 34 | 8.57 | 7.19 | 6.22 |
+| 48 | 9.49 | 8.41 | 8.16 |
+| 64 | 9.21 | 8.13 | 10.27 |
+| 128 | 11.74 | 11.11 | 20.63 |
+
+So the table scans the column below 48 rows (`NEAR_VECTOR_FROM`):
+`pos.tolist()`, one C call, then six float compares a row against the
+cached tuples, about 0.15 µs a row against the 2.9–4.6 µs a far row cost
+the player before. From 48 rows it runs the kept NumPy form: the compare
+written into preallocated `(n, 4)` arrays (a fourth column always
+passing), each row's four results read as one `uint32`, the brushes
+picked by `itertools.compress`. Asking and being refused cost 2.6 µs at
+first; asking the resolver before working out the pads brought that to
+~1.4–1.9 µs.
+
+#### Validation
+
+* **Trajectories bit-identical to `8d42dfc`**: `bench_player_table.py
+  --trace`, 18 lanes × 960 ticks (8 box, angled, spinning-box and
+  spinning-angled movers, 34 doors, 1 mover; jumps, ducks, falls from 900
+  units, 2,400 and 6,000 u/s dashes, the player put inside the nearest
+  mover), with the scan and again with the vectorised pass forced
+  (`NEAR_VECTOR_FROM = 0`). Counted: the broad phase answered every tick
+  (8 rows → 0.6–1.9 kept; 34 doors → 0–1.2), and the fallbacks ran 84–793
+  times a scenario. The `RuntimeOverrides` trace
+  (`bench_player_movers.py --trace`) is unchanged too.
+* `tests/brush_model/test_mover_broad_phase.py`: the same equality against
+  the full scan (box, angled, spinning and turned movers, near and far
+  doors, a twin; fallbacks asserted to run); a far mover is never even
+  classified; `near_rows` keeps every row the resolver's bounds put within
+  reach, by the scan and the vectorised pass alike, in list order; the
+  broad phase steps aside for the editor preview and for lists that are
+  not the table's rows; the reaches follow a journaled edit (`touch`, as
+  `setprop` makes one) and a restored spin.
+* Headless tier: 3,794 passed, 140 skipped (`8d42dfc`: 3,791; the three
+  more are the suite-integrity checks of the new module). Qt tier: 3,101
+  passed, 31 skipped, 1 failed -- the known play-cycle leak, failing on
+  `8d42dfc` the same way here (601 KiB retained, 602 on `8d42dfc`). GL
+  tier: 311 passed, 4 skipped, 3 failed -- the three portal-fade cases,
+  failing on `8d42dfc` the same way here (the known baseline of §11.5).
+* The `movers` probe's timed loop runs none of the changed functions
+  (profiled): its readings against `8d42dfc` compare the same code.
+
+#### Measurements against `8d42dfc`
+
+Production path, seven interleaved rounds on one pinned core, median of
+the per-round medians (µs a tick); calls exact.
+
+| Scenario | Player calls | Player | Tick | Total |
 |---|---|---|---|---|
-| 8 box movers | 261 / 317 | 32.8 / 42.4 (1.29×) | 70.2 / 37.1 (0.53×) | 103.6 / 80.5 (0.78×) |
-| 8 angled movers | 323 / 522 | 35.0 / 61.3 (1.75×) | 69.9 / 38.0 (0.54×) | 106.3 / 99.9 (0.94×) |
-| 8 spinning boxes | 327 / 606 | 35.1 / 88.7 (2.53×) | 76.1 / 43.8 (0.58×) | 113.0 / 133.6 (1.18×) |
-| 8 spinning angled | 323 / 631 | 35.8 / 73.9 (2.06×) | 74.2 / 42.5 (0.57×) | 111.2 / 117.2 (1.05×) |
-| 34 doors away from the player | 811 / 1,015 | 70.0 / 118.1 (1.69×) | 110.7 / 126.2 (1.14×) | 182.5 / 244.9 (1.34×) |
-| 1 mover (most shipped maps) | 109 / 121 | 19.7 / 23.5 (1.19×) | 21.5 / 17.2 (0.80×) | 41.5 / 40.7 (0.98×) |
+| 8 box movers | 317 → 198 | 44.9 → 40.7 | 39.0 → 39.4 | 84.5 → 80.5 |
+| 8 angled movers | 522 → 220 | 63.1 → 52.9 | 39.0 → 38.7 | 102.7 → 91.9 |
+| 8 spinning boxes | 606 → 369 | 95.1 → 73.8 | 46.0 → 45.3 | 142.4 → 119.8 |
+| 8 spinning angled | 631 → 379 | 77.1 → 65.0 | 44.1 → 44.2 | 122.3 → 110.4 |
+| 34 doors away from the player | 1,015 → 86 | 116.5 → 32.9 | 129.4 → 121.2 | 249.2 → 155.1 |
+| 1 mover | 121 → 123 | 24.6 → 25.1 | 17.7 → 17.7 | 42.3 → 42.9 |
 
-Read across: Stage 2's tick and publication are cheaper than Stage 1's; the
-player is not. A box mover nowhere near the player costs the player's
-update about 1.6 µs a tick on Stage 1 and 2.9–4.6 µs on HEAD (classified,
-its AABB derived through the runtime layer, tested by every pass), so the
-34 far doors cost ~100 µs a tick. Work scales with movers, not contacts.
+Publication is untouched: the tick's calls fall a little (box movers
+173 → 167, far doors 523 → 488) because each placement stamp drops the
+cached AABBs of only the movers queried since the last, and the player
+now queries only the near ones; the tick's time is level within noise.
 
-#### Proposal
+Gate, five rounds (`perf_gate.py --base 8d42dfc --head 051b165`):
 
-The smallest change that removes per-mover Python from the player's tick:
+* `table`: player faster with angled movers (0.86×), spinning boxes
+  (0.80×) and far doors (0.29×; total 0.65×); box movers 0.94× and
+  spinning angled 0.84× (not significant); calls 0.09–0.62×. The 1-mover
+  player is **1.05× (p .016)**: about 0.6 µs a tick (a 9-round focused run:
+  24.7 → 25.3 µs median, 22.7 → 23.3 minimum) for the gather as a call and
+  the guards, which every level pays; its tick (unchanged code) read
+  1.03× in the same run.
+* `gameplay` (GL; `_SHOWCASE`, MonsterTest, BigWorld, Office_Corridor):
+  **0 regressions in 20 metrics**; BigWorld's logic calls a frame
+  1,241 → 1,051, its logic time level (1.04×, p .21); maps with one mover
+  +2 calls a frame.
+* `player` (the `RuntimeOverrides` probe): level except spinning angled
+  1.07× (p .008): asking and being refused costs ~1.4–1.9 µs (measured
+  apart: broad phase off +0.5 µs, on +1.9 µs). Play never takes this path:
+  in play the mover table answers.
+* `movers` and `aabb`: nine `movers` metrics read 1.02–1.08× (p .004–.048)
+  with no changed code in their loop -- the probe's known systematic noise
+  (§ Measurement noise); `aabb` level.
 
-1. **`MoverTable.near_rows`**: one vectorised test per group over the
-   table's `pos` column -- the dense projection the step already writes and
-   publishes every tick -- against a per-row reach: a row's authored
-   half-extents, or for a row that can turn, the radius of its box. The
-   reaches depend only on the authored shape and the row's flags, so they
-   are worked out once per row rebuild or resync (change-driven), never per
-   tick. Nothing is added to the tick or to publication; nothing is written
-   to a brush.
-2. **`brush_placement.movers_near`**: the resolver's entry point. It
-   answers only when the mover table is the one runtime source with entries
-   (the editor preview and test overrides keep the per-brush path) and the
-   lists handed in are the table's own rows.
-3. **`Player.update`** gathers only the movers and doors that answer near;
-   every pass then runs as before, per brush, on that short list.
-   Exactness is proved, not assumed: the region is the player's standing
-   hull plus a displacement allowance and the reach of every test a pass
-   makes (step-up, un-duck, the capsule's broad reject in a turned frame).
-   A guard checks the player's displacement before each pass and after each
-   push; if a pass would test beyond the region (a dash, a long push), that
-   pass re-runs from its saved state on the full lists. The result is
-   bit-identical to scanning every mover.
-4. Below a few rows a group keeps the per-brush path, where one NumPy call
-   costs more than the rows.
+#### Against Stage 1
 
-What it is expected to remove: the per-tick Python for every mover and
-door not near the player (classification, the runtime AABB miss, a
-`_has_headroom` per pass, and for a moving convex or spinning shape its
-collision frame). What stays: the per-brush path for movers near the
-player, which is where true-shape collision does its work.
+Gate, five rounds (`--base 56ec0e3 --head 051b165`), the moving-brush
+metrics:
+
+| Metric | Ratio | |
+|---|---|---|
+| `table_far_doors_player` / `_total` | 0.46× / 0.83× | faster |
+| `table_box_movers_total`, `table_angled_movers_total` | 0.78×, 0.83× | faster |
+| `table_spinning_angled_total`, `table_one_mover_total` | 0.98×, 1.06× | same |
+| `table_spinning_boxes_total` | 1.08× (p .028) | regression |
+| `table_*_player`, 8 movers next to the path | 1.27× (box) – 2.07× (spinning boxes) | regression |
+| `table_one_mover_player` | 1.30× | regression |
+| `player_*` (`RuntimeOverrides`), 8 movers | 1.71–2.34× | regression |
+| `movers{8,32,128}_aabb_moving` | 1.34–1.49× | regression |
+
+Python calls a player tick are now below Stage 1's with box movers (198
+against 261), angled movers (220 / 323) and far doors (87 / 811), above it
+with spinners (369–380 / 323–327) and one mover (123 / 109).
+
+#### What remains
+
+* **The movers near the player** still take the per-brush path, which is
+  where true-shape collision does its work: a moved box's first AABB
+  query resolves its transform through the runtime layer (~1 µs against
+  Stage 1's 0.5 µs `pos` read), and a moving convex or spinning shape
+  builds its collision frame and is collided by its planes. That work now
+  scales with contacts, as required, but each contact still costs more
+  than Stage 1's (which collided the wrong shape). Removing the remaining
+  per-contact cost means handing the near rows' boxes and frames to the
+  player from the columns too.
+* **A single moved mover's AABB** (`movers*_aabb_moving`) is the same
+  per-brush miss; untouched here.
+* **One or two movers** pay ~0.6 µs a tick for the structure (the gather
+  as a function, the guard checks), ~2.4 % of that player update.
+* The thresholds (`NEAR_VECTOR_FROM`, `MOVER_NEAR_FROM`) were measured on
+  the x86 VM; on the Snapdragon 8cx Gen 3 the balance of NumPy calls
+  against bytecode may differ. Nothing here is measured on the target.
+
+#### A Stage 2b regression, fixed (`9f5d0c6`)
+
+Stopping play in a level with a brush that is both a mover and a door
+raised `IndexError`: stop empties the movers' rows before the doors', and
+`_adopt` republished the doors' rows against twin rows that were gone.
+Stage 1 stopped such a level. `_adopt` now links the twins against the
+rows as they are before publishing; a regression test holds it.

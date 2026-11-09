@@ -1,8 +1,76 @@
 # Fio 3.1 brush model, Stage 2: handoff
 
-State at handoff (2026-11-09). Stage 2 is **not accepted**: the performance
-gate against Stage 1 has not passed. **Do not begin M3**, and do not accept
+State at handoff (2026-11-09, updated after the second session; see
+*Second session* first). Stage 2 is **not accepted**: the performance gate
+against Stage 1 has not passed. **Do not begin M3**, and do not accept
 Stage 2 until the user has reviewed the results.
+
+## Second session: a dense mover broad phase (read this first)
+
+Full record: `docs/brush-model-stage2.md` §11.7.
+
+* Commits on `3.1.0.0611_CANARY` after `8d42dfc`:
+  * `371e1a8` tools: `tools/bench_player_table.py` (the production path:
+    each tree's own `MoverTable` ticked, then the player) and the §11.7
+    proposal, recorded before the implementation;
+  * `9f5d0c6` fix: stopping play with a brush that is both a mover and a
+    door raised `IndexError` (a Stage 2b regression; Stage 1 stopped it);
+  * `b30a77c` tools: the gate's `table` probe; the bench stops each world
+    as the game does, and its `--trace` forces the rare paths;
+  * `051b165` perf: `MoverTable.near_rows` + `brush_placement.movers_near`
+    + `Player.update` gathering only the movers and doors near the player,
+    exact by a displacement guard with a full-list fallback;
+  * the docs commit after it.
+* Result against `8d42dfc` (production path, player µs a tick): 8 box
+  movers 44.9 → 40.7, angled 63.1 → 52.9, spinning boxes 95.1 → 73.8,
+  spinning angled 77.1 → 65.0, 34 far doors 116.5 → 32.9 (Stage 1 71.1),
+  1 mover 24.6 → 25.1 (+0.6 µs: the structure). Trajectories bit-identical.
+  `gameplay` gate: 0 regressions in 20.
+* Against Stage 1 the player next to moving shapes is still 1.27–2.07×
+  (production path) and 1.71–2.34× (the `RuntimeOverrides` probe), and a
+  moved mover's single AABB query 1.34–1.49×. The remaining cost is per
+  contact: the movers near the player take the per-brush path (runtime
+  miss, collision frame, true-shape planes).
+* The experiment patch (`docs/stage2-handoff/turning-ids-gather.patch`) was
+  **not applied**: with the broad phase the gather resolves only the
+  movers near the player (0.6–1.9 a tick in the scenarios), so its saving
+  per gathered mover is now a saving per near mover, and it adds upkeep to
+  every publication.
+* Lesson measured this session: a NumPy call costs 1–4 µs in the frame
+  (caches the mover tick has just used) against well under 1 µs in a
+  `timeit` loop. An all-NumPy broad phase cost 13 µs a tick and made the
+  8-mover player slower; time candidates in the frame
+  (`bench_player_table.py`), not in a loop.
+
+### Next steps (not started)
+
+1. The per-contact cost: hand the near rows' boxes (and, for a turned or
+   convex row, its frame) to the player from the columns the broad phase
+   already reads, instead of the per-brush runtime miss.
+2. `movers*_aabb_moving`: the single-brush miss, untouched.
+3. The calibrated gate on the new head: an A/A run, nine rounds of
+   `movers,player,aabb,table`, the full gate (GL). Run nothing else on the
+   machine meanwhile, or pin the rest away from the gate's core.
+4. Everything on the Snapdragon 8cx Gen 3 target, including the
+   thresholds `MoverTable.NEAR_VECTOR_FROM` and `Player.MOVER_NEAR_FROM`.
+
+### Environment notes (this container)
+
+* Install the requirements first (`pip install -r requirements.txt
+  pytest`); PyGLM was missing.
+* Without a display PyOpenGL fails to import (EGL), so even the headless
+  tier needs `xvfb-run -a env QT_QPA_PLATFORM=offscreen ...`.
+* Qt's `xcb` plugin (the GL probes) needed `apt-get install -y
+  libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0
+  libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxcb-shape0
+  libxcb-randr0 libxcb-xfixes0`.
+* The Qt tier took ~25 minutes here.
+* Tests elsewhere in the suite leave `RuntimeOverrides` sources registered
+  with entries; the broad phase rightly steps aside for them, so
+  `test_mover_broad_phase.py` plays with the editor preview alone
+  registered (its `one_world` fixture).
+
+## First session (state at `8d42dfc`)
 
 ## The architectural requirement
 
@@ -164,6 +232,13 @@ plus restored angles at `sync`/restore time.
 
 ## Next steps (designed, not implemented)
 
+(First session's list. Step 2 became the second session's broad phase, in
+the form measured best: the reader scans the table's `pos` column against
+per-row reaches rather than the table writing float32 bounds at
+publication. Step 1's aim -- invalidation proportional to what was asked --
+followed from it: the player now queries only near movers, so a stamp
+drops only theirs. See *Second session*.)
+
 1. **Change-driven invalidation (dirty rows).** Writers pass the brushes
    they changed: `note_runtime_change(changed)`.
    * The stamp then drops only the cached keys that are both changed and
@@ -203,6 +278,7 @@ plus restored angles at `sync`/restore time.
 | Gather reading the per-stamp runtime cache inline | Tests pass; no measurable gain. |
 | Miss-path micro-variants (a per-stamp tuple of active source dicts, the mover branch inlined into `brush_aabb_bounds`, no per-stamp cache store, invalidation by overwrite instead of `pop`) | Within noise: each ingredient is 28–68 ns. |
 | Dropping the `_MoverKey` tag | Incorrect: a mover whose `pos` is edited without a stamp would take the plain-box miss. |
+| An all-NumPy mover broad phase (second session) | 13 µs a tick in the frame for 8 rows (5.2 µs in `timeit`); the 8-mover player slower than before, the 1-mover player 7 µs slower. Replaced by a scan of the column below 48 rows and a leaner NumPy form above (§11.7). |
 
 ## Relevant files
 
@@ -252,7 +328,16 @@ To try the experiment:
 git apply docs/stage2-handoff/turning-ids-gather.patch
 ```
 
-Calls and update timing for one tree:
+The production path (each tree's own mover table, then the player), one
+tree, every scenario; or interleaved over several trees:
+
+```bash
+taskset -c 3 python tools/bench_player_table.py ../fio-stage1 --kind all
+python tools/bench_player_table.py ../fio-head --trace /tmp/a.json && python tools/bench_player_table.py . --trace /tmp/b.json && cmp /tmp/a.json /tmp/b.json
+python tools/perf_gate.py --base ../fio-stage1 --head . --rounds 5 --core 3 --probes movers,player,aabb,table --json gate_mpat.json
+```
+
+Calls and update timing for one tree (`RuntimeOverrides`-driven):
 
 ```bash
 taskset -c 3 python tools/bench_player_movers.py ../fio-stage1 --calls 40
