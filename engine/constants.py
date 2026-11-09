@@ -304,10 +304,22 @@ def _brush_aabb_runtime(brush, placement, sig):
                         runtime = found[1]
                         break
         cache[key] = (brush, runtime)
-    if runtime is not None and 'geometry' not in brush and '_mesh_bounds' not in brush:
-        # A box carried (and turned): world_box_at's box rule, inline.
-        size = brush['size']
-        hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
+    half = None
+    if runtime is not None:
+        if 'geometry' not in brush and '_mesh_bounds' not in brush:
+            # A box carried (and turned): world_box_at's box rule, inline.
+            size = brush['size']
+            half = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+        elif '_mesh_bounds' not in brush:
+            # A convex brush carried: only its shape's half-extents matter
+            # (authored_box's, from the cached shape every geometry edit
+            # drops), not its authored centre.
+            convex = brush.get('_geo_cache')
+            if convex is not None and convex.is_valid:
+                box = convex.shape_box
+                half = (box[3], box[4], box[5])
+    if half is not None:
+        hx, hy, hz = half
         if runtime[6]:
             hx, hy, hz = placement.turned_half(hx, hy, hz, runtime[3:6], runtime[6])
         bp = glm.vec3(runtime[0], runtime[1], runtime[2])

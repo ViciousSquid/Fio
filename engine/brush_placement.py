@@ -816,9 +816,20 @@ def world_bounds(brush):
         else:
             runtime = runtime_of(brush)
             cache[id(brush)] = (brush, runtime)
-        if runtime is not None and 'geometry' not in brush and '_mesh_bounds' not in brush:
-            size = brush.get('size') or DEFAULT_SIZE
-            hx, hy, hz = size[0] * 0.5, size[1] * 0.5, size[2] * 0.5
+        half = None
+        if runtime is not None:
+            if 'geometry' not in brush and '_mesh_bounds' not in brush:
+                size = brush.get('size') or DEFAULT_SIZE
+                half = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+            elif '_mesh_bounds' not in brush:
+                # A convex brush carried: its cached shape's half-extents
+                # (authored_box's), not its authored centre.
+                convex = brush.get('_geo_cache')
+                if convex is not None and convex.is_valid:
+                    box = convex.shape_box
+                    half = (box[3], box[4], box[5])
+        if half is not None:
+            hx, hy, hz = half
             if runtime[6]:
                 hx, hy, hz = turned_half(hx, hy, hz, runtime[3:6], runtime[6])
             cx, cy, cz = runtime[0], runtime[1], runtime[2]
