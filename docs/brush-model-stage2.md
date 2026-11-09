@@ -1286,3 +1286,72 @@ Everything above is x86-64 with software GL. On the Snapdragon 8cx Gen 3
   CPU) moves the bottleneck;
 * memory and allocation behaviour under the device's memory;
 * the visual oracles on the Adreno driver (validated here only on llvmpipe).
+
+### 11.7 Stage 2 optimisation: a dense mover broad phase for the player
+
+Status: **proposed** (this section is written before the implementation and
+updated with its measurements). Stage 2 is not accepted.
+
+#### The production path, measured
+
+The gate's `player` probe drives Stage 2's movers through a
+`RuntimeOverrides` (eight stamps a tick, the source's own update untimed)
+and Stage 1's by writing `pos`. A level moves them differently: the logic
+thread ticks the `MoverTable` (Stage 1 writes `pos` into each brush; Stage 2
+publishes runtime transforms, once a tick) and then hands the player every
+mover and door in the level. `tools/bench_player_table.py` does exactly
+that on any checkout, with each tree's own table and player, and times the
+tick (publication included), the player update, and both together.
+
+Baseline, `8d42dfc` (HEAD's code is `f1556d0`) against Stage 1 `56ec0e3`:
+five interleaved rounds, one pinned core, median of the per-round medians
+(µs per tick); calls are exact.
+
+| Scenario | Player calls S1 / HEAD | Player S1 / HEAD | Tick S1 / HEAD | Total S1 / HEAD |
+|---|---|---|---|---|
+| 8 box movers | 261 / 317 | 32.8 / 42.4 (1.29×) | 70.2 / 37.1 (0.53×) | 103.6 / 80.5 (0.78×) |
+| 8 angled movers | 323 / 522 | 35.0 / 61.3 (1.75×) | 69.9 / 38.0 (0.54×) | 106.3 / 99.9 (0.94×) |
+| 8 spinning boxes | 327 / 606 | 35.1 / 88.7 (2.53×) | 76.1 / 43.8 (0.58×) | 113.0 / 133.6 (1.18×) |
+| 8 spinning angled | 323 / 631 | 35.8 / 73.9 (2.06×) | 74.2 / 42.5 (0.57×) | 111.2 / 117.2 (1.05×) |
+| 34 doors away from the player | 811 / 1,015 | 70.0 / 118.1 (1.69×) | 110.7 / 126.2 (1.14×) | 182.5 / 244.9 (1.34×) |
+| 1 mover (most shipped maps) | 109 / 121 | 19.7 / 23.5 (1.19×) | 21.5 / 17.2 (0.80×) | 41.5 / 40.7 (0.98×) |
+
+Read across: Stage 2's tick and publication are cheaper than Stage 1's; the
+player is not. A box mover nowhere near the player costs the player's
+update about 1.6 µs a tick on Stage 1 and 2.9–4.6 µs on HEAD (classified,
+its AABB derived through the runtime layer, tested by every pass), so the
+34 far doors cost ~100 µs a tick. Work scales with movers, not contacts.
+
+#### Proposal
+
+The smallest change that removes per-mover Python from the player's tick:
+
+1. **`MoverTable.near_rows`**: one vectorised test per group over the
+   table's `pos` column -- the dense projection the step already writes and
+   publishes every tick -- against a per-row reach: a row's authored
+   half-extents, or for a row that can turn, the radius of its box. The
+   reaches depend only on the authored shape and the row's flags, so they
+   are worked out once per row rebuild or resync (change-driven), never per
+   tick. Nothing is added to the tick or to publication; nothing is written
+   to a brush.
+2. **`brush_placement.movers_near`**: the resolver's entry point. It
+   answers only when the mover table is the one runtime source with entries
+   (the editor preview and test overrides keep the per-brush path) and the
+   lists handed in are the table's own rows.
+3. **`Player.update`** gathers only the movers and doors that answer near;
+   every pass then runs as before, per brush, on that short list.
+   Exactness is proved, not assumed: the region is the player's standing
+   hull plus a displacement allowance and the reach of every test a pass
+   makes (step-up, un-duck, the capsule's broad reject in a turned frame).
+   A guard checks the player's displacement before each pass and after each
+   push; if a pass would test beyond the region (a dash, a long push), that
+   pass re-runs from its saved state on the full lists. The result is
+   bit-identical to scanning every mover.
+4. Below a few rows a group keeps the per-brush path, where one NumPy call
+   costs more than the rows.
+
+What it is expected to remove: the per-tick Python for every mover and
+door not near the player (classification, the runtime AABB miss, a
+`_has_headroom` per pass, and for a moving convex or spinning shape its
+collision frame). What stays: the per-brush path for movers near the
+player, which is where true-shape collision does its work.
