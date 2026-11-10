@@ -58,8 +58,13 @@ visible grows, and drawing it is rendering work, not change detection.
   reader already depends on) marks it; `publish` logs the marked rows and
   writes a render table only the rows marked since *that* table was last
   written, so the two render buffers' tables each catch up on what moved
-  during the other's frame. A group whose every row moved is written
-  whole, as before.
+  during the other's frame. **Dense publication** (M4.5): a group with at
+  most `DENSE_SLACK_ROWS` rows unmarked (so every small group) or at least
+  `DENSE_SHARE` marked is written whole in one step -- and still logged,
+  every row of it, a superset of what moved, so the kept matrices and the
+  streams see every change, and the other table catches up on the whole
+  group. A group with no marks writes nothing. The two thresholds are
+  measured, not assumed (`tools/bench_mover_crossover.py`, below).
 * **Row-set versions** (`engine/row_list.py`, `RowList`). `EditorState`'s
   brush and entity lists take a fresh version from one process-wide counter
   on every change to their rows; a table holding the version it reconciled
@@ -130,13 +135,14 @@ Validation, all with the oracle on:
   the Debug Tables comparison catches a brush edited with no journal entry;
   the mover oracle catches a pose written without being published.
 * Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record` (every change
-  record checked, a miss fails the test), on M4.2c's tree before its last
-  fixes: 7,346 passed, 8 failed -- the documented environment failures
-  (the position window, three `test_portal_fade` cases), two tests fixed in
-  M4.2c (a source check of the distance cull; a list type a test assigns is
-  no longer copied), and the player-start focus test, which is flaky on
-  M3.1's head too. The run on M4's final commit was in progress when this
-  was written (see the handoff).
+  record checked, a miss fails the test), on `6a66004`: **7,354 passed, 4
+  failed -- exactly the documented environment failures** (the position
+  window, three `test_portal_fade` cases; the play-cycle memory guard is
+  run on its own, below). No test left a missed change record. Dense
+  publication (`c43d6b8`) was then validated across the brush-model,
+  renderer, visual, e2e, engine, logic and Big World tiers with the oracle
+  recording (3,005 passed), with tests that both publication modes leave a
+  complete record.
 
 ## Measured
 
@@ -171,7 +177,23 @@ newly visible rows a frame). GL calls on every frame: 89-91 -> 73-75
 
 **The mover publication** (publish alone, five interleaved rounds against
 M4.0): at rest 13 -> 3 us (8 movers), 24 -> 5 (128); every mover moving
-every tick, the worst case: 17 -> 25 (8), 21 -> 29 (32), 30 -> 41 (128).
+every tick, the worst case: 17 -> 25 (8), 21 -> 29 (32), 30 -> 41 (128)
+before dense publication; with it, the fixed cost of keeping the record
+(deciding the mode, the log entry, the seal and the logged write) remains,
+~+5-10 us a publication.
+
+**Where dense publication pays** (`tools/bench_mover_crossover.py`: both
+modes forced, the publication plus the renderer's work on the rows logged
+-- matrices rebuilt, instance rows packed -- two alternating tables, 300
+publications, medians). Logging a row needlessly costs the renderer ~0.18
+us; picking rows out costs the publication ~6 us a group. Dense is cheaper
+at nearly any moving share up to ~64 rows; for 128-512 rows the crossover
+lies between 40 % and 75 % moving, the two modes within a few microseconds
+of each other near it (and within this host's noise). Hence an absolute
+slack for small groups and a share for large ones: `DENSE_SLACK_ROWS = 48`,
+`DENSE_SHARE = 0.75`. An ARM CPU and a mobile driver weigh the two sides
+differently (uploads cost more there, Python more too): rerun the tool on
+the target and set both from what it prints.
 
 **Entity instance buffers and per-cell buffers, measured before building
 anything** (gameplay, draws stubbed: CPU only). Sprites, models and effects
@@ -201,11 +223,15 @@ M3.1's head, both trees clean worktrees; first run on `6a66004`):
 ## Trade-offs and what remains
 
 * **The record has a cost where everything changes.** With every mover
-  moving every tick, `MoverTable.publish` costs 8-14 us more than before
-  (the marks, the log and the logged write); at rest it costs 10-20 us
-  less. On a large world the renderer recovers more than that by no longer
-  comparing columns; on a tiny world with every mover moving it is a net
-  cost of a few microseconds a frame.
+  moving every tick, `MoverTable.publish` costs ~5-10 us more than before
+  even in dense mode (deciding, the log entry, the seal, the logged write):
+  the price of an accurate record. At rest it costs 10-20 us less. On a
+  large world the renderer recovers more than that by no longer comparing
+  columns; on a tiny world with every mover moving it is a net cost of a
+  few microseconds a frame, within the noise of every complete-frame gate.
+* **Dense publication logs rows that did not move** (by design: a
+  superset), which the renderer rebuilds and re-uploads; the thresholds
+  are where that costs less than picking, measured on this host only.
 * **Frames that change still do work in proportion to what changed** -- by
   design. A turning camera re-culls, compares its new visible set once with
   the last one made (to keep identity when it has not changed) and
