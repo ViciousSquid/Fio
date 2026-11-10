@@ -37,6 +37,9 @@ if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
     # PyOpenGL defaults to GLX, but the editor Qt tier intentionally runs without X11.
     # Use EGL for context-free imports in that tier; the actual GL tier runs under Xvfb.
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+# Seal the render table's transform columns (engine/render_table.py): a write
+# that bypasses the change log raises. A test-time check; play does not pay it.
+os.environ.setdefault("FIO_SEAL_COLUMNS", "1")
 # Qt writes its runtime files here; without it every Qt test prints a warning.
 os.environ.setdefault("XDG_RUNTIME_DIR", os.path.join("/tmp", "fio-test-runtime"))
 try:

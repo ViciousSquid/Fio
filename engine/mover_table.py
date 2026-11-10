@@ -690,7 +690,9 @@ class _Group:
         rows, arrays = self._marked_rows, self._marked_arrays
         if rows is None or arrays is None:
             return None
-        return len(rows) + sum(len(a) for a in arrays)
+        if not arrays:
+            return len(rows)
+        return len(rows) + sum(map(len, arrays))
 
     def drop_marks(self):
         """Forget the marks (the publication is writing every row)."""
@@ -2210,9 +2212,16 @@ class MoverTable:
                 slots = [slot_of.get(id(brush), -1) for brush in group.brushes]
                 slots = np.asarray(slots, dtype=np.intp)
                 ok = slots >= 0
-                maps.append((np.flatnonzero(ok), slots[ok], slots))
-            # [key, row/slot maps, the pose version the table holds]
-            cached = [key, tuple(maps), None]
+                held = np.flatnonzero(ok)
+                # Every row of the group in the table (the usual case): its
+                # rows are read as a slice -- a view, not a gathered copy.
+                if len(held) == len(slots):
+                    held = slice(0, len(slots))
+                maps.append((held, slots[ok], slots))
+            # [key, row/slot maps, the pose version the table holds, the
+            # whole groups' flat indices into the table's columns]
+            cached = [key, tuple(maps), None,
+                      tuple(table.transform_index(m[1]) for m in maps)]
             self._slot_cache[table] = cached
         started = change_detection.now()
         (all_m, slots_m, slot_of_m), (all_d, slots_d, slot_of_d) = cached[1]
@@ -2235,35 +2244,48 @@ class MoverTable:
             rows_m, rows_d = self._rows_since(cached[2])
         cached[2] = self._pose_version
         writes = []
+        written = 0
+        index_m, index_d = cached[3]
         if rows_m is None or len(rows_m) >= len(slot_of_m):
             rows_m = all_m
         elif len(rows_m):
+            index_m = None
             picked = slot_of_m[rows_m]
             held = picked >= 0
             rows_m, slots_m = rows_m[held], picked[held]
-        if len(rows_m):
+        else:
+            slots_m = _NO_ROWS                # nothing of the group to write
+        if len(slots_m):
+            written = len(slots_m)
             angle = movers.rot_angle[rows_m]
-            rot = np.zeros((len(rows_m), 4), dtype=table.rot.dtype)
-            spun = angle != 0.0
-            if spun.any():
-                rot[spun, :3] = movers.rot_axis[rows_m][spun]
-                rot[spun, 3] = angle[spun]
+            if angle.any():
+                # (axis, angle), and all zeros for a row that does not turn.
+                rot = np.empty((len(slots_m), 4), dtype=table.rot.dtype)
+                rot[:, :3] = np.where((angle != 0.0)[:, None],
+                                      movers.rot_axis[rows_m], 0.0)
+                rot[:, 3] = angle
                 table.turning = True        # the column's other writer
-            writes.append((slots_m, movers.pos[rows_m], rot))
+            else:
+                rot = 0.0                   # nothing turns: every value 0
+            writes.append((slots_m, movers.pos[rows_m], rot, index_m))
         if rows_d is None or len(rows_d) >= len(slot_of_d):
             rows_d = all_d
         elif len(rows_d):
+            index_d = None
             picked = slot_of_d[rows_d]
             held = picked >= 0
             rows_d, slots_d = rows_d[held], picked[held]
-        if len(rows_d):
+        else:
+            slots_d = _NO_ROWS                # nothing of the group to write
+        if len(slots_d):
+            written += len(slots_d)
             # Doors last: a brush that is both is left as the door put it.
-            writes.append((slots_d, doors.pos[rows_d], None))
+            writes.append((slots_d, doors.pos[rows_d], None, index_d))
         if writes:
             table.write_transforms_many(writes)
         # The rows written: those published since this table was last
         # written, or every row when it was not (or a rebuild came between).
-        change_detection.DETECT.add('mover.publish', len(rows_m) + len(rows_d),
+        change_detection.DETECT.add('mover.publish', written,
                                     change_detection.now() - started)
         if change_detection.ORACLE:
             self._check_published(table, cached[1])
@@ -2331,6 +2353,8 @@ class MoverTable:
         movers, doors = self.movers, self.doors
         problems = []
         for group, (rows, slots, _slot_of_row) in zip((movers, doors), maps):
+            if isinstance(rows, slice):
+                rows = np.arange(rows.stop)
             awake = ~group.parked[rows]
             rows, slots = rows[awake], slots[awake]
             if not len(rows):

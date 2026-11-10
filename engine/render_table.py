@@ -66,6 +66,7 @@ the count (``rows read last frame``).
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 
@@ -363,8 +364,19 @@ TRANSFORM_LOG = 64
 #: write that bypasses the change log raises instead of going unseen (M4).
 _SEALED_COLUMNS = ('bounds', 'rot')
 
+#: Whether the transform columns are sealed. A check for tests and
+#: debugging -- the suite turns it on (conftest.py: ``FIO_SEAL_COLUMNS``), as
+#: does the oracle -- not paid in play: toggling the two columns' writeable
+#: flags around every write cost the mover publication ~1.5 us a frame.
+SEAL_COLUMNS = change_detection.ORACLE or bool(os.environ.get('FIO_SEAL_COLUMNS'))
+
 _NO_ROWS = np.empty(0, dtype=np.intp)
 _NO_ROWS.flags.writeable = False
+
+#: A row's centre within ``bounds`` and its rotation within ``rot``, as
+#: offsets into the flattened row (RenderTable.transform_index).
+_CENTRE = np.arange(3, dtype=np.intp)
+_ROTATION = np.arange(4, dtype=np.intp)
 
 
 def _writes(method):
@@ -373,6 +385,8 @@ def _writes(method):
     otherwise. Every such method logs the rows it wrote."""
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        if not SEAL_COLUMNS:
+            return method(self, *args, **kwargs)
         if not self._writing:
             self._seal(False)
         self._writing += 1
@@ -531,7 +545,8 @@ class RenderTable:
         #: Rows whose brush dict the last :meth:`begin_frame` read (Debug
         #: Tables shows it: on a still frame it is the movers and doors).
         self.rows_read = 0
-        self._seal(True)
+        if SEAL_COLUMNS:
+            self._seal(True)
         JOURNAL.subscribe(self)
 
     # -- transform change records (M4) -------------------------------------
@@ -570,20 +585,41 @@ class RenderTable:
         parts = [rows for written, rows in log if written > version]
         return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
+    def transform_index(self, slots):
+        """``(centre, rotation)`` flat indices of *slots* into ``bounds`` and
+        ``rot`` for :meth:`write_transforms_many`: a store through them is a
+        one-dimensional fancy store, about three times cheaper than
+        ``bounds[slots, :3] = ...``. They depend on the slots alone, not on
+        the columns' capacity, so a caller keeps them as long as the slots."""
+        slots = np.asarray(slots, dtype=np.intp)[:, None]
+        return ((slots * self.bounds.shape[1] + _CENTRE).ravel(),
+                (slots * self.rot.shape[1] + _ROTATION).ravel())
+
     def write_transforms_many(self, writes):
-        """Store ``(slots, centre, rot)`` for each of *writes* in order (*rot*
-        may be None; *slots* intp arrays), each logged: the mover table's
-        publication, once a frame, so the seal is handled here rather than by
-        the decorator. The caller sets :attr:`turning` when a *rot* turns a
-        row (it knows already)."""
-        opened = not self._writing
+        """Store ``(slots, centre, rot, index)`` for each of *writes* in order,
+        each logged: the mover table's publication, once a frame, so the seal
+        is handled here rather than by the decorator. *slots* is an intp
+        array; *rot* an array, a float for every value, or None; *index* the
+        slots' :meth:`transform_index`, or None. The caller sets
+        :attr:`turning` when a *rot* turns a row (it knows already)."""
+        opened = SEAL_COLUMNS and not self._writing
         if opened:
             self._seal(False)
         try:
-            for slots, centre, rot in writes:
-                self.bounds[slots, :3] = centre
-                if rot is not None:
-                    self.rot[slots] = rot
+            for slots, centre, rot, index in writes:
+                if index is None:
+                    self.bounds[slots, :3] = centre
+                    if rot is not None:
+                        self.rot[slots] = rot
+                else:
+                    # The columns are whole C-ordered arrays: reshape is a view.
+                    flat = self.bounds.reshape(-1)
+                    flat[index[0]] = centre.reshape(-1)
+                    if rot is not None:
+                        self.rot.reshape(-1)[index[1]] = (
+                            rot if type(rot) is float else rot.reshape(-1))
+                    if change_detection.ORACLE and not np.shares_memory(flat, self.bounds):
+                        change_detection.missed("bounds written through a copy")
                 self._note_transforms(slots)
         finally:
             if opened:
