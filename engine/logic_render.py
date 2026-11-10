@@ -27,6 +27,18 @@ def _sealed(array):
     return array
 
 
+def _shared(cache, table, slots):
+    """*slots*, sealed -- or, when another table's kept visible set holds
+    the same rows, that array: the two render buffers' tables take turns
+    every frame, and a consumer that sees the same object from both
+    recognises an unchanged set by identity whichever table it drew last.
+    Compared only when a set is made, never on a still frame."""
+    for other, entry in cache.items():
+        if other is not table and np.array_equal(entry[6], slots):
+            return entry[6]
+    return _sealed(slots)
+
+
 class LogicRender:
     """Render-facing projection and culling for LogicThread."""
 
@@ -296,7 +308,7 @@ class LogicRender:
                         mask = entry[5].copy()
                         mask[rows] = inside
                         entry[5] = mask
-                        entry[6] = _sealed(np.flatnonzero(mask))
+                        entry[6] = _shared(cache, table, np.flatnonzero(mask))
                 if change_detection.ORACLE:
                     self._check_cull(table, frustum_planes, keep, entry[6])
                 return entry[6]
@@ -309,7 +321,7 @@ class LogicRender:
                 and np.array_equal(entry[6], slots)):
             slots = entry[6]            # the same set: the same version
         else:
-            slots = _sealed(slots)
+            slots = _shared(cache, table, slots)
         cache[table] = [table.generation, count, frustum_planes, keep,
                         table.transform_version, mask, slots]
         return slots
@@ -322,7 +334,7 @@ class LogicRender:
             bounds = brush_placement.turned_bounds(bounds, table.rot[:count])
         fresh = np.flatnonzero(keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
         if not np.array_equal(fresh, slots):
-            raise change_detection.MissedChange(
+            change_detection.missed(
                 "kept visible set differs from a fresh cull: %s"
                 % np.setxor1d(fresh, slots)[:8].tolist())
 

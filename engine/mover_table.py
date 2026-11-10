@@ -2266,5 +2266,5 @@ class MoverTable:
                 problems.append((type(group).__name__, rows[differ].tolist()[:8],
                                  slots[differ].tolist()[:8]))
         if problems:
-            raise change_detection.MissedChange(
+            change_detection.missed(
                 "mover rows changed without being published: %r" % (problems,))

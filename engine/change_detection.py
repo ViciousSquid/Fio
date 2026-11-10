@@ -65,3 +65,18 @@ DETECT = ChangeDetection()
 
 #: Verify every change record against a full comparison (tests, debugging).
 ORACLE = bool(os.environ.get('FIO_RENDER_ORACLE'))
+
+#: What a miss does: raise :class:`MissedChange` where it is found, or --
+#: ``FIO_RENDER_ORACLE=record`` -- append the message to :data:`MISSES` and
+#: carry on. Raising in the middle of a GL frame (inside ``paintGL``, with
+#: the HUD's painter active) can take the process down; the test suite
+#: records instead and fails the test that left a miss behind (conftest.py).
+RAISE = os.environ.get('FIO_RENDER_ORACLE') != 'record'
+MISSES = []
+
+
+def missed(message):
+    """Report a change no record reported (oracle mode only)."""
+    if RAISE:
+        raise MissedChange(message)
+    MISSES.append(message)

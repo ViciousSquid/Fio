@@ -214,7 +214,7 @@ class InstancingMixin:
             if change_detection.ORACLE and not (
                     np.array_equal(stream.slots[:count], slots)
                     and stream.same_payload(count, spare, payload)):
-                raise change_detection.MissedChange(
+                change_detection.missed(
                     "stream %r: an immutable input changed" % (key,))
         else:
             started = change_detection.now()

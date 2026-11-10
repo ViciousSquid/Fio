@@ -140,6 +140,14 @@ class TablesMixin:
             while len(tables) >= PASS_MEMO_TABLES:
                 del tables[next(iter(tables))]
         _seal_arrays(value)
+        # The other tables' value for this pass, when it is the same: the two
+        # render buffers' tables take turns, and a stream that is handed the
+        # same arrays from both recognises them by identity (compared only
+        # when a value is built, never on a still frame).
+        for other_tid, other in tables.items():
+            if other_tid != tid and other[0]() is not None and _same_value(other[4], value):
+                value = other[4]
+                break
         kept = (slots if isinstance(slots, np.ndarray) and not slots.flags.writeable
                 else np.array(slots, copy=True))
         tables[tid] = (weakref.ref(table), full, tuple(objects), kept, value)
@@ -150,7 +158,7 @@ class TablesMixin:
         """Oracle: a kept value is what deriving it afresh gives."""
         fresh = build()
         if not _same_value(entry[4], fresh):
-            raise change_detection.MissedChange(
+            change_detection.missed(
                 "pass %r kept arrays differ from a fresh derivation" % (key,))
 
     def _frame_transforms(self, table, slots):

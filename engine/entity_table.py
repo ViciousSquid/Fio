@@ -681,7 +681,8 @@ class EntityTable:
         'effect_slots',
         '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
         '_effect_custom_ids', '_effect_custom_paths',
-        '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', 'rows_read',
+        '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', '_row_list',
+        '_row_list_version', 'rows_read',
         '_effect_published', '_effect_static',
         '__weakref__'))
 
@@ -727,6 +728,10 @@ class EntityTable:
         self._epoch = None
         #: The row set as a tuple, for :meth:`needs_reconcile`.
         self._row_tuple = ()
+        #: The live RowList the rows were last taken from and its version
+        #: (see RenderTable._row_list, M4).
+        self._row_list = None
+        self._row_list_version = None
         #: Rows whose entity the last :meth:`begin_frame` read (Debug Tables).
         self.rows_read = 0
         #: ``(effect store, its generation)`` the Effect rows' static columns
@@ -845,10 +850,27 @@ class EntityTable:
         # the editor thread can also append to. Freeze it at the frame
         # boundary so every step below sees the same rows.
         started = change_detection.now()
-        things = tuple(things)
-        n = len(things)
-        reconcile = self.needs_reconcile(things, epoch)
-        change_detection.DETECT.add('entity_table.rows', n,
+        version = getattr(things, 'row_version', None)
+        if (version is not None and things is self._row_list
+                and version == self._row_list_version
+                and epoch is not None and epoch == self._epoch):
+            # The same RowList at the same version: the same rows (M4).
+            if change_detection.ORACLE and tuple(things) != self._row_tuple:
+                change_detection.missed(
+                    "the entity list changed without moving its version")
+            things = self._row_tuple
+            n = len(things)
+            reconcile = False
+            examined = 0
+        else:
+            live = things
+            things = tuple(things)
+            n = len(things)
+            reconcile = self.needs_reconcile(things, epoch)
+            examined = n
+            self._row_list = live if version is not None else None
+            self._row_list_version = version
+        change_detection.DETECT.add('entity_table.rows', examined,
                                     change_detection.now() - started)
         changes = JOURNAL.drain(self)
         changed_positions = JOURNAL.drain_positions(self)
@@ -907,6 +929,7 @@ class EntityTable:
         self._effect_custom_paths = list(peer._effect_custom_paths)
         self._epoch = peer._epoch
         self._row_tuple = peer._row_tuple
+        self._row_list = None               # compared once, next frame
         self._slot_of_obj = dict(peer._slot_of_obj)
         self._effect_published = None
         self.generation += 1
@@ -1190,6 +1213,7 @@ class EntityTable:
         anything preparing a pass outside the frame loop.
         """
         before = self.generation
+        self._row_list = None               # rows taken as given, next frame compares
         if self.needs_reconcile(things, epoch):
             self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch

@@ -452,13 +452,29 @@ class OcclusionMixin:
             self._occlusion_drawn = len(slots)
             return slots
 
+        # The same visible set (the same immutable array), the same rows and
+        # the same hidden groups: the same result, handed back as the same
+        # read-only array so what follows knows it by identity (M4).
+        kept = getattr(self, '_occlusion_kept', None)
+        if kept is None:
+            kept = self._occlusion_kept = {}
+        inputs = (table.generation, table.transform_version)
+        held = kept.get(self._instance_view)
+        if (held is not None and held[0] is slots and held[1] == inputs
+                and np.array_equal(held[2], culled_groups)):
+            self._occlusion_skipped, self._occlusion_drawn = held[4]
+            return held[3]
         keep = np.ones(len(slots), dtype=bool)
         keep[eligible] = ~culled_groups[group_of_row]
         self._occlusion_skipped = int(np.count_nonzero(~keep))
         self._occlusion_drawn = len(slots) - self._occlusion_skipped
         # Score savings against *eligible* rows; a map full of protected
         # convex geometry should not bury a useful small occlusion region.
-        return slots[keep]
+        out = slots[keep]
+        out.flags.writeable = False
+        kept[self._instance_view] = (slots, inputs, culled_groups, out,
+                                     (self._occlusion_skipped, self._occlusion_drawn))
+        return out
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):
         """Measure non-blocking query polling and optional probe submission."""

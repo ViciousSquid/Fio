@@ -423,7 +423,8 @@ class RenderTable:
         '_shown_mask', '_shown_slots', '_shown_stale',
         '_occlusion_index', '_occlusion_dirty', 'turning',
         'material_version', 'extent_version', 'transform_version',
-        '_transform_log', '_writing', 'shown_version', '__weakref__'))
+        '_transform_log', '_writing', 'shown_version', '_row_list',
+        '_row_list_version', '__weakref__'))
 
     @property
     def center(self):
@@ -519,6 +520,12 @@ class RenderTable:
         #: in here stay unique; comparing it with the live list is how an
         #: unannounced change to the row set is recognised, in one C compare.
         self._row_tuple = ()
+        #: The live row list the row set was last taken from, when it says
+        #: when its rows change (engine.row_list.RowList), and the version it
+        #: was at: the same list at the same version is the same rows, with
+        #: no row compared (M4).
+        self._row_list = None
+        self._row_list_version = None
         #: ``id(brush)`` -> slot, for applying the change journals.
         self._slot_of_obj: dict = {}
         #: Rows whose brush dict the last :meth:`begin_frame` read (Debug
@@ -899,20 +906,41 @@ class RenderTable:
         made the second buffer rebuild every row as well.
         """
         started = change_detection.now()
-        brushes = tuple(brushes)
-        n = len(brushes)
-        # What the row set is compared against: one identity test a row, in
-        # C (change detection: counted, M4).
-        same_rows = (epoch is not None and epoch == self._epoch
-                     and brushes == self._row_tuple)
-        change_detection.DETECT.add('render_table.rows', n,
+        version = getattr(brushes, 'row_version', None)
+        if (version is not None and brushes is self._row_list
+                and version == self._row_list_version):
+            # The same RowList at the same version: the same rows (M4),
+            # whatever the epoch says about what is in them. The frame works
+            # on the table's own frozen tuple of them.
+            if change_detection.ORACLE and tuple(brushes) != self._row_tuple:
+                change_detection.missed(
+                    "the row list changed without moving its version")
+            brushes = self._row_tuple
+            n = len(brushes)
+            rows_known = True
+            same_rows = epoch is not None and epoch == self._epoch
+            examined = 0
+        else:
+            live = brushes
+            brushes = tuple(brushes)
+            n = len(brushes)
+            rows_known = False
+            # Compared with the rows last reconciled: an identity test a row,
+            # in C.
+            same_rows = (epoch is not None and epoch == self._epoch
+                         and brushes == self._row_tuple)
+            examined = n
+            # Whatever happens below, the table then holds this row set.
+            self._row_list = live if version is not None else None
+            self._row_list_version = version
+        change_detection.DETECT.add('render_table.rows', examined,
                                     change_detection.now() - started)
         changes = JOURNAL.drain(self)
         self.rows_read = 0
         resolved_all = False
         if not same_rows:
             cold_dirty = epoch is None or epoch != self._epoch
-            if self._refresh_in_place(brushes, n, epoch, dirty_objects):
+            if self._refresh_in_place(brushes, n, epoch, dirty_objects, rows_known):
                 pass
             elif _can_adopt(peer, brushes, epoch, dirty_objects, peer_dirty):
                 self.adopt(peer)
@@ -984,6 +1012,7 @@ class RenderTable:
         self._tex_names = list(peer._tex_names)
         self._epoch = peer._epoch
         self._row_tuple = peer._row_tuple
+        self._row_list = None               # compared once, next frame
         self._slot_of_obj = dict(peer._slot_of_obj)
         self._shown_stale = True
         self._occlusion_index = None
@@ -1010,6 +1039,7 @@ class RenderTable:
         and anything preparing a pass outside the frame loop).
         """
         brushes = tuple(brushes)
+        self._row_list = None               # rows taken as given, next frame compares
         if not self.needs_reconcile(brushes, epoch):
             return False
         cold_dirty = epoch is None or epoch != self._epoch
@@ -1212,7 +1242,7 @@ class RenderTable:
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
 
     @_writes
-    def _refresh_in_place(self, brushes, n, epoch, dirty_objects):
+    def _refresh_in_place(self, brushes, n, epoch, dirty_objects, rows_known=False):
         """Apply a precise journal without a reconcile, when that is exact.
 
         A reconcile walks every row -- matching ids, re-reading every
@@ -1227,7 +1257,7 @@ class RenderTable:
         """
         if epoch is None or dirty_objects is None or n != self.count:
             return False
-        if tuple(brushes) != self._row_tuple:
+        if not rows_known and tuple(brushes) != self._row_tuple:
             return False
         slots = [self._slot_of_obj[obj_id] for obj_id in dirty_objects
                  if obj_id in self._slot_of_obj]

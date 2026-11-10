@@ -34,6 +34,7 @@ pytestmark = pytest.mark.qt
 @pytest.fixture
 def oracle(monkeypatch):
     monkeypatch.setattr(change_detection, 'ORACLE', True)
+    monkeypatch.setattr(change_detection, 'RAISE', True)
 
 
 @pytest.fixture

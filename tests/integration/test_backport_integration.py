@@ -43,7 +43,9 @@ def test_cull_output_feeds_the_dense_brush_pipeline():
     """The main camera consumes cull output as dense slots, then classifies/sorts them."""
     body = _render_scene_source()
     assert "slots = brush_slots" in body
-    assert "self._distance_cull_slots(" in body
+    # Through the kept result (M4): the same cull, kept while its inputs stand.
+    assert "self._kept_distance_cull(" in body
+    assert "self._distance_cull_slots(" in _read("engine/renderer/forward/renderer.py")
     assert "self._classify_brush_slots(table, slots, config)" in body
     assert "self._sort_slots_by_distance(" in body
     assert "_sort_objects" not in body

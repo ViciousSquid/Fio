@@ -213,6 +213,12 @@ peer = RenderTable()
 peer.begin_frame(brushes, epoch=1)
 configs = {id(table): _config(table), id(peer): _config(peer)}
 
+try:
+    # As EditorState holds them (M4): a list that says when its rows change.
+    from engine.row_list import RowList as _RowList        # noqa: E402
+    brushes = _RowList(brushes)
+except ImportError:                     # a tree before M4
+    pass
 _first = brushes[:len(brushes) // max(1, args.scale)]
 pos = np.array([b.get("pos", (0, 0, 0)) for b in _first], dtype=float)
 centre = pos.mean(axis=0)
@@ -447,6 +453,7 @@ def scenario(label, step, frames):
         'upload_kb': sent.get('all', 0) / frames / 1024.0,
         'uploads': calls.get('upload', 0) / frames,
         'gl_calls': gl_calls / frames,
+        'gl_by_name': {k: v / frames for k, v in sorted(calls.items())},
         'draws': (calls.get('glDrawArrays', 0) + calls.get('glDrawArraysInstanced', 0)
                   + calls.get('glDrawElements', 0)
                   + calls.get('glDrawElementsInstanced', 0)

@@ -125,6 +125,24 @@ def pytest_ignore_collect(collection_path, config):
 
 
 # ---------------------------------------------------------------------------
+# M4's change records
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_missed_change_record():
+    """With the oracle recording (``FIO_RENDER_ORACLE=record``), a test that
+    leaves a missed change record behind fails: a writer it exercised did not
+    report what it wrote (engine/change_detection.py)."""
+    from engine import change_detection
+    del change_detection.MISSES[:]
+    yield
+    misses = list(change_detection.MISSES)
+    del change_detection.MISSES[:]
+    if misses:
+        pytest.fail("missed change records (%d): %s" % (len(misses), misses[:3]))
+
+
+# ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
 

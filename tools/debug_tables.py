@@ -15,6 +15,7 @@ import zipfile
 from types import SimpleNamespace
 
 import numpy as np
+from PyQt5 import sip
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor, QFont, QPainter
 from PyQt5.QtWidgets import (
@@ -77,6 +78,11 @@ class FrozenTable:
         self.team_names = list(getattr(table, "team_names", ()))
         self.path = str(getattr(table, "path", ""))
         self.generation = int(getattr(table, "generation", 0))
+        # M4's change records: what the table says changed, and when.
+        self.versions = {name: int(getattr(table, name))
+                         for name in ("transform_version", "material_version",
+                                      "extent_version", "shown_version")
+                         if isinstance(getattr(table, name, None), int)}
 
     #: Columns a table exposes as views of another: RenderTable's centre and
     #: half-extent live in its ``bounds`` block.
@@ -131,6 +137,8 @@ def _set_text_preserve_scroll(widget, text):
     widget.setText(text)
 
     def restore():
+        if sip.isdeleted(bar):
+            return      # the window closed before this deferred restore ran
         try:
             if at_bottom:
                 bar.setValue(bar.maximum())
@@ -286,6 +294,8 @@ class RawTable(QWidget):
             return      # set_highlight scrolls to the followed row instead
 
         def restore():
+            if sip.isdeleted(bar):
+                return  # the window closed before this deferred restore ran
             try:
                 if at_bottom:
                     bar.setValue(bar.maximum())
@@ -940,10 +950,41 @@ class DebugTablesWindow(QMainWindow):
             f"frustum-culled {culled_entities:,}   "
             f"drawn {entity_candidates - culled_entities:,}\n"
             + detail_lines + "\n"
+            + self._change_lines(timings)
             + self._monster_lines(timings)
             + self._terrain_lines(timings) +
             "PASSES (inclusive)\n" + pass_lines
         )
+
+    def _change_lines(self, timings):
+        """M4: what the tables say changed (their versions) and what working
+        it out cost -- rows examined and microseconds a published frame,
+        site by site, since the last refresh. On a still frame every site
+        should read 0 rows whatever the size of the world."""
+        try:
+            from engine import change_detection
+        except ImportError:                 # a tree before M4
+            return ""
+        detect = change_detection.DETECT
+        now = {site: tuple(v) for site, v in detect.sites.items()}
+        published = int(getattr(self._game_state(), "published_frames", 0))
+        last = getattr(self, "_last_detect", None)
+        self._last_detect = (now, published)
+        render = self.render
+        versions = "  ".join(f"{k.replace('_version', '')} {v:,}"
+                             for k, v in getattr(render, "versions", {}).items())
+        lines = ["CHANGE RECORDS (M4)",
+                 f"  RenderTable   generation {int(render.generation):,}  {versions}"]
+        if last is not None:
+            frames = max(1, published - last[1])
+            for site in sorted(now):
+                rows, ns, calls = now[site]
+                old = last[0].get(site, (0, 0, 0))
+                lines.append(f"  {site:<26} {(rows - old[0]) / frames:10,.0f} rows"
+                             f"  {(ns - old[1]) / frames / 1e3:8.1f} us /frame")
+        if change_detection.ORACLE:
+            lines.append("  oracle ON: every change record is checked")
+        return "\n".join(lines) + "\n\n"
 
     def _renderer_name(self):
         """The registry name of the active renderer, or a dash before one exists."""

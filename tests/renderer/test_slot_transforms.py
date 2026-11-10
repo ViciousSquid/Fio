@@ -120,6 +120,7 @@ def test_a_still_table_is_recognised_without_looking_at_its_rows():
 def test_a_write_past_the_log_is_caught_by_the_oracle(monkeypatch):
     from engine import change_detection
     monkeypatch.setattr(change_detection, 'ORACLE', True)
+    monkeypatch.setattr(change_detection, 'RAISE', True)
     table, _brushes = _table()
     cache = SlotTransforms(table)
     cache.sync(table)

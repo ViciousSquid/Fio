@@ -707,6 +707,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._pass_memos.clear()
         self._selected_payloads.clear()
         self._distance_culls.clear()
+        self.__dict__.pop('_occlusion_kept', None)
         for vao in (self._sprite_instance_vao, self._effect_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])

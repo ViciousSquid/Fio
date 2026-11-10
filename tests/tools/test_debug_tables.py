@@ -62,7 +62,8 @@ def test_what_it_shows_is_a_copy_of_the_sampled_frame(window):
     shown = instrument.render
 
     game_state.request_swap()                 # both buffers change hands
-    game_state.get_write_state().render_table.center[0] = 999.0
+    # The next frame moves the row (through the table: M4's write path).
+    game_state.get_write_state().render_table.write_transforms([0], centre=[[999.0] * 3])
 
     assert shown.count == 1
     assert shown.center[0].tolist() != [999.0, 999.0, 999.0]

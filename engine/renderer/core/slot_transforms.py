@@ -110,7 +110,7 @@ class SlotTransforms:
                     & np.isnan(self.bounds).any(axis=1))
         missed = np.setdiff1d(np.flatnonzero(differ), np.asarray(rows, dtype=np.intp))
         if len(missed):
-            raise change_detection.MissedChange(
+            change_detection.missed(
                 "render-table rows %s changed transform without being logged"
                 % missed[:8].tolist())
 
