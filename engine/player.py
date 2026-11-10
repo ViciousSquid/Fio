@@ -31,8 +31,10 @@ from .constants import (
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
 from .constants import _UNPUBLISHED
+from . import brush_placement as _placement
 from .brush_placement import (
-    collision_shape, collision_shape_at, off_range, overridden, world_bounds,
+    collision_shape, collision_shape_at, off_range, overridden, resolved_runtime,
+    world_bounds,
 )
 from .physics import world_gravity
 
@@ -236,9 +238,9 @@ def _gather(colliders, moving):
                 # always is.
                 runtime = b.get('_aabb_runtime', _UNPUBLISHED)
                 if runtime is _UNPUBLISHED:
-                    # No table published it: the resolver finds it.
-                    brush_aabb_bounds(b)
-                    runtime = b.get('_aabb_runtime')
+                    # No table published it: the resolver finds its
+                    # transform (its box is derived by a pass that needs it).
+                    runtime = resolved_runtime(b)
                 if 'geometry' not in b and (runtime is None or not runtime[6]):
                     aabb_brushes.append(b)
                     continue
@@ -463,6 +465,13 @@ class Player:
         (brush_placement.off_range) -- in canonical order, and the
         :class:`_Reach` that says how far the player may move before a pass
         needs every one."""
+        if overridden:
+            place = self._moving_cache[4]
+            if any(key in place for key in overridden):
+                # Another source moves one of these brushes (the editor
+                # preview, a test): it keeps no travel the grid could file,
+                # so every mover is looked at, as before the broad phase.
+                return None, moving
         hull = (self.width, self.stand_height, self.depth, self.step_height)
         pads = getattr(self, '_reach_pads', None)
         if pads is None or pads[0] != hull:
@@ -478,21 +487,18 @@ class Player:
                 (z - reach) // size, (z + reach) // size)
         rows = grid._boxes()
         held = self._near_span
-        if held is None or held[0] is not rows or held[1] is not pads or held[2] != span:
+        off = _placement.off_range_version
+        if (held is None or held[0] is not rows or held[1] is not pads
+                or held[2] != span or held[4] != off):
             entries = self._span_entries(grid, pads, span)
             if entries is None:
                 return None, moving             # no cell holds it: every mover
-            held = self._near_span = (rows, pads, span, entries)
+            held = self._near_span = (rows, pads, span, entries, off)
         # Each mover filed in those cells, with the box it can reach over its
-        # travel padded by the player's pads (_cells_moving), in canonical
-        # order: those whose box holds the player.
+        # travel padded by the player's pads (_cells_moving), and each off
+        # range, in canonical order: those whose box holds the player.
         near = [brush for brush, bx0, by0, bz0, bx1, by1, bz1 in held[3]
                 if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1]
-        if off_range or overridden:
-            # Rows that may be anywhere: off their filed travel, or moved by
-            # a source that keeps no range (the editor preview, a test).
-            near = self._in_order(near + list(off_range.values())
-                                  + list(overridden.values()))
         cover = self._cover
         if cover is None:
             cover = self._cover = _Reach()
@@ -514,7 +520,7 @@ class Player:
         except (ValueError, OverflowError):
             return None                         # a NaN or infinite position
         cells = self._cells_moving(grid, pads)
-        if x0 == x1 and z0 == z1:
+        if x0 == x1 and z0 == z1 and not off_range:
             return cells.get((x0, z0), ())
         found = {}
         for cx in range(x0, x1 + 1):
@@ -522,6 +528,12 @@ class Player:
                 for entry in cells.get((cx, cz), ()):
                     found.setdefault(id(entry[0]), entry)
         place = self._moving_cache[4]
+        # A row off its filed travel (brush_placement.off_range) may be
+        # anywhere: kept whatever the player's position.
+        for brush in off_range.values():
+            if id(brush) in place:
+                found[id(brush)] = (brush, -math.inf, -math.inf, -math.inf,
+                                    math.inf, math.inf, math.inf)
         return tuple(found[key] for key in sorted(found, key=place.__getitem__))
 
     def _in_order(self, brushes):

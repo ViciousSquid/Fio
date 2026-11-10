@@ -503,6 +503,15 @@ def shared_bulk_boxes(brushes, rows):
 #: (``check_range``) and forgets them when play stops. Empty in most levels.
 off_range = {}
 
+#: Moves whenever :data:`off_range` gains or loses a brush.
+off_range_version = 0
+
+
+def note_off_range():
+    """The mover table marked a brush off range, or forgot one."""
+    global off_range_version
+    off_range_version += 1
+
 #: id -> (brush, weak ref to its source): movers and doors a streaming layer has parked
 #: (``engine.spatial.PARKED_HIDDEN_KEY``). Nothing ticks or publishes them:
 #: their mover table keeps the state it last resolved them to and the tick

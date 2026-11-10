@@ -409,7 +409,15 @@ def _brush_aabb_runtime(brush, placement, sig):
     if half is not None:
         hx, hy, hz = half
         if runtime[6]:
-            hx, hy, hz = placement.turned_half(hx, hy, hz, runtime[3:6], runtime[6])
+            # Turned once per transform, shared with the collision frame
+            # (brush_placement.turn_of; turned_half's arithmetic, in its
+            # order: the same bits).
+            turn = placement.turn_of(brush, runtime)
+            if turn is not None:
+                (r00, r01, r02), (r10, r11, r12), (r20, r21, r22) = turn
+                hx, hy, hz = (abs(r00) * hx + abs(r01) * hy + abs(r02) * hz,
+                              abs(r10) * hx + abs(r11) * hy + abs(r12) * hz,
+                              abs(r20) * hx + abs(r21) * hy + abs(r22) * hz)
         cx, cy, cz = runtime[0], runtime[1], runtime[2]
     else:
         cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
@@ -420,9 +428,8 @@ def _brush_aabb_runtime(brush, placement, sig):
     bounds = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
     # The transform it was placed by, kept with it (brush_aabb_runtime), and
     # the float64 box world_bounds reads under the same key -- consistent
-    # with this transform, whatever a mover table published before. The
-    # rotation is not worked out here: its slot is emptied (unknown).
-    brush.pop('_aabb_turn', None)
+    # with this transform, whatever a mover table published before. (A
+    # rotation kept from another transform is told apart by turn_of.)
     brush['_aabb_runtime'] = runtime
     brush['_world_bounds'] = (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
     brush['_aabb_bounds'] = bounds          # publication order: see above

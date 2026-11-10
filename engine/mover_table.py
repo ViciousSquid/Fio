@@ -175,8 +175,11 @@ def _withdraw(brushes):
     _withdraw_slots(brushes)
     off_range = brush_placement.off_range
     if off_range:
+        count = len(off_range)
         for brush in brushes:
             off_range.pop(id(brush), None)
+        if len(off_range) != count:
+            brush_placement.note_off_range()
     asleep = brush_placement.asleep
     if asleep:
         gone = False
@@ -675,6 +678,7 @@ class _Group:
         lo, hi, turns = filed[0], filed[1], filed[2]
         if angle and not turns:
             brush_placement.off_range[id(brush)] = brush
+            brush_placement.note_off_range()
             return
         if centre is not None:
             points = (centre,)
@@ -689,6 +693,7 @@ class _Group:
         for point in points:
             if not all(lo[i] <= point[i] <= hi[i] for i in range(3)):
                 brush_placement.off_range[id(brush)] = brush
+                brush_placement.note_off_range()
                 return
 
     def _authored_direction(self, row):
