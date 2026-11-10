@@ -1,9 +1,8 @@
-# Renderer M3: dirty-range instance uploads — profiling first
+# Renderer M3: change-driven box instance uploads
 
-Status: **profiling only.** No renderer change has been made for M3. This
-records what the renderer uploads per frame and where its CPU goes today, so
-that M3 is designed against measurements rather than added as another
-rendering layer.
+Status: **implemented** for box brush instances (the lit, textured and shadow
+passes): see *M3 as built* below. The profiling that designed it follows,
+unchanged, as it was recorded before any renderer change.
 
 Measured on the Stage 2 head (immutable convex geometry, transform-only
 movement), CPython 3.13, llvmpipe (software GL), 640×360, one pinned core,
@@ -75,3 +74,80 @@ frame adds 128 bytes per moved brush.
 
 Reproduce: `xvfb-run -a python tools/profile_frame_uploads.py BigWorld_streaming_test.json`
 (and `_SHOWCASE.json --movers 32`).
+
+
+## M3 as built
+
+Commits on `3.1.0.0611_CANARY`: the benchmark tool
+(`tools/bench_instance_uploads.py`), the slot-transform cache, the
+per-pass instance streams, and this record.
+
+### The choice: change-driven attributes, not slot-resident transforms
+
+The outline above proposed moving each box's matrices into a slot-indexed
+buffer texture and fetching them in the vertex shader (M2's pattern for
+angled brushes). For boxes that multiplies the GPU's reads: an instance
+attribute is fetched once per instance, a buffer-texture fetch once per
+*vertex* -- seven texels for each of a cube's 36 vertices in the lit pass,
+252 fetches where the attributes cost one instance record. On a tiled mobile
+GPU that is the wrong trade for a CPU saving that can be had without it. So
+the instance layout, the shaders and the draw calls are unchanged; what
+changed is when the rows are built and uploaded.
+
+### What was built
+
+* **Every row's matrices kept by change** (`engine/renderer/core/
+  slot_transforms.py`). Per render table, the model and normal matrices of
+  every row and the two columns they are built from (`bounds`, `rot`). A
+  reader first tests both columns with whole-column equality (~8 µs for
+  BigWorld's 3,604 rows; the row-wise `!= ... any(axis=1)` it replaced cost
+  118) and only on a difference finds and rebuilds the changed rows; a
+  reconcile that renumbers the slots rebuilds all. Rebuilt rows are stamped
+  with the cache's version. `_frame_transforms` gathers from it.
+* **One instance stream per pass** (`engine/renderer/forward/instancing.py`,
+  `BrushStream`): its own buffer, vertex array and CPU mirror, keyed by the
+  pass, the view (the main view or a portal's) and the pass's use within the
+  frame (the textured and lit passes draw more than one brush group). Each
+  frame:
+  * nothing changed -- the same items, payload and spare, and the table's
+    matrices at the version the buffer last matched -- returns at once:
+    **no row is built and no byte uploaded**;
+  * the same items with some rows moved: only the rows the stamps name, the
+    rows another table's frame wrote meanwhile, and rows whose payload
+    changed (a selection, a colour) are rebuilt and uploaded, in coalesced
+    ranges;
+  * the items changed (the visible set moved, a brush was shown or hidden):
+    the rows before the first changed item are kept unless they changed;
+    everything from it on is rewritten;
+  * a stream under 1,024 rows, or one most of which changes, is rewritten
+    whole and uploaded in one call, as before M3 (comparing costs more than
+    it saves there, measured).
+* **The two double-buffered render tables** each keep an entry per stream
+  (the version of that table's matrices the buffer last matched, and the
+  rows the other table's frame wrote since), so alternating tables upload
+  only what differs between them.
+* **The shadow pass** keeps a stream per shadow slot; with its existing
+  signature cache a still light neither renders nor uploads.
+* **Lifecycle.** `cleanup()` deletes every stream and drops the matrix
+  caches; a new renderer (renderer switching, a recreated context) starts
+  empty. A play/editor transition, undo/redo, creation or deletion reaches
+  the renderer as a table reconcile (new generation: everything rebuilt
+  once) or a row-local refresh (the rows that changed); a Big World park or
+  unpark as a visibility change (the items change).
+
+### Validation
+
+`tests/visual/test_box_instance_streams.py` (GL): through 40 frames of
+random moves, turns, resizes, selection changes, parks and unparks, added
+and deleted brushes, camera turns and two render tables taking turns, in the
+textured and the solid display modes, the long-lived renderer draws exactly
+what a renderer whose streams are rebuilt from scratch every frame draws,
+pixel for pixel, and every stream's buffer *on the GPU* (read back) holds
+exactly the rows a fresh pack would, to the bit. A still world uploads no
+instance byte, with and without shadows; a mover in a 1,500-box world
+uploads its one row; a changed selection its rows; cleanup deletes every
+buffer and a new renderer draws the same picture; two renderers in turn keep
+their own streams. `tests/renderer/test_slot_transforms.py`: the kept
+matrices are `model_matrices`' to the bit through moves, turns, resizes and
+reconciles. GL renderer and visual tiers: all pass but the three
+`test_portal_fade` cases, which fail the same way on the accepted baseline.
