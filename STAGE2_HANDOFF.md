@@ -1,19 +1,175 @@
 # Fio 3.1 brush model, Stage 2: handoff
 
-State at handoff (2026-11-10, after the third session; read *Third
-session* first). **Stage 2 is accepted for progression to M3** (the user,
-2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
-**M3 (change-driven GPU instance uploads for box brushes) is implemented**,
-**M3.1** (what the passes derive kept by change, accepted) and **M4**
-(change records from the tables to GL, complete: the user's acceptance
-condition -- Office and the all-moving mover workloads no slower than
-M3.1 -- met, see the M4 section); see the M4, M3.1 and M3 sections below,
-`docs/renderer-m4.md` and `docs/renderer-m3-profiling.md`. **Next: the
-whole-engine performance audit, then M5 chosen from it** (ms-scale costs,
-not microsecond tuning: the user, 2026-11-10). The earlier sections are
-kept as history.
+State at handoff (2026-11-10, after the fourth session; read *Fourth
+session* first). **Stage 2 is accepted** (`docs/brush-model-stage2.md`
+§11.10); **M3**, **M3.1** and **M4** are complete (M4 on the user's
+condition: Office and the all-moving mover workloads no slower than M3.1;
+see the M4 section, `docs/renderer-m4.md`, `docs/renderer-m3-profiling.md`).
+**The whole-engine performance audit is under way: three findings fixed,
+the rest listed below with what to measure next; M5 is to be chosen from
+it.** The user wants millisecond-scale costs found and fixed, not
+microsecond tuning. Earlier sections are kept as history.
 
-## Third session: state published once, the grid's movers, parked movers (read this first)
+## Fourth session: M4 closed, the audit begun, archives read in place (read this first)
+
+### Commits on `3.1.0.0611_CANARY` this session (all pushed)
+
+* `a645e23`, `2f8c1f9` -- M4.5: small visible sets compared as bytes (the
+  Office logic regression); the mover publication level with M3.1 (the
+  column seal a test-time check, `FIO_SEAL_COLUMNS`; slices and flat-index
+  writes). Docs: `fe79057`, `4e1be4e`.
+* `7dc9727` -- FIRE/ORB effect animations loaded when a map's effects use
+  them, one variant at a time (audit finding 2).
+* `7d99429` -- logic ticks paced to their due time (audit finding 1).
+* `1ed56dd` -- category archives and game packages read in place, never
+  extracted (the user's report). `65eced8` -- GC settled at load and play
+  changes (audit finding 3). `d477e97` -- SysMon smaller; collapsed, the
+  frame-time graph. Then the visgroups/pacing-test fixes and
+  `tools/audit_play.py` with this section (see `git log`).
+
+### The audit: how to run it
+
+`tools/audit_play.py MAP --seconds N --json OUT` (under `xvfb-run -a`)
+plays a map in the real editor as shipped -- logic thread free-running at
+60 Hz, monster AI on its thread, painting at up to 60 Hz with scripted
+input -- and reports load and play-entry time, memory (and a timeline), CPU
+per thread, tick cost and pacing, paint cost and rate, and GC pauses by
+generation. `--ready FILE` lets `py-spy` (installed, 0.4.3) attach for the
+measured window: `py-spy record --pid P --threads --gil -d 15 -f raw`.
+Run one X-display tool at a time: two `xvfb-run -a` started together can
+break each other's X connection. Paint numbers here are llvmpipe's (no GPU
+in this container or on GitHub's hosted runners); GL-bound costs need the
+Snapdragon (a self-hosted runner on it, started from the logged-in desktop,
+not as a service, would run the gate and the GL tier there; not set up).
+
+Seven maps measured (12 s each, before the fixes below): the logic thread
+uses 2-5 % of a core and the monster AI at most 3 %; ticks cost 0.14-0.32
+ms (p50); the main (paint) thread 0.46-0.9 cores; llvmpipe the rest.
+
+### Findings fixed
+
+1. **Logic tick pacing** (`7d99429`). The loop slept 0.9 x (a tick - this
+   iteration's work) whatever the accumulator held, so a tick due soon was
+   overslept: ticks landed up to ~14 ms off their 60 Hz slots at p95 on
+   every map (no interpolation between ticks: uneven motion). Now it sleeps
+   to the next tick's due time: p95 13.9 -> 4.0 ms (MonsterTest), 14.2 ->
+   4.0 (`_SHOWCASE`). The remaining ~4 ms is the logic thread waiting for
+   the GIL while the main thread paints; a 1 ms switch interval only took
+   it to ~3 ms at a 1-2 % paint cost (not adopted).
+2. **Effect textures at start-up** (`7dc9727`). All ten FIRE/ORB GIFs (286
+   frames, 152.5 MB of RGBA textures, ~0.5 s) were decoded and uploaded when
+   the renderer started, whatever the map. Now per variant, when a map holds
+   an effect using it (`ensure_effect_frames`). Start-up 1.42 -> 0.91-1.12
+   s; resident memory after MainWindow 584 -> 431 MB.
+3. **GC pauses in play** (`engine/gc_policy.py`). BigWorld's world is ~138k
+   tracked objects; a full (generation 2) collection during play took 46 ms.
+   `gc_policy.settle()` -- unfreeze, collect, freeze -- now runs after a
+   level loads, as play starts and as it stops (each under the loading bar
+   or at Stop): 30 s of BigWorld play, gen-2 collections 1 (46 ms) -> 0;
+   longest pause 0.6 ms (gen 0); 137,190 objects frozen, 372 tracked; load
+   +0.05 s, play entry +0.04 s. Memory levels off in play (516 -> 524 MB
+   over 28 s): the growth seen earlier was play set-up, not a leak.
+   Trade-off: an object that was frozen and later becomes part of an
+   unreachable reference cycle waits for the next settle (the next load or
+   play change) instead of the next collection; anything freed by its
+   reference count goes at once, as before. A closing editor window calls
+   `gc_policy.release()` so its world is collectable (the test sessions'
+   leak check found that). Tests: `tests/engine/test_gc_policy.py`.
+
+Also measured and **not built**: the monster AI stepped on alternate logic
+ticks instead of its own 30 Hz thread (the user's idea, measured first on
+MonsterTest and `_SHOWCASE`): CPU, tick jitter, late ticks and paint the
+same in both; an update costs 0.05-0.2 ms. No benefit.
+
+### Findings open (measure, then decide M5)
+
+* **More eager loading at start-up**: `QtGameView._preload_assets` uploads
+  every texture in `assets/textures` (45 textures, 41 MB) and
+  `load_all_sprite_textures` every sprite, whatever the map; 8 shadow cube
+  maps (27 MB) are allocated whether or not a light casts shadows. The same
+  treatment as finding 2 would apply (load what the map uses).
+* **BigWorld paints at ~5 fps under llvmpipe**, the main thread the
+  bottleneck (0.9 cores vs llvmpipe 0.4): profile Python against driver time
+  (`py-spy --native`) before concluding anything; the GPU split needs the
+  Snapdragon.
+* **Portal_Test takes 0.9 s to enter play** (other maps 0.06-0.35 s).
+* **The GIL**: tick p99 2-3.5 ms against p50 0.14-0.32 -- the logic thread
+  preempted while the main thread paints in calls that hold the GIL
+  (PyQt painting?). `py-spy --gil` would say which.
+* SysMon's VRAM line reads NVIDIA/ATI-only memory queries without checking
+  the extensions: garbage on Mesa (and likely Adreno).
+* The dense mover publication's thresholds were measured on this x86 host
+  only: rerun `tools/bench_mover_crossover.py` on the Snapdragon.
+
+### Category archives read in place (the user's report)
+
+`assets/<category>.fiopak` (editor, sprites, textures, models, fonts,
+music, sounds) were extracted to loose files at start-up (by design, with a
+test asserting it). Now nothing is extracted: `engine/asset_archives.py`
+indexes the archives and serves members by their usual paths
+(`asset_bytes`, `asset_source` for Pillow, `asset_exists`, `asset_isdir`,
+`asset_listdir`, `asset_files`); `engine/asset_qt.py` builds Qt images,
+pixmaps, icons and fonts from them. Every loader goes through these: the
+renderer's textures, models (OBJ, MTL, GLB), GIF animations, terrain,
+sprites, HUD fonts and images, the editor's fonts, icons and thing sprites,
+texture sizes in the surface inspector, the asset browser (thumbnails,
+folder listing, and a folder tree that shows archive-only folders). Loose files still override; a member is also found
+case-insensitively; archives are opened per read, so a repack can replace
+one while the editor runs. Audio kept its own readers. Verified: an
+archive-only installation starts and renders `_SHOWCASE` the same as the
+loose one, with no load errors and no file written.
+
+**Game packages are read in place too** (`editor/package_session.py`).
+Tools -> Play Game Package used to extract the `.fiopak` to a temporary
+folder. A `PackageSession` now checks it first (the player's own reader --
+no bundled plugin code, a manifest naming a start map -- member names that
+cannot climb out, the player's per-entry and total size budgets) and reads
+the start map, the maps a level change names, and cutscenes
+(`CutsceneRuntime._package_cutscene`, via `logic.package`) straight from the
+zip, opened per read. Its `assets/...` members are served by
+`asset_archives.set_package`, after the project's loose files and category
+archives (so a project asset of the same name wins, as before). Nothing is
+written; the package is never modified.
+
+**Android player** (`player/`, not changed this session): its reader
+(`player/fiopak.py`) already streams members from the zip and never
+extracts. The one disk write is `player/platform/documents.py`
+`copy_package`: a package picked through Android's document picker is copied
+whole into app storage before it is opened (a content-provider stream is
+not seekable; a ZIP needs to seek). The user asked for the player to read
+packages without that copy: next task, separate from this session's work
+(open the picked file's descriptor directly when it is seekable, or read it
+into memory with `FioPackage.from_bytes`; the 1 GiB import limit bears on
+which).
+
+### Tests at handoff
+
+* Full suite with the oracle recording, on the archive, package, GC and
+  SysMon code: 7,112 passed, 175 skipped, 12 failed, 3 errors. Of those:
+  the 4 documented environment failures (the position window, three
+  `test_portal_fade` cases); 8 tests (and 3 teardown errors) in
+  `tests/editor/test_visgroups_cordon.py`, from imports a script had put
+  inside `editor/visgroups_window.py`'s docstring -- fixed, 12 of 12 pass;
+  and the suite rule against `SimpleNamespace` owners, broken by
+  `tests/engine/test_logic_tick_pacing.py` -- fixed (it now drives the real
+  `LogicThread`), the integrity module passes (1,136). The editor tier
+  rerun after both fixes: 2,268 passed, 2 failed (the position window, and
+  the player-start focus test -- timing-sensitive: it passes alone, here
+  and before this session).
+* **The play-cycle memory guard** (`tests/e2e/test_play_cycles.py`, run on
+  its own) fails: 631-647 KiB retained over 30 Play sessions against a 512
+  KiB limit. It fails the same on `fe79057`, before this session (652 KiB),
+  and with the GC settle disabled: not caused here. The largest retainer is
+  `json/decoder.py` (4,483 objects, 230 KiB), then `debug_console.py` log
+  lines: worth a look in the audit.
+
+### SysMon
+
+0.9 of its former size (360 x 248), text at its former size; collapsing it
+leaves the title bar and the frame-time graph with "Frame time: N ms" at its
+foot (was a strip); a collapsed panel no longer takes clicks below it.
+
+## Third session: state published once, the grid's movers, parked movers
 
 Full record: `docs/brush-model-stage2.md` §11.8 (published once; the grid's
 movers, gathered once), §11.9 (parked movers) and §11.10 (the gate, the
