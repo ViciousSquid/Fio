@@ -78,9 +78,10 @@ Reproduce: `xvfb-run -a python tools/profile_frame_uploads.py BigWorld_streaming
 
 ## M3 as built
 
-Commits on `3.1.0.0611_CANARY`: the benchmark tool
-(`tools/bench_instance_uploads.py`), the slot-transform cache, the
-per-pass instance streams, and this record.
+Commits on `3.1.0.0611_CANARY`: `d91d8e0` the benchmark tool
+(`tools/bench_instance_uploads.py`, extended in `071d3d0`), `6733997` the
+slot-transform cache, `d3e7e43` the per-pass instance streams, `8e00359`
+their coalescing rule, and this record (`3a59395` and after).
 
 ### The choice: change-driven attributes, not slot-resident transforms
 
@@ -151,3 +152,84 @@ their own streams. `tests/renderer/test_slot_transforms.py`: the kept
 matrices are `model_matrices`' to the bit through moves, turns, resizes and
 reconciles. GL renderer and visual tiers: all pass but the three
 `test_portal_fade` cases, which fail the same way on the accepted baseline.
+
+### Measured (x86 VM, llvmpipe; three interleaved rounds against the accepted Stage 2 baseline)
+
+`tools/bench_instance_uploads.py MAP --no-raster` (draw calls stubbed, so
+`render_scene` times the CPU side alone -- Python, GL calls, uploads -- which
+is what the target pays on its CPU; llvmpipe would otherwise add the GPU's
+rasterising to it). CPU is the median of per-round medians, ratio to the
+baseline. Instance bytes and upload calls a frame are exact.
+
+BigWorld (3,604 boxes):
+
+| Scenario | CPU ms | ×base | Instance bytes / frame | Uploads |
+|---|---|---|---|---|
+| still | 1.03 → 0.69 | 0.67 | 450.5 KB → **0** | 1 → 0 |
+| frustum-culled turning camera | 0.72 → 0.56 | 0.77 | 129.8 → 128.2 KB | 1 → 1 |
+| one mover | 1.33 → 0.95 | 0.71 | 450.5 → 0.1 KB | 1 → 1 |
+| 64 movers | 1.31 → 0.91 | 0.69 | 450.5 → 8 KB | 1 → 1 |
+| 512 movers | 1.06 → 0.90 | 0.85 | 450.5 → 64 KB | 1 → 1 |
+| a selection change | 1.33 → 0.87 | 0.66 | 450.5 → 0.2 KB | 1 → 1 |
+| 32 edits a frame | 1.24 → 0.91 | 0.73 | 450.5 → 4 KB | 1 → 1 |
+| two tables in turn, 64 movers | 1.29 → 0.93 | 0.72 | 450.5 → 8 KB | 1 → 1 |
+
+`_SHOWCASE` (85 brushes, 68 boxes; streams of a few hundred rows):
+
+| Scenario | CPU ms | ×base (p50 / min) | Instance bytes / frame | Uploads |
+|---|---|---|---|---|
+| still | 3.30 → 2.70 | 0.82 / 0.73 | 28.6 KB → **0** | 3 → 0 |
+| turning camera | 2.33 → 1.76 | 0.76 / 0.77 | 7.0 → 1.3 KB | 2.2 → 0.3 |
+| one mover | 3.37 → 3.18 | 0.94 / 1.01 | 28.6 → 22.1 KB | 3 → 1 |
+| 64 movers (64 of 68 boxes) | 2.67 → 3.39 | 1.27 / 1.04 | 28.6 → 28.6 KB | 3 → 3 |
+| every box moving | 3.21 → 3.36 | 1.05 / 0.86 | 28.6 → 28.6 KB | 3 → 3 |
+| a selection change | 3.54 → 3.09 | 0.87 / 0.91 | 28.6 → 0 KB | 3 → 0 |
+| 32 edits a frame | 3.40 → 3.21 | 0.94 / 0.88 | 28.6 → 26.0 KB | 3 → 2.2 |
+| two tables in turn | 2.52 → 2.66 | 1.06 / 1.05 | 28.6 → 28.4 KB | 3 → 3 |
+
+Timed in the frame (the instance work alone: matrices and streams, two
+alternations), `_SHOWCASE` costs 135–148 µs against 258–290 on a still frame,
+~310 against 241–310 with one mover, and 30–70 µs more than the baseline
+when nearly every box moves every frame (change detection, and the frame's
+one rebuild of the moved rows' matrices) -- ~2 % of its 3.2 ms CPU frame,
+at the same bytes. BigWorld's instance work is lower in every case.
+
+GL calls a frame: unchanged (±3). Python calls a frame: fewer on still
+frames (BigWorld 805 → 732), up to ~100 (BigWorld) or ~300 (`_SHOWCASE`)
+more when rows change. Memory the renderer keeps for box instances (stream
+mirrors and kept matrices, against the old staging and matrix buffers):
+BigWorld 0.80 → 1.14 MB (1.75 MB with both double-buffered tables' matrices),
+`_SHOWCASE` 36 → 133 KB; the frames' allocation peak falls (BigWorld 640 →
+490 KB). Each stream's GPU buffer is the size of its mirror.
+
+The production path (`tools/perf_gate.py --probes frames,gameplay`, base the
+accepted baseline): `render_scene` frames 0.95–0.99 (BigWorld moving 0.96,
+faster); gameplay frame and paint on BigWorld, MonsterTest, Office and
+`_SHOWCASE` 0.95–1.05, none significant over seven rounds (a first
+five-round run flagged `gameplay_big_logic_ms` at 1.024, p .028 -- the logic
+thread, which M3 does not touch; 0.99 on the re-run).
+
+### Remaining limitations
+
+* **A changed visible set re-uploads from its first change.** Streams hold
+  the visible items compacted, so a camera turn, a cull or a brush shown or
+  hidden shifts every row after the first changed item; those rows go up
+  again (BigWorld's turning camera: ~128 KB a frame, as before M3, at less
+  CPU). Item-stable layouts need either GPU-side culling (vertex work for
+  every culled instance) or an index indirection (the per-vertex fetches
+  rejected above); per-cell streams, or base-instance draws on GL 4.2
+  hardware, are the options left.
+* **Coalescing favours fewer calls over fewer bytes.** One `_SHOWCASE`
+  mover's faces, spread through a few hundred rows, go up as one 22 KB call
+  rather than six 128-byte ones.
+* **Small maps pay a little for change detection** when nearly everything
+  moves every frame (+30–70 µs on `_SHOWCASE`, above).
+* **Sprites, models and effects** still repack their instance buffers every
+  frame; M3 covers box brushes. (Absent from the maps above.)
+* **`MoverTable.publish`** still writes every mover's and door's row into
+  the render table every frame; the kept matrices' equality test sees the
+  unchanged values, so nothing is rebuilt or uploaded, but the writes remain.
+* **Nothing is measured on the Snapdragon 8cx Gen 3 / Adreno 690 target**,
+  where the balance of call cost, upload bandwidth and Python speed differs;
+  the thresholds (`STREAM_GAP_ROWS`, `STREAM_MAX_RANGES`) were set from this
+  VM's measurements.

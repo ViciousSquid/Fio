@@ -3,8 +3,9 @@
 State at handoff (2026-11-10, after the third session; read *Third
 session* first). **Stage 2 is accepted for progression to M3** (the user,
 2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
-M3 (change-driven GPU instance uploads) is recorded in
-`docs/renderer-m3-profiling.md`. The earlier sections are kept as history.
+**M3 (change-driven GPU instance uploads for box brushes) is implemented**;
+see the M3 section below and `docs/renderer-m3-profiling.md`. The earlier
+sections are kept as history.
 
 ## Third session: state published once, the grid's movers, parked movers (read this first)
 
@@ -106,7 +107,38 @@ unchanged (identical calls; ticks within noise).
 * Everything on the target hardware, including `Player.MOVER_NEAR_FROM`
   (3) and `LEG_COUNT_LIMIT`.
 
-### M3 (in progress; see `docs/renderer-m3-profiling.md` for its record)
+### M3: change-driven box instance uploads (implemented; record in `docs/renderer-m3-profiling.md`)
+
+* Commits: `d91d8e0`/`071d3d0` tools (`tools/bench_instance_uploads.py`:
+  eight scenarios, uploads, GL and Python calls, memory, `--no-raster` for
+  the CPU side alone); `6733997` every render-table row's matrices kept by
+  change (`engine/renderer/core/slot_transforms.py`); `d3e7e43` one instance
+  stream per pass, view and use (`instancing.BrushStream`), uploading only
+  rows that changed; `8e00359` small streams patched too, uploads coalesced
+  by call cost; the docs.
+* The instance layout, shaders and draw calls are unchanged: slot-resident
+  transforms in a buffer texture were rejected (seven texel fetches per
+  vertex, 252 per cube, against one attribute read per instance).
+* BigWorld: a still frame uploads **0** instance bytes (was 450.5 KB); one
+  mover 0.1 KB, 64 movers 8 KB, 512 movers 64 KB, a selection 0.2 KB, 32
+  edits 4 KB, two tables in turn 8 KB; the CPU side of `render_scene`
+  0.66–0.85× the accepted baseline in every scenario. `_SHOWCASE`: still and
+  selection 0 bytes (was 28.6 KB); CPU at or below the baseline except when
+  nearly every box moves every frame (+30–70 µs, ~2 %). frames/gameplay gate:
+  the same or faster.
+* Validation: `tests/visual/test_box_instance_streams.py` (pixel parity with
+  a full rebuild through random edits, GPU buffers read back equal to a
+  fresh pack, zero-byte still frames with and without shadows, a mover's and
+  a selection's own rows, cleanup and renderer switching);
+  `tests/renderer/test_slot_transforms.py` (bit-exact matrices).
+* Limitations (in the record): a changed visible set re-uploads from its
+  first change (a turning camera, as before, at less CPU); coalescing
+  favours fewer calls; sprites, models and effects still repack per frame;
+  `MoverTable.publish` still writes every mover's row each frame; nothing
+  measured on the target.
+* Next: entity instance buffers (sprites, models, effects) the same way;
+  `MoverTable.publish` change-driven; an item-stable layout for camera
+  motion (per-cell streams); everything on the Snapdragon 8cx Gen 3.
 
 Change-driven GPU instance uploads. Start from
 `docs/renderer-m3-profiling.md` (profiling only; nothing built): a still
@@ -473,6 +505,21 @@ tree, every scenario; or interleaved over several trees:
 taskset -c 3 python tools/bench_player_table.py ../fio-stage1 --kind all
 python tools/bench_player_table.py ../fio-head --trace /tmp/a.json && python tools/bench_player_table.py . --trace /tmp/b.json && cmp /tmp/a.json /tmp/b.json
 python tools/perf_gate.py --base ../fio-stage1 --head . --rounds 5 --core 3 --probes movers,player,aabb,table --json gate_mpat.json
+```
+
+M3's instance uploads, one tree (draws stubbed: the CPU side alone), and
+upload bytes, GL calls, Python calls and memory; compare against a worktree
+of `bee6c67` (the accepted baseline), interleaved and pinned:
+
+```bash
+xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 taskset -c 3 python tools/bench_instance_uploads.py BigWorld_streaming_test.json --no-raster --tree .
+```
+
+M3's GL tests need a real context (the offscreen Qt platform cannot make
+one, and the tests then skip):
+
+```bash
+xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 python -m pytest -q -p no:cacheprovider tests/visual/test_box_instance_streams.py tests/renderer
 ```
 
 Parked movers, one tree (HEAD and a tree before `fd5118b` to compare):
