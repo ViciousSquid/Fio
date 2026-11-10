@@ -1,0 +1,329 @@
+"""Per-frame GPU instance uploads, GL calls and render CPU (renderer M3).
+
+    xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 \\
+        python tools/bench_instance_uploads.py MAP [--tree PATH] [--json OUT]
+
+Renders a map's brushes through ``ForwardRenderer.render_scene`` (lit mode,
+textured display) from the dense render table, the way the editor and the
+game do, in these scenarios:
+
+* ``still``: nothing changes;
+* ``camera``: the camera orbits a little every frame (the visible set and
+  its order change);
+* ``one_mover``: one box brush moves every frame (runtime transform
+  published into the table, as the mover table does);
+* ``movers64`` / ``movers512``: 64 / 512 box brushes move every frame;
+* ``selection``: the selected brush alternates between two every frame;
+* ``editing``: 32 brushes are edited every frame (journalled authored moves
+  re-read by the table: high-churn editing);
+* ``alternating``: two render tables of the same brushes take turns, as the
+  double-buffered render state does, with 64 movers moving.
+
+For each: ``render_scene`` p50 and minimum (ms), the bytes and calls a frame
+uploads to instance buffers (any buffer upload made from
+``engine/renderer/forward/instancing.py``) and to every buffer, the GL calls
+a frame (the common entry points, wrapped), Python calls a frame (cProfile),
+and the memory the frames allocate and keep (tracemalloc).
+
+Run trees interleaved, pinned to one core (``taskset -c 3``), and compare.
+"""
+import argparse
+import collections
+import cProfile
+import json
+import math
+import os
+import pstats
+import statistics
+import sys
+import time
+import tracemalloc
+import traceback
+
+ap = argparse.ArgumentParser()
+ap.add_argument('map')
+ap.add_argument('--tree', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+ap.add_argument('--frames', type=int, default=60)
+ap.add_argument('--size', default='640x360')
+ap.add_argument('--only', default='')
+ap.add_argument('--json')
+args = ap.parse_args()
+tree = os.path.abspath(args.tree)
+os.chdir(tree)
+sys.path.insert(0, tree)
+sys.path.insert(0, os.path.join(tree, 'tools'))
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+
+import glm                                            # noqa: E402
+import numpy as np                                    # noqa: E402
+import OpenGL.GL as gl                                # noqa: E402
+import bench_geo_passes as passes                     # noqa: E402
+from bench_brush_model import _raw                    # noqa: E402
+from engine import brush_placement as bp              # noqa: E402
+from engine.constants import RENDER_MODE_LIT          # noqa: E402
+from engine.entity_table import EntityTable           # noqa: E402
+from engine.render_table import RenderTable           # noqa: E402
+from engine.renderer.forward import ForwardRenderer   # noqa: E402
+
+width, height = (int(v) for v in args.size.split('x'))
+keep = passes._context(width, height)
+
+# -- GL accounting -------------------------------------------------------------
+UPLOADS = ('glBufferData', 'glBufferSubData')
+COUNTED = UPLOADS + (
+    'glDrawArrays', 'glDrawArraysInstanced', 'glDrawElements',
+    'glDrawElementsInstanced', 'glMultiDrawElements', 'glBindVertexArray',
+    'glBindBuffer', 'glBindTexture', 'glUseProgram', 'glUniformMatrix4fv',
+    'glUniformMatrix3fv', 'glUniform1f', 'glUniform1i', 'glUniform3f',
+    'glUniform4f', 'glUniform3fv', 'glTexBuffer', 'glActiveTexture',
+    'glPolygonMode', 'glEnable', 'glDisable', 'glVertexAttribPointer',
+    'glVertexAttribIPointer', 'glEnableVertexAttribArray')
+state = {'on': False, 'calls': collections.Counter(), 'bytes': collections.Counter()}
+
+
+def _instance_site():
+    for frame in reversed(traceback.extract_stack(limit=8)[:-2]):
+        if '/engine/renderer/' in frame.filename:
+            return frame.filename.endswith('instancing.py')
+    return False
+
+
+def _wrap(module, name):
+    real = getattr(module, name, None)
+    if real is None:
+        return
+
+    def wrapped(*a, **k):
+        if state['on']:
+            state['calls'][name] += 1
+            if name in UPLOADS:
+                size = 0
+                for v in a:
+                    if hasattr(v, 'nbytes'):
+                        size = int(v.nbytes)
+                if name == 'glBufferData' and len(a) > 1 and isinstance(a[1], int):
+                    size = int(a[1])
+                if name == 'glBufferSubData' and len(a) > 2 and isinstance(a[2], int):
+                    size = int(a[2])
+                state['bytes']['all'] += size
+                state['calls']['upload'] += 1
+                if _instance_site():
+                    state['bytes']['instance'] += size
+                    state['calls']['instance_upload'] += 1
+        return real(*a, **k)
+    setattr(module, name, wrapped)
+
+
+for _name in COUNTED:
+    _wrap(gl, _name)
+# The instance attribute re-pointing goes through the raw entry point.
+from engine.renderer.forward import instancing as _instancing   # noqa: E402
+_real_raw = _instancing._raw_vertex_attrib_pointer
+
+
+def _raw_counted(*a):
+    if state['on']:
+        state['calls']['glVertexAttribPointer'] += 1
+    return _real_raw(*a)
+
+
+_instancing._raw_vertex_attrib_pointer = _raw_counted
+
+# -- the scene -----------------------------------------------------------------
+renderer = ForwardRenderer(None)
+renderer.shadows_enabled = False
+renderer.set_grid(4096, 64)
+renderer.set_sprite_textures({})
+brushes = json.loads(json.dumps(_raw(tree, args.map)['brushes']))
+etable = EntityTable()
+hidden = etable.begin_frame([], epoch=1)
+
+
+def _config(table):
+    _mask, slots = table.shown()
+    return {"render_mode": RENDER_MODE_LIT, "brush_display_mode": "Textured",
+            "play_mode": False, "grid_visible": False,
+            "camera_distance_cull": False, "shadows_enabled": False,
+            "render_table": table, "all_brush_slots": slots.astype(np.int32),
+            "entity_table": etable,
+            "visible_thing_slots": np.arange(0, dtype=np.int32),
+            "thing_hidden": hidden, "all_brushes": brushes, "all_things": []}
+
+
+table = RenderTable()
+table.begin_frame(brushes, epoch=1)
+peer = RenderTable()
+peer.begin_frame(brushes, epoch=1)
+configs = {id(table): _config(table), id(peer): _config(peer)}
+
+pos = np.array([b.get("pos", (0, 0, 0)) for b in brushes], dtype=float)
+centre = pos.mean(axis=0)
+extent = float(np.ptp(pos[:, [0, 2]], axis=0).max()) or 512.0
+projection = glm.perspective(glm.radians(70.0), width / height, 1.0, 40000.0)
+
+
+def _view(angle):
+    eye = glm.vec3(centre[0] + 0.9 * extent * math.sin(angle),
+                   centre[1] + 0.45 * extent,
+                   centre[2] + 0.9 * extent * math.cos(angle))
+    return glm.lookAt(eye, glm.vec3(*centre), glm.vec3(0, 1, 0)), eye
+
+
+source = bp.RuntimeOverrides()
+bp.register_runtime(source)
+boxes = [i for i, b in enumerate(brushes) if not b.get('geometry')]
+for i in boxes[:512]:
+    brushes[i]['is_mover'] = True
+homes = {i: list(brushes[i]['pos']) for i in boxes[:512]}
+camera = {'angle': 0.0}
+current = {'table': table}
+epoch = {'n': 10}
+
+
+def frame():
+    tab = current['table']
+    config = configs[id(tab)]
+    view, eye = _view(camera['angle'])
+    t0 = time.perf_counter()
+    renderer.render_scene(projection, view, eye, None, config,
+                          brush_slots=config["all_brush_slots"])
+    spent = (time.perf_counter() - t0) * 1e3
+    gl.glFinish()
+    return spent
+
+
+def _move(rows, k, tab):
+    for i in rows:
+        h = homes[i]
+        source.set(brushes[i], centre=(h[0], h[1] + 8.0 * ((k + i) % 7), h[2]))
+    tab.refresh_transforms(brushes, np.asarray(rows, dtype=np.intp))
+
+
+def still(k):
+    return None
+
+
+def camera_orbit(k):
+    camera['angle'] = 0.01 * k
+
+
+def one_mover(k):
+    _move(boxes[:1], k, table)
+
+
+def movers64(k):
+    _move(boxes[:64], k, table)
+
+
+def movers512(k):
+    _move(boxes[:512], k, table)
+
+
+def selection(k):
+    from editor.selection_overlay import describe_selection
+    chosen = describe_selection(brushes[boxes[k % 2]])
+    for tab in (table, peer):
+        configs[id(tab)]['primary_selection'] = chosen
+
+
+def editing(k):
+    rows = boxes[(k * 32) % max(1, len(boxes) - 32):][:32]
+    for i in rows:
+        p = brushes[i]['pos']
+        brushes[i]['pos'] = [p[0], p[1] + (2.0 if k % 2 else -2.0), p[2]]
+    epoch['n'] += 1
+    table.begin_frame(brushes, epoch=epoch['n'],
+                      dirty_objects={id(brushes[i]) for i in rows})
+
+
+def alternating(k):
+    tab = peer if k % 2 else table
+    current['table'] = tab
+    _move(boxes[:64], k, tab)
+
+
+SCENARIOS = [('still', still), ('camera', camera_orbit), ('one_mover', one_mover),
+             ('movers64', movers64), ('movers512', movers512),
+             ('selection', selection), ('editing', editing),
+             ('alternating', alternating)]
+
+
+def scenario(label, step, frames):
+    for k in range(10):
+        step(k)
+        frame()
+    # Timing (nothing else counted).
+    times = []
+    for k in range(frames):
+        step(10 + k)
+        times.append(frame())
+    # GL calls and uploads.
+    state['calls'].clear()
+    state['bytes'].clear()
+    state['on'] = True
+    for k in range(frames):
+        step(10 + frames + k)
+        frame()
+    state['on'] = False
+    calls = dict(state['calls'])
+    sent = dict(state['bytes'])
+    # Python calls.
+    prof = cProfile.Profile()
+    for k in range(frames):
+        step(10 + 2 * frames + k)
+        prof.enable()
+        frame()
+        prof.disable()
+    py_calls = pstats.Stats(prof).total_calls / frames
+    # Memory: what the frames allocate at their peak, and keep.
+    tracemalloc.start()
+    base = tracemalloc.get_traced_memory()[0]
+    for k in range(frames):
+        step(10 + 3 * frames + k)
+        frame()
+    current_mem, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    gl_calls = sum(v for key, v in calls.items()
+                   if key not in ('upload', 'instance_upload'))
+    out = {
+        'render_ms_p50': statistics.median(times), 'render_ms_min': min(times),
+        'instance_kb': sent.get('instance', 0) / frames / 1024.0,
+        'instance_uploads': calls.get('instance_upload', 0) / frames,
+        'upload_kb': sent.get('all', 0) / frames / 1024.0,
+        'uploads': calls.get('upload', 0) / frames,
+        'gl_calls': gl_calls / frames,
+        'draws': (calls.get('glDrawArrays', 0) + calls.get('glDrawArraysInstanced', 0)
+                  + calls.get('glDrawElements', 0)
+                  + calls.get('glDrawElementsInstanced', 0)
+                  + calls.get('glMultiDrawElements', 0)) / frames,
+        'py_calls': py_calls,
+        'alloc_peak_kb': (peak - base) / 1024.0,
+        'kept_kb': (current_mem - base) / 1024.0,
+    }
+    print('%-11s render %6.2f ms (min %6.2f)  instance %7.1f KB %4.1f up  all %7.1f KB '
+          '%4.1f up  gl %6.1f  draws %5.1f  py %7.0f  peak %7.1f KB  kept %6.1f KB'
+          % (label, out['render_ms_p50'], out['render_ms_min'], out['instance_kb'],
+             out['instance_uploads'], out['upload_kb'], out['uploads'], out['gl_calls'],
+             out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb']))
+    return out
+
+
+print('%s  %s  brushes %d (convex %d, boxes %d), %dx%d'
+      % (os.path.basename(tree), args.map, len(brushes),
+         sum(1 for b in brushes if b.get('geometry')), len(boxes), width, height))
+results = {}
+only = set(filter(None, args.only.split(',')))
+for label, step in SCENARIOS:
+    if only and label not in only:
+        continue
+    camera['angle'] = 0.0
+    current['table'] = table
+    for tab in (table, peer):
+        configs[id(tab)].pop('primary_selection', None)
+    results[label] = scenario(label, step, args.frames)
+source.clear()
+renderer.cleanup()
+if args.json:
+    with open(args.json, 'w') as fh:
+        json.dump({'map': args.map, 'tree': tree, 'results': results}, fh, indent=1)
+del keep
