@@ -1512,3 +1512,275 @@ raised `IndexError`: stop empties the movers' rows before the doors', and
 `_adopt` republished the doors' rows against twin rows that were gone.
 Stage 1 stopped such a level. `_adopt` now links the twins against the
 rows as they are before publishing; a regression test holds it.
+
+### 11.8 Stage 2 optimisation: state published once, the grid's movers, each gathered once
+
+Status: **implemented** (`afffbd5`, `c5314a0`, `f0f99d6`). Stage 2
+acceptance is the user's decision (§11.10).
+
+The architectural target: each mover is processed once per tick and
+publishes its runtime state; derived geometry is worked out once when it
+changes and shared; caches are invalidated by row, never wholesale; the
+grid finds a moving brush wherever its travel takes it; a mover is
+narrow-phased at most once per collision pass.
+
+#### What the frame profile showed (`6333b17`)
+
+The player's gather was where Stage 2 lost to Stage 1 -- box movers
+17.9 µs against 4.95, spinning boxes 42.4 against 5.1. Every moved mover's
+world box, float64 bounds and rotation were derived by each reader through
+the resolver (a scan of the runtime sources, a per-stamp runtime cache,
+rotation memos keyed per angle that grew ~110 blocks a tick and were cleared
+whole, GLM, a registry), and a placement stamp -- eight a tick with eight
+movers walked row by row -- dropped every reader's cache. The rotation
+helper was not slow; it was called redundantly.
+
+Two more defects surfaced. The spatial grid filed a mover or door where play
+began, so one that travelled into another 512-unit cell was missed there by
+every grid query (shown: a slider found in cell 1 by `overlaps_wall` and
+`raycast_down` though it had left). And the player gathered each nearby
+mover twice -- once from the grid's colliders, once from the mover lists --
+so it was narrow-phased twice a pass.
+
+#### Published once per change, derived once, shared (`afffbd5`)
+
+* The mover table publishes each changed row's transform into its brush's
+  runtime-only slot (`_aabb_runtime`) and drops that row's derived key --
+  nothing else; bulk rows by C-level stores.
+* The first reader that needs a row's world box, float64 bounds or rotation
+  works them out once from the published transform and the cached local
+  half-extents (`constants.mover_box`; `brush_placement.turn_of`: one
+  rotation matrix per transform, shared by the turned box -- `|R|·h` -- and
+  the collision frame). The player's gather and passes, `world_bounds` for
+  AI and triggers, and the collision frame all read it. A row that has not
+  moved derives nothing.
+* Deriving everything at publication instead was measured and rejected: it
+  cost the tick more than it saved readers in five of six production
+  scenarios (34 doors away from the player: total 153 → 191 µs).
+* Slots are runtime-only (`AABB_RUNTIME_KEYS`, stripped on save), withdrawn
+  when play stops, when a group's rows are rebuilt and when a table is
+  collected. A brush the editor preview or a test's overrides answer for
+  (`brush_placement.overridden`) is left to the resolver.
+
+Bit-identical to `6333b17` on both trajectory traces.
+`tests/brush_model/test_published_state.py` holds the published boxes to the
+resolver's to the bit (boxes, convex brushes, spinners about vertical and
+tilted axes, doors, a twin), a still mover deriving nothing, one derivation
+and one rotation per change however many readers ask, per-row invalidation,
+the preview's precedence and every withdrawal. Player update in the frame
+(`6333b17` → `afffbd5`, medians of three alternations): box movers 44.2 →
+41.2 µs, angled 57.7 → 54.1, spinning boxes 80.2 → 57.9, spinning angled
+67.0 → 60.3.
+
+#### Movers filed for their whole travel; the player's from the grid (`c5314a0`)
+
+* **Filing.** `SpatialGrid.populate` files every mover and door for every
+  cell its box can reach over its travel (`mover_table.travel_range`: the
+  segment its centre travels, padded by its half-extents, or by its radius
+  if it turns; unioned with where it is), and keeps that box on the brush
+  as `_travel_filed` (runtime-only). Linear travel stays on its segment, so
+  a tick checks nothing.
+* **Off range.** A row driven off its filed travel -- a path step, a
+  restored placement or spin, an edit in play that lengthens or turns its
+  travel -- is marked by the mover table (`_Group.check_range`, run only
+  where the columns it depends on change) in `brush_placement.off_range`,
+  and every grid reader (`overlaps_wall`, `raycast_down`, line of sight,
+  the batched AI pairs, the player) adds it wherever it looks, until play
+  stops. Empty in most levels.
+* **The player's candidates.** `Player._near_movers` reads the same grid:
+  for the cells within its reach, each cell's movers in canonical order
+  with their travel box padded by the player's pads (cached per grid rows
+  and pads; static), kept by an exact interval test on the player's centre
+  -- a superset of every mover whose box can come within a pass's reach
+  while the `_Reach` guard holds, so the guard and the full-list fallback
+  are unchanged. Fewer than three movers are each looked at (the small-map
+  path; measured below). The mover table's own broad phase (`near_rows`,
+  `movers_near`) is removed.
+* **Once each.** `_gather` takes the grid's colliders in grid order, then
+  the movers in canonical order, skipping any it already holds: every
+  mover is narrow-phased at most once a pass, in a deterministic order.
+* The player forgets its mover lists when play stops (the runtime-cache
+  audit found the new cache holding the finished session's brushes).
+
+`tests/brush_model/test_mover_broad_phase.py` holds the player bit for bit
+against looking at every mover (box, angled, spinning, twin, doors; jumps,
+ducks, dashes past the cover, teleports into a mover), a far mover costing
+nothing, each mover gathered once a tick, every mover that can reach the
+player being a candidate, a slider found by the grid's per-query and batched
+queries in every cell along its travel, and off-range marking (a path step,
+a restored placement and spin, a journaled distance edit) with no false
+marks. Both trajectory traces are bit-identical to `afffbd5`.
+
+The first cut, without the travel-box test and the small-map threshold,
+regressed one mover (player 22.7 → 30.8 µs; total 1.15× Stage 1) and box
+movers (grid cells hand the player twice the candidates the exact test
+does); both were fixed before committing.
+
+**Each span's movers kept (`f0f99d6`).** Timed in the frame,
+`_near_movers` still cost ~7 µs a tick with box movers, most of it merging
+and canonically sorting the movers of the cells in reach every tick. The
+merged, ordered entries of a span of cells are now kept until the span,
+the grid's rows or the lists change; a tick filters them by the cached
+travel boxes, and one `_Reach` is reused: 7.0 → 3.3 µs. A NaN or infinite
+position looks at every mover rather than raising.
+
+#### Measured (interleaved, five rounds, medians; x86 VM)
+
+Player update, µs a tick:
+
+| Scenario | Stage 1 | `afffbd5` | `c5314a0` | ×Stage 1 |
+|---|---|---|---|---|
+| 8 box movers | 31.9 | 38.6 | 38.7 | 1.21 |
+| 8 angled movers | 35.7 | 49.8 | 42.9 | 1.20 |
+| 8 spinning boxes | 35.3 | 55.2 | 52.3 | 1.48 |
+| 8 spinning angled | 35.2 | 56.2 | 53.4 | 1.52 |
+| 34 doors away | 69.5 | 32.6 | 26.4 | 0.38 |
+| 1 mover | 19.3 | 22.8 | 22.5 | 1.17 |
+
+Tick + player (the complete mover frame) against Stage 1: 0.78, 0.77,
+0.88, 0.88, 0.83, 0.96. Python calls a player update: 172 / 166 / 249 /
+265 / 92 / 106 (Stage 1: 261 / 323 / 327 / 323 / 811 / 109). After
+`f0f99d6` (segment-timed in the frame, three alternations), box movers'
+player update is 36.1 / 33.4 µs against Stage 1's 33.7 / 31.9 (from 40.4);
+the gate's figures are in §11.10.
+
+Where the box-mover player update goes, against Stage 1 (µs, segment-timed):
+
+| Segment | Stage 1 | `f0f99d6` | |
+|---|---|---|---|
+| mover cull + gather | 4.8 | 7.5–8.2 | `_moving` 0.5, `_near_movers` ~2.5, `_gather` ~4.5 (each mover once; its published box) |
+| x/z passes | 8.3 | 11.5–12.4 | the first AABB query of each moved mover derives its box here (`mover_box`) |
+| y pass | 9.1 | 3.6–3.9 | ... where Stage 1 derived it (its key: `pos`) |
+| everything else | 11.0 | 10.9–11.1 | |
+
+The x/z and y passes together are faster than Stage 1's (16 against 17.4
+µs). What remains is the gather: ~3 µs a tick for the grid lookup, the
+dedupe and the published-slot reads, against Stage 1's direct loop over
+every mover.
+
+### 11.9 Parked movers: I/O stays live, simulation sleeps
+
+Status: **implemented** (`fd5118b`).
+
+The rule, as specified: *I/O remains live; continuous simulation sleeps;
+state catches up on demand; missed outputs are not replayed.* A
+UUID-addressable mover or door can be logically active while physically
+parked. Parking follows Big World's residency (its parking mark), never the
+camera's view distance.
+
+#### What parks a row
+
+A brush Big World parks (`BigWorldSession._set_brush_active`:
+`PARKED_HIDDEN_KEY`, the live `hidden` flag, a VISIBILITY touch) is parked
+in the mover table at its next sync. Only that flag changed, so the table
+re-reads the mark alone -- no resync -- and a crossing that parks and wakes
+many rows publishes the woken ones together and stamps the readers once. A
+brush in both groups is never parked (its two rows move it together). Rows
+built while their brush is parked start parked.
+
+#### While parked
+
+* **Not walked, not published.** The walk skips parked rows; a group whose
+  rows are all parked returns before planning. Nothing is derived and no
+  placement stamp is issued, so no reader's cache is dropped on their
+  account. Each parked row keeps the state it was last resolved to and the
+  tick it was resolved at (`since`); a group counts its ticks.
+* **Readers are answered for now.** The row's published slots are
+  withdrawn and the brush is listed in `brush_placement.asleep` (held
+  weakly). `runtime_of` -- so `world_bounds`, the AABB cache, the collision
+  frame, `position_of` -- answers from the row's state and the ticks since,
+  storing nothing, from any thread (`runtime_now`). The grid's batched AI
+  pairs re-resolve the parked rows a query reaches. A parked row stays
+  filed for its travel: discoverable, and correct when queried.
+* **I/O reaches it.** Every input to a parked brush first brings it to now
+  (`brush_placement.settle`, called by `IOManager._execute_input` before
+  the handler), then acts on its current state; the time it takes effect
+  from is the tick it arrived. A read or write of its state through
+  `door_states` / `mover_states`, a parameter resync, `move_to`,
+  `restore_placement` and a saved game do the same. Only the logic thread
+  stores a catch-up.
+
+#### Catching up
+
+A row is brought to now from its state and the elapsed ticks, worked out,
+not stepped:
+
+* a linear mover's progress bounces between its ends with whole round trips
+  skipped, and its spin advances by `speed · dt · n`;
+* a door goes through opening, open (its timer running down), closing and
+  closed -- at most one cycle;
+* a path follower is worked a segment or a wait at a time along its nodes,
+  whole laps of a looped path skipped; at the end of its path it stops
+  after a wait (its `start_on` cleared) or, with none, drops the path and
+  travels on its own, as the walk does.
+
+Each end of travel lands on the tick the walk would reach it: a leg is
+counted with the walk's own float additions (bounded by one leg, whatever
+time has passed; a whole leg from an end counted once per step), because a
+whole number of steps a leg in exact arithmetic can take one more as a sum
+-- exact arithmetic drifted a tick a leg on a mover with an even ratio.
+Within a leg the value is worked out, so it differs from the walk's in the
+last bits.
+
+No output is fired while catching up: OnFullyOpen, OnFullyClosed, a door's
+OnClose (its timer running out), OnPathNodeReached and a path's end are not
+replayed and not queued. Outputs resume with the first transition after the
+row wakes. What an input fires itself (a door's OnOpen when it is opened)
+is a transition now, and fires. Woken, a row is published once.
+
+#### A walk bug fixed on the way
+
+A path follower that waited at the last node of its path had its
+`start_on` cleared without the change being journalled, so the mover
+table's column kept it running: it snapped back to its authored centre and
+travelled on. The clear is now journalled (`touch`) and it stops at the end
+of its path. (A path that ends without a wait still drops the path and
+leaves the row running, as before.) This predates Stage 1.
+
+#### Validation
+
+`tests/brush_model/test_parked_movers.py`, against the same level never
+parked: a parked row is not walked, published, derived or stamped; woken
+after 1, 7, 113, 2 000 and 50 000 ticks every row (linear movers including
+an even ratio, a spinner, doors, a looped path with waits) is where the
+reference is to 1e-6 and nothing it passed is fired; outputs resume on the
+reference's ticks; a door is worked through its cycle; a script of
+repeated, reversed and interrupted inputs (Open, Close, Stop, Reverse,
+Toggle, SetPosition, SetSpeed, Enable/Disable, StopPath/FollowPath) leaves
+every row where the reference is, the input's own outputs fired and no
+movement outputs replayed; a delayed input by UUID reaches a parked door; a
+save taken while parked holds where the rows have got to and a load goes on
+as the reference does; the resolver and the grid's per-query and batched
+queries see a parked row where it is now without storing anything; a twin
+is never parked; stopping play forgets them; paths that end with and
+without a wait; and Big World's own session parking and waking movers and a
+door across a crossing. The closed forms are tested against the per-tick
+rule directly.
+
+#### Measured (`tools/bench_parked_movers.py`)
+
+A streamed level's far side: 64 linear movers cycling, 16 spinners and 34
+doors opened at the start, all in cells Big World would park, and a batch of
+64 floor rays near the player (what the AI asks). Pinned, interleaved,
+medians:
+
+| | tick | AI batch query | stamps a tick |
+|---|---|---|---|
+| nothing parked (either tree) | ~180 µs | ~128 µs | 1.08 |
+| parked, HEAD (rows still walked) | ~185 µs | ~128 µs | 1.08 |
+| parked, suspended | ~7 µs | ~80 µs | 0 |
+
+With nothing parked the standard scenarios are unchanged: identical Python
+calls a tick, tick ratios 1.00–1.03 against the tree before (six
+interleaved rounds, within noise).
+
+#### Limitations
+
+* Logic timers, monsters and other entities follow Big World's own parking
+  of things (disabled, DORMANT); unchanged here.
+* `delta` is taken as fixed (the logic thread's 60 Hz step): a catch-up
+  counts ticks of the last step.
+* A brush in both groups keeps ticking when parked.
+* The batched AI pairs read parked rows' boxes as last stored until the
+  query re-resolves the rows it reaches; a structure refreshed in between
+  (another thread) can see that box for one query.
