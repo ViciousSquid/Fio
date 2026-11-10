@@ -3,9 +3,10 @@
 State at handoff (2026-11-10, after the third session; read *Third
 session* first). **Stage 2 is accepted for progression to M3** (the user,
 2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
-**M3 (change-driven GPU instance uploads for box brushes) is implemented**;
-see the M3 section below and `docs/renderer-m3-profiling.md`. The earlier
-sections are kept as history.
+**M3 (change-driven GPU instance uploads for box brushes) is implemented**,
+and **M3.1** (what the passes derive kept by change); see the M3 and M3.1
+sections below and `docs/renderer-m3-profiling.md`, which also outlines
+**M4** (proposed, not started). The earlier sections are kept as history.
 
 ## Third session: state published once, the grid's movers, parked movers (read this first)
 
@@ -144,7 +145,8 @@ unchanged (identical calls; ticks within noise).
   `MoverTable.publish` change-driven; an item-stable layout for camera
   motion (per-cell streams); everything on the Snapdragon 8cx Gen 3.
 
-Change-driven GPU instance uploads. Start from
+The brief M3 started from (kept as history): change-driven GPU instance
+uploads. Start from
 `docs/renderer-m3-profiling.md` (profiling only; nothing built): a still
 BigWorld frame uploads 450.5 KB in one call, every visible box instance
 repacked at 128 bytes in every pass, and `render_table.model_matrices`
@@ -172,8 +174,59 @@ Adreno. Measure upload bytes, GL calls, CPU render time, frame time and
 memory; reproduce with `tools/profile_frame_uploads.py
 BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
 
+### M3.1: what the passes derive, kept by change (implemented; record in `docs/renderer-m3-profiling.md`)
+
+* Commits: `373fc24` `RenderTable.material_version` / `extent_version`
+  (move only on a real change to a row's material or extents, and with a
+  reconcile or adopt); `4b2368b` the passes keep what they derive
+  (`TablesMixin._pass_memo`: classification, the lit pass's classes,
+  colours and payload, the textured pass's face batches with UV scale,
+  shift and rotation and run descriptors, the shadow pass's caster split),
+  per pass, view, use and render table; `824dc87` glass and fog read the
+  kept matrices; `14049bc` a selection patches the lit pass's kept payload
+  instead of deriving the pass again; the docs (and
+  `bench_instance_uploads` now runs with PyOpenGL error checking off, as
+  `main.py` runs the game, and reports the kept arrays).
+* A box's face state is resolved once per edit; a still frame derives
+  nothing and costs one equality test of the visible rows per pass.
+* CPU side of `render_scene` against M3's head (`1d7a6b0`), five
+  interleaved rounds: BigWorld still 0.44×, one mover 0.43×, 64 / 512
+  movers 0.58 / 0.65×, selection 0.59×, 32 edits 0.62×, two tables in turn
+  0.60×, turning camera 0.80×; `_SHOWCASE` 0.71-0.92× (64 movers read
+  1.05× in the first run, its known noise; 0.80× over seven more rounds). Bytes, uploads and GL calls unchanged; Python calls ~55
+  (BigWorld) / ~175 (`_SHOWCASE`) fewer a frame; kept arrays ~180 KB per
+  render table on BigWorld. Production gate (clean worktrees, same
+  `settings.ini`): frames 0.92-0.94, gameplay 0.94-1.00, no regressions.
+* Validation: the GL parity test adds retextures, UV and colour edits and
+  natural-scale boxes and checks every kept array against a fresh
+  derivation each frame; a per-edit test pins what rebuilds (a still
+  frame, a move and a selection: nothing). Mutation checks: dropping `material_version` or
+  `extent_version` from the key fails them. GL tiers: 910 passed (the
+  three `test_portal_fade` failures are pre-existing). Full suite (xvfb, GL
+  included): 7,300 passed, 175 skipped, the known five failed; the memory
+  guard reads 630 KiB against M3's 616 alone, the kept arrays (~15 KiB,
+  flat over 10, 30 and 60 sessions).
+* Not done (measured too small to be worth an aliasing risk): skipping the
+  streams' own equality tests by array identity.
+* **Next: M4** (proposed, not started; outline in the record): change sets
+  from the tables to GL -- `MoverTable.publish` writes only moved rows and
+  every transform writer stamps the rows it wrote, so the kept matrices
+  read stamps instead of comparing columns; a visible-set version from the
+  cull, so still frames test integers; light and environment uniforms by
+  change; entity instance streams; per-cell streams for camera motion;
+  everything measured on the Snapdragon 8cx Gen 3.
+
 ### Environment notes (this session)
 
+* **`settings.ini` is tracked, and the editor tests and an interrupted
+  probe leave a `[Layout]` section (the window's geometry) and recent files
+  in it.** A gameplay gate then runs the two trees at different window
+  sizes -- different frusta, different visible sets, different raster cost
+  -- and reports it as a regression (M3.1's first gameplay gate did:
+  `_SHOWCASE` paint 1.13×, with every frame drawing a different triangle
+  count; with the same `settings.ini` both trees drew identically, frame
+  for frame). Run `git checkout -- settings.ini` in both trees before a
+  gameplay gate, and after the test suite.
 * Full suite ~25 minutes; the full gate (all probes, five rounds) ~13.
 * Benchmarks pinned to core 3 with nothing heavy running beside them;
   check `uptime` and use minima and alternation when the VM is noisy.
@@ -517,6 +570,17 @@ of `bee6c67` (the accepted baseline), interleaved and pinned:
 
 ```bash
 xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 taskset -c 3 python tools/bench_instance_uploads.py BigWorld_streaming_test.json --no-raster --tree .
+```
+
+Its "derived arrays" line (M3.1) says how many of the passes' kept arrays a
+frame reused and rebuilt, and how much they hold. It runs with PyOpenGL's
+error checking off, as `main.py` does; M3's recorded milliseconds had it
+on.
+
+M3.1 was compared against a worktree of `1d7a6b0` (M3's head):
+
+```bash
+git worktree add --detach ../fio-m31base 1d7a6b00
 ```
 
 M3's GL tests need a real context (the offscreen Qt platform cannot make
