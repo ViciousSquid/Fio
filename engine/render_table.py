@@ -574,7 +574,8 @@ class RenderTable:
         """Store ``(slots, centre, rot)`` for each of *writes* in order (*rot*
         may be None; *slots* intp arrays), each logged: the mover table's
         publication, once a frame, so the seal is handled here rather than by
-        the decorator."""
+        the decorator. The caller sets :attr:`turning` when a *rot* turns a
+        row (it knows already)."""
         opened = not self._writing
         if opened:
             self._seal(False)
@@ -583,8 +584,6 @@ class RenderTable:
                 self.bounds[slots, :3] = centre
                 if rot is not None:
                     self.rot[slots] = rot
-                    if not self.turning and (rot[:, 3] != 0).any():
-                        self.turning = True     # the column's other writer
                 self._note_transforms(slots)
         finally:
             if opened:
@@ -872,7 +871,6 @@ class RenderTable:
             return True
         return tuple(brushes) != self._row_tuple
 
-    @_writes
     def begin_frame(self, brushes, epoch=None, dirty_objects=None,
                     edited=(), peer=None, peer_dirty=None):
         """Bring the table into line with *brushes*; return the ``hidden`` mask.
@@ -1026,7 +1024,6 @@ class RenderTable:
         """Whether the table was last reconciled at *epoch*."""
         return epoch is not None and epoch == self._epoch
 
-    @_writes
     def sync(self, brushes, epoch=None, dirty_objects=None):
         """Bring the table up to date outside the frame loop.
 
@@ -1241,7 +1238,6 @@ class RenderTable:
             self.dynamic_slots = np.flatnonzero(
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
 
-    @_writes
     def _refresh_in_place(self, brushes, n, epoch, dirty_objects, rows_known=False):
         """Apply a precise journal without a reconcile, when that is exact.
 
@@ -1267,7 +1263,6 @@ class RenderTable:
         self.refresh_rows(brushes, slots)
         return True
 
-    @_writes
     def refresh_edited(self, brushes, objects):
         """Re-read the rows an editor tool may be changing in place.
 

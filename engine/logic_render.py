@@ -27,16 +27,6 @@ def _sealed(array):
     return array
 
 
-def _shared(cache, table, slots):
-    """*slots*, sealed -- or, when another table's kept visible set holds
-    the same rows, that array: the two render buffers' tables take turns
-    every frame, and a consumer that sees the same object from both
-    recognises an unchanged set by identity whichever table it drew last.
-    Compared only when a set is made, never on a still frame."""
-    for other, entry in cache.items():
-        if other is not table and np.array_equal(entry[6], slots):
-            return entry[6]
-    return _sealed(slots)
 
 
 class LogicRender:
@@ -285,9 +275,11 @@ class LogicRender:
         """
         cache = getattr(self, '_cull_cache', None)
         if cache is None:
-            cache = self._cull_cache = weakref.WeakKeyDictionary()
+            cache = self._cull_cache = {}
         count = table.count
-        entry = cache.get(table)
+        entry = cache.get(id(table))
+        if entry is not None and entry[7]() is not table:
+            entry = None                    # another table at that address
         if (entry is not None and entry[0] == table.generation
                 and entry[1] == count and entry[3] is keep
                 and entry[2] == frustum_planes):
@@ -308,7 +300,7 @@ class LogicRender:
                         mask = entry[5].copy()
                         mask[rows] = inside
                         entry[5] = mask
-                        entry[6] = _shared(cache, table, np.flatnonzero(mask))
+                        entry[6] = self._shared_visible(np.flatnonzero(mask))
                 if change_detection.ORACLE:
                     self._check_cull(table, frustum_planes, keep, entry[6])
                 return entry[6]
@@ -316,14 +308,25 @@ class LogicRender:
         if table.turning:
             bounds = brush_placement.turned_bounds(bounds, table.rot[:count])
         mask = keep & self.aabb_in_frustum_bounds(frustum_planes, bounds)
-        slots = np.flatnonzero(mask)
-        if (entry is not None and entry[0] == table.generation
-                and np.array_equal(entry[6], slots)):
-            slots = entry[6]            # the same set: the same version
-        else:
-            slots = _shared(cache, table, slots)
-        cache[table] = [table.generation, count, frustum_planes, keep,
-                        table.transform_version, mask, slots]
+        slots = self._shared_visible(np.flatnonzero(mask))
+        if len(cache) > 4:                  # tables gone (a session ended)
+            for key in [k for k, e in cache.items() if e[7]() is None]:
+                del cache[key]
+        cache[id(table)] = [table.generation, count, frustum_planes, keep,
+                            table.transform_version, mask, slots,
+                            weakref.ref(table)]
+        return slots
+
+    def _shared_visible(self, slots):
+        """*slots*, sealed -- or the visible set made last (for either
+        table) when it holds the same rows: the two render buffers' tables
+        take turns every frame, and a consumer handed the same object from
+        both recognises an unchanged set by identity. One comparison, made
+        only when a set is made, never on a still frame."""
+        last = getattr(self, '_last_visible', None)
+        if last is not None and np.array_equal(last, slots):
+            return last
+        self._last_visible = slots = _sealed(slots)
         return slots
 
     def _check_cull(self, table, frustum_planes, keep, slots):

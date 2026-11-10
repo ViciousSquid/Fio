@@ -660,13 +660,15 @@ class _Group:
         if not arrays:
             if not rows:
                 return _NO_ROWS
-            marked = np.fromiter(set(rows), dtype=np.intp)
-        else:
-            if rows:
-                arrays.append(np.fromiter(set(rows), dtype=np.intp))
-            marked = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
-        # Every row (the usual tick of a busy level): say so, and the
-        # publication writes them as it always did.
+            distinct = set(rows)
+            # Every row (the usual tick of a busy level): say so, and the
+            # publication writes them as it always did.
+            if len(distinct) >= len(self.index):
+                return None
+            return np.fromiter(distinct, dtype=np.intp, count=len(distinct))
+        if rows:
+            arrays.append(np.fromiter(set(rows), dtype=np.intp))
+        marked = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
         return None if len(marked) >= len(self.index) else marked
 
     def quiet(self, rows):
@@ -2186,6 +2188,7 @@ class MoverTable:
             if spun.any():
                 rot[spun, :3] = movers.rot_axis[rows_m][spun]
                 rot[spun, 3] = angle[spun]
+                table.turning = True        # the column's other writer
             writes.append((slots_m, movers.pos[rows_m], rot))
         if rows_d is None or len(rows_d) >= len(slot_of_d):
             rows_d = all_d
@@ -2220,24 +2223,24 @@ class MoverTable:
         movers, doors = self.movers, self.doors
         if since == self._pose_version - 1 and not movers.any_twin:
             return log[-1][1]               # one publication behind: its rows
-        parts = ([], [])
-        for version, marks in log:
+        movers_parts, doors_parts = [], []
+        for version, (marks_m, marks_d) in reversed(log):
             if version <= since:
-                continue
-            for k in (0, 1):
-                if marks[k] is None:
-                    parts[k].append(None)
-                elif len(marks[k]):
-                    parts[k].append(marks[k])
-        rows = []
-        for k in (0, 1):
-            if any(p is None for p in parts[k]):
-                rows.append(None)
-            elif not parts[k]:
-                rows.append(_NO_ROWS)
-            else:
-                rows.append(parts[k][0] if len(parts[k]) == 1
-                            else np.concatenate(parts[k]))
+                break
+            if movers_parts is not None:
+                if marks_m is None:
+                    movers_parts = None
+                elif len(marks_m):
+                    movers_parts.append(marks_m)
+            if doors_parts is not None:
+                if marks_d is None:
+                    doors_parts = None
+                elif len(marks_d):
+                    doors_parts.append(marks_d)
+        rows = [None if parts is None else
+                _NO_ROWS if not parts else
+                parts[0] if len(parts) == 1 else np.concatenate(parts)
+                for parts in (movers_parts, doors_parts)]
         if movers.any_twin and rows[0] is not None and rows[1] is not None:
             # The twin of a row that moved moved with it.
             twins_d = movers.twin_row[rows[0]]

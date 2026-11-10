@@ -19,6 +19,9 @@ from editor.things import update_all_counters_from_entities
 from engine import player_starts as start_rules
 from engine.row_list import row_list
 
+#: EditorState attributes that hold a row set (see EditorState.__setattr__).
+_ROW_SETS = frozenset(("brushes", "things"))
+
 # Import I/O system for serialization
 try:
     from .io_system import OutputConnection, get_connections
@@ -94,26 +97,17 @@ class EditorState:
     #: UI event loop, edits are synchronous and nothing needs deferring.
     post_event = None
 
-    # The world's row sets, as RowLists (engine/row_list.py): whatever list
-    # is assigned is taken as one, so the render and entity tables recognise
-    # an unchanged row set by its version instead of comparing every row
-    # each frame (M4). Assigning copies a plain list: keep using the
-    # attribute, not the list that was assigned.
-    @property
-    def brushes(self):
-        return self._brushes
-
-    @brushes.setter
-    def brushes(self, rows):
-        self._brushes = row_list(rows)
-
-    @property
-    def things(self):
-        return self._things
-
-    @things.setter
-    def things(self, rows):
-        self._things = row_list(rows)
+    # The world's row sets, as RowLists (engine/row_list.py): a plain list
+    # assigned to ``brushes`` or ``things`` is taken as one, so the render
+    # and entity tables recognise an unchanged row set by its version
+    # instead of comparing every row each frame (M4). Assigning copies a
+    # plain list: keep using the attribute, not the list that was assigned.
+    # Only assignment is intercepted: the attributes stay plain, and reading
+    # them -- many times a tick -- costs what it always did.
+    def __setattr__(self, name, value):
+        if name in _ROW_SETS:
+            value = row_list(value)
+        object.__setattr__(self, name, value)
 
     def __init__(self):
         #: Coarse "something about the world changed" counter -- see
