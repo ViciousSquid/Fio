@@ -6,6 +6,7 @@ resizes and reconciles, while rebuilding only the rows that changed.
 """
 
 import numpy as np
+import pytest
 
 from engine import render_table
 from engine.render_table import RenderTable
@@ -96,3 +97,34 @@ def test_renderer_frame_transforms_match_a_fresh_build():
         fresh_m, fresh_n = render_table.model_matrices(table, slots)
         assert np.array_equal(models.view(np.uint32), fresh_m.view(np.uint32))
         assert np.array_equal(normals.view(np.uint32), fresh_n.view(np.uint32))
+
+
+def test_a_still_table_is_recognised_without_looking_at_its_rows():
+    """M4: the rows to rebuild come from the table's transform log; a still
+    table costs one integer test, whatever its size."""
+    from engine import change_detection
+    table, _brushes = _table()
+    cache = SlotTransforms(table)
+    cache.sync(table)
+    change_detection.DETECT.reset()
+    for _ in range(5):
+        assert cache.sync(table) == 0
+    assert change_detection.DETECT.rows == 0
+    table.write_transforms([3], centre=[[1.0, 2.0, 3.0]])
+    assert cache.sync(table) == 1
+    assert change_detection.DETECT.rows == 0
+    _same(cache, table)
+    assert sorted(cache.rows_since(cache.version - 1).tolist()) == [3]
+
+
+def test_a_write_past_the_log_is_caught_by_the_oracle(monkeypatch):
+    from engine import change_detection
+    monkeypatch.setattr(change_detection, 'ORACLE', True)
+    table, _brushes = _table()
+    cache = SlotTransforms(table)
+    cache.sync(table)
+    table._seal(False)                  # what a rogue writer would have to do
+    table.bounds[2, 0] += 50.0
+    table._seal(True)
+    with pytest.raises(change_detection.MissedChange):
+        cache.sync(table)

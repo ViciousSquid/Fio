@@ -68,7 +68,7 @@ class BrushStream:
     render tables take turns, so each keeps its own entry."""
 
     __slots__ = ('vbo', 'vao', 'capacity', 'mirror', 'count', 'slots', 'spare',
-                 'payload', 'consts', 'seen', 'uploaded')
+                 'payload', 'consts', 'seen', 'uploaded', 'index')
 
     def __init__(self):
         self.vbo = None
@@ -85,6 +85,29 @@ class BrushStream:
         self.consts = None
         #: Bytes this stream has uploaded (tests and tools).
         self.uploaded = 0
+        #: ``(sorted slots, their positions)`` of the current items, built
+        #: when first needed and kept while the items stand (M4).
+        self.index = None
+
+    def positions_of(self, rows, upto):
+        """The positions (before *upto*) of the items that draw any of the
+        slots *rows*, sorted and unique: what a change record of k rows
+        costs, k searches, rather than a look at every item."""
+        index = self.index
+        if index is None:
+            items = self.slots[:self.count]
+            order = np.argsort(items, kind='stable')
+            index = self.index = (items[order], order)
+        ordered, order = index
+        lo = np.searchsorted(ordered, rows, 'left')
+        counts = np.searchsorted(ordered, rows, 'right') - lo
+        total = int(counts.sum())
+        if not total:
+            return _NO_ROWS
+        # Each row's run of positions, expanded (CSR).
+        starts = np.repeat(lo - (np.cumsum(counts) - counts), counts)
+        positions = order[starts + np.arange(total)]
+        return np.unique(positions[positions < upto])
 
     def same_payload(self, count, spare, payload):
         """Whether *spare* and *payload* (scalars or per-row arrays) are what
@@ -192,7 +215,7 @@ class InstancingMixin:
             # buffer last matched this table, that another table's frame
             # wrote meanwhile, or whose payload changed.
             head = self._stream_head(stream, cache, entry, slots, count,
-                                     spare, payload, same_payload)
+                                     spare, payload, same_payload, logged=True)
             if len(head) * 2 <= count:
                 if len(head):
                     mirror[head] = self._stream_block(
@@ -234,6 +257,7 @@ class InstancingMixin:
             rows = _ALL_ROWS
         if not same_items:
             stream.slots[:count] = slots
+            stream.index = None
             seen.clear()
         elif rows is _ALL_ROWS:
             for other_key in [k for k in seen if k != id(cache)]:
@@ -255,16 +279,24 @@ class InstancingMixin:
 
     @staticmethod
     def _stream_head(stream, cache, entry, slots, upto, spare, payload,
-                     same_payload):
+                     same_payload, logged=False):
         """Rows before *upto* that must be rewritten although their item is
         unchanged: moved since *entry* matched, written by another table's
-        frame since, or with a changed payload."""
+        frame since, or with a changed payload.
+
+        *logged* (the items are the stream's own): the moved rows come from
+        the matrices' rebuild log, found among the items by search (M4);
+        otherwise every item's stamp is looked at."""
         parts = []
         if entry[1] < cache.version:
-            started = change_detection.now()
-            moved = np.flatnonzero(cache.stamp[slots[:upto]] > entry[1])
-            change_detection.DETECT.add('stream.stamps', upto,
-                                        change_detection.now() - started)
+            rows = cache.rows_since(entry[1]) if logged else None
+            if rows is not None:
+                moved = stream.positions_of(rows, upto)
+            else:
+                started = change_detection.now()
+                moved = np.flatnonzero(cache.stamp[slots[:upto]] > entry[1])
+                change_detection.DETECT.add('stream.stamps', upto,
+                                            change_detection.now() - started)
             if len(moved):
                 parts.append(moved)
         for written in entry[2]:
@@ -357,6 +389,7 @@ class InstancingMixin:
         stream.spare = np.zeros(capacity, dtype=np.float32)
         stream.payload = np.zeros((capacity, 4), dtype=np.float32)
         stream.count = 0
+        stream.index = None
         stream.seen.clear()
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, stream.mirror.nbytes, None,
