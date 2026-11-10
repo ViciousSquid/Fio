@@ -8,6 +8,7 @@ import numpy as np
 from .change_journal import touch
 from . import brush_placement as _placement
 from .brush_placement import shared_bulk_boxes, world_bounds, world_box
+from .mover_table import travel_range
 from .constants import is_water_brush, brush_aabb_bounds
 
 _chain = chain.from_iterable
@@ -173,7 +174,22 @@ class _CellRows:
             self._seen = stamps
 
     def pairs(self, cx, cz):
-        """``(query, row)`` for every brush filed in each query's cell."""
+        """``(query, row)`` for every brush filed in each query's cell, and
+        every off-range mover or door (brush_placement.off_range) for every
+        query: one may be anywhere."""
+        query, rows = self._pairs_filed(cx, cz)
+        off = _off_range_filed()
+        if not off or not len(cx):
+            return query, rows
+        row_of = {id(brush): row for row, brush in self.movers}
+        extra = [row_of[id(b)] for b in off if id(b) in row_of]
+        if not extra:
+            return query, rows
+        count = len(cx)
+        return (np.concatenate((query, np.repeat(np.arange(count, dtype=np.int64), len(extra)))),
+                np.concatenate((rows, np.tile(np.asarray(extra, dtype=np.int64), count))))
+
+    def _pairs_filed(self, cx, cz):
         count = len(cx)
         if not len(self.rows) or not count:
             empty = np.empty(0, dtype=np.int64)
@@ -225,6 +241,27 @@ class _CellRows:
 
 
 _EMPTY_CELL_ROWS = _CellRows({})
+
+
+def _off_range_filed():
+    """The movers and doors that may be outside the travel range the grid
+    filed them for (brush_placement.off_range): every query adds them, as
+    they may be anywhere. Empty in most levels."""
+    off, moved = _placement.off_range, _placement.overridden
+    if not (off or moved):
+        return ()
+    found = {id(b): b for b in off.values() if '_travel_filed' in b}
+    found.update((id(b), b) for b in moved.values() if '_travel_filed' in b)
+    return tuple(found.values())
+
+
+def _off_range_overlaps(m_xmin, m_ymin, m_zmin, m_xmax, m_ymax, m_zmax):
+    for brush in _off_range_filed():
+        bx_min, by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
+        if (m_xmax > bx_min and m_xmin < bx_max and m_ymax > by_min and m_ymin < by_max
+                and m_zmax > bz_min and m_zmin < bz_max):
+            return True
+    return False
 
 
 class _BoxRows:
@@ -455,11 +492,25 @@ class SpatialGrid:
             self._all_solid.append(brush)
 
             # Filed by its derived bounds (brush_placement): an angled
-            # brush's planes, a mover where it is now, a spinner's turned box
-            # -- one rule in the editor and in play.
+            # brush's planes -- one rule in the editor and in play. A mover
+            # or door is filed for its whole travel (mover_table.travel_range:
+            # every centre its travel can give it, widened by its box, or by
+            # its box's radius if it turns) and for where it is now, so every
+            # cell it can reach finds it; the range it was filed for is kept
+            # with it, and a row that leaves it (a path, a restored placement,
+            # an edit in play) is marked off range by the mover table.
             # (Membership tests first: most brushes carry none of these keys,
             # and world_bounds itself handles a flag that is set false.)
-            if ('geometry' in brush or '_mesh_bounds' in brush
+            if is_dynamic:
+                lo, hi, turns, reach = travel_range(brush)
+                lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = world_bounds(brush)
+                # Everywhere its box can be on its travel (and where it is).
+                box = (min(lo_x, lo[0] - reach[0]), min(lo_y, lo[1] - reach[1]),
+                       min(lo_z, lo[2] - reach[2]), max(hi_x, hi[0] + reach[0]),
+                       max(hi_y, hi[1] + reach[1]), max(hi_z, hi[2] + reach[2]))
+                brush['_travel_filed'] = (lo, hi, turns, box)
+                self._index.insert(brush, box[0], box[2], box[3], box[5])
+            elif ('geometry' in brush or '_mesh_bounds' in brush
                     or 'is_mover' in brush or 'is_door' in brush):
                 lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = world_bounds(brush)
                 self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
@@ -568,7 +619,7 @@ class SpatialGrid:
                         m_ymax > by_min and m_ymin < by_max and
                         m_zmax > bz_min and m_zmin < bz_max):
                     return True
-            return False
+            return _off_range_overlaps(m_xmin, m_ymin, m_zmin, m_xmax, m_ymax, m_zmax)
 
         seen = set()
         for cx in range(min_cx, max_cx + 1):
@@ -592,7 +643,7 @@ class SpatialGrid:
                             m_ymax > by_min and m_ymin < by_max and
                             m_zmax > bz_min and m_zmin < bz_max):
                         return True
-        return False
+        return _off_range_overlaps(m_xmin, m_ymin, m_zmin, m_xmax, m_ymax, m_zmax)
 
     def _cells_along_ray(self, start, ray_dir, ray_len):
         """Every cell the ray's XZ projection crosses, start cell first.
@@ -777,7 +828,7 @@ class SpatialGrid:
                 if by_max <= start_y:
                     if best_y is None or by_max > best_y:
                         best_y = by_max
-        for brush in rows.moving.get(cell, ()):
+        for brush in chain(rows.moving.get(cell, ()), _off_range_filed()):
             bx_min, _by_min, bz_min, bx_max, by_max, bz_max = world_bounds(brush)
             if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
                 if by_max <= start_y:
@@ -834,8 +885,10 @@ class SpatialGrid:
                 return False
         elif not dense:
             return False
-        return self._los_walk(rows.moving_by_cell, coords,
-                              start, ray_dir, ray_len)
+        if not self._los_walk(rows.moving_by_cell, coords, start, ray_dir, ray_len):
+            return False
+        off = _off_range_filed()
+        return not off or self._los_walk({0: off}, (0,), start, ray_dir, ray_len)
 
     def _los_dense(self, start, ray_dir, ray_len, rows, coords):
         """Line of sight over the static rows, when there are enough of them.

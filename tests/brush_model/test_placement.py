@@ -30,6 +30,7 @@ from engine import brush_placement as bp
 from engine import render_table as rt
 from engine.constants import brush_aabb_bounds
 from engine.logic_render import LogicRender
+from engine.mover_table import travel_range
 from engine.physics import SpatialGrid
 from engine.render_table import RenderTable
 from engine.view_filters import brush_bounds
@@ -344,7 +345,16 @@ def test_every_headless_consumer_reads_the_resolvers_bounds(axis, angle):
         assert np.array_equal(rows.hi[row], want[3:]), brush.get('name')
         filed = {coord for coord, bucket in grid.cells.items()
                  if any(b is brush for b in bucket)}
-        assert filed == _expected_cells(want, grid.cell_size), brush.get('name')
+        if brush.get('is_mover') or brush.get('is_door'):
+            # Filed for its whole travel (mover_table.travel_range), as well
+            # as where it is now.
+            lo, hi, _turns, reach = travel_range(brush)
+            travel = (min(want[0], lo[0] - reach[0]), 0.0, min(want[2], lo[2] - reach[2]),
+                      max(want[3], hi[0] + reach[0]), 0.0, max(want[5], hi[2] + reach[2]))
+            assert filed == _expected_cells(travel, grid.cell_size), brush.get('name')
+            assert filed >= _expected_cells(want, grid.cell_size), brush.get('name')
+        else:
+            assert filed == _expected_cells(want, grid.cell_size), brush.get('name')
         got = np.asarray(brush_aabb_bounds(brush))
         assert np.allclose(got, want, rtol=1e-6, atol=1e-4), brush.get('name')
         assert np.allclose(brush_bounds(brush)[0], want[:3]) and \

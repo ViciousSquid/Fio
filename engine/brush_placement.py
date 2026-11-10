@@ -303,67 +303,6 @@ def runtime_sources():
     return [source for source in (ref() for ref in _sources) if source is not None]
 
 
-#: ``(sources, tables, others)``: :data:`_sources` as :func:`movers_near`
-#: last sorted it -- the weak references to the sources that keep columns
-#: (``near_rows``) and to the rest -- worked out again whenever a source is
-#: registered or dropped (which replaces the tuple).
-_near_sources = (None, (), ())
-
-
-def _sorted_sources():
-    global _near_sources
-    sorted_ = _near_sources
-    if sorted_[0] is not _sources:
-        tables, others = [], []
-        for ref in _sources:
-            source = ref()
-            if source is not None:
-                (tables if getattr(source, 'near_rows', None) is not None
-                 else others).append(ref)
-        sorted_ = _near_sources = (_sources, tuple(tables), tuple(others))
-    return sorted_
-
-
-def movers_near(lists):
-    """A broad phase over moving brushes, from the dense columns that hold
-    where they are: the ``near_rows`` of the runtime source whose rows
-    *lists* are (a reader's mover list and door list, as the logic thread
-    hands them out), or ``None``.
-
-    ``near_rows(lists, x, y, z, pad, pad_turned)`` then gives, list by list,
-    the brushes whose derived box can come within *pad* -- per axis,
-    ``(px, py, pz)`` -- of the point ``(x, y, z)``; for a brush that can
-    turn, within *pad_turned* of it, its box bounded by the sphere through
-    its corners. A superset: a brush left out cannot reach that far, one
-    kept may not.
-
-    Only the source that keeps columns (the mover table) can say, and only
-    while it is the one source with entries: the editor preview or a test's
-    overrides answer brush by brush, so then -- or when the lists are not
-    that table's rows -- this is ``None`` and the reader looks at every
-    brush. Asked first, before the reader works out anything for the
-    question, so that answer costs little."""
-    sorted_ = _sorted_sources()
-    for ref in sorted_[2]:
-        source = ref()
-        if source is not None and source.runtime_entries:
-            return None
-    tables = sorted_[1]
-    for ref in tables:
-        table = ref()
-        if table is None or not table.holds_rows(lists):
-            continue
-        # Another table (a world not yet collected) must not be answering
-        # for anything.
-        if len(tables) > 1:
-            for other in tables:
-                other = other()
-                if other is not None and other is not table and other.runtime_entries:
-                    return None
-        return table.near_rows
-    return None
-
-
 class BulkBoxes:
     """:func:`world_box` for a fixed list of brushes -- the movers and doors
     a collision structure keeps rows for -- in bulk, from the tables that
@@ -547,6 +486,15 @@ def shared_bulk_boxes(brushes, rows):
         ordered_rows[at] = rows
         return bulk, ordered_rows, None
     return bulk, rows, at
+
+
+#: id -> brush: movers and doors that may now be outside the travel range
+#: the spatial grid filed them by (``_travel_filed``,
+#: ``mover_table.travel_range``) -- a path being followed, a restored
+#: placement, an edit in play changing where one travels. Every reader of
+#: the grid adds these wherever it looks; the mover table marks them
+#: (``check_range``) and forgets them when play stops. Empty in most levels.
+off_range = {}
 
 
 #: id -> brush for every brush a source without columns (the editor
@@ -1084,7 +1032,7 @@ def _rotation(axis, angle_degrees):
 #: Runtime-only key this module caches on a brush dict (stripped on save,
 #: like the geometry and AABB caches): its collision shape and frame, with
 #: what they were built from.
-RUNTIME_CACHE_KEYS = ('_collision_entry', '_collision_box')
+RUNTIME_CACHE_KEYS = ('_collision_entry', '_collision_box', '_travel_filed')
 
 
 def collision_shape(brush):

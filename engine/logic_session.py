@@ -446,6 +446,7 @@ class LogicSession:
         for player in (logic.player_runtime.player, logic.player_runtime.player2):
             if player is not None:
                 player.ground_object = None
+                player.release_movers()
 
     def start_monster_ai(self):
         logic = self.logic

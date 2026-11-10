@@ -31,7 +31,9 @@ from .constants import (
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
 from .constants import _UNPUBLISHED
-from .brush_placement import collision_shape, collision_shape_at, movers_near, world_bounds
+from .brush_placement import (
+    collision_shape, collision_shape_at, off_range, overridden, world_bounds,
+)
 from .physics import world_gravity
 
 
@@ -190,21 +192,34 @@ def _blocks_player(brush):
     return is_solid_world_brush(brush)
 
 
-def _gather(colliders, movers, doors):
+def _gather(colliders, moving):
     """``(aabb_brushes, mesh_brushes, mesh_shapes)``: one pass over
-    everything that could collide this tick, dropping what the player does
-    not collide with at all (see _blocks_player) and splitting the rest by
-    shape (brush_placement.collision_shape). A solid shape -- an angled
-    brush, static or moving, a spinning box, a model's collision mesh -- is
+    everything that could collide this tick -- *colliders* in the order the
+    grid gave them, then each mover and door in *moving* (canonical order:
+    the mover list, then the door list) that the colliders did not already
+    hold, so every brush is gathered once and narrow-phased at most once a
+    pass -- dropping what the player does not collide with at all (see
+    _blocks_player) and splitting the rest by shape
+    (brush_placement.collision_shape). A solid shape -- an angled brush,
+    static or moving, a spinning box, a model's collision mesh -- is
     resolved in its own frame; any other box keeps the AABB fast path, its
     derived bounds being exact."""
     mesh_brushes = []
     mesh_shapes = []
     aabb_brushes = []
-    for source in (colliders, movers, doors):
+    held = None
+    for source in (colliders, moving):
         if not source:
             continue
         for b in source:
+            if 'is_mover' in b or 'is_door' in b:
+                # Gathered once: from the grid's cells, or from the movers.
+                if held is None:
+                    held = {id(b)}
+                elif id(b) in held:
+                    continue
+                else:
+                    held.add(id(b))
             if not _blocks_player(b):
                 continue
             # A static box -- most of a level -- is told by three dict
@@ -246,10 +261,11 @@ def _gather(colliders, movers, doors):
 
 
 class _Reach:
-    """What the tick's mover broad phase (brush_placement.movers_near)
-    covers: the movers and doors near the player where the tick began, and
-    how far the player may move from there before a pass could test beyond
-    them.
+    """What the tick's mover broad phase (Player._near_movers: the spatial
+    grid's cells within the player's reach, movers filed there for their
+    whole travel) covers: the movers and doors near the player where the
+    tick began, and how far the player may move from there before a pass
+    could test beyond them.
 
     The broad phase keeps every mover whose box can come within the
     player's standing hull, plus the capsule's reach and :attr:`room`, of
@@ -401,35 +417,127 @@ class Player:
     #: push) runs that pass on every mover instead.
     MOVER_ROOM = 80.0
 
-    #: Fewer movers and doors than this are each looked at, as before: the
-    #: broad phase costs a few microseconds a tick to ask, about what two
-    #: rows cost the passes (measured: tools/bench_player_table.py).
+    #: Fewer movers and doors than this are each looked at: the broad phase
+    #: costs a few microseconds a tick to ask, about what two rows cost the
+    #: passes (measured: tools/bench_player_table.py, one_mover).
     MOVER_NEAR_FROM = 3
 
-    def _near_movers(self, colliders, movers, doors):
-        """``(cover, movers, doors)``: this tick's mover broad phase
-        (brush_placement.movers_near) about where the player is -- the
-        movers and doors near enough for a pass to reach, and the
-        :class:`_Reach` that says how far that holds -- or None when nothing
-        can say which are near (every one is then looked at)."""
-        lists = (movers, doors)
-        near_rows = movers_near(lists)
-        if near_rows is None:
-            return None
+    def release_movers(self):
+        """Play stopped: forget the level's movers and doors (the broad
+        phase's lists of them), so nothing of the finished session is kept."""
+        self._moving_cache = None
+        self._moving_cells = None
+
+    def _moving(self, movers, doors):
+        """The level's movers and doors, each once, in canonical order (the
+        mover list, then the door list; a brush in both comes once, as a
+        mover), with each one's place in it -- worked out again only when
+        the lists are replaced."""
+        cached = getattr(self, '_moving_cache', None)
+        if (cached is not None and cached[0] is movers and cached[1] is doors
+                and cached[2] == ((len(movers) if movers else 0), (len(doors) if doors else 0))):
+            return cached[3]
+        rank = {}
+        for source in (movers, doors):
+            for brush in source or ():
+                rank.setdefault(id(brush), (len(rank), brush))
+        moving = tuple(brush for _place, brush in rank.values())
+        self._moving_cache = (movers, doors, ((len(movers) if movers else 0),
+                                              (len(doors) if doors else 0)),
+                              moving, {key: place for key, (place, _b) in rank.items()})
+        self._moving_cells = None
+        return moving
+
+    def _near_movers(self, grid, colliders, moving):
+        """``(cover, near)``: this tick's movers and doors near enough for a
+        pass to reach -- those the spatial grid filed (for their whole
+        travel) in the cells within the player's reach, and any off range
+        (brush_placement.off_range) -- in canonical order, and the
+        :class:`_Reach` that says how far the player may move before a pass
+        needs every one."""
         hull = (self.width, self.stand_height, self.depth, self.step_height)
         pads = getattr(self, '_reach_pads', None)
         if pads is None or pads[0] != hull:
-            pads = self._reach_pads = (hull,) + _reach_pads(*hull, self.MOVER_ROOM)
+            pad, pad_turned, allowed = _reach_pads(*hull, self.MOVER_ROOM)
+            pads = self._reach_pads = (hull, pad, pad_turned, allowed,
+                                       max(max(pad), pad_turned[0]))
         x, y, z = self.pos.x, self.pos.y, self.pos.z
-        near = near_rows(lists, x, y, z, pads[1], pads[2])
+        reach = pads[4]
+        size = grid.cell_size
+        x0 = int(math.floor((x - reach) / size))
+        x1 = int(math.floor((x + reach) / size))
+        z0 = int(math.floor((z - reach) / size))
+        z1 = int(math.floor((z + reach) / size))
+        cells = self._cells_moving(grid, pads)
+        # Each cell's movers with the box they can reach over their travel,
+        # padded (_cells_moving): those whose box holds the player.
+        if x0 == x1 and z0 == z1:
+            near = [brush for brush, bx0, by0, bz0, bx1, by1, bz1 in cells.get((x0, z0), ())
+                    if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1]
+        else:
+            near = []
+            for cx in range(x0, x1 + 1):
+                for cz in range(z0, z1 + 1):
+                    near.extend([brush for brush, bx0, by0, bz0, bx1, by1, bz1
+                                 in cells.get((cx, cz), ())
+                                 if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1])
+            if len(near) > 1:
+                near = self._in_order(near)
+        if off_range or overridden:
+            # Rows that may be anywhere: off their filed travel, or moved by
+            # a source that keeps no range (the editor preview, a test).
+            near = self._in_order(list(near) + list(off_range.values())
+                                  + list(overridden.values()))
         cover = _Reach()
         cover.x = x
         cover.y = y
         cover.z = z
         # Far from the origin a float32 box is coarser: keep a margin for it.
         cover.room = pads[3] - 1e-6 * max(abs(x), abs(y), abs(z))
-        cover.full = (colliders, movers, doors)
-        return cover, near[0], near[1]
+        cover.full = (colliders, moving)
+        return cover, near
+
+    def _in_order(self, brushes):
+        """*brushes* (some listed twice) once each, in canonical order; any
+        not in the lists left out."""
+        place = self._moving_cache[4]
+        seen = {}
+        for brush in brushes:
+            key = id(brush)
+            if key in place and key not in seen:
+                seen[key] = brush
+        return tuple(seen[key] for key in sorted(seen, key=place.__getitem__))
+
+    def _cells_moving(self, grid, pads):
+        """The grid's movers and doors cell by cell, each cell's in canonical
+        order, each as ``(brush, x0, y0, z0, x1, y1, z1)``: the box it can
+        reach anywhere on the travel the grid filed it for (``_travel_filed``)
+        widened by the player's *pads* -- a turning one's by the turned pad
+        -- so the player's centre is in it if a pass can reach the brush.
+        Worked out again only when the grid's rows, the lists or the pads
+        change."""
+        rows = grid._boxes()
+        cached = self._moving_cells
+        if cached is not None and cached[0] is rows and cached[1] is pads:
+            return cached[2]
+        pad, turned = pads[1], pads[2]
+        cells = {}
+        for cell, bucket in rows.moving.items():
+            entries = []
+            for brush in self._in_order(bucket):
+                filed = brush.get('_travel_filed')
+                if filed is None:
+                    box = world_bounds(brush)
+                    p = turned if brush.get('rotate') else pad
+                else:
+                    box = filed[3]
+                    p = turned if filed[2] else pad
+                entries.append((brush, box[0] - p[0], box[1] - p[1], box[2] - p[2],
+                                box[3] + p[0], box[4] + p[1], box[5] + p[2]))
+            if entries:
+                cells[cell] = entries
+        self._moving_cells = (rows, pads, cells)
+        return cells
 
     def _check_duck(self, crouch, aabb_brushes):
         """Duck on the ground with crouch held; stand up only where there is room."""
@@ -499,12 +607,10 @@ class Player:
         # every mover first (_Reach), so the passes answer what they would
         # over every mover and door in the level.
         cover = None
-        if ((len(movers) if movers else 0) + (len(doors) if doors else 0)
-                >= self.MOVER_NEAR_FROM):
-            near = self._near_movers(colliders, movers, doors)
-            if near is not None:
-                cover, movers, doors = near
-        aabb_brushes, mesh_brushes, mesh_shapes = _gather(colliders, movers, doors)
+        moving = self._moving(movers, doors)
+        if spatial_grid and len(moving) >= self.MOVER_NEAR_FROM:
+            cover, moving = self._near_movers(spatial_grid, colliders, moving)
+        aabb_brushes, mesh_brushes, mesh_shapes = _gather(colliders, moving)
 
         # --- Water immersion (before movement so swim physics can use it) ---
         if spatial_grid is not None:

@@ -48,6 +48,7 @@ plugins -- asks the resolver, which answers from the per-brush
 
 from __future__ import annotations
 
+import math
 import weakref
 from collections.abc import MutableMapping
 from collections import deque
@@ -85,6 +86,44 @@ _PUBLISHED_SLOTS = ('_aabb_sig', '_aabb_bounds', '_aabb_runtime', '_world_bounds
                     '_aabb_turn')
 
 
+def travel_range(brush):
+    """``(lo, hi, turns, reach)``: every centre a mover's or door's travel can
+    give it -- *lo*/*hi* bound its authored centre and the far end of its
+    authored travel (``direction`` x ``distance`` for a mover; a door's
+    ``door_direction`` x ``door_distance`` less its lip), with a margin for
+    rounding -- whether it can turn, and how far its box reaches from that
+    centre: its half-extents, or for a row that can turn the radius of its
+    box in every axis. The rules :class:`MoverTable` moves rows by, from the
+    authored parameters alone, so the spatial grid can file a brush for all
+    of its travel before the table has a row for it."""
+    from engine.logic_movers import DOOR_DIRECTION_MAP
+    box = brush_placement.authored_box(brush)
+    origin = tuple(float(v) for v in box[:3])
+    half = box[3:]
+    ends = [origin]
+    if brush.get('is_mover'):
+        direction = _unit_direction(brush.get('direction', [0, 1, 0]))
+        distance = float(brush.get('distance', 128.0))
+        ends.append(tuple(origin[i] + direction[i] * distance for i in range(3)))
+    if brush.get('is_door'):
+        distance = float(brush.get('door_distance', brush.get('distance', 128.0)))
+        if 'door_lip' in brush:
+            distance = max(1.0, distance - float(brush.get('door_lip', 0.0)))
+        direction = _unit_direction(DOOR_DIRECTION_MAP.get(brush.get('door_direction', ''),
+                                                           [0, 1, 0]))
+        ends.append(tuple(origin[i] + direction[i] * distance for i in range(3)))
+    margin = 1.0 + 1e-6 * max(abs(v) for end in ends for v in end)
+    lo = tuple(min(end[i] for end in ends) - margin for i in range(3))
+    hi = tuple(max(end[i] for end in ends) + margin for i in range(3))
+    turns = bool(brush.get('is_mover') and brush.get('rotate'))
+    if turns:
+        radius = math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+        reach = (radius, radius, radius)
+    else:
+        reach = (float(half[0]), float(half[1]), float(half[2]))
+    return lo, hi, turns, reach
+
+
 def _publish_slot(brush, transform):
     """Publish one changed row's transform into its brush's runtime-only
     slot and drop its derived key -- nothing else. The first reader that
@@ -116,10 +155,15 @@ def _publish_slots(chosen, transforms, live):
 
 
 def _withdraw(brushes):
-    """Drop every slot a mover table publishes from *brushes*."""
+    """Drop every slot a mover table publishes from *brushes*, and their
+    marks as off their filed travel (``brush_placement.off_range``)."""
     for brush in brushes:
         for key in _PUBLISHED_SLOTS:
             brush.pop(key, None)
+    off_range = brush_placement.off_range
+    if off_range:
+        for brush in brushes:
+            off_range.pop(id(brush), None)
 
 
 def _withdraw_held(held):
@@ -266,10 +310,6 @@ class _Group:
         self.states = StateView(self)
         #: The MoverTable this group belongs to (its runtime source).
         self.table = None
-        #: Moves whenever what bounds a row's reach may change -- its
-        #: half-extents or whether it can turn (resync, a restored spin):
-        #: MoverTable.near_rows keeps its per-row reaches against it.
-        self.reach_version = 0
         self._build([])
 
     # -- rows ----------------------------------------------------------------
@@ -367,11 +407,46 @@ class _Group:
         authored = box[:3]
         self.half[row] = box[3:]
         self.turned[row] = box[3:]
-        self.reach_version += 1
         if tuple(self.original[row].tolist()) != authored:
             travelled = self.pos[row] - self.original[row]
             self.original[row] = authored
             self.pos[row] = self.original[row] + travelled
+
+    def check_range(self, row, centre=None, angle=None):
+        """Whether row *row* can now be anywhere the spatial grid did not
+        file its brush for (``_travel_filed``, :func:`travel_range`): a path
+        step or a restored placement at *centre*, a restored spin *angle*,
+        or a travel segment an edit or a loaded state changed. If so the
+        brush is *off range* (``brush_placement.off_range``) until play
+        stops, and every reader of the grid adds it wherever it looks.
+
+        Linear travel stays on its segment, which is checked whenever the
+        columns it is worked out from change, so a tick checks nothing."""
+        brush = self.brushes[row]
+        filed = brush.get('_travel_filed')
+        if filed is None or id(brush) in brush_placement.off_range:
+            return
+        lo, hi, turns = filed[0], filed[1], filed[2]
+        if angle and not turns:
+            brush_placement.off_range[id(brush)] = brush
+            return
+        if centre is not None:
+            points = (centre,)
+        else:
+            origin = self.original[row].tolist()
+            distance = float(self.distance[row])
+            if self.dir_valid[row]:
+                direction = self.direction[row].tolist()
+            else:
+                direction = self._authored_direction(row)
+            points = (origin, [origin[i] + direction[i] * distance for i in range(3)])
+        for point in points:
+            if not all(lo[i] <= point[i] <= hi[i] for i in range(3)):
+                brush_placement.off_range[id(brush)] = brush
+                return
+
+    def _authored_direction(self, row):
+        return _unit_direction(self.brushes[row].get('direction', [0, 1, 0]))
 
     # -- state as a mapping ----------------------------------------------------
 
@@ -448,7 +523,8 @@ class _Group:
         self.pos[row] = position
         if hasattr(self, 'rot_angle'):
             self.rot_angle[row] = angle
-            self.reach_version += 1         # it may turn now (near_rows)
+        # A saved game may put it anywhere.
+        self.check_range(row, centre=position, angle=angle)
 
     def _write_positions(self, rows, new_pos, ride, spin=None):
         """Store *new_pos* for the *rows* that moved, and publish them and
@@ -628,6 +704,8 @@ class LinearMovers(_Group):
         # Its half-extents and axis are new: its turned box is worked out
         # again when next gathered.
         self.turn_angle[row] = np.nan
+        # An edit in play may take its travel past where the grid filed it.
+        self.check_range(row)
 
     def settle_turns(self, rows):
         """Bring the turned half-extents of *rows* up to date: worked out
@@ -688,6 +766,7 @@ class LinearMovers(_Group):
         else:
             self.direction[row] = value
             self.dir_valid[row] = True
+            self.check_range(row)
 
     def _unset(self, row, key):
         if key == '_direction_np':
@@ -859,6 +938,12 @@ class Doors(_Group):
     def resync(self, row):
         super().resync(row)
         self.open_time[row] = self.brushes[row].get('open_time', 3.0)
+        if self.dir_valid[row]:
+            self.check_range(row)
+
+    def _authored_direction(self, row):
+        raw = self.raw_direction[row]
+        return _unit_direction([0, 1, 0] if raw is None else raw)
 
     def _reset_fields(self, row):
         self.progress[row] = 0.0
@@ -899,11 +984,14 @@ class Doors(_Group):
             self.speed[row] = value
         elif key == 'distance':
             self.distance[row] = value
+            if self.dir_valid[row]:
+                self.check_range(row)
         elif key == 'direction':
             self.raw_direction[row] = value
         else:
             self.direction[row] = value
             self.dir_valid[row] = True
+            self.check_range(row)
 
     def _unset(self, row, key):
         if key == 'speed':
@@ -1264,121 +1352,6 @@ class MoverTable:
             if not claimed[i]:
                 bulk.claim(i, self.runtime_entries.get(id(bulk.brushes[i])), centre, half, claimed)
 
-    # -- the broad phase -----------------------------------------------------
-
-    #: From this many rows a group is tested in one vectorised pass;
-    #: below it, a scan of the column in scalars. Measured in the frame (the
-    #: tick and the player around it, CPython 3.13, NumPy 2.5.3): the NumPy
-    #: pass costs 6-11 us from 8 to 128 rows (each call 1-2 us on caches the
-    #: tick has just used), the scan about 1 us plus 0.15 us a row -- level
-    #: at about 48 rows (docs/brush-model-stage2.md §11.7).
-    NEAR_VECTOR_FROM = 48
-
-    #: Each row's four compare results, read as one integer: all true.
-    _ALL_NEAR = np.uint32(0x01010101)
-
-    def near_rows(self, lists, x, y, z, pad, pad_turned):
-        """The broad phase over the table's columns: for *lists* -- the
-        mover list and the door list a reader was handed, in the order of
-        this table's rows -- the brushes whose box can come within *pad*
-        (per axis) of the point ``(x, y, z)``, each list's in its order.
-
-        A row's box is its centre now (the ``pos`` column: where its runtime
-        entry puts it, or, with no entry, its authored centre, which the
-        publication leaves it at) and its authored half-extents; a row that
-        can turn is bounded by the radius of its box instead, and its
-        distance taken against *pad_turned*. Rows whose box the columns
-        cannot bound (a brush in both groups, a mesh proxy) are always
-        near. The reaches are worked out once per row rebuild or resync,
-        never per tick; each tick reads the centres in one go and compares
-        (:attr:`NEAR_VECTOR_FROM`).
-
-        The lists must be this table's rows (:meth:`holds_rows`)."""
-        out = []
-        for brushes, group in zip(lists, (self.movers, self.doors)):
-            if not brushes:
-                out.append(brushes)
-                continue
-            reach = self._reach(group, pad, pad_turned)
-            if len(brushes) < self.NEAR_VECTOR_FROM:
-                out.append([b for b, (px, py, pz), (rx, ry, rz)
-                            in zip(brushes, group.pos.tolist(), reach[1])
-                            if -rx <= px - x <= rx and -ry <= py - y <= ry
-                            and -rz <= pz - z <= rz])
-                continue
-            # |centre - point| <= reach, a fourth column always true, and
-            # each row's four results read as one integer.
-            limit, gap, near = reach[2], reach[3], reach[4]
-            np.subtract(group.pos, (x, y, z), out=gap[:, :3])
-            np.abs(gap, out=gap)
-            np.less_equal(gap, limit, out=near)
-            out.append(list(compress(
-                brushes, (near.view(np.uint32).ravel() == self._ALL_NEAR).tolist())))
-        return out
-
-    def holds_rows(self, lists):
-        """Whether *lists* -- a mover list and a door list -- are this
-        table's rows, brush for brush (an empty list always is)."""
-        for brushes, group in zip(lists, (self.movers, self.doors)):
-            if brushes and not self._is_rows(brushes, group):
-                return False
-        return True
-
-    def _is_rows(self, brushes, group):
-        """Whether the list *brushes* is *group*'s rows, brush for brush.
-        Checked once per list object and row build (the lists a reader is
-        handed are replaced, never edited in place)."""
-        seen = group.__dict__.get('_near_list')
-        if (seen is not None and seen[0] is brushes and seen[1] == group.version
-                and seen[2] == len(brushes)):
-            return True
-        rows = group.brushes
-        if len(brushes) != len(rows) or any(a is not b for a, b in zip(brushes, rows)):
-            return False
-        group._near_list = (brushes, group.version, len(brushes))
-        return True
-
-    def _reach(self, group, pad, pad_turned):
-        """``(key, rows, limit, gap, near)``: per row, how far its centre
-        may be from a point (per axis) for its box to come within *pad* /
-        *pad_turned* of it -- as tuples for the scan, and as an ``(n, 4)``
-        array (a fourth column always passing) with the scratch arrays the
-        vectorised pass fills -- kept until the rows, their reach inputs or
-        the pads change."""
-        cached = group.__dict__.get('_near_reach')
-        if cached is not None:
-            key = cached[0]
-            if ((key[0] is pad or key[0] == pad)
-                    and (key[1] is pad_turned or key[1] == pad_turned)
-                    and key[2] == group.reach_version
-                    and key[3] == self.movers.version and key[4] == self.doors.version):
-                return cached
-        half = group.half
-        reach = half + np.asarray(pad)
-        turns = group.twin_row >= 0
-        if group is self.movers:
-            turns = turns | group.rotate | (group.rot_angle != 0.0)
-        if turns.any():
-            # Turned any way about its centre, a box stays inside the sphere
-            # through its corners.
-            radius = np.sqrt(np.einsum('ij,ij->i', half[turns], half[turns]))
-            reach[turns] = radius[:, None] + np.asarray(pad_turned)
-        # A brush in both groups (its spin is the other group's) and a mesh
-        # proxy (collided by its world-space mesh, which no row moves): near
-        # wherever they are.
-        reach[group.twin_row >= 0] = np.inf
-        for row, brush in enumerate(group.brushes):
-            if '_mesh_bounds' in brush or '_collision_mode' in brush:
-                reach[row] = np.inf
-        count = len(reach)
-        limit = np.ones((count, 4))
-        limit[:, :3] = reach
-        cached = group._near_reach = (
-            (pad, pad_turned, group.reach_version, self.movers.version, self.doors.version),
-            [tuple(r) for r in reach.tolist()], limit,
-            np.zeros((count, 4)), np.zeros((count, 4), dtype=bool))
-        return cached
-
     def position_of(self, brush):
         """Where *brush* is now (its centre): its row's position, or its
         authored centre when it has no row."""
@@ -1395,8 +1368,9 @@ class MoverTable:
         if row is None or movers.brushes[row] is not brush:
             return False
         # One row, in scalars (_store_one), as the per-row walk stores it.
-        movers._store_one(row, [float(position[0]), float(position[1]), float(position[2])],
-                          movers.original[row].tolist())
+        centre = [float(position[0]), float(position[1]), float(position[2])]
+        movers.check_range(row, centre=centre)        # a path goes anywhere
+        movers._store_one(row, centre, movers.original[row].tolist())
         return True
 
     def restore_placement(self, brush, position, angle=0.0):
@@ -1413,7 +1387,7 @@ class MoverTable:
             found = True
             if group is self.movers:
                 group.rot_angle[row] = float(angle)
-                group.reach_version += 1    # it may turn now (near_rows)
+            group.check_range(row, centre=position, angle=float(angle))
             group._store(np.array([row]), np.array([position]))
         if not found:
             self._pending[id(brush)] = (brush, position, float(angle))
