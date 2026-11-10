@@ -1088,7 +1088,6 @@ class QtGameView(QOpenGLWidget):
                                "the view stays empty; the error is in the "
                                "terminal output.")
         self.set_cull_distance(self.cull_distance)
-        self._preload_assets()
         self.load_all_sprite_textures()
         self.preload_level_textures()
         self._start_logic_thread()
@@ -1174,16 +1173,6 @@ class QtGameView(QOpenGLWidget):
         except Exception as e:
             print(f"Debug Renderer Init Failed: {e}")
 
-    def _preload_assets(self):
-        tex_dir = os.path.join('assets', 'textures')
-        for f in asset_listdir(tex_dir):
-            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga', '.gif')):
-                self.renderer.load_texture(f, 'textures')
-        terrain_dir = os.path.join('assets', 'textures', 'terrain')
-        for f in asset_listdir(terrain_dir):
-            if f.lower().endswith(('.jpg', '.png')):
-                self.renderer.load_texture(os.path.join('terrain', f), 'textures')
-
     def _handle_logic_tick_fault(self, message):
         """Run fatal-tick play teardown on QtGameView's GUI thread.
 
@@ -1261,8 +1250,19 @@ class QtGameView(QOpenGLWidget):
         super().closeEvent(event)
 
     def preload_level_textures(self):
-        if not self.renderer:
+        """Load the textures the open map's brushes name, in this view's GL
+        context: called when a map has loaded and as Play starts, under the
+        loading bar, so no frame stops to decode one. Nothing else is loaded
+        up front -- every texture in ``assets/textures`` used to be, at
+        start-up, whatever the map (0.3 s and 53 MB of a 1.3 s start). A
+        texture applied later is loaded when a frame first draws it.
+        """
+        if not self.renderer or not self.renderer.ready:
             return
+        with self.gl_context():
+            self._preload_level_textures()
+
+    def _preload_level_textures(self):
         texture_set = set()
         for brush in self.editor.state.brushes:
             for face_tex in brush.get('textures', {}).values():
@@ -3302,7 +3302,6 @@ class QtGameView(QOpenGLWidget):
             self._renderer_mode = mode
             self._sync_view_distance()
             self.sprite_textures = {}
-            self._preload_assets()
             self.load_all_sprite_textures()
             self.preload_level_textures()
             self.grid_dirty = True

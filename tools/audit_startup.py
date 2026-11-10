@@ -95,7 +95,6 @@ try:
     span(QtGameView, 'initializeGL', 'initializeGL')
     span(game_view, 'create_renderer', '  create_renderer (shaders)')
     span(LightingMixin, '_init_shadow_resources', '    of which the shadow cube maps')
-    span(QtGameView, '_preload_assets', '  _preload_assets (assets/textures)')
     span(QtGameView, 'load_all_sprite_textures', '  load_all_sprite_textures')
     span(QtGameView, 'preload_level_textures', '  preload_level_textures')
     span(QtGameView, '_start_logic_thread', '  _start_logic_thread')

@@ -2662,6 +2662,8 @@ class MainWindow(QMainWindow):
             self._capture_pre_play_world()
             # Play runs on the complete authored world, not the editor's cells.
             self.state.materialize_editor_world()
+            # The whole world's textures, before the first frame of play.
+            self.view_3d.preload_level_textures()
             logic = self.view_3d.logic_thread
             if logic is not None:
                 # A played package's cutscenes are read from the package.
@@ -4908,6 +4910,8 @@ class MainWindow(QMainWindow):
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()
+            # The map's textures, here rather than in its first frame.
+            self.view_3d.preload_level_textures()
 
             return True
 
