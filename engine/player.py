@@ -340,6 +340,11 @@ class Player:
         # Physics state
         self.on_ground = False
         self.ground_object = None  # Reference to the brush we are standing on
+        # The mover broad phase's caches (see _near_movers).
+        self._moving_cache = None
+        self._moving_cells = None
+        self._near_span = None
+        self._cover = None
         self.physics_enabled = physics_enabled
         self.step_height = 18.0  # Max height the player can step up automatically
 
@@ -427,6 +432,8 @@ class Player:
         phase's lists of them), so nothing of the finished session is kept."""
         self._moving_cache = None
         self._moving_cells = None
+        self._near_span = None
+        self._cover = None
 
     def _moving(self, movers, doors):
         """The level's movers and doors, each once, in canonical order (the
@@ -446,6 +453,7 @@ class Player:
                                               (len(doors) if doors else 0)),
                               moving, {key: place for key, (place, _b) in rank.items()})
         self._moving_cells = None
+        self._near_span = None
         return moving
 
     def _near_movers(self, grid, colliders, moving):
@@ -464,31 +472,30 @@ class Player:
         x, y, z = self.pos.x, self.pos.y, self.pos.z
         reach = pads[4]
         size = grid.cell_size
-        x0 = int(math.floor((x - reach) / size))
-        x1 = int(math.floor((x + reach) / size))
-        z0 = int(math.floor((z - reach) / size))
-        z1 = int(math.floor((z + reach) / size))
-        cells = self._cells_moving(grid, pads)
-        # Each cell's movers with the box they can reach over their travel,
-        # padded (_cells_moving): those whose box holds the player.
-        if x0 == x1 and z0 == z1:
-            near = [brush for brush, bx0, by0, bz0, bx1, by1, bz1 in cells.get((x0, z0), ())
-                    if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1]
-        else:
-            near = []
-            for cx in range(x0, x1 + 1):
-                for cz in range(z0, z1 + 1):
-                    near.extend([brush for brush, bx0, by0, bz0, bx1, by1, bz1
-                                 in cells.get((cx, cz), ())
-                                 if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1])
-            if len(near) > 1:
-                near = self._in_order(near)
+        # Floor division of floats is the floor (math.floor, without the
+        # calls).
+        span = ((x - reach) // size, (x + reach) // size,
+                (z - reach) // size, (z + reach) // size)
+        rows = grid._boxes()
+        held = self._near_span
+        if held is None or held[0] is not rows or held[1] is not pads or held[2] != span:
+            entries = self._span_entries(grid, pads, span)
+            if entries is None:
+                return None, moving             # no cell holds it: every mover
+            held = self._near_span = (rows, pads, span, entries)
+        # Each mover filed in those cells, with the box it can reach over its
+        # travel padded by the player's pads (_cells_moving), in canonical
+        # order: those whose box holds the player.
+        near = [brush for brush, bx0, by0, bz0, bx1, by1, bz1 in held[3]
+                if bx0 <= x <= bx1 and by0 <= y <= by1 and bz0 <= z <= bz1]
         if off_range or overridden:
             # Rows that may be anywhere: off their filed travel, or moved by
             # a source that keeps no range (the editor preview, a test).
-            near = self._in_order(list(near) + list(off_range.values())
+            near = self._in_order(near + list(off_range.values())
                                   + list(overridden.values()))
-        cover = _Reach()
+        cover = self._cover
+        if cover is None:
+            cover = self._cover = _Reach()
         cover.x = x
         cover.y = y
         cover.z = z
@@ -496,6 +503,26 @@ class Player:
         cover.room = pads[3] - 1e-6 * max(abs(x), abs(y), abs(z))
         cover.full = (colliders, moving)
         return cover, near
+
+    def _span_entries(self, grid, pads, span):
+        """The :meth:`_cells_moving` entries of every cell in *span*
+        (``(x0, x1, z0, z1)``), each mover once, in canonical order --
+        worked out when the player's cells, the grid's rows or the lists
+        change, not every tick -- or None for a span no cell can hold."""
+        try:
+            x0, x1, z0, z1 = (int(v) for v in span)
+        except (ValueError, OverflowError):
+            return None                         # a NaN or infinite position
+        cells = self._cells_moving(grid, pads)
+        if x0 == x1 and z0 == z1:
+            return cells.get((x0, z0), ())
+        found = {}
+        for cx in range(x0, x1 + 1):
+            for cz in range(z0, z1 + 1):
+                for entry in cells.get((cx, cz), ()):
+                    found.setdefault(id(entry[0]), entry)
+        place = self._moving_cache[4]
+        return tuple(found[key] for key in sorted(found, key=place.__getitem__))
 
     def _in_order(self, brushes):
         """*brushes* (some listed twice) once each, in canonical order; any

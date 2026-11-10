@@ -359,3 +359,17 @@ def test_restores_and_edits_mark_a_row_only_when_it_leaves_its_travel():
         assert id(near) not in bp.off_range
     finally:
         run.close()
+
+
+@pytest.mark.parametrize("bad", [float('nan'), float('inf'), -float('inf')])
+def test_a_position_no_cell_holds_looks_at_every_mover(bad):
+    run = _Run()
+    try:
+        run.step(0)
+        player = run.player
+        moving = player._moving(run.runtime._mover_brush_list, run.runtime._door_brush_list)
+        player.pos.x = bad
+        cover, near = player._near_movers(run.grid, [], moving)
+        assert cover is None and near is moving
+    finally:
+        run.close()
