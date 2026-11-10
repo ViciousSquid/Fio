@@ -353,6 +353,12 @@ _COLUMNS = (
 )
 
 
+#: The columns a row's classification and material are made of: every one
+#: but the warm transform and visibility (RenderTable.material_version).
+_MATERIAL_COLUMNS = tuple(name for name, *_ in _COLUMNS
+                          if name not in ('bounds', 'rot', 'hidden'))
+
+
 def _can_adopt(peer, rows, epoch, dirty_objects, peer_dirty):
     """Whether a table that must re-resolve every row can copy *peer* instead.
 
@@ -383,7 +389,8 @@ class RenderTable:
         '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
         '_shown_mask', '_shown_slots', '_shown_stale',
-        '_occlusion_index', '_occlusion_dirty', 'turning', '__weakref__'))
+        '_occlusion_index', '_occlusion_dirty', 'turning',
+        'material_version', 'extent_version', '__weakref__'))
 
     @property
     def center(self):
@@ -397,6 +404,14 @@ class RenderTable:
 
     def __init__(self):
         self.generation = 0
+        #: Move whenever a row's classification or material columns
+        #: (everything but bounds, rot and hidden) or its half-extents
+        #: actually change -- not when a mover's centre is written every
+        #: tick -- so a renderer can keep what it derives from them (pass
+        #: groups, payloads, face batches) until they do. A reconcile or an
+        #: adopt moves both, with :attr:`generation`.
+        self.material_version = 0
+        self.extent_version = 0
         self.count = 0
         #: slot -> the brush's stable UUID.  A plain list: never indexed in the
         #: frame loop, only when a cache boundary has to be crossed.
@@ -837,6 +852,8 @@ class RenderTable:
         self._occlusion_index = None
         self._occlusion_dirty = None
         self.generation += 1
+        self.material_version += 1
+        self.extent_version += 1
 
     def epoch_is_current(self, epoch):
         """Whether the table was last reconciled at *epoch*."""
@@ -983,6 +1000,8 @@ class RenderTable:
         self._occlusion_index = None  # mapping or row set may have changed
         self._occlusion_dirty = None
         self.generation += 1
+        self.material_version += 1
+        self.extent_version += 1
         return not survivors
 
     def refresh_transforms(self, brushes, slots):
@@ -994,11 +1013,15 @@ class RenderTable:
         """
         if self._occlusion_dirty is not None:
             self._occlusion_dirty.update(int(slot) for slot in slots)
+        idx = np.asarray(slots, dtype=np.intp)
+        half = self.bounds[idx, 3:]
         if len(slots) > 16:
             self._resolve_warm_rows(slots, brushes)
         else:
             for slot in slots:
                 self._resolve_warm(slot, brushes[slot])
+        if not np.array_equal(self.bounds[idx, 3:], half):
+            self.extent_version += 1
         self.rows_read += len(slots)
 
     def refresh_rows(self, brushes, slots):
@@ -1012,8 +1035,17 @@ class RenderTable:
         if self._occlusion_dirty is not None:
             self._occlusion_dirty.update(slots)
         self.rows_read += len(slots)
+        # What the rows held, to tell whether this edit changed any of it
+        # (an edit-time cost: a handful of rows).
+        before = [getattr(self, name)[slots] for name in _MATERIAL_COLUMNS]
+        half = self.bounds[slots, 3:]
         self._resolve_warm_rows(slots, brushes)
         self._resolve_cold_rows(slots, brushes)
+        if not np.array_equal(self.bounds[slots, 3:], half):
+            self.extent_version += 1
+        if not all(np.array_equal(getattr(self, name)[slots], was)
+                   for name, was in zip(_MATERIAL_COLUMNS, before)):
+            self.material_version += 1
         replaced = False
         for slot in slots:
             brush = brushes[slot]

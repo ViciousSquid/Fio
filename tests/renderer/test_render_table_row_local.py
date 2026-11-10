@@ -241,3 +241,68 @@ def test_a_peer_at_another_epoch_or_row_set_is_not_adopted(monkeypatch):
     RenderTable().begin_frame(brushes, 6, peer=peer)            # newer epoch
     RenderTable().begin_frame(brushes[:-1], 5, peer=peer)       # other rows
     assert adopted == []
+
+
+# ---------------------------------------------------------------------------
+# What a renderer keeps derived from the table (M3.1)
+# ---------------------------------------------------------------------------
+
+def _versions(table):
+    return table.generation, table.material_version, table.extent_version
+
+
+def test_material_and_extent_versions_move_only_on_a_real_change():
+    """A renderer keeps the arrays it derives from the material columns
+    (face batches, pass groups) while ``material_version`` stands, and those
+    that read a box's extent (natural UV scale) while ``extent_version``
+    stands; a move, a still frame or an edit that changes nothing moves
+    neither."""
+    from engine.change_journal import STATE, touch
+    rng = random.Random(12)
+    brushes = [_brush(i, rng) for i in range(12)]
+    box = next(b for b in brushes if not bg.brush_has_geometry(b))
+    table = RenderTable()
+    table.begin_frame(brushes, 1)
+    slot = table.slot_of_id[box['id']]
+
+    start = _versions(table)
+    table.begin_frame(brushes, 1)                                # still
+    assert _versions(table) == start
+
+    box['pos'][0] += 30.0                                        # a move
+    table.refresh_transforms(brushes, [slot])
+    assert _versions(table) == start
+
+    touch(box, STATE)                                            # no change
+    table.begin_frame(brushes, 1)
+    assert _versions(table) == start
+
+    box['size'][1] *= 2.0                                        # a resize
+    table.refresh_transforms(brushes, [slot])
+    generation, material, extent = _versions(table)
+    assert (generation, material) == start[:2] and extent > start[2]
+
+    brush_faces.set_face_material(box, 'top', texture='wood.png')   # retexture
+    touch(box, STATE)
+    table.begin_frame(brushes, 1)
+    after = _versions(table)
+    assert after[0] == generation and after[1] > material and after[2] == extent
+
+    box['uv_shift'] = {'top': [0.25, 0.0]}                       # a UV edit
+    touch(box, STATE)
+    table.begin_frame(brushes, 1)
+    assert _versions(table)[1] > after[1]
+
+    before = _versions(table)
+    table.begin_frame(brushes + [_brush(99, rng)], 2)            # reconcile
+    assert all(now > was for now, was in zip(_versions(table), before))
+
+
+def test_adopting_the_peer_moves_every_version():
+    rng = random.Random(13)
+    brushes = [_brush(i, rng) for i in range(10)]
+    peer, table = RenderTable(), RenderTable()
+    peer.begin_frame(brushes, 5)
+    before = _versions(table)
+    table.adopt(peer)
+    assert all(now > was for now, was in zip(_versions(table), before))
