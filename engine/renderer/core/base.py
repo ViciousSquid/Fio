@@ -76,6 +76,9 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         # Reusable model/normal matrix buffers for the batched transform build.
         self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
+        #: id(RenderTable) -> SlotTransforms: each table's matrices, kept by
+        #: change (core/slot_transforms.py).
+        self._slot_transform_caches = {}
 
 
         # PERF: cache of texture-name -> "textures/<name>" cache-key path.

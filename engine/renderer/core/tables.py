@@ -9,6 +9,7 @@ import math
 import numpy as np
 
 from engine import render_table
+from engine.renderer.core.slot_transforms import SlotTransforms
 
 
 #: Recipe lists whose GL resolution a renderer keeps parked: the two render
@@ -37,20 +38,40 @@ def _swap_recipe_cache(parked, current, recipes, fresh):
 class TablesMixin:
     """Dense-table lookups shared by renderer implementations."""
 
+    def _slot_transforms(self, table):
+        """*table*'s :class:`SlotTransforms`: every row's matrices, kept by
+        change (one per render table; the two double-buffered tables have
+        one each)."""
+        caches = self._slot_transform_caches
+        cache = caches.get(id(table))
+        if cache is None or cache.table() is not table:
+            if len(caches) >= 8:
+                for key in [k for k, c in caches.items() if c.table() is None]:
+                    del caches[key]
+            cache = caches[id(table)] = SlotTransforms(table)
+        return cache
+
     def _frame_transforms(self, table, slots):
         """Model and normal matrices for *slots*, into reusable buffers.
 
-        One batched build per pass instead of one memoised glm matrix per brush
-        object.  The buffers are grown geometrically and never shrunk, so a
-        steady-state frame allocates nothing.
+        Gathered from the table's :class:`SlotTransforms`, which rebuilds only
+        the rows whose transform columns changed since it last built them
+        (M3): a still world builds no matrix. The buffers are grown
+        geometrically and never shrunk, so a steady-state frame allocates
+        nothing.
         """
         count = len(slots)
         if len(self._brush_mat_buf) < count:
             capacity = max(count, 16, len(self._brush_mat_buf) * 2)
             self._brush_mat_buf = np.empty((capacity, 16), dtype=np.float32)
             self._brush_nmat_buf = np.empty((capacity, 9), dtype=np.float32)
-        return render_table.model_matrices(
-            table, slots, self._brush_mat_buf, self._brush_nmat_buf)
+        cache = self._slot_transforms(table)
+        cache.sync(table)
+        models = np.take(cache.models, slots, axis=0,
+                         out=self._brush_mat_buf[:count])
+        normals = np.take(cache.normals, slots, axis=0,
+                          out=self._brush_nmat_buf[:count])
+        return models, normals
 
     def _gl_texture_ids(self, table):
         """Return the dense texture-id array for one RenderTable projection.
