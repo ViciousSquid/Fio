@@ -246,6 +246,21 @@ class LogicRender:
             peer_epoch, through_epoch=snapshot_epoch
         )[1]
 
+    def cull_brushes(self, table, frustum_planes, keep):
+        """The slots of *table*'s rows in *keep* (a mask over its live rows)
+        whose box meets the frustum.
+
+        Derived bounds (brush_placement): a spinning row is tested as the
+        AABB of its turned box, so it is never culled while drawn. Until any
+        row has turned (RenderTable.turning) every row's box is its bounds,
+        and the resolver is not asked.
+        """
+        count = table.count
+        bounds = table.bounds[:count]
+        if table.turning:
+            bounds = brush_placement.turned_bounds(bounds, table.rot[:count])
+        return np.flatnonzero(keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
+
     def prepare_render_state(self):
         logic = self.logic
         started = time.perf_counter()
@@ -517,15 +532,7 @@ class LogicRender:
                 table.class_bits[:total_count], table)
             all_slots = np.flatnonzero(keep)
         if self.culling_enabled and total_count:
-            # Derived bounds (brush_placement): a spinning row is tested as
-            # the AABB of its turned box, so it is never culled while drawn.
-            # Until any row has turned (RenderTable.turning) every row's box
-            # is its bounds, and the resolver is not asked.
-            bounds = table.bounds[:total_count]
-            if table.turning:
-                bounds = brush_placement.turned_bounds(bounds, table.rot[:total_count])
-            visible_slots = np.flatnonzero(
-                keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
+            visible_slots = self.cull_brushes(table, frustum_planes, keep)
         else:
             visible_slots = all_slots
 

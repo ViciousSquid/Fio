@@ -50,6 +50,13 @@ ap.add_argument('--only', default='')
 ap.add_argument('--json')
 ap.add_argument('--profile', default='',
                 help='print the functions that took most time in this scenario')
+ap.add_argument('--logic', action='store_true',
+                help='also run the logic thread\'s per-frame publication before '
+                     'each frame -- RenderTable.begin_frame and the frustum cull '
+                     '(LogicRender.cull_brushes) -- timed apart as logic_ms')
+ap.add_argument('--scale', type=int, default=1,
+                help='tile the map this many times (a square of copies) to see '
+                     'how change detection grows with the world (M4)')
 ap.add_argument('--no-raster', action='store_true',
                 help='make draw calls no-ops: render_scene then times the CPU '
                      'side alone (Python, GL calls, uploads), which is what the '
@@ -73,6 +80,10 @@ from engine import brush_placement as bp              # noqa: E402
 from engine.constants import RENDER_MODE_LIT          # noqa: E402
 from engine.entity_table import EntityTable           # noqa: E402
 from engine.render_table import RenderTable           # noqa: E402
+try:
+    from engine import change_detection as _change_detection   # noqa: E402
+except ImportError:                     # a tree before M4
+    _change_detection = None
 from engine.renderer.forward import ForwardRenderer   # noqa: E402
 
 width, height = (int(v) for v in args.size.split('x'))
@@ -163,6 +174,24 @@ renderer.shadows_enabled = False
 renderer.set_grid(4096, 64)
 renderer.set_sprite_textures({})
 brushes = json.loads(json.dumps(_raw(tree, args.map)['brushes']))
+if args.scale > 1:
+    # Copies of the map side by side, each brush with its own id: a bigger
+    # world around the same view (the camera stays on the first copy).
+    _xz = np.array([b.get('pos', (0, 0, 0)) for b in brushes], dtype=float)[:, [0, 2]]
+    _step = float(np.ptp(_xz, axis=0).max() or 512.0) * 1.1
+    _side = int(math.ceil(math.sqrt(args.scale)))
+    _tiles = [(i % _side, i // _side) for i in range(args.scale)]
+    _copies = []
+    for _tx, _tz in _tiles[1:]:
+        for _b in json.loads(json.dumps(brushes)):
+            _p = _b.get('pos') or [0.0, 0.0, 0.0]
+            _b['pos'] = [_p[0] + _tx * _step, _p[1], _p[2] + _tz * _step]
+            if _b.get('geometry'):
+                from engine import brush_geometry as _bg
+                _bg.translate_brush(_b, (_tx * _step, 0.0, _tz * _step))
+            _b['id'] = '%s-%d-%d' % (_b.get('id'), _tx, _tz)
+            _copies.append(_b)
+    brushes = brushes + _copies
 etable = EntityTable()
 hidden = etable.begin_frame([], epoch=1)
 
@@ -184,7 +213,8 @@ peer = RenderTable()
 peer.begin_frame(brushes, epoch=1)
 configs = {id(table): _config(table), id(peer): _config(peer)}
 
-pos = np.array([b.get("pos", (0, 0, 0)) for b in brushes], dtype=float)
+_first = brushes[:len(brushes) // max(1, args.scale)]
+pos = np.array([b.get("pos", (0, 0, 0)) for b in _first], dtype=float)
 centre = pos.mean(axis=0)
 extent = float(np.ptp(pos[:, [0, 2]], axis=0).max()) or 512.0
 projection = glm.perspective(glm.radians(70.0), width / height, 1.0, 40000.0)
@@ -216,10 +246,33 @@ def _turning_view(angle):
     return glm.lookAt(eye, target, glm.vec3(0, 1, 0)), eye
 
 
+_logic_ms = []
+
+
+def _logic_side(tab, config):
+    """The logic thread's share of a frame: the table brought up to date
+    (RenderTable.begin_frame) and the frustum cull (LogicRender.cull_brushes)
+    for the view this frame draws."""
+    started = time.perf_counter()
+    tab.begin_frame(brushes, epoch=epoch['n'])
+    keep, all_slots = tab.shown()
+    config['all_brush_slots'] = all_slots
+    if camera['cull']:
+        view, eye = _turning_view(camera['angle'])
+    else:
+        view, eye = _view(camera['angle'])
+    planes = _culler.extract_frustum_planes(projection * view)
+    slots = _culler.cull_brushes(tab, planes, keep)
+    _logic_ms.append((time.perf_counter() - started) * 1e3)
+    return view, eye, slots
+
+
 def frame():
     tab = current['table']
     config = configs[id(tab)]
-    if camera['cull']:
+    if args.logic:
+        view, eye, slots = _logic_side(tab, config)
+    elif camera['cull']:
         view, eye = _turning_view(camera['angle'])
         planes = _culler.extract_frustum_planes(projection * view)
         bounds = tab.bounds[:tab.count]
@@ -337,11 +390,18 @@ def scenario(label, step, frames):
         frame()
     # Timing (nothing else counted).
     times = []
+    del _logic_ms[:]
+    _detect = getattr(_change_detection, 'DETECT', None)
+    if _detect is not None:
+        _detect.reset()
     hits0 = getattr(renderer, 'pass_memo_hits', 0)
     misses0 = getattr(renderer, 'pass_memo_misses', 0)
     for k in range(frames):
         step(10 + k)
         times.append(frame())
+    detect = ({site: (v[0] / frames, v[1] / frames / 1e3) for site, v in _detect.sites.items()}
+              if _detect is not None else {})
+    logic_ms = statistics.median(_logic_ms) if _logic_ms else None
     memo_hits = getattr(renderer, 'pass_memo_hits', 0) - hits0
     memo_misses = getattr(renderer, 'pass_memo_misses', 0) - misses0
     # GL calls and uploads.
@@ -396,6 +456,12 @@ def scenario(label, step, frames):
         'kept_kb': (current_mem - base) / 1024.0,
         'held_kb': _held_kb(),
         'memo_kb': _memo_kb(),
+        # M4: rows examined and microseconds spent establishing what
+        # changed, a frame, per site; and the logic side's share (--logic).
+        'detect': detect,
+        'detect_rows': sum(v[0] for v in detect.values()),
+        'detect_us': sum(v[1] for v in detect.values()),
+        'logic_ms_p50': logic_ms,
         # M3.1: derived pass arrays reused / rebuilt, a frame.
         'memo_hits': memo_hits / frames,
         'memo_misses': memo_misses / frames,
@@ -406,6 +472,12 @@ def scenario(label, step, frames):
              out['instance_uploads'], out['upload_kb'], out['uploads'], out['gl_calls'],
              out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb'],
              out['held_kb']))
+    if detect or logic_ms is not None:
+        print('%-11s change detection a frame: %.0f rows, %.1f us%s  [%s]'
+              % ('', out['detect_rows'], out['detect_us'],
+                 '' if logic_ms is None else ';  logic side %.3f ms' % logic_ms,
+                 ', '.join('%s %.0f/%.1f' % (k, v[0], v[1])
+                           for k, v in sorted(detect.items()))))
     if memo_hits or memo_misses:
         print('%-11s derived arrays a frame: %.1f reused, %.1f rebuilt; kept %.1f KB'
               % ('', out['memo_hits'], out['memo_misses'], out['memo_kb']))

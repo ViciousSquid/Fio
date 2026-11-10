@@ -58,7 +58,7 @@ from operator import itemgetter, not_, setitem
 
 import numpy as np
 
-from engine import brush_placement
+from engine import brush_placement, change_detection
 from engine.change_journal import JOURNAL, OVERFLOW, VISIBILITY
 from engine.spatial import PARKED_HIDDEN_KEY
 
@@ -2091,6 +2091,7 @@ class MoverTable:
             cached = (key, tuple(maps))
             self._slot_cache[table] = cached
         (mover_rows, mover_slots), (door_rows, door_slots) = cached[1]
+        started = change_detection.now()
         if len(mover_rows):
             table.bounds[mover_slots, :3] = movers.pos[mover_rows]
             angle = movers.rot_angle[mover_rows]
@@ -2103,3 +2104,8 @@ class MoverTable:
                 table.turning = True    # the column's other writer
         if len(door_rows):
             table.bounds[door_slots, :3] = doors.pos[door_rows]
+        # Every mover's and door's row, written whether it moved or not
+        # (counted with change detection: what M4 removes).
+        change_detection.DETECT.add('mover.publish',
+                                    len(mover_rows) + len(door_rows),
+                                    change_detection.now() - started)

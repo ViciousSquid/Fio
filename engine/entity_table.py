@@ -78,6 +78,7 @@ from itertools import chain
 import glm
 import numpy as np
 
+from . import change_detection
 from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
 from .portal_transform import basis_from_rotation
 from .render_table import _can_adopt
@@ -843,13 +844,17 @@ class EntityTable:
         # The logic thread normally hands us EditorState.things, a live list
         # the editor thread can also append to. Freeze it at the frame
         # boundary so every step below sees the same rows.
+        started = change_detection.now()
         things = tuple(things)
         n = len(things)
+        reconcile = self.needs_reconcile(things, epoch)
+        change_detection.DETECT.add('entity_table.rows', n,
+                                    change_detection.now() - started)
         changes = JOURNAL.drain(self)
         changed_positions = JOURNAL.drain_positions(self)
         self.rows_read = 0
         resolved_all = False
-        if self.needs_reconcile(things, epoch):
+        if reconcile:
             if self._refresh_in_place(
                     things, epoch, dirty_objects, effect_store=effect_store):
                 pass

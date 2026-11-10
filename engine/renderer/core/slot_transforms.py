@@ -22,7 +22,7 @@ import weakref
 
 import numpy as np
 
-from engine import render_table
+from engine import change_detection, render_table
 
 
 class SlotTransforms:
@@ -58,10 +58,13 @@ class SlotTransforms:
         if table.generation != self.generation or count != self.count:
             self._rebuild(table, count)
             return count
+        started = change_detection.now()
         bounds = table.bounds[:count]
         rot = table.rot[:count]
         moved = not np.array_equal(bounds, self.bounds)
         turned = not np.array_equal(rot, self.rot)
+        change_detection.DETECT.add('slot_transforms.columns', 2 * count,
+                                    change_detection.now() - started)
         if not (moved or turned):
             self.rebuilt = 0
             return 0

@@ -10,7 +10,7 @@ import weakref
 
 import numpy as np
 
-from engine import render_table
+from engine import change_detection, render_table
 from engine.renderer.core.slot_transforms import SlotTransforms
 
 
@@ -89,10 +89,14 @@ class TablesMixin:
         full = (table.generation, table.material_version, table.extent_version) + state
         if (entry is not None and entry[0]() is table and entry[1] == full
                 and len(entry[2]) == len(objects)
-                and all(a is b for a, b in zip(entry[2], objects))
-                and np.array_equal(entry[3], slots)):
-            self.pass_memo_hits += 1
-            return entry[4]
+                and all(a is b for a, b in zip(entry[2], objects))):
+            started = change_detection.now()
+            same = np.array_equal(entry[3], slots)
+            change_detection.DETECT.add('pass_memo.rows', len(slots),
+                                        change_detection.now() - started)
+            if same:
+                self.pass_memo_hits += 1
+                return entry[4]
         self.pass_memo_misses += 1
         value = build()
         if entry is None and len(tables) >= PASS_MEMO_TABLES:

@@ -12,7 +12,7 @@ import OpenGL.GL as gl
 from OpenGL.raw.GL.VERSION.GL_2_0 import (
     glVertexAttribPointer as _raw_vertex_attrib_pointer)
 
-from engine import render_table
+from engine import change_detection, render_table
 from engine.render_keys import KeyLayout, sort_into_runs
 
 # The render key every brush pass sorts by. Two fields, because two things
@@ -165,9 +165,14 @@ class InstancingMixin:
         if entry is not None and (entry[0]() is not cache or entry[3] != normals):
             entry = None
         known = stream.count
-        same_items = (not grew and known == count
-                      and np.array_equal(stream.slots[:count], slots))
+        started = change_detection.now()
+        compared = not grew and known == count
+        same_items = compared and np.array_equal(stream.slots[:count], slots)
         same_payload = stream.same_payload(count, spare, payload)
+        change_detection.DETECT.add(
+            'stream.items',
+            (count if compared else 0) + (count if np.ndim(payload) else 0),
+            change_detection.now() - started)
         if (same_items and same_payload and entry is not None
                 and entry[1] == cache.version and not entry[2]):
             return stream               # nothing changed: nothing to do
@@ -256,7 +261,10 @@ class InstancingMixin:
         frame since, or with a changed payload."""
         parts = []
         if entry[1] < cache.version:
+            started = change_detection.now()
             moved = np.flatnonzero(cache.stamp[slots[:upto]] > entry[1])
+            change_detection.DETECT.add('stream.stamps', upto,
+                                        change_detection.now() - started)
             if len(moved):
                 parts.append(moved)
         for written in entry[2]:

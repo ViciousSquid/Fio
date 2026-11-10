@@ -73,7 +73,7 @@ from engine.constants import is_water_brush, normalize_color, water_high_quality
 from engine.spatial import authored_hidden
 import itertools
 
-from engine import brush_faces, brush_geometry, brush_placement
+from engine import brush_faces, brush_geometry, brush_placement, change_detection
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
 
 #: Process-wide sources of :attr:`RenderTable.geometry_version` values (two
@@ -774,12 +774,19 @@ class RenderTable:
         Without it, one checkpoint landing between the two buffers' frames
         made the second buffer rebuild every row as well.
         """
+        started = change_detection.now()
         brushes = tuple(brushes)
         n = len(brushes)
+        # What the row set is compared against: one identity test a row, in
+        # C (change detection: counted, M4).
+        same_rows = (epoch is not None and epoch == self._epoch
+                     and brushes == self._row_tuple)
+        change_detection.DETECT.add('render_table.rows', n,
+                                    change_detection.now() - started)
         changes = JOURNAL.drain(self)
         self.rows_read = 0
         resolved_all = False
-        if epoch is None or epoch != self._epoch or brushes != self._row_tuple:
+        if not same_rows:
             cold_dirty = epoch is None or epoch != self._epoch
             if self._refresh_in_place(brushes, n, epoch, dirty_objects):
                 pass
