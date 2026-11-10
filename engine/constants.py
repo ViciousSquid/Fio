@@ -363,6 +363,17 @@ def _brush_aabb_runtime(brush, placement, sig):
     # with every other reader this tick (brush_placement.resolved_runtime)
     # -- read after the stamps it is checked against below.
     stamps = placement.placement_stamps
+    asleep = placement.asleep
+    if asleep and id(brush) in asleep:
+        # Parked (brush_placement.asleep): it moves with no stamp, so where
+        # it is now is worked out for each reader and nothing is cached.
+        runtime = placement.runtime_of(brush)
+        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
+        bp = glm.vec3(cx, cy, cz)
+        bh = glm.vec3(hx, hy, hz)
+        lo = bp - bh
+        hi = bp + bh
+        return (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
     cache = placement._runtime_cache          # resolved_runtime, inline
     key = id(brush)
     entry = cache.get(key)

@@ -7,10 +7,12 @@ door activation, and per-tick advancement.
 
 from __future__ import annotations
 
+import weakref
+
 import glm
 import numpy as np
 
-from .change_journal import moved
+from .change_journal import moved, touch
 from .mover_table import MoverTable
 
 try:
@@ -37,6 +39,9 @@ class LogicMovers:
     def __init__(self, logic):
         self.logic = logic
         self._mover_table = MoverTable()
+        # Held weakly (the logic thread holds this runtime): a parked path
+        # follower is worked out along its path nodes.
+        self._mover_table.logic = weakref.ref(logic)
         self._moving_rows = None
         self.movers = []
         self.doors = []
@@ -236,6 +241,9 @@ class LogicMovers:
                     state["lerp_t"] = 0.0
                 else:
                     brush["start_on"] = False
+                    # Journalled, so the mover table's start_on column
+                    # follows and the mover stops at the end of its path.
+                    touch(brush)
                     if logic.io_manager:
                         logic.io_manager.fire_output(brush, "OnFullyClosed")
                     self.mover_path_states.pop(idx, None)

@@ -77,7 +77,7 @@ class _CellRows:
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
                  '_unpacked_cells', '_mover_rows', '_seen', '_lock', '_mover_boxes',
-                 '_mover_at')
+                 '_mover_at', '_asleep')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -135,6 +135,9 @@ class _CellRows:
         #: The placement stamps the mover rows were last derived at; the
         #: constructor just derived them, but at no recorded stamp.
         self._seen = None
+        #: ``(brush_placement.asleep_version, rows)``: the mover rows that
+        #: are parked (see _resolve_asleep).
+        self._asleep = None
         self._lock = threading.Lock()
         # The gather shared with the collision rows (the same movers).
         self._mover_boxes, self._mover_rows, self._mover_at = shared_bulk_boxes(
@@ -179,15 +182,38 @@ class _CellRows:
         query: one may be anywhere."""
         query, rows = self._pairs_filed(cx, cz)
         off = _off_range_filed()
-        if not off or not len(cx):
-            return query, rows
-        row_of = {id(brush): row for row, brush in self.movers}
-        extra = [row_of[id(b)] for b in off if id(b) in row_of]
-        if not extra:
-            return query, rows
-        count = len(cx)
-        return (np.concatenate((query, np.repeat(np.arange(count, dtype=np.int64), len(extra)))),
-                np.concatenate((rows, np.tile(np.asarray(extra, dtype=np.int64), count))))
+        if off and len(cx):
+            row_of = {id(brush): row for row, brush in self.movers}
+            extra = [row_of[id(b)] for b in off if id(b) in row_of]
+            if extra:
+                count = len(cx)
+                query = np.concatenate((query, np.repeat(np.arange(count, dtype=np.int64),
+                                                         len(extra))))
+                rows = np.concatenate((rows, np.tile(np.asarray(extra, dtype=np.int64), count)))
+        if _placement.asleep and len(rows):
+            self._resolve_asleep(rows)
+        return query, rows
+
+    def _resolve_asleep(self, rows):
+        """The parked movers and doors among *rows* (brush_placement.asleep):
+        nothing ticks them, so their boxes -- as the table last stored them
+        -- are worked out again for now, for the rows a query reaches."""
+        key = _placement.asleep_version
+        held = self._asleep
+        if held is None or held[0] != key:
+            asleep = _placement.asleep
+            mine = [row for row, brush in self.movers if id(brush) in asleep]
+            held = self._asleep = (key, np.asarray(mine, dtype=np.int64))
+        if not len(held[1]):
+            return
+        hit = np.unique(rows[np.isin(rows, held[1])])
+        if not len(hit):
+            return
+        with self._lock:
+            for row in hit.tolist():
+                bounds = world_bounds(self.brushes[row])
+                self.lo[row] = bounds[0:3]
+                self.hi[row] = bounds[3:6]
 
     def _pairs_filed(self, cx, cz):
         count = len(cx)

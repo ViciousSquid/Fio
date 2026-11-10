@@ -14,6 +14,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Dict, Callable, Optional, Set
 
+from engine.brush_placement import settle as settle_parked
 from engine.change_journal import touch
 
 # Import debug logger - with fallback to print if not available
@@ -555,6 +556,11 @@ class IOManager:
         # from; the logic thread rebuilds it if an input changes it.
         was_hidden = (authored_flag(target, 'hidden')
                       if isinstance(target, dict) else None)
+        if was_hidden is not None:
+            # A mover or door Big World has parked is not ticked: it is
+            # brought to now first, so the input acts on where it has got
+            # to and takes effect from now (brush_placement.asleep).
+            settle_parked(target)
         try:
             if handler:
                 try:

@@ -339,9 +339,15 @@ def test_big_world_parks_and_wakes_a_mover_mid_motion(request):
     assert lift['pos'] == [300.0, 16.0, 0.0]
     assert filed() == home_cells
     assert bp.placed_box(lift)[:3] == while_parked
+    # Parked, it was not ticked (its row still holds where it was parked)
+    # but worked out for every reader; woken at the table's next sync, it is
+    # stored there once.
     table = logic.mover_runtime._movers()
     row = table.movers.row_of_obj[id(lift)]
+    assert tuple(table.movers.pos[row].tolist()) != while_parked
+    table.sync()
     assert while_parked == tuple(table.movers.pos[row].tolist())
+    assert not table.movers.parked[row]
 
 
 # ---------------------------------------------------------------------------

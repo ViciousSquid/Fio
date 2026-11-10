@@ -373,6 +373,13 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     and self-contained (it embeds the whole level), so it can be written to disk
     and loaded in a fresh session, or applied back in the same one.
     """
+    # Movers and doors Big World has parked are not ticked: each is brought
+    # to now, so the save holds where it has got to (its state, placement
+    # and path), as for every other.
+    try:
+        logic.mover_runtime._movers().settle_parked()
+    except Exception:
+        pass
     level = {}
     try:
         level = logic.editor_state.get_level_data()

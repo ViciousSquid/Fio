@@ -49,6 +49,7 @@ plugins -- asks the resolver, which answers from the per-brush
 from __future__ import annotations
 
 import math
+import threading
 import weakref
 from collections.abc import MutableMapping
 from collections import deque
@@ -58,7 +59,8 @@ from operator import itemgetter, not_, setitem
 import numpy as np
 
 from engine import brush_placement
-from engine.change_journal import JOURNAL, OVERFLOW
+from engine.change_journal import JOURNAL, OVERFLOW, VISIBILITY
+from engine.spatial import PARKED_HIDDEN_KEY
 
 # Door states. OTHER keeps any unrecognised string as-is.
 CLOSED, OPENING, OPEN, CLOSING, STOPPED, OTHER = range(6)
@@ -78,6 +80,11 @@ _EVENT_NAMES = {_FULLY_OPEN: 'OnFullyOpen', _FULLY_CLOSED: 'OnFullyClosed',
 
 #: An empty row list.
 _NO_ROWS = np.zeros(0, dtype=np.intp)
+
+
+def _no_logic():
+    """A table not yet linked to a logic thread's runtime."""
+    return None
 
 _consume = deque(maxlen=0).extend
 
@@ -154,16 +161,32 @@ def _publish_slots(chosen, transforms, live):
                 brush.pop('_aabb_runtime', None)
 
 
-def _withdraw(brushes):
-    """Drop every slot a mover table publishes from *brushes*, and their
-    marks as off their filed travel (``brush_placement.off_range``)."""
+def _withdraw_slots(brushes):
+    """Drop every slot a mover table publishes from *brushes*."""
     for brush in brushes:
         for key in _PUBLISHED_SLOTS:
             brush.pop(key, None)
+
+
+def _withdraw(brushes):
+    """Drop every slot a mover table publishes from *brushes*, and their
+    marks as off their filed travel (``brush_placement.off_range``) or
+    parked (``brush_placement.asleep``)."""
+    _withdraw_slots(brushes)
     off_range = brush_placement.off_range
     if off_range:
         for brush in brushes:
             off_range.pop(id(brush), None)
+    asleep = brush_placement.asleep
+    if asleep:
+        gone = False
+        for brush in brushes:
+            held = asleep.get(id(brush))
+            if held is not None and held[0] is brush:
+                del asleep[id(brush)]
+                gone = True
+        if gone:
+            brush_placement.note_asleep()
 
 
 def _withdraw_held(held):
@@ -195,6 +218,106 @@ def _eased(t):
     inputs, and a mover would then drift from where it used to be.
     """
     return np.where(t < 0.5, 4 * t * t * t, 1 - np.float_power(-2 * t + 2, 3) / 2)
+
+
+def _ticks_to(gap, step):
+    """How many ticks a value moving *step* a tick (> 0) takes to cover
+    *gap*: the smallest k >= 1 with ``k * step >= gap``. A ratio within
+    float error of a whole number counts as that number (what exact
+    arithmetic says; a sum stepped tick by tick can land either side)."""
+    if gap <= 0.0:
+        return 1
+    ratio = gap / step
+    k = math.ceil(ratio - 1e-9 * ratio)
+    return k if k > 1 else 1
+
+
+#: Legs longer than this many ticks are not counted step by step (see
+#: :func:`_leg`): worked out instead.
+LEG_COUNT_LIMIT = 20000
+
+#: ``(step, forward) -> ticks``: a whole leg's length as the walk counts it.
+_WHOLE_LEGS = {}
+
+
+def _leg(p, step, forward):
+    """How many ticks the walk takes to carry a progress value from *p* to
+    its end (1 going forward, 0 going back) at *step* a tick (> 0): counted
+    with the walk's own additions, so an end lands on the tick it would --
+    a whole number of steps a leg in exact arithmetic can take one more as
+    a sum. Bounded by one leg, whatever time has passed; a whole leg (from
+    an end) is counted once per step. A leg longer than
+    :data:`LEG_COUNT_LIMIT` ticks is worked out (:func:`_ticks_to`)."""
+    estimate = _ticks_to(1.0 - p if forward else p, step)
+    if estimate > LEG_COUNT_LIMIT:
+        return estimate
+    key = None
+    if p == (0.0 if forward else 1.0):
+        key = (step, forward)
+        known = _WHOLE_LEGS.get(key)
+        if known is not None:
+            return known
+    k = 0
+    if forward:
+        while True:
+            p += step
+            k += 1
+            if p >= 1.0:
+                break
+    else:
+        while True:
+            p -= step
+            k += 1
+            if p <= 0.0:
+                break
+    if key is not None:
+        if len(_WHOLE_LEGS) > 4096:
+            _WHOLE_LEGS.clear()
+        _WHOLE_LEGS[key] = k
+    return k
+
+
+def _countdown(timer, dt):
+    """How many ticks a timer at *timer* takes to run out, *dt* a tick: the
+    walk's own subtractions (bounded by the timer), or worked out past
+    :data:`LEG_COUNT_LIMIT` ticks."""
+    estimate = _ticks_to(timer, dt)
+    if estimate > LEG_COUNT_LIMIT:
+        return estimate
+    k = 0
+    while True:
+        timer -= dt
+        k += 1
+        if timer <= 0:
+            return k
+
+
+def _bounce(progress, forward, step, n):
+    """A mover's ``(progress, forward)`` *n* ticks of *step* on: the per-tick
+    rule (:meth:`LinearMovers._one` -- on towards the end it faces, clamped
+    there, where it turns), its ends on the ticks the walk reaches them
+    (:func:`_leg`), whole round trips skipped."""
+    p, f = progress, forward
+    if step <= 0.0:
+        # Nothing moves; an end it is already at still turns it, once.
+        if n > 0:
+            if f and p >= 1.0:
+                return 1.0, False
+            if not f and p <= 0.0:
+                return 0.0, True
+        return p, f
+    lap = None
+    while n > 0:
+        k = _leg(p, step, f)
+        if n < k:
+            return (p + n * step, True) if f else (p - n * step, False)
+        p, f = (1.0, False) if f else (0.0, True)
+        n -= k
+        if lap is None:
+            # At an end now: a round trip from here is the two whole legs.
+            lap = _leg(1.0, step, False) + _leg(0.0, step, True)
+            n %= lap
+    return p, f
 
 
 def _unit_direction(raw):
@@ -244,11 +367,18 @@ class StateView(MutableMapping):
     def __init__(self, group):
         self._group = group
 
+    # A parked row's state is brought to now before it is read or written
+    # (_Group.settle): what an input or a saved game sees is where it has
+    # got to, and what it writes takes effect from now.
+
     def __getitem__(self, index):
         group = self._group
         row = group.row_of_index.get(index)
-        if row is not None and group.has_state[row]:
-            return RowState(group, row)
+        if row is not None:
+            if group.n_parked and group.parked[row]:
+                group.settle(row)
+            if group.has_state[row]:
+                return RowState(group, row)
         return group.fallback[index]
 
     def __setitem__(self, index, state):
@@ -257,12 +387,16 @@ class StateView(MutableMapping):
         if row is None:
             group.fallback[index] = state
         else:
+            if group.n_parked and group.parked[row]:
+                group.settle(row)
             group.load_state(row, state)
             group.dirty.add(row)
 
     def __delitem__(self, index):
         group = self._group
         row = group.row_of_index.get(index)
+        if row is not None and group.n_parked and group.parked[row]:
+            group.settle(row)
         if row is not None and group.has_state[row]:
             group.has_state[row] = False
             group.dirty.add(row)
@@ -272,8 +406,11 @@ class StateView(MutableMapping):
     def __contains__(self, index):
         group = self._group
         row = group.row_of_index.get(index)
-        if row is not None and group.has_state[row]:
-            return True
+        if row is not None:
+            if group.n_parked and group.parked[row]:
+                group.settle(row)
+            if group.has_state[row]:
+                return True
         return index in group.fallback
 
     def __iter__(self):
@@ -310,6 +447,11 @@ class _Group:
         self.states = StateView(self)
         #: The MoverTable this group belongs to (its runtime source).
         self.table = None
+        #: Ticks this group has walked, and the step of the last: the clock
+        #: a parked row is resolved against (see :meth:`settle`). Kept
+        #: across rebuilds.
+        self.ticks = 0
+        self.delta = 1.0 / 60.0
         self._build([])
 
     # -- rows ----------------------------------------------------------------
@@ -346,6 +488,12 @@ class _Group:
         #: Whether any row has a twin (almost never): the publish skips the
         #: twin gather without it.
         self.any_twin = False
+        #: Rows a streaming layer has parked (PARKED_HIDDEN_KEY): not walked
+        #: or published; each is resolved on demand from its state and the
+        #: ticks since :attr:`since` (see :meth:`settle`).
+        self.parked = np.zeros(n, dtype=bool)
+        self.since = np.zeros(n, dtype=np.int64)
+        self.n_parked = 0
         self._build_columns(n)
         for row in range(n):
             # A brush cached as still before it had a mover's flag
@@ -353,6 +501,7 @@ class _Group:
             # one now: drop the key once, here.
             self.brushes[row].pop('_aabb_sig', None)
             self.resync(row)
+            self.note_parking(row)
         if self.table is not None:
             self.table._rows_held[self.held_as] = self.brushes
             self.table._adopt(self)
@@ -386,6 +535,7 @@ class _Group:
                 moved.append(row)
         if moved and self.table is not None:
             self.table._publish(self, moved)
+            self.quiet(moved)
         self.dirty.clear()
 
     def replace_states(self, entries, states):
@@ -401,7 +551,10 @@ class _Group:
         """Copy row *row*'s brush parameters and authored centre into the
         columns. Only an authored centre that has changed (an edit in play)
         rebases the row, keeping the displacement it has travelled; an
-        unchanged one leaves its position exactly as it is."""
+        unchanged one leaves its position exactly as it is. A parked row is
+        first brought to now under the parameters it had."""
+        if self.n_parked and self.parked[row]:
+            self.settle(row)
         brush = self.brushes[row]
         box = brush_placement.authored_box(brush)
         authored = box[:3]
@@ -411,6 +564,99 @@ class _Group:
             travelled = self.pos[row] - self.original[row]
             self.original[row] = authored
             self.pos[row] = self.original[row] + travelled
+
+    # -- parked rows ---------------------------------------------------------
+
+    def note_parking(self, row, publish=True):
+        """Park or wake row *row* if its brush's parking mark
+        (``engine.spatial.PARKED_HIDDEN_KEY``, set by a streaming layer) no
+        longer says what the row is: ``'parked'``, ``'woken'`` or None. A
+        brush in both groups is never parked: its two rows move it
+        together. With *publish* false the caller publishes a woken row and
+        stamps the change (a crossing parks and wakes many at once)."""
+        table = self.table
+        brush = self.brushes[row]
+        parked = (table is not None and PARKED_HIDDEN_KEY in brush
+                  and self.twin_row[row] < 0)
+        if parked == bool(self.parked[row]):
+            return None
+        if parked:
+            self.parked[row] = True
+            self.since[row] = self.ticks
+            self.n_parked += 1
+            brush_placement.asleep[id(brush)] = (brush, table.ref)
+            brush_placement.note_asleep()
+            # Every reader asks the resolver now (runtime_now), from any
+            # thread; nothing is published until it wakes.
+            _withdraw_slots((brush,))
+            if publish:
+                brush_placement.note_runtime_change()
+            return 'parked'
+        self.wake(row, publish)
+        return 'woken'
+
+    def wake(self, row, publish=True):
+        """Unpark row *row*: brought to now once, then walked and published
+        as any other row (by the caller, when *publish* is false)."""
+        self.settle(row, publish)
+        brush = self.brushes[row]
+        self.parked[row] = False
+        self.n_parked -= 1
+        held = brush_placement.asleep.get(id(brush))
+        if held is not None and held[0] is brush:
+            del brush_placement.asleep[id(brush)]
+            brush_placement.note_asleep()
+        if publish and self.table is not None:
+            self.table._publish(self, [row])
+
+    def quiet(self, rows):
+        """Withdraw what was just published for the parked rows among
+        *rows*: a parked row is answered by :meth:`runtime_now`."""
+        if self.n_parked:
+            _withdraw_slots([self.brushes[row] for row in rows if self.parked[row]])
+
+    def settle(self, row, publish=True):
+        """Bring parked row *row* to now and store it: its state as the
+        ticks since it was last resolved leave it (:meth:`_after`, worked
+        out, not stepped), firing no output -- a transition it passed while
+        parked is not replayed. Only the logic thread, which owns the
+        columns, stores; another thread's readers use :meth:`runtime_now`.
+        With *publish* false the caller publishes it (it is being woken)."""
+        n = self.ticks - int(self.since[row])
+        if n <= 0:
+            return
+        table = self.table
+        if table is not None and table.owner not in (None, threading.get_ident()):
+            return
+        self.since[row] = self.ticks
+        self._catch_up(row, n, self.delta)
+        if table is not None and publish:
+            brush = self.brushes[row]
+            table._publish_row(self, row, table.runtime_entries)
+            if self.parked[row]:
+                _withdraw_slots((brush,))
+            brush_placement.note_runtime_change()
+
+    def runtime_now(self, row):
+        """Parked row *row*'s runtime transform now, worked out from its
+        state and the ticks since, storing nothing (any thread)."""
+        n = self.ticks - int(self.since[row])
+        if n <= 0:
+            centre = self.pos[row].tolist()
+            angle = self._angle(row)
+        else:
+            out = self._after(row, n, self.delta)
+            centre, angle = out['centre'], out.get('angle', 0.0)
+        if angle:
+            ax, ay, az = self.rot_axis[row].tolist()
+            return (centre[0], centre[1], centre[2], ax, ay, az, angle)
+        rest = self.original[row].tolist()
+        if centre[0] == rest[0] and centre[1] == rest[1] and centre[2] == rest[2]:
+            return None
+        return (centre[0], centre[1], centre[2], 0.0, 1.0, 0.0, 0.0)
+
+    def _angle(self, row):
+        return 0.0
 
     def check_range(self, row, centre=None, angle=None):
         """Whether row *row* can now be anywhere the spatial grid did not
@@ -607,10 +853,13 @@ class _Group:
     def _walk(self, logic, delta, table):
         """One pass in list order: vectorised between sequence points."""
         self.dirty.clear()
-        if not self.index:
-            # Most maps have no movers or no doors. With no rows the plan is
-            # empty and the pass below commits nothing, but building it cost
-            # some thirty NumPy calls per group per tick.
+        self.ticks += 1
+        self.delta = delta
+        if not self.index or (self.n_parked and self.n_parked == len(self.index)):
+            # Most maps have no movers or no doors (and a streamed one may
+            # have every row parked). With no rows to walk the plan is empty
+            # and the pass below commits nothing, but building it cost some
+            # thirty NumPy calls per group per tick.
             return
         io = logic.io_manager
         ride = self._ride(logic)
@@ -776,11 +1025,15 @@ class LinearMovers(_Group):
 
     def _takes_part(self, row):
         """Whether *row* moves this tick: what :meth:`_plan` calls active."""
-        return bool(self.start_on[row]) and not self.move_once[row]
+        return (bool(self.start_on[row]) and not self.move_once[row]
+                and not (self.n_parked and self.parked[row]))
 
     def _plan(self, logic, start, delta, io):
         rows = np.arange(start, len(self.index))
-        active = rows[~self.move_once[start:] & self.start_on[start:]]
+        moving = ~self.move_once[start:] & self.start_on[start:]
+        if self.n_parked:
+            moving &= ~self.parked[start:]
+        active = rows[moving]
         paths = logic.mover_runtime.mover_path_states
         if paths:
             on_path = np.zeros(len(self.index), dtype=bool)
@@ -849,6 +1102,185 @@ class LinearMovers(_Group):
         self.forward[rows] = plan['forward'][pick]
         # The spun rows are published with the moved ones, once.
         self._write_positions(rows, plan['pos'][pick], ride, spin)
+
+    # -- a parked row, worked out ---------------------------------------------
+
+    def _angle(self, row):
+        return float(self.rot_angle[row])
+
+    def _after(self, row, n, dt):
+        """Row *row*'s state *n* ticks of *dt* on, as the walk would leave
+        it: ``{'progress', 'forward', 'angle', 'centre', 'path'}`` (*path*: a
+        path mover's ``(state or None, ended)``). Worked out, not stepped;
+        nothing is stored or fired."""
+        progress = float(self.progress[row])
+        forward = bool(self.forward[row])
+        angle = float(self.rot_angle[row])
+        out = {'progress': progress, 'forward': forward, 'angle': angle,
+               'centre': self.pos[row].tolist(), 'path': None}
+        if n <= 0 or not self.start_on[row] or self.move_once[row]:
+            return out
+        table = self.table
+        logic = table.logic() if table is not None else None
+        paths = logic.mover_runtime.mover_path_states if logic is not None else None
+        i = self.index[row]
+        has_state = bool(self.has_state[row])
+        if paths and i in paths:
+            # A path follower does not spin (the walk hands it to the path
+            # step before its spin).
+            state, centre, n = self._path_after(row, n, dt, paths[i], logic)
+            out['centre'] = centre
+            out['path'] = state
+            if state[0] is not None or state[1] or n <= 0:
+                return out
+            # Off the end of a path with no wait (or a node gone): the walk
+            # drops the path and the row travels on its own from the next
+            # tick, from a fresh state (the path took its old one).
+            has_state = False
+        if self.rotate[row]:
+            out['angle'] = (angle + float(self.spin_speed[row]) * dt * n) % 360.0
+        if not has_state:
+            progress, forward = 0.0, True
+        speed = float(self.speed[row])
+        distance = float(self.distance[row])
+        if self.dir_valid[row]:
+            direction = self.direction[row].tolist()
+        else:
+            direction = list(self._authored_direction(row))
+        step = (speed * dt) / distance if distance > 0 else 0
+        progress, forward = _bounce(progress, forward, step, n)
+        out['progress'], out['forward'] = progress, forward
+        t = progress
+        eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
+        original = self.original[row].tolist()
+        out['centre'] = [original[0] + (direction[0] * distance) * eased,
+                      original[1] + (direction[1] * distance) * eased,
+                      original[2] + (direction[2] * distance) * eased]
+        return out
+
+    #: Path segments and waits a parked path follower is worked through at
+    #: most when brought to now (a looped path is skipped by whole laps).
+    PATH_STEPS = 10000
+
+    def _path_after(self, row, n, dt, state, logic):
+        """A parked path follower *n* ticks of *dt* on: ``((state, ended),
+        centre, left)`` -- the path state it would have (None once it has
+        left the path), whether it stopped at the end of its path (after a
+        wait, the walk clears its ``start_on``), and the ticks left after it
+        left the path -- by ``LogicMovers._update_mover_path``'s rule, a
+        segment or a wait at a time, whole laps of a looped path skipped. No
+        output is fired."""
+        brush = self.brushes[row]
+        find = logic.world_runtime.find_path_node_by_name
+        st = dict(state)
+        centre = self.pos[row].tolist()
+        speed = brush.get("speed", 64.0)
+        laps = {}
+        for _ in range(self.PATH_STEPS):
+            if n <= 0:
+                break
+            name = st.get("current_node")
+            if not name:
+                break
+            node = find(name)
+            if node is None:
+                return (None, False), centre, n - 1     # the walk drops the path
+            if st.get("waiting"):
+                k = _countdown(st["wait_remaining"], dt)
+                if n < k:
+                    st["wait_remaining"] -= n * dt
+                    break
+                n -= k
+                st["wait_remaining"] -= k * dt
+                st["waiting"] = False
+                next_name = node.get_next_node_name()
+                if not next_name:
+                    return (None, True), centre, 0
+                st["origin"] = list(centre)
+                st["current_node"] = next_name
+                st["lerp_t"] = 0.0
+                continue
+            origin = [float(v) for v in st["origin"]]
+            if st["lerp_t"] == 0.0 and laps is not None:
+                # The start of a segment: seen here before, the path loops.
+                key = (name, tuple(origin))
+                seen = laps.get(key)
+                if seen is not None and seen > n:
+                    n %= seen - n
+                    laps = None
+                    continue
+                laps[key] = n
+            target = [float(v) for v in node.pos]
+            segment = [target[0] - origin[0], target[1] - origin[1], target[2] - origin[2]]
+            length = math.sqrt(segment[0] ** 2 + segment[1] ** 2 + segment[2] ** 2)
+            if length < 1.0:
+                k = 1
+            else:
+                step = (speed * node.get_speed() * dt) / length
+                if step <= 0.0:
+                    break                           # it never gets there
+                k = _leg(st["lerp_t"], step, True)
+                if n < k:
+                    t = st["lerp_t"] = st["lerp_t"] + n * step
+                    eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
+                    centre = [origin[0] + segment[0] * eased,
+                              origin[1] + segment[1] * eased,
+                              origin[2] + segment[2] * eased]
+                    break
+            n -= k
+            st["lerp_t"] = 1.0
+            centre = target
+            wait = node.get_wait_time()
+            if wait > 0.0:
+                st["waiting"] = True
+                st["wait_remaining"] = wait
+            else:
+                next_name = node.get_next_node_name()
+                if not next_name:
+                    return (None, False), centre, n
+                st["origin"] = list(centre)
+                st["current_node"] = next_name
+                st["lerp_t"] = 0.0
+        return (st, False), centre, 0
+
+    def _catch_up(self, row, n, dt):
+        """:meth:`_after`, stored in the row (and a path follower's state)."""
+        out = self._after(row, n, dt)
+        path = out['path']
+        if path is not None:
+            state, ended = path
+            logic = self.table.logic()
+            paths = logic.mover_runtime.mover_path_states
+            i = self.index[row]
+            if state is None:
+                paths.pop(i, None)
+                if ended:
+                    brush = self.brushes[row]
+                    brush["start_on"] = False
+                    self.start_on[row] = False
+            else:
+                held = paths[i]
+                held.clear()
+                held.update(state)
+            self.pos[row] = out['centre']
+            self.check_range(row, centre=out['centre'])
+            if state is not None or ended:
+                return
+            # It left the path and travelled on its own (see _after).
+            self.load_state(row, {'progress': out['progress'], 'forward': out['forward']})
+            if not self.dir_valid[row]:
+                self._set_direction(row, self._authored_direction(row))
+            self.rot_angle[row] = out['angle']
+            return
+        if self.start_on[row] and not self.move_once[row]:
+            if not self.has_state[row]:
+                self.load_state(row, {'progress': 0.0, 'forward': True})
+            if not self.dir_valid[row]:
+                self._set_direction(row, self._authored_direction(row))
+        self.progress[row] = out['progress']
+        self.forward[row] = out['forward']
+        self.rot_angle[row] = out['angle']
+        self.pos[row] = out['centre']
 
     # -- one row, in order ---------------------------------------------------
 
@@ -1006,11 +1438,14 @@ class Doors(_Group):
     def _takes_part(self, row):
         """Whether *row* moves this tick: what :meth:`_plan` calls live."""
         return bool(self.has_state[row]) and not (
-            self.code[row] == CLOSED and self.progress[row] == 0.0)
+            self.code[row] == CLOSED and self.progress[row] == 0.0) and not (
+                self.n_parked and self.parked[row])
 
     def _plan(self, logic, start, delta, io):
         rows = np.arange(start, len(self.index))
         idle = (self.code[start:] == CLOSED) & (self.progress[start:] == 0.0)
+        if self.n_parked:
+            idle |= self.parked[start:]
         live = rows[self.has_state[start:] & ~idle]
         special = live[~self.dir_valid[live]]
         simple = live[self.dir_valid[live]]
@@ -1076,6 +1511,74 @@ class Doors(_Group):
         self.progress[rows] = plan['progress'][pick]
         self.open_timer[rows] = plan['timer'][pick]
         self._write_positions(rows, plan['pos'][pick], ride)
+
+    # -- a parked row, worked out ---------------------------------------------
+
+    def _after(self, row, n, dt):
+        """Row *row*'s state *n* ticks of *dt* on, as the walk would leave
+        it: ``{'code', 'progress', 'timer', 'centre'}``. Opening, open (its
+        timer running down), closing, closed: at most one pass through the
+        cycle, worked out, not stepped; nothing is stored or fired."""
+        code = int(self.code[row])
+        progress = float(self.progress[row])
+        timer = float(self.open_timer[row])
+        out = {'code': code, 'progress': progress, 'timer': timer,
+               'centre': self.pos[row].tolist()}
+        if n <= 0 or not self.has_state[row] or code not in (OPENING, OPEN, CLOSING):
+            return out
+        distance = float(self.distance[row])
+        step = (float(self.speed[row]) * dt) / distance if distance > 0 else 0
+        open_time = float(self.open_time[row])
+        while n > 0:
+            if code == OPENING:
+                if step <= 0.0 and progress < 1.0:
+                    break                           # it never gets there
+                k = _leg(progress, step, True) if step > 0.0 else 1
+                if n < k:
+                    progress += n * step
+                    break
+                n -= k
+                progress, code, timer = 1.0, OPEN, open_time
+            elif code == OPEN:
+                k = _countdown(timer, dt)
+                if n < k:
+                    timer -= n * dt
+                    break
+                n -= k
+                timer -= k * dt
+                code = CLOSING
+            elif code == CLOSING:
+                if step <= 0.0 and progress > 0.0:
+                    break
+                k = _leg(progress, step, False) if step > 0.0 else 1
+                if n < k:
+                    progress -= n * step
+                    break
+                n -= k
+                progress, code = 0.0, CLOSED
+            else:
+                break
+        out['code'], out['progress'], out['timer'] = code, progress, timer
+        if self.dir_valid[row]:
+            direction = self.direction[row].tolist()
+        else:
+            direction = list(self._authored_direction(row))
+        original = self.original[row].tolist()
+        out['centre'] = [original[0] + (direction[0] * distance) * progress,
+                      original[1] + (direction[1] * distance) * progress,
+                      original[2] + (direction[2] * distance) * progress]
+        return out
+
+    def _catch_up(self, row, n, dt):
+        """:meth:`_after`, stored in the row."""
+        out = self._after(row, n, dt)
+        if out['code'] != int(self.code[row]) or out['progress'] != float(self.progress[row]):
+            if not self.dir_valid[row]:
+                self._set_direction(row, self._authored_direction(row))
+        self.code[row] = out['code']
+        self.progress[row] = out['progress']
+        self.open_timer[row] = out['timer']
+        self.pos[row] = out['centre']
 
     def _one(self, logic, row, delta, io, ride):
         brush = self.brushes[row]
@@ -1154,6 +1657,15 @@ class MoverTable:
         #: id(brush) -> (brush, position, angle): saved-game placements
         #: restored before the brush's row exists (:meth:`restore_placement`).
         self._pending = {}
+        #: A weak reference to the table: what brush_placement.asleep holds
+        #: (a parked row must not keep a stopped world's table alive).
+        self.ref = weakref.ref(self)
+        #: The logic thread (the one that walks the rows), once it has: only
+        #: it stores a parked row's catch-up (_Group.settle).
+        self.owner = None
+        #: The logic thread's runtime, held weakly (set by its mover
+        #: runtime): a parked path follower is worked out along its nodes.
+        self.logic = _no_logic
         JOURNAL.subscribe(self)
         brush_placement.register_runtime(self)
 
@@ -1167,6 +1679,40 @@ class MoverTable:
         if entry is None or entry[0] is not brush:
             return None
         return entry[1]
+
+    # -- parked rows (brush_placement.asleep) ----------------------------------
+
+    def _parked_row(self, brush):
+        for group in (self.movers, self.doors):
+            if not group.n_parked:
+                continue
+            row = group.row_of_obj.get(id(brush))
+            if row is not None and group.brushes[row] is brush and group.parked[row]:
+                return group, row
+        return None, None
+
+    def runtime_now(self, brush):
+        """A parked brush's runtime transform now, worked out from its row's
+        state and the ticks since, storing nothing (any thread)."""
+        group, row = self._parked_row(brush)
+        if group is None:
+            return self.runtime_of(brush)
+        return group.runtime_now(row)
+
+    def settle_brush(self, brush):
+        """Bring a parked brush's row to now (an input is about to act on
+        it): see :meth:`_Group.settle`."""
+        group, row = self._parked_row(brush)
+        if group is not None:
+            group.settle(row)
+
+    def settle_parked(self):
+        """Bring every parked row to now (a saved game is about to be
+        taken): its state, position and path as they are now."""
+        for group in (self.movers, self.doors):
+            if group.n_parked:
+                for row in np.flatnonzero(group.parked).tolist():
+                    group.settle(row)
 
     #: Below this many rows :meth:`_publish` goes row by row in scalars: the
     #: NumPy pack costs more than the few reads it saves.
@@ -1295,6 +1841,7 @@ class MoverTable:
         for each in (self.movers, self.doors):
             if each.brushes:
                 self._publish(each, list(range(len(each.brushes))), entries)
+                each.quiet(range(len(each.brushes)))
         self.runtime_entries = entries
         brush_placement.note_runtime_change()
 
@@ -1358,6 +1905,11 @@ class MoverTable:
         for group in (self.doors, self.movers):
             row = group.row_of_obj.get(id(brush))
             if row is not None and group.brushes[row] is brush:
+                if group.n_parked and group.parked[row]:
+                    runtime = group.runtime_now(row)
+                    if runtime is None:
+                        return tuple(group.original[row].tolist())
+                    return (runtime[0], runtime[1], runtime[2])
                 return tuple(group.pos[row].tolist())
         return tuple(brush_placement.authored_box(brush)[:3])
 
@@ -1367,10 +1919,13 @@ class MoverTable:
         row = movers.row_of_obj.get(id(brush))
         if row is None or movers.brushes[row] is not brush:
             return False
+        if movers.n_parked and movers.parked[row]:
+            movers.settle(row)
         # One row, in scalars (_store_one), as the per-row walk stores it.
         centre = [float(position[0]), float(position[1]), float(position[2])]
         movers.check_range(row, centre=centre)        # a path goes anywhere
         movers._store_one(row, centre, movers.original[row].tolist())
+        movers.quiet((row,))
         return True
 
     def restore_placement(self, brush, position, angle=0.0):
@@ -1385,10 +1940,13 @@ class MoverTable:
             if row is None or group.brushes[row] is not brush:
                 continue
             found = True
+            if group.n_parked and group.parked[row]:
+                group.settle(row)
             if group is self.movers:
                 group.rot_angle[row] = float(angle)
             group.check_range(row, centre=position, angle=float(angle))
             group._store(np.array([row]), np.array([position]))
+            group.quiet((row,))
         if not found:
             self._pending[id(brush)] = (brush, position, float(angle))
 
@@ -1401,6 +1959,9 @@ class MoverTable:
         self._pending = {}
         self.movers.live[:] = False
         self.doors.live[:] = False
+        for group in (self.movers, self.doors):
+            group.parked[:] = False
+            group.n_parked = 0
         self._box_maps = {}
         brush_placement.note_runtime_change()
 
@@ -1417,21 +1978,46 @@ class MoverTable:
                 # An authored edit can rebase a row (resync): its runtime
                 # transform is republished, not left at the old position.
                 self._publish(group, rows)
+                group.quiet(rows)
+                for row in rows:
+                    group.note_parking(row)
             return
         if not changes:
             return
+        parked = False
         for group in groups:
             rows = []
-            for oid in changes:
+            woken = []
+            for oid, flags in changes.items():
                 row = group.row_of_obj.get(oid)
-                if row is not None:
-                    group.resync(row)
-                    group.dirty.add(row)
-                    rows.append(row)
+                if row is None:
+                    continue
+                group.dirty.add(row)
+                if flags == VISIBILITY:
+                    # Only its live hidden flag: a streaming layer parking
+                    # or unparking it (a crossing parks thousands at once:
+                    # the woken rows are published together, one stamp).
+                    change = group.note_parking(row, publish=False)
+                    if change == 'woken':
+                        woken.append(row)
+                    elif change == 'parked':
+                        parked = True
+                    continue
+                group.resync(row)
+                rows.append(row)
+            if woken:
+                self._publish(group, woken)
             if rows:
                 self._publish(group, rows)
+                group.quiet(rows)
+                for row in rows:
+                    group.note_parking(row)
+        if parked:
+            brush_placement.note_runtime_change()
 
     def tick_movers(self, logic, delta):
+        if self.owner is None:
+            self.owner = threading.get_ident()
         self._link(logic)
         self.sync()
         self.movers._walk(logic, delta, self)
@@ -1467,6 +2053,12 @@ class MoverTable:
                 movers.twin_row[row] = other
                 doors.twin_row[other] = row
         movers.any_twin = doors.any_twin = bool((movers.twin_row >= 0).any())
+        if movers.any_twin:
+            # A brush in both groups is never parked (note_parking).
+            for group in (movers, doors):
+                if group.n_parked:
+                    for row in np.flatnonzero(group.parked & (group.twin_row >= 0)).tolist():
+                        group.wake(row)
 
     def publish(self, logic, table):
         """Store every mover's and door's position (and a mover's spin) in

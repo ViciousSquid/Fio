@@ -288,6 +288,13 @@ def runtime_of(brush):
     if not (brush.get('is_mover') or brush.get('is_door')):
         return None
     key = id(brush)
+    if asleep:
+        held = asleep.get(key)
+        if held is not None and held[0] is brush:
+            source = held[1]()
+            if source is not None:
+                # Parked: where it is now, worked out (nothing ticks it).
+                return source.runtime_now(brush)
     for ref in _sources:
         source = ref()
         if source is None:
@@ -495,6 +502,38 @@ def shared_bulk_boxes(brushes, rows):
 #: the grid adds these wherever it looks; the mover table marks them
 #: (``check_range``) and forgets them when play stops. Empty in most levels.
 off_range = {}
+
+#: id -> (brush, weak ref to its source): movers and doors a streaming layer has parked
+#: (``engine.spatial.PARKED_HIDDEN_KEY``). Nothing ticks or publishes them:
+#: their mover table keeps the state it last resolved them to and the tick
+#: it did, and each is resolved again on demand. A reader asking where one
+#: is -- :func:`runtime_of`, so :func:`world_bounds`, the AABB cache and the
+#: collision shapes -- is answered for now, worked out from that state and
+#: the ticks since (``source.runtime_now``), storing nothing, from any
+#: thread; the logic thread stores the answer (:func:`settle`) only when
+#: the state is about to be used: an input to it, a saved game, a wake.
+#: Their published slots are withdrawn, so every reader asks.
+asleep = {}
+
+#: Moves whenever :data:`asleep` gains or loses a brush.
+asleep_version = 0
+
+
+def note_asleep():
+    """The mover table parked or woke a brush (:data:`asleep` changed)."""
+    global asleep_version
+    asleep_version += 1
+
+
+def settle(brush):
+    """Bring a parked mover or door (:data:`asleep`) to now before its state
+    is used -- an input is about to act on it. Nothing for anything else."""
+    if asleep:
+        held = asleep.get(id(brush))
+        if held is not None and held[0] is brush:
+            source = held[1]()
+            if source is not None:
+                source.settle_brush(brush)
 
 
 #: id -> brush for every brush a source without columns (the editor
@@ -768,6 +807,8 @@ def resolved_runtime(brush):
     ``pos``/``size`` by whoever needs one."""
     if not (brush.get('is_mover') or brush.get('is_door')):
         return None
+    if asleep and id(brush) in asleep:
+        return runtime_of(brush)        # parked: moves with no stamp
     cache = _runtime_cache
     entry = cache.get(id(brush))
     if entry is not None and entry[0] is brush:
@@ -851,7 +892,9 @@ def world_bounds(brush):
         # (resolved_runtime, inline), and a box's rule inline.
         cache = _runtime_cache
         entry = cache.get(id(brush))
-        if entry is not None and entry[0] is brush:
+        if asleep and id(brush) in asleep:
+            runtime = runtime_of(brush)     # parked: moves with no stamp
+        elif entry is not None and entry[0] is brush:
             runtime = entry[1]
         else:
             runtime = runtime_of(brush)
