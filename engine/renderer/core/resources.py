@@ -494,47 +494,49 @@ class ResourcesMixin:
 
         return [], np.empty(0, dtype=np.float32)
 
-    def _load_fire_effect_textures(self):
-        """Load the five authored FIRE variants once after the GL context exists."""
-        self.effect_fire_frames.clear()
-        self.effect_fire_cumulative.clear()
+    def _effect_frames(self, kind, variant):
+        """``(frames, cumulative)`` of the FIRE (*kind* 0) or ORB (*kind* 2)
+        animation *variant* (0-4), decoded and uploaded the first time an
+        effect needs it.
 
-        for variant in range(5):
-            asset_path = (
-                f"assets/textures/effects/fire{variant + 1:02d}.gif"
-            )
-            frames, cumulative = self._load_fire_gif(asset_path)
-
+        Nothing is loaded at start-up: the ten authored GIFs are ~150 MB of
+        RGBA textures (shared system memory on an integrated GPU) and half a
+        second of decoding, and most maps use one variant or none.
+        """
+        if kind == 0:
+            store, timings, family = (self.effect_fire_frames,
+                                      self.effect_fire_cumulative, 'fire')
+        else:
+            store, timings, family = (self.effect_orb_frames,
+                                      self.effect_orb_cumulative, 'orb')
+        frames = store.get(variant)
+        if frames is None:
+            frames, cumulative = self._load_fire_gif(
+                f"assets/textures/effects/{family}{variant + 1:02d}.gif")
             # Optional variants may not exist yet.  Keep the selector usable
-            # without inventing an asset: an absent variant falls back to FIRE 01.
+            # without inventing an asset: an absent variant falls back to 01.
             if not frames and variant != 0:
-                frames = self.effect_fire_frames.get(0, ())
-                cumulative = self.effect_fire_cumulative.get(
-                    0, np.empty(0, dtype=np.float32)
-                )
+                frames, cumulative = self._effect_frames(kind, 0)
+            store[variant] = frames = tuple(frames)
+            timings[variant] = cumulative
+        return frames, timings[variant]
 
-            self.effect_fire_frames[variant] = tuple(frames)
-            self.effect_fire_cumulative[variant] = cumulative
-
-    def _load_orb_effect_textures(self):
-        """Load the five authored ORB variants once after the GL context exists."""
-        self.effect_orb_frames.clear()
-        self.effect_orb_cumulative.clear()
-
-        for variant in range(5):
-            asset_path = (
-                f"assets/textures/effects/orb{variant + 1:02d}.gif"
-            )
-            frames, cumulative = self._load_fire_gif(asset_path)
-
-            if not frames and variant != 0:
-                frames = self.effect_orb_frames.get(0, ())
-                cumulative = self.effect_orb_cumulative.get(
-                    0, np.empty(0, dtype=np.float32)
-                )
-
-            self.effect_orb_frames[variant] = tuple(frames)
-            self.effect_orb_cumulative[variant] = cumulative
+    def ensure_effect_frames(self, table):
+        """Load the FIRE and ORB variants the effects in *table* (an
+        EntityTable) use, the first time any of them is in the map -- so an
+        effect coming into view later in play does not stall a frame decoding
+        its animation. A map without effects loads none."""
+        slots = table.effect_slots
+        if not len(slots):
+            return
+        kinds = table.effect_type[slots]
+        variants = table.effect_fire_variant[slots]
+        for kind, store in ((0, self.effect_fire_frames), (2, self.effect_orb_frames)):
+            chosen = kinds == kind
+            if chosen.any():
+                for variant in np.unique(variants[chosen]).tolist():
+                    if 0 <= variant < 5 and variant not in store:
+                        self._effect_frames(kind, variant)
 
     # --------------------------------------------------------------------------
     # Models

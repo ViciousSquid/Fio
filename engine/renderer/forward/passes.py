@@ -1773,10 +1773,7 @@ class PassesMixin:
         # There are only five authored variants per animated Effect family.
         # This bounded 10-way loop replaces an entity-by-entity Python loop
         # while allowing FIRE and ORB to use separate GIF sets.
-        for effect_kind, frame_store, cumulative_store in (
-            (0, self.effect_fire_frames, self.effect_fire_cumulative),
-            (2, self.effect_orb_frames, self.effect_orb_cumulative),
-        ):
+        for effect_kind in (0, 2):
             kind_mask = effect_types == effect_kind
             if not np.any(kind_mask):
                 continue
@@ -1787,8 +1784,8 @@ class PassesMixin:
                 mask = kind_variants == variant
                 if not np.any(mask):
                     continue
-                frames = frame_store.get(variant, ())
-                cumulative = cumulative_store.get(variant)
+                # Loaded already, unless this view saw the effect first.
+                frames, cumulative = self._effect_frames(effect_kind, variant)
                 if not frames or cumulative is None or not len(cumulative):
                     continue
 

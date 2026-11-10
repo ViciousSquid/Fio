@@ -259,10 +259,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 gl.glTexParameteri(
                     gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
 
-        # Animated FIRE/ORB texture sets. Each GIF is decoded once into
-        # individual GL textures; the render path only selects the current frame.
-        self._load_fire_effect_textures()
-        self._load_orb_effect_textures()
+        # Animated FIRE/ORB texture sets are decoded when a map first holds
+        # an effect that uses them (ensure_effect_frames), not here.
 
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
@@ -614,6 +612,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self.draw_models_instanced(
                 projection, view, camera_pos, etable, fading_model_slots,
                 lights, config)
+        if etable is not None and len(etable.effect_slots):
+            self.ensure_effect_frames(etable)
         if effect_slots is not None and len(effect_slots):
             self.draw_effects_instanced(
                 projection, view, etable, effect_slots,
