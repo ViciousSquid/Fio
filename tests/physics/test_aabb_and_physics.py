@@ -118,13 +118,22 @@ def test_runtime_keys_are_declared_for_stripping():
     brush_still_box(cut)
     cached = {k for k in cut if k.startswith("_aabb")}
     assert cached == {"_aabb_sig", "_aabb_bounds", "_aabb_box"}
-    # A mover also keeps the runtime transform its box was placed by.
+    # A mover also keeps the runtime transform its box was placed by, and
+    # the float64 box world_bounds reads under the same key.
     mover = _brush([1, 2, 3], [4, 5, 6])
     mover["is_mover"] = True
     brush_aabb_bounds(mover)
     moved = {k for k in mover if k.startswith("_")}
-    assert moved == {"_aabb_sig", "_aabb_bounds", "_aabb_runtime"}
-    assert cached | moved == set(AABB_RUNTIME_KEYS)
+    assert moved == {"_aabb_sig", "_aabb_bounds", "_aabb_runtime", "_world_bounds"}
+    # One whose mover table published a turned transform keeps the rotation
+    # it was turned by too (constants.mover_box).
+    spun = _brush([1, 2, 3], [4, 5, 6])
+    spun["is_mover"] = True
+    spun["_aabb_runtime"] = (1.0, 2.0, 3.0, 0.0, 1.0, 0.0, 30.0)
+    brush_aabb_bounds(spun)
+    turned = {k for k in spun if k.startswith("_")}
+    assert turned == moved | {"_aabb_turn"}
+    assert cached | moved | turned == set(AABB_RUNTIME_KEYS)
 
 
 def test_editor_state_strips_the_cache_keys():

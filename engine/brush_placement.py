@@ -310,6 +310,20 @@ def runtime_sources():
 _near_sources = (None, (), ())
 
 
+def _sorted_sources():
+    global _near_sources
+    sorted_ = _near_sources
+    if sorted_[0] is not _sources:
+        tables, others = [], []
+        for ref in _sources:
+            source = ref()
+            if source is not None:
+                (tables if getattr(source, 'near_rows', None) is not None
+                 else others).append(ref)
+        sorted_ = _near_sources = (_sources, tuple(tables), tuple(others))
+    return sorted_
+
+
 def movers_near(lists):
     """A broad phase over moving brushes, from the dense columns that hold
     where they are: the ``near_rows`` of the runtime source whose rows
@@ -329,16 +343,7 @@ def movers_near(lists):
     that table's rows -- this is ``None`` and the reader looks at every
     brush. Asked first, before the reader works out anything for the
     question, so that answer costs little."""
-    global _near_sources
-    sorted_ = _near_sources
-    if sorted_[0] is not _sources:
-        tables, others = [], []
-        for ref in _sources:
-            source = ref()
-            if source is not None:
-                (tables if getattr(source, 'near_rows', None) is not None
-                 else others).append(ref)
-        sorted_ = _near_sources = (_sources, tuple(tables), tuple(others))
+    sorted_ = _sorted_sources()
     for ref in sorted_[2]:
         source = ref()
         if source is not None and source.runtime_entries:
@@ -544,6 +549,14 @@ def shared_bulk_boxes(brushes, rows):
     return bulk, rows, at
 
 
+#: id -> brush for every brush a source without columns (the editor
+#: preview, a test's overrides) answers for now. A mover table does not
+#: publish a transform into such a brush's slot -- runtime_of asks that
+#: source first -- and in play the set is empty, so the table's check is one
+#: global read.
+overridden = {}
+
+
 class RuntimeOverrides:
     """A runtime source holding explicit transforms by brush.
 
@@ -564,8 +577,11 @@ class RuntimeOverrides:
                       home[2] + float(offset[2]))
         axis, angle = spin if spin is not None else ((0.0, 1.0, 0.0), 0.0)
         # A brush cached as still (constants.brush_aabb_bounds keys it by
-        # pos/size alone) is not still any more.
+        # pos/size alone) is not still any more, and a transform a mover
+        # table published for it is not the one that answers now.
         brush.pop('_aabb_sig', None)
+        brush.pop('_aabb_runtime', None)
+        overridden[id(brush)] = brush
         self.runtime_entries[id(brush)] = (brush, (
             float(centre[0]), float(centre[1]), float(centre[2]),
             float(axis[0]), float(axis[1]), float(axis[2]), float(angle)))
@@ -573,9 +589,16 @@ class RuntimeOverrides:
 
     def clear(self, brush=None):
         if brush is None:
+            for held, _transform in self.runtime_entries.values():
+                held.pop('_aabb_sig', None)
+                held.pop('_aabb_runtime', None)
+                overridden.pop(id(held), None)
             self.runtime_entries.clear()
         else:
             self.runtime_entries.pop(id(brush), None)
+            brush.pop('_aabb_sig', None)
+            brush.pop('_aabb_runtime', None)
+            overridden.pop(id(brush), None)
         note_runtime_change()
 
     def runtime_of(self, brush):
@@ -863,8 +886,21 @@ def world_bounds(brush):
                 cz = float(pos[2]) + lz
                 return (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
     else:
-        # A mover or door: its transform as resolved under the current
-        # stamps (resolved_runtime, inline), and a box's rule inline.
+        # A mover or door: the float64 box its mover table published with
+        # its last change (or the AABB cache's miss worked out), while its
+        # cache key -- its authored pos/size -- still holds.
+        published = brush.get('_world_bounds')
+        pos = brush.get('pos') or DEFAULT_POS
+        size = brush.get('size') or DEFAULT_SIZE
+        sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
+        if published is not None and brush.get('_aabb_sig') == sig:
+            return published
+        if '_aabb_runtime' in brush:
+            # Changed since: worked out once from the published transform,
+            # for every reader (constants.mover_box).
+            return _constants().mover_box(brush, sig)[1]
+        # Otherwise its transform as resolved under the current stamps
+        # (resolved_runtime, inline), and a box's rule inline.
         cache = _runtime_cache
         entry = cache.get(id(brush))
         if entry is not None and entry[0] is brush:
@@ -1086,6 +1122,37 @@ def collision_shape(brush):
     return collision_shape_at(brush, resolved_runtime(brush))
 
 
+def turn_of(brush, runtime):
+    """The rotation *runtime* turns *brush* by, worked out once per
+    transform and kept with it in the brush's runtime-only slot: whichever
+    reader needs it first -- the collision frame, or the turned box
+    (constants.mover_box) -- pays the trig, and the other reuses it. A mover
+    table replaces the transform tuple whenever the row changes, so ``is``
+    decides."""
+    if not runtime[6]:
+        return None                     # a carried, unturned shape
+    turn = brush.get('_aabb_turn')
+    if turn is not None and turn[0] is runtime:
+        return turn[1]
+    rotation = rotation_matrix(runtime[3:6], runtime[6])
+    brush['_aabb_turn'] = (runtime, rotation)
+    return rotation
+
+
+_turn_of = turn_of
+
+
+_constants_module = None
+
+
+def _constants():
+    global _constants_module
+    if _constants_module is None:
+        from engine import constants
+        _constants_module = constants
+    return _constants_module
+
+
 def collision_shape_at(brush, runtime):
     """:func:`collision_shape` given the brush's :func:`runtime_of`, for a
     caller that has just found it."""
@@ -1104,12 +1171,12 @@ def collision_shape_at(brush, runtime):
         if runtime is None:
             frame = Frame(origin, authored_box(brush)[:3], None)
         else:
-            frame = Frame(origin, runtime[:3], _rotation(runtime[3:6], runtime[6]))
+            frame = Frame(origin, runtime[:3], _turn_of(brush, runtime))
         result = (planes, triangles, bounds, frame)
         brush['_collision_entry'] = (key, convex, result)
         return result
     if runtime is not None and runtime[6]:
-        rotation = _rotation(runtime[3:6], runtime[6])
+        rotation = _turn_of(brush, runtime)
         if rotation is not None:
             # What the solid is placed by: a box's pos/size (its authored
             # box), a mesh proxy's authored box.

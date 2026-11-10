@@ -50,8 +50,9 @@ from __future__ import annotations
 
 import weakref
 from collections.abc import MutableMapping
+from collections import deque
 from itertools import compress, repeat
-from operator import itemgetter
+from operator import itemgetter, not_, setitem
 
 import numpy as np
 
@@ -76,6 +77,59 @@ _EVENT_NAMES = {_FULLY_OPEN: 'OnFullyOpen', _FULLY_CLOSED: 'OnFullyClosed',
 
 #: An empty row list.
 _NO_ROWS = np.zeros(0, dtype=np.intp)
+
+_consume = deque(maxlen=0).extend
+
+#: The runtime-only slots a published row writes (constants.AABB_RUNTIME_KEYS).
+_PUBLISHED_SLOTS = ('_aabb_sig', '_aabb_bounds', '_aabb_runtime', '_world_bounds',
+                    '_aabb_turn')
+
+
+def _publish_slot(brush, transform):
+    """Publish one changed row's transform into its brush's runtime-only
+    slot and drop its derived key -- nothing else. The first reader that
+    needs its world box, float64 bounds or rotation works them out once from
+    this transform (:func:`engine.constants.mover_box`) and every other
+    reader shares them; a row that has not changed keeps what was derived
+    for it. A brush another source answers for is left to the resolver."""
+    overridden = brush_placement.overridden
+    if overridden and id(brush) in overridden:
+        brush.pop('_aabb_runtime', None)
+    else:
+        brush['_aabb_runtime'] = transform          # transform, then key
+    brush.pop('_aabb_sig', None)
+
+
+def _publish_slots(chosen, transforms, live):
+    """:func:`_publish_slot` for many rows, iterated in C (*live*: which
+    rows have a transform, or None when all do)."""
+    _store_slot(chosen, '_aabb_runtime', transforms)
+    if live is not None:
+        # The rows back where they were authored: no transform.
+        _store_slot(compress(chosen, map(not_, live)), '_aabb_runtime', repeat(None))
+    _consume(map(dict.pop, chosen, repeat('_aabb_sig'), repeat(None)))
+    overridden = brush_placement.overridden
+    if overridden:
+        for brush in chosen:
+            if id(brush) in overridden:
+                brush.pop('_aabb_runtime', None)
+
+
+def _withdraw(brushes):
+    """Drop every slot a mover table publishes from *brushes*."""
+    for brush in brushes:
+        for key in _PUBLISHED_SLOTS:
+            brush.pop(key, None)
+
+
+def _withdraw_held(held):
+    for brushes in held:
+        _withdraw(brushes)
+
+
+def _store_slot(brushes, key, values):
+    """``brush[key] = value`` for each pair, iterated in C."""
+    _consume(map(setitem, brushes, repeat(key), values))
 
 
 def _sequence_points(parts):
@@ -222,6 +276,9 @@ class _Group:
 
     def _build(self, entries):
         n = len(entries)
+        # What was published for the rows being replaced is withdrawn (the
+        # new rows publish their own when the table adopts them).
+        _withdraw(getattr(self, 'brushes', ()))
         self.index = [i for i, _ in entries]
         self.brushes = [brush for _, brush in entries]
         self.row_of_index = {i: row for row, i in enumerate(self.index)}
@@ -257,6 +314,7 @@ class _Group:
             self.brushes[row].pop('_aabb_sig', None)
             self.resync(row)
         if self.table is not None:
+            self.table._rows_held[self.held_as] = self.brushes
             self.table._adopt(self)
         #: Moves each time the rows are rebuilt, so a renderer slot map built
         #: against the old rows is recognised as stale.
@@ -986,6 +1044,13 @@ class MoverTable:
         self.doors = Doors()
         self.movers.table = self
         self.doors.table = self
+        self.movers.held_as, self.doors.held_as = 0, 1
+        #: The two groups' current brush lists, for the finalizer below
+        #: (which must not hold the table itself): a table collected
+        #: without a reset (a logic thread stopped mid-play) withdraws what
+        #: it published, so no brush is left with a transform no source has.
+        self._rows_held = [self.movers.brushes, self.doors.brushes]
+        weakref.finalize(self, _withdraw_held, self._rows_held)
         # render table -> ((its generation, mover version, door version),
         # slots). One entry per table: frames alternate between the two render
         # buffers' tables, so a single entry would miss on every frame.
@@ -1070,18 +1135,21 @@ class MoverTable:
             ax, ay, az = axes.T.tolist()
             values = zip(x, y, z, ax, ay, az, angle.tolist())
         group.live[pick] = live
-        # A spinner's turned box is not worked out here: the angle is in its
-        # column, and a reader that gathers boxes settles it (settle_turns).
         # Tuples built and stored in C: no bytecode per row (count >= 2, so
         # the getter hands back a tuple).
         chosen = itemgetter(*pick.tolist())(group.brushes)
+        values = list(values)
         if live.all():
             runtime.update(zip(map(id, chosen), zip(chosen, values)))
-            return
-        runtime.update(compress(zip(map(id, chosen), zip(chosen, values)), live.tolist()))
-        # The rows that are back where they were authored, unturned: no entry.
-        for brush in compress(chosen, (~live).tolist()):
-            runtime.pop(id(brush), None)
+            live_list = None
+        else:
+            live_list = live.tolist()
+            runtime.update(compress(zip(map(id, chosen), zip(chosen, values)), live_list))
+            # The rows that are back where they were authored, unturned: no
+            # entry.
+            for brush in compress(chosen, (~live).tolist()):
+                runtime.pop(id(brush), None)
+        _publish_slots(chosen, values, live_list)
 
     def _publish_row(self, group, row, runtime, centre=None, rest=None):
         """:meth:`_publish` for one row, in scalars (*centre* and *rest*:
@@ -1106,10 +1174,13 @@ class MoverTable:
             if cx == rx and cy == ry and cz == rz:
                 group.live[row] = False
                 runtime.pop(id(brush), None)
+                _publish_slot(brush, None)
                 return
             ax, ay, az = 0.0, 1.0, 0.0
         group.live[row] = True
-        runtime[id(brush)] = (brush, (cx, cy, cz, ax, ay, az, angle))
+        transform = (cx, cy, cz, ax, ay, az, angle)
+        runtime[id(brush)] = (brush, transform)
+        _publish_slot(brush, transform)
 
     def _publish_row_now(self, group, row, centre=None, rest=None):
         """:meth:`_publish_row` into :attr:`runtime_entries`, stamped."""
@@ -1348,7 +1419,10 @@ class MoverTable:
             self._pending[id(brush)] = (brush, position, float(angle))
 
     def reset(self):
-        """Play stopped: no row is displaced or turned any more."""
+        """Play stopped: no row is displaced or turned any more, and what
+        was published for the rows is withdrawn (the readers' caches go back
+        to their own rules)."""
+        _withdraw_held(self._rows_held)
         self.runtime_entries = {}
         self._pending = {}
         self.movers.live[:] = False

@@ -30,6 +30,7 @@ from .constants import (
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
     is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
+from .constants import _UNPUBLISHED
 from .brush_placement import collision_shape, collision_shape_at, movers_near, world_bounds
 from .physics import world_gravity
 
@@ -210,15 +211,20 @@ def _gather(colliders, movers, doors):
             # reads; only a brush with planes, a mesh or a runtime
             # transform asks for its shape (once: the resolve below is
             # handed what it answered).
-            if ('geometry' not in b and '_collision_mode' not in b
+            if ('_collision_mode' not in b
                     and (('is_mover' in b and b['is_mover'])
                          or ('is_door' in b and b['is_door']))):
-                # A box mover or door: a solid shape only while it is
-                # turned. Its transform is the one its cached box was
-                # placed by, which the AABB passes then read as a hit.
-                brush_aabb_bounds(b)        # (brush_aabb_runtime, inline)
-                runtime = b.get('_aabb_runtime')
-                if runtime is None or not runtime[6]:
+                # A mover or door: its box and the transform it was placed
+                # by, as its mover table published them with its last
+                # change (the AABB passes then read the same box). A box
+                # is a solid shape only while it is turned; a convex brush
+                # always is.
+                runtime = b.get('_aabb_runtime', _UNPUBLISHED)
+                if runtime is _UNPUBLISHED:
+                    # No table published it: the resolver finds it.
+                    brush_aabb_bounds(b)
+                    runtime = b.get('_aabb_runtime')
+                if 'geometry' not in b and (runtime is None or not runtime[6]):
                     aabb_brushes.append(b)
                     continue
                 shape = collision_shape_at(b, runtime)

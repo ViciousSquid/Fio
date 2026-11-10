@@ -154,9 +154,13 @@ def is_solid_world_brush(brush):
 
 # Runtime-only keys written to brush dicts by the cached-AABB helpers below
 # (brush_aabb_bounds -- and for a mover or door the runtime transform its
-# box was placed by -- and brush_still_box for a still angled brush).
+# box was placed by -- and brush_still_box for a still angled brush), and by
+# the mover table, which publishes a moved row's derived state once into the
+# same slots: ``_world_bounds`` (world_bounds' float64 box) and
+# ``_aabb_turn`` (the rotation its turned box and collision frame use).
 # Stripped on serialisation alongside the renderer's own private keys.
-AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds', '_aabb_box', '_aabb_runtime')
+AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds', '_aabb_box', '_aabb_runtime',
+                     '_world_bounds', '_aabb_turn')
 
 
 #: engine.brush_placement, bound on first use: it imports the geometry
@@ -220,6 +224,9 @@ def brush_aabb_bounds(brush):
         # otherwise drops the key -- that has moved: Stage 1's miss, below.
         pass
     elif ('is_mover' in brush and brush['is_mover']) or ('is_door' in brush and brush['is_door']):
+        if '_aabb_runtime' in brush:
+            # Its mover table published the transform with its last change.
+            return mover_box(brush, sig)[0]
         return _brush_aabb_runtime(brush, _brush_placement or _bind_brush_placement(), sig)
     elif 'geometry' in brush or '_mesh_bounds' in brush:
         # An angled brush or mesh proxy: its derived box.
@@ -239,6 +246,8 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
     """:func:`brush_aabb_bounds` past its fast path: a miss, or a mover."""
     placement = _brush_placement or _bind_brush_placement()
     if brush.get('is_mover') or brush.get('is_door'):
+        if '_aabb_runtime' in brush:
+            return mover_box(brush, plain_sig)[0]
         return _brush_aabb_runtime(brush, placement, plain_sig)
     sig = plain_sig
     if 'geometry' in brush or '_mesh_bounds' in brush:
@@ -271,6 +280,74 @@ def _brush_aabb_slow(brush, pos, size, plain_sig):
     brush['_aabb_bounds'] = bounds
     brush['_aabb_sig'] = sig
     return bounds
+
+
+def mover_box(brush, sig=None):
+    """``(aabb, bounds)``: a mover's or door's world box worked out once from
+    the transform its mover table published with its last change -- the
+    float32 AABB :func:`brush_aabb_bounds` returns and the float64 box
+    :func:`engine.brush_placement.world_bounds` returns -- and kept, with the
+    rotation a turned row's collision frame uses, in the brush's
+    runtime-only slots until the row next changes (the table drops the key
+    then). Every reader shares the one derivation: no runtime source is
+    asked, nothing is memoised per angle, nothing is registered for a stamp.
+
+    The arithmetic is the resolver's (world_box_at, turned_half,
+    brush_aabb_bounds' GLM float32), so the numbers are the same to the
+    bit."""
+    placement = _brush_placement or _bind_brush_placement()
+    if sig is None:
+        pos = brush['pos']
+        size = brush['size']
+        sig = (pos[0], pos[1], pos[2], size[0], size[1], size[2])
+    runtime = brush.get('_aabb_runtime', _UNPUBLISHED)
+    if runtime is _UNPUBLISHED:
+        bounds = _brush_aabb_runtime(brush, placement, sig)
+        return bounds, brush.get('_world_bounds')
+    turn = None
+    half = None
+    if runtime is not None:
+        if 'geometry' not in brush and '_mesh_bounds' not in brush:
+            size = brush['size']
+            half = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+        elif '_mesh_bounds' not in brush:
+            convex = brush.get('_geo_cache')
+            if convex is not None and convex.is_valid:
+                box = convex.shape_box
+                half = (box[3], box[4], box[5])
+    if half is not None:
+        hx, hy, hz = half
+        if runtime[6]:
+            turn = placement.turn_of(brush, runtime)      # once per transform
+            if turn is not None:
+                # turned_half's arithmetic, in its order.
+                (r00, r01, r02), (r10, r11, r12), (r20, r21, r22) = turn
+                hx, hy, hz = (abs(r00) * hx + abs(r01) * hy + abs(r02) * hz,
+                              abs(r10) * hx + abs(r11) * hy + abs(r12) * hz,
+                              abs(r20) * hx + abs(r21) * hy + abs(r22) * hz)
+        cx, cy, cz = runtime[0], runtime[1], runtime[2]
+    else:
+        cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
+    bp = glm.vec3(cx, cy, cz)
+    bh = glm.vec3(hx, hy, hz)
+    lo = bp - bh
+    hi = bp + bh
+    aabb = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
+    bounds = (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
+    # Values first, key last (see _brush_aabb_slow); then, if the table
+    # published another transform meanwhile (another thread asked), the key
+    # is dropped again: never a stale box under a live key.
+    brush['_world_bounds'] = bounds
+    brush['_aabb_bounds'] = aabb
+    brush['_aabb_sig'] = _MoverKey(sig)
+    if brush.get('_aabb_runtime', _UNPUBLISHED) is not runtime:
+        brush.pop('_aabb_sig', None)
+    return aabb, bounds
+
+
+#: What a brush's ``_aabb_runtime`` slot holds when no mover table has
+#: published a transform into it.
+_UNPUBLISHED = object()
 
 
 def _brush_aabb_runtime(brush, placement, sig):
@@ -322,17 +399,21 @@ def _brush_aabb_runtime(brush, placement, sig):
         hx, hy, hz = half
         if runtime[6]:
             hx, hy, hz = placement.turned_half(hx, hy, hz, runtime[3:6], runtime[6])
-        bp = glm.vec3(runtime[0], runtime[1], runtime[2])
-        bh = glm.vec3(hx, hy, hz)
+        cx, cy, cz = runtime[0], runtime[1], runtime[2]
     else:
         cx, cy, cz, hx, hy, hz = placement.world_box_at(brush, runtime)
-        bp = glm.vec3(cx, cy, cz)
-        bh = glm.vec3(hx, hy, hz)
+    bp = glm.vec3(cx, cy, cz)
+    bh = glm.vec3(hx, hy, hz)
     lo = bp - bh
     hi = bp + bh
     bounds = (lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
-    # The transform it was placed by, kept with it (brush_aabb_runtime).
+    # The transform it was placed by, kept with it (brush_aabb_runtime), and
+    # the float64 box world_bounds reads under the same key -- consistent
+    # with this transform, whatever a mover table published before. The
+    # rotation is not worked out here: its slot is emptied (unknown).
+    brush.pop('_aabb_turn', None)
     brush['_aabb_runtime'] = runtime
+    brush['_world_bounds'] = (cx - hx, cy - hy, cz - hz, cx + hx, cy + hy, cz + hz)
     brush['_aabb_bounds'] = bounds          # publication order: see above
     brush['_aabb_sig'] = _MoverKey(sig)
     placement._runtime_cached[key] = brush        # remember_runtime_cached
