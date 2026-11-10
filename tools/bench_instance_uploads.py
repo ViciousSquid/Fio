@@ -8,8 +8,9 @@ textured display) from the dense render table, the way the editor and the
 game do, in these scenarios:
 
 * ``still``: nothing changes;
-* ``camera``: the camera orbits a little every frame (the visible set and
-  its order change);
+* ``camera``: the camera, nearer the map's centre, turns a little every
+  frame and the visible set is frustum-culled as the logic thread culls it
+  (``LogicRender.aabb_in_frustum_bounds``), so what is drawn changes;
 * ``one_mover``: one box brush moves every frame (runtime transform
   published into the table, as the mover table does);
 * ``movers64`` / ``movers512``: 64 / 512 box brushes move every frame;
@@ -47,6 +48,12 @@ ap.add_argument('--frames', type=int, default=60)
 ap.add_argument('--size', default='640x360')
 ap.add_argument('--only', default='')
 ap.add_argument('--json')
+ap.add_argument('--profile', default='',
+                help='print the functions that took most time in this scenario')
+ap.add_argument('--no-raster', action='store_true',
+                help='make draw calls no-ops: render_scene then times the CPU '
+                     'side alone (Python, GL calls, uploads), which is what the '
+                     'target pays on its CPU; llvmpipe rasterises on the CPU')
 args = ap.parse_args()
 tree = os.path.abspath(args.tree)
 os.chdir(tree)
@@ -88,10 +95,14 @@ def _instance_site():
     return False
 
 
+_REAL = {}
+
+
 def _wrap(module, name):
     real = getattr(module, name, None)
     if real is None:
         return
+    _REAL[name] = real
 
     def wrapped(*a, **k):
         if state['on']:
@@ -111,9 +122,17 @@ def _wrap(module, name):
                     state['bytes']['instance'] += size
                     state['calls']['instance_upload'] += 1
         return real(*a, **k)
-    setattr(module, name, wrapped)
+    _WRAPPED[name] = wrapped
 
 
+_WRAPPED = {}
+if args.no_raster:
+    def _no_draw(*a, **k):
+        return None
+    for _name in ('glDrawArrays', 'glDrawArraysInstanced', 'glDrawElements',
+                  'glDrawElementsInstanced', 'glMultiDrawElements'):
+        if hasattr(gl, _name):
+            setattr(gl, _name, _no_draw)
 for _name in COUNTED:
     _wrap(gl, _name)
 # The instance attribute re-pointing goes through the raw entry point.
@@ -127,7 +146,13 @@ def _raw_counted(*a):
     return _real_raw(*a)
 
 
-_instancing._raw_vertex_attrib_pointer = _raw_counted
+def _counting(on):
+    """Install the counting wrappers (on) or the real entry points: the
+    timed frames run without them."""
+    for name, wrapped in _WRAPPED.items():
+        setattr(gl, name, wrapped if on else _REAL[name])
+    _instancing._raw_vertex_attrib_pointer = _raw_counted if on else _real_raw
+    state['on'] = on
 
 # -- the scene -----------------------------------------------------------------
 renderer = ForwardRenderer(None)
@@ -175,18 +200,34 @@ boxes = [i for i, b in enumerate(brushes) if not b.get('geometry')]
 for i in boxes[:512]:
     brushes[i]['is_mover'] = True
 homes = {i: list(brushes[i]['pos']) for i in boxes[:512]}
-camera = {'angle': 0.0}
+camera = {'angle': 0.0, 'cull': False}
 current = {'table': table}
+from engine.logic_render import LogicRender            # noqa: E402
+_culler = LogicRender.__new__(LogicRender)
 epoch = {'n': 10}
+
+
+def _turning_view(angle):
+    eye = glm.vec3(centre[0], centre[1] + 0.15 * extent, centre[2])
+    target = eye + glm.vec3(math.sin(angle), -0.3, math.cos(angle))
+    return glm.lookAt(eye, target, glm.vec3(0, 1, 0)), eye
 
 
 def frame():
     tab = current['table']
     config = configs[id(tab)]
-    view, eye = _view(camera['angle'])
+    if camera['cull']:
+        view, eye = _turning_view(camera['angle'])
+        planes = _culler.extract_frustum_planes(projection * view)
+        bounds = tab.bounds[:tab.count]
+        visible = np.flatnonzero(LogicRender.aabb_in_frustum_bounds(planes, bounds))
+        slots = visible.astype(np.int32)
+    else:
+        view, eye = _view(camera['angle'])
+        slots = config["all_brush_slots"]
     t0 = time.perf_counter()
     renderer.render_scene(projection, view, eye, None, config,
-                          brush_slots=config["all_brush_slots"])
+                          brush_slots=slots)
     spent = (time.perf_counter() - t0) * 1e3
     gl.glFinish()
     return spent
@@ -204,7 +245,8 @@ def still(k):
 
 
 def camera_orbit(k):
-    camera['angle'] = 0.01 * k
+    camera['cull'] = True
+    camera['angle'] = 0.02 * k
 
 
 def one_mover(k):
@@ -232,8 +274,10 @@ def editing(k):
         p = brushes[i]['pos']
         brushes[i]['pos'] = [p[0], p[1] + (2.0 if k % 2 else -2.0), p[2]]
     epoch['n'] += 1
-    table.begin_frame(brushes, epoch=epoch['n'],
-                      dirty_objects={id(brushes[i]) for i in rows})
+    # Both double-buffered tables hear of every edit (the render journal).
+    for tab in (table, peer):
+        tab.begin_frame(brushes, epoch=epoch['n'],
+                        dirty_objects={id(brushes[i]) for i in rows})
 
 
 def alternating(k):
@@ -248,6 +292,24 @@ SCENARIOS = [('still', still), ('camera', camera_orbit), ('one_mover', one_mover
              ('alternating', alternating)]
 
 
+def _held_kb():
+    """What the renderer keeps for box instances on the CPU side: M3's
+    stream mirrors and slot matrices, or the pre-M3 staging buffer. (Each
+    stream's GPU buffer is the size of its mirror.)"""
+    total = 0
+    for stream in getattr(renderer, '_brush_streams', {}).values():
+        total += sum(a.nbytes for a in (stream.mirror, stream.slots, stream.spare,
+                                         stream.payload))
+    for cache in getattr(renderer, '_slot_transform_caches', {}).values():
+        total += sum(a.nbytes for a in (cache.models, cache.normals, cache.bounds,
+                                         cache.rot, cache.stamp) if a is not None)
+    staging = getattr(renderer, '_brush_instance_data', None)
+    if staging is not None:
+        total += staging.nbytes
+    total += renderer._brush_mat_buf.nbytes + renderer._brush_nmat_buf.nbytes
+    return total / 1024.0
+
+
 def scenario(label, step, frames):
     for k in range(10):
         step(k)
@@ -260,11 +322,11 @@ def scenario(label, step, frames):
     # GL calls and uploads.
     state['calls'].clear()
     state['bytes'].clear()
-    state['on'] = True
+    _counting(True)
     for k in range(frames):
         step(10 + frames + k)
         frame()
-    state['on'] = False
+    _counting(False)
     calls = dict(state['calls'])
     sent = dict(state['bytes'])
     # Python calls.
@@ -275,6 +337,14 @@ def scenario(label, step, frames):
         frame()
         prof.disable()
     py_calls = pstats.Stats(prof).total_calls / frames
+    if args.profile == label:
+        import io
+        buf = io.StringIO()
+        pstats.Stats(prof, stream=buf).sort_stats(
+            os.environ.get('PROFILE_SORT', 'tottime')).print_stats(int(os.environ.get('PROFILE_TOP', '22')))
+        for line in buf.getvalue().splitlines():
+            if '/' in line or '{' in line:
+                print('   ' + line.replace(tree + '/', '')[:150])
     # Memory: what the frames allocate at their peak, and keep.
     tracemalloc.start()
     base = tracemalloc.get_traced_memory()[0]
@@ -299,12 +369,14 @@ def scenario(label, step, frames):
         'py_calls': py_calls,
         'alloc_peak_kb': (peak - base) / 1024.0,
         'kept_kb': (current_mem - base) / 1024.0,
+        'held_kb': _held_kb(),
     }
     print('%-11s render %6.2f ms (min %6.2f)  instance %7.1f KB %4.1f up  all %7.1f KB '
-          '%4.1f up  gl %6.1f  draws %5.1f  py %7.0f  peak %7.1f KB  kept %6.1f KB'
+          '%4.1f up  gl %6.1f  draws %5.1f  py %7.0f  peak %7.1f KB  kept %6.1f KB  held %7.1f KB'
           % (label, out['render_ms_p50'], out['render_ms_min'], out['instance_kb'],
              out['instance_uploads'], out['upload_kb'], out['uploads'], out['gl_calls'],
-             out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb']))
+             out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb'],
+             out['held_kb']))
     return out
 
 
@@ -316,10 +388,17 @@ only = set(filter(None, args.only.split(',')))
 for label, step in SCENARIOS:
     if only and label not in only:
         continue
+    # Every scenario starts from the same state: nothing overridden, both
+    # tables re-read from the brushes.
     camera['angle'] = 0.0
+    camera['cull'] = False
     current['table'] = table
+    source.clear()
+    epoch['n'] += 1
     for tab in (table, peer):
         configs[id(tab)].pop('primary_selection', None)
+        tab.begin_frame(brushes, epoch=epoch['n'])
+        configs[id(tab)]['all_brush_slots'] = tab.shown()[1].astype(np.int32)
     results[label] = scenario(label, step, args.frames)
 source.clear()
 renderer.cleanup()
