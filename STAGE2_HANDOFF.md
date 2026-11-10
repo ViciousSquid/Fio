@@ -1,11 +1,148 @@
 # Fio 3.1 brush model, Stage 2: handoff
 
-State at handoff (2026-11-09, updated after the second session; see
-*Second session* first). Stage 2 is **not accepted**: the performance gate
-against Stage 1 has not passed. **Do not begin M3**, and do not accept
-Stage 2 until the user has reviewed the results.
+State at handoff (2026-11-10, after the third session; read *Third
+session* first). The user reviewed the third session's results ("looks
+good") and **M3 starts in a new session**. The earlier sections are kept
+as history.
 
-## Second session: a dense mover broad phase (read this first)
+## Third session: state published once, the grid's movers, parked movers (read this first)
+
+Full record: `docs/brush-model-stage2.md` §11.8 (published once; the grid's
+movers, gathered once) and §11.9 (parked movers). The gate below is not yet
+written up there as §11.10.
+
+### Commits on `3.1.0.0611_CANARY` after `6333b17` (all pushed; tree clean)
+
+* `afffbd5` perf: a mover's runtime state is published once per change into
+  its brush's runtime-only slot (`_aabb_runtime`); its world box, float64
+  bounds and rotation are derived once by the first reader
+  (`constants.mover_box`, `brush_placement.turn_of`) and shared; only the
+  changed rows' keys are dropped.
+* `c5314a0` perf: movers and doors are filed in the spatial grid for their
+  whole travel (`mover_table.travel_range`, kept as `_travel_filed`) -- they
+  were filed where play began and lost by every grid query once they left
+  that 512-unit cell; rows driven off their travel are marked
+  (`brush_placement.off_range`) and added by every grid reader; the
+  player's movers come from the same grid, each gathered and narrow-phased
+  once a pass; the table's own broad phase (`near_rows`, `movers_near`) is
+  removed; the player forgets its mover lists at Stop.
+* `fd5118b` feat: parked movers sleep. Rows Big World parks
+  (`PARKED_HIDDEN_KEY`) are not walked or published; I/O reaches them at any
+  distance (`IOManager._execute_input` settles the target first); state is
+  caught up on demand in closed form, ends landing on the walk's ticks;
+  missed outputs are never replayed; readers on any thread are answered for
+  now (`brush_placement.asleep`, `runtime_now`). Also fixes a walk bug that
+  predates Stage 1: a path follower that waited at its last node kept
+  running (its `start_on` clear was not journalled).
+* `f0f99d6` perf: the grid broad phase keeps each span's merged movers.
+* `1c6f58d5` docs: §11.8, §11.9.
+* `9b91c54` perf: the `RuntimeOverrides` path (editor preview, tests) --
+  the broad phase steps aside when another source moves one of the
+  player's movers, the gather asks only for an unpublished mover's
+  transform, the resolver shares one rotation with the collision frame.
+* This handoff.
+
+Trajectories are bit-identical through every commit (both trace sets, 18
+lanes each, production path and `RuntimeOverrides` path, against
+`6333b17`).
+
+### Tests
+
+Full suite on `fd5118b`: 6,963 passed, 489 skipped, 1 failed. The failure is
+`tests/e2e/test_play_cycles.py::test_repeated_play_sessions_leak_no_threads_or_memory`
+(~603 KiB retained over 30 play sessions against a 512 KiB limit): it fails
+the same way in isolation on every tree in this container, Stage 1
+included (601–605 KiB), and none of its top retained allocations is in a
+module this session changed. Engine, e2e, integration and Big World tiers on
+`9b91c54`: 2,066 passed, the same one failure. New tests:
+`tests/brush_model/test_published_state.py`,
+`tests/brush_model/test_parked_movers.py` (54), and
+`tests/brush_model/test_mover_broad_phase.py` rewritten for the grid.
+
+### The gate against Stage 1 (`f0f99d6`, all probes, 5 rounds, core 3)
+
+97 metrics, 17 regressions. Representative gameplay and every complete
+mover frame are at or below Stage 1:
+
+| Metric | ×Stage 1 | |
+|---|---|---|
+| `gameplay_*_frame_ms` (BigWorld, MonsterTest, Office, `_SHOWCASE`) | 0.97–1.00 | same |
+| `gameplay_big_logic_ms` / `_calls` | 0.89 / 0.84 | faster |
+| `table_*_total` (box, angled, spinning boxes, spinning angled, far doors, one mover) | 0.72, 0.80, 0.77, 0.78, 0.83, 0.98 | faster / same |
+| `movers{8,32,128}_frame_total` | 0.57, 0.80, 0.54 | faster / same |
+| `ai_*` | 0.46–1.00 | faster / same |
+| `frame_*` (GL) | 0.98–1.01 | same |
+
+The regressions, and what they are:
+
+| Metric | ×Stage 1 | What it is |
+|---|---|---|
+| `table_box_movers_player` | 1.045 | Engine overhead, ~2–3 µs a tick: the grid lookup, the once-each dedupe and the published-slot reads, against Stage 1's direct loop (§11.8's segment table). The box-mover frame total is 0.72×. |
+| `table_one_mover_player` | 1.16 | The same structure with one mover; total 0.98×. |
+| `table_angled_movers_player`, `table_spinning_boxes_player` (and `_spinning_angled`, 1.31, not significant) | 1.22, 1.23 | Mostly true-shape collision: a convex or turned mover is collided by its planes in its own frame, where Stage 1 collided the AABB (the wrong shape). Totals 0.77–0.80×. |
+| `player_*` (`RuntimeOverrides`, not the production path) | 2.30–3.49 at `f0f99d6` | Made worse by `afffbd5`/`c5314a0`, fixed in `9b91c54`: player µs now box 46, angled 54, spinning boxes 59, spinning angled 66 (Stage 1's gate p50s 23.7, 28.6, 31.0, 28.8; `6333b17` 42, 60, 72, 61). Not re-gated. Every override goes through the resolver; plus true-shape collision. |
+| `player_static_angled` | 1.22 | Still angled brushes, no movers; was 1.18 (not significant) before this session. Not investigated. |
+| `movers32_tick`, `movers128_tick`, `table_far_doors_tick` | 1.22, 1.27, 1.14 | Publication: each changed row's runtime entry and published slot (and its derived key dropped), the cost that makes readers' derivation once per change. Avoidable in principle (a validity key needing no per-row pop). |
+| `movers32/128_publish`, `movers32_rows_first` | 1.07–1.12 | The render-table publication and first collision-rows refresh at 32/128 rows. |
+| `movers32/128_aabb_moving` | 1.42, 1.25 | A moved mover's first AABB query derives its box (`mover_box`) once per change. |
+
+Measured on the x86 VM only; nothing is measured on the Snapdragon 8cx Gen 3
+target.
+
+### Parked movers (§11.9), measured
+
+`tools/bench_parked_movers.py` (64 cycling movers, 16 spinners, 34 doors in
+parked cells): tick ~185 → ~7 µs, the AI's batched floor query near the
+player ~128 → ~80 µs, placement stamps 1.08 → 0 a tick. Nothing parked:
+unchanged (identical calls; ticks within noise).
+
+### Open items (not started)
+
+* `player_static_angled` (1.22×): profile still angled brushes against
+  Stage 1.
+* The publication cost at 32+ rows (tick 1.22–1.27×): see the table.
+* Write §11.10 (this gate) into `docs/brush-model-stage2.md`.
+* Everything on the target hardware, including `Player.MOVER_NEAR_FROM`
+  (3) and `LEG_COUNT_LIMIT`.
+
+### M3, for the next session
+
+Change-driven GPU instance uploads. Start from
+`docs/renderer-m3-profiling.md` (profiling only; nothing built): a still
+BigWorld frame uploads 450.5 KB in one call, every visible box instance
+repacked at 128 bytes in every pass, and `render_table.model_matrices`
+rebuilds every visible slot's matrices every frame. Where to look:
+
+* `engine/renderer/forward/instancing.py` -- `_pack_brush_instances` (the
+  128-byte layout: model matrix, padded normal matrix, payload) and the
+  instance VBO/VAO; `_point_brush_instances_at` (GL 3.3 has no base
+  instance);
+* `engine/renderer/forward/passes.py` -- `_draw_lit_brushes_instanced`,
+  `_draw_face_runs_instanced`, `_submit_brush_runs`;
+  `engine/renderer/forward/lighting.py` (the shadow pass packs too);
+* `engine/renderer/core/tables.py` -- `_frame_transforms` (the per-frame
+  matrix build);
+* `engine/renderer/core/geo_store.py` -- M2's pattern to follow: a
+  slot-indexed transform buffer texture (seven RGBA32F texels a slot, read
+  through `uTransforms` in `forward/shaders.py`), a CPU mirror, and
+  dirty-range `glBufferSubData`;
+* `MoverTable.publish` -- still writes every mover's and door's position
+  and spin into the render table every frame, moved or not.
+
+Constraints to carry over: the two render tables alternate frames (slot
+maps keyed by table generation), renderer hot-swapping, OpenGL 3.3 core,
+Adreno. Measure upload bytes, GL calls, CPU render time, frame time and
+memory; reproduce with `tools/profile_frame_uploads.py
+BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
+
+### Environment notes (this session)
+
+* Full suite ~25 minutes; the full gate (all probes, five rounds) ~13.
+* Benchmarks pinned to core 3 with nothing heavy running beside them;
+  check `uptime` and use minima and alternation when the VM is noisy.
+* Worktrees used: `../fio-stage1` (`56ec0e3`), and one per commit compared.
+
+## Second session: a dense mover broad phase
 
 Full record: `docs/brush-model-stage2.md` §11.7.
 
@@ -335,6 +472,12 @@ tree, every scenario; or interleaved over several trees:
 taskset -c 3 python tools/bench_player_table.py ../fio-stage1 --kind all
 python tools/bench_player_table.py ../fio-head --trace /tmp/a.json && python tools/bench_player_table.py . --trace /tmp/b.json && cmp /tmp/a.json /tmp/b.json
 python tools/perf_gate.py --base ../fio-stage1 --head . --rounds 5 --core 3 --probes movers,player,aabb,table --json gate_mpat.json
+```
+
+Parked movers, one tree (HEAD and a tree before `fd5118b` to compare):
+
+```bash
+taskset -c 3 python tools/bench_parked_movers.py .
 ```
 
 Calls and update timing for one tree (`RuntimeOverrides`-driven):
