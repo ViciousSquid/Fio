@@ -1,4 +1,5 @@
 from engine.asset_qt import load_icon, load_pixmap
+from engine import gc_policy
 import sys
 import io
 import json
@@ -2667,6 +2668,9 @@ class MainWindow(QMainWindow):
                 logic.package = self._package
             physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
             self.view_3d.toggle_play_mode(player_start, physics_enabled)
+            # The play world is built: settle the collector while the
+            # loading bar is still up (engine/gc_policy.py).
+            gc_policy.settle()
         self.view_3d.setFocus()
         
         # Update play button color
@@ -2739,6 +2743,8 @@ class MainWindow(QMainWindow):
                 # Back to the cells around the editor camera.
                 stream.suspended = False
                 self.state.stream_editor_camera(self.view_3d.camera.pos, force=True)
+            # What play made and dropped is garbage now: collect it here.
+            gc_policy.settle()
 
         self.ui.notification_label.setText("")
         self._restore_properties_tab()
@@ -4738,6 +4744,10 @@ class MainWindow(QMainWindow):
                     self.view_3d.repaint()
                 except Exception:
                     pass
+            if loaded:
+                # The world just loaded, under the loading bar: collect now
+                # and freeze it, rather than in play (engine/gc_policy.py).
+                gc_policy.settle()
             return loaded
 
     @property
@@ -5699,6 +5709,9 @@ class MainWindow(QMainWindow):
                 if logic_thread.is_alive():
                     logic_thread.join(timeout=1.0)
 
+            # The world was frozen out of the collector (gc_policy.settle);
+            # a closed window's world must be collectable.
+            gc_policy.release()
             event.accept()
         except Exception as e:
             import traceback
