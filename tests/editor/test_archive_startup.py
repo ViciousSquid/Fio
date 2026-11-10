@@ -1,4 +1,4 @@
-"""A real editor host finds archive assets before constructing its toolbar."""
+"""A real editor host reads archive assets in place: nothing is extracted."""
 
 from pathlib import Path
 import shutil
@@ -29,20 +29,31 @@ def test_archive_only_assets_start_the_editor_with_the_same_icon_pixels(
         shutil.copy2(archive, assets / archive.name)
     monkeypatch.chdir(install)
     assert not (assets / 'b_save.png').exists()
+    before = sorted(p.relative_to(install).as_posix() for p in install.rglob('*') if p.is_file())
     window = MainWindow(str(install))
     try:
+        from engine.asset_archives import asset_bytes
+        from engine.asset_qt import load_icon, load_pixmap
         assert not window.undo_action.icon().isNull()
         for name in ('b_save.png', 'b_undo.png', 'splash.png', 'sprites/logic_camera.png'):
             expected = QPixmap(str(root / 'assets' / name)).toImage()
-            actual = QPixmap(str(assets / name)).toImage()
+            actual = load_pixmap(str(assets / name)).toImage()
             assert not actual.isNull()
             assert actual == expected
-        assert not QIcon(str(assets / 'b_save.png')).isNull()
+        assert not load_icon(str(assets / 'b_save.png')).isNull()
         for category in ('models', 'textures', 'fonts', 'sprites'):
             for source in (root / 'assets' / category).rglob('*'):
-                if source.is_file():
-                    assert (assets / source.relative_to(root / 'assets')).read_bytes() == source.read_bytes()
-        assert (assets / 'noise_3d.bin').read_bytes() == (root / 'assets/noise_3d.bin').read_bytes()
+                if source.is_file() and source.name != '.gitkeep':
+                    member = assets / source.relative_to(root / 'assets')
+                    assert asset_bytes(member) == source.read_bytes()
+        assert asset_bytes(assets / 'noise_3d.bin') == (root / 'assets/noise_3d.bin').read_bytes()
+        # Read in place: not one file was written under the installation
+        # (settings aside: the editor keeps its own; the asset browser makes
+        # its empty folders, as it always has).
+        after = sorted(p.relative_to(install).as_posix() for p in install.rglob('*')
+                       if p.is_file())
+        written = [p for p in after if p not in before and not p.startswith('settings')]
+        assert written == [], written[:10]
     finally:
         window.unsaved_changes = False
         window.close()

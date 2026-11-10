@@ -554,8 +554,8 @@ class SurfaceInspector(QDialog):
         size = ft.DEFAULT_TEXTURE_SIZE
         root = self.editor.root_dir
         path = os.path.join(root, 'assets', 'textures', name)
-        reader = QImageReader(path)
-        read = reader.size()
+        from engine.asset_qt import image_size
+        read = image_size(path)              # loose, or in textures.fiopak
         if read.isValid() and read.width() > 0 and read.height() > 0:
             size = (read.width(), read.height())
         self._texture_sizes[name] = size

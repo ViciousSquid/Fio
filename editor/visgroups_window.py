@@ -10,6 +10,8 @@ Opened from the eye on the toolbar. Three tabs:
   the editor's views. Set it from the selection or type its corners.
 
 All of it is :class:`engine.view_filters.ViewFilters` state: it hides objects
+from engine.asset_qt import load_icon
+from engine.asset_archives import asset_exists
 from every editor view, never from Play, and visgroups and the cordon are
 saved with the map. The padlock keeps the window on top of everything.
 """
@@ -68,8 +70,8 @@ class VisgroupsWindow(QWidget):
         header.addStretch()
         self.lock_btn = QPushButton()
         lock_icon = os.path.join(main_window.root_dir, 'assets', 'lock.png')
-        if os.path.isfile(lock_icon):
-            self.lock_btn.setIcon(QIcon(lock_icon))
+        if asset_exists(lock_icon):
+            self.lock_btn.setIcon(load_icon(lock_icon))
             self.lock_btn.setIconSize(QSize(18, 18))
         else:
             self.lock_btn.setText("\U0001F512")

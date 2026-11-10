@@ -33,16 +33,13 @@ class CutsceneRuntime:
         self._message_queue = queue.SimpleQueue()
 
     def _cutscene_file_path(self, filename):
-        """Resolve an authored cutscene path without allowing it outside cutscenes/.
-
-        A played package's own ``cutscenes/`` (``logic.package_root``) is
-        searched before the project's.
+        """Resolve an authored cutscene path in the project, without allowing
+        it outside cutscenes/ (a played package's are :meth:`_package_cutscene`).
         """
         raw = str(filename or "").strip().replace("\\", "/")
         if not raw:
             return None
-        roots = [getattr(self.logic, "package_root", None),
-                 getattr(self.logic, "root_dir",
+        roots = [getattr(self.logic, "root_dir",
                          os.path.dirname(os.path.dirname(__file__)))]
         for project_root in roots:
             if not project_root:
@@ -58,15 +55,31 @@ class CutsceneRuntime:
                 return candidate
         return None
 
+    def _package_cutscene(self, filename):
+        """The member of the played package (``logic.package``, read in place)
+        that *filename* names inside its ``cutscenes/``, or None. A package's
+        cutscenes come before the project's."""
+        package = getattr(self.logic, "package", None)
+        if package is None:
+            return None
+        member = package.member(filename)
+        if member is None or not member.startswith("cutscenes/"):
+            return None
+        return member
+
     def _load_cutscene_file(self, filename):
-        path = self._cutscene_file_path(filename)
-        if path is None:
+        member = self._package_cutscene(filename)
+        path = None if member is not None else self._cutscene_file_path(filename)
+        if member is None and path is None:
             debug_log("Cutscene", f"FAILED: '{filename}' not found or outside cutscenes/")
             return None
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, ValueError, TypeError) as exc:
+            if member is not None:
+                data = self.logic.package.load_json(member)
+            else:
+                with open(path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
             debug_log("Cutscene", f"FAILED: '{filename}' could not be loaded: {exc}")
             return None
         if not isinstance(data, dict) or not isinstance(data.get("camera"), list):

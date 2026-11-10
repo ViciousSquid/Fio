@@ -1,5 +1,7 @@
 """The editor's Windows layout rules, shared on every desktop platform."""
 
+from engine.asset_archives import asset_files
+from engine.asset_qt import add_application_font, load_icon
 from pathlib import Path
 import os
 import sys
@@ -198,14 +200,14 @@ class EditorStyle(QProxyStyle):
             QStyle.SP_MessageBoxCritical: 'error', QStyle.SP_MessageBoxQuestion: 'question',
         }
         if icon in files:
-            return QIcon(str(ICON_DIRECTORY / (files[icon] + '.svg')))
+            return load_icon(str(ICON_DIRECTORY / (files[icon] + '.svg')))
         return super().standardIcon(icon, option, widget)
 
 
 class EditorFileIcons(QFileIconProvider):
     def icon(self, value):
         folder = value.isDir() if hasattr(value, 'isDir') else value == QFileIconProvider.Folder
-        return QIcon(str(ICON_DIRECTORY / ('folder.svg' if folder else 'file.svg')))
+        return load_icon(str(ICON_DIRECTORY / ('folder.svg' if folder else 'file.svg')))
 
 
 class EditorLayoutRules(QObject):
@@ -330,8 +332,9 @@ def install_editor_style(app):
     if getattr(app, "_fio_editor_style_installed", False):
         return
     directory = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "editor"
-    for path in sorted(directory.glob("*.ttf")):
-        if QFontDatabase.addApplicationFont(str(path)) < 0:
+    # Loose, or inside assets/fonts.fiopak: read in place.
+    for path in asset_files(directory, ('.ttf',)):
+        if add_application_font(path) < 0:
             raise RuntimeError("Could not load editor font: " + str(path))
     families = set(QFontDatabase().families())
     if not {UI_FONT, MONO_FONT}.issubset(families):

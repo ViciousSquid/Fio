@@ -15,6 +15,7 @@ Usage
 """
 
 from __future__ import annotations
+from engine.asset_qt import load_icon
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtWidgets import (
@@ -1420,26 +1421,26 @@ class LogicGraphWindow(QWidget):
         tb_lay.addWidget(self._chk_pins)
 
         btn_arrange = QPushButton("Arrange")
-        btn_arrange.setIcon(QIcon("assets/ui/controls/move.svg"))
+        btn_arrange.setIcon(load_icon("assets/ui/controls/move.svg"))
         btn_arrange.setToolTip("Lay the graph out left-to-right by signal flow")
         btn_arrange.setFixedWidth(120)
         btn_arrange.clicked.connect(self._arrange)
         tb_lay.addWidget(btn_arrange)
 
         btn_refresh = QPushButton("Reload")
-        btn_refresh.setIcon(QIcon("assets/ui/controls/refresh.svg"))
+        btn_refresh.setIcon(load_icon("assets/ui/controls/refresh.svg"))
         btn_refresh.setToolTip("Reload nodes from scene")
         btn_refresh.setFixedWidth(150)
         btn_refresh.clicked.connect(self._reload)
 
         btn_wizard = QPushButton("Wizard…")
-        btn_wizard.setIcon(QIcon("assets/ui/controls/shader.svg"))
+        btn_wizard.setIcon(load_icon("assets/ui/controls/shader.svg"))
         btn_wizard.setToolTip("Open the Logic Wizard for guided setup")
         btn_wizard.setFixedWidth(300)
         btn_wizard.clicked.connect(self._open_wizard)
 
         self._btn_apply = QPushButton("Apply")
-        self._btn_apply.setIcon(QIcon("assets/ui/controls/check.svg"))
+        self._btn_apply.setIcon(load_icon("assets/ui/controls/check.svg"))
         self._btn_apply.setToolTip(
             "Write graph connections back to entities (Ctrl+S)")
         self._btn_apply.setFixedWidth(300)

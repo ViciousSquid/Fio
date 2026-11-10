@@ -12,7 +12,8 @@ class TextureManager:
         return self.textures[path]
 
     def _load_texture(self, path):
-        image = QImage(path)
+        from engine.asset_qt import load_image
+        image = load_image(path)
 
         if image.isNull():
             print(f"Error loading image: {path}")

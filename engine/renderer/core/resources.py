@@ -14,6 +14,7 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
+from engine.asset_archives import asset_bytes, asset_exists, asset_source
 from PyQt5.QtGui import QImage, QImageReader
 
 from engine import shaders
@@ -190,7 +191,7 @@ class ResourcesMixin:
             return tex_id
 
         texture_path = os.path.join('assets', subfolder, texture_name)
-        if not os.path.exists(texture_path):
+        if not asset_exists(texture_path):
             return self.load_texture('default.png', 'textures')
 
         try:
@@ -202,7 +203,7 @@ class ResourcesMixin:
                 frames = [im.transpose(Image.FLIP_TOP_BOTTOM).tobytes() for im in images]
                 img = images[0].transpose(Image.FLIP_TOP_BOTTOM)
             else:
-                img = Image.open(texture_path).convert("RGBA")
+                img = Image.open(asset_source(texture_path)).convert("RGBA")
                 img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
@@ -261,11 +262,9 @@ class ResourcesMixin:
             gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
     def _load_3d_texture(self, filepath, size=32):
-        try:
-            with open(filepath, 'rb') as f:
-                data = f.read()
-        except OSError as exc:
-            print(f"{_RENDERER_PREFIX} Could not read 3D texture '{filepath}': {exc}")
+        data = asset_bytes(filepath)
+        if data is None:
+            print(f"{_RENDERER_PREFIX} Could not read 3D texture '{filepath}'")
             return 0
 
         expected_size = size ** 3
@@ -319,15 +318,8 @@ class ResourcesMixin:
     # FIRE animation textures
     # --------------------------------------------------------------------------
     def _fire_asset_bytes(self, asset_path):
-        """Read an effect asset's bytes from the project directory."""
-        disk_path = os.path.join(os.getcwd(), asset_path)
-        if os.path.exists(disk_path):
-            try:
-                with open(disk_path, "rb") as handle:
-                    return handle.read()
-            except OSError:
-                pass
-        return None
+        """Read an effect asset's bytes: the loose file, or the archive's."""
+        return asset_bytes(os.path.join(os.getcwd(), asset_path))
 
     def _upload_fire_frame(self, cache_key, image):
         """Upload one already-decoded FIRE frame and return its GL texture id."""
@@ -583,12 +575,12 @@ class ResourcesMixin:
         full_path = normalized_filename
         if not os.path.isabs(full_path):
             candidate = os.path.join('assets', 'models', full_path)
-            if os.path.exists(candidate):
+            if asset_exists(candidate):
                 full_path = candidate
-            elif os.path.exists(original_filename):
+            elif asset_exists(original_filename):
                 full_path = original_filename
 
-        if not os.path.exists(full_path):
+        if not asset_exists(full_path):
             return self._model_load_failed(filename)
 
         # Determine format by extension
@@ -651,7 +643,7 @@ class ResourcesMixin:
         resolved_path = self._resolve_model_texture_path(
             material or {'texture': tex_name}, tex_name)
         use_direct = bool(
-            resolved_path and os.path.exists(resolved_path) and
+            resolved_path and asset_exists(resolved_path) and
             (not manual or not resolved_path.startswith('assets'))
         )
         if not use_direct:
@@ -662,7 +654,7 @@ class ResourcesMixin:
             return tex_id
         try:
             from PIL import Image
-            img = Image.open(resolved_path).convert('RGBA')
+            img = Image.open(asset_source(resolved_path)).convert('RGBA')
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
@@ -710,17 +702,17 @@ class ResourcesMixin:
                 .replace('/', os.sep)
             )
             resolved = os.path.normpath(os.path.join(mtl_dir, texture_name))
-            if os.path.exists(resolved):
+            if asset_exists(resolved):
                 return resolved
 
         # 2. Try assets/textures/ (global fallback)
         resolved = os.path.normpath(os.path.join('assets', 'textures', texture_name))
-        if os.path.exists(resolved):
+        if asset_exists(resolved):
             return resolved
 
         # 3. Try assets/models/ (legacy fallback)
         resolved = os.path.normpath(os.path.join('assets', 'models', texture_name))
-        if os.path.exists(resolved):
+        if asset_exists(resolved):
             return resolved
 
         # 4. Return as-is and let the loader handle errors

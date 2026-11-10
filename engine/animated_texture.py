@@ -18,13 +18,20 @@ MIN_FRAME_SECONDS = 0.02
 DEFAULT_FRAME_SECONDS = 0.1
 
 
+def _source(path):
+    """What Pillow opens for *path*: the file, or the archived asset."""
+    from engine.asset_archives import asset_source
+    source = asset_source(path)
+    return path if source is None else source
+
+
 def is_animated_gif(path) -> bool:
     """True for a GIF with more than one frame."""
     if not str(path).lower().endswith(".gif"):
         return False
     try:
         from PIL import Image
-        with Image.open(path) as image:
+        with Image.open(_source(path)) as image:
             return bool(getattr(image, "is_animated", False)) and image.n_frames > 1
     except Exception:
         return False
@@ -47,7 +54,7 @@ def decode_gif_frames(path):
     """
     from PIL import Image, ImageSequence
     images, seconds = [], []
-    with Image.open(path) as gif:
+    with Image.open(_source(path)) as gif:
         for frame in ImageSequence.Iterator(gif):
             rgba = frame.convert("RGBA")
             if images and rgba.size != images[0].size:

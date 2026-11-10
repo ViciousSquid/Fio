@@ -1,4 +1,6 @@
 import atexit
+from engine.asset_archives import asset_exists, asset_listdir
+from engine.asset_qt import add_application_font, load_pixmap
 import contextlib
 import io
 import time
@@ -595,8 +597,8 @@ class QtGameView(QOpenGLWidget):
             available = False
             try:
                 path = os.path.join(fonts_dir, filename)
-                if os.path.isfile(path):
-                    font_id = QFontDatabase.addApplicationFont(path)
+                if asset_exists(path):
+                    font_id = add_application_font(path)
                     if font_id >= 0:
                         families = QFontDatabase.applicationFontFamilies(font_id)
                         if families:
@@ -624,8 +626,8 @@ class QtGameView(QOpenGLWidget):
             return None
         path = os.path.join(os.getcwd(), "assets", "fonts", basename)
         try:
-            if os.path.isfile(path):
-                font_id = QFontDatabase.addApplicationFont(path)
+            if asset_exists(path):
+                font_id = add_application_font(path)
                 if font_id >= 0:
                     families = QFontDatabase.applicationFontFamilies(font_id)
                     if families:
@@ -1174,15 +1176,13 @@ class QtGameView(QOpenGLWidget):
 
     def _preload_assets(self):
         tex_dir = os.path.join('assets', 'textures')
-        if os.path.exists(tex_dir):
-            for f in os.listdir(tex_dir):
-                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga', '.gif')):
-                    self.renderer.load_texture(f, 'textures')
+        for f in asset_listdir(tex_dir):
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tga', '.gif')):
+                self.renderer.load_texture(f, 'textures')
         terrain_dir = os.path.join('assets', 'textures', 'terrain')
-        if os.path.exists(terrain_dir):
-            for f in os.listdir(terrain_dir):
-                if f.lower().endswith(('.jpg', '.png')):
-                    self.renderer.load_texture(os.path.join('terrain', f), 'textures')
+        for f in asset_listdir(terrain_dir):
+            if f.lower().endswith(('.jpg', '.png')):
+                self.renderer.load_texture(os.path.join('terrain', f), 'textures')
 
     def _handle_logic_tick_fault(self, message):
         """Run fatal-tick play teardown on QtGameView's GUI thread.
@@ -4358,7 +4358,7 @@ class QtGameView(QOpenGLWidget):
     def _hud_pixmap(self, path):
         """The QPixmap of the HUD sprite at *path*, or None if there is none."""
         if path not in self.hud_pixmaps:
-            self.hud_pixmaps[path] = QPixmap(path) if path and os.path.exists(path) else None
+            self.hud_pixmaps[path] = load_pixmap(path) if path and asset_exists(path) else None
         return self.hud_pixmaps[path]
 
     @staticmethod

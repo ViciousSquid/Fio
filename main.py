@@ -165,8 +165,9 @@ if __name__ == "__main__":
         root_directory = os.path.dirname(os.path.abspath(__file__))
 
     os.chdir(root_directory)
-    # Restore missing archive assets before Qt asks for the splash or icons.
-    from engine.asset_archives import prepare_asset_archives
+    # Index the asset archives before Qt asks for the splash or icons.
+    from engine.asset_archives import asset_exists, prepare_asset_archives
+    from engine.asset_qt import load_icon, load_pixmap
     prepare_asset_archives(root_directory)
     
     # Set the application ID for Windows taskbar (required for Windows 7+)
@@ -222,7 +223,7 @@ if __name__ == "__main__":
             super().__init__()
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
 
-            pixmap = QPixmap(pixmap_path)
+            pixmap = load_pixmap(pixmap_path)
 
             layout = QVBoxLayout()
             layout.setContentsMargins(0, 0, 0, 0)
@@ -280,18 +281,18 @@ if __name__ == "__main__":
 
     # Set application icon
     icon_path = os.path.join(root_directory, 'assets', 'icon.ico')
-    if os.path.exists(icon_path):
-        app_icon = QIcon(icon_path)
+    if asset_exists(icon_path):
+        app_icon = load_icon(icon_path)
         app.setWindowIcon(app_icon)
     else:
         mac_icon_path = os.path.join(root_directory, 'assets', 'icon.icns')
-        if os.path.exists(mac_icon_path):
-            app_icon = QIcon(mac_icon_path)
+        if asset_exists(mac_icon_path):
+            app_icon = load_icon(mac_icon_path)
             app.setWindowIcon(app_icon)
         else:
             png_icon_path = os.path.join(root_directory, 'assets', 'icon.png')
-            if os.path.exists(png_icon_path):
-                app_icon = QIcon(png_icon_path)
+            if asset_exists(png_icon_path):
+                app_icon = load_icon(png_icon_path)
                 app.setWindowIcon(app_icon)
 
     splash = ProgressSplashScreen('assets/splash.png')

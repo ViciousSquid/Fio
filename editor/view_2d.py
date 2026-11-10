@@ -1,3 +1,4 @@
+from engine.asset_qt import load_pixmap
 import numpy as np
 import math
 import time
@@ -179,7 +180,7 @@ class View2D(QWidget):
             'white': "assets/circ_white.png",
         }
         for color_name, path in colour_icon_map.items():
-            pixmap = QPixmap(path)
+            pixmap = load_pixmap(path)
             if not pixmap.isNull():
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
 

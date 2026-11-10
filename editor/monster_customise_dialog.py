@@ -217,7 +217,8 @@ class MonsterCustomiseDialog(QDialog):
             path = edit.text().strip()
             if path:
                 abs_path = os.path.join(_project_root(), path)
-                if not os.path.isfile(abs_path):
+                from engine.asset_archives import asset_exists
+                if not asset_exists(abs_path):
                     ans = QMessageBox.warning(
                         self,
                         "File Not Found",

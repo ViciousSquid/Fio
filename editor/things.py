@@ -4,6 +4,8 @@ Each Thing type has associated I/O definitions (inputs/outputs) for
 the event-driven entity communication system.
 """
 
+from engine.asset_qt import load_pixmap
+from engine.asset_archives import asset_exists
 import copy
 import os
 import math
@@ -216,8 +218,8 @@ class Thing:
         absolute_path = os.path.join(project_root, cls.pixmap_path)
 
         pixmap = None
-        if os.path.exists(absolute_path):
-            loaded_pixmap = QPixmap(absolute_path)
+        if asset_exists(absolute_path):
+            loaded_pixmap = load_pixmap(absolute_path)
             if not loaded_pixmap.isNull():
                 pixmap = loaded_pixmap
             else:
@@ -254,7 +256,7 @@ class Thing:
             return self._pixmap_cache[cache_key]
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
-        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
+        pixmap = load_pixmap(absolute_path) if asset_exists(absolute_path) else None
         if pixmap is not None and pixmap.isNull():
             pixmap = None
         self._pixmap_cache[cache_key] = pixmap
@@ -697,7 +699,7 @@ class Monster(Thing):
         invalidate_sprite_caches() if sprite files change on disk at runtime."""
         cached = cls._custom_path_exists_cache.get(abs_path)
         if cached is None:
-            cached = os.path.isfile(abs_path)
+            cached = asset_exists(abs_path)
             cls._custom_path_exists_cache[abs_path] = cached
         return cached
 
@@ -818,8 +820,8 @@ class Monster(Thing):
                 f"logic_{logic_type}.png"
             )
 
-            if os.path.exists(image_path):
-                pixmap = QPixmap(image_path)
+            if asset_exists(image_path):
+                pixmap = load_pixmap(image_path)
                 if not pixmap.isNull():
                     self._pixmap_cache[cache_key] = pixmap
                     return pixmap
@@ -836,8 +838,8 @@ class Monster(Thing):
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
             abs_path = os.path.join(project_root, icon_path)
-            if os.path.exists(abs_path):
-                pix = QPixmap(abs_path)
+            if asset_exists(abs_path):
+                pix = load_pixmap(abs_path)
                 if not pix.isNull():
                     return pix
         except Exception:
@@ -938,8 +940,8 @@ class LogicGate(Thing):
             project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
             abs_path = os.path.join(project_root, expected_path)
             
-            if os.path.exists(abs_path):
-                pix = QPixmap(abs_path)
+            if asset_exists(abs_path):
+                pix = load_pixmap(abs_path)
                 if not pix.isNull():
                     self._pixmap_cache[expected_path] = pix
                     return pix

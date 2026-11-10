@@ -62,6 +62,8 @@
 | `soa.py` | Growth helpers for the dense arrays. |
 | `spatial.py` | World cell maths and the cell index. |
 | `audio_archives.py` | Safe audio discovery and reads from ZIP-based `.fiopak` archives. |
+| `asset_archives.py` | Category `.fiopak` archives in `assets/`, indexed at startup and read in place (loose files override); `asset_bytes`, `asset_source`, `asset_exists`, `asset_listdir`, `asset_files`. |
+| `asset_qt.py` | Qt images, pixmaps, icons and fonts from assets, loose or archived. |
 | `speaker_audio.py` | Rules for which files a Speaker may play (`assets/sounds`, `assets/music`), from disk or archives. |
 | `sprite_layers.py` | Entity sprites as layers of one texture array. |
 | `sysmon.py` | The system monitor overlay. |

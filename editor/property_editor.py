@@ -1,3 +1,4 @@
+from engine.asset_qt import load_icon
 import json
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
@@ -968,19 +969,19 @@ class PropertyEditor(QWidget):
         self.tab_widget.addTab(self._create_general_tab(brush), "General")
 
         self.trigger_tab = self._create_trigger_tab(brush)
-        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, QIcon("assets/ui/controls/target.svg"), "Trigger")
+        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, load_icon("assets/ui/controls/target.svg"), "Trigger")
         self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
 
         self.mover_tab = self._create_mover_tab(brush)
-        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, QIcon("assets/ui/controls/move.svg"), "Mover")
+        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, load_icon("assets/ui/controls/move.svg"), "Mover")
         self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
 
         self.door_tab = self._create_door_tab(brush)
-        self.door_tab_index = self.tab_widget.addTab(self.door_tab, QIcon("assets/ui/controls/door.svg"), "Door")
+        self.door_tab_index = self.tab_widget.addTab(self.door_tab, load_icon("assets/ui/controls/door.svg"), "Door")
         self.tab_widget.setTabVisible(self.door_tab_index, is_door)
 
         self.shader_tab = self._create_shader_tab(brush)
-        self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, QIcon("assets/ui/controls/shader.svg"), "Shader")
+        self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, load_icon("assets/ui/controls/shader.svg"), "Shader")
         self.tab_widget.setTabVisible(self.shader_tab_index, shader_type not in ('<<None>', None, ''))
 
         self.tab_widget.addTab(self._create_appearance_tab(brush), "Appearance")
@@ -989,7 +990,7 @@ class PropertyEditor(QWidget):
         self.io_tab = None
         if IO_AVAILABLE and (is_trigger or is_mover or is_door):
             self.io_tab = self._create_io_tab_for_brush(brush)
-            self.io_tab_index = self.tab_widget.addTab(self.io_tab, QIcon("assets/ui/controls/links.svg"), "I/O")
+            self.io_tab_index = self.tab_widget.addTab(self.io_tab, load_icon("assets/ui/controls/links.svg"), "I/O")
 
         layout.addWidget(self.tab_widget)
 
@@ -1009,7 +1010,7 @@ class PropertyEditor(QWidget):
         """
         placeholder = QWidget(self.tab_widget)
         QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
-        index = self.tab_widget.addTab(placeholder, QIcon("assets/ui/controls/links.svg"), "I/O")
+        index = self.tab_widget.addTab(placeholder, load_icon("assets/ui/controls/links.svg"), "I/O")
         tabs = self.tab_widget
 
         def fill(current, _tabs=tabs, _index=index, _holder=placeholder):
@@ -3793,7 +3794,7 @@ class PropertyEditor(QWidget):
         radius_spin = _make_spin(thing.properties.get('radius', 256.0), 1.0, 99999.0,
                                  suffix=" u", decimals=1, step=16.0)
         show_btn = QToolButton()
-        show_btn.setIcon(QIcon("assets/ui/controls/target.svg"))
+        show_btn.setIcon(load_icon("assets/ui/controls/target.svg"))
         show_btn.setCheckable(True)
         show_btn.setChecked(bool(thing.properties.get('show_radius', False)))
         show_btn.setStyleSheet("""
@@ -4168,7 +4169,7 @@ class PropertyEditor(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         refresh_btn = QPushButton("Refresh Live Values")
-        refresh_btn.setIcon(QIcon("assets/ui/controls/refresh.svg"))
+        refresh_btn.setIcon(load_icon("assets/ui/controls/refresh.svg"))
         refresh_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
                           border-radius: 3px; padding: 4px 8px; }
@@ -4298,9 +4299,9 @@ class PropertyEditor(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
         add_btn = QPushButton("Add Key")
-        add_btn.setIcon(QIcon("assets/ui/controls/plus.svg"))
+        add_btn.setIcon(load_icon("assets/ui/controls/plus.svg"))
         rem_btn = QPushButton("Remove Selected")
-        rem_btn.setIcon(QIcon("assets/ui/controls/minus.svg"))
+        rem_btn.setIcon(load_icon("assets/ui/controls/minus.svg"))
         for b in (add_btn, rem_btn):
             b.setStyleSheet("""
                 QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
@@ -4417,7 +4418,7 @@ class PropertyEditor(QWidget):
         sight_spin = _make_spin(thing.properties.get('sight', 512), 0, 9999, suffix=" u")
         sight_spin.setToolTip("Distance at which this monster detects the player")
         sight_btn = QToolButton()
-        sight_btn.setIcon(QIcon("assets/ui/controls/eye.svg"))
+        sight_btn.setIcon(load_icon("assets/ui/controls/eye.svg"))
         sight_btn.setCheckable(True)
         sight_btn.setChecked(getattr(self.editor, '_sight_preview_thing', None) is thing)
         sight_btn.setStyleSheet("""
@@ -4606,7 +4607,7 @@ class PropertyEditor(QWidget):
 
         # Customise button
         cust_btn = QPushButton("Customise Sprites…")
-        cust_btn.setIcon(QIcon("assets/ui/controls/palette.svg"))
+        cust_btn.setIcon(load_icon("assets/ui/controls/palette.svg"))
         cust_btn.setFixedWidth(350)
         cust_btn.setToolTip("Assign custom idle / shoot / dead PNGs and billboard size")
         cust_btn.setStyleSheet("""

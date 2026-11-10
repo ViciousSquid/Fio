@@ -130,7 +130,8 @@ def sanitize_params(params):
 def _resolve_texture(texture_name):
     """Return an existing texture filename, falling back to default.png."""
     name = str(texture_name or "").strip()
-    if name and os.path.isfile(os.path.join(TEXTURE_DIR, name)):
+    from engine.asset_archives import asset_exists
+    if name and asset_exists(os.path.join(TEXTURE_DIR, name)):
         return name
     return "default.png"
 

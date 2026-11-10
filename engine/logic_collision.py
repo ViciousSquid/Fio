@@ -525,10 +525,11 @@ class LogicCollision:
         if not model_path:
             return None
 
+        from engine.asset_archives import asset_exists
         full_path = os.path.join('assets', 'models', model_path)
-        if not os.path.exists(full_path):
+        if not asset_exists(full_path):
             full_path = model_path
-        if not os.path.exists(full_path):
+        if not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
@@ -618,10 +619,11 @@ class LogicCollision:
         if not model_path:
             return None
 
+        from engine.asset_archives import asset_exists
         full_path = os.path.join('assets', 'models', model_path)
-        if not os.path.exists(full_path):
+        if not asset_exists(full_path):
             full_path = model_path
-        if not os.path.exists(full_path):
+        if not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()

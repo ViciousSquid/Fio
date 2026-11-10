@@ -247,7 +247,8 @@ class OverheadSpriteRenderer:
         except Exception:
             return 0
         try:
-            img = Image.open(path).convert("RGBA")
+            from engine.asset_archives import asset_source
+            img = Image.open(asset_source(path) or path).convert("RGBA")
             data = np.array(img, dtype=np.uint8)
             tex = gl.glGenTextures(1)
             gl.glBindTexture(gl.GL_TEXTURE_2D, tex)

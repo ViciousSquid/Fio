@@ -12,13 +12,19 @@ Fio discovers these category archives in `assets/` at editor startup:
 | `music.fiopak` | `assets/music/` (currently no music tracks are shipped) |
 | `sounds.fiopak` | `assets/sounds/` |
 
-These are data-only ZIP archives with project-relative paths. Loose non-audio
-files stay as development overrides. Startup restores missing files, byte for
-byte, before constructing the splash or editor toolbar; existing files are
-never overwritten. An archive-only installation therefore needs writable
-asset directories. Sounds and music retain their existing archive-first native
-readers and are not extracted; repack their category after editing loose audio.
-Archives are not opened in rendering hot paths.
+These are data-only ZIP archives with project-relative paths, **read in
+place: nothing is extracted**. Startup indexes each archive
+(`engine/asset_archives.py`); every loader -- textures, sprites, models,
+fonts, editor icons, the asset browser -- asks for an asset by its usual path
+and gets the archive member's bytes (`asset_bytes`, `asset_source`, and the Qt
+helpers in `engine/asset_qt.py`). A loose file at the same path still wins, as
+a development override, and a member is also found by a case-insensitive
+match. An archive-only installation needs no writable asset directories.
+Archives are opened per read and never held, so a repack can replace one while
+the editor runs; the next read sees it. Sounds and music keep their streaming
+readers (`engine/audio_archives.py`); repack their category after editing
+loose audio. Archives are not opened in rendering hot paths: a texture or
+model is read once, when it is first loaded.
 
 Rebuild all categories from the repository root:
 

@@ -1,3 +1,4 @@
+from engine.asset_qt import load_pixmap
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
@@ -180,7 +181,7 @@ class LogoTextBrowser(QTextBrowser):
     def _load_logo(self):
         """Load the logo pixmap if path is valid."""
         if self._logo_path:
-            self._logo_pixmap = QPixmap(self._logo_path)
+            self._logo_pixmap = load_pixmap(self._logo_path)
         else:
             self._logo_pixmap = None
 

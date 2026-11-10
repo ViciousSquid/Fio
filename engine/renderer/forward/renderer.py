@@ -245,7 +245,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # cannot bleed neighbouring frames through transparent borders.
         self.effect_explosion_texture = 0
         explosion_path = os.path.join('assets', 'textures', 'effects', 'explosion.png')
-        if os.path.exists(explosion_path):
+        from engine.asset_archives import asset_exists
+        if asset_exists(explosion_path):
             self.effect_explosion_texture = self.load_texture(
                 'explosion.png', 'textures/effects')
             if self.effect_explosion_texture:

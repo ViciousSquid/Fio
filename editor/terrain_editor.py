@@ -1,3 +1,4 @@
+from engine.asset_qt import load_icon
 import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
@@ -209,7 +210,7 @@ class TerrainEditorPanel(QWidget):
         top_button_layout.setSpacing(10)
 
         regenerate_btn = QPushButton("Regenerate")
-        regenerate_btn.setIcon(QIcon("assets/ui/controls/refresh.svg"))
+        regenerate_btn.setIcon(load_icon("assets/ui/controls/refresh.svg"))
         regenerate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #F08000;
@@ -229,7 +230,7 @@ class TerrainEditorPanel(QWidget):
         top_button_layout.addStretch()
 
         close_btn = QPushButton("Close")
-        close_btn.setIcon(QIcon("assets/ui/controls/close.svg"))
+        close_btn.setIcon(load_icon("assets/ui/controls/close.svg"))
         close_btn.clicked.connect(self.request_close)
         top_button_layout.addWidget(close_btn)
 
@@ -373,7 +374,7 @@ class TerrainEditorPanel(QWidget):
         seed_layout.addWidget(self.seed_spin)
         
         randomize_btn = QPushButton("Randomize")
-        randomize_btn.setIcon(QIcon("assets/ui/controls/dice.svg"))
+        randomize_btn.setIcon(load_icon("assets/ui/controls/dice.svg"))
         randomize_btn.clicked.connect(self.randomize_seed)
         seed_layout.addWidget(randomize_btn)
         
@@ -860,7 +861,7 @@ class TerrainEditorPanel(QWidget):
 
         hm_btn_row = QHBoxLayout()
         load_hm_btn = QPushButton("Load Image…")
-        load_hm_btn.setIcon(QIcon("assets/ui/controls/folder.svg"))
+        load_hm_btn.setIcon(load_icon("assets/ui/controls/folder.svg"))
         load_hm_btn.clicked.connect(self.load_heightmap_image)
         hm_btn_row.addWidget(load_hm_btn)
 

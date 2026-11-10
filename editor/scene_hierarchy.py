@@ -1,3 +1,4 @@
+from engine.asset_qt import load_icon
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
                              QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
@@ -170,8 +171,8 @@ class SceneHierarchy(QWidget):
         self.tree.setIconSize(QtCore.QSize(44, 20))
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_menu)
-        self.lock_icon = QIcon("assets/lock.png")
-        self.hidden_icon = QIcon("assets/hidden.png")
+        self.lock_icon = load_icon("assets/lock.png")
+        self.hidden_icon = load_icon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
         # Double-clicks are read off the viewport, not itemDoubleClicked: the
         # first click of a double-click changes the selection, which rebuilds
@@ -194,13 +195,13 @@ class SceneHierarchy(QWidget):
 
         # Load colour icons in rainbow order (ROYGIBV) with white last
         self.colour_icons = {
-            'red': QIcon("assets/circ_red.png"),
-            'orange': QIcon("assets/circ_orange.png"),
-            'yellow': QIcon("assets/circ_yellow.png"),
-            'green': QIcon("assets/circ_green.png"),
-            'blue': QIcon("assets/circ_blue.png"),
-            'pink': QIcon("assets/circ_pink.png"),
-            'white': QIcon("assets/circ_white.png"),
+            'red': load_icon("assets/circ_red.png"),
+            'orange': load_icon("assets/circ_orange.png"),
+            'yellow': load_icon("assets/circ_yellow.png"),
+            'green': load_icon("assets/circ_green.png"),
+            'blue': load_icon("assets/circ_blue.png"),
+            'pink': load_icon("assets/circ_pink.png"),
+            'white': load_icon("assets/circ_white.png"),
         }
         self.colour_names = {
             "circ_red.png": "red",

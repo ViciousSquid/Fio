@@ -44,7 +44,12 @@ def _read_bounded(path: str) -> Optional[bytes]:
     being read forever.
     """
     try:
-        if not os.path.isfile(path) or os.path.getsize(path) > MAX_GLB_FILE_BYTES:
+        if not os.path.isfile(path):
+            # An archived asset (assets/<category>.fiopak), read in place.
+            from engine.asset_archives import asset_bytes
+            data = asset_bytes(path)
+            return data if data is not None and len(data) <= MAX_GLB_FILE_BYTES else None
+        if os.path.getsize(path) > MAX_GLB_FILE_BYTES:
             return None
         with open(path, 'rb') as f:
             data = f.read(MAX_GLB_FILE_BYTES + 1)

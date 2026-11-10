@@ -1,3 +1,4 @@
+from engine.asset_qt import load_icon, load_pixmap
 import sys
 import io
 import json
@@ -191,9 +192,10 @@ class MainWindow(QMainWindow):
         #: output (holds the top undo entry it was loaded with), so a
         #: regenerate can replace its own preview without asking.
         self._generated_level_marker = None
-        #: Extraction folder of the package whose levels are open, so a level
-        #: change inside it finds the package's maps.
-        self._package_level_dir = None
+        #: The played game package (editor/package_session.PackageSession,
+        #: read in place), whose levels and cutscenes a level change or a
+        #: LogicCamera finds; or None.
+        self._package = None
         self._previous_tab_index = None
         self.file_path = None
         self.recent_files = []
@@ -201,7 +203,7 @@ class MainWindow(QMainWindow):
         self.generate_level_signal.connect(self._on_generate_level_requested)
 
         self.setWindowTitle("Fio")
-        self.setWindowIcon(QIcon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
+        self.setWindowIcon(load_icon(os.path.join(self.root_dir, 'assets', 'icon.ico')))
         self.setGeometry(100, 100, 1600, 900)
         self._minimum_size_screen = None
         self._cap_minimum_size()
@@ -2661,8 +2663,8 @@ class MainWindow(QMainWindow):
             self.state.materialize_editor_world()
             logic = self.view_3d.logic_thread
             if logic is not None:
-                # A played package's cutscenes are looked up in the package.
-                logic.package_root = self._package_level_dir
+                # A played package's cutscenes are read from the package.
+                logic.package = self._package
             physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
             self.view_3d.toggle_play_mode(player_start, physics_enabled)
         self.view_3d.setFocus()
@@ -3078,7 +3080,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container_widget)
 
         splash_label = QLabel()
-        pixmap = QPixmap('assets/splash.png')
+        pixmap = load_pixmap('assets/splash.png')
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
@@ -3259,7 +3261,7 @@ class MainWindow(QMainWindow):
 
         self.file_path = None
         self._generated_level_marker = None
-        self._package_level_dir = None
+        self._close_package()
         self.unsaved_changes = False
         self.update_title()
         self.update_all_ui()
@@ -4676,32 +4678,28 @@ class MainWindow(QMainWindow):
         return self.load_level_file(filePath, destination_spawn, from_game)
 
     def _package_map_path(self, relative_path):
-        """The played package's copy of *relative_path*, or ``None``.
+        """The played package's member *relative_path* names, or ``None``.
 
         While a level from a ``.fiopak`` is open, a level change names a map
         inside that package (``maps/next.json``), not one in the editor's own
-        ``maps/`` folder.
+        ``maps/`` folder. The package is read in place (PackageSession).
         """
-        package_dir = self._package_level_dir
-        if not package_dir or os.path.isabs(relative_path):
+        package = self._package
+        if package is None:
             return None
-        package_dir = os.path.realpath(package_dir)
-        candidate = os.path.realpath(os.path.join(package_dir, relative_path))
-        if not candidate.startswith(package_dir + os.sep):
-            return None
-        return candidate if os.path.isfile(candidate) else None
+        return package.member(relative_path)
 
     def _load_package_map(self, map_path, destination_spawn=None, from_game=False):
-        """Open a map from the extracted package as an untitled, saved level.
+        """Open the played package's map *map_path* (a member, read in place)
+        as an untitled, saved level.
 
-        Like the package's start map, it never takes the extraction's path as
+        Like the package's start map, it never takes the package's path as
         its file: the first save goes through Save As.
         """
         name = os.path.splitext(os.path.basename(str(map_path)))[0]
         with _loading_overlay(self).busy(f"Loading {name}", "Reading the map", 5):
             try:
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    level_data = json.load(f)
+                level_data = self._package.load_json(map_path)
             except Exception as e:
                 print(f"ERROR loading level {map_path}: {e}")
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
@@ -4866,7 +4864,7 @@ class MainWindow(QMainWindow):
             self._generated_level_marker = None
             if file_path is not None:
                 # A map opened from disk ends the package session.
-                self._package_level_dir = None
+                self._close_package()
             self.unsaved_changes = file_path is None
             loaded = True
             self.update_title()
@@ -5176,37 +5174,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.show_toast(f"Failed to restart: {e}", is_error=True)
 
-    def _safe_extract_zip(self, zip_path, dest_dir):
-        """Extract a zip file safely, rejecting any member that would escape dest_dir."""
-        import zipfile
-        import os
-
-        from player.fiopak import MAX_ASSET_ENTRY_BYTES, MAX_TOTAL_ASSET_BYTES
-
-        dest_dir = os.path.realpath(dest_dir)
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            members = zf.infolist()
-            # A package is shareable input: hold extraction to the same budget
-            # the player's reader enforces, so a small archive cannot inflate
-            # into gigabytes on disk. zipfile never yields more than an
-            # entry's declared size, so the declared sizes are binding.
-            if len(members) > self.MAX_PACKAGE_ENTRIES:
-                raise ValueError(f"Package has too many files ({len(members)})")
-            total = 0
-            for member in members:
-                target_path = os.path.realpath(os.path.join(dest_dir, member.filename))
-                if not target_path.startswith(dest_dir + os.sep) and target_path != dest_dir:
-                    raise ValueError(f"Zip slip attempt detected: {member.filename}")
-                if member.file_size > MAX_ASSET_ENTRY_BYTES:
-                    raise ValueError(f"Package file too large: {member.filename}")
-                total += member.file_size
-                if total > MAX_TOTAL_ASSET_BYTES:
-                    raise ValueError("Package expands past the size limit")
-            zf.extractall(dest_dir)
-
-    #: Upper bound on files in one extracted .fiopak.
-    MAX_PACKAGE_ENTRIES = 20000
-
+    def _close_package(self):
+        """End the package session: its maps, cutscenes and assets are no
+        longer looked up (nothing to delete: it was never extracted)."""
+        self._package = None
+        from engine.asset_archives import set_package
+        set_package(None)
 
     def play_game_package(self):
         """Pick a .fiopak and launch it in kiosk mode."""
@@ -5219,44 +5192,12 @@ class MainWindow(QMainWindow):
         if filePath:
             self.play_package_from_path(filePath)
 
-    def _extract_package(self, file_path):
-        """Validate a .fiopak, extract it, and return ``(temp_dir, map_path)``.
-
-        The package is opened with the player's reader first, so the editor
-        accepts exactly what the player accepts (no bundled plugin code) and
-        starts on the map the manifest names rather than whichever ``.json``
-        the extraction happens to list first.
-        """
-        import tempfile
-        import shutil
-        from player.fiopak import FioPackage
-
-        with FioPackage.open(file_path) as package:
-            start_map = package.start_map_path()
-
-        temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-        try:
-            self._safe_extract_zip(file_path, temp_dir)
-            map_path = os.path.join(temp_dir, *start_map.split('/'))
-            if not os.path.isfile(map_path):
-                raise FileNotFoundError(f"Start map '{start_map}' missing from package")
-        except Exception:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            raise
-        return temp_dir, map_path
-
-    def _discard_package_temp_dir(self):
-        temp_dir = getattr(self, '_package_temp_dir', None)
-        self._package_temp_dir = None
-        self._package_level_dir = None
-        if temp_dir:
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
     def play_package_from_path(self, file_path):
-        """Load and launch a game package (Tools menu and asset browser)."""
-        import shutil
+        """Load and launch a game package (Tools menu and asset browser).
 
+        The package is read in place (editor/package_session.py): checked
+        first, then its start map loaded; nothing is extracted.
+        """
         if not self.check_unsaved_changes():
             return
 
@@ -5264,28 +5205,24 @@ class MainWindow(QMainWindow):
             self.show_toast(f"Package not found: {file_path}", is_error=True)
             return
 
-        temp_dir = None
         try:
-            # The archive is read-only input: extract, and work on the copy.
-            temp_dir, map_path = self._extract_package(file_path)
+            from editor.package_session import PackageSession
+            session = PackageSession(file_path)
+            level_data = session.load_json(session.start_map)
 
-            with open(map_path, 'r', encoding='utf-8') as f:
-                level_data = json.load(f)
-
-            # Never point file_path at the package (or its extraction):
-            # save_level() writes that path, and writing a map over the
-            # .fiopak replaces the archive with a JSON file.  Cleared before
-            # the scene is replaced, so no failure below can leave the
-            # previous map's path attached to this scene.  The first save
-            # goes through Save As.
+            # Never point file_path at the package: save_level() writes that
+            # path, and writing a map over the .fiopak replaces the archive
+            # with a JSON file.  Cleared before the scene is replaced, so no
+            # failure below can leave the previous map's path attached to
+            # this scene.  The first save goes through Save As.
             self.file_path = None
             self._apply_level_data(level_data)
 
-            # One extracted package at a time; the previous one is released.
-            self._discard_package_temp_dir()
-            self._package_temp_dir = temp_dir
-            self._package_level_dir = temp_dir
-            temp_dir = None  # owned by the window now; removed on close
+            # One package at a time.
+            self._close_package()
+            self._package = session
+            from engine.asset_archives import set_package
+            set_package(session.path, session.names)
 
             self.unsaved_changes = False
             self.update_title()
@@ -5302,9 +5239,6 @@ class MainWindow(QMainWindow):
             self.show_toast(f"Failed to load game package: {e}", is_error=True)
             import traceback
             traceback.print_exc()
-        finally:
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def leave_play_mode_from_escape(self):
         """Leave Play the way Esc did before the pause menu.
@@ -5749,8 +5683,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'autosave_timer'):
                 self.autosave_timer.stop()
 
-            # Cleanup extracted package temp dir
-            self._discard_package_temp_dir()
+            # The played package, if any, is no longer read.
+            self._close_package()
 
             try:
                 self.save_layout()

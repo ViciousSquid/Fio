@@ -1,7 +1,8 @@
 """A `.fiopak` must survive being played.
 
-Tools -> Play Game Package extracts a package to a temp directory and loads the
-map out of it. The archive itself is an input, never an output: `save_level`
+Tools -> Play Game Package reads a package in place (editor/package_session.py)
+and loads the map out of it; nothing is extracted. The archive itself is an
+input, never an output: `save_level`
 writes `self.file_path` with `json.dump`, so leaving `file_path` pointing at the
 package means one Ctrl+S replaces a ZIP -- the map, every texture, every model,
 every bundled plugin -- with a bare JSON file.
@@ -85,8 +86,9 @@ def test_playing_a_package_never_leaves_file_path_on_it(tmp_path, main_window):
         "file_path points at %r; save_level() would write that path"
         % window.file_path)
     assert open(pak, "rb").read() == before, "the archive itself was modified"
-    assert window._package_temp_dir is not None
-    window._discard_package_temp_dir()
+    assert window._package is not None
+    assert window._package.path == os.path.abspath(pak)
+    window._close_package()
 
 
 def test_the_manifest_start_map_is_the_one_loaded(tmp_path, main_window):
@@ -97,27 +99,37 @@ def test_the_manifest_start_map_is_the_one_loaded(tmp_path, main_window):
     window.play_package_from_path(pak)
 
     assert [b.get("id") for b in window.state.brushes] == ["start-marker"]
-    window._discard_package_temp_dir()
+    window._close_package()
 
 
-def test_the_extraction_is_a_temp_copy_released_by_the_next_package(
-        tmp_path, main_window):
+def test_a_package_is_read_in_place_and_replaced_by_the_next(
+        tmp_path, main_window, monkeypatch):
+    from engine.asset_archives import asset_bytes
     first = make_package(str(tmp_path / "first.fiopak"))
     second = make_package(str(tmp_path / "second.fiopak"))
+    created = []
+    real_mkdtemp = __import__("tempfile").mkdtemp
+    monkeypatch.setattr("tempfile.mkdtemp",
+                        lambda *a, **k: created.append(real_mkdtemp(*a, **k)) or created[-1])
     window = main_window
     _prepare_package_window(window)
 
     window.play_package_from_path(first)
-    first_dir = window._package_temp_dir
-    assert first_dir and os.path.isfile(
-        os.path.join(first_dir, "assets", "sprites", "pickup.png"))
-    assert not first_dir.startswith(str(tmp_path))
+    assert window._package.path == os.path.abspath(first)
+    # Its members are read from the archive itself; nothing was written out.
+    assert window._package.read("assets/sprites/pickup.png") == b"\x89PNG not really"
+    assert created == []
+    written = [p for p in tmp_path.rglob("*") if p.is_file()
+               and p.name in ("pickup.png", "level.json", "metadata.json")]
+    assert written == [], written
 
     window.play_package_from_path(second)
-    assert not os.path.exists(first_dir), "the previous extraction leaked"
-    second_dir = window._package_temp_dir
-    window._discard_package_temp_dir()
-    assert not os.path.exists(second_dir)
+    assert window._package.path == os.path.abspath(second)
+    window._close_package()
+    assert window._package is None
+    # A package's assets are served only while it is played.
+    if not os.path.isfile(os.path.join(window.root_dir, "assets", "sprites", "pickup.png")):
+        assert asset_bytes("assets/sprites/pickup.png") is None
 
 
 @pytest.mark.parametrize("entries", [
@@ -143,15 +155,15 @@ def test_a_hostile_package_is_refused_before_the_scene_changes(
     assert window.state.brushes == []
     assert window.state.things == []
     assert window.file_path.endswith("previous.json")
-    assert getattr(window, "_package_temp_dir", None) is None
+    assert getattr(window, "_package", None) is None
     assert window.unsaved_changes is False
     assert not (tmp_path / "escape.json").exists()
 
 
-def test_a_package_that_inflates_past_the_budget_is_not_extracted(
+def test_a_package_that_inflates_past_the_budget_is_refused(
         tmp_path, main_window, monkeypatch):
-    """A tiny archive of highly compressible data must not be written out
-    whole: extraction keeps to the player's asset budget."""
+    """A tiny archive of highly compressible data is refused before anything
+    is read from it: the session keeps to the player's asset budget."""
     import player.fiopak as fiopak
 
     # Shrink the budget so the test archive stays small on disk.
@@ -178,6 +190,5 @@ def test_a_package_that_inflates_past_the_budget_is_not_extracted(
 
     window.play_package_from_path(pak)
 
-    assert getattr(window, "_package_temp_dir", None) is None
-    assert created and not any(os.path.exists(p) for p in created), (
-        "an over-budget package was extracted (or its temp dir leaked)")
+    assert getattr(window, "_package", None) is None
+    assert created == [], "a temporary folder was made for a package"

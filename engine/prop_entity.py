@@ -383,12 +383,12 @@ class Prop(_ThingBase):
             return None
         sprite_path = cls.get_key_sprite_path(key_name)
         try:
-            from PyQt5.QtGui import QPixmap
             import os
+            from engine.asset_qt import load_pixmap
             project_root = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), os.pardir))
             absolute_path = os.path.join(project_root, sprite_path)
-            pixmap = QPixmap(absolute_path)
+            pixmap = load_pixmap(absolute_path)
             return None if pixmap.isNull() else pixmap
         except Exception:
             return None

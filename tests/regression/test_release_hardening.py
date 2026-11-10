@@ -191,10 +191,11 @@ def test_a_missing_model_is_not_reloaded_every_frame(monkeypatch, capsys):
         try:
             renderer.loaded_models = {}
             probes = []
-            real_exists = renderer_resources.os.path.exists
+            # Every probe goes through the asset reader (loose or archived).
+            real_exists = renderer_resources.asset_exists
             monkeypatch.setattr(
-                renderer_resources.os.path,
-                "exists",
+                renderer_resources,
+                "asset_exists",
                 lambda p: probes.append(p) or real_exists(p),
             )
             for _ in range(50):

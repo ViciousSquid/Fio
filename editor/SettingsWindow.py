@@ -1,3 +1,4 @@
+from engine.asset_qt import load_pixmap
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
@@ -510,7 +511,7 @@ class SettingsWindow(QDialog):
             button = QToolButton()
             button.setCheckable(True)
             button.setToolTip(label)
-            button.setIcon(QIcon(QPixmap(glasses_path(style))))
+            button.setIcon(QIcon(load_pixmap(glasses_path(style))))
             button.setIconSize(QSize(150, 64))
             button.setToolButtonStyle(Qt.ToolButtonIconOnly)
             button.setMinimumSize(170, 84)

@@ -2342,7 +2342,8 @@ class Terrain:
         except ImportError:
             # Fallback to Qt
             from PyQt5.QtGui import QImage
-            img = QImage(image_path)
+            from engine.asset_qt import load_image
+            img = load_image(image_path)
             if img.isNull():
                 raise ValueError(f"Could not load image: {image_path}")
             img = img.convertToFormat(QImage.Format_Grayscale8)
@@ -2354,7 +2355,8 @@ class Terrain:
             arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, stride))[:, :w]
             arr = arr.astype(np.float32)
         else:
-            with Image.open(image_path) as source:
+            from engine.asset_archives import asset_source
+            with Image.open(asset_source(image_path) or image_path) as source:
                 arr = np.array(source.convert('L'), dtype=np.float32)
         # This array is owned here. Normalize without a second full float copy.
         arr /= 255.0
@@ -2466,7 +2468,8 @@ class Terrain:
         """Load a paint source into a compact RGBA8 NumPy image."""
         try:
             from PyQt5.QtGui import QImage
-            image = QImage(path)
+            from engine.asset_qt import load_image
+            image = load_image(path)
             if image.isNull():
                 return None
             image = image.convertToFormat(QImage.Format_RGBA8888)

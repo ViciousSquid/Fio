@@ -40,6 +40,22 @@ def _write_map(path, level=LEVEL):
     path.write_text(json.dumps(level))
     return str(path)
 
+def _package(tmp_path, members, name="package.fiopak"):
+    """A played package's session over a .fiopak holding *members*
+    (path -> level dict, or bytes), read in place."""
+    import zipfile
+    from editor.package_session import PackageSession
+    path = tmp_path / name
+    with zipfile.ZipFile(path, "w") as archive:
+        start = next((m for m in members if m.startswith("maps/")), "maps/start.json")
+        archive.writestr("metadata.json", json.dumps({"map_path": start}))
+        if start not in members:
+            archive.writestr(start, json.dumps(LEVEL))
+        for member, data in members.items():
+            archive.writestr(member, data if isinstance(data, bytes) else json.dumps(data))
+    return PackageSession(str(path))
+
+
 
 @pytest.fixture
 def prompts(main_window, monkeypatch):
@@ -167,35 +183,36 @@ def test_generating_asks_once_the_preview_has_been_edited(main_window, prompts):
 
 def test_a_played_package_changes_to_its_own_maps(main_window, tmp_path):
     window = main_window
-    package = tmp_path / "package"
-    _write_map(package / "maps" / "next.json",
-               {"version": 3, "brushes": [box_brush("pkg", (0, 0, 0))], "things": []})
-    window._package_level_dir = str(package)
+    package = _package(tmp_path, {"maps/start.json": LEVEL, "maps/next.json":
+                       {"version": 3, "brushes": [box_brush("pkg", (0, 0, 0))], "things": []}})
+    window._package = package
 
     assert window.open_level_file("maps/next.json") is True
 
     assert [b.get("name") for b in window.state.brushes] == ["pkg"]
-    # Never the extraction's path: Ctrl+S must not write into the temp folder.
+    # Never the package's path: Ctrl+S must not write over the archive.
     assert window.file_path is None
     assert not window.unsaved_changes
-    assert window._package_level_dir == str(package)
+    assert window._package is package
+    window._close_package()
 
 
 def test_a_package_level_change_cannot_climb_out_of_the_package(main_window, tmp_path):
     window = main_window
-    package = tmp_path / "package"
-    package.mkdir()
     _write_map(tmp_path / "outside.json")
-    window._package_level_dir = str(package)
+    window._package = _package(tmp_path, {"maps/start.json": LEVEL})
 
     assert window._package_map_path("../outside.json") is None
+    assert window._package_map_path("maps/../../outside.json") is None
+    assert window._package_map_path(str(tmp_path / "outside.json")) is None
+    window._close_package()
 
 
 def test_opening_a_map_file_ends_the_package_session(main_window, tmp_path):
     window = main_window
-    window._package_level_dir = str(tmp_path)
+    window._package = _package(tmp_path, {"maps/start.json": LEVEL})
     assert window.load_level_file(_write_map(tmp_path / "maps" / "plain.json"))
-    assert window._package_level_dir is None
+    assert window._package is None
 
 
 @pytest.mark.parametrize("command", ["vsync", "r_vsync", "fps"])
@@ -213,15 +230,15 @@ def test_map_logic_does_not_write_settings(main_window, monkeypatch, command):
 
 def test_a_played_packages_map_command_changes_to_its_own_maps(main_window, tmp_path):
     window = main_window
-    package = tmp_path / "package"
-    _write_map(package / "maps" / "next.json",
-               {"version": 3, "brushes": [box_brush("pkg", (0, 0, 0))], "things": []})
-    window._package_level_dir = str(package)
+    window._package = _package(tmp_path, {"maps/start.json": LEVEL, "maps/next.json":
+                               {"version": 3, "brushes": [box_brush("pkg", (0, 0, 0))],
+                                "things": []}})
 
     window.console_handler.handle_command("map next", from_map=True)
 
     assert [b.get("name") for b in window.state.brushes] == ["pkg"]
     assert window.file_path is None
+    window._close_package()
 
 
 # ---------------------------------------------------------------------------
@@ -294,20 +311,19 @@ def test_a_user_opening_a_map_without_a_start_in_play_gets_no_dialog(
 
 
 def test_play_tells_the_logic_thread_where_a_played_package_is(main_window, tmp_path):
-    """Cutscenes inside a package are looked up in its extraction."""
+    """Cutscenes inside a package are read from the package itself."""
     window = main_window
-    package = tmp_path / "package"
-    _write_map(package / "maps" / "start.json", PLAYABLE)
-    window._package_level_dir = str(package)
+    package = _package(tmp_path, {"maps/start.json": PLAYABLE})
+    window._package = package
     assert window.open_level_file("maps/start.json")
 
     window.enter_play_mode()
-    assert window.view_3d.logic_thread.package_root == str(package)
+    assert window.view_3d.logic_thread.package is package
     window._exit_play_mode()
 
-    window._package_level_dir = None
+    window._close_package()
     window.enter_play_mode()
-    assert window.view_3d.logic_thread.package_root is None
+    assert window.view_3d.logic_thread.package is None
     window._exit_play_mode()
 
 
@@ -335,35 +351,33 @@ def test_an_exported_packages_cutscene_plays_from_the_package(main_window, tmp_p
     window.enter_play_mode()
     try:
         runtime = window.view_3d.logic_thread.cutscene_runtime
-        found = runtime._cutscene_file_path("cutscenes/intro.json")
-        assert found is not None
-        assert found.startswith(os.path.realpath(window._package_temp_dir))
+        assert runtime._package_cutscene("cutscenes/intro.json") == "cutscenes/intro.json"
+        assert runtime._cutscene_file_path("cutscenes/intro.json") is None   # not in the project
         assert runtime._load_cutscene_file("cutscenes/intro.json")["name"] == "intro"
     finally:
         window._exit_play_mode()
-        window._discard_package_temp_dir()
+        window._close_package()
 
 
 def test_the_cutscene_lookup_prefers_the_played_package(main_window, tmp_path):
     logic = main_window.view_3d.logic_thread
     runtime = logic.cutscene_runtime
-    package = tmp_path / "package"
     cutscene = {"version": 2, "actors": [], "camera": []}
-    _write_map(package / "cutscenes" / "showcase.json", dict(cutscene, name="pkg"))
-    _write_map(package / "cutscenes" / "only_here.json", cutscene)
-    (package / "outside.json").write_text("{}")
+    package = _package(tmp_path, {"maps/start.json": LEVEL,
+                                  "cutscenes/showcase.json": dict(cutscene, name="pkg"),
+                                  "cutscenes/only_here.json": cutscene,
+                                  "outside.json": {}})
 
-    logic.package_root = str(package)
+    logic.package = package
     try:
-        assert runtime._cutscene_file_path("cutscenes/showcase.json") == \
-            os.path.realpath(package / "cutscenes" / "showcase.json")
-        assert runtime._cutscene_file_path("cutscenes/only_here.json")
-        assert runtime._cutscene_file_path("cutscenes/../outside.json") is None
+        assert runtime._package_cutscene("cutscenes/showcase.json") == "cutscenes/showcase.json"
+        assert runtime._load_cutscene_file("cutscenes/showcase.json")["name"] == "pkg"
+        assert runtime._package_cutscene("cutscenes/only_here.json")
+        assert runtime._package_cutscene("cutscenes/../outside.json") is None
+        assert runtime._package_cutscene("outside.json") is None
     finally:
-        logic.package_root = None
+        logic.package = None
     # Without a package: the project's own cutscenes, and nothing else.
     assert runtime._cutscene_file_path("cutscenes/showcase.json").endswith(
         os.path.join("cutscenes", "showcase.json"))
-    assert not runtime._cutscene_file_path("cutscenes/showcase.json").startswith(
-        os.path.realpath(package))
     assert runtime._cutscene_file_path("cutscenes/only_here.json") is None
