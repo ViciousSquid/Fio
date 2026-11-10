@@ -348,6 +348,11 @@ class BarView(QWidget):
 
 class DebugTablesWindow(QMainWindow):
     def __init__(self, main_window):
+        try:                                # it shows what change detection costs
+            from engine import change_detection
+            change_detection.timing(True)
+        except (ImportError, AttributeError):
+            pass
         super().__init__(main_window)
         self.main_window = main_window
         self.setWindowTitle("Fio — Debug Tables")

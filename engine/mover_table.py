@@ -67,6 +67,42 @@ from engine.spatial import PARKED_HIDDEN_KEY
 #: render table last written further back than this is written whole.
 POSE_LOG = 32
 
+#: The publication writes a group whole -- every row written and logged by
+#: the render table, so the change record stays complete (a superset) --
+#: when at most this many of its rows were not marked, rather than picking
+#: out the marked rows. What decides it is the renderer's work on the rows
+#: logged needlessly (~0.18 us a row here: matrices rebuilt, instance rows
+#: repacked and re-uploaded) against what picking costs (~6 us a group):
+#: an absolute count of rows, not a share, so a group of up to this many
+#: rows is always written whole. Measured, not assumed:
+#: tools/bench_mover_crossover.py times both modes end to end across group
+#: sizes and shares (here: dense cheaper at nearly any share up to ~64 rows;
+#: for 128-512 rows the crossover lies between 40 % and 75 % moving, the two
+#: within a few microseconds of each other near it); retune both on the
+#: target (an ARM CPU and a mobile driver weigh the two sides differently).
+DENSE_SLACK_ROWS = 48
+
+#: ... or when at least this share of its rows were marked: past it, picking
+#: and catching both tables up costs more than the rows written needlessly.
+#: Measured with the same tool.
+DENSE_SHARE = 0.75
+
+
+def _dense_or_marks(group, rows):
+    """*group*'s marks since the last publication, or None -- every row,
+    written and logged as such -- when at most :data:`DENSE_SLACK_ROWS` of
+    its *rows* were not marked, or at least :data:`DENSE_SHARE` were
+    (repeats counted: deciding costs no array)."""
+    count = group.marked_count()
+    if count == 0:
+        return _NO_ROWS                     # nothing moved: nothing written
+    if (count is None or rows - count <= DENSE_SLACK_ROWS
+            or count >= DENSE_SHARE * rows):
+        group.drop_marks()
+        return None
+    return group.take_marks()
+
+
 #: Marks a group keeps between publications before it gives up listing rows
 #: and says "every row" (ticks walked with no frame published: a headless
 #: run, a stalled renderer).
@@ -647,6 +683,18 @@ class _Group:
             arrays.append(rows)
             if len(arrays) > MARKS_LIMIT:
                 self._marked_arrays = None      # "every row"
+
+    def marked_count(self):
+        """How many rows were marked since the last :meth:`take_marks`,
+        counting repeats (an upper bound), or None for every row."""
+        rows, arrays = self._marked_rows, self._marked_arrays
+        if rows is None or arrays is None:
+            return None
+        return len(rows) + sum(len(a) for a in arrays)
+
+    def drop_marks(self):
+        """Forget the marks (the publication is writing every row)."""
+        self._marked_rows, self._marked_arrays = [], []
 
     def take_marks(self):
         """The rows whose runtime transform was published since the last
@@ -1861,7 +1909,11 @@ class MoverTable:
     def _publish_row(self, group, row, runtime, centre=None, rest=None):
         """:meth:`_publish` for one row, in scalars (*centre* and *rest*:
         its position and authored centre, when the caller holds them)."""
-        group._mark_row(row)
+        marked = group._marked_rows         # group._mark_row, inline: per row
+        if marked is not None:
+            marked.append(row)
+            if len(marked) > MARKS_LIMIT * 8:
+                group._marked_rows = None
         brush = group.brushes[row]
         if centre is None:
             cx, cy, cz = group.pos[row].tolist()
@@ -2163,17 +2215,25 @@ class MoverTable:
             cached = [key, tuple(maps), None]
             self._slot_cache[table] = cached
         started = change_detection.now()
+        (all_m, slots_m, slot_of_m), (all_d, slots_d, slot_of_d) = cached[1]
         # What was published since the last publication -- the tick's own
         # record of the rows it moved (M4) -- logged for both render tables.
-        # A group whose every row was published is "every row" (None).
-        marks_m = movers.take_marks()
-        marks_d = doors.take_marks()
+        # A group at least half of whose rows were published (counting
+        # repeats) is dense: picking its rows out would cost more than the
+        # writes it saves, so it is "every row" (None) and written whole, as
+        # before M4.
+        marks_m = _dense_or_marks(movers, len(slot_of_m))
+        marks_d = _dense_or_marks(doors, len(slot_of_d))
         if marks_m is None or marks_d is None or len(marks_m) or len(marks_d):
             self._pose_version += 1
             self._pose_log.append((self._pose_version, (marks_m, marks_d)))
-        rows_m, rows_d = (None, None) if fresh else self._rows_since(cached[2])
+        if fresh:
+            rows_m = rows_d = None
+        elif marks_m is None and marks_d is None:
+            rows_m = rows_d = None          # both written whole: no log walk
+        else:
+            rows_m, rows_d = self._rows_since(cached[2])
         cached[2] = self._pose_version
-        (all_m, slots_m, slot_of_m), (all_d, slots_d, slot_of_d) = cached[1]
         writes = []
         if rows_m is None or len(rows_m) >= len(slot_of_m):
             rows_m = all_m
@@ -2237,10 +2297,24 @@ class MoverTable:
                     doors_parts = None
                 elif len(marks_d):
                     doors_parts.append(marks_d)
-        rows = [None if parts is None else
-                _NO_ROWS if not parts else
-                parts[0] if len(parts) == 1 else np.concatenate(parts)
-                for parts in (movers_parts, doors_parts)]
+        rows = []
+        for parts, group in ((movers_parts, movers), (doors_parts, doors)):
+            if parts is None:
+                rows.append(None)
+            elif not parts:
+                rows.append(_NO_ROWS)
+            elif len(parts) == 1:
+                rows.append(parts[0])
+            else:
+                joined = np.concatenate(parts)
+                # The same rows moving publication after publication (the
+                # two tables catch up on two each): told apart only when
+                # the repeats would otherwise make it look like every row.
+                if len(joined) >= len(group.index):
+                    seen = np.zeros(len(group.index), dtype=bool)
+                    seen[joined] = True     # O(group), no sort
+                    joined = np.flatnonzero(seen)
+                rows.append(joined)
         if movers.any_twin and rows[0] is not None and rows[1] is not None:
             # The twin of a row that moved moved with it.
             twins_d = movers.twin_row[rows[0]]

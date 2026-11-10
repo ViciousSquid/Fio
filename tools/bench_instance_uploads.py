@@ -82,6 +82,8 @@ from engine.entity_table import EntityTable           # noqa: E402
 from engine.render_table import RenderTable           # noqa: E402
 try:
     from engine import change_detection as _change_detection   # noqa: E402
+    if hasattr(_change_detection, 'timing'):
+        _change_detection.timing(True)      # this tool reports the time
 except ImportError:                     # a tree before M4
     _change_detection = None
 from engine.renderer.forward import ForwardRenderer   # noqa: E402

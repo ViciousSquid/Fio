@@ -22,7 +22,21 @@ replaced, and raise :class:`MissedChange` when the record missed something.
 import os
 import time
 
-now = time.perf_counter_ns
+
+def _no_clock():
+    return 0
+
+
+#: The clock the sites read, or a stand-in returning 0 while timing is off
+#: (the rows are always counted). Benchmarks turn it on: ``timing(True)``.
+now = _no_clock
+
+
+def timing(on):
+    """Time the sites (benchmarks), or only count their rows (the default:
+    a frame should not pay for reading the clock to report on itself)."""
+    global now
+    now = time.perf_counter_ns if on else _no_clock
 
 
 class MissedChange(AssertionError):

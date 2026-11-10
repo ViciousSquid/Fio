@@ -73,7 +73,16 @@ def _drawn_where_placed(logic, table):
         assert float(table.rot[slot, 3]) == pytest.approx(angle), brush['name']
 
 
-def test_only_the_rows_that_moved_are_written(logic, oracle):
+@pytest.fixture
+def marks_mode(monkeypatch):
+    """Rows picked out one by one, whatever the group's size (dense mode
+    writes small groups whole)."""
+    from engine import mover_table
+    monkeypatch.setattr(mover_table, 'DENSE_SLACK_ROWS', -1)
+    monkeypatch.setattr(mover_table, 'DENSE_SHARE', 2.0)
+
+
+def test_only_the_rows_that_moved_are_written(logic, oracle, marks_mode):
     table = _table(logic)
     _tick(logic, 5)
     assert _publish(logic, table) is not None
@@ -85,15 +94,20 @@ def test_only_the_rows_that_moved_are_written(logic, oracle):
     _drawn_where_placed(logic, table)
 
 
-def test_a_world_at_rest_writes_nothing(logic, oracle):
+@pytest.mark.parametrize("mode", ["dense", "marks"])
+def test_a_world_at_rest_writes_nothing(logic, oracle, monkeypatch, mode):
+    from engine import mover_table
+    if mode == "marks":
+        monkeypatch.setattr(mover_table, 'DENSE_SLACK_ROWS', -1)
+        monkeypatch.setattr(mover_table, 'DENSE_SHARE', 2.0)
     table = _table(logic)
     gate = _named(logic, 'gate')
     logic.mover_runtime._trigger_door_open(logic.editor_state.brushes.index(gate), gate)
     _tick(logic, 2)
     _publish(logic, table)
     _tick(logic, 1)
-    assert _publish(logic, table).tolist() == _slots(
-        logic, 'lift', 'fan', 'gate', 'ramp_lift')
+    assert set(_slots(logic, 'lift', 'fan', 'gate', 'ramp_lift')) <= set(
+        _publish(logic, table).tolist())
     # Stop the continuous movers; the gate finishes opening and holds.
     movers = logic.mover_runtime._movers()
     for name in ('lift', 'fan', 'ramp_lift'):
@@ -184,7 +198,12 @@ def test_big_world_parks_and_wakes_a_mover_and_the_table_follows(request, oracle
         _drawn_where_placed(logic, table)
 
 
-def test_a_pose_written_without_being_published_is_caught(logic, oracle):
+@pytest.mark.parametrize("mode", ["dense", "marks"])
+def test_a_pose_written_without_being_published_is_caught(logic, oracle, monkeypatch, mode):
+    from engine import mover_table
+    if mode == "marks":
+        monkeypatch.setattr(mover_table, 'DENSE_SLACK_ROWS', -1)
+        monkeypatch.setattr(mover_table, 'DENSE_SHARE', 2.0)
     table = _table(logic)
     _tick(logic, 3)
     _publish(logic, table)
@@ -193,3 +212,41 @@ def test_a_pose_written_without_being_published_is_caught(logic, oracle):
     movers.doors.pos[row, 1] += 40.0                     # no _publish: missed
     with pytest.raises(change_detection.MissedChange):
         _publish(logic, table)
+
+
+@pytest.mark.parametrize("mode", ["dense", "marks"])
+def test_both_publication_modes_leave_a_complete_record(logic, oracle, monkeypatch, mode):
+    """Dense mode writes a whole group without picking rows out, but never
+    around the table's versioning: every row of the group is written and
+    logged (a superset of what moved), so the kept matrices and the instance
+    streams downstream see every change. Marks mode logs exactly what moved.
+    Either way the table ends up where placed_box puts every brush, and the
+    rows logged cover every row that moved."""
+    from engine import mover_table
+    from engine.renderer.core.slot_transforms import SlotTransforms
+    if mode == "dense":
+        monkeypatch.setattr(mover_table, 'DENSE_SLACK_ROWS', 1 << 20)
+    else:
+        monkeypatch.setattr(mover_table, 'DENSE_SLACK_ROWS', -1)
+        monkeypatch.setattr(mover_table, 'DENSE_SHARE', 2.0)
+    tables = [_table(logic), _table(logic)]
+    caches = [SlotTransforms(t) for t in tables]
+    for cache, table in zip(caches, tables):
+        cache.sync(table)
+    group = logic.mover_runtime._movers().movers
+    brushes = logic.editor_state.brushes
+    for frame in range(10):
+        _tick(logic, 1 + frame % 2)
+        table, cache = tables[frame % 2], caches[frame % 2]
+        before = {id(b): bp.placed_box(b) for b in brushes}
+        logged = _publish(logic, table)
+        cache.sync(table)                          # the oracle checks it
+        _drawn_where_placed(logic, table)
+        moved = {table.slot_of_id[b['id']] for b in group.brushes}
+        if logged is not None:
+            if mode == "dense":
+                assert moved <= set(logged.tolist())   # the whole group
+            else:
+                assert set(logged.tolist()) <= moved | set(
+                    table.slot_of_id[b['id']] for b in logic.mover_runtime._movers().doors.brushes)
+        del before
