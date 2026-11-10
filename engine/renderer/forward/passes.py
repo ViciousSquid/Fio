@@ -142,32 +142,35 @@ class PassesMixin:
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
         indices = range(len(visible))
-        bits = table.class_bits[visible]
-        colours = table.colour[visible]
         selected_slot = self._selected_slot(table, config)
-        geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        key = self._stream_key('lit')
+        # What this pass derives from the table for these rows -- classes,
+        # colours, the box rows' instance payload and run order -- kept while
+        # the rows, their material and the selection are unchanged (M3.1).
+        lit = self._pass_memo(key, table, visible, (selected_slot,), (),
+                              lambda: self._lit_derived(table, visible,
+                                                        selected_slot))
+        bits, colours, geometry = lit['bits'], lit['colours'], lit['geometry']
         # Resolve convex meshes at the dense-table/cache boundary once for
         # the geometry rows in this pass. The draw loop stays integer-only:
         # geometry_id -> prepared mesh, with no slot -> Brush lookup.
         geo_meshes = (
-            self._prepare_geo_meshes(table, visible[geometry])
-            if geometry.any() else {}
+            self._prepare_geo_meshes(table, lit['geo_slots'])
+            if lit['geo_rows'] else {}
         )
         if ('lit_brush_instanced' in self.shaders
-                and self._cube_vbo is not None and (~geometry).any()):
+                and self._cube_vbo is not None and lit['item_slots'] is not None):
             # Every plain box brush in one submission; the angled minority
             # still needs its own mesh, so it falls through to the loop.
             self._draw_lit_brushes_instanced(
-                projection, view, lights, table, visible,
-                np.flatnonzero(~geometry).astype(np.int32),
-                config, selected_slot, fill_mode)
+                projection, view, lights, table, key, lit, fill_mode)
             gl.glUseProgram(shader)
             self._current_shader = shader
             gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
             gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
             gl.glBindVertexArray(self.vaos['cube'])
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
-            indices = [int(i) for i in np.flatnonzero(geometry)]
+            indices = lit['geo_rows']
 
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
@@ -324,39 +327,48 @@ class PassesMixin:
         gl.glDisable(gl.GL_POLYGON_OFFSET_LINE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-    def _draw_lit_brushes_instanced(self, projection, view, lights, table,
-                                    slots, cube_rows, config,
-                                    selected_slot, fill_mode=gl.GL_FILL):
-        """Bring the lit pass's instances up to date and hand its runs to the
-        GPU.
+    def _lit_derived(self, table, visible, selected_slot):
+        """The lit pass's view of *visible*: class bits and colours by row,
+        which rows are angled (drawn one at a time) and, for the box rows,
+        the slot each instance draws, its payload and the run order.
 
         The lit pass binds no texture and draws the whole cube, so both key
         fields are zero for every brush and the sort yields exactly one run.
         That is worth doing through the same machinery rather than short-cut
         to a single draw: the run count falls out of the data, so when
         something does start varying per run the pass needs a field in the key
-        and nothing else.
-        """
+        and nothing else."""
+        bits = table.class_bits[visible]
+        geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_rows = [int(i) for i in np.flatnonzero(geometry)]
+        out = {'bits': bits, 'colours': table.colour[visible],
+               'geometry': geometry, 'geo_rows': geo_rows,
+               'geo_slots': visible[geometry], 'item_slots': None}
+        cube_rows = np.flatnonzero(~geometry).astype(np.int32)
         count = len(cube_rows)
-        if not count:
-            return 0
-        row_slots = slots[cube_rows]
-        payload = self.lit_instance_payload(table, row_slots, selected_slot)
+        if count:
+            payload = self.lit_instance_payload(table, visible[cube_rows],
+                                                selected_slot)
+            zeros = np.zeros(count, dtype=np.int64)
+            keys = BRUSH_RUN_KEY.pack(texture=zeros, face=zeros)
+            order, run_starts = sort_into_runs(keys)
+            out['item_slots'] = visible[cube_rows[order]]
+            out['payload'] = payload[order]
+            out['run_starts'] = run_starts
+            out['run_texture'], out['run_first'] = self._run_descriptors(
+                zeros, zeros, run_starts)
+        return out
 
-        zeros = np.zeros(count, dtype=np.int64)
-        keys = BRUSH_RUN_KEY.pack(texture=zeros, face=zeros)
-        order, run_starts = sort_into_runs(keys)
-        rows = cube_rows[order]
-        payload = payload[order]
-
-        stream = self._brush_stream(self._stream_key('lit'), table,
-                                    slots[rows], 0.0, payload)
-        run_texture, run_first = self._run_descriptors(
-            zeros, zeros, run_starts)
+    def _draw_lit_brushes_instanced(self, projection, view, lights, table,
+                                    key, lit, fill_mode=gl.GL_FILL):
+        """Bring the lit pass's instances up to date (*lit*: what
+        :meth:`_lit_derived` made of the rows) and hand its runs to the GPU."""
+        stream = self._brush_stream(key, table, lit['item_slots'], 0.0,
+                                    lit['payload'])
         self._submit_brush_runs('lit_brush_instanced', projection, view,
-                                lights, run_starts, run_texture, run_first, 36,
-                                fill_mode, stream)
-        return count
+                                lights, lit['run_starts'], lit['run_texture'],
+                                lit['run_first'], 36, fill_mode, stream)
+        return len(lit['item_slots'])
 
     def _submit_brush_runs(self, program_name, projection, view, lights,
                            run_starts, run_texture, run_first, vertex_count,
@@ -404,21 +416,38 @@ class PassesMixin:
             self.render_stats.visible_tris += triangles * length
         gl.glBindVertexArray(0)
 
-    def _draw_face_runs_instanced(self, projection, view, lights, table,
-                                  item_slots, faces, gl_tex, scales, shifts,
-                                  angles, run_starts):
-        """Bring the textured pass's instances up to date (one per face
-        drawn: *item_slots* the slot each draws) and hand its runs to the
-        GPU."""
+    def _face_derived(self, table, slots, config):
+        """The textured pass's box faces for *slots* (see
+        :meth:`_build_face_batches`), with each face's slot, UV shift and
+        rotation, its instance payload and the per-run draw state."""
+        rows, faces, gl_tex, scales, run_starts = self._build_face_batches(
+            table, slots, config)
+        item_slots = slots[rows]
+        shifts = table.uv_shift[item_slots, faces]
         payload = np.empty((len(item_slots), 4), dtype=np.float32)
         payload[:, 0:2] = scales
         payload[:, 2:4] = shifts
-        stream = self._brush_stream(self._stream_key('textured'), table,
-                                    item_slots, angles, payload)
         run_texture, run_first = self._run_descriptors(gl_tex, faces, run_starts)
+        bits = table.class_bits[slots]
+        return {'rows': rows, 'faces': faces, 'gl_tex': gl_tex, 'scales': scales,
+                'run_starts': run_starts, 'item_slots': item_slots,
+                'shifts': shifts,
+                'angles': np.radians(table.uv_angle[item_slots, faces]),
+                'payload': payload, 'run_texture': run_texture,
+                'run_first': run_first,
+                'has_geometry': bool(
+                    ((bits & render_table.CLASS_HAS_GEOMETRY) != 0).any())}
+
+    def _draw_face_runs_instanced(self, projection, view, lights, table, key,
+                                  derived):
+        """Bring the textured pass's instances up to date (one per face
+        drawn; *derived*: what :meth:`_face_derived` made of the rows) and
+        hand its runs to the GPU."""
+        stream = self._brush_stream(key, table, derived['item_slots'],
+                                    derived['angles'], derived['payload'])
         self._submit_brush_runs('brush_instanced', projection, view, lights,
-                                run_starts, run_texture, run_first, 6,
-                                stream=stream)
+                                derived['run_starts'], derived['run_texture'],
+                                derived['run_first'], 6, stream=stream)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def _begin_instanced_pass(self, name, projection, view, lights):
@@ -490,14 +519,19 @@ class PassesMixin:
             normal_mat_loc = -1
 
         is_play = config.get('play_mode', False)
-        rows, faces, gl_tex, scales, run_starts = self._build_face_batches(
-            table, slots, config)
-        # Gathered from the table's kept matrices (SlotTransforms); the
-        # convex half (_draw_geo_runs) and the per-face fallback read them.
-        models, normals = self._frame_transforms(table, slots)
-        sel_slots = slots[rows]
-        angles = np.radians(table.uv_angle[sel_slots, faces])
-        shifts = table.uv_shift[sel_slots, faces]
+        key = self._stream_key('textured')
+        # Every box face this pass draws -- texture, run order, UV scale,
+        # shift and rotation -- kept while the rows, their material and
+        # extents, and the texture ids and sizes are unchanged (M3.1): the
+        # face state of a box is resolved once per edit, as an angled
+        # brush's is once per mesh build.
+        derived = self._pass_memo(
+            key, table, slots, (bool(is_play),),
+            (self._gl_texture_ids(table), self._texture_sizes_by_name_id(table)),
+            lambda: self._face_derived(table, slots, config))
+        rows, faces, gl_tex = derived['rows'], derived['faces'], derived['gl_tex']
+        scales, shifts, angles = derived['scales'], derived['shifts'], derived['angles']
+        sel_slots = derived['item_slots']
 
         self._portal_begin_cull(is_geo=False)
         if self.debug_gl_state:
@@ -506,10 +540,15 @@ class PassesMixin:
         current_tex = None
         instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
                      and self._cube_vbo is not None)
+        # The kept matrices (SlotTransforms), gathered only for what reads
+        # them: the convex half (_draw_geo_runs) and the per-face fallback.
+        if derived['has_geometry'] or (len(rows) and not instanced):
+            models, normals = self._frame_transforms(table, slots)
+        else:
+            models = normals = None
         if instanced:
             self._draw_face_runs_instanced(
-                projection, view, lights, table, sel_slots, faces,
-                gl_tex, scales, shifts, angles, run_starts)
+                projection, view, lights, table, key, derived)
             gl.glUseProgram(shader)
             self._current_shader = shader
             gl.glActiveTexture(gl.GL_TEXTURE0)

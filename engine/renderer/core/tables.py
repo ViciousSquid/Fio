@@ -19,6 +19,10 @@ from engine.renderer.core.slot_transforms import SlotTransforms
 #: by a new play session.
 _PARKED_RECIPE_LISTS = 4
 
+#: Render tables a pass keeps derived arrays for: the two render buffers'
+#: and one more (the editor's own, or a table replaced by a new session).
+PASS_MEMO_TABLES = 3
+
 
 def _swap_recipe_cache(parked, current, recipes, fresh):
     """Park *current* (``(list, *state)``) and return *recipes*' state.
@@ -61,6 +65,46 @@ class TablesMixin:
             # takes its matrices with it at once.
             weakref.finalize(table, _forget_cache, caches, id(table), cache)
         return cache
+
+    def _pass_memo(self, key, table, slots, state, objects, build):
+        """What *build()* derives from *table* for *slots*, kept while
+        neither changes (M3.1): the pass groups, payloads, run orders and
+        face batches every frame used to derive again from the same columns.
+
+        Kept per *key* (a pass, its view and its use in the frame) and per
+        table -- the two render buffers' tables take turns, frame by frame,
+        so one entry per key would be replaced every frame and never reused.
+        An entry is reused while its table is at the same generation,
+        :attr:`~engine.render_table.RenderTable.material_version` and
+        ``extent_version``, *state* (a tuple of plain values) is equal, every
+        one of *objects* is the same object (arrays a cache hands out, told
+        by identity), and *slots* holds the same rows. A still frame costs
+        one equality test of *slots*. The value is shared: callers treat it
+        as read-only."""
+        tables = self._pass_memos.get(key)
+        if tables is None:
+            tables = self._pass_memos[key] = {}
+        tid = id(table)
+        entry = tables.get(tid)
+        full = (table.generation, table.material_version, table.extent_version) + state
+        if (entry is not None and entry[0]() is table and entry[1] == full
+                and len(entry[2]) == len(objects)
+                and all(a is b for a, b in zip(entry[2], objects))
+                and np.array_equal(entry[3], slots)):
+            self.pass_memo_hits += 1
+            return entry[4]
+        self.pass_memo_misses += 1
+        value = build()
+        if entry is None and len(tables) >= PASS_MEMO_TABLES:
+            # A table no longer drawn (a buffer replaced, a world unloaded):
+            # the dead go first, then the longest kept.
+            for dead in [t for t, e in tables.items() if e[0]() is None]:
+                del tables[dead]
+            while len(tables) >= PASS_MEMO_TABLES:
+                del tables[next(iter(tables))]
+        tables[tid] = (weakref.ref(table), full, tuple(objects),
+                       np.array(slots, copy=True), value)
+        return value
 
     def _frame_transforms(self, table, slots):
         """Model and normal matrices for *slots*, into reusable buffers.

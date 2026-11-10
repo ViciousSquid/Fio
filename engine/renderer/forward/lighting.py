@@ -24,6 +24,12 @@ _SHADER_LIGHT_CAPS = {
 }
 
 
+def _split_casters(table, slots):
+    """``(box slots, convex geometry slots)`` of the caster *slots*."""
+    geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
+    return slots[~geometry], slots[geometry]
+
+
 class LightingMixin:
     """ForwardRenderer's lights and shadows."""
 
@@ -351,11 +357,10 @@ class LightingMixin:
                     None)
 
         slots = np.asarray(in_brushes, dtype=np.int32)
-        geometry = (
-            (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
-        )
-        cube_slots = slots[~geometry]
-        geo_slots = slots[geometry]
+        # The casters split into boxes and convex meshes, kept while the
+        # light's casters and their classes are unchanged (M3.1).
+        cube_slots, geo_slots = self._pass_memo(
+            key, table, slots, (), (), lambda: _split_casters(table, slots))
 
         stream = None
         if instanced and len(cube_slots):

@@ -4,12 +4,14 @@ Each pass that draws box brushes keeps its own instance buffer
 (``instancing.BrushStream``) and every row's matrices are kept by change
 (``core/slot_transforms.SlotTransforms``). These tests pin:
 
-* **Parity.** Through random moves, turns, edits, selection changes,
-  hide/show (a streaming park), added and deleted brushes, camera turns and
-  two render tables taking turns, the long-lived renderer draws exactly what
-  a renderer whose instance buffers are rebuilt from scratch every frame
-  draws -- pixel for pixel -- and every stream's buffer on the GPU holds
-  exactly the rows a fresh pack would.
+* **Parity.** Through random moves, turns, edits, retextures, UV and colour
+  edits, selection changes, hide/show (a streaming park), added and deleted
+  brushes, camera turns and two render tables taking turns, the long-lived
+  renderer draws exactly what a renderer whose instance buffers are rebuilt
+  from scratch every frame draws -- pixel for pixel -- every stream's buffer
+  on the GPU holds exactly the rows a fresh pack would, and every array a
+  pass keeps derived from the tables (M3.1) is what deriving it afresh
+  gives.
 * **Steady state.** A still world uploads no instance byte; a mover uploads
   its own rows; a changed selection its own rows; a large world's mover does
   not re-upload the rest.
@@ -72,6 +74,28 @@ def _fresh_streams(renderer):
     renderer did before M3): every frame starts with no stream."""
     renderer._release_brush_streams()
     renderer._slot_transform_caches.clear()
+    renderer._pass_memos.clear()
+
+
+def _same(kept, fresh):
+    if isinstance(kept, dict):
+        return kept.keys() == fresh.keys() and all(_same(kept[k], fresh[k]) for k in kept)
+    if isinstance(kept, (list, tuple)):
+        return len(kept) == len(fresh) and all(map(_same, kept, fresh))
+    if isinstance(kept, np.ndarray) or isinstance(fresh, np.ndarray):
+        return (np.asarray(kept).dtype == np.asarray(fresh).dtype
+                and np.array_equal(kept, fresh))
+    return kept == fresh
+
+
+def _derived_as_fresh(kept, fresh, table):
+    """Every array *kept* holds derived from *table* for a pass drawn this
+    frame equals what *fresh* (which derives everything every frame)
+    derived."""
+    for key, tables in fresh._pass_memos.items():
+        want = tables[id(table)][4]
+        got = kept._pass_memos[key][id(table)][4]
+        assert _same(got, want), key
 
 
 def _gpu_rows(stream):
@@ -106,6 +130,11 @@ def test_change_driven_streams_draw_what_a_full_rebuild_draws(context, display):
     from tests.helpers.worlds import box_brush
 
     brushes = _world(textured=(display == "Textured"))
+    # Some faces keep a constant texel size, so a resize changes their UV
+    # scale (what a pass derives from a box's extent).
+    for brush in brushes[1:-1:3]:
+        brush['texture_tiling'] = True
+    brushes[2]['uv_natural'] = {'top': True, 'south': True}
     tables = [RenderTable(), RenderTable()]
     for table in tables:
         table.begin_frame(brushes, epoch=1)
@@ -118,8 +147,8 @@ def test_change_driven_streams_draw_what_a_full_rebuild_draws(context, display):
     epoch = 1
     eye = [0.0, 520.0, 760.0]
     try:
-        for frame in range(40):
-            op = frame % 8
+        for frame in range(60):
+            op = frame % 10
             dirty = set()
             if op == 0:                                  # movers
                 for i in rng.sample(range(1, len(brushes) - 1), 4):
@@ -155,10 +184,26 @@ def test_change_driven_streams_draw_what_a_full_rebuild_draws(context, display):
             elif op == 6:                                # a brush deleted
                 del brushes[rng.randrange(1, len(brushes) - 1)]
                 dirty = None
-            else:                                        # a resize
+            elif op == 7:                                # a resize
                 i = rng.randrange(1, len(brushes) - 1)
                 brushes[i]['size'][0] *= 1.3
                 dirty.add(id(brushes[i]))
+            elif op == 8:                                # a retexture
+                i = rng.randrange(1, len(brushes) - 1)
+                brush = brushes[i]
+                if display == "Textured":
+                    face = rng.choice(["top", "north", "east"])
+                    brush['textures'][face] = rng.choice(
+                        ["Dev/256.jpg", "Dev/512.jpg", "caulk.jpg", "nodraw.jpg"])
+                brush['tint'] = [rng.randrange(256) for _ in range(3)]
+                dirty.add(id(brush))
+            else:                                        # a UV edit
+                i = rng.randrange(1, len(brushes) - 1)
+                brush = brushes[i]
+                brush['uv_shift'] = {'top': [rng.uniform(0, 1), rng.uniform(0, 1)]}
+                brush['uv_angle'] = {'north': rng.choice([0.0, 45.0, 90.0])}
+                brush['uv_scale'] = {'east': [rng.uniform(0.5, 2), 1.0]}
+                dirty.add(id(brush))
             epoch += 1
             for table, config in zip(tables, configs):
                 table.begin_frame(brushes, epoch=epoch, dirty_objects=dirty)
@@ -171,6 +216,79 @@ def test_change_driven_streams_draw_what_a_full_rebuild_draws(context, display):
             _fresh_streams(fresh)
             want = _draw(fresh, context, config, eye=tuple(eye))
             assert np.array_equal(got, want), "frame %d (op %d) differs" % (frame, op)
+            _derived_as_fresh(kept, fresh, config['render_table'])
+        # Reuse, not just rebuilds, was what the check above checked.
+        assert kept.pass_memo_hits > 0
+    finally:
+        kept.cleanup()
+        fresh.cleanup()
+
+
+@pytest.mark.parametrize("display", ["Textured", "Solid"])
+def test_kept_pass_arrays_follow_each_kind_of_edit(context, display):
+    """M3.1: what a pass derives from the table -- its groups, face batches,
+    UV scale, shift and rotation, payloads and runs -- is kept from frame to
+    frame and rebuilt when, and only when, an edit changes what it was
+    derived from. After each edit below, on its own, it equals what a
+    renderer deriving everything afresh derives, and the picture matches; a
+    still frame or a move reuses it."""
+    from engine.render_table import RenderTable
+
+    brushes = _world(textured=(display == "Textured"))
+    for brush in brushes[1:-1]:
+        brush['texture_tiling'] = True       # a resize changes the UV scale
+    table = RenderTable()
+    epoch = 1
+    table.begin_frame(brushes, epoch=epoch)
+    config = glh.render_config(all_brushes=brushes, render_table=table,
+                               all_brush_slots=table.shown()[1].astype(np.int32),
+                               shadows_enabled=False, brush_display_mode=display)
+    target = brushes[5]
+
+    def move():
+        target['pos'][0] += 40.0
+
+    def resize():
+        target['size'][0] *= 1.5
+
+    def retexture():
+        target['textures']['top'] = 'Dev/256.jpg'
+        target['textures']['north'] = 'caulk.jpg'
+
+    def uv():
+        target['uv_shift'] = {'top': [0.25, 0.5]}
+        target['uv_angle'] = {'south': 45.0}
+        target['uv_scale'] = {'east': [2.0, 1.0]}
+
+    def tint():
+        target['tint'] = [200, 40, 40]
+
+    def hide():
+        target['hidden'] = True
+
+    edits = [('still', None), ('move', move), ('resize', resize),
+             ('retexture', retexture), ('uv', uv), ('tint', tint), ('hide', hide)]
+    kept, fresh = _renderer(), _renderer()
+    try:
+        _draw(kept, context, config)
+        _draw(kept, context, config)
+        for label, edit in edits:
+            if edit is not None:
+                edit()
+                epoch += 1
+                table.begin_frame(brushes, epoch=epoch, dirty_objects={id(target)})
+                config['all_brush_slots'] = table.shown()[1].astype(np.int32)
+            misses = kept.pass_memo_misses
+            got = _draw(kept, context, config)
+            rebuilt = kept.pass_memo_misses - misses
+            _fresh_streams(fresh)
+            want = _draw(fresh, context, config)
+            assert np.array_equal(got, want), label
+            _derived_as_fresh(kept, fresh, table)
+            if label in ('still', 'move'):
+                assert rebuilt == 0, label
+            else:
+                assert rebuilt > 0, label
     finally:
         kept.cleanup()
         fresh.cleanup()

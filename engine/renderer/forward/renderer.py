@@ -377,7 +377,12 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # sort and pack the surviving rows (renderer/forward/occlusion.py).
         slots = self._occlusion_filter_slots(table, slots, config, camera_pos,
                                              view)
-        groups = self._classify_brush_slots(table, slots, config)
+        # Kept while the visible rows and their classification are unchanged
+        # (a copy: the depth sort below replaces some of its arrays).
+        groups = dict(self._pass_memo(
+            ('classify', self._instance_view), table, slots,
+            (bool(config.get('play_mode', False)),), (),
+            lambda: self._classify_brush_slots(table, slots, config)))
         if cx is not None:
             for key in ('transparent', 'water', 'glass'):
                 groups[key] = self._sort_slots_by_distance(
@@ -678,6 +683,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # Instance streams: one buffer and one vertex array per pass.
         self._release_brush_streams()
         self._slot_transform_caches.clear()
+        self._pass_memos.clear()
         for vao in (self._sprite_instance_vao, self._effect_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])

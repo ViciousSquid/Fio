@@ -79,6 +79,13 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         #: id(RenderTable) -> SlotTransforms: each table's matrices, kept by
         #: change (core/slot_transforms.py).
         self._slot_transform_caches = {}
+        #: Per pass, view and use: what it derived from the tables last
+        #: frame, kept while they and the visible rows are unchanged
+        #: (TablesMixin._pass_memo).
+        self._pass_memos = {}
+        #: Reuses and rebuilds of those (counts, for tests and tools).
+        self.pass_memo_hits = 0
+        self.pass_memo_misses = 0
 
 
         # PERF: cache of texture-name -> "textures/<name>" cache-key path.

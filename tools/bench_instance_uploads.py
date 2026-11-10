@@ -316,9 +316,13 @@ def scenario(label, step, frames):
         frame()
     # Timing (nothing else counted).
     times = []
+    hits0 = getattr(renderer, 'pass_memo_hits', 0)
+    misses0 = getattr(renderer, 'pass_memo_misses', 0)
     for k in range(frames):
         step(10 + k)
         times.append(frame())
+    memo_hits = getattr(renderer, 'pass_memo_hits', 0) - hits0
+    memo_misses = getattr(renderer, 'pass_memo_misses', 0) - misses0
     # GL calls and uploads.
     state['calls'].clear()
     state['bytes'].clear()
@@ -370,6 +374,9 @@ def scenario(label, step, frames):
         'alloc_peak_kb': (peak - base) / 1024.0,
         'kept_kb': (current_mem - base) / 1024.0,
         'held_kb': _held_kb(),
+        # M3.1: derived pass arrays reused / rebuilt, a frame.
+        'memo_hits': memo_hits / frames,
+        'memo_misses': memo_misses / frames,
     }
     print('%-11s render %6.2f ms (min %6.2f)  instance %7.1f KB %4.1f up  all %7.1f KB '
           '%4.1f up  gl %6.1f  draws %5.1f  py %7.0f  peak %7.1f KB  kept %6.1f KB  held %7.1f KB'
@@ -377,6 +384,9 @@ def scenario(label, step, frames):
              out['instance_uploads'], out['upload_kb'], out['uploads'], out['gl_calls'],
              out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb'],
              out['held_kb']))
+    if memo_hits or memo_misses:
+        print('%-11s derived arrays a frame: %.1f reused, %.1f rebuilt'
+              % ('', out['memo_hits'], out['memo_misses']))
     return out
 
 

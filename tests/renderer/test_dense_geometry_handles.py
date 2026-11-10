@@ -119,6 +119,9 @@ def test_shadow_preparation_returns_dense_convex_slots():
             self.packed = (key, list(slots), normals)
             return 'stream'
 
+        def _pass_memo(self, key, table, slots, state, objects, build):
+            return build()
+
     probe = Probe()
     cube_slots, geo_slots, stream = ForwardRenderer._prepare_shadow_instances(
         probe, table, np.array([0, 1], dtype=np.int32), True, key=('shadow', 3))
