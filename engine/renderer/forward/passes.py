@@ -2306,7 +2306,7 @@ class PassesMixin:
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
 
-        models, normals = render_table.model_matrices(table, brushes)
+        models, normals = self._frame_transforms(table, brushes)
         colors = table.glass_color[brushes]
         params = table.glass_params[brushes]
         geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
@@ -2373,7 +2373,7 @@ class PassesMixin:
             gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
             gl.glPolygonOffset(-1.0, -1.0)
 
-        models, _ = render_table.model_matrices(table, brushes)
+        models, _ = self._frame_transforms(table, brushes)
         # model_matrices is column-major for GL; transpose into conventional
         # matrices, invert the batch, then transpose back for glUniform.
         mats = models.reshape(-1, 4, 4).transpose(0, 2, 1)
