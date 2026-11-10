@@ -1515,8 +1515,8 @@ rows as they are before publishing; a regression test holds it.
 
 ### 11.8 Stage 2 optimisation: state published once, the grid's movers, each gathered once
 
-Status: **implemented** (`afffbd5`, `c5314a0`, `f0f99d6`). Stage 2
-acceptance is the user's decision (§11.10).
+Status: **implemented** (`afffbd5`, `c5314a0`, `f0f99d6`, `9b91c54`).
+Stage 2 accepted for progression to M3 (§11.10).
 
 The architectural target: each mover is processed once per tick and
 publishes its runtime state; derived geometry is worked out once when it
@@ -1784,3 +1784,85 @@ interleaved rounds, within noise).
 * The batched AI pairs read parked rows' boxes as last stored until the
   query re-resolves the rows it reaches; a structure refreshed in between
   (another thread) can see that box for one query.
+
+### 11.10 The gate after the third session, and acceptance
+
+Status: **Stage 2 accepted for progression to M3** (the user, 2026-11-10),
+on the measurements below. M3 is recorded in `docs/renderer-m3-profiling.md`.
+
+#### Run
+
+`tools/perf_gate.py --base 56ec0e3 --head f0f99d6 --rounds 5 --core 3`, all
+seven probe families (GL under llvmpipe), on a frozen worktree of
+`f0f99d6`, nothing else running; ~13 minutes. Method and noise floor as in
+§11.6: a metric regresses when the one-sided Mann–Whitney p < 0.05 and the
+head's p50 is more than 2 % above Stage 1's. x86 VM only; nothing here is
+measured on the Snapdragon 8cx Gen 3 target.
+
+**97 metrics: 17 regressions, 38 faster, the rest the same.**
+
+#### What a player of the game sees: the same or faster
+
+| Metric | Stage 1 p50 | Stage 2 p50 | Ratio | |
+|---|---|---|---|---|
+| `gameplay_big_frame_ms` (BigWorld: 34 movers, 40 monsters) | 128.07 | 125.89 | 0.98 | same |
+| `gameplay_big_logic_ms` | 0.876 | 0.782 | 0.89 | faster |
+| `gameplay_big_logic_calls` | 1,247 | 1,043 | 0.84 | faster |
+| `gameplay_monster_frame_ms` | 17.22 | 16.74 | 0.97 | same |
+| `gameplay_office_frame_ms` | 10.20 | 10.22 | 1.00 | same |
+| `gameplay_show_frame_ms` (`_SHOWCASE`) | 21.51 | 20.78 | 0.97 | same |
+| `frame_*` (`render_scene`, still and 32 movers, two maps) | | | 0.98–1.01 | same |
+| `ai_big_batch32`, `ai_show_overlaps_wall`, `ai_show_raycast_down` | | | 0.77, 0.50, 0.46 | faster |
+
+#### The complete mover frame: the same or faster
+
+The mover table's tick plus the player's update with the level's movers
+(`table_*_total`, the production path), and the movers probe's whole frame:
+
+| Scenario | ×Stage 1 | |
+|---|---|---|
+| 8 box movers beside the player | 0.72 | faster |
+| 8 angled movers | 0.80 | same (p .95) |
+| 8 spinning boxes | 0.77 | faster |
+| 8 spinning angled brushes | 0.78 | faster |
+| 34 doors away from the player | 0.83 | faster |
+| 1 mover | 0.98 | same |
+| `movers{8,32,128}_frame_total` | 0.57, 0.80, 0.54 | faster, same, faster |
+
+#### Known localised regressions
+
+None reaches a whole frame. Each is a part of a frame that the rest of the
+same frame more than repays.
+
+| Metric | ×Stage 1 | Kind | What it is |
+|---|---|---|---|
+| `table_box_movers_player` | 1.045 | engine overhead | The grid lookup, the once-each dedupe and the published-slot reads, ~2–3 µs a tick against Stage 1's direct loop (§11.8's segment table). |
+| `table_one_mover_player` | 1.16 | engine overhead | The same structure with one mover (~3 µs). |
+| `table_angled_movers_player`, `table_spinning_boxes_player` (`table_spinning_angled_player` 1.31, not significant) | 1.22, 1.23 | true shape, mostly | A convex or turned mover is collided by its planes in its own frame; Stage 1 collided its AABB, the wrong shape. |
+| `player_*` (movers driven through `RuntimeOverrides`; the editor preview's path, not the game's) | 2.30–3.49 | engine overhead, since reduced | Worsened by `afffbd5` and `c5314a0` and fixed after the gate in `9b91c54`: player µs box 46, angled 54, spinning boxes 59, spinning angled 66 (Stage 1's gate p50s 23.7, 28.6, 31.0, 28.8; `6333b17`'s 42, 60, 72, 61). Not re-gated. Every override is resolved per brush, and true-shape collision applies. |
+| `player_static_angled` | 1.22 | not investigated | Still angled brushes and no movers; 1.18 and not significant at `051b165`. |
+| `movers32_tick`, `movers128_tick`, `table_far_doors_tick` | 1.22, 1.27, 1.14 | engine overhead | Publication: each changed row's runtime entry and published slot, and its derived key dropped -- what lets every reader derive once per change. The frames they belong to are 0.80, 0.54 and 0.83×. |
+| `movers32_publish`, `movers128_publish`, `movers32_rows_first` | 1.12, 1.07, 1.12 | engine overhead | The render-table publication and the first collision-rows refresh after a tick at 32/128 rows. |
+| `movers32_aabb_moving`, `movers128_aabb_moving` | 1.42, 1.25 | engine overhead | A moved mover's first AABB query derives its box once per change (`constants.mover_box`); Stage 1 recomputed it from `pos`. |
+
+#### Tests
+
+Full suite on `fd5118b`: 6,963 passed, 489 skipped, 1 failed. Engine, e2e,
+integration and Big World tiers on `9b91c54`: 2,066 passed, the same 1
+failed.
+
+**Pre-existing failure, not a regression:**
+`tests/e2e/test_play_cycles.py::test_repeated_play_sessions_leak_no_threads_or_memory`
+asserts that 30 Play/Stop cycles retain under 512 KiB (tracemalloc). In this
+container it retains 601–605 KiB on every tree, Stage 1 (`56ec0e3`)
+included, when run on its own; in the full suite it passed once and failed
+once on the same Stage 2 code, depending on what earlier tests had warmed.
+None of its top retained allocations is in a module Stage 2's third session
+changed (they are the JSON decoder, the debug console, the editor state,
+the scene hierarchy and the render and entity tables' caches).
+
+#### Trajectories
+
+Bit-identical through every third-session commit, on both trace sets (the
+production path with its fallbacks, and the `RuntimeOverrides` path; 18
+lanes each) against `6333b17`.

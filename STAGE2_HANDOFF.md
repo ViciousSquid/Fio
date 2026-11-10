@@ -1,15 +1,16 @@
 # Fio 3.1 brush model, Stage 2: handoff
 
 State at handoff (2026-11-10, after the third session; read *Third
-session* first). The user reviewed the third session's results ("looks
-good") and **M3 starts in a new session**. The earlier sections are kept
-as history.
+session* first). **Stage 2 is accepted for progression to M3** (the user,
+2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
+M3 (change-driven GPU instance uploads) is recorded in
+`docs/renderer-m3-profiling.md`. The earlier sections are kept as history.
 
 ## Third session: state published once, the grid's movers, parked movers (read this first)
 
 Full record: `docs/brush-model-stage2.md` §11.8 (published once; the grid's
-movers, gathered once) and §11.9 (parked movers). The gate below is not yet
-written up there as §11.10.
+movers, gathered once), §11.9 (parked movers) and §11.10 (the gate, the
+known localised regressions, the pre-existing test failure, acceptance).
 
 ### Commits on `3.1.0.0611_CANARY` after `6333b17` (all pushed; tree clean)
 
@@ -50,10 +51,11 @@ lanes each, production path and `RuntimeOverrides` path, against
 
 Full suite on `fd5118b`: 6,963 passed, 489 skipped, 1 failed. The failure is
 `tests/e2e/test_play_cycles.py::test_repeated_play_sessions_leak_no_threads_or_memory`
-(~603 KiB retained over 30 play sessions against a 512 KiB limit): it fails
-the same way in isolation on every tree in this container, Stage 1
-included (601–605 KiB), and none of its top retained allocations is in a
-module this session changed. Engine, e2e, integration and Big World tiers on
+(~603 KiB retained over 30 play sessions against a 512 KiB limit). It is
+**pre-existing, not a regression**: it fails the same way in isolation on
+every tree in this container, Stage 1 included (601–605 KiB); in the full
+suite it passed once and failed once on the same code; and none of its top
+retained allocations is in a module this session changed (§11.10). Engine, e2e, integration and Big World tiers on
 `9b91c54`: 2,066 passed, the same one failure. New tests:
 `tests/brush_model/test_published_state.py`,
 `tests/brush_model/test_parked_movers.py` (54), and
@@ -61,8 +63,8 @@ module this session changed. Engine, e2e, integration and Big World tiers on
 
 ### The gate against Stage 1 (`f0f99d6`, all probes, 5 rounds, core 3)
 
-97 metrics, 17 regressions. Representative gameplay and every complete
-mover frame are at or below Stage 1:
+97 metrics, 17 regressions, all localised (§11.10). Representative
+gameplay and every complete mover frame are at or below Stage 1:
 
 | Metric | ×Stage 1 | |
 |---|---|---|
@@ -101,11 +103,10 @@ unchanged (identical calls; ticks within noise).
 * `player_static_angled` (1.22×): profile still angled brushes against
   Stage 1.
 * The publication cost at 32+ rows (tick 1.22–1.27×): see the table.
-* Write §11.10 (this gate) into `docs/brush-model-stage2.md`.
 * Everything on the target hardware, including `Player.MOVER_NEAR_FROM`
   (3) and `LEG_COUNT_LIMIT`.
 
-### M3, for the next session
+### M3 (in progress; see `docs/renderer-m3-profiling.md` for its record)
 
 Change-driven GPU instance uploads. Start from
 `docs/renderer-m3-profiling.md` (profiling only; nothing built): a still
