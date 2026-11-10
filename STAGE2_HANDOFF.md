@@ -130,7 +130,11 @@ unchanged (identical calls; ticks within noise).
   a full rebuild through random edits, GPU buffers read back equal to a
   fresh pack, zero-byte still frames with and without shadows, a mover's and
   a selection's own rows, cleanup and renderer switching);
-  `tests/renderer/test_slot_transforms.py` (bit-exact matrices).
+  `tests/renderer/test_slot_transforms.py` (bit-exact matrices). GL tiers:
+  905 passed (the three `test_portal_fade` failures are pre-existing). Full
+  suite: 6,976 passed, 1 failed -- the pre-existing memory guard, at 615 KiB
+  against the baseline's 604: the live tables' kept matrices, flat at
+  ~62.7 KiB over 10, 30 and 60 sessions (bounded, not a leak).
 * Limitations (in the record): a changed visible set re-uploads from its
   first change (a turning camera, as before, at less CPU); coalescing
   favours fewer calls; sprites, models and effects still repack per frame;

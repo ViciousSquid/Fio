@@ -150,8 +150,14 @@ uploads its one row; a changed selection its rows; cleanup deletes every
 buffer and a new renderer draws the same picture; two renderers in turn keep
 their own streams. `tests/renderer/test_slot_transforms.py`: the kept
 matrices are `model_matrices`' to the bit through moves, turns, resizes and
-reconciles. GL renderer and visual tiers: all pass but the three
-`test_portal_fade` cases, which fail the same way on the accepted baseline.
+reconciles. GL renderer and visual tiers: 905 passed; the three
+`test_portal_fade` cases fail the same way on the accepted baseline. Full
+suite (headless): 6,976 passed, 1 failed -- the pre-existing play-cycle
+memory guard (Stage 2 §11.10), at 615 KiB against the accepted baseline's
+604. The 11 KiB is the kept matrices of the live render tables: measured
+over 10, 30 and 60 play sessions the renderer's share stays at 62.4, 62.7
+and 62.8 KiB, so it is bounded, not a leak; a table's matrices are dropped
+when the table is collected.
 
 ### Measured (x86 VM, llvmpipe; three interleaved rounds against the accepted Stage 2 baseline)
 

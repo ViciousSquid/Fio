@@ -6,6 +6,8 @@ buffer layouts are technique-specific and live with each renderer.
 """
 
 import math
+import weakref
+
 import numpy as np
 
 from engine import render_table
@@ -35,6 +37,13 @@ def _swap_recipe_cache(parked, current, recipes, fresh):
     return (recipes,) + tuple(fresh)
 
 
+def _forget_cache(caches, key, cache):
+    """A render table was collected: drop its SlotTransforms (unless the id
+    already names a newer table's)."""
+    if caches.get(key) is cache:
+        del caches[key]
+
+
 class TablesMixin:
     """Dense-table lookups shared by renderer implementations."""
 
@@ -45,10 +54,12 @@ class TablesMixin:
         caches = self._slot_transform_caches
         cache = caches.get(id(table))
         if cache is None or cache.table() is not table:
-            if len(caches) >= 8:
-                for key in [k for k, c in caches.items() if c.table() is None]:
-                    del caches[key]
+            for key in [k for k, c in caches.items() if c.table() is None]:
+                del caches[key]
             cache = caches[id(table)] = SlotTransforms(table)
+            # A table that goes (a finished session, a replaced projection)
+            # takes its matrices with it at once.
+            weakref.finalize(table, _forget_cache, caches, id(table), cache)
         return cache
 
     def _frame_transforms(self, table, slots):
