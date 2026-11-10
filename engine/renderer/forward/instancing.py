@@ -293,14 +293,17 @@ class InstancingMixin:
         return block
 
     #: Streams of at least this many rows are patched row by row; smaller
-    #: ones are rewritten whole whenever anything in them changes (measured
-    #: in the frame: tools/bench_instance_uploads.py --no-raster).
-    STREAM_PATCH_FROM = 1024
+    #: ones are rewritten whole whenever anything in them changes. Patching
+    #: costs no more once the changed rows go up in few calls (below), so
+    #: every stream is patched.
+    STREAM_PATCH_FROM = 0
 
-    #: Rows of unchanged data a coalesced upload may carry to save a call.
-    STREAM_GAP_ROWS = 16
+    #: Rows of unchanged data a coalesced upload may carry to save a call:
+    #: an upload costs ~6 us a call and ~0.02 us a KB here (llvmpipe), and a
+    #: call's fixed cost is what dominates on a mobile driver too.
+    STREAM_GAP_ROWS = 128
     #: Ranges above which one upload covering all of them is cheaper.
-    STREAM_MAX_RANGES = 16
+    STREAM_MAX_RANGES = 4
 
     def _upload_stream_rows(self, stream, rows, count):
         """Upload *rows* (sorted, unique) of *stream*'s mirror: close rows
