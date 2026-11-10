@@ -50,9 +50,11 @@ visible grows, and drawing it is rendering work, not change detection.
   Every write to the transform columns (`bounds`, `rot`) logs the rows it
   wrote: `refresh_transforms`, `refresh_rows`, and `write_transforms` /
   `write_transforms_many` -- the only way a writer outside the table writes
-  them. A reconcile or adopt starts the log afresh (readers rebuild). The
-  two columns are **read-only outside the table's write methods**: a write
-  that bypasses the log raises at once.
+  them. A reconcile or adopt starts the log afresh (readers rebuild). Under
+  test (`conftest.py` sets `FIO_SEAL_COLUMNS`) and in oracle mode the two
+  columns are **read-only outside the table's write methods**: a write that
+  bypasses the log raises at once. Play does not pay for toggling the
+  seal (`render_table.SEAL_COLUMNS`).
 * **Mover publication** (`MoverTable.publish`). Each row's runtime
   publication (`_publish_into` / `_publish_row`, the one every gameplay
   reader already depends on) marks it; `publish` logs the marked rows and
@@ -178,9 +180,13 @@ newly visible rows a frame). GL calls on every frame: 89-91 -> 73-75
 **The mover publication** (publish alone, five interleaved rounds against
 M4.0): at rest 13 -> 3 us (8 movers), 24 -> 5 (128); every mover moving
 every tick, the worst case: 17 -> 25 (8), 21 -> 29 (32), 30 -> 41 (128)
-before dense publication; with it, the fixed cost of keeping the record
-(deciding the mode, the log entry, the seal and the logged write) remains,
-~+5-10 us a publication.
+before dense publication; with it, +7-10 us remained. That was closed
+(M4.5) by not toggling the column seal outside tests (~1.5 us), reading a
+whole group's rows as a slice rather than a gathered copy, and writing
+whole groups through flat indices kept with the slot map (a 1-D store,
+~3x cheaper than `bounds[slots, :3] = ...`). In-process A/B against
+M3.1's publication on the same movers, alternating every tick (byte-
+identical columns): 1.01-1.03x at 8-32 movers, 0.81x at 128.
 
 **Where dense publication pays** (`tools/bench_mover_crossover.py`: both
 modes forced, the publication plus the renderer's work on the rows logged
@@ -222,13 +228,13 @@ M3.1's head, both trees clean worktrees; first run on `6a66004`):
 
 ## Trade-offs and what remains
 
-* **The record has a cost where everything changes.** With every mover
-  moving every tick, `MoverTable.publish` costs ~5-10 us more than before
-  even in dense mode (deciding, the log entry, the seal, the logged write):
-  the price of an accurate record. At rest it costs 10-20 us less. On a
-  large world the renderer recovers more than that by no longer comparing
-  columns; on a tiny world with every mover moving it is a net cost of a
-  few microseconds a frame, within the noise of every complete-frame gate.
+* **The record's cost where everything changes** is now offset: with
+  every mover moving every tick the publication is level with M3.1's (the
+  log, marks and counters paid for by cheaper writes); at rest it costs
+  10-20 us less.
+* **The column seal is a test-time check.** In play an unlogged write to
+  `bounds`/`rot` is not caught (the suite and the oracle catch it); a stale
+  picture rather than a crash in a player's build.
 * **Dense publication logs rows that did not move** (by design: a
   superset), which the renderer rebuilds and re-uploads; the thresholds
   are where that costs less than picking, measured on this host only.

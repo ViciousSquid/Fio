@@ -5,9 +5,13 @@ session* first). **Stage 2 is accepted for progression to M3** (the user,
 2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
 **M3 (change-driven GPU instance uploads for box brushes) is implemented**,
 **M3.1** (what the passes derive kept by change, accepted) and **M4**
-(change records from the tables to GL); see the M4, M3.1 and M3 sections
-below, `docs/renderer-m4.md` and `docs/renderer-m3-profiling.md`. The
-earlier sections are kept as history.
+(change records from the tables to GL, complete: the user's acceptance
+condition -- Office and the all-moving mover workloads no slower than
+M3.1 -- met, see the M4 section); see the M4, M3.1 and M3 sections below,
+`docs/renderer-m4.md` and `docs/renderer-m3-profiling.md`. **Next: the
+whole-engine performance audit, then M5 chosen from it** (ms-scale costs,
+not microsecond tuning: the user, 2026-11-10). The earlier sections are
+kept as history.
 
 ## Third session: state published once, the grid's movers, parked movers (read this first)
 
@@ -198,20 +202,45 @@ BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
   runs every write path in the real editor with three oracles (oracle mode,
   Debug Tables' copy of the published table against a fresh rebuild, the
   picture against a cache-free renderer); each oracle is shown catching a
-  forced miss. Gate against M3.1's head (first run on `6a66004`): frames
-  the same or faster; flagged -- the mover publication's worst case (all
-  movers moving), `_SHOWCASE` gameplay logic 1.12× and frame 1.07×, and
-  `player_static_*` 1.20× / `table_one_mover_tick` 1.15× (not seen in the
-  previous full gate; being re-run). Full suite on the final commit: in
-  progress at the time of writing.
-* Trade-offs: the mover publication costs 8-14 us more when every mover
-  moves every tick (10-20 us less at rest); ~25-55 more Python calls a logic
-  frame; hidden (parked) rows not kept current; a plain list assigned to
-  `EditorState.brushes`/`things` is copied. Entity instance streams and
-  per-cell buffers measured and not built (entity uploads <= 0.6 KB a
-  frame; a camera turn's 128 KB upload ~10 us).
+  forced miss.
+* Full suite with the oracle recording on `6a66004`: 7,354 passed, the 4
+  documented environment failures (position window, three
+  `test_portal_fade`). After M4.5 the renderer, visual, engine,
+  brush-model, change-record, integration, stability-audit and Debug
+  Tables tiers: 2,412 passed with the oracle and 2,412 without.
+* **Gate against M3.1's head, seven rounds** (`perf_gate.py --probes
+  gameplay,movers,table`, clean worktrees, on `fe79057`): Office logic
+  0.93× and frame 0.87× (the earlier 1.04× logic regression, cold NumPy
+  calls on 27-row arrays, removed by comparing small arrays as bytes,
+  `change_detection.same_rows`); BigWorld logic 0.91×; MonsterTest and
+  `_SHOWCASE` frames the same (`_SHOWCASE` logic 1.06×, p .049, 1.04× p .23
+  in the run before); table probes the same or faster. The mover probe
+  then still flagged `publish` 1.47-1.54×, closed by `2f8c1f9` (in-process
+  A/B against M3.1's publication: 1.01-1.03× at 8-32 movers, 0.81× at
+  128, columns byte-identical). The mover probe's untouched parts
+  (`aabb_moving`, `cells_*`, `rows_*`) moved 0.96-1.10× between two
+  identical runs: this host's noise, about ±10%. The logic frame's Python
+  call counts are +4-11% (deterministic; not time).
+* Trade-offs: ~25-55 more Python calls a logic frame; hidden (parked) rows
+  not kept current; a plain list assigned to `EditorState.brushes`/
+  `things` is copied; the transform columns' seal is a test-time check
+  (`FIO_SEAL_COLUMNS`, set by `conftest.py`; the oracle sets it too), so
+  in play an unlogged write shows as a stale picture, not a crash. Dense
+  mover publication's thresholds (`DENSE_SLACK_ROWS`, `DENSE_SHARE`) were
+  measured on this host only: rerun `tools/bench_mover_crossover.py` on the
+  Snapdragon. Entity instance streams and per-cell buffers measured and not
+  built (entity uploads <= 0.6 KB a frame; a camera turn's 128 KB upload
+  ~10 us).
 * Commits: `84d312e` M4.0, `9b92066` M4.1, `42f98d7` M4.2a, `0ca6aec`
-  M4.2b, `ed60466` M4.2c, `0497431` M4.3, `6a66004` M4.4, and the docs.
+  M4.2b, `ed60466` M4.2c, `0497431` M4.3, `6a66004` M4.4, `c43d6b8`,
+  `a645e23` and `2f8c1f9` M4.5 (dense publication, small arrays compared as
+  bytes, publication level with M3.1), and the docs.
+* Real hardware: GitHub's hosted runners have no GPU (the repo's
+  `editor-screenshots.yml` already installs Mesa's software GL); their GPU
+  runners are NVIDIA T4s on paid organisation plans and tell nothing about
+  Adreno. A self-hosted runner on the Snapdragon 8cx Gen 3, started from
+  the logged-in desktop (`run.cmd`, not a service), would run the gate,
+  the crossover tool and the GL tier on the real driver; not set up.
 * Debug Tables shows the tables' versions and change detection per site
   (rows and microseconds a published frame).
 
