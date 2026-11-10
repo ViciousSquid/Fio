@@ -10,13 +10,14 @@ Opened from the eye on the toolbar. Three tabs:
   the editor's views. Set it from the selection or type its corners.
 
 All of it is :class:`engine.view_filters.ViewFilters` state: it hides objects
-from engine.asset_qt import load_icon
-from engine.asset_archives import asset_exists
 from every editor view, never from Play, and visgroups and the cordon are
 saved with the map. The padlock keeps the window on top of everything.
 """
 
 import os
+
+from engine.asset_archives import asset_exists
+from engine.asset_qt import load_icon
 
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
