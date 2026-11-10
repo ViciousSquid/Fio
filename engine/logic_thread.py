@@ -92,6 +92,9 @@ class LogicThread(threading.Thread):
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
+    #: How far past a tick's due time the loop wakes (seconds): an early
+    #: wake would run no tick. The accumulator carries it, so it never drifts.
+    WAKE_MARGIN = 0.0002
 
     # Construction-time host contracts for the extracted Logic runtimes.
     #
@@ -371,10 +374,19 @@ class LogicThread(threading.Thread):
             accumulator += frame_time
             accumulator = self._step_frame(accumulator)
             self._publish_frame()
-            
-            sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
+
+            # Sleep until the accumulator next holds a whole tick -- the next
+            # tick's due time, less what stepping and publishing took -- and
+            # wake just past it, never just before (an early wake runs no
+            # tick and sleeps again). Sleeping a fixed share of a tick from
+            # this iteration's start instead overshot whenever an iteration
+            # began just short of a tick: ticks then landed up to ~14 ms off
+            # their 60 Hz slots (p95), and with no interpolation the picture
+            # moved unevenly.
+            sleep_time = (self.TICK_DURATION - accumulator
+                          - (time.perf_counter() - current_time) + self.WAKE_MARGIN)
             if sleep_time > 0:
-                time.sleep(sleep_time * 0.9)
+                time.sleep(sleep_time)
                 
     def _publish_frame(self) -> bool:
         """Hand the frame just prepared to the renderer, if it is not reading.
