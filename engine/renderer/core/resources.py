@@ -39,10 +39,16 @@ _MODEL_RETRY_S = 5.0
 
 # ---------- Utility classes ----------
 class UniformCache:
-    __slots__ = ('program', '_cache', 'shadow_slots')
+    __slots__ = ('program', '_cache', 'shadow_slots', 'env', 'active_lights')
     def __init__(self, shader_program):
         self.program = shader_program
         self._cache = {}
+        # The last values given to this program's fog/ambient block and its
+        # active_lights (M4): uniform values are program state, so they hold
+        # until the program is deleted, and a recompiled program, a new
+        # context or another renderer comes with a new cache.
+        self.env = None
+        self.active_lights = None
         # The shadowMaps[i] slots this program samples, once their sampler
         # units are assigned (see Renderer._bind_shadow_maps); None before.
         self.shadow_slots = None

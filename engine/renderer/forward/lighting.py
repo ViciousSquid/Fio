@@ -94,6 +94,15 @@ class LightingMixin:
         vd = self.view_distance
         start, end = vd.resolve()
         cam = self._frame_camera_pos
+        # Sent when they change, per program (M4): the values are compared
+        # every frame, so a change still reaches the next draw. The terrain's
+        # program belongs to the terrain, which may set them itself.
+        values = (vd.fog_enabled, tuple(vd.fog_color), start, end,
+                  vd.fog_density, tuple(cam), tuple(vd.ambient))
+        if shader_name != 'terrain':
+            if uniforms.env == values:
+                return
+            uniforms.env = values
         gl.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
         gl.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
         gl.glUniform1f(uniforms['uFogStart'], start)
@@ -234,7 +243,10 @@ class LightingMixin:
         self._frame_lights_uploaded[shader_name] = (
             id(table), table.generation,
             tuple(slots[:cap].tolist()))
-        gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
+        program = self.uniforms[shader_name]
+        if shader_name == 'terrain' or program.active_lights != num_lights:
+            gl.glUniform1i(program['active_lights'], num_lights)
+            program.active_lights = num_lights
         # One upload serves every pass: the buffer holds the frame's light
         # prefix up to MAX_LIGHTS, and each shader reads its own first
         # ``active_lights`` entries of it. Uploading per shader cap re-sent
