@@ -60,11 +60,16 @@ class SlotTransforms:
             return count
         bounds = table.bounds[:count]
         rot = table.rot[:count]
-        if np.array_equal(bounds, self.bounds) and np.array_equal(rot, self.rot):
+        moved = not np.array_equal(bounds, self.bounds)
+        turned = not np.array_equal(rot, self.rot)
+        if not (moved or turned):
             self.rebuilt = 0
             return 0
-        rows = np.union1d(np.flatnonzero((bounds != self.bounds).ravel()) // 6,
-                          np.flatnonzero((rot != self.rot).ravel()) // 4)
+        rows = (np.unique(np.flatnonzero((bounds != self.bounds).ravel()) // 6)
+                if moved else None)
+        if turned:
+            spun = np.unique(np.flatnonzero((rot != self.rot).ravel()) // 4)
+            rows = spun if rows is None else np.union1d(rows, spun)
         if not len(rows):
             self.rebuilt = 0            # NaN against NaN: equal, unchanged
             return 0

@@ -114,16 +114,16 @@ def test_shadow_preparation_returns_dense_convex_slots():
     table.sync([box, convex], 1)
 
     class Probe:
-        def _frame_transforms(self, table, slots):
-            return np.zeros((len(slots), 16), dtype=np.float32), None
-
-        def _pack_brush_instances(self, models, normals, rows, selected, alpha):
-            self.packed = len(rows)
+        def _brush_stream(self, key, table, slots, spare=0.0, payload=0.0,
+                          normals=True):
+            self.packed = (key, list(slots), normals)
+            return 'stream'
 
     probe = Probe()
-    cube_slots, geo_slots = ForwardRenderer._prepare_shadow_instances(
-        probe, table, np.array([0, 1], dtype=np.int32), True)
+    cube_slots, geo_slots, stream = ForwardRenderer._prepare_shadow_instances(
+        probe, table, np.array([0, 1], dtype=np.int32), True, key=('shadow', 3))
 
     assert cube_slots.tolist() == [0]
     assert geo_slots.tolist() == [1]
-    assert probe.packed == 1
+    assert probe.packed == (('shadow', 3), [0], False)
+    assert stream == 'stream'

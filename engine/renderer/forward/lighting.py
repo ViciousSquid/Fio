@@ -337,15 +337,18 @@ class LightingMixin:
     #: the casters once and drawing them six times is the whole saving.
     SHADOW_RUN_KEY = KeyLayout([('face', 3)])
 
-    def _prepare_shadow_instances(self, table, in_brushes, instanced):
-        """Pack dense brush casters and return dense convex geometry slots.
+    def _prepare_shadow_instances(self, table, in_brushes, instanced,
+                                  key=('shadow', 0)):
+        """Bring a light's box casters' instance stream (*key*) up to date
+        and return ``(cube slots, convex geometry slots, stream)``.
 
         All inputs are RenderTable slots. No Brush reference is reconstructed
         here; geometry rows remain integer geometry_id handles and AABB rows
-        use the shared instanced cube buffer.
+        use the instanced cube buffer.
         """
         if table is None or not len(in_brushes):
-            return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+            return (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32),
+                    None)
 
         slots = np.asarray(in_brushes, dtype=np.int32)
         geometry = (
@@ -354,12 +357,11 @@ class LightingMixin:
         cube_slots = slots[~geometry]
         geo_slots = slots[geometry]
 
+        stream = None
         if instanced and len(cube_slots):
-            models, _normals = self._frame_transforms(table, cube_slots)
-            rows = np.arange(len(cube_slots), dtype=np.int32)
-            self._pack_brush_instances(models, None, rows, 0.0, 0.0)
+            stream = self._brush_stream(key, table, cube_slots, normals=False)
 
-        return cube_slots, geo_slots
+        return cube_slots, geo_slots, stream
 
     @timed_pass('shadow maps')
     def render_shadow_maps(self, shadow_lights, config, camera_pos=None):
@@ -498,14 +500,12 @@ class LightingMixin:
         model_loc = u['model']
         lsm_loc = u['lightSpaceMatrix']
         depth_instanced = self.shaders.get('depth_cube_instanced')
-        instance_vao = None
         inst_lsm_loc = inst_lightpos_loc = inst_far_loc = -1
         if depth_instanced is not None and self._cube_vbo is not None:
             iu = self.uniforms['depth_cube_instanced']
             inst_lsm_loc = iu['lightSpaceMatrix']
             inst_lightpos_loc = iu['lightPos']
             inst_far_loc = iu['far_plane']
-            instance_vao = self._ensure_brush_instance_vao()
         lightpos_loc = u['lightPos']
         far_loc = u['far_plane']
         cube_vao = self.vaos['cube']
@@ -549,8 +549,9 @@ class LightingMixin:
             model_bases[:, 12:15] = entity_table.pos[model_slots]
             upload_base = uniform_rows('mat4', model_bases)
 
-            cube_slots, geo_slots = self._prepare_shadow_instances(
-                table, in_brushes, depth_instanced is not None)
+            cube_slots, geo_slots, stream = self._prepare_shadow_instances(
+                table, in_brushes, depth_instanced is not None,
+                key=('shadow', slot))
 
             for face in range(6):
                 gl.glFramebufferTexture2D(
@@ -562,13 +563,14 @@ class LightingMixin:
                 gl.glUniformMatrix4fv(
                     lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
 
-                if len(cube_slots) and depth_instanced is not None:
+                if len(cube_slots) and stream is not None:
                     gl.glUseProgram(depth_instanced)
                     gl.glUniformMatrix4fv(
                         inst_lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
                     gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
                     gl.glUniform1f(inst_far_loc, far_plane)
-                    gl.glBindVertexArray(instance_vao)
+                    gl.glBindVertexArray(stream.vao)
+                    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
                     self._point_brush_instances_at(0)
                     gl.glDrawArraysInstanced(
                         gl.GL_TRIANGLES, 0, 36, len(cube_slots))

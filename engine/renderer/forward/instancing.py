@@ -5,6 +5,7 @@ from dense table columns, render-key runs and the textured-face batches.
 """
 
 import ctypes
+import weakref
 
 import numpy as np
 import OpenGL.GL as gl
@@ -41,42 +42,327 @@ _SELECTED_COLOR = (1.0, 1.0, 0.0)
 _SUBTRACT_COLOR = (1.0, 0.0, 0.0)
 
 
+#: No rows.
+_NO_ROWS = np.empty(0, dtype=np.intp)
+
+
+#: "Every row": what a whole rewrite uploads (no index array is built).
+_ALL_ROWS = np.empty(0, dtype=np.intp)
+
+
+def _pick(value, rows):
+    """*value*'s entries for *rows*: a per-row array indexed, a scalar as
+    it is."""
+    return value[rows] if np.ndim(value) else value
+
+
+class BrushStream:
+    """One pass's box instances on the GPU (renderer M3): a buffer that pass
+    alone writes, its CPU mirror, and what each row was built from -- the
+    slot it draws, its spare scalar and payload -- so a frame uploads only
+    the rows that differ from what is there.
+
+    ``seen`` maps ``id(SlotTransforms)`` to ``[weak ref, version, rows
+    written since by another table's frame, normals]``: the version of that
+    table's matrices this buffer last matched. The two double-buffered
+    render tables take turns, so each keeps its own entry."""
+
+    __slots__ = ('vbo', 'vao', 'capacity', 'mirror', 'count', 'slots', 'spare',
+                 'payload', 'consts', 'seen', 'uploaded')
+
+    def __init__(self):
+        self.vbo = None
+        self.vao = None
+        self.capacity = 0
+        self.mirror = np.zeros((0, 32), dtype=np.float32)
+        self.count = 0
+        self.slots = np.zeros(0, dtype=np.int32)
+        self.spare = np.zeros(0, dtype=np.float32)
+        self.payload = np.zeros((0, 4), dtype=np.float32)
+        self.seen = {}
+        #: ``(spare, payload)`` when both were last given as scalars (the
+        #: arrays are then not kept), else None.
+        self.consts = None
+        #: Bytes this stream has uploaded (tests and tools).
+        self.uploaded = 0
+
+    def same_payload(self, count, spare, payload):
+        """Whether *spare* and *payload* (scalars or per-row arrays) are what
+        the rows hold."""
+        scalar_spare = np.ndim(spare) == 0
+        scalar_payload = np.ndim(payload) == 0
+        if scalar_spare and scalar_payload:
+            return self.consts == (float(spare), float(payload))
+        if self.consts is not None:
+            return False
+        if scalar_spare:
+            if not (self.spare[:count] == spare).all():
+                return False
+        elif not np.array_equal(spare, self.spare[:count]):
+            return False
+        if scalar_payload:
+            return bool((self.payload[:count] == payload).all())
+        return np.array_equal(payload, self.payload[:count])
+
+    def keep_payload(self, count, spare, payload):
+        """Remember what the rows now hold (*spare*, *payload*: scalars or
+        per-row arrays)."""
+        self.spare[:count] = spare
+        self.payload[:count] = payload
+        if np.ndim(spare) == 0 and np.ndim(payload) == 0:
+            self.consts = (float(spare), float(payload))
+        else:
+            self.consts = None
+
+
 class InstancingMixin:
     """ForwardRenderer's instance buffers and packing."""
 
-    def _ensure_brush_instance_buffer(self, count):
-        """Grow the per-face instance VBO and its staging array to *count* rows."""
-        if self._brush_instance_vbo is None:
-            self._brush_instance_vbo = gl.glGenBuffers(1)
-        if count <= self._brush_instance_capacity:
+    # -- box instance streams (M3) ----------------------------------------------
+
+    def _stream_key(self, name):
+        """The stream a pass called *name* draws from: per view (the main
+        view, or a portal's), and per use within the frame -- the textured
+        and lit passes each draw more than one brush group a frame -- so a
+        group finds the buffer it filled last frame."""
+        calls = self._stream_calls
+        key = (name, self._instance_view)
+        n = calls.get(key, 0)
+        calls[key] = n + 1
+        return (name, self._instance_view, n)
+
+
+    def _brush_stream(self, key, table, slots, spare=0.0, payload=0.0,
+                      normals=True):
+        """Bring pass *key*'s instance buffer up to these instances and
+        return it (:class:`BrushStream`): one row per item, *slots* the
+        render-table slot each item draws, *spare* and *payload* scalars or
+        per-item arrays (see :attr:`BRUSH_INSTANCE_ATTRS`), *normals* false
+        for a pass that writes only depth.
+
+        Each pass (per view) has its own buffer, so a frame that draws what
+        the last one drew uploads nothing. What is rewritten is told without
+        comparing rows: the items before the first that differs from last
+        time keep their rows unless the table's :class:`SlotTransforms`
+        stamps say their transform changed since this buffer last matched
+        that table, another table's frame wrote them meanwhile, or their
+        payload changed; everything from the first changed item on is
+        rewritten; and when most of the buffer changes it is rewritten
+        whole, as before M3. Uploads are coalesced ranges
+        (:meth:`_upload_stream_rows`). Vectorised throughout: no per-row
+        Python."""
+        streams = self._brush_streams
+        stream = streams.get(key)
+        if stream is None:
+            stream = streams[key] = BrushStream()
+        cache = self._slot_transforms(table)
+        cache.sync(table)
+        slots = np.asarray(slots)
+        count = len(slots)
+        grew = self._ensure_stream_capacity(stream, count)
+        seen = stream.seen
+        entry = seen.get(id(cache))
+        if entry is not None and (entry[0]() is not cache or entry[3] != normals):
+            entry = None
+        known = stream.count
+        same_items = (not grew and known == count
+                      and np.array_equal(stream.slots[:count], slots))
+        same_payload = stream.same_payload(count, spare, payload)
+        if (same_items and same_payload and entry is not None
+                and entry[1] == cache.version and not entry[2]):
+            return stream               # nothing changed: nothing to do
+        if np.ndim(spare):
+            spare = np.asarray(spare, dtype=np.float32)
+        else:
+            spare = np.float32(spare)
+        if np.ndim(payload):
+            payload = np.asarray(payload, dtype=np.float32)
+        else:
+            payload = np.float32(payload)
+        mirror = stream.mirror
+        large = count >= self.STREAM_PATCH_FROM
+        rows = None
+        if large and same_items and entry is not None:
+            # The same items: only rows whose transform changed since this
+            # buffer last matched this table, that another table's frame
+            # wrote meanwhile, or whose payload changed.
+            head = self._stream_head(stream, cache, entry, slots, count,
+                                     spare, payload, same_payload)
+            if len(head) * 2 <= count:
+                if len(head):
+                    mirror[head] = self._stream_block(
+                        cache, slots[head], _pick(spare, head), _pick(payload, head),
+                        normals)
+                rows = head
+        elif large and same_items:
+            # A table this buffer has not matched (the other of the two
+            # double-buffered tables, the first time): compared once, so
+            # both keep their place.
+            block = self._stream_block(cache, slots, spare, payload, normals)
+            differ = np.flatnonzero((block != mirror[:count]).ravel())
+            rows = np.unique(differ // self.BRUSH_INSTANCE_FLOATS)
+            mirror[:count] = block
+        elif large and entry is not None and known and not grew:
+            # The items changed (the visible set moved, a brush was shown
+            # or hidden): rows before the first changed item are kept unless
+            # they changed; everything from it on is rewritten.
+            kept = min(known, count)
+            differ = np.flatnonzero(stream.slots[:kept] != slots[:kept])
+            first = int(differ[0]) if len(differ) else kept
+            if first * 2 >= count:
+                head = self._stream_head(stream, cache, entry, slots, first,
+                                         spare, payload, same_payload)
+                if len(head):
+                    mirror[head] = self._stream_block(
+                        cache, slots[head], _pick(spare, head), _pick(payload, head),
+                        normals)
+                mirror[first:count] = self._stream_block(
+                    cache, slots[first:], _pick(spare, slice(first, None)),
+                    _pick(payload, slice(first, None)), normals)
+                tail = np.arange(first, count, dtype=np.intp)
+                rows = tail if not len(head) else np.concatenate((head, tail))
+        if rows is None:
+            # A small buffer, or most of one changing: rewritten whole, as
+            # before M3 (comparing would cost more than it saves).
+            self._stream_block(cache, slots, spare, payload, normals,
+                               out=mirror[:count])
+            rows = _ALL_ROWS
+        if not same_items:
+            stream.slots[:count] = slots
+            seen.clear()
+        elif rows is _ALL_ROWS:
+            for other_key in [k for k in seen if k != id(cache)]:
+                del seen[other_key]         # every row rewritten
+        elif len(rows):
+            for other_key, other in list(seen.items()):
+                if other[0]() is None:
+                    del seen[other_key]
+                elif other_key != id(cache):
+                    other[2].append(rows)
+                    if sum(len(r) for r in other[2]) * 2 > count:
+                        other[1] = -1           # cheaper to look at every row
+                        other[2] = []
+        stream.keep_payload(count, spare, payload)
+        stream.count = count
+        seen[id(cache)] = [weakref.ref(cache), cache.version, [], normals]
+        self._upload_stream_rows(stream, rows, count)
+        return stream
+
+    @staticmethod
+    def _stream_head(stream, cache, entry, slots, upto, spare, payload,
+                     same_payload):
+        """Rows before *upto* that must be rewritten although their item is
+        unchanged: moved since *entry* matched, written by another table's
+        frame since, or with a changed payload."""
+        parts = []
+        if entry[1] < cache.version:
+            moved = np.flatnonzero(cache.stamp[slots[:upto]] > entry[1])
+            if len(moved):
+                parts.append(moved)
+        for written in entry[2]:
+            parts.append(written[written < upto])
+        if not same_payload:
+            changed = ((_pick(payload, slice(0, upto)) != stream.payload[:upto]).any(axis=1)
+                       | (_pick(spare, slice(0, upto)) != stream.spare[:upto]))
+            parts.append(np.flatnonzero(changed))
+        if not parts:
+            return _NO_ROWS
+        if len(parts) == 1:
+            return parts[0]
+        return np.unique(np.concatenate(parts))
+
+    @staticmethod
+    def _stream_block(cache, slots, spare, payload, normals, out=None):
+        """Instance rows for *slots* in :attr:`BRUSH_INSTANCE_ATTRS` layout:
+        the model matrix, the normal matrix padded to three vec4 with *spare*
+        in the first, and *payload* -- gathered from the slot matrices, into
+        *out* when given."""
+        block = np.empty((len(slots), 32), dtype=np.float32) if out is None else out
+        np.take(cache.models, slots, axis=0, out=block[:, 0:16])
+        if normals:
+            item = cache.normals[slots]
+            block[:, 16:19] = item[:, 0:3]
+            block[:, 20:23] = item[:, 3:6]
+            block[:, 24:27] = item[:, 6:9]
+            block[:, 23] = 0.0
+            block[:, 27] = 0.0
+        else:
+            block[:, 16:28] = 0.0
+        block[:, 19] = spare
+        block[:, 28:32] = payload
+        return block
+
+    #: Streams of at least this many rows are patched row by row; smaller
+    #: ones are rewritten whole whenever anything in them changes (measured
+    #: in the frame: tools/bench_instance_uploads.py --no-raster).
+    STREAM_PATCH_FROM = 1024
+
+    #: Rows of unchanged data a coalesced upload may carry to save a call.
+    STREAM_GAP_ROWS = 16
+    #: Ranges above which one upload covering all of them is cheaper.
+    STREAM_MAX_RANGES = 16
+
+    def _upload_stream_rows(self, stream, rows, count):
+        """Upload *rows* (sorted, unique) of *stream*'s mirror: close rows
+        coalesced into one range, many ranges into one."""
+        if stream.vbo is None or not count:
             return
-        capacity = max(count, 256, self._brush_instance_capacity * 2)
-        self._brush_instance_capacity = capacity
-        self._brush_instance_data = np.empty(
-            (capacity, self.BRUSH_INSTANCE_FLOATS), dtype=np.float32)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._brush_instance_data.nbytes,
-                        None, gl.GL_DYNAMIC_DRAW)
+        stride = self.BRUSH_INSTANCE_FLOATS * 4
+        if rows is _ALL_ROWS:
+            bounds = ((0, count),)
+        elif not len(rows):
+            return
+        elif int(rows[-1]) + 1 - int(rows[0]) == len(rows):
+            bounds = ((int(rows[0]), int(rows[-1]) + 1),)      # one block
+        else:
+            breaks = np.flatnonzero(np.diff(rows) > self.STREAM_GAP_ROWS) + 1
+            if len(breaks) >= self.STREAM_MAX_RANGES:
+                bounds = ((int(rows[0]), int(rows[-1]) + 1),)
+            else:
+                ends = breaks.tolist()
+                firsts = [0] + ends
+                lasts = ends + [len(rows)]
+                bounds = [(int(rows[a]), int(rows[b - 1]) + 1)
+                          for a, b in zip(firsts, lasts)]
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
+        for lo, hi in bounds:
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, lo * stride,
+                               stream.mirror[lo:hi])
+            stream.uploaded += (hi - lo) * stride
+            self.instance_bytes_uploaded += (hi - lo) * stride
 
-        # The VAO is deliberately left alone. glBufferData reallocates the data
-        # store but keeps the buffer's name, and a VAO's attribute pointers
-        # reference the name with a stride and offset that have not changed --
-        # so the VAO stays valid across a growth. Deleting it here would also
-        # invalidate any handle a caller is holding, which the shadow pass does
-        # across its six faces.
+    def _ensure_stream_capacity(self, stream, count):
+        """Grow *stream*'s buffer and mirror to hold *count* rows; True when
+        they were (re)allocated, so every row is written again."""
+        if stream.vbo is None:
+            stream.vbo = gl.glGenBuffers(1)
+        if count <= stream.capacity and stream.vao is not None:
+            return False
+        capacity = max(count, 256, stream.capacity * 2)
+        stream.capacity = capacity
+        stream.mirror = np.zeros((capacity, self.BRUSH_INSTANCE_FLOATS),
+                                 dtype=np.float32)
+        stream.slots = np.full(capacity, -1, dtype=np.int32)
+        stream.spare = np.zeros(capacity, dtype=np.float32)
+        stream.payload = np.zeros((capacity, 4), dtype=np.float32)
+        stream.count = 0
+        stream.seen.clear()
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, stream.mirror.nbytes, None,
+                        gl.GL_DYNAMIC_DRAW)
+        if stream.vao is None:
+            stream.vao = self._brush_stream_vao(stream.vbo)
+        # A grown store keeps the buffer's name: the vertex array's pointers
+        # (name, stride, offset) are still right.
+        return True
 
-    def _ensure_brush_instance_vao(self):
-        """A VAO over the shared cube VBO plus the per-face instance buffer.
+    def _brush_stream_vao(self, vbo):
+        """A VAO over the shared cube VBO plus one instance stream's buffer.
 
         Deliberately separate from ``vaos['cube']``: the non-instanced path
         shares that one, and giving it eight enabled divisor-1 attributes would
         have every ordinary cube draw read an instance buffer it does not use.
         """
-        if self._brush_instance_vao is not None:
-            return self._brush_instance_vao
-        # The shadow pass asks for the VAO during its setup, before anything
-        # has packed instances, so the buffer may not exist yet.
-        self._ensure_brush_instance_buffer(1)
         vao = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
@@ -84,7 +370,7 @@ class InstancingMixin:
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      32, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         stride = self.BRUSH_INSTANCE_FLOATS * 4
         for location in range(3, 11):
             gl.glVertexAttribPointer(
@@ -93,8 +379,17 @@ class InstancingMixin:
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
         gl.glBindVertexArray(0)
-        self._brush_instance_vao = vao
         return vao
+
+    def _release_brush_streams(self):
+        """Delete every instance stream's buffer and vertex array (renderer
+        cleanup, or a context about to be lost)."""
+        for stream in self._brush_streams.values():
+            if stream.vao:
+                gl.glDeleteVertexArrays(1, [stream.vao])
+            if stream.vbo:
+                gl.glDeleteBuffers(1, [stream.vbo])
+        self._brush_streams.clear()
 
     def _point_brush_instances_at(self, base):
         """Re-aim the instance attributes at instance *base*.
@@ -114,43 +409,6 @@ class InstancingMixin:
             _raw_vertex_attrib_pointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
                 ctypes.c_void_p(origin + (location - 3) * 16))
-
-    def _pack_brush_instances(self, models, normals, rows, spare, payload):
-        """Pack one instance row per draw item, straight from existing arrays.
-
-        The layout is :data:`Renderer.BRUSH_INSTANCE_ATTRS`: the model
-        matrix, the normal matrix padded to three vec4 with one spare scalar,
-        and a payload vec4 whose meaning belongs to the calling pass.  Every
-        field is a vectorised take -- no Python loop, and no going back to an
-        object for a transform that already exists as a column.
-
-        *rows* selects which of *models* / *normals* each instance uses, so one
-        brush appearing as six faces costs six instance rows and one matrix
-        build.
-        """
-        count = len(rows)
-        self._ensure_brush_instance_buffer(count)
-        data = self._brush_instance_data[:count]
-        np.take(models, rows, axis=0, out=data[:, 0:16])
-        if payload is None:
-            payload = 0.0
-        if normals is None:
-            # A pass that writes only depth has no normal to carry; leaving the
-            # slots zero keeps one instance layout for the whole renderer at
-            # the cost of a little upload bandwidth.
-            data[:, 16:28] = 0.0
-        else:
-            item_normals = normals[rows]
-            data[:, 16:19] = item_normals[:, 0:3]
-            data[:, 19] = spare
-            data[:, 20:23] = item_normals[:, 3:6]
-            data[:, 23] = 0.0
-            data[:, 24:27] = item_normals[:, 6:9]
-            data[:, 27] = 0.0
-        data[:, 28:32] = payload
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
-        return count
 
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""

@@ -114,10 +114,16 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
         # GPU-instanced model data. One persistent VBO is shared by all model
         # VAOs; each instance carries a model matrix and normal matrix (112 B).
-        # The shared brush-instance buffer and its VAO. One layout serves every
-        # pass that submits runs (see BRUSH_INSTANCE_ATTRS).
-        self._brush_instance_vbo = None
-        self._brush_instance_vao = None
+        # Box brush instances: one stream (buffer, VAO, CPU mirror) per pass,
+        # per view, per use in the frame, written only where it changed
+        # (instancing.BrushStream; one layout, BRUSH_INSTANCE_ATTRS).
+        self._brush_streams = {}
+        self._stream_calls = {}
+        #: The view the passes are drawing: None for the main view, a portal's
+        #: (aperture, depth) while its virtual view draws.
+        self._instance_view = None
+        #: Bytes uploaded to box instance streams (tests and tools).
+        self.instance_bytes_uploaded = 0
         self._sprite_instance_vbo = None
         self._sprite_instance_vao = None
         self._sprite_instance_capacity = 0
@@ -149,8 +155,6 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
         self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
-        self._brush_instance_capacity = 0
-        self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         self._model_instance_vbo = None
         self._model_instance_capacity = 0
         self._model_instance_data = np.empty((0, 29), dtype=np.float32)
@@ -306,6 +310,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._frame_camera_pos = self._camera_xyz(camera_pos)
         self.render_stats.reset()
         self.render_stats.total_brushes = len(config.get('all_brush_slots', ()))
+        if not getattr(self, '_portal_scene_pass', False):
+            self._stream_calls.clear()
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
@@ -670,17 +676,17 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._light_ubo_key = None
             self._light_ubo_bound = False
         # Instance streams: one buffer and one vertex array per pass.
-        for vao in (self._brush_instance_vao, self._sprite_instance_vao,
-                    self._effect_instance_vao):
+        self._release_brush_streams()
+        self._slot_transform_caches.clear()
+        for vao in (self._sprite_instance_vao, self._effect_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])
-        for vbo in (self._brush_instance_vbo, self._sprite_instance_vbo,
-                    self._effect_instance_vbo):
+        for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo):
             if vbo:
                 gl.glDeleteBuffers(1, [vbo])
-        self._brush_instance_vao = self._sprite_instance_vao = None
+        self._sprite_instance_vao = None
         self._effect_instance_vao = None
-        self._brush_instance_vbo = self._sprite_instance_vbo = None
+        self._sprite_instance_vbo = None
         self._effect_instance_vbo = None
         # Portal resources. The mask and rim programs are not in ``shaders``.
         if self._portal_quad_vao:

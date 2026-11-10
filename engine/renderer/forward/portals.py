@@ -213,6 +213,10 @@ class PortalsMixin:
         clip_proj=self._calculate_oblique_projection(projection,virtual_view,portal_table.pos[portal_b],portal_table.portal_basis[portal_b,2])
         gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00)
         old_proj_ptr,old_view_ptr=self._proj_ptr,self._view_ptr; self._proj_ptr=glm.value_ptr(clip_proj); self._view_ptr=glm.value_ptr(virtual_view); self._current_shader=None; self._portal_scene_pass=True
+        # The portal's view has its own instance streams (BrushStream): it
+        # draws other brushes than the main view does.
+        outer_view = self._instance_view
+        self._instance_view = (int(portal_a), depth)
         try:
             draw_scene_fn(
                 RenderView(
@@ -225,6 +229,7 @@ class PortalsMixin:
             )
         finally:
             self._portal_scene_pass=False
+            self._instance_view = outer_view
         self._proj_ptr=old_proj_ptr; self._view_ptr=old_view_ptr; self._current_shader=None; gl.glStencilMask(0xFF)
         if depth < self.MAX_PORTAL_RECURSION:
             self._draw_nested_portals(portal_table,portal_a,portal_b,clip_proj,virtual_view,virtual_cam,config,draw_scene_fn,portal_slots,depth+1)
