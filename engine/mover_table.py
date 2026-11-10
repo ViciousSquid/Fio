@@ -62,6 +62,16 @@ from engine import brush_placement, change_detection
 from engine.change_journal import JOURNAL, OVERFLOW, VISIBILITY
 from engine.spatial import PARKED_HIDDEN_KEY
 
+
+#: Publications the mover table remembers the published rows of (M4): a
+#: render table last written further back than this is written whole.
+POSE_LOG = 32
+
+#: Marks a group keeps between publications before it gives up listing rows
+#: and says "every row" (ticks walked with no frame published: a headless
+#: run, a stalled renderer).
+MARKS_LIMIT = 512
+
 # Door states. OTHER keeps any unrecognised string as-is.
 CLOSED, OPENING, OPEN, CLOSING, STOPPED, OTHER = range(6)
 _DOOR_CODES = {'closed': CLOSED, 'opening': OPENING, 'open': OPEN,
@@ -455,6 +465,12 @@ class _Group:
         #: across rebuilds.
         self.ticks = 0
         self.delta = 1.0 / 60.0
+        #: Rows whose runtime transform was published since the mover table
+        #: last took them (MoverTable.publish): its change record (M4) --
+        #: single rows as ints, batches as arrays; None once there are too
+        #: many to list ("every row").
+        self._marked_rows = []
+        self._marked_arrays = []
         self._build([])
 
     # -- rows ----------------------------------------------------------------
@@ -464,6 +480,9 @@ class _Group:
         # What was published for the rows being replaced is withdrawn (the
         # new rows publish their own when the table adopts them).
         _withdraw(getattr(self, 'brushes', ()))
+        # Row numbers of the rows being replaced: the rebuild is written whole.
+        self._marked_rows = []
+        self._marked_arrays = []
         self.index = [i for i, _ in entries]
         self.brushes = [brush for _, brush in entries]
         self.row_of_index = {i: row for row, i in enumerate(self.index)}
@@ -611,6 +630,44 @@ class _Group:
             brush_placement.note_asleep()
         if publish and self.table is not None:
             self.table._publish(self, [row])
+
+    def _mark_row(self, row):
+        """Record that row *row* had its runtime transform published."""
+        rows = self._marked_rows
+        if rows is not None:
+            rows.append(row)
+            if len(rows) > MARKS_LIMIT * 8:
+                self._marked_rows = None        # "every row"
+
+    def _mark_rows(self, rows):
+        """Record that *rows* (an array) had their runtime transform
+        published."""
+        arrays = self._marked_arrays
+        if arrays is not None:
+            arrays.append(rows)
+            if len(arrays) > MARKS_LIMIT:
+                self._marked_arrays = None      # "every row"
+
+    def take_marks(self):
+        """The rows whose runtime transform was published since the last
+        call (M4's change record for the publication; a row may appear more
+        than once), or None for every row (a rebuild, or more than could be
+        listed)."""
+        rows, arrays = self._marked_rows, self._marked_arrays
+        self._marked_rows, self._marked_arrays = [], []
+        if rows is None or arrays is None:
+            return None
+        if not arrays:
+            if not rows:
+                return _NO_ROWS
+            marked = np.fromiter(set(rows), dtype=np.intp)
+        else:
+            if rows:
+                arrays.append(np.fromiter(set(rows), dtype=np.intp))
+            marked = arrays[0] if len(arrays) == 1 else np.concatenate(arrays)
+        # Every row (the usual tick of a busy level): say so, and the
+        # publication writes them as it always did.
+        return None if len(marked) >= len(self.index) else marked
 
     def quiet(self, rows):
         """Withdraw what was just published for the parked rows among
@@ -1651,6 +1708,13 @@ class MoverTable:
         # slots). One entry per table: frames alternate between the two render
         # buffers' tables, so a single entry would miss on every frame.
         self._slot_cache = weakref.WeakKeyDictionary()
+        #: The rows published since each publication, logged (M4): version ->
+        #: (mover rows, door rows). A render table is written only the rows
+        #: logged since it was last written (the two render buffers' tables
+        #: take turns, so each catches up on what moved during the other's
+        #: frame); one further back than the log is written whole.
+        self._pose_version = 0
+        self._pose_log = deque(maxlen=POSE_LOG)
         #: id(brush) -> (brush, (cx, cy, cz, ax, ay, az, angle)): the runtime
         #: transform of every row that is displaced or turned -- its position
         #: column as it is, and its spin -- refreshed for the rows that move
@@ -1744,13 +1808,15 @@ class MoverTable:
             return
         runtime = self.runtime_entries if entries is None else entries
         if count < self.PUBLISH_ROWS_BELOW:
+            # _publish_row marks each row.
             centres = (None if here is None
                        else np.asarray(here, dtype=np.float64).tolist())
             for k, row in enumerate(rows):
                 self._publish_row(group, int(row), runtime,
                                   None if centres is None else centres[k])
             return
-        pick = np.asarray(rows, dtype=np.intp)
+        pick = np.array(rows, dtype=np.intp)
+        group._mark_rows(pick)
         here = group.pos[pick] if here is None else np.asarray(here, dtype=np.float64)
         movers = self.movers
         angle = spin_at = None
@@ -1793,6 +1859,7 @@ class MoverTable:
     def _publish_row(self, group, row, runtime, centre=None, rest=None):
         """:meth:`_publish` for one row, in scalars (*centre* and *rest*:
         its position and authored centre, when the caller holds them)."""
+        group._mark_row(row)
         brush = group.brushes[row]
         if centre is None:
             cx, cy, cz = group.pos[row].tolist()
@@ -1962,6 +2029,7 @@ class MoverTable:
         _withdraw_held(self._rows_held)
         self.runtime_entries = {}
         self._pending = {}
+        self._slot_cache = weakref.WeakKeyDictionary()     # written whole next
         self.movers.live[:] = False
         self.doors.live[:] = False
         for group in (self.movers, self.doors):
@@ -2080,32 +2148,123 @@ class MoverTable:
             return
         key = (table.generation, movers.version, doors.version)
         cached = self._slot_cache.get(table)
-        if cached is None or cached[0] != key:
+        fresh = cached is None or cached[0] != key
+        if fresh:
             slot_of = table._slot_of_obj
             maps = []
             for group in (movers, doors):
                 slots = [slot_of.get(id(brush), -1) for brush in group.brushes]
                 slots = np.asarray(slots, dtype=np.intp)
                 ok = slots >= 0
-                maps.append((np.flatnonzero(ok), slots[ok]))
-            cached = (key, tuple(maps))
+                maps.append((np.flatnonzero(ok), slots[ok], slots))
+            # [key, row/slot maps, the pose version the table holds]
+            cached = [key, tuple(maps), None]
             self._slot_cache[table] = cached
-        (mover_rows, mover_slots), (door_rows, door_slots) = cached[1]
         started = change_detection.now()
-        if len(mover_rows):
-            table.bounds[mover_slots, :3] = movers.pos[mover_rows]
-            angle = movers.rot_angle[mover_rows]
-            rot = np.zeros((len(mover_rows), 4), dtype=table.rot.dtype)
+        # What was published since the last publication -- the tick's own
+        # record of the rows it moved (M4) -- logged for both render tables.
+        # A group whose every row was published is "every row" (None).
+        marks_m = movers.take_marks()
+        marks_d = doors.take_marks()
+        if marks_m is None or marks_d is None or len(marks_m) or len(marks_d):
+            self._pose_version += 1
+            self._pose_log.append((self._pose_version, (marks_m, marks_d)))
+        rows_m, rows_d = (None, None) if fresh else self._rows_since(cached[2])
+        cached[2] = self._pose_version
+        (all_m, slots_m, slot_of_m), (all_d, slots_d, slot_of_d) = cached[1]
+        writes = []
+        if rows_m is None or len(rows_m) >= len(slot_of_m):
+            rows_m = all_m
+        elif len(rows_m):
+            picked = slot_of_m[rows_m]
+            held = picked >= 0
+            rows_m, slots_m = rows_m[held], picked[held]
+        if len(rows_m):
+            angle = movers.rot_angle[rows_m]
+            rot = np.zeros((len(rows_m), 4), dtype=table.rot.dtype)
             spun = angle != 0.0
-            rot[spun, :3] = movers.rot_axis[mover_rows][spun]
-            rot[spun, 3] = angle[spun]
-            table.rot[mover_slots] = rot
-            if not table.turning and spun.any():
-                table.turning = True    # the column's other writer
-        if len(door_rows):
-            table.bounds[door_slots, :3] = doors.pos[door_rows]
-        # Every mover's and door's row, written whether it moved or not
-        # (counted with change detection: what M4 removes).
-        change_detection.DETECT.add('mover.publish',
-                                    len(mover_rows) + len(door_rows),
+            if spun.any():
+                rot[spun, :3] = movers.rot_axis[rows_m][spun]
+                rot[spun, 3] = angle[spun]
+            writes.append((slots_m, movers.pos[rows_m], rot))
+        if rows_d is None or len(rows_d) >= len(slot_of_d):
+            rows_d = all_d
+        elif len(rows_d):
+            picked = slot_of_d[rows_d]
+            held = picked >= 0
+            rows_d, slots_d = rows_d[held], picked[held]
+        if len(rows_d):
+            # Doors last: a brush that is both is left as the door put it.
+            writes.append((slots_d, doors.pos[rows_d], None))
+        if writes:
+            table.write_transforms_many(writes)
+        # The rows written: those published since this table was last
+        # written, or every row when it was not (or a rebuild came between).
+        change_detection.DETECT.add('mover.publish', len(rows_m) + len(rows_d),
                                     change_detection.now() - started)
+        if change_detection.ORACLE:
+            self._check_published(table, cached[1])
+
+    def _rows_since(self, since):
+        """``(mover rows, door rows)`` published since *table* was last
+        written (None: every row; a row may appear more than once) -- a brush
+        in both groups counts in both. *since*: the pose version the table
+        holds (None: none)."""
+        if since is None:
+            return None, None
+        if since == self._pose_version:
+            return _NO_ROWS, _NO_ROWS
+        log = self._pose_log
+        if not log or log[0][0] > since + 1:
+            return None, None
+        movers, doors = self.movers, self.doors
+        if since == self._pose_version - 1 and not movers.any_twin:
+            return log[-1][1]               # one publication behind: its rows
+        parts = ([], [])
+        for version, marks in log:
+            if version <= since:
+                continue
+            for k in (0, 1):
+                if marks[k] is None:
+                    parts[k].append(None)
+                elif len(marks[k]):
+                    parts[k].append(marks[k])
+        rows = []
+        for k in (0, 1):
+            if any(p is None for p in parts[k]):
+                rows.append(None)
+            elif not parts[k]:
+                rows.append(_NO_ROWS)
+            else:
+                rows.append(parts[k][0] if len(parts[k]) == 1
+                            else np.concatenate(parts[k]))
+        if movers.any_twin and rows[0] is not None and rows[1] is not None:
+            # The twin of a row that moved moved with it.
+            twins_d = movers.twin_row[rows[0]]
+            twins_m = doors.twin_row[rows[1]]
+            rows = [np.concatenate((rows[0], twins_m[twins_m >= 0])),
+                    np.concatenate((rows[1], twins_d[twins_d >= 0]))]
+        return rows[0], rows[1]
+
+    def _check_published(self, table, maps):
+        """Oracle (M4): every awake mover's and door's row in *table* holds
+        what the group holds. A row that differs was moved without being
+        published (marked): a writer outside the change record. Parked rows
+        are hidden, and written when they wake."""
+        movers, doors = self.movers, self.doors
+        problems = []
+        for group, (rows, slots, _slot_of_row) in zip((movers, doors), maps):
+            awake = ~group.parked[rows]
+            rows, slots = rows[awake], slots[awake]
+            if not len(rows):
+                continue
+            differ = (table.bounds[slots, :3] != group.pos[rows]).any(axis=1)
+            if group is movers:
+                angle = movers.rot_angle[rows].astype(table.rot.dtype)
+                differ |= table.rot[slots, 3] != angle
+            if differ.any():
+                problems.append((type(group).__name__, rows[differ].tolist()[:8],
+                                 slots[differ].tolist()[:8]))
+        if problems:
+            raise change_detection.MissedChange(
+                "mover rows changed without being published: %r" % (problems,))

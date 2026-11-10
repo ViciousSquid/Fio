@@ -43,11 +43,11 @@ def test_built_once_then_only_what_changes():
     rng = np.random.default_rng(3)
     for step in range(30):
         rows = rng.choice(table.count, size=int(rng.integers(1, 6)), replace=False)
-        table.bounds[rows, :3] += rng.normal(size=(len(rows), 3))
-        if step % 3 == 0:
-            table.bounds[rows, 3:] *= 1.01
-        if step % 4 == 0:
-            table.rot[rows] = np.array([0.3, 1.0, 0.2, 10.0 * step], dtype=np.float32)
+        table.write_transforms(
+            rows, centre=table.bounds[rows, :3] + rng.normal(size=(len(rows), 3)),
+            half=table.bounds[rows, 3:] * 1.01 if step % 3 == 0 else None,
+            rot=(np.tile(np.array([0.3, 1.0, 0.2, 10.0 * step], dtype=np.float32),
+                         (len(rows), 1)) if step % 4 == 0 else None))
         assert cache.sync(table) == len(rows)
         _same(cache, table)
         changed = cache.changed_since(version, np.arange(table.count))
@@ -60,7 +60,7 @@ def test_nan_rows_do_not_rebuild_every_time():
     table, _brushes = _table()
     cache = SlotTransforms(table)
     cache.sync(table)
-    table.bounds[4, 0] = np.nan
+    table.write_transforms([4], centre=[[np.nan, table.bounds[4, 1], table.bounds[4, 2]]])
     assert cache.sync(table) == 1
     assert cache.sync(table) in (0, 1)       # NaN never equals itself
 
@@ -88,8 +88,10 @@ def test_renderer_frame_transforms_match_a_fresh_build():
     probe = Probe()
     slots = np.array([5, 1, 7, 30, 2], dtype=np.int32)
     for step in range(5):
-        table.bounds[slots[step], 0] += 3.0
-        table.rot[slots[(step + 2) % 5]] = np.array([0, 1, 0, 15.0 * step], dtype=np.float32)
+        moved = slots[step]
+        table.write_transforms([moved], centre=table.bounds[[moved], :3] + [3.0, 0.0, 0.0])
+        table.write_transforms([slots[(step + 2) % 5]],
+                               rot=[np.array([0, 1, 0, 15.0 * step], dtype=np.float32)])
         models, normals = probe._frame_transforms(table, slots)
         fresh_m, fresh_n = render_table.model_matrices(table, slots)
         assert np.array_equal(models.view(np.uint32), fresh_m.view(np.uint32))

@@ -306,3 +306,62 @@ def test_adopting_the_peer_moves_every_version():
     before = _versions(table)
     table.adopt(peer)
     assert all(now > was for now, was in zip(_versions(table), before))
+
+
+# ---------------------------------------------------------------------------
+# Transform change records (M4)
+# ---------------------------------------------------------------------------
+
+def test_the_transform_columns_are_written_only_through_the_table():
+    """A write that bypasses the change log raises instead of going unseen."""
+    rng = random.Random(14)
+    brushes = [_brush(i, rng) for i in range(6)]
+    table = RenderTable()
+    table.begin_frame(brushes, 1)
+    with pytest.raises(ValueError):
+        table.bounds[0, 0] = 5.0
+    with pytest.raises(ValueError):
+        table.rot[0, 3] = 30.0
+    table.write_transforms([0], centre=[[5.0, 0.0, 0.0]])
+    assert table.bounds[0, 0] == 5.0
+
+
+def test_every_transform_writer_logs_the_rows_it_wrote():
+    from engine.change_journal import STATE, touch
+    rng = random.Random(15)
+    brushes = [_brush(i, rng) for i in range(10)]
+    table = RenderTable()
+    table.begin_frame(brushes, 1)
+    version = table.transform_version
+    assert table.transforms_since(version).tolist() == []
+
+    table.write_transforms([3, 7], centre=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert sorted(table.transforms_since(version).tolist()) == [3, 7]
+
+    version = table.transform_version
+    brushes[2]['pos'][0] += 10.0                       # a journalled move
+    touch(brushes[2], STATE)
+    table.begin_frame(brushes, 1)
+    assert 2 in table.transforms_since(version).tolist()
+
+    version = table.transform_version
+    brushes[5]['size'][0] *= 2.0                       # an editor edit
+    table.begin_frame(brushes, 2, dirty_objects={id(brushes[5])})
+    assert 5 in table.transforms_since(version).tolist()
+
+    version = table.transform_version
+    table.begin_frame(brushes + [_brush(50, rng)], 3)  # a reconcile
+    assert table.transforms_since(version) is None
+
+
+def test_a_reader_too_far_behind_is_told_to_rebuild():
+    from engine.render_table import TRANSFORM_LOG
+    rng = random.Random(16)
+    brushes = [_brush(i, rng) for i in range(4)]
+    table = RenderTable()
+    table.begin_frame(brushes, 1)
+    version = table.transform_version
+    for k in range(TRANSFORM_LOG + 1):
+        table.write_transforms([k % 4], centre=[[float(k), 0.0, 0.0]])
+    assert table.transforms_since(version) is None
+    assert table.transforms_since(table.transform_version - 1).tolist() == [TRANSFORM_LOG % 4]

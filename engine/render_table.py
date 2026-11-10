@@ -71,7 +71,9 @@ import numpy as np
 
 from engine.constants import is_water_brush, normalize_color, water_high_quality
 from engine.spatial import authored_hidden
+import functools
 import itertools
+from collections import deque
 
 from engine import brush_faces, brush_geometry, brush_placement, change_detection
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
@@ -353,6 +355,36 @@ _COLUMNS = (
 )
 
 
+#: Transform writes a table remembers (M4): a reader that last caught up
+#: further back than this many writes is told to treat every row as written.
+TRANSFORM_LOG = 64
+
+#: The transform columns: read-only outside the table's write methods, so a
+#: write that bypasses the change log raises instead of going unseen (M4).
+_SEALED_COLUMNS = ('bounds', 'rot')
+
+_NO_ROWS = np.empty(0, dtype=np.intp)
+_NO_ROWS.flags.writeable = False
+
+
+def _writes(method):
+    """Mark a RenderTable method as one that may write the transform columns:
+    they are writable while the outermost such method runs, read-only
+    otherwise. Every such method logs the rows it wrote."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not self._writing:
+            self._seal(False)
+        self._writing += 1
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._writing -= 1
+            if not self._writing:
+                self._seal(True)
+    return wrapper
+
+
 #: The columns a row's classification and material are made of: every one
 #: but the warm transform and visibility (RenderTable.material_version).
 _MATERIAL_COLUMNS = tuple(name for name, *_ in _COLUMNS
@@ -390,7 +422,8 @@ class RenderTable:
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
         '_shown_mask', '_shown_slots', '_shown_stale',
         '_occlusion_index', '_occlusion_dirty', 'turning',
-        'material_version', 'extent_version', '__weakref__'))
+        'material_version', 'extent_version', 'transform_version',
+        '_transform_log', '_writing', 'shown_version', '__weakref__'))
 
     @property
     def center(self):
@@ -412,6 +445,17 @@ class RenderTable:
         #: adopt moves both, with :attr:`generation`.
         self.material_version = 0
         self.extent_version = 0
+        #: Moves with every write to the transform columns (``bounds``,
+        #: ``rot``), which logs the rows written (M4): a reader that knows
+        #: the version it last caught up to asks :meth:`transforms_since`
+        #: for exactly the rows written since, instead of comparing columns.
+        self.transform_version = 0
+        #: ``(version, rows)`` per logged write; created on the first one.
+        self._transform_log = None
+        self._writing = 0
+        #: Moves whenever :meth:`shown` recomputes (a ``hidden`` value or the
+        #: row set changed).
+        self.shown_version = 0
         self.count = 0
         #: slot -> the brush's stable UUID.  A plain list: never indexed in the
         #: frame loop, only when a cache boundary has to be crossed.
@@ -480,7 +524,86 @@ class RenderTable:
         #: Rows whose brush dict the last :meth:`begin_frame` read (Debug
         #: Tables shows it: on a still frame it is the movers and doors).
         self.rows_read = 0
+        self._seal(True)
         JOURNAL.subscribe(self)
+
+    # -- transform change records (M4) -------------------------------------
+
+    def _seal(self, sealed):
+        self.bounds.flags.writeable = not sealed      # _SEALED_COLUMNS
+        self.rot.flags.writeable = not sealed
+
+    def _note_transforms(self, rows):
+        """Log that *rows* (slot indices) had their transform written."""
+        if len(rows):
+            self.transform_version += 1
+            if self._transform_log is None:
+                self._transform_log = deque(maxlen=TRANSFORM_LOG)
+            self._transform_log.append((self.transform_version, rows))
+
+    def _forget_transforms(self):
+        """Every row is to be treated as written (a reconcile, an adopt):
+        readers further back than now find no log and rebuild."""
+        self.transform_version += 1
+        self._transform_log = None
+
+    def transforms_since(self, version):
+        """The rows whose transform was written after *version* (slot
+        indices in no particular order, possibly repeated), or ``None`` when
+        the log does not reach back that far and the caller must treat every
+        row as written.
+
+        Readers also check :attr:`generation`: a reconcile renumbers slots.
+        Costs the rows written since, not the table's size."""
+        if version >= self.transform_version:
+            return _NO_ROWS
+        log = self._transform_log
+        if not log or log[0][0] > version + 1:
+            return None
+        parts = [rows for written, rows in log if written > version]
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+    def write_transforms_many(self, writes):
+        """Store ``(slots, centre, rot)`` for each of *writes* in order (*rot*
+        may be None; *slots* intp arrays), each logged: the mover table's
+        publication, once a frame, so the seal is handled here rather than by
+        the decorator."""
+        opened = not self._writing
+        if opened:
+            self._seal(False)
+        try:
+            for slots, centre, rot in writes:
+                self.bounds[slots, :3] = centre
+                if rot is not None:
+                    self.rot[slots] = rot
+                    if not self.turning and (rot[:, 3] != 0).any():
+                        self.turning = True     # the column's other writer
+                self._note_transforms(slots)
+        finally:
+            if opened:
+                self._seal(True)
+
+    @_writes
+    def write_transforms(self, slots, centre=None, rot=None, half=None):
+        """Store runtime transforms for *slots*: the way a writer outside the
+        table -- the mover table's publication -- writes them, so the rows
+        are logged (M4). *centre* ``(k, 3)``, *rot* ``(k, 4)`` (axis, angle in
+        degrees), *half* ``(k, 3)``; any may be omitted."""
+        slots = np.asarray(slots, dtype=np.intp)
+        if not len(slots):
+            return
+        if centre is not None:
+            self.bounds[slots, :3] = centre
+        if half is not None:
+            was = self.bounds[slots, 3:]
+            self.bounds[slots, 3:] = half
+            if not np.array_equal(was, self.bounds[slots, 3:]):
+                self.extent_version += 1
+        if rot is not None:
+            self.rot[slots] = rot
+            if not self.turning and (self.rot[slots, 3] != 0).any():
+                self.turning = True     # the column's other writer
+        self._note_transforms(slots)
 
     # -- texture name interning -------------------------------------------
 
@@ -742,6 +865,7 @@ class RenderTable:
             return True
         return tuple(brushes) != self._row_tuple
 
+    @_writes
     def begin_frame(self, brushes, epoch=None, dirty_objects=None,
                     edited=(), peer=None, peer_dirty=None):
         """Bring the table into line with *brushes*; return the ``hidden`` mask.
@@ -831,9 +955,15 @@ class RenderTable:
         if self._shown_stale:
             self._shown_mask = ~self.hidden[:self.count]
             self._shown_slots = np.flatnonzero(self._shown_mask)
+            # Published as they are: the same objects until the next
+            # recompute, never written in place (M4).
+            self._shown_mask.flags.writeable = False
+            self._shown_slots.flags.writeable = False
             self._shown_stale = False
+            self.shown_version += 1
         return self._shown_mask, self._shown_slots
 
+    @_writes
     def adopt(self, peer):
         """Become a copy of *peer*: its rows, columns and intern tables.
 
@@ -861,11 +991,13 @@ class RenderTable:
         self.generation += 1
         self.material_version += 1
         self.extent_version += 1
+        self._forget_transforms()
 
     def epoch_is_current(self, epoch):
         """Whether the table was last reconciled at *epoch*."""
         return epoch is not None and epoch == self._epoch
 
+    @_writes
     def sync(self, brushes, epoch=None, dirty_objects=None):
         """Bring the table up to date outside the frame loop.
 
@@ -890,6 +1022,7 @@ class RenderTable:
         self._epoch = epoch
         return self.generation != before
 
+    @_writes
     def _reconcile(self, brushes, cold_dirty, dirty_objects=None):
         """Rebuild the slot mapping, preserving the cold columns that survive.
 
@@ -1009,8 +1142,10 @@ class RenderTable:
         self.generation += 1
         self.material_version += 1
         self.extent_version += 1
+        self._forget_transforms()
         return not survivors
 
+    @_writes
     def refresh_transforms(self, brushes, slots):
         """Re-read the warm columns for *slots*: transform and ``hidden``.
 
@@ -1029,8 +1164,10 @@ class RenderTable:
                 self._resolve_warm(slot, brushes[slot])
         if not np.array_equal(self.bounds[idx, 3:], half):
             self.extent_version += 1
+        self._note_transforms(idx)
         self.rows_read += len(slots)
 
+    @_writes
     def refresh_rows(self, brushes, slots):
         """Re-resolve the cold columns for *slots* after a semantic change.
 
@@ -1048,6 +1185,7 @@ class RenderTable:
         half = self.bounds[slots, 3:]
         self._resolve_warm_rows(slots, brushes)
         self._resolve_cold_rows(slots, brushes)
+        self._note_transforms(np.asarray(slots, dtype=np.intp))
         if not np.array_equal(self.bounds[slots, 3:], half):
             self.extent_version += 1
         if not all(np.array_equal(getattr(self, name)[slots], was)
@@ -1073,6 +1211,7 @@ class RenderTable:
             self.dynamic_slots = np.flatnonzero(
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
 
+    @_writes
     def _refresh_in_place(self, brushes, n, epoch, dirty_objects):
         """Apply a precise journal without a reconcile, when that is exact.
 
@@ -1098,6 +1237,7 @@ class RenderTable:
         self.refresh_rows(brushes, slots)
         return True
 
+    @_writes
     def refresh_edited(self, brushes, objects):
         """Re-read the rows an editor tool may be changing in place.
 
