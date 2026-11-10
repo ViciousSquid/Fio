@@ -208,13 +208,24 @@ BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
   flat over 10, 30 and 60 sessions).
 * Not done (measured too small to be worth an aliasing risk): skipping the
   streams' own equality tests by array identity.
-* **Next: M4** (proposed, not started; outline in the record): change sets
-  from the tables to GL -- `MoverTable.publish` writes only moved rows and
-  every transform writer stamps the rows it wrote, so the kept matrices
-  read stamps instead of comparing columns; a visible-set version from the
-  cull, so still frames test integers; light and environment uniforms by
-  change; entity instance streams; per-cell streams for camera motion;
-  everything measured on the Snapdragon 8cx Gen 3.
+* **Next: M4** (direction agreed, not started; outline in the record):
+  change sets from the tables to GL. Two requirements from the user:
+  * **the renderer must not miss a change** -- every writer is part of the
+    contract: writes go through table methods that stamp, columns are
+    read-only outside them, an oracle mode runs the old full comparisons
+    beside the stamps across the whole test suite, and every audited write
+    path (editor edits, drags, undo/redo, load, movers, parked movers, I/O,
+    savegame restore, Big World streaming, plugins, play start/stop,
+    renderer transitions, visibility inputs) has a test against a
+    cache-free renderer; this lands first (step 0), before anything reads a
+    stamp;
+  * **the invariant is flat change-detection cost**, not flat frame cost:
+    establishing that nothing changed is constant per table and pass,
+    whatever the world's size (counters of rows examined, asserted at 1×,
+    4×, 16× BigWorld); total frame time may grow with what is visible.
+  Then transform change sets (`MoverTable.publish` writes only moved rows),
+  visible-set versions, uniforms by change, entity streams, per-cell
+  streams for camera motion, and the Snapdragon 8cx Gen 3.
 
 ### Environment notes (this session)
 

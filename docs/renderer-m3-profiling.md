@@ -414,44 +414,128 @@ gate above shows no regression.
 
 ## M4 (proposed, not started): change sets from the tables to GL
 
+Direction agreed (2026-11-10), with two qualifications that this outline
+now carries: the renderer must not miss a change, and "flat cost" means
+flat *change-detection* cost.
+
 M3 and M3.1 reach zero instance uploads and no re-derivation on a still
 frame, but they *find out* that nothing changed by comparing: two
 whole-column tests of `bounds` and `rot` per table, one test of the visible
 rows per pass, the streams' tests of items and payload. The logic thread
 meanwhile writes every mover's and door's pose into the render table every
-frame, moved or not. M4's aim: **the tables publish what changed, and the
-renderer reads that** -- a frame in which nothing changed does a constant
-amount of work per pass, whatever the size of the world, and a change costs
-work in proportion to the rows it touched, from the logic thread's
-publication to the GL upload.
+frame, moved or not. M4: **the tables publish what changed, and the
+renderer reads that.**
 
+### The primary invariant
+
+**Establishing that nothing changed costs a constant amount of work per
+table and per pass, whatever the size of the world and however many rows
+are visible; a change costs work in proportion to the rows it changed.**
+
+Total frame cost is *not* held constant. An unchanged frame still submits
+its draws, sets its state, and culls when the camera moves; that work
+grows with what is visible, it is rendering, and it is measured as it is
+today. What M4 removes is the work that grows with the world only to
+discover that nothing happened.
+
+The invariant is measured by counters, not only by time: every
+change-detection site reports how many rows (or elements) it examined. On
+a still frame the total is a constant independent of world size (the
+target is zero rows); for k changed rows it is O(k). Tests assert the
+counters on BigWorld's rows at 1×, 4× and 16×; the benchmarks report
+change-detection time separately from render time.
+
+### The renderer must not miss a change
+
+A version counter is only as reliable as its least careful writer, and a
+missed mark does not fail loudly: the renderer reuses stale data, and keeps
+reusing it, indefinitely. So participation in the contract is enforced and
+checked, not assumed.
+
+1. **One door per table.** Today the render table's columns are written by
+   `render_table.py`'s own resolve, refresh, reconcile and adopt paths and,
+   outside it, by `MoverTable.publish` alone (the centre of `bounds`, and
+   `rot`, assigned directly). M4 puts every write behind table methods that
+   write and stamp in one step (`MoverTable.publish` calls a
+   `write_transforms(slots, centre, rot)` instead of assigning columns), and
+   makes the columns read-only outside them (NumPy `writeable = False`,
+   opened by the writing method; columns are handed out as read-only
+   views). A write that bypasses the stamps raises at once -- in a test, or
+   in play -- instead of going stale.
+2. **An oracle mode.** With `FIO_RENDER_ORACLE` set, every frame also runs
+   M3/M3.1's full comparisons beside the stamps and fails, naming the rows
+   and columns, if anything changed that no stamp reported (and if any kept
+   pass array differs from deriving it afresh). The **whole test suite**
+   -- editor, e2e play, plugins (Big World, deathmatch), savegame, GL
+   oracles -- runs once with it on, so a write path nobody listed is caught
+   by any test that renders through it, not only by tests written for M4.
+3. **A test for every known write path.** Each performs the write through
+   the real API (no hand-poked columns), then checks the version-driven
+   renderer against a renderer with no caches: kept arrays, stream mirrors,
+   GPU buffers read back, and the picture (M3.1's per-edit test, extended).
+   The audited paths (2026-11-10) are below; the list is part of the
+   contract, and a new writer adds its row and its test.
+4. **A bounded-staleness net in the field** (to be decided on measurement):
+   a rolling audit compares a fixed number of rows a frame -- constant cost,
+   so the invariant holds -- repairs any it finds stale and logs the path
+   once. A missed writer then shows stale data for at most rows/K frames,
+   not forever. At least for editor and debug builds.
+
+Write paths into the render table, as audited:
+
+| Path | Reaches the table through |
+|---|---|
+| Editor edits (move, resize, rotate, retexture, UV, tint, shader, property editor) | editor epoch + dirty objects (`EditorState.render_dirty_since`) → `refresh_rows` / `refresh_transforms`, in place or by reconcile |
+| A drag in progress (dicts written for hundreds of frames after one checkpoint) | `edited` objects → `refresh_edited` (transform; geometry epoch → `refresh_rows`); `logic_render` journals the objects a drag leaves |
+| Scene hierarchy (hide, show, rename), console commands, `main_window` | change journal (`scene_hierarchy`, `console_commands`, `main_window`) |
+| Undo / redo | epoch moves with its dirty set, or a full reconcile |
+| Load, new map, add / delete / duplicate | reconcile (`generation`); an unannounced row-set change caught by the row tuple |
+| The other render buffer | `adopt`, plus `peer_dirty` re-resolution |
+| Movers and doors in play | `MoverTable.publish` (direct column writes today) |
+| Parked movers (Big World): asleep, I/O while asleep, catch-up on wake | `brush_placement.settle` + publication; visibility journal on unpark |
+| I/O (`io_system`), entity links, portal links | change journal |
+| Savegame restore | change journal (`savegame.py`) |
+| Big World streaming: park, unpark, cell activation | change journal, `VISIBILITY` (`plugins/bigworld`) |
+| Plugins (deathmatch teams, spectator, network, authoring) | change journal (entities; brushes wherever a plugin touches one) |
+| Play start / stop, session reset | `logic_session` journals the reset rows; reconcile |
+| Journal overflow | `refresh_rows` over every row |
+| Physics, monsters, props, combat, timing | change journal (entities: the entity-table half, item 4) |
+| Renderer side: renderer switch, context recreation, cleanup, two renderers in turn, texture loads, play/editor state (nodraw, triggers) | the renderer's caches dropped, or keyed on the state |
+| What the visible set depends on (item 2): camera, cull distance, view filters, occlusion results, the hidden mask, bounds, portal views | each must move the visible-set version |
+
+### The steps
+
+0. **The contract first**, while the full comparisons still run: the write
+   methods, read-only columns, the oracle mode, the per-path tests and the
+   change-detection counters. Nothing reads a stamp yet, so the oracle
+   compares the stamps against the comparisons it will replace.
 1. **Transform change sets.** `MoverTable.publish` writes only the movers
    and doors whose pose changed since it last published (at rest, at a path
-   end, parked: nothing). Every transform writer -- the publication,
-   `refresh_transforms`, the warm resolves of a reconcile -- stamps the rows
-   it wrote with the table's transform version. `SlotTransforms` reads the
-   rows stamped since its own version instead of comparing the columns, and
-   the streams already follow its stamps. This closes M3's
-   `MoverTable.publish` limitation and saves on the logic thread as well.
+   end, parked: nothing). Every transform writer stamps the rows it wrote
+   with the table's transform version. `SlotTransforms` reads the rows
+   stamped since its own version instead of comparing the columns; the
+   streams already follow its stamps. This closes M3's `MoverTable.publish`
+   limitation and saves on the logic thread as well.
 2. **Visible-set versions.** The cull publishes its visible rows with a
-   version that stands while the camera and the bounds it tested are
-   unchanged (and the same array with it). The passes' kept arrays and the
-   streams key on that version, so a still frame's tests compare integers;
-   the depth sort of the transparent, water and glass groups is kept while
-   the camera stands. Then incremental culling: cell by cell for Big World,
-   re-testing only cells whose contents or visibility changed.
+   version that stands while every input in the table's last row stands
+   (and the same array with it). The passes' kept arrays and the streams
+   key on that version, so a still frame's tests compare integers; the
+   depth sort of the transparent, water and glass groups is kept while the
+   camera stands. Re-culling when the camera moves is rendering work, not
+   change detection; incremental, cell-by-cell culling for Big World is a
+   separate saving, measured on its own.
 3. **Uniform state by change.** Every frame each program used is sent the
    distance-fog and ambient block (seven calls, deliberately unconditional)
    and its shadow-map bindings, and the light set is keyed again
    (`_upload_lights_once`). Program uniforms persist in GL, so these can be
    sent when they change: a version from `ViewDistance`, the light table and
    the shadow pool, per program. Under cProfile they are ~17 % of a still
-   BigWorld frame's `render_scene` (`_upload_lights_once` with the
-   environment block and the shadow-map bindings).
+   BigWorld frame's `render_scene`.
 4. **Entity instance streams.** Sprites, models and effects still repack
    their instance buffers every frame. Measure them first (MonsterTest and
    an entity-heavy map), then give them `BrushStream`'s treatment from the
-   entity table's versions.
+   entity table's versions, under the same contract (its writers: physics,
+   monsters, props, combat, timing, plugins).
 5. **Camera motion.** Per-cell streams for Big World, drawn cell by cell,
    so a turn changes which cells are drawn instead of rewriting every row
    after the first changed item (~128 KB a frame now). On GL 3.3 that costs
@@ -462,9 +546,20 @@ publication to the GL upload.
    `STREAM_MAX_RANGES`, `Player.MOVER_NEAR_FROM` and `LEG_COUNT_LIMIT`
    retuned there, keeping the fastest measured.
 
-Order: 1 and 2 first (the remaining O(world) work, and the principle), then
-3; 4 and 5 after measuring; 6 as soon as a device is available. Acceptance
-as M3: the GL oracles and pixel parity with a fresh renderer, zero instance
-bytes on a still world, no CPU regression in any benchmark scenario against
-M3.1, memory bounded -- and a still frame's CPU and Python calls flat as
-the world grows (BigWorld's rows at 1× and 4×).
+Order: 0, then 1 and 2, then 3; 4 and 5 after measuring; 6 as soon as a
+device is available.
+
+### Acceptance
+
+* **No missed change:** every path in the table has its test and passes;
+  the full suite passes with the oracle on; the columns are read-only
+  outside the write methods.
+* **The invariant:** on a still frame the change-detection counters are
+  the same constant at 1×, 4× and 16× BigWorld's rows (target: zero rows
+  examined), and O(k) for k changed rows; change-detection time reported
+  separately and flat within noise.
+* **As M3:** the GL oracles and pixel parity with a fresh renderer, zero
+  instance bytes on a still world, no CPU regression in any benchmark
+  scenario against M3.1, memory bounded, frames and gameplay gate no worse.
+* **Total frame time** is reported at each world size and is expected to
+  grow with what is visible; it is not held flat.
