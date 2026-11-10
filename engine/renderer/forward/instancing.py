@@ -218,7 +218,8 @@ class InstancingMixin:
                     "stream %r: an immutable input changed" % (key,))
         else:
             started = change_detection.now()
-            same_items = compared and np.array_equal(stream.slots[:count], slots)
+            same_items = compared and change_detection.same_rows(
+                stream.slots[:count], slots)
             same_payload = stream.same_payload(count, spare, payload)
             change_detection.DETECT.add(
                 'stream.items',

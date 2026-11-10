@@ -324,7 +324,7 @@ class LogicRender:
         both recognises an unchanged set by identity. One comparison, made
         only when a set is made, never on a still frame."""
         last = getattr(self, '_last_visible', None)
-        if last is not None and np.array_equal(last, slots):
+        if last is not None and change_detection.same_rows(last, slots):
             return last
         self._last_visible = slots = _sealed(slots)
         return slots

@@ -22,6 +22,8 @@ replaced, and raise :class:`MissedChange` when the record missed something.
 import os
 import time
 
+import numpy as np
+
 
 def _no_clock():
     return 0
@@ -37,6 +39,24 @@ def timing(on):
     a frame should not pay for reading the clock to report on itself)."""
     global now
     now = time.perf_counter_ns if on else _no_clock
+
+
+#: Up to this many elements, two arrays are compared as bytes: a memcmp,
+#: no ufunc dispatch -- several times cheaper for the small arrays a small
+#: world compares, and the difference grows in a real frame, where every
+#: NumPy call is cold. Beyond it, np.array_equal (copying no memory).
+_BYTES_UP_TO = 2048
+
+
+def same_rows(a, b):
+    """Whether arrays *a* and *b* hold the same values (shape, dtype and
+    contents): the comparison the change records fall back on when an
+    identity test fails. Arrays of different dtypes are compared by value."""
+    if a.shape != b.shape:
+        return False
+    if a.dtype == b.dtype and a.size <= _BYTES_UP_TO:
+        return a.tobytes() == b.tobytes()
+    return bool(np.array_equal(a, b))
 
 
 class MissedChange(AssertionError):

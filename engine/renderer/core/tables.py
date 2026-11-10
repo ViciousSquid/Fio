@@ -124,7 +124,7 @@ class TablesMixin:
                     self._check_memo(key, entry, build)
             else:
                 started = change_detection.now()
-                same = np.array_equal(entry[3], slots)
+                same = change_detection.same_rows(entry[3], np.asarray(slots))
                 change_detection.DETECT.add('pass_memo.rows', len(slots),
                                             change_detection.now() - started)
             if same:
