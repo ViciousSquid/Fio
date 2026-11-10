@@ -4,9 +4,10 @@ State at handoff (2026-11-10, after the third session; read *Third
 session* first). **Stage 2 is accepted for progression to M3** (the user,
 2026-11-10), on the gate recorded in `docs/brush-model-stage2.md` §11.10.
 **M3 (change-driven GPU instance uploads for box brushes) is implemented**,
-and **M3.1** (what the passes derive kept by change); see the M3 and M3.1
-sections below and `docs/renderer-m3-profiling.md`, which also outlines
-**M4** (proposed, not started). The earlier sections are kept as history.
+**M3.1** (what the passes derive kept by change, accepted) and **M4**
+(change records from the tables to GL); see the M4, M3.1 and M3 sections
+below, `docs/renderer-m4.md` and `docs/renderer-m3-profiling.md`. The
+earlier sections are kept as history.
 
 ## Third session: state published once, the grid's movers, parked movers (read this first)
 
@@ -173,6 +174,46 @@ maps keyed by table generation), renderer hot-swapping, OpenGL 3.3 core,
 Adreno. Measure upload bytes, GL calls, CPU render time, frame time and
 memory; reproduce with `tools/profile_frame_uploads.py
 BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
+
+### M4: change records from the tables to GL (implemented; record in `docs/renderer-m4.md`)
+
+* The systems that change things report what they changed, and the
+  renderer reads those reports instead of comparing: the render table logs
+  every transform write (`transforms_since`; the columns are read-only
+  outside its write methods); `MoverTable.publish` writes only rows marked
+  as published since that table was last written; `EditorState.brushes` /
+  `things` are `RowList`s whose version says when the row set changed;
+  `SlotTransforms` and the instance streams read the logs; visible sets
+  (the logic cull, the distance cull, occlusion) and the passes' kept
+  arrays are immutable arrays recognised by identity, shared between the two
+  alternating render tables; fog/ambient and `active_lights` are sent on
+  change.
+* Invariant (counted by `engine/change_detection.py`): a still frame
+  examines **0 rows** at 1×, 4× and 16× BigWorld (was 25,228 / 67,808 /
+  197,664); `render_scene` 0.26 -> 0.15 ms at 1×, 0.81 -> 0.22 at 16×; the
+  logic side 0.13 -> 0.03 ms at 1×, 1.31 -> 0.05 at 16×.
+* Correctness: oracle mode (`FIO_RENDER_ORACLE=1` raises, `=record`
+  records and `conftest.py` fails the test) checks every change record
+  against the comparison it replaced; `tests/e2e/test_change_records.py`
+  runs every write path in the real editor with three oracles (oracle mode,
+  Debug Tables' copy of the published table against a fresh rebuild, the
+  picture against a cache-free renderer); each oracle is shown catching a
+  forced miss. Gate against M3.1's head (first run on `6a66004`): frames
+  the same or faster; flagged -- the mover publication's worst case (all
+  movers moving), `_SHOWCASE` gameplay logic 1.12× and frame 1.07×, and
+  `player_static_*` 1.20× / `table_one_mover_tick` 1.15× (not seen in the
+  previous full gate; being re-run). Full suite on the final commit: in
+  progress at the time of writing.
+* Trade-offs: the mover publication costs 8-14 us more when every mover
+  moves every tick (10-20 us less at rest); ~25-55 more Python calls a logic
+  frame; hidden (parked) rows not kept current; a plain list assigned to
+  `EditorState.brushes`/`things` is copied. Entity instance streams and
+  per-cell buffers measured and not built (entity uploads <= 0.6 KB a
+  frame; a camera turn's 128 KB upload ~10 us).
+* Commits: `84d312e` M4.0, `9b92066` M4.1, `42f98d7` M4.2a, `0ca6aec`
+  M4.2b, `ed60466` M4.2c, `0497431` M4.3, `6a66004` M4.4, and the docs.
+* Debug Tables shows the tables' versions and change detection per site
+  (rows and microseconds a published frame).
 
 ### M3.1: what the passes derive, kept by change (implemented; record in `docs/renderer-m3-profiling.md`)
 

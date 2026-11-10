@@ -2,7 +2,8 @@
 
 Status: **implemented** for box brush instances (the lit, textured and shadow
 passes): see *M3 as built* below, then *M3.1* (what the passes derive, kept
-by change) and the outline of *M4* (proposed, not started). The profiling
+by change) and the outline of *M4* -- since implemented: see
+`docs/renderer-m4.md`. The profiling
 that designed M3 follows, unchanged, as it was recorded before any renderer
 change.
 
@@ -413,7 +414,7 @@ gate above shows no regression.
   ~13 %, the matrices' sync -- ~5 % -- included), and they grow with the
   world; M4 below replaces them with versions the tables publish.
 
-## M4 (proposed, not started): change sets from the tables to GL
+## M4 (outline; implemented -- see `docs/renderer-m4.md`): change sets from the tables to GL
 
 Direction agreed (2026-11-10), with two qualifications that this outline
 now carries: the renderer must not miss a change, and "flat cost" means
