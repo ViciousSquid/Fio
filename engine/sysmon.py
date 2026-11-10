@@ -44,8 +44,19 @@ class SysMon:
 
     # Graph configuration
     GRAPH_POINTS = 60
-    GRAPH_WIDTH = 390
-    GRAPH_HEIGHT = 50
+    # The panel's layout, 0.9 of its first size (it covered too much of
+    # the view); the text keeps its size. Collapsed, the panel is its title
+    # bar and the frame-time graph.
+    WIDTH = 360
+    HEADER = 23                 # title bar height, and its two buttons' width
+    EXPANDED_HEIGHT = 248
+    GRAPH_WIDTH = 351
+    GRAPH_HEIGHT = 45
+    GRAPH_GAP = 4               # between the title bar, the graph and the edge
+    COLLAPSED_HEIGHT = HEADER + GRAPH_GAP + GRAPH_HEIGHT + GRAPH_GAP + 1
+    LINE_HEIGHT = 18
+    MARGIN = 9
+    FONT_POINTS = 9
     CACHE_INTERVAL_SEC = 1.0    # Stats text cache rebuild interval
 
     def __init__(self, parent_view):
@@ -64,7 +75,7 @@ class SysMon:
         self.dragging = False
         self.drag_offset = QPoint(0, 0)
         self.active = False
-        self.window_rect = QRect(20, 20, 400, 200)
+        self.window_rect = QRect(20, 20, self.WIDTH, 200)
 
         # Frame time ring buffer (pre-allocated numpy array)
         self._ft_buffer = np.zeros(self.GRAPH_POINTS, dtype=np.float32)
@@ -75,7 +86,8 @@ class SysMon:
         self._fps = 0.0
 
         # Font & metrics
-        self.font = QFont("Fio UI", 9)
+        self.font = QFont("Fio UI")
+        self.font.setPointSizeF(self.FONT_POINTS)
         self.font.setStyleHint(QFont.Monospace)
         self._font_metrics = QFontMetrics(self.font)
 
@@ -107,6 +119,7 @@ class SysMon:
         self._graph_line_color = QColor(100, 255, 100)
         self._graph_fill_color = QColor(100, 200, 100, 40)
         self._white = QColor(255, 255, 255)
+        self._shadow_color = QColor(0, 0, 0, 200)
         self._vram_color = QColor(255, 200, 100)
         self._green = QColor(50, 200, 50)
         self._grey = QColor(180, 180, 180)
@@ -275,17 +288,17 @@ class SysMon:
             return False
 
         # Close button.
-        if (event.x() > self.window_rect.right() - 25
-                and event.y() < self.window_rect.y() + 25):
+        if (event.x() > self.window_rect.right() - self.HEADER
+                and event.y() < self.window_rect.y() + self.HEADER):
             self.active = False
             return True
 
         # Title bar
         title_bar = QRect(self.window_rect.x(), self.window_rect.y(),
-                          self.window_rect.width(), 25)
+                          self.window_rect.width(), self.HEADER)
         if title_bar.contains(event.pos()):
             # Collapse/expand arrow.
-            if event.x() > self.window_rect.right() - 50:
+            if event.x() > self.window_rect.right() - 2 * self.HEADER:
                 self.expanded = not self.expanded
                 return True
             self.dragging = True
@@ -413,7 +426,10 @@ class SysMon:
 
     def draw(self, painter, fps, logic_thread, renderer, editor_state, terrain):
         """Draw the sysmon overlay. Always paints — caller controls call rate."""
-        target_height = 275 if self.expanded else 30
+        target_height = self.EXPANDED_HEIGHT if self.expanded else self.COLLAPSED_HEIGHT
+        # Clicks land on what is drawn: a collapsed panel no longer takes the
+        # clicks below it.
+        self.window_rect.setHeight(target_height)
         rect = QRect(self.window_rect.x(), self.window_rect.y(),
                      self.window_rect.width(), target_height)
 
@@ -423,26 +439,24 @@ class SysMon:
         painter.drawRect(rect)
 
         # --- Header ---
-        header_rect = QRect(rect.x(), rect.y(), rect.width(), 25)
+        header = self.HEADER
+        header_rect = QRect(rect.x(), rect.y(), rect.width(), header)
         painter.fillRect(header_rect, self._header_color)
         painter.setPen(self._border_pen)
-        painter.drawLine(rect.x(), rect.y() + 25, rect.right(), rect.y() + 25)
+        painter.drawLine(rect.x(), rect.y() + header, rect.right(), rect.y() + header)
 
         painter.setFont(self.font)
         painter.setPen(self._white)
-        painter.drawText(header_rect.adjusted(10, 0, 0, 0),
+        painter.drawText(header_rect.adjusted(self.MARGIN, 0, 0, 0),
                          Qt.AlignVCenter | Qt.AlignLeft, "SysMon [F3]")
-        painter.drawText(QRect(rect.right() - 50, rect.y(), 25, 25),
+        painter.drawText(QRect(rect.right() - 2 * header, rect.y(), header, header),
                          Qt.AlignCenter, "▼" if self.expanded else "▶")
-        painter.drawText(QRect(rect.right() - 25, rect.y(), 25, 25),
+        painter.drawText(QRect(rect.right() - header, rect.y(), header, header),
                          Qt.AlignCenter, "[X]")
 
-        if not self.expanded:
-            return
-
-        # --- Graph background ---
-        graph_x = rect.x() + 5
-        graph_y = rect.y() + 30
+        # --- Graph background (shown collapsed too) ---
+        graph_x = rect.x() + (rect.width() - self.GRAPH_WIDTH) // 2
+        graph_y = rect.y() + header + self.GRAPH_GAP
         painter.setPen(self._border_pen)
         painter.setBrush(self._graph_bg_brush)
         painter.drawRect(graph_x, graph_y, self.GRAPH_WIDTH, self.GRAPH_HEIGHT)
@@ -450,16 +464,28 @@ class SysMon:
         # --- Graph line ---
         self._draw_graph(painter, graph_x, graph_y)
 
+        current_ft = self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS] if self._ft_count > 0 else 0
+        if not self.expanded:
+            # Collapsed, the frame time sits at the foot of the graph itself
+            # (shadowed, so it reads over the line).
+            text = f"Frame time: {current_ft:.1f} ms"
+            tx = graph_x + 6
+            ty = graph_y + self.GRAPH_HEIGHT - 4 - self._font_metrics.descent()
+            painter.setPen(self._shadow_color)
+            painter.drawText(tx + 1, ty + 1, text)
+            painter.setPen(self._white)
+            painter.drawText(tx, ty, text)
+            return
+
         # --- Stats text (cached once/sec) ---
         now = time.perf_counter()
         if now - self._stats_cache_time >= self.CACHE_INTERVAL_SEC:
             self._rebuild_stats_cache(fps, logic_thread, renderer, editor_state, terrain)
         cache = self._stats_cache
 
-        left_margin = rect.x() + 10
-        stats_start_y = graph_y + self.GRAPH_HEIGHT + 25
-        line_height = 18
-        current_ft = self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS] if self._ft_count > 0 else 0
+        left_margin = rect.x() + self.MARGIN
+        stats_start_y = graph_y + self.GRAPH_HEIGHT + 22
+        line_height = self.LINE_HEIGHT
 
         # FPS (cached string)
         painter.setPen(self._white)
@@ -489,10 +515,10 @@ class SysMon:
                          cache.get('visible_tri_text', '(Visible: 0)'))
 
         painter.setPen(self._grey)
-        painter.drawText(left_margin, rect.bottom() - 10,
+        painter.drawText(left_margin, rect.bottom() - self.MARGIN,
                          cache.get('cull_text', 'Culled: 0.0%'))
-        painter.drawText(rect.right() - cache.get('tps_text_width', 0) - 10,
-                         rect.bottom() - 10,
+        painter.drawText(rect.right() - cache.get('tps_text_width', 0) - self.MARGIN,
+                         rect.bottom() - self.MARGIN,
                          cache.get('tps_text', 'TPS: 0.0'))
 
     # ------------------------------------------------------------------
