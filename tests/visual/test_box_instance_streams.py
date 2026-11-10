@@ -231,7 +231,9 @@ def test_kept_pass_arrays_follow_each_kind_of_edit(context, display):
     frame and rebuilt when, and only when, an edit changes what it was
     derived from. After each edit below, on its own, it equals what a
     renderer deriving everything afresh derives, and the picture matches; a
-    still frame or a move reuses it."""
+    still frame, a move or a selection reuses it (the lit pass applies the
+    selection to its kept payload as it draws)."""
+    from editor.selection_overlay import describe_selection
     from engine.render_table import RenderTable
 
     brushes = _world(textured=(display == "Textured"))
@@ -247,6 +249,9 @@ def test_kept_pass_arrays_follow_each_kind_of_edit(context, display):
 
     def move():
         target['pos'][0] += 40.0
+
+    def select():
+        config['primary_selection'] = describe_selection(target)
 
     def resize():
         target['size'][0] *= 1.5
@@ -266,14 +271,17 @@ def test_kept_pass_arrays_follow_each_kind_of_edit(context, display):
     def hide():
         target['hidden'] = True
 
-    edits = [('still', None), ('move', move), ('resize', resize),
+    edits = [('still', None), ('move', move), ('select', select),
+             ('resize', resize),
              ('retexture', retexture), ('uv', uv), ('tint', tint), ('hide', hide)]
     kept, fresh = _renderer(), _renderer()
     try:
         _draw(kept, context, config)
         _draw(kept, context, config)
         for label, edit in edits:
-            if edit is not None:
+            if edit is select:
+                edit()
+            elif edit is not None:
                 edit()
                 epoch += 1
                 table.begin_frame(brushes, epoch=epoch, dirty_objects={id(target)})
@@ -285,7 +293,7 @@ def test_kept_pass_arrays_follow_each_kind_of_edit(context, display):
             want = _draw(fresh, context, config)
             assert np.array_equal(got, want), label
             _derived_as_fresh(kept, fresh, table)
-            if label in ('still', 'move'):
+            if label in ('still', 'move', 'select'):
                 assert rebuilt == 0, label
             else:
                 assert rebuilt > 0, label

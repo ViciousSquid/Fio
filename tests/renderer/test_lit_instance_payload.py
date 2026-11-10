@@ -100,3 +100,25 @@ def test_an_empty_slot_array_yields_an_empty_payload():
     payload = ForwardRenderer.lit_instance_payload(
         table, np.empty(0, dtype=np.int32), -1)
     assert payload.shape == (0, 4)
+
+
+def test_selecting_on_a_kept_payload_matches_a_payload_made_selected():
+    """M3.1: the lit pass keeps its payload across selection changes and
+    applies the selection as it draws (``lit_payload_selecting``); that must
+    read exactly as the payload made with the selection, whatever is
+    selected -- a plain brush, a subtract brush, a trigger (which stays a
+    trigger), nothing, or a brush not in the rows."""
+    brushes = [_brush('a', tint=[255, 0, 0]), _brush('s', operation='subtract'),
+               _brush('t', is_trigger=True), _brush('b', tint=[0, 0, 255])]
+    table = RenderTable()
+    table.sync(brushes, 1)
+    slots = np.array([3, 0, 2, 1], dtype=np.int32)
+    kept = ForwardRenderer.lit_instance_payload(table, slots)
+    for selected in (-1, 0, 1, 2, 3):
+        for rows in (slots, slots[:2]):
+            got = ForwardRenderer.lit_payload_selecting(
+                table, rows, kept[:len(rows)], selected)
+            want = ForwardRenderer.lit_instance_payload(table, rows, selected)
+            assert np.array_equal(got, want), (selected, rows)
+    # The kept payload itself is never written.
+    assert np.array_equal(kept, ForwardRenderer.lit_instance_payload(table, slots))

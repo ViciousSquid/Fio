@@ -146,10 +146,11 @@ class PassesMixin:
         key = self._stream_key('lit')
         # What this pass derives from the table for these rows -- classes,
         # colours, the box rows' instance payload and run order -- kept while
-        # the rows, their material and the selection are unchanged (M3.1).
-        lit = self._pass_memo(key, table, visible, (selected_slot,), (),
-                              lambda: self._lit_derived(table, visible,
-                                                        selected_slot))
+        # the rows and their material are unchanged (M3.1). The selection is
+        # applied to the kept payload as it is drawn, so selecting a brush
+        # does not derive the pass again.
+        lit = self._pass_memo(key, table, visible, (), (),
+                              lambda: self._lit_derived(table, visible))
         bits, colours, geometry = lit['bits'], lit['colours'], lit['geometry']
         # Resolve convex meshes at the dense-table/cache boundary once for
         # the geometry rows in this pass. The draw loop stays integer-only:
@@ -163,7 +164,8 @@ class PassesMixin:
             # Every plain box brush in one submission; the angled minority
             # still needs its own mesh, so it falls through to the loop.
             self._draw_lit_brushes_instanced(
-                projection, view, lights, table, key, lit, fill_mode)
+                projection, view, lights, table, key, lit, selected_slot,
+                fill_mode)
             gl.glUseProgram(shader)
             self._current_shader = shader
             gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
@@ -327,10 +329,11 @@ class PassesMixin:
         gl.glDisable(gl.GL_POLYGON_OFFSET_LINE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
-    def _lit_derived(self, table, visible, selected_slot):
+    def _lit_derived(self, table, visible):
         """The lit pass's view of *visible*: class bits and colours by row,
         which rows are angled (drawn one at a time) and, for the box rows,
-        the slot each instance draws, its payload and the run order.
+        the slot each instance draws, its payload (with no selection: see
+        :meth:`lit_payload_selecting`) and the run order.
 
         The lit pass binds no texture and draws the whole cube, so both key
         fields are zero for every brush and the sort yields exactly one run.
@@ -347,8 +350,7 @@ class PassesMixin:
         cube_rows = np.flatnonzero(~geometry).astype(np.int32)
         count = len(cube_rows)
         if count:
-            payload = self.lit_instance_payload(table, visible[cube_rows],
-                                                selected_slot)
+            payload = self.lit_instance_payload(table, visible[cube_rows])
             zeros = np.zeros(count, dtype=np.int64)
             keys = BRUSH_RUN_KEY.pack(texture=zeros, face=zeros)
             order, run_starts = sort_into_runs(keys)
@@ -360,11 +362,13 @@ class PassesMixin:
         return out
 
     def _draw_lit_brushes_instanced(self, projection, view, lights, table,
-                                    key, lit, fill_mode=gl.GL_FILL):
+                                    key, lit, selected_slot=-1,
+                                    fill_mode=gl.GL_FILL):
         """Bring the lit pass's instances up to date (*lit*: what
         :meth:`_lit_derived` made of the rows) and hand its runs to the GPU."""
-        stream = self._brush_stream(key, table, lit['item_slots'], 0.0,
-                                    lit['payload'])
+        payload = self.lit_payload_selecting(table, lit['item_slots'],
+                                             lit['payload'], selected_slot)
+        stream = self._brush_stream(key, table, lit['item_slots'], 0.0, payload)
         self._submit_brush_runs('lit_brush_instanced', projection, view,
                                 lights, lit['run_starts'], lit['run_texture'],
                                 lit['run_first'], 36, fill_mode, stream)

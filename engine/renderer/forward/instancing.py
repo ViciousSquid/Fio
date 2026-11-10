@@ -621,6 +621,27 @@ class InstancingMixin:
         return payload
 
     @staticmethod
+    def lit_payload_selecting(table, row_slots, payload, selected_slot):
+        """*payload* -- :meth:`lit_instance_payload` made with no selection --
+        as it reads with *selected_slot* selected: the same array when the
+        selection is not among *row_slots* (or is a trigger, which reads as a
+        trigger even when selected), else a copy with the selected rows'
+        colour. The lit pass keeps its payload across selection changes
+        (M3.1) and applies the selection this way, every frame, for the cost
+        of one comparison over the rows."""
+        if selected_slot < 0:
+            return payload
+        chosen = np.flatnonzero(row_slots == selected_slot)
+        if len(chosen):
+            bits = table.class_bits[row_slots[chosen]]
+            chosen = chosen[(bits & render_table.CLASS_TRIGGER) == 0]
+        if not len(chosen):
+            return payload
+        payload = payload.copy()
+        payload[chosen, 0:3] = _SELECTED_COLOR
+        return payload
+
+    @staticmethod
     def _run_descriptors(sorted_texture, sorted_face, run_starts):
         """Per-run GPU state, read off the first item of each run.
 
