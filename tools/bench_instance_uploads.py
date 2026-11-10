@@ -60,6 +60,9 @@ os.chdir(tree)
 sys.path.insert(0, tree)
 sys.path.insert(0, os.path.join(tree, 'tools'))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+# As main.py runs the game: PyOpenGL's error checking off (a debugging aid
+# that adds a glGetError to every GL call timed here).
+os.environ.setdefault('PYOPENGL_ERROR_CHECKING', '0')
 
 import glm                                            # noqa: E402
 import numpy as np                                    # noqa: E402
@@ -310,6 +313,24 @@ def _held_kb():
     return total / 1024.0
 
 
+def _array_bytes(value):
+    if isinstance(value, dict):
+        return sum(_array_bytes(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_array_bytes(v) for v in value)
+    return getattr(value, 'nbytes', 0)
+
+
+def _memo_kb():
+    """What the renderer keeps of the passes' derived arrays (M3.1): every
+    entry's arrays and its copy of the visible rows."""
+    total = 0
+    for tables in getattr(renderer, '_pass_memos', {}).values():
+        for entry in tables.values():
+            total += _array_bytes(entry[3]) + _array_bytes(entry[4])
+    return total / 1024.0
+
+
 def scenario(label, step, frames):
     for k in range(10):
         step(k)
@@ -374,6 +395,7 @@ def scenario(label, step, frames):
         'alloc_peak_kb': (peak - base) / 1024.0,
         'kept_kb': (current_mem - base) / 1024.0,
         'held_kb': _held_kb(),
+        'memo_kb': _memo_kb(),
         # M3.1: derived pass arrays reused / rebuilt, a frame.
         'memo_hits': memo_hits / frames,
         'memo_misses': memo_misses / frames,
@@ -385,8 +407,8 @@ def scenario(label, step, frames):
              out['draws'], out['py_calls'], out['alloc_peak_kb'], out['kept_kb'],
              out['held_kb']))
     if memo_hits or memo_misses:
-        print('%-11s derived arrays a frame: %.1f reused, %.1f rebuilt'
-              % ('', out['memo_hits'], out['memo_misses']))
+        print('%-11s derived arrays a frame: %.1f reused, %.1f rebuilt; kept %.1f KB'
+              % ('', out['memo_hits'], out['memo_misses'], out['memo_kb']))
     return out
 
 
