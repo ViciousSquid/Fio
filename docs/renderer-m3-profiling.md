@@ -402,8 +402,9 @@ gate above shows no regression.
 
 * **A changed visible set still re-derives the passes' arrays** as well as
   re-uploading from its first change: a turning camera rebuilds them every
-  frame (at about the cost it had before M3.1). Keeping them per cell, with the
-  per-cell streams M3's limitations describe, would cover both.
+  frame (at about the cost it had before M3.1). Per-cell streams could
+  cover both, but are not pursued by default (M4, step 4): the upload may
+  cost less than the bookkeeping that would avoid it.
 * **The tests that tell a still frame are still O(rows)**: one equality
   test of the visible rows per pass, two whole-column tests of `bounds` and
   `rot` per table (M3), and the streams' own. Contiguous memory and C
@@ -503,51 +504,58 @@ Write paths into the render table, as audited:
 | Renderer side: renderer switch, context recreation, cleanup, two renderers in turn, texture loads, play/editor state (nodraw, triggers) | the renderer's caches dropped, or keyed on the state |
 | What the visible set depends on (item 2): camera, cull distance, view filters, occlusion results, the hidden mask, bounds, portal views | each must move the visible-set version |
 
-### The steps
+### The steps (order as recommended, 2026-11-10)
 
-0. **The contract first**, while the full comparisons still run: the write
-   methods, read-only columns, the oracle mode, the per-path tests and the
-   change-detection counters. Nothing reads a stamp yet, so the oracle
-   compares the stamps against the comparisons it will replace.
-1. **Transform change sets.** `MoverTable.publish` writes only the movers
-   and doors whose pose changed since it last published (at rest, at a path
-   end, parked: nothing). Every transform writer stamps the rows it wrote
-   with the table's transform version. `SlotTransforms` reads the rows
-   stamped since its own version instead of comparing the columns; the
-   streams already follow its stamps. This closes M3's `MoverTable.publish`
+1. **Mover publication and transform dirty sets.** First the contract,
+   while the full comparisons still run: the write methods, read-only
+   columns, the oracle mode, the per-path tests and the change-detection
+   counters -- nothing reads a change record yet, so the oracle checks the
+   records against the comparisons they will replace. Then eliminate
+   unchanged mover writes: `MoverTable.publish` writes only the movers and
+   doors whose pose changed since it last published (at rest, at a path
+   end, parked: nothing). Then make the matrix updates consume explicit
+   change records: every transform writer stamps the rows it wrote with
+   the table's transform version, and `SlotTransforms` reads the rows
+   stamped since its own version instead of comparing the columns (the
+   streams already follow its stamps). This closes M3's `MoverTable.publish`
    limitation and saves on the logic thread as well.
-2. **Visible-set versions.** The cull publishes its visible rows with a
-   version that stands while every input in the table's last row stands
-   (and the same array with it). The passes' kept arrays and the streams
-   key on that version, so a still frame's tests compare integers; the
-   depth sort of the transparent, water and glass groups is kept while the
-   camera stands. Re-culling when the camera moves is rendering work, not
-   change detection; incremental, cell-by-cell culling for Big World is a
-   separate saving, measured on its own.
-3. **Uniform state by change.** Every frame each program used is sent the
-   distance-fog and ambient block (seven calls, deliberately unconditional)
-   and its shadow-map bindings, and the light set is keyed again
-   (`_upload_lights_once`). Program uniforms persist in GL, so these can be
-   sent when they change: a version from `ViewDistance`, the light table and
-   the shadow pool, per program. Under cProfile they are ~17 % of a still
-   BigWorld frame's `render_scene`.
-4. **Entity instance streams.** Sprites, models and effects still repack
-   their instance buffers every frame. Measure them first (MonsterTest and
-   an entity-heavy map), then give them `BrushStream`'s treatment from the
-   entity table's versions, under the same contract (its writers: physics,
-   monsters, props, combat, timing, plugins).
-5. **Camera motion.** Per-cell streams for Big World, drawn cell by cell,
-   so a turn changes which cells are drawn instead of rewriting every row
-   after the first changed item (~128 KB a frame now). On GL 3.3 that costs
-   a draw and a vertex-array bind per cell; kept only if it beats the
-   compacted rewrite on CPU.
-6. **The target.** The instance-upload, frame and gameplay benchmarks on
-   the Snapdragon 8cx Gen 3 / Adreno 690; `STREAM_GAP_ROWS`,
-   `STREAM_MAX_RANGES`, `Player.MOVER_NEAR_FROM` and `LEG_COUNT_LIMIT`
-   retuned there, keeping the fastest measured.
-
-Order: 0, then 1 and 2, then 3; 4 and 5 after measuring; 6 as soon as a
-device is available.
+2. **Visible-set versioning.** Comparisons of the visible rows (the pass
+   memos', the streams') become generation checks: the cull publishes its
+   visible rows with a generation that moves on any change to camera,
+   bounds or visibility -- the hidden mask, view filters, cull distance,
+   occlusion results, portal views, every input in the write-path table's
+   last row -- and the same array stands with it. The depth sort of the
+   transparent, water and glass groups is kept while the camera stands.
+   Re-culling when the camera moves is rendering work, not change
+   detection.
+3. **Uniform caching.** The fog and ambient block, the shadow-map sampler
+   bindings and the light set's uniforms are sent to every program used,
+   every frame (~17 % of a still BigWorld frame's `render_scene` under
+   cProfile). Send them when they change, tracked per program -- a
+   recompiled or relinked program (shader reload) starts with no cached
+   values -- and per context: a renderer switch, context recreation or
+   cleanup drops the cache. Uniform values are program state and survive;
+   what is bound to texture units, the current program and the bound
+   buffers are context state that the HUD's QPainter (it shares the
+   context) and other passes change, so those stay bound as they are
+   today, every frame.
+4. **Entity instances and camera-motion buffers.** Each benchmarked on its
+   own, and kept only where it reduces **complete-frame** time. Sprites,
+   models and effects still repack their instance buffers every frame:
+   measure first (MonsterTest, an entity-heavy map), then, if it pays, give
+   them `BrushStream`'s treatment from the entity table's versions under
+   the same contract (its writers: physics, monsters, props, combat,
+   timing, plugins). **Per-cell instance buffers are not pursued by
+   default**: the ~128 KB a turning camera uploads on BigWorld may well
+   cost less than the CPU bookkeeping it would take to avoid it --
+   particularly on Adreno, where a draw and a vertex-array bind per cell
+   are the expensive part -- so they are tried only if a measurement on
+   the target says camera motion is worth it.
+5. **The target**, throughout and as soon as a device is available: the
+   instance-upload, frame and gameplay benchmarks on the Snapdragon 8cx
+   Gen 3 / Adreno 690; `STREAM_GAP_ROWS`, `STREAM_MAX_RANGES`,
+   `Player.MOVER_NEAR_FROM` and `LEG_COUNT_LIMIT` retuned there, keeping
+   the fastest measured.
 
 ### Acceptance
 
@@ -563,3 +571,5 @@ device is available.
   scenario against M3.1, memory bounded, frames and gameplay gate no worse.
 * **Total frame time** is reported at each world size and is expected to
   grow with what is visible; it is not held flat.
+* **Step 4's changes** (entity instances, any camera-motion buffers) are
+  kept only where they reduce complete-frame time, measured on their own.

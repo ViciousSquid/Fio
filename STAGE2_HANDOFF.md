@@ -223,9 +223,16 @@ BigWorld_streaming_test.json` (and `_SHOWCASE.json --movers 32`).
     establishing that nothing changed is constant per table and pass,
     whatever the world's size (counters of rows examined, asserted at 1×,
     4×, 16× BigWorld); total frame time may grow with what is visible.
-  Then transform change sets (`MoverTable.publish` writes only moved rows),
-  visible-set versions, uniforms by change, entity streams, per-cell
-  streams for camera motion, and the Snapdragon 8cx Gen 3.
+  Order (the user's): 1. mover publication and transform dirty sets
+  (unchanged mover writes gone first, then matrix updates from explicit
+  change records; the contract lands at the start of this step); 2.
+  visible-set versioning (generation checks, invalidated on camera, bounds
+  and visibility changes); 3. uniform caching (per program and per context,
+  with program and GL-context changes tracked); 4. entity instances and
+  camera-motion buffers, each benchmarked separately and kept only if it
+  reduces complete-frame time. Per-cell instance buffers are **not**
+  pursued by default: the ~128 KB camera-turn upload may cost less than
+  the bookkeeping to avoid it, particularly on Adreno.
 
 ### Environment notes (this session)
 
