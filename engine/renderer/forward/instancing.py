@@ -68,7 +68,7 @@ class BrushStream:
     render tables take turns, so each keeps its own entry."""
 
     __slots__ = ('vbo', 'vao', 'capacity', 'mirror', 'count', 'slots', 'spare',
-                 'payload', 'consts', 'seen', 'uploaded', 'index')
+                 'payload', 'consts', 'seen', 'uploaded', 'index', 'given')
 
     def __init__(self):
         self.vbo = None
@@ -88,6 +88,26 @@ class BrushStream:
         #: ``(sorted slots, their positions)`` of the current items, built
         #: when first needed and kept while the items stand (M4).
         self.index = None
+        #: ``(slots, spare, payload)`` as last handed in, when each is a
+        #: read-only array or a scalar: the next frame's are recognised by
+        #: identity, with no look at a row (M4).
+        self.given = None
+
+    def same_as_given(self, slots, spare, payload):
+        """Whether *slots*, *spare* and *payload* are what was last handed
+        in: the same read-only arrays (or equal scalars)."""
+        given = self.given
+        if given is None or given[0] is not slots or slots.flags.writeable:
+            return False
+        for old, new in ((given[1], spare), (given[2], payload)):
+            if isinstance(new, np.ndarray) and new.ndim:
+                if old is not new or new.flags.writeable:
+                    return False
+            elif isinstance(old, np.ndarray) and old.ndim:
+                return False
+            elif float(old) != float(new):
+                return False
+        return True
 
     def positions_of(self, rows, upto):
         """The positions (before *upto*) of the items that draw any of the
@@ -188,14 +208,25 @@ class InstancingMixin:
         if entry is not None and (entry[0]() is not cache or entry[3] != normals):
             entry = None
         known = stream.count
-        started = change_detection.now()
         compared = not grew and known == count
-        same_items = compared and np.array_equal(stream.slots[:count], slots)
-        same_payload = stream.same_payload(count, spare, payload)
-        change_detection.DETECT.add(
-            'stream.items',
-            (count if compared else 0) + (count if np.ndim(payload) else 0),
-            change_detection.now() - started)
+        if compared and stream.same_as_given(slots, spare, payload):
+            same_items = same_payload = True    # the same immutable inputs
+            if change_detection.ORACLE and not (
+                    np.array_equal(stream.slots[:count], slots)
+                    and stream.same_payload(count, spare, payload)):
+                raise change_detection.MissedChange(
+                    "stream %r: an immutable input changed" % (key,))
+        else:
+            started = change_detection.now()
+            same_items = compared and np.array_equal(stream.slots[:count], slots)
+            same_payload = stream.same_payload(count, spare, payload)
+            change_detection.DETECT.add(
+                'stream.items',
+                (count if compared else 0) + (count if np.ndim(payload) else 0),
+                change_detection.now() - started)
+        # Remembered for the next frame's identity test (read-only arrays
+        # and scalars only: anything else is compared).
+        stream.given = (slots, spare, payload) if not slots.flags.writeable else None
         if (same_items and same_payload and entry is not None
                 and entry[1] == cache.version and not entry[2]):
             return stream               # nothing changed: nothing to do

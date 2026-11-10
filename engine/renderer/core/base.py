@@ -83,6 +83,11 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         #: frame, kept while they and the visible rows are unchanged
         #: (TablesMixin._pass_memo).
         self._pass_memos = {}
+        #: Per lit stream: (kept payload, selected slot, that payload with
+        #: the selection applied) -- see _draw_lit_brushes_instanced.
+        self._selected_payloads = {}
+        #: Per view: the play-mode distance cull's inputs and result.
+        self._distance_culls = {}
         #: Reuses and rebuilds of those (counts, for tests and tools).
         self.pass_memo_hits = 0
         self.pass_memo_misses = 0

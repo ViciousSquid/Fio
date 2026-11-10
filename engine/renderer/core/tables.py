@@ -24,6 +24,29 @@ _PARKED_RECIPE_LISTS = 4
 PASS_MEMO_TABLES = 3
 
 
+def _seal_arrays(value):
+    """Make every array in *value* (a dict, tuple, list or array) read-only."""
+    if isinstance(value, np.ndarray):
+        value.flags.writeable = False
+    elif isinstance(value, dict):
+        for item in value.values():
+            _seal_arrays(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _seal_arrays(item)
+
+
+def _same_value(kept, fresh):
+    if isinstance(kept, dict):
+        return kept.keys() == fresh.keys() and all(
+            _same_value(kept[k], fresh[k]) for k in kept)
+    if isinstance(kept, (list, tuple)):
+        return len(kept) == len(fresh) and all(map(_same_value, kept, fresh))
+    if isinstance(kept, np.ndarray) or isinstance(fresh, np.ndarray):
+        return np.array_equal(kept, fresh)
+    return kept == fresh
+
+
 def _swap_recipe_cache(parked, current, recipes, fresh):
     """Park *current* (``(list, *state)``) and return *recipes*' state.
 
@@ -78,9 +101,14 @@ class TablesMixin:
         :attr:`~engine.render_table.RenderTable.material_version` and
         ``extent_version``, *state* (a tuple of plain values) is equal, every
         one of *objects* is the same object (arrays a cache hands out, told
-        by identity), and *slots* holds the same rows. A still frame costs
-        one equality test of *slots*. The value is shared: callers treat it
-        as read-only."""
+        by identity), and *slots* holds the same rows.
+
+        *slots* is recognised by identity when it is a read-only array (M4):
+        the visible set's producers -- the logic thread's cull, the passes'
+        own kept arrays -- hand out the same immutable array while it stands,
+        so a still frame costs no look at a row. Any other array is compared.
+        The value's arrays are made read-only: shared, and versions in turn
+        for what consumes them (an instance stream)."""
         tables = self._pass_memos.get(key)
         if tables is None:
             tables = self._pass_memos[key] = {}
@@ -90,10 +118,15 @@ class TablesMixin:
         if (entry is not None and entry[0]() is table and entry[1] == full
                 and len(entry[2]) == len(objects)
                 and all(a is b for a, b in zip(entry[2], objects))):
-            started = change_detection.now()
-            same = np.array_equal(entry[3], slots)
-            change_detection.DETECT.add('pass_memo.rows', len(slots),
-                                        change_detection.now() - started)
+            if entry[3] is slots and not slots.flags.writeable:
+                same = True                 # the same immutable rows
+                if change_detection.ORACLE:
+                    self._check_memo(key, entry, build)
+            else:
+                started = change_detection.now()
+                same = np.array_equal(entry[3], slots)
+                change_detection.DETECT.add('pass_memo.rows', len(slots),
+                                            change_detection.now() - started)
             if same:
                 self.pass_memo_hits += 1
                 return entry[4]
@@ -106,9 +139,19 @@ class TablesMixin:
                 del tables[dead]
             while len(tables) >= PASS_MEMO_TABLES:
                 del tables[next(iter(tables))]
-        tables[tid] = (weakref.ref(table), full, tuple(objects),
-                       np.array(slots, copy=True), value)
+        _seal_arrays(value)
+        kept = (slots if isinstance(slots, np.ndarray) and not slots.flags.writeable
+                else np.array(slots, copy=True))
+        tables[tid] = (weakref.ref(table), full, tuple(objects), kept, value)
         return value
+
+    @staticmethod
+    def _check_memo(key, entry, build):
+        """Oracle: a kept value is what deriving it afresh gives."""
+        fresh = build()
+        if not _same_value(entry[4], fresh):
+            raise change_detection.MissedChange(
+                "pass %r kept arrays differ from a fresh derivation" % (key,))
 
     def _frame_transforms(self, table, slots):
         """Model and normal matrices for *slots*, into reusable buffers.

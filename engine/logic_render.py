@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import math
 import time
+import weakref
 
 import glm
 import numpy as np
 
-from . import brush_placement
+from . import brush_placement, change_detection
 from .change_journal import JOURNAL, STATE
 from .entity_table import ENT_PROP
 from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
 from .view_distance import ViewDistance
+
+
+def _sealed(array):
+    """*array*, read-only: published as a version (M4), never written."""
+    array.flags.writeable = False
+    return array
 
 
 class LogicRender:
@@ -248,18 +255,76 @@ class LogicRender:
 
     def cull_brushes(self, table, frustum_planes, keep):
         """The slots of *table*'s rows in *keep* (a mask over its live rows)
-        whose box meets the frustum.
+        whose box meets the frustum, as a read-only array.
 
         Derived bounds (brush_placement): a spinning row is tested as the
         AABB of its turned box, so it is never culled while drawn. Until any
         row has turned (RenderTable.turning) every row's box is its bounds,
         and the resolver is not asked.
+
+        The visible set's version is its identity (M4): kept per table, the
+        same read-only array is handed back while the frustum, *keep* (the
+        same object: ``RenderTable.shown`` hands one out until a ``hidden``
+        value changes) and the table's rows stand. Rows written since
+        (``RenderTable.transforms_since``) are re-tested alone; a new frustum
+        is culled whole, and a result equal to the last keeps the last array.
+        Whatever consumes the visible set recognises an unchanged one by
+        identity, at no cost that grows with the world.
         """
+        cache = getattr(self, '_cull_cache', None)
+        if cache is None:
+            cache = self._cull_cache = weakref.WeakKeyDictionary()
+        count = table.count
+        entry = cache.get(table)
+        if (entry is not None and entry[0] == table.generation
+                and entry[1] == count and entry[3] is keep
+                and entry[2] == frustum_planes):
+            if entry[4] == table.transform_version:
+                if change_detection.ORACLE:
+                    self._check_cull(table, frustum_planes, keep, entry[6])
+                return entry[6]
+            rows = table.transforms_since(entry[4])
+            if rows is not None and len(rows) * 4 < count:
+                entry[4] = table.transform_version
+                rows = rows[rows < count]
+                if len(rows):
+                    bounds = table.bounds[rows]
+                    if table.turning:
+                        bounds = brush_placement.turned_bounds(bounds, table.rot[rows])
+                    inside = keep[rows] & self.aabb_in_frustum_bounds(frustum_planes, bounds)
+                    if (inside != entry[5][rows]).any():
+                        mask = entry[5].copy()
+                        mask[rows] = inside
+                        entry[5] = mask
+                        entry[6] = _sealed(np.flatnonzero(mask))
+                if change_detection.ORACLE:
+                    self._check_cull(table, frustum_planes, keep, entry[6])
+                return entry[6]
+        bounds = table.bounds[:count]
+        if table.turning:
+            bounds = brush_placement.turned_bounds(bounds, table.rot[:count])
+        mask = keep & self.aabb_in_frustum_bounds(frustum_planes, bounds)
+        slots = np.flatnonzero(mask)
+        if (entry is not None and entry[0] == table.generation
+                and np.array_equal(entry[6], slots)):
+            slots = entry[6]            # the same set: the same version
+        else:
+            slots = _sealed(slots)
+        cache[table] = [table.generation, count, frustum_planes, keep,
+                        table.transform_version, mask, slots]
+        return slots
+
+    def _check_cull(self, table, frustum_planes, keep, slots):
+        """Oracle: the kept visible set is what culling afresh gives."""
         count = table.count
         bounds = table.bounds[:count]
         if table.turning:
             bounds = brush_placement.turned_bounds(bounds, table.rot[:count])
-        return np.flatnonzero(keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
+        fresh = np.flatnonzero(keep & self.aabb_in_frustum_bounds(frustum_planes, bounds))
+        if not np.array_equal(fresh, slots):
+            raise change_detection.MissedChange(
+                "kept visible set differs from a fresh cull: %s"
+                % np.setxor1d(fresh, slots)[:8].tolist())
 
     def prepare_render_state(self):
         logic = self.logic

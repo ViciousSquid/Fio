@@ -10,6 +10,8 @@ implements :class:`engine.renderer.api.Renderer` and builds on
 import os
 
 import glm
+import weakref
+
 import numpy as np
 import OpenGL.GL as gl
 
@@ -277,6 +279,25 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._init_distance()
             self._init_occlusion(config)
 
+    def _kept_distance_cull(self, table, slots, cx, cz, limit_sq):
+        """:meth:`_distance_cull_slots`, its result kept per view (M4): the
+        same read-only array while the visible set (the same immutable
+        array), the camera's position, the limit and the table's transforms
+        stand; a result equal to the last keeps the last array."""
+        key = self._instance_view
+        held = self._distance_culls.get(key)
+        inputs = (cx, cz, limit_sq, table.generation, table.transform_version)
+        if (held is not None and held[0] is slots and not slots.flags.writeable
+                and held[1]() is table and held[2] == inputs):
+            return held[3]
+        culled = self._distance_cull_slots(table, slots, cx, cz, limit_sq)
+        if held is not None and held[1]() is table and np.array_equal(held[3], culled):
+            culled = held[3]
+        else:
+            culled.flags.writeable = False
+        self._distance_culls[key] = (slots, weakref.ref(table), inputs, culled)
+        return culled
+
     def render_scene(self, projection, view, camera_pos,
                      primary_selection, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -371,8 +392,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         slots = brush_slots
         if (config.get('camera_distance_cull', config.get('play_mode', False))
                 and cx is not None):
-            slots = self._distance_cull_slots(
-                table, slots, cx, cz, self.view_distance.distance_sq)
+            slots = self._kept_distance_cull(table, slots, cx, cz,
+                                             self.view_distance.distance_sq)
         # GPU-verified hidden cells drop out here, before the passes classify,
         # sort and pack the surviving rows (renderer/forward/occlusion.py).
         slots = self._occlusion_filter_slots(table, slots, config, camera_pos,
@@ -684,6 +705,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._release_brush_streams()
         self._slot_transform_caches.clear()
         self._pass_memos.clear()
+        self._selected_payloads.clear()
+        self._distance_culls.clear()
         for vao in (self._sprite_instance_vao, self._effect_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])

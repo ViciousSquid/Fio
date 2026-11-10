@@ -366,8 +366,19 @@ class PassesMixin:
                                     fill_mode=gl.GL_FILL):
         """Bring the lit pass's instances up to date (*lit*: what
         :meth:`_lit_derived` made of the rows) and hand its runs to the GPU."""
-        payload = self.lit_payload_selecting(table, lit['item_slots'],
-                                             lit['payload'], selected_slot)
+        payload = lit['payload']
+        if selected_slot >= 0:
+            # The selection applied to the kept payload, kept in turn while
+            # both stand (one read-only array: the stream knows it by sight).
+            held = self._selected_payloads.get(key)
+            if held is not None and held[0] is payload and held[1] == selected_slot:
+                payload = held[2]
+            else:
+                chosen = self.lit_payload_selecting(table, lit['item_slots'],
+                                                    payload, selected_slot)
+                chosen.flags.writeable = False
+                self._selected_payloads[key] = (payload, selected_slot, chosen)
+                payload = chosen
         stream = self._brush_stream(key, table, lit['item_slots'], 0.0, payload)
         self._submit_brush_runs('lit_brush_instanced', projection, view,
                                 lights, lit['run_starts'], lit['run_texture'],
