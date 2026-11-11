@@ -248,24 +248,39 @@ Tests that scan the view's source now scan these modules too
   per mark, 55% opaque at most, 1.6 s. `ViewHud.damage_bearing` is one rule
   for first person and overhead. `[Display] damage_indicators` in
   `settings.ini`. Split screen: player one's only, over the whole view.
-* **Blood on the actor's sprite: a prototype, NOT committed** -- the user
-  asked to see it first. It is `git stash` entry "sprite gore prototype"
-  in the session's container and is lost with it; the design, to rebuild:
+* **Blood on the actor's sprite** (`73dbac3`, approved from screenshots).
   `props['_wounds']` (0..15, added per bleeding hit in `_fire_rays`, then
-  `touch`), an `EntityTable.sprite_wound` column = `2 * (steps + 16 *
-  pattern)` added to the sprite instance's opacity float (no ninth
-  attribute), taken apart in the instanced sprite vertex shader, and a
-  noise stain on the texel in the fragment shader (torso-weighted, in 72
-  blocks to match the pixel art). Adding the column will need the entity
-  row budget checked.
-* **Terrain stamps look muddy and stretched: diagnosed, not changed.** A
-  chunk's paint map is 128x128 (2-4 world units a texel; terrain textures
-  are 16 px a unit), and a stamp stretches one image over its footprint.
-  The fix (tile the source texture in the shader under a baked mask, or
-  tile at bake with a larger map) changes the map's format and look: the
-  user's decision.
-* Not rerun since these: the full suite. Tiers run: e2e (new files),
-  logic, regression, visual, deathmatch plugin -- all passed.
+  `touch`); `EntityTable.sprite_wound` = `2 * (steps + 16 * pattern)`,
+  added to the sprite instance's opacity float (no ninth attribute) and
+  taken apart in the instanced sprite vertex shader; the fragment shader
+  stains the texel with torso-weighted noise in 72 blocks
+  (`SPRITE_WOUND_GLSL` in `engine/renderer/forward/shaders.py`).
+* **Terrain paint** (`988e0f9`, and the commit after it). 128 -> 256 a
+  chunk (the user chose 256 over 512 from screenshots). Stamps are tiled:
+  the texture lies on the world at `STAMP_TILE_UNITS_PER_PIXEL` and the
+  stamp is a window onto it (`'tiled': False` on a record keeps one
+  stretched copy). Old maps are converted in `from_dict`: stamps baked
+  again from their records, record-less paint resampled. Stamp records
+  stay selectable and movable (asked; the user chose to keep them). GL:
+  paint layers go to painted chunks only, pages of 32, three mips, -1 LOD
+  bias, anisotropy where the driver has it (`TerrainGL._paint_layer`).
+  Responsiveness: `Terrain._drag_layers` keeps what lies under and over
+  the selected stamps, so a drag step bakes only those; the display
+  during a drag uses a one-layer shortcut inside the selection's box and
+  is exact outside it; the stored paint is always the exact composition.
+  Measured (CPU, this container; 24 scattered stamps): a click (two undo
+  snapshots and the bake) 32 -> 18 ms; a drag step 65 -> 8 ms for the
+  newest stamp, 44 -> 21 ms for the oldest; release 162 -> 27 ms and
+  205 -> 127 ms. At 128 before any of this: place 8.5-10 ms, drag step
+  50-57 ms (another scene: nine overlapping stamps). Paint memory 65 ->
+  262 KB a painted chunk; saved terrain 0.20 -> 0.59 MB for 18 chunks.
+  Frame (llvmpipe, four stamps in view): 20.1-22.6 ms before, 23.7 after
+  -- the mip and anisotropic filtering, which software GL pays for and a
+  GPU mostly does not; unverified on Adreno. Still slow: the first step
+  and the release when dragging a stamp with many stamps above it.
+* Not rerun since these: the full suite. Tiers run and passed: engine,
+  renderer, visual, e2e, logic, regression, brush_model, persistence, the
+  stamp-editing editor tests, the deathmatch plugin.
 
 ### Behaviour changes to know about
 

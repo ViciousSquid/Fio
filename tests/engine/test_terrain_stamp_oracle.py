@@ -65,7 +65,7 @@ def _encode(maps):
     out = []
     for (cx, cz), paint in sorted(maps.items()):
         if np.any(paint[..., 3]):
-            raw = zlib.compress(np.ascontiguousarray(paint).tobytes(), 6)
+            raw = zlib.compress(np.ascontiguousarray(paint).tobytes(), 1)
             out.append({"coord": [cx, cz], "data": base64.b64encode(raw).decode("ascii")})
     return out
 

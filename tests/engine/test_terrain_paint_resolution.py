@@ -153,3 +153,75 @@ def test_the_tiled_image_is_reduced_to_the_paint_density(checker):
     image, per_unit = terrain._tile_image(checker)
     # 2 pixels a unit, 1 texel a unit: halved.
     assert image.shape == (32, 32, 4) and per_unit == 1.0
+
+
+def _scatter(texture, count=10):
+    import random
+    rnd = random.Random(5)
+    terrain = Terrain(seed=1)
+    for _ in range(count):
+        terrain.add_paint_stamp(rnd.uniform(-200, 200), rnd.uniform(-200, 200),
+                                rnd.uniform(40, 120), texture,
+                                feather=rnd.choice((0.0, 0.3)))
+    return terrain
+
+
+@pytest.mark.parametrize("which", [0, 4, -1])
+def test_a_drag_bakes_only_the_dragged_stamp_and_ends_exact(checker, which, monkeypatch):
+    """What lies under and over a dragged stamp is kept, not baked again a
+    step; the stored paint at the end is the exact composition."""
+    terrain = _scatter(checker)
+    stamp = terrain.paint_stamps[which]
+    terrain.set_selected_stamps({stamp['id']})
+    terrain.move_paint_stamps({stamp['id']}, 3.0, 2.0, defer=True)     # fills the cache
+
+    baked = []
+    real = Terrain._bake_stamp
+    monkeypatch.setattr(Terrain, '_bake_stamp',
+                        lambda self, s, *a, **k: (baked.append(s['id']), real(self, s, *a, **k))[1])
+    terrain.move_paint_stamps({stamp['id']}, 3.0, 2.0, defer=True)
+    assert baked and set(baked) == {stamp['id']}
+    monkeypatch.undo()
+
+    # The preview is the exact picture to a rounding step, tint aside.
+    terrain.finish_stamp_edit()
+    terrain.set_selected_stamps(())
+    fresh = Terrain(seed=1)
+    fresh.merge_paint_stamps([dict(s) for s in terrain.paint_stamps])
+    assert set(fresh.texture_paint_maps) == set(terrain.texture_paint_maps)
+    for key, paint in fresh.texture_paint_maps.items():
+        assert np.array_equal(terrain.texture_paint_maps[key], paint), key
+
+
+def test_the_drag_preview_is_within_a_rounding_step_of_the_exact_paint(checker):
+    terrain = _scatter(checker)
+    stamp = terrain.paint_stamps[0]                 # everything else is above it
+    terrain.set_selected_stamps({stamp['id']})
+    terrain.move_paint_stamps({stamp['id']}, 20.0, -10.0, defer=True)
+    keys = terrain._stamp_chunks(stamp)
+    for key in keys:
+        preview = terrain._compose_paint_chunk(key, preview=True)
+        exact = terrain._compose_paint_chunk(key)
+        if exact is None:
+            assert preview is None
+            continue
+        assert np.abs(preview.astype(int) - exact.astype(int)).max() <= 2
+
+
+def test_the_cache_is_dropped_when_what_it_holds_changes(checker):
+    terrain = _scatter(checker)
+    a, b = terrain.paint_stamps[2], terrain.paint_stamps[7]
+    terrain.set_selected_stamps({a['id']})
+    terrain.move_paint_stamps({a['id']}, 1.0, 0.0, defer=True)
+    assert terrain._drag_cache
+    terrain.move_paint_stamps({b['id']}, 30.0, 0.0)      # an unselected stamp moves
+    assert not terrain._drag_cache or all(
+        np.array_equal(terrain._compose_paint_chunk(k), terrain.texture_paint_maps[k])
+        for k in terrain._stamp_chunks(b) if k in terrain.texture_paint_maps)
+    terrain.finish_stamp_edit()
+    terrain.set_selected_stamps(())
+    assert not terrain._drag_cache
+    fresh = Terrain(seed=1)
+    fresh.merge_paint_stamps([dict(s) for s in terrain.paint_stamps])
+    for key, paint in fresh.texture_paint_maps.items():
+        assert np.array_equal(terrain.texture_paint_maps[key], paint), key
