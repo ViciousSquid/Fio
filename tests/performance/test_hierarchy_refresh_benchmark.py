@@ -78,5 +78,10 @@ def test_report_hierarchy_refresh(qt_app, main_window, distribution):
                       (distribution, count, selected_count, before, after,
                        before / after), flush=True)
     finally:
+        # The stand-ins are not entities (no pos): the editor's views must
+        # never paint them. A repaint that met one raised inside paintEvent,
+        # and tearing the window down from there crashed the interpreter in
+        # whichever test ran next.
+        state.brushes, state.things, state.selected_objects = [], [], []
         panel.close()
         qt_app.processEvents()

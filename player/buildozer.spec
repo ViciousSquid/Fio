@@ -32,7 +32,7 @@ source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag
 source.exclude_dirs = assets, packages, editor, tools, maps, tests, audit, docs, wiki, .git, .github, player/tests, player/bin, player/.buildozer, player/p4a-recipes
 source.exclude_patterns = editor/*, settings.ini, Dockerfile, docker-compose.yml, player/_SHOWCASE.fiopak
 
-version = 3.0.0
+version = 3.5.0
 
 # Runtime dependencies. hostpython3/python3 come from p4a.
 #   pygame  -> SDL2 window, GLES surface, touch (FINGER*), controllers, audio
