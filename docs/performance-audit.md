@@ -141,7 +141,7 @@ the four terrain textures differently from the terrain's own loader --
 `textures\terrain\x` against `textures/terrain\x` -- so they were decoded
 twice there. Read from the code, not run.)
 
-### F3. BigWorld's frame is the terrain draw -- OPEN (the M5 candidate)
+### F3. BigWorld's frame is the terrain draw -- PART FIXED (M5.1)
 
 `Terrain.draw_heightfield_slots` is 70 of the 76-84 ms of main-thread CPU in
 BigWorld's paint; the rest of the renderer is ~7 ms. `py-spy --native` puts
@@ -159,8 +159,15 @@ host-specific:
   `Terrain._upload_chunk` ~2 calls a frame, 0.8 ms p50, 6.6 ms max.
 
 Whether 930k such vertices matter on the Adreno is **unknown**; nothing here
-can say. Not a small fix: the per-triangle flat normal and colour are built
-in the vertex shader, so indexing needs the outputs reorganised.
+can say.
+
+M5.1 (`9a9049b`, after this audit): the heightfield is drawn indexed with
+flat face outputs, 2 (res+1)^2 vertices a chunk instead of 6 res^2. Measured
+with `tools/bench_terrain.py`: frame 81.7-84.5 -> 52.5-54.9 ms, the
+terrain's vertex stage 44-50 -> 14.6-15.2; as shipped BigWorld 8.1-9.8 ->
+13.7 fps. LOD selecting full detail is by design (every resident chunk is
+inside the protected zone); chunk generation is still on the paint thread.
+See the handoff's M5 section.
 
 ### F4. Qt composing the window -- OPEN, host-specific
 

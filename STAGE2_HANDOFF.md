@@ -4,9 +4,9 @@ State at handoff (2026-11-11, after the fifth session; read *Fifth session*
 first). **Stage 2 is accepted**; **M3**, **M3.1** and **M4** are complete.
 **The whole-engine performance audit is done** (`docs/performance-audit.md`)
 and so is the renderer's "tables all the way to GL" audit
-(`docs/renderer-boundary-audit.md`). **M5 is recommended, not started: the
-terrain through tables to GL, beginning with a measurement on the
-Snapdragon.** The user wants millisecond-scale costs found and fixed, not
+(`docs/renderer-boundary-audit.md`). **M5 (the terrain through tables to GL) is started: profiled, the
+vertex load cut (M5.1); chunk generation off the paint thread and the
+boundary itself are not done.** The user wants millisecond-scale costs found and fixed, not
 microsecond tuning. Earlier sections are kept as history.
 
 ## Fifth session: the audit finished, the renderer boundary, M5 recommended (read this first)
@@ -22,7 +22,11 @@ microsecond tuning. Earlier sections are kept as history.
   `entity_refs` out of the frame input; the boundary ratchet tests.
 * `bf29bd0` -- the 2D views repaint at 10 Hz in play.
 * `2cf304f` -- SysMon asks only for an advertised memory query.
-* then the two documents and this section (see `git log`).
+* `bdf9998` -- the two audit documents.
+* `1bb4665` -- H hides the selection (things too); Shift+H shows all.
+* `9a9049b` -- M5.1: the terrain heightfield drawn indexed
+  (`tools/bench_terrain.py`).
+* `618a552` -- the view's audio moved to `engine/view_audio.py`.
 
 ### What the audit found (numbers in `docs/performance-audit.md`)
 
@@ -71,16 +75,89 @@ published `RenderTable`, with a set shared across threads (R1).
 V2 and V3 are fixed. Debug Tables (`tools/debug_tables.py`) reads the same
 published snapshot and is the oracle for any column V2-V4 add.
 
-### M5 (recommended; not started)
+### M5: terrain tables all the way to GL (started; M5.1 done)
 
-The terrain through tables to GL. 1. Measure on the Snapdragon first (a GL
-timer query around the terrain pass; the frame with terrain off): if the
-Adreno shades it in a millisecond or two, drop steps 3-4. 2. Chunk heights
-generated off the paint thread, published as `TerrainTable` rows. 3. Fewer
-vertex runs (two a quad, or indexed with the flat normal in the fragment
-shader), with pixel parity. 4. LOD that engages inside the view distance.
-5. `terrain` out of the frame input. The self-hosted Snapdragon runner is
-the precondition; it is still not set up.
+The user asked for M5 in full: no renderer access to the live `Terrain`;
+versioned `TerrainTable` data and immutable appearance state published;
+chunk generation off the paint thread; GL ownership in the renderer; profile
+first, and find out why LOD selects maximum detail.
+
+**Done -- M5.0, the profile** (`tools/bench_terrain.py`, BigWorld, llvmpipe,
+camera held, complete frames with `glFinish`): frame 79.6-84.5 ms; terrain
+70.5-75.5; the terrain's vertex stage alone (`GL_RASTERIZER_DISCARD`) 44-50;
+the frame without terrain 7-9. 64-69 chunks drawn of 282 resident, all at
+resolution 48: 885-954k vertex runs for 154-166k grid points. Removing the
+shader's height fetches and colour gradient left the vertex stage at 30 ms:
+the cost was the count of unshared vertices, not their arithmetic.
+
+**Done -- the LOD question.** Maximum detail is by design: a chunk never
+changes LOD inside the protected zone (`_near_detail_radius()`: min(4096,
+the stream radius), plus a chunk), and the first LOD band begins at 4608.
+BigWorld streams 2048 and sees 4096, so every resident chunk is protected
+and no band is ever reached. Not changed: lower detail inside the view
+changes the facets on screen (and chunks of different LOD do not stitch).
+A chunk 2000 units away has quads about a pixel wide at this viewport, so
+there is a case for LOD by projected size -- a fidelity decision for the
+user, with image comparisons, not a silent change.
+
+**Done -- M5.1** (`9a9049b`): the heightfield drawn indexed with flat face
+outputs (`terrain_indexed.vert`, `terrain_flat.frag`, `heightfield_indices`).
+Frame 81.7-84.5 -> 52.5-54.9 ms; terrain 73.2-75.5 -> 44.1-46.2; vertex stage
+44-50 -> 14.6-15.2. As shipped (`audit_play --loop`): BigWorld 8.1-9.8 -> 13.7
+fps. Terrain_Test_medium level. The image-parity tests against the old
+CPU-mesh draw pass unchanged. GPU gain unverified. (Tried and discarded:
+flat outputs computed at the provoking vertex only, still unindexed -- no
+gain; llvmpipe's vectorised shader runs both sides of the branch.)
+
+**Not done -- M5.2, chunk generation off the paint thread.** Measured: 297
+builds on the paint thread over 240 walked frames, 263 ms in all, 3.7 ms the
+longest (`Terrain._upload_chunk` = `_chunk_heights` + `table.store`; the GL
+upload already happens later, in `draw_heightfield_slots`, by version). The
+table's `store` is written as a seqlock (`seq` odd while writing) for this.
+Plan: a worker takes the `schedule()` queue; the paint thread only uploads
+rows whose `version` moved. Watch: `_chunk_heights` reads sculpt, heightmap
+and CSG state the editor mutates (snapshot the inputs or lock per build);
+the stream/evict of slots while a build is in flight (check the slot's key
+again before `store`); `bench_terrain.py` already reports builds on and off
+the paint thread.
+
+**Not done -- M5.3, the boundary** (`docs/renderer-boundary-audit.md` V4).
+`terrain` in the frame input is still the editor's live object, and
+`render_terrain` / `setup_terrain_shader` still write on it. Plan: the logic
+thread publishes the `TerrainTable` and a frozen appearance record
+(`appearance_uniforms()`, gradient, flags, texture names, chunk size and
+offsets) on `RenderState`; a renderer-side object owns the height and paint
+pages, the index arrays, the grass buffers and both programs, keyed by
+terrain slot and version; `Terrain` keeps authoring, heights and
+serialisation. `terrain.py` is 3,400 lines with GL through it; this is the
+large step and was not started. Debug Tables is the oracle for the
+published rows.
+
+Next after those: the remaining ~25 ms of rasterising in BigWorld's terrain
+is llvmpipe's; judge it on the Snapdragon.
+
+### `engine/qt_game_view.py` being broken up (started)
+
+The user asked for it to be split as `logic_thread` was. Done: the audio
+(`618a552`, `engine/view_audio.py`, `view.audio`; 4,812 -> 4,488 lines).
+By size, what is left in the class: the HUD (22 methods, ~655 lines), mouse
+and keyboard handling (~570), `_paint_frame` (~440, one method), the pause
+menu (20 methods, ~270), terrain editing and stamps (~220), view messages
+(~160), component editing (~140), actor picking (~110). Suggested order:
+pause menu, HUD, view messages (each has its own state and tests that name
+its methods: move the tests' references with the code, as the audio slice
+did), then input; `_paint_frame` last, by pass.
+
+### Asked for and not started
+
+* **Water** (the user's `_SHOWCASE` screenshot): the waves read as too close
+  together (`water.vert` Gerstner wavelengths 190/118/74/38 units; the
+  ripple normal map at 0.011/0.0047/0.031 in `water.frag`), and high-quality
+  water does not reflect the EFFECT floating above it. The reflection is
+  screen-space (`traceReflection` marches the copied depth buffer): effects
+  are blended and write no depth, so a ray never finds them. It needs the
+  effect in the depth copy (alpha-tested depth for opaque-centred effects)
+  or a separate reflection of effects; not a parameter change.
 
 ### Behaviour changes to know about
 
@@ -91,6 +168,8 @@ the precondition; it is still not set up.
   drawn (as textures in subfolders always were), not at start-up.
 * A texture file added for an already loaded model appears when the model
   reloads, not on the next frame.
+* H hides every selected object and clears the selection; Shift+H works
+  with nothing selected.
 
 ### Tests at handoff
 
