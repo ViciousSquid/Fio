@@ -12,6 +12,10 @@ PROTOCOL = "fio-arena-1"
 DISCOVERY_PORT = 27960
 GAME_PORT = 27961
 MAX_PACKET = 1024 * 1024
+FRAME_TIMEOUT = 10
+# A client sends 20 inputs a second; a peer far beyond that is not a client.
+MAX_MESSAGE_RATE = 200
+MAX_OFFERS = 64
 
 
 def encode(message):
@@ -22,10 +26,11 @@ def encode(message):
 
 
 class Channel:
-    def __init__(self, sock, received, disconnected):
+    def __init__(self, sock, received, disconnected, rate=None):
         self.sock = sock
         self.sock.settimeout(1)
         self.received, self.disconnected = received, disconnected
+        self.rate, self.opened = rate, time.monotonic()
         self.closed = threading.Event()
         self.outgoing = queue.Queue(32)
         self._close_lock = threading.Lock()
@@ -38,13 +43,17 @@ class Channel:
         try:
             self.outgoing.put_nowait(encode(message))
             return True
-        except (queue.Full, ValueError, TypeError):
+        except queue.Full:
+            # A stalled link: the frame being written has its own deadline,
+            # and state this stale is worthless to the peer once it recovers.
+            return False
+        except (ValueError, TypeError):
             self.close()
             return False
 
     def _exact(self, count):
         result = bytearray()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + FRAME_TIMEOUT
         while len(result) < count and not self.closed.is_set():
             if time.monotonic() > deadline:
                 raise OSError("LAN frame timed out")
@@ -60,6 +69,7 @@ class Channel:
         return result
 
     def _read(self):
+        window, count = time.monotonic(), 0
         try:
             while not self.closed.is_set():
                 size, = struct.unpack("!I", self._exact(4))
@@ -68,6 +78,13 @@ class Channel:
                 message = json.loads(self._exact(size))
                 if not isinstance(message, dict):
                     break
+                if self.rate is not None:
+                    now = time.monotonic()
+                    if now - window >= 1:
+                        window, count = now, 0
+                    count += 1
+                    if count > self.rate:
+                        break
                 self.received(message)
         except (OSError, ValueError, RecursionError, queue.Full):
             pass
@@ -81,7 +98,16 @@ class Channel:
                     data = self.outgoing.get(timeout=0.2)
                 except queue.Empty:
                     continue
-                self.sock.sendall(data)
+                # Not sendall(): its socket timeout would be the budget for
+                # the whole frame, one second for a map of up to 1 MiB.
+                view, deadline = memoryview(data), time.monotonic() + FRAME_TIMEOUT
+                while view and not self.closed.is_set():
+                    if time.monotonic() > deadline:
+                        raise OSError("LAN frame timed out")
+                    try:
+                        view = view[self.sock.send(view):]
+                    except socket.timeout:
+                        continue
         except OSError:
             pass
         finally:
@@ -122,8 +148,10 @@ class LanHost:
         except OSError:
             self.listener.close(); self.discovery.close()
             raise
-        threading.Thread(target=self._accept, daemon=True).start()
-        threading.Thread(target=self._discover, daemon=True).start()
+        self._threads = [threading.Thread(target=target, daemon=True)
+                         for target in (self._accept, self._discover)]
+        for thread in self._threads:
+            thread.start()
 
     def _event(self, *event):
         try:
@@ -140,11 +168,12 @@ class LanHost:
             except OSError:
                 break
             with self.lock:
-                if len(self.peers) >= self.capacity - 1:
+                # close() may have collected the peers while accept() returned.
+                if self.closed.is_set() or len(self.peers) >= self.capacity - 1:
                     sock.close(); continue
                 key = "lan_" + uuid.uuid4().hex[:12]
                 channel = Channel(sock, lambda msg, k=key: self._event("message", k, msg),
-                                  lambda k=key: self._lost(k))
+                                  lambda k=key: self._lost(k), rate=MAX_MESSAGE_RATE)
                 self.peers[key] = channel
             self._event("connected", key)
 
@@ -176,6 +205,22 @@ class LanHost:
             peer = self.peers.get(key)
         return peer.send(message) if peer else False
 
+    def connections(self):
+        """``{key: seconds connected}`` of the live peers.
+
+        The event queue is bounded and may drop a ``disconnected`` event, so
+        this, not the events, is the authority on who is still here.
+        """
+        now = time.monotonic()
+        with self.lock:
+            return {key: now - channel.opened for key, channel in self.peers.items()}
+
+    def drop(self, key):
+        with self.lock:
+            peer = self.peers.get(key)
+        if peer is not None:
+            peer.close()
+
     def drain(self):
         while True:
             try:
@@ -185,6 +230,11 @@ class LanHost:
 
     def close(self):
         self.closed.set()
+        # A thread blocked in accept()/recvfrom() keeps its port bound until
+        # it wakes, so wait for both: hosting again at once must succeed.
+        for thread in self._threads:
+            if thread is not threading.current_thread():
+                thread.join(1)
         self.listener.close(); self.discovery.close()
         with self.lock:
             peers = list(self.peers.values())
@@ -197,6 +247,7 @@ class LanClient:
         self.events = queue.Queue(128)
         self.channel = None
         self.closed = threading.Event()
+        self.lost, self._lost_reported = threading.Event(), False
         self.address, self.port = address, port
         self.name, self.team = name[:32], team
         threading.Thread(target=self._connect, daemon=True).start()
@@ -206,10 +257,13 @@ class LanClient:
             sock = socket.create_connection((self.address, self.port), timeout=3)
             if self.closed.is_set():
                 sock.close(); return
-            self.channel = Channel(sock, lambda msg: self.events.put_nowait(msg),
-                                   lambda: self._event({"type": "disconnected"}))
+            self.channel = Channel(sock, lambda msg: self.events.put_nowait(msg), self.lost.set)
+            if self.closed.is_set():
+                # close() ran between the check above and the assignment.
+                self.channel.close(); return
             self.send(dict(type="hello", protocol=PROTOCOL, name=self.name, team=self.team))
-        except OSError as error:
+        except (OSError, ValueError, OverflowError) as error:
+            # ValueError: the resolver's IDNA codec rejects names such as "a..b".
             self._event(dict(type="error", message=str(error)))
 
     def _event(self, message):
@@ -226,7 +280,12 @@ class LanClient:
             try:
                 yield self.events.get_nowait()
             except queue.Empty:
-                return
+                break
+        # Never queued: a full queue is one of the reasons a channel closes,
+        # and the game must still learn that it did.
+        if self.lost.is_set() and not self._lost_reported:
+            self._lost_reported = True
+            yield {"type": "disconnected"}
 
     def close(self):
         self.closed.set()
@@ -255,15 +314,17 @@ class Discovery:
                 except OSError as error:
                     self.error = str(error)
             end = time.monotonic() + 1.2
-            while time.monotonic() < end:
+            found = 0
+            while time.monotonic() < end and found < MAX_OFFERS:
                 try:
                     data, address = sock.recvfrom(2048)
                     offer = json.loads(data)
                     if (isinstance(offer, dict) and offer.get("protocol") == PROTOCOL
-                            and offer.get("type") == "offer" and isinstance(offer.get("port"), int)
+                            and offer.get("type") == "offer" and type(offer.get("port")) is int
                             and 1 <= offer["port"] <= 65535):
                         offer["address"] = address[0]
                         self.results.put(offer)
+                        found += 1
                 except socket.timeout:
                     continue
                 except (ValueError, OSError):
