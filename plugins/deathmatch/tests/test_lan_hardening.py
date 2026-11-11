@@ -623,3 +623,46 @@ def test_discovery_flood_is_capped_and_ports_are_real_integers():
         assert all(type(offer["port"]) is int for offer in offers)
     finally:
         stop.set(); thread.join(3); responder.close()
+
+
+def test_a_quiet_connection_is_kept_alive(monkeypatch):
+    """The frame deadline also ran while a peer had nothing to send: a guest
+    loading the map or sitting in a dialog was dropped after ten seconds.
+    Each side now pings when idle; a ping never reaches the game."""
+    import socket as socket_module
+    from plugins.deathmatch import lan as lan_module
+    monkeypatch.setattr(lan_module, "FRAME_TIMEOUT", 0.6)
+    monkeypatch.setattr(lan_module, "KEEPALIVE", 0.15)
+    left, right = socket_module.socketpair()
+    received, lost = [], []
+    a = lan_module.Channel(left, received.append, lambda: lost.append("a"))
+    b = lan_module.Channel(right, received.append, lambda: lost.append("b"))
+    try:
+        deadline = time.monotonic() + 2.0           # three frame deadlines
+        while time.monotonic() < deadline and not lost:
+            time.sleep(0.05)
+        assert not lost and not a.closed.is_set() and not b.closed.is_set()
+        assert received == []
+        assert a.send({"type": "input", "keys": []})
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not received:
+            time.sleep(0.02)
+        assert received == [{"type": "input", "keys": []}]
+    finally:
+        a.close(); b.close()
+
+
+def test_a_peer_that_goes_silent_is_still_dropped(monkeypatch):
+    import socket as socket_module
+    from plugins.deathmatch import lan as lan_module
+    monkeypatch.setattr(lan_module, "FRAME_TIMEOUT", 0.4)
+    left, right = socket_module.socketpair()     # nothing ever answers on right
+    lost = []
+    channel = lan_module.Channel(left, lambda message: None, lambda: lost.append(1))
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not lost:
+            time.sleep(0.05)
+        assert lost
+    finally:
+        channel.close(); right.close()

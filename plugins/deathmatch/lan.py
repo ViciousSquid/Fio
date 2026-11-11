@@ -13,6 +13,11 @@ DISCOVERY_PORT = 27960
 GAME_PORT = 27961
 MAX_PACKET = 1024 * 1024
 FRAME_TIMEOUT = 10
+# A connection with nothing to say sends this often, so the frame deadline
+# only ever catches a peer that has stalled or gone: a guest loading the map
+# or sitting in a dialog sends no input, and was dropped after ten seconds.
+KEEPALIVE = 2.5
+PING = {"type": "ping"}
 # A client sends 20 inputs a second; a peer far beyond that is not a client.
 MAX_MESSAGE_RATE = 200
 MAX_OFFERS = 64
@@ -78,6 +83,8 @@ class Channel:
                 message = json.loads(self._exact(size))
                 if not isinstance(message, dict):
                     break
+                if message == PING:
+                    continue        # the transport's own; never the game's
                 if self.rate is not None:
                     now = time.monotonic()
                     if now - window >= 1:
@@ -92,12 +99,16 @@ class Channel:
             self.close()
 
     def _write(self):
+        sent = time.monotonic()
         try:
             while not self.closed.is_set():
                 try:
                     data = self.outgoing.get(timeout=0.2)
                 except queue.Empty:
-                    continue
+                    if time.monotonic() - sent < KEEPALIVE:
+                        continue
+                    data = encode(PING)
+                sent = time.monotonic()
                 # Not sendall(): its socket timeout would be the budget for
                 # the whole frame, one second for a map of up to 1 MiB.
                 view, deadline = memoryview(data), time.monotonic() + FRAME_TIMEOUT
