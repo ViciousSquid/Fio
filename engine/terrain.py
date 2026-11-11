@@ -369,9 +369,19 @@ class Terrain:
     MAX_GRADIENT_STOPS = 32
     #: Fixed per-chunk albedo paint resolution. Paint is baked into the terrain
     #: material, rather than retained as a render-time stamp/decal list.
-    TERRAIN_PAINT_RESOLUTION = 128
+    #: 256 a chunk is one texel a world unit at the default chunk size (it
+    #: was 128: a texel every two units, which is what made paint muddy).
+    #: Maps saved at another resolution are converted when loaded.
+    TERRAIN_PAINT_RESOLUTION = 256
+    #: World units one pixel of a tiled paint texture covers: a 512-pixel
+    #: image repeats every 256 units, whatever the size of the stamp.
+    STAMP_TILE_UNITS_PER_PIXEL = 0.5
     #: Texture layers per paint-map page; clamped to the driver's limit.
-    PAINT_PAGE_LAYERS = 512
+    #: A layer goes to a painted chunk only (TerrainGL hands them out), so a
+    #: page is small: 32 layers is 11 MB of video memory with its mips, and
+    #: a map gets as many pages as its painted chunks need. (It was one
+    #: layer a chunk slot, painted or not: 32 MB a page at 128.)
+    PAINT_PAGE_LAYERS = 32
     #: Texture layers per height-grid page; clamped to the driver's limit.
     HEIGHT_PAGE_LAYERS = 512
     #: Every uniform the terrain programs are driven through.
@@ -2040,9 +2050,93 @@ class Terrain:
             self._paint_image_cache[texture] = self._load_texture_rgba(texture)
         return self._paint_image_cache[texture]
 
+    def _tile_image(self, texture):
+        """*texture* for tiling: (image, pixels a world unit), or None.
+
+        The image is reduced (whole-number box filter) until it has no more
+        pixels a unit than the paint map has texels, so tiling it does not
+        alias; the reduced image is kept with the terrain.
+        """
+        key = ('tile', texture, self.TERRAIN_PAINT_RESOLUTION, self.chunk_size)
+        hit = self._paint_image_cache.get(key)
+        if hit is None:
+            image = self._paint_image(texture)
+            if image is None:
+                return None
+            per_unit = 1.0 / self.STAMP_TILE_UNITS_PER_PIXEL
+            texels = self.TERRAIN_PAINT_RESOLUTION / float(self.chunk_size)
+            factor = max(1, int(round(per_unit / max(texels, 1e-6))))
+            factor = min(factor, image.shape[0], image.shape[1])
+            if factor > 1:
+                h = image.shape[0] // factor * factor
+                w = image.shape[1] // factor * factor
+                image = image[:h, :w].reshape(
+                    h // factor, factor, w // factor, factor, 4
+                ).astype(np.float32).mean(axis=(1, 3))
+                image = np.clip(image + 0.5, 0, 255).astype(np.uint8)
+            hit = (image, per_unit / factor)
+            self._paint_image_cache[key] = hit
+        return hit
+
+    @staticmethod
+    def _sample_tiled_image(image, px, py):
+        """Bilinear RGBA sample at pixel coordinates, the image repeating."""
+        h, w = image.shape[:2]
+        px = px - 0.5
+        py = py - 0.5
+        fx0 = np.floor(px)
+        fy0 = np.floor(py)
+        fx = (px - fx0)[..., None]
+        fy = (py - fy0)[..., None]
+        x0 = np.mod(fx0.astype(np.int64), w)
+        y0 = np.mod(fy0.astype(np.int64), h)
+        x1 = np.mod(x0 + 1, w)
+        y1 = np.mod(y0 + 1, h)
+        c00 = image[y0, x0].astype(np.float32)
+        c10 = image[y0, x1].astype(np.float32)
+        c01 = image[y1, x0].astype(np.float32)
+        c11 = image[y1, x1].astype(np.float32)
+        top = c00 * (1.0 - fx) + c10 * fx
+        bottom = c01 * (1.0 - fx) + c11 * fx
+        return (top * (1.0 - fy) + bottom * fy) / 255.0
+
+    @staticmethod
+    def _sample_tiled_grid(image, px, py):
+        """As :meth:`_sample_tiled_image` over the grid of 1-D *px* x *py*.
+
+        An unturned stamp samples the image on a grid of its own rows and
+        columns, so each tap is a row-and-column pick rather than a pick a
+        texel -- and where the paint's texels sit on the image's pixels (the
+        usual case: the image is reduced to exactly that) one pick is all.
+        Returns (len(px), len(py), 4) in 0..1.
+        """
+        h, w = image.shape[:2]
+        px = px.astype(np.float64) - 0.5
+        py = py.astype(np.float64) - 0.5
+        fx0 = np.floor(px + 1e-4)
+        fy0 = np.floor(py + 1e-4)
+        fx = (px - fx0).astype(np.float32)
+        fy = (py - fy0).astype(np.float32)
+        x0 = np.mod(fx0.astype(np.int64), w)
+        y0 = np.mod(fy0.astype(np.int64), h)
+        if np.all(np.abs(fx) < 1e-3) and np.all(np.abs(fy) < 1e-3):
+            picked = image[np.ix_(y0, x0)].astype(np.float32)
+        else:
+            x1 = np.mod(x0 + 1, w)
+            y1 = np.mod(y0 + 1, h)
+            wx = fx[None, :, None]
+            wy = fy[:, None, None]
+            top = (image[np.ix_(y0, x0)].astype(np.float32) * (1.0 - wx)
+                   + image[np.ix_(y0, x1)].astype(np.float32) * wx)
+            bottom = (image[np.ix_(y1, x0)].astype(np.float32) * (1.0 - wx)
+                      + image[np.ix_(y1, x1)].astype(np.float32) * wx)
+            picked = top * (1.0 - wy) + bottom * wy
+        picked *= 1.0 / 255.0
+        return picked.transpose(1, 0, 2)
+
     def _bake_texture_rect(self, bounds, texture, angle=0.0,
                            feather=0.0, opacity=1.0, target=None,
-                           only=None, tint=None):
+                           only=None, tint=None, tiled=False):
         """Bake one source image directly into terrain's per-chunk albedo.
 
         *target* is the chunk dict written (default: texture_paint_maps,
@@ -2059,6 +2153,7 @@ class Terrain:
         image = self._paint_image(texture)
         if image is None:
             return False
+        tile = self._tile_image(texture) if tiled else None
         # The stored paint dicts may share arrays (texture_paint_base starts
         # as a copy of the map's paint) and their serialisation is cached by
         # array, so their arrays are replaced, never written in place.
@@ -2125,9 +2220,23 @@ class Terrain:
                 if not np.any(amount > 1e-6):
                     continue
 
-                uv_x = 0.5 + qx * 0.5
-                uv_z = 0.5 + qz * 0.5
-                sampled = self._sample_paint_image(image, uv_x, uv_z)
+                if tile is not None:
+                    # The texture lies on the world, turned by the stamp's
+                    # angle about the world's origin: stamps of one texture
+                    # and angle continue each other.
+                    tile_image, per_unit = tile
+                    if abs(angle) > 1e-6:
+                        tx = wx * ca + wz * sa
+                        tz = -wx * sa + wz * ca
+                        sampled = self._sample_tiled_image(
+                            tile_image, tx * per_unit, -tz * per_unit)
+                    else:
+                        sampled = self._sample_tiled_grid(
+                            tile_image, xs * per_unit, -zs * per_unit)
+                else:
+                    uv_x = 0.5 + qx * 0.5
+                    uv_z = 0.5 + qz * 0.5
+                    sampled = self._sample_paint_image(image, uv_x, uv_z)
                 if tint is not None:
                     rgb, mix = tint
                     sampled[..., :3] = (sampled[..., :3] * (1.0 - mix)
@@ -2143,18 +2252,20 @@ class Terrain:
                 elif copy_on_write:
                     paint = paint.copy()
                 target[key] = paint
-                dst = paint[ix0:ix1 + 1, iz0:iz1 + 1].astype(np.float32) / 255.0
-                dst_a = dst[..., 3]
-                out_a = src_a + dst_a * (1.0 - src_a)
-                out_rgb = np.zeros_like(dst[..., :3])
-                valid = out_a > 1e-6
-                out_rgb[valid] = (
-                    sampled[..., :3][valid] * src_a[valid, None]
-                    + dst[..., :3][valid] * dst_a[valid, None] * (1.0 - src_a[valid, None])
-                ) / out_a[valid, None]
-                dst[..., :3] = out_rgb
+                # Source over destination, whole arrays at a time (a mask
+                # pick a texel was most of a bake). Where nothing covers a
+                # texel its alpha rounds to 0 and its colour is cleared below.
+                dst = paint[ix0:ix1 + 1, iz0:iz1 + 1].astype(np.float32)
+                dst *= np.float32(1.0 / 255.0)
+                under = dst[..., 3] * (1.0 - src_a)
+                out_a = src_a + under
+                dst[..., :3] *= under[..., None]
+                dst[..., :3] += sampled[..., :3] * src_a[..., None]
+                dst[..., :3] /= np.maximum(out_a, np.float32(1e-6))[..., None]
                 dst[..., 3] = out_a
-                out = np.clip(dst * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                dst *= np.float32(255.0)
+                dst += np.float32(0.5)
+                out = np.clip(dst, 0, 255, out=dst).astype(np.uint8)
                 # A texel whose alpha rounds to 0 carries no colour: chunks with
                 # no alpha are not saved, so colour there would not survive a
                 # reload and a rebake after it would differ.
@@ -2177,7 +2288,7 @@ class Terrain:
             changed = self._bake_texture_rect(
                 bounds, str(texture), angle=float(angle),
                 feather=radius * float(np.clip(feather, 0.0, 1.0)),
-                opacity=opacity)
+                opacity=opacity, tiled=True)
             if changed:
                 self.texture_paint_base = dict(self.texture_paint_maps)
             return changed
@@ -2185,7 +2296,7 @@ class Terrain:
         changed = self._bake_texture_rect(
             bounds, str(texture), angle=float(angle),
             feather=radius * float(np.clip(feather, 0.0, 1.0)),
-            opacity=opacity, target=self.texture_paint_base)
+            opacity=opacity, target=self.texture_paint_base, tiled=True)
         if changed:
             self._recompose_paint(self._chunks_in_bounds(bounds))
         return changed
@@ -2197,8 +2308,16 @@ class Terrain:
 
     @staticmethod
     def make_paint_stamp(world_x, world_z, radius, texture, feather=0.25,
-                         opacity=1.0, angle=0.0, stamp_id=None):
-        """A stamp record, or None if it cannot be placed."""
+                         opacity=1.0, angle=0.0, stamp_id=None, tiled=True):
+        """A stamp record, or None if it cannot be placed.
+
+        *tiled* (the default, and what a record saved without the key
+        becomes): the texture repeats at its own scale in the world
+        (STAMP_TILE_UNITS_PER_PIXEL) and the stamp is the window onto it, so
+        a big stamp shows more of the texture rather than a bigger copy, and
+        stamps of one texture join. False stretches one copy of the image
+        over the stamp, for a picture rather than a material.
+        """
         import uuid
         try:
             record = {
@@ -2210,6 +2329,7 @@ class Terrain:
                 'angle': float(angle),
                 'feather': float(np.clip(float(feather), 0.0, 1.0)),
                 'opacity': float(np.clip(float(opacity), 0.0, 1.0)),
+                'tiled': bool(tiled),
             }
         except (TypeError, ValueError):
             return None
@@ -2297,7 +2417,8 @@ class Terrain:
         return self._bake_texture_rect(
             self._stamp_bounds(stamp), stamp['texture'],
             angle=stamp['angle'], feather=stamp['radius'] * stamp['feather'],
-            opacity=stamp['opacity'], target=target, only=only, tint=tint)
+            opacity=stamp['opacity'], target=target, only=only, tint=tint,
+            tiled=stamp.get('tiled', True))
 
     def _compose_paint_chunk(self, key, tint_ids=()):
         """Base paint plus every stamp over chunk *key*, in placement order."""
@@ -2446,7 +2567,7 @@ class Terrain:
                 raw.get('x'), raw.get('z'), raw.get('radius'),
                 raw.get('texture', ''), raw.get('feather', 0.25),
                 raw.get('opacity', 1.0), raw.get('angle', 0.0),
-                stamp_id=raw.get('id'))
+                stamp_id=raw.get('id'), tiled=raw.get('tiled', True))
             if stamp is None:
                 continue
             index = by_id.get(stamp['id'])
@@ -2529,19 +2650,52 @@ class Terrain:
             self._paint_serial_cache = fresh
         return entries
 
-    def _restore_texture_paint(self, entries):
+    def _restore_texture_paint(self, entries, saved_res=None):
         self._paint_map_versions = {}
         self._paint_epoch += 1
         self._paint_version_counter = 0
-        self.texture_paint_maps = self._decode_texture_paint(entries)
+        self.texture_paint_maps = self._decode_texture_paint(entries, saved_res)
         self._paint_epoch += 1
         for key in self.texture_paint_maps:
             self._touch_texture_paint(key)
 
-    def _decode_texture_paint(self, entries):
+    #: The paint resolution of maps saved before it was written to them.
+    LEGACY_PAINT_RESOLUTION = 128
+
+    @staticmethod
+    def _resample_paint(paint, res):
+        """*paint* (n, n, 4 uint8) at *res* a side, bilinear.
+
+        Colour is weighted by alpha, so the edge of a painted area keeps
+        its colour rather than fading towards the black of unpainted texels.
+        """
+        n = paint.shape[0]
+        if n == res:
+            return paint
+        at = (np.arange(res, dtype=np.float32) + 0.5) * (n / float(res)) - 0.5
+        i0 = np.clip(np.floor(at).astype(np.int64), 0, n - 1)
+        i1 = np.clip(i0 + 1, 0, n - 1)
+        f = np.clip(at - np.floor(at), 0.0, 1.0).astype(np.float32)
+        src = paint.astype(np.float32)
+        src[..., :3] *= src[..., 3:4] / 255.0
+        rows = src[i0] * (1.0 - f)[:, None, None] + src[i1] * f[:, None, None]
+        out = rows[:, i0] * (1.0 - f)[None, :, None] + rows[:, i1] * f[None, :, None]
+        alpha = out[..., 3:4]
+        np.divide(out[..., :3] * 255.0, alpha, out=out[..., :3], where=alpha > 1e-3)
+        out = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        out[out[..., 3] == 0, :3] = 0
+        return out
+
+    def _decode_texture_paint(self, entries, saved_res=None):
+        """Paint chunks from their saved entries, at this terrain's resolution.
+
+        *saved_res* is the side they were saved at (default: the current
+        one); a chunk saved at another is resampled.
+        """
         import base64, zlib
         maps = {}
-        res = self.TERRAIN_PAINT_RESOLUTION
+        res = int(saved_res or self.TERRAIN_PAINT_RESOLUTION)
+        target = self.TERRAIN_PAINT_RESOLUTION
         expected = res * res * 4
         for entry in entries or []:
             if not isinstance(entry, dict):
@@ -2556,6 +2710,8 @@ class Terrain:
                     continue
                 paint = np.frombuffer(raw, dtype=np.uint8).copy().reshape(
                     res, res, 4)
+                if res != target:
+                    paint = self._resample_paint(paint, target)
                 maps[(int(coord[0]), int(coord[1]))] = paint
             except (TypeError, ValueError, OSError, zlib.error):
                 continue
@@ -2718,7 +2874,14 @@ class Terrain:
             self.biome = BiomeConfig.from_dict(data['custom_biome'])
             self.biome.name = biome_display_name(self.biome.name)
         # Baked terrain texture paint.
-        self._restore_texture_paint(data.get('texture_paint', []))
+        try:
+            saved_res = int(data.get('texture_paint_resolution',
+                                     self.LEGACY_PAINT_RESOLUTION))
+        except (TypeError, ValueError):
+            saved_res = self.LEGACY_PAINT_RESOLUTION
+        if saved_res <= 0 or saved_res > 4096:
+            saved_res = self.LEGACY_PAINT_RESOLUTION
+        self._restore_texture_paint(data.get('texture_paint', []), saved_res)
         # Migrate old render-time stamps once. The source asset is sampled now
         # and then discarded; the saved terrain owns the resulting pixels.
         for stamp in data.get('texture_stamps', []):
@@ -2742,18 +2905,24 @@ class Terrain:
         # records only make them editable. A map without records keeps all
         # of its paint as the base layer.
         self.paint_stamps = []
+        # A map from before this resolution, or whose stamps were stretched
+        # (no 'tiled' key), is converted: its stamps are baked again from
+        # their records, sharp and tiled. Paint with no record behind it can
+        # only be resampled.
+        convert = saved_res != self.TERRAIN_PAINT_RESOLUTION
         for raw in data.get('paint_stamps', []) or []:
             if isinstance(raw, dict):
+                convert = convert or 'tiled' not in raw
                 stamp = self.make_paint_stamp(
                     raw.get('x'), raw.get('z'), raw.get('radius'),
                     raw.get('texture', ''), raw.get('feather', 0.25),
                     raw.get('opacity', 1.0), raw.get('angle', 0.0),
-                    stamp_id=raw.get('id'))
+                    stamp_id=raw.get('id'), tiled=raw.get('tiled', True))
                 if stamp is not None:
                     self.paint_stamps.append(stamp)
         if self.paint_stamps:
             self.texture_paint_base = self._decode_texture_paint(
-                data.get('texture_paint_base', []))
+                data.get('texture_paint_base', []), saved_res)
         else:
             self.texture_paint_base = dict(self.texture_paint_maps)
         self.selected_stamp_ids = set()
@@ -2761,6 +2930,11 @@ class Terrain:
         self._paint_epoch += 1
         self._stamp_dirty_chunks = set()
         self._invalidate_stamp_index()
+        if convert and self.paint_stamps:
+            keys = set()
+            for stamp in self.paint_stamps:
+                keys |= self._stamp_chunks(stamp)
+            self._recompose_paint(keys)
 
         # Sculpt offsets
         self.sculpt_offsets = {}

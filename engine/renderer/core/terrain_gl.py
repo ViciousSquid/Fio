@@ -45,6 +45,10 @@ def _no_current_gl_context():
         return False
 
 
+#: EXT/ARB_texture_filter_anisotropic (not in PyOpenGL's core namespace).
+_TEXTURE_MAX_ANISOTROPY = 0x84FE
+_MAX_TEXTURE_MAX_ANISOTROPY = 0x84FF
+
 class TerrainGL:
     """GL state for one published terrain (``TerrainFrame.key``)."""
 
@@ -76,6 +80,12 @@ class TerrainGL:
         self._page_layers = 0
         self._paint_pages = []
         self._paint_page_layers = 0
+        # Paint layers go to painted chunks only: slot -> layer number across
+        # the pages, and the numbers given back by slots that lost theirs.
+        self._paint_layer = {}
+        self._paint_layers_free = []
+        self._paint_layers_used = 0
+        self._paint_anisotropy_limit = None
         self._paint_epoch = None
         self._index_vaos = {}          # resolution -> (vertex array, index buffer)
         self._placeholder_cubemap = 0
@@ -351,6 +361,11 @@ class TerrainGL:
             for slot, version in zip(order, paint):
                 if version and gpu_version[slot] != version:
                     self._upload_paint_chunk(slot)
+            # A version with no pixels behind it (the chunk's paint went
+            # between publication and here) has no layer: draw it unpainted.
+            layers = self._paint_layer
+            paint = [version if slot in layers else 0
+                     for slot, version in zip(order, paint)]
         bound_res = -1
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
         lods = table.lod[slots].tolist() if lod_level_loc != -1 else None
@@ -371,7 +386,8 @@ class TerrainGL:
                 bound_page = page
             if paint_unit is not None:
                 if paint is not None and paint[i]:
-                    paint_page = slot // self._paint_page_layers
+                    paint_page, paint_layer = divmod(
+                        self._paint_layer[slot], self._paint_page_layers)
                     if paint_page != bound_paint_page:
                         gl.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
                         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
@@ -381,8 +397,7 @@ class TerrainGL:
                     if paint_enabled != 1:
                         gl.glUniform1i(u['uPaintEnabled'], 1)
                         paint_enabled = 1
-                    gl.glUniform1i(u['uPaintLayer'],
-                                   slot % self._paint_page_layers)
+                    gl.glUniform1i(u['uPaintLayer'], paint_layer)
                 elif paint_enabled != 0:
                     gl.glUniform1i(u['uPaintEnabled'], 0)
                     paint_enabled = 0
@@ -500,6 +515,11 @@ class TerrainGL:
         self._placeholder_cubemap = tex
         return self._placeholder_cubemap
 
+    #: Mip levels a paint page has beyond the first. Enough that paint in
+    #: the distance does not shimmer; few enough that a chunk's edge texels
+    #: are not averaged far into its neighbour's missing ones.
+    PAINT_MIP_LEVELS = 3
+
     def _ensure_paint_page(self, page: int) -> int:
         if not self._paint_page_layers:
             limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
@@ -507,42 +527,121 @@ class TerrainGL:
         while len(self._paint_pages) <= page:
             tex = int(gl.glGenTextures(1))
             gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
-            gl.glTexImage3D(
-                gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8,
-                self.frame.paint_resolution, self.frame.paint_resolution,
-                self._paint_page_layers, 0,
-                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            side = int(self.frame.paint_resolution)
+            levels = 0
+            for level in range(self.PAINT_MIP_LEVELS + 1):
+                if side >> level < 1:
+                    break
+                gl.glTexImage3D(
+                    gl.GL_TEXTURE_2D_ARRAY, level, gl.GL_RGBA8,
+                    side >> level, side >> level,
+                    self._paint_page_layers, 0,
+                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+                levels = level
             for pname, value in (
-                (gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                (gl.GL_TEXTURE_BASE_LEVEL, 0),
+                (gl.GL_TEXTURE_MAX_LEVEL, levels),
+                (gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR),
                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
                 (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
                 gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
+            # Seen at a grazing angle -- which the ground mostly is -- plain
+            # trilinear filtering picks a mip for the squashed axis and blurs
+            # the other: bias it back a level (core GL), and filter along
+            # the squash where the driver can (an extension nearly all have).
+            gl.glTexParameterf(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_LOD_BIAS,
+                               self.PAINT_LOD_BIAS)
+            anisotropy = self._paint_anisotropy()
+            if anisotropy > 1.0:
+                gl.glTexParameterf(gl.GL_TEXTURE_2D_ARRAY,
+                                   _TEXTURE_MAX_ANISOTROPY, anisotropy)
             self._paint_pages.append(tex)
         return self._paint_pages[page]
+
+    PAINT_LOD_BIAS = -1.0
+    PAINT_ANISOTROPY = 4.0
+
+    def _paint_anisotropy(self):
+        """Anisotropic samples for paint pages, 1.0 where unsupported."""
+        if self._paint_anisotropy_limit is None:
+            limit = 1.0
+            try:
+                count = int(gl.glGetIntegerv(gl.GL_NUM_EXTENSIONS))
+                names = {gl.glGetStringi(gl.GL_EXTENSIONS, i).decode('ascii', 'replace')
+                         for i in range(count)}
+                if ('GL_EXT_texture_filter_anisotropic' in names
+                        or 'GL_ARB_texture_filter_anisotropic' in names):
+                    limit = float(gl.glGetFloatv(_MAX_TEXTURE_MAX_ANISOTROPY))
+            except Exception:
+                limit = 1.0
+            self._paint_anisotropy_limit = limit
+        return max(1.0, min(self.PAINT_ANISOTROPY, self._paint_anisotropy_limit))
+
+    def _release_paint_layer(self, slot: int):
+        layer = self._paint_layer.pop(int(slot), None)
+        if layer is not None:
+            self._paint_layers_free.append(layer)
+
+    def _release_paint_layers(self):
+        """Every paint layer back: the paint was replaced wholesale."""
+        self._paint_layer.clear()
+        self._paint_layers_free = []
+        self._paint_layers_used = 0
+
+    @staticmethod
+    def _paint_mip(paint):
+        """*paint* (n, n, 4 uint8) at half the side, colour weighted by alpha
+        (an unpainted texel is black, and must not darken its neighbours)."""
+        n = paint.shape[0] // 2
+        blocks = paint[:n * 2, :n * 2].reshape(n, 2, n, 2, 4).astype(np.float32)
+        alpha = blocks[..., 3:4]
+        weight = alpha.sum(axis=(1, 3))
+        colour = (blocks[..., :3] * alpha).sum(axis=(1, 3))
+        np.divide(colour, weight, out=colour, where=weight > 0.0)
+        out = np.empty((n, n, 4), dtype=np.uint8)
+        out[..., :3] = np.clip(colour + 0.5, 0, 255)
+        out[..., 3:4] = np.clip(weight * 0.25 + 0.5, 0, 255)
+        return out
 
     def _upload_paint_chunk(self, slot: int):
         table = self.frame.table
         self._sync_gl_columns()
+        slot = int(slot)
         coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
         paint = self.frame.paint_display.get(coord)
         if paint is None:
             paint = self.frame.paint_maps.get(coord)
         if paint is None:
             self._paint_gpu_version[slot] = 0
+            self._release_paint_layer(slot)
             return
         if not self._paint_page_layers:
             self._ensure_paint_page(0)
-        page, layer = divmod(int(slot), self._paint_page_layers)
+        number = self._paint_layer.get(slot)
+        if number is None:
+            if self._paint_layers_free:
+                number = self._paint_layers_free.pop()
+            else:
+                number = self._paint_layers_used
+                self._paint_layers_used += 1
+            self._paint_layer[slot] = number
+        page, layer = divmod(number, self._paint_page_layers)
         tex = self._ensure_paint_page(page)
         data = np.ascontiguousarray(paint, dtype=np.uint8)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
-        gl.glTexSubImage3D(
-            gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
-            self.frame.paint_resolution, self.frame.paint_resolution, 1,
-            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
+        side = int(self.frame.paint_resolution)
+        for level in range(self.PAINT_MIP_LEVELS + 1):
+            if side >> level < 1:
+                break
+            if level:
+                data = np.ascontiguousarray(self._paint_mip(data))
+            gl.glTexSubImage3D(
+                gl.GL_TEXTURE_2D_ARRAY, level, 0, 0, layer,
+                side >> level, side >> level, 1,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
         self._paint_gpu_version[slot] = self.frame.paint_versions.get(coord, 0)
 
     # -- slots ------------------------------------------------------------
@@ -579,6 +678,7 @@ class TerrainGL:
             self._block_count[slot] = 0
             self._block_version[slot] = 0
             self._paint_gpu_version[slot] = 0
+            self._release_paint_layer(slot)
             self._gpu_version[slot] = 0
 
     def _product(self, store, slot):
@@ -705,6 +805,7 @@ class TerrainGL:
         self._adopt(table)
         if self._paint_epoch != frame.paint_epoch:
             self._paint_gpu_version[:] = 0
+            self._release_paint_layers()
             self._paint_epoch = frame.paint_epoch
 
         gl.glUseProgram(prog)
@@ -827,6 +928,7 @@ class TerrainGL:
                     pass
         self._paint_pages, self._height_pages = [], []
         self._paint_page_layers = 0
+        self._release_paint_layers()
         for vao, buffer in self._index_vaos.values():
             gl.glDeleteVertexArrays(1, [vao])
             gl.glDeleteBuffers(1, [buffer])
