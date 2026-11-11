@@ -437,19 +437,31 @@ class MainWindow(QMainWindow):
         dirty_marker = "*" if self.unsaved_changes else ""
         self.setWindowTitle(f"Fio - {fname} {dirty_marker}")
 
+    # A key's name is a settings.ini option name and its command an option
+    # value, and configparser has rules for both: "Ctrl+=" and "Ctrl+:" hold a
+    # delimiter, "[" and "#" start a section or a comment, and a "%" in a
+    # command is interpolation syntax. Names are percent-encoded on disk and
+    # "%" doubled, so every key Qt can name and every command can be stored.
+
     def load_key_bindings(self):
+        from urllib.parse import unquote
         if self.config.has_section('KeyBindings'):
-            for key, command in self.config.items('KeyBindings'):
-                self.key_bindings[key] = command
+            for key in self.config.options('KeyBindings'):
+                try:
+                    command = self.config.get('KeyBindings', key)
+                except configparser.InterpolationError:
+                    # A hand-edited command with a bare "%".
+                    command = self.config.get('KeyBindings', key, raw=True)
+                self.key_bindings[unquote(key)] = command
 
     def save_key_bindings(self):
-        if not self.config.has_section('KeyBindings'):
-            self.config.add_section('KeyBindings')
-        else:
+        from urllib.parse import quote
+        if self.config.has_section('KeyBindings'):
             self.config.remove_section('KeyBindings')
-            self.config.add_section('KeyBindings')
+        self.config.add_section('KeyBindings')
         for key, command in self.key_bindings.items():
-            self.config.set('KeyBindings', key, command)
+            self.config.set('KeyBindings', quote(key, safe='+'),
+                            str(command).replace('%', '%%'))
         self.save_config()
 
     def set_key_binding(self, key_str, command):
