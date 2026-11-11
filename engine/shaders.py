@@ -2416,6 +2416,92 @@ void main() {
 }"""
 
 
+DEFAULT_SHADERS['decal.vert'] = """#version 330 core
+precision highp float;
+// A projected decal: its box, drawn as the unit cube. One instance a decal.
+layout (location = 0) in vec3 aPos;
+layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iParams;      // variant, opacity, kind, mirrored
+
+uniform mat4 projection;
+uniform mat4 view;
+
+flat out mat4 WorldToBox;
+flat out vec4 Params;
+
+void main() {
+    mat4 model = mat4(iModel0, iModel1, iModel2, iModel3);
+    WorldToBox = inverse(model);
+    Params = iParams;
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+}"""
+
+DEFAULT_SHADERS['decal.frag'] = """#version 330 core
+precision highp float;
+// The surface under this pixel -- whatever was drawn there, read back from
+// the depth copy -- is put in the decal box's own space. Inside the box it
+// takes the decal's texture; outside, nothing. So one box paints a wall,
+// the floor below it and the corner between, without knowing either.
+out vec4 FragColor;
+
+flat in mat4 WorldToBox;
+flat in vec4 Params;
+
+uniform highp sampler2D sceneDepth;
+uniform mediump sampler2DArray decalTextures;
+uniform vec4 decalRanges;       // first layer and count: wall images, floor images
+uniform mat4 invViewProjection;
+uniform vec4 viewport;          // x, y, width, height of the depth copy
+uniform vec3 viewPos;
+
+const float DECAL_STRENGTH = 2.6;
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
+    float depth = texture(sceneDepth, uv).r;
+    if (depth >= 0.99999) discard;                      // sky: no surface
+    vec4 clip = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    vec4 world = invViewProjection * clip;
+    world /= world.w;
+    vec3 local = (WorldToBox * world).xyz;              // -0.5..0.5 inside
+    if (any(greaterThan(abs(local), vec3(0.5)))) discard;
+
+    // The surface's facing, from how the world position changes across the
+    // pixel, in the box's space. The box's z is the way the decal was
+    // thrown: a surface facing that way (the far side of a thin wall) gets
+    // none.
+    vec3 normal = normalize(cross(dFdx(world.xyz), dFdy(world.xyz)));
+    if (dot(normal, viewPos - world.xyz) < 0.0) normal = -normal;
+    vec3 facing = normalize(mat3(WorldToBox) * normal);
+    if (facing.z > 0.35) discard;
+
+    // Across a surface square to the throw the texture lies on the box's
+    // x and y. On one that turns away -- the floor under a wall, a side
+    // wall -- it is unfolded about the box's middle: the distance out from
+    // the wall carries on from where the wall left off, so a run that
+    // reaches the foot of a wall goes on across the floor and nothing is
+    // smeared along the throw.
+    vec2 at = local.xy + facing.xy * local.z;
+    if (any(greaterThan(abs(at), vec2(0.5)))) discard;
+    vec2 range = Params.z > 0.5 ? decalRanges.zw : decalRanges.xy;
+    float layer = range.x + mod(Params.x, max(range.y, 1.0));
+    float across = Params.w > 0.5 ? -at.x : at.x;
+    vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
+    // Fade at the box's near and far ends rather than cut.
+    float ends = 1.0 - smoothstep(0.38, 0.5, abs(local.z));
+    float amount = texel.a * Params.y * ends;
+    if (amount <= 0.004) discard;
+    // Stained, not painted: the blend is dst * (src.rgb + 1 - src.a), so
+    // the surface keeps its own light and shadow -- blood in a dark room is
+    // dark -- while the colour, pushed past 1, stays red on a grey wall
+    // instead of going to black.
+    FragColor = vec4(texel.rgb * (amount * DECAL_STRENGTH), amount);
+}"""
+
+
 def _terrain_indexed_sources():
     """The heightfield terrain program as it is drawn: ``terrain_indexed.vert``
     and ``terrain_flat.frag``, derived from ``terrain.vert``/``terrain.frag``.

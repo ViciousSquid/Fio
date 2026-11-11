@@ -97,6 +97,9 @@ class RenderState:
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
+        #: Projected decals (blood): (models (n, 16), params (n, 4)) float32
+        #: from the combat runtime's DecalTable, or None (engine/decal_table.py).
+        self.decals = None
         #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
         self.projectiles = np.empty((0, 3), dtype=np.float32)
 
@@ -189,6 +192,7 @@ class RenderState:
         self.hud_message = ""
         self.hud_prompt_key = None
         self.bullet_marks = []
+        self.decals = None
         #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
         self.projectiles = np.empty((0, 3), dtype=np.float32)
         self.muzzle_flash_active = False

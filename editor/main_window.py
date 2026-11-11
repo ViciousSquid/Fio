@@ -142,6 +142,22 @@ class Toast(QLabel):
         self.anim.start()
         
 
+def gore_level_from(config) -> int:
+    """The gore level in *config* (Settings/gore): 0 off, 1 normal (the
+    default), up to the last of ``LogicCombat.GORE_LEVELS``. An old on/off
+    value reads as off or normal."""
+    from engine.logic_combat import LogicCombat
+    raw = str(config.get('Settings', 'gore', fallback='1')).strip().lower()
+    if raw in ('true', 'yes', 'on'):
+        return 1
+    if raw in ('false', 'no', 'off'):
+        return 0
+    try:
+        return max(0, min(int(float(raw)), len(LogicCombat.GORE_LEVELS) - 1))
+    except ValueError:
+        return 1
+
+
 def _loading_overlay(window):
     """*window*'s loading bar (a no-op stand-in where it has none)."""
     from editor.loading_overlay import overlay_for
@@ -2139,6 +2155,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_():
             self.save_config()
             self.update_shortcuts()
+            self.apply_gore_setting()
             self.apply_tooltip_settings()
             
             # Update Autosave if changed
@@ -2670,6 +2687,7 @@ class MainWindow(QMainWindow):
                 logic.package = self._package
             physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
             self.view_3d.toggle_play_mode(player_start, physics_enabled)
+            self.apply_gore_setting()
             # The play world is built: settle the collector while the
             # loading bar is still up (engine/gc_policy.py).
             gc_policy.settle()
@@ -2680,6 +2698,12 @@ class MainWindow(QMainWindow):
         
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
 
+
+    def apply_gore_setting(self):
+        """Give the game the Settings' gore level (0 clears the blood)."""
+        logic = self.view_3d.logic_thread
+        if logic is not None:
+            logic.combat_runtime.set_gore_level(gore_level_from(self.config))
 
     def _capture_pre_play_world(self):
         """Remember the world as Play starts, if Stop is to put it back.

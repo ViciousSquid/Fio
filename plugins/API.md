@@ -428,6 +428,14 @@ authored object, and a renderer writes nothing on what it is handed:
   `live`; keep your state under `frame.key` and free it when the key changes.
   Streaming, LOD and chunk building are done before the frame
   (`Terrain.advance`, by the host): a renderer computes no height.
+- `decals`: projected decals (blood), or `None`: `(models, params)`, float32
+  `(n, 16)` and `(n, 4)`, from the logic thread's `DecalTable`
+  (`engine/decal_table.py`). Each is a box -- the unit cube's column-major
+  model matrix -- with `(texture variant, opacity, kind, mirrored)`; `kind`
+  is 0 for what landed on a wall, 1 on a floor. Draw the box and paint its
+  texture onto whatever the frame has drawn inside it (the built-in pass
+  reconstructs the surface from depth: `engine/renderer/forward/decals.py`,
+  `decal.frag`). A renderer that ignores the key simply shows no blood.
 
 The renderer owns its technique — shaders, passes, lighting model, shadowing,
 G-buffer — and consumes the dense tables rather than authored

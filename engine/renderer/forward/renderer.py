@@ -35,11 +35,12 @@ from .lighting import LightingMixin
 from .passes import PassesMixin
 from .portals import PortalsMixin
 from .occlusion import OcclusionMixin
+from .decals import DecalsMixin
 from .distance import DistanceMixin
 from .shaders import ShadersMixin
 
 
-class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
+class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
                       DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
@@ -178,6 +179,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
+        self._init_decals()
         #: Effects also write depth this frame (see _write_effect_depth), and
         #: the nearest few's centre and size, for the water pass to reflect.
         self._effects_write_depth = False
@@ -621,6 +623,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 lights, config)
         if etable is not None and len(etable.effect_slots):
             self.ensure_effect_frames(etable)
+        # Projected decals (blood): onto the opaque world just drawn, before
+        # anything blended, so they lie under water and glass.
+        self.draw_decals(projection, view, camera_pos, config.get('decals'))
         # High-quality water reflects what is in the depth buffer: in a frame
         # that has some, effects write their solid part there too.
         self._reflected_effects = None
@@ -686,6 +691,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # renderer rebuild (a render-mode or shadow-quality change) strands the
         # whole cube-map pool -- MAX_SHADOW_LIGHTS cube-maps at shadow_map_size,
         # tens of megabytes of VRAM, every time.
+        try:
+            self._cleanup_decals()
+        except Exception:
+            pass
         if self._terrain_gl_state is not None:
             try:
                 self._terrain_gl_state[1].cleanup()

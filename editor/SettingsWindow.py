@@ -324,6 +324,21 @@ class SettingsWindow(QDialog):
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")
         gameplay_layout.addWidget(self.show_hud_checkbox)
 
+        # Gore: how much blood an actor throws when shot (projected decals
+        # on the world behind and under it). Off draws and traces nothing.
+        from engine.logic_combat import LogicCombat
+        gore_row = QHBoxLayout()
+        gore_row.addWidget(QLabel("Gore:"))
+        self.gore_combo = QComboBox()
+        self.gore_combo.addItems(list(LogicCombat.GORE_NAMES))
+        self.gore_combo.setToolTip(
+            "Blood thrown when an actor is shot. Off: none. Normal: a little "
+            "for the pistol, a lot for the shotgun. Heavy and Verhoeven: more "
+            "of it, and bigger.")
+        gore_row.addWidget(self.gore_combo)
+        gore_row.addStretch(1)
+        gameplay_layout.addLayout(gore_row)
+
         self.show_glasses_checkbox = QCheckBox("Show glasses")
         self.show_glasses_checkbox.setToolTip(
             "Show the player's glasses representation in play mode, "
@@ -631,6 +646,8 @@ class SettingsWindow(QDialog):
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
+        from editor.main_window import gore_level_from
+        self.gore_combo.setCurrentIndex(gore_level_from(self.config))
         self.restore_world_checkbox.setChecked(
             self.config.getboolean('Settings', 'restore_world_on_stop', fallback=False))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
@@ -769,6 +786,7 @@ class SettingsWindow(QDialog):
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'gore', str(self.gore_combo.currentIndex()))
         self.config.set('Settings', 'restore_world_on_stop',
                         str(self.restore_world_checkbox.isChecked()))
         self.config.set('Settings', 'save_mode',

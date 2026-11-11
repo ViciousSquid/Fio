@@ -536,6 +536,10 @@ class LogicRender:
             if current_time - m["time"] < logic.combat_runtime.BULLET_FADE_TIME
         ]
 
+        combat = logic.combat_runtime
+        write_state.decals = combat.blood.frame(
+            current_time, combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
+
         far = (
             self.view_distance.far_plane
         )
