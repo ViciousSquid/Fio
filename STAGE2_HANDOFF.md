@@ -278,9 +278,11 @@ Tests that scan the view's source now scan these modules too
   -- the mip and anisotropic filtering, which software GL pays for and a
   GPU mostly does not; unverified on Adreno. Still slow: the first step
   and the release when dragging a stamp with many stamps above it.
-* Not rerun since these: the full suite. Tiers run and passed: engine,
-  renderer, visual, e2e, logic, regression, brush_model, persistence, the
-  stamp-editing editor tests, the deathmatch plugin.
+* The full suite was rerun after all of these: see Tests at handoff.
+* Asked for and not started: cutting the cost of editing stamps further
+  (the user redirected to closing the audit). Where it still is: the
+  first step and the release of a drag with many stamps above the one
+  dragged, about 130 ms each; a click 18 ms.
 
 ### Behaviour changes to know about
 
@@ -301,25 +303,25 @@ Tests that scan the view's source now scan these modules too
 
 ### Tests at handoff
 
-Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `4d3bfeb`
-(everything up to the Wave Spacing slider): **7,480 passed, 177 skipped, 10
-failed** (24 minutes). Five are the known set: the three `test_portal_fade`
-cases and the position window (environment), and the play-cycle memory
-guard. **Five were regressions from the last batch, fixed in the commit
-after it and rerun (all pass)**: two table-size budgets the new 4-byte
-`water_wave_spread` column exceeded (the budgets are now 357 and 545 B a
-row, stated in the test); two 2D-view component tests and one
-connection-line test that the view split's test rewrite had pointed at the
-wrong object. The full suite has **not** been rerun since that fix.
+Closing gate: full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`
+at `fcddde2` (everything: gore, damage indicators, terrain paint at 256,
+the stamp drag cache): **7,544 passed, 179 skipped, 7 failed** (26
+minutes). Five are the known set: the three `test_portal_fade` cases and
+the position window (environment), and the play-cycle memory guard. Two
+were suite-hygiene rules broken by the newest tests (a module missing its
+`qt` mark; a test patching a production class), fixed in `0f3dbba`; the
+integrity module passes after it.
 
-The play-cycle memory guard is at its limit: alone it measured 478 KiB
-earlier, then 513 (failing) and a pass on consecutive runs here. It is
-noise around 512 KiB, not a new leak -- the largest retainers are the same
-(`json/decoder.py`, the Debug Console's log lines) -- but it will keep
-flickering until those are looked at.
+**The play-cycle memory guard is explained** (`docs/performance-audit.md`,
+F9): it passes alone; after `test_change_records.py`,
+`test_debug_tables_oracle.py` or `test_display_mode.py` it fails, because
+it counts the pending-change dictionaries of those tests' still-alive,
+undrained tables. Bounded by `PENDING_LIMIT`, not an engine leak, and it
+fails the same at this session's first commit. A test-side fix is open.
 
-The gates before: `d827b77` 7,466 passed, 5 failed; `e62ac25` 7,442 passed,
-6 failed (the known set each time).
+Earlier gates: `4d3bfeb` 7,480 passed, 10 failed (five regressions, fixed
+in `5d49a5e`); `d827b77` 7,466 passed, 5 failed; `e62ac25` 7,442 passed, 6
+failed.
 
 ### Environment notes (this session)
 

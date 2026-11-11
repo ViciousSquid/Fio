@@ -217,13 +217,28 @@ Eight 384 px depth cube maps allocated at start: 11-13 ms and 27 MB here
 would save that for maps without one; not done (most shipped maps have
 lights, and the first use would then cost a frame).
 
-### F9. Play-cycle memory guard -- passes here, cause not isolated
+### F9. Play-cycle memory guard -- cause isolated: other tests' idle tables
 
-`tests/e2e/test_play_cycles.py` passes at this head: 478 KiB retained over
-30 sessions (limit 512; 631-647 at the last handoff). One run; which change
-moved it was not isolated. The largest retainer is still `json/decoder.py`
-(116 KiB, 2,267 objects: about 75 objects a session), then the Debug
-Console's log lines. It is close enough to the limit to fail again.
+`tests/e2e/test_play_cycles.py` passes on its own (two of two runs at the
+closing head) and with the newest end-to-end files; it fails when it runs
+after any of `test_change_records.py`, `test_debug_tables_oracle.py` or
+`test_display_mode.py` (610, 688 and 770 KiB against the 512 limit), and in
+the whole tier (1,151-1,282 KiB).
+
+What it then counts is not this session's memory. Two thirds of it is
+`engine/change_journal.py:156/158`: the pending-change dictionaries of
+tables that are still alive from the earlier tests but no longer drained.
+Every change the 30 Play sessions record is noted for them too. That is
+bounded by design (`PENDING_LIMIT`, 131,072 ids, after which a sink is
+marked overflowed and holds nothing), so it is not a leak in the engine;
+in the editor there is one live set of tables, which is drained every
+frame. The same pairing fails at the session's first commit (`adbe6e6`,
+925 KiB) and at `5d49a5e` (757), so nothing here introduced it.
+
+Open, small, test-side: either those three files should release their
+tables, or the guard should measure only its own session. The remaining
+real retainers are as before: `json/decoder.py` (about 135 KiB, 75 objects
+a session) and the Debug Console's log lines.
 
 ### F10. SysMon's VRAM line -- FIXED as far as it can be checked
 
@@ -276,3 +291,30 @@ What would change this recommendation: a Snapdragon run showing the frame
 bound by something this container cannot see (F4's composition, F5's
 first-draw compiles). The self-hosted runner the last handoff asked for is
 the precondition for judging any GL-bound item, this one included.
+
+## 5. Closing state
+
+The audit is closed with these outcomes (measurements are llvmpipe, this
+container; nothing below has been run on the Snapdragon):
+
+* Fixed and measured: F1 (2D views in play), F2 (textures on demand), F3
+  (terrain: M5 done -- indexed draw, published `TerrainFrame`, builds off
+  the paint thread, GL owned by the renderer), F10 (SysMon VRAM, as far as
+  it can be checked here).
+* The renderer boundary: every violation found is closed
+  (`docs/renderer-boundary-audit.md`).
+* Open, host-specific, needing the target machine: F4 (Qt composition), F5
+  (first use of shaders), F8 (shadow cube maps). Open and small: F6
+  (hitches in play), F9 (above, test-side).
+* Measured with no fix proposed: F7 (the GIL behind the main thread).
+
+Closing gate, full suite with the oracle recording at `fcddde2`: **7,544
+passed, 179 skipped, 7 failed** (26 minutes). Five are the known set (three
+`test_portal_fade` cases and the position window -- environment; the
+play-cycle guard -- F9). Two were suite-hygiene rules broken by tests added
+after the last gate (a module missing its `qt` mark; a test patching a
+production class), fixed in `0f3dbba`, after which the integrity module
+passes (1,201 with the two files concerned).
+
+The one thing that would most change these conclusions is still a run on
+the Adreno 690: every GPU-bound number here is software GL.
