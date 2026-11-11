@@ -5347,8 +5347,8 @@ class MainWindow(QMainWindow):
         self.save_config()
 
     def _apply_audio_volumes(self):
-        self.view_3d.sound_volume = self.sound_volume() / 100.0
-        self.view_3d.music_volume = self.music_volume() / 100.0
+        self.view_3d.audio.sound_volume = self.sound_volume() / 100.0
+        self.view_3d.audio.music_volume = self.music_volume() / 100.0
 
     def sound_volume(self):
         """The volume of every game sound but music, 0-100."""

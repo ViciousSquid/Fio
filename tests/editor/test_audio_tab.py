@@ -139,15 +139,15 @@ def test_the_game_view_loads_a_speakers_music(main_window, project, monkeypatch)
     view = main_window.view_3d
     loaded = {}
     monkeypatch.chdir(project)
-    monkeypatch.setattr(view, "_ensure_pygame_mixer", lambda: True)
+    monkeypatch.setattr(view.audio, "_ensure_pygame_mixer", lambda: True)
 
     def load(name, path):
         loaded[name] = path
-        view.sound_pool[name] = object()
+        view.audio.sound_pool[name] = object()
         return True
 
-    monkeypatch.setattr(view, "_load_sound_to_cache", load)
-    assert view._get_sound_instance("assets/music/act1/boss.mp3") is not None
+    monkeypatch.setattr(view.audio, "_load_sound_to_cache", load)
+    assert view.audio._get_sound_instance("assets/music/act1/boss.mp3") is not None
     assert loaded == {"assets/music/act1/boss.mp3":
                       os.path.realpath(project / "assets" / "music" / "act1" / "boss.mp3")}
 
@@ -174,22 +174,22 @@ def test_the_game_view_loads_a_speaker_music_member_from_music_fiopak(
         main_window, project, monkeypatch):
     view = main_window.view_3d
     monkeypatch.chdir(project)
-    monkeypatch.setattr(view, "_ensure_pygame_mixer", lambda: True)
-    view.sound_pool.clear()
+    monkeypatch.setattr(view.audio, "_ensure_pygame_mixer", lambda: True)
+    view.audio.sound_pool.clear()
     loaded = {}
 
     def load_bytes(names, data):
         loaded[names[0]] = data
         for name in names:
-            view.sound_pool[name] = object()
+            view.audio.sound_pool[name] = object()
         return True
 
-    monkeypatch.setattr(view, "_load_sound_bytes_to_cache", load_bytes)
+    monkeypatch.setattr(view.audio, "_load_sound_bytes_to_cache", load_bytes)
     with zipfile.ZipFile(project / "assets" / "music.fiopak", "w") as archive:
         archive.writestr("assets/music/act1/boss.mp3", b"archive-music")
         archive.writestr("assets/sounds/effect.wav", b"wrong archive root")
 
-    assert view._get_sound_instance("assets/music/act1/boss.mp3") is not None
+    assert view.audio._get_sound_instance("assets/music/act1/boss.mp3") is not None
     assert loaded == {"assets/music/act1/boss.mp3": b"archive-music"}
 
 
@@ -197,22 +197,22 @@ def test_the_game_view_loads_a_sound_effect_from_sounds_fiopak(
         main_window, project, monkeypatch):
     view = main_window.view_3d
     monkeypatch.chdir(project)
-    monkeypatch.setattr(view, "_ensure_pygame_mixer", lambda: True)
-    view.sound_pool.clear()
+    monkeypatch.setattr(view.audio, "_ensure_pygame_mixer", lambda: True)
+    view.audio.sound_pool.clear()
     loaded = {}
 
     def load_bytes(names, data):
         loaded.update({name: data for name in names})
         for name in names:
-            view.sound_pool[name] = object()
+            view.audio.sound_pool[name] = object()
         return True
 
-    monkeypatch.setattr(view, "_load_sound_bytes_to_cache", load_bytes)
+    monkeypatch.setattr(view.audio, "_load_sound_bytes_to_cache", load_bytes)
     with zipfile.ZipFile(project / "assets" / "sounds.fiopak", "w") as archive:
         archive.writestr("assets/sounds/shot.wav", b"archive-sound")
         archive.writestr("assets/music/theme.mp3", b"wrong archive root")
 
-    assert view._get_sound_instance("shot.wav") is not None
+    assert view.audio._get_sound_instance("shot.wav") is not None
     assert loaded == {
         "shot.wav": b"archive-sound",
         "assets/sounds/shot.wav": b"archive-sound",
@@ -225,7 +225,7 @@ def test_preload_reuses_archive_skips_bad_sound_and_preserves_aliases(
 
     view = main_window.view_3d
     monkeypatch.chdir(project)
-    monkeypatch.setattr(view, '_ensure_pygame_mixer', lambda: True)
+    monkeypatch.setattr(view.audio, '_ensure_pygame_mixer', lambda: True)
     monkeypatch.setattr(audio_archives, 'MAX_AUDIO_BYTES', 8)
     path = project / 'assets/sounds.fiopak'
     with zipfile.ZipFile(path, 'w') as archive:
@@ -247,8 +247,8 @@ def test_preload_reuses_archive_skips_bad_sound_and_preserves_aliases(
         return True
 
     monkeypatch.setattr(audio_archives.zipfile, 'ZipFile', track)
-    monkeypatch.setattr(view, '_load_sound_bytes_to_cache', load_bytes)
-    view._init_sound_system()
+    monkeypatch.setattr(view.audio, '_load_sound_bytes_to_cache', load_bytes)
+    view.audio._init_sound_system()
     assert loaded == {
         'assets/sounds/shot.wav': b'shot', 'shot.wav': b'shot',
         'assets/sounds/ui/click.ogg': b'click',

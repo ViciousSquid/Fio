@@ -35,7 +35,7 @@ def test_a_failed_mixer_is_not_reprobed_on_every_sound(main_window, qt_app, monk
     monkeypatch.setattr(qt_game_view.time, "perf_counter", lambda: clock[0])
     view = qt_game_view.QtGameView(main_window)
     try:
-        ensure = view._ensure_pygame_mixer
+        ensure = view.audio._ensure_pygame_mixer
 
         # Construction performs the first real mixer probe. Repeated sound
         # requests must not probe again until the retry window expires.
@@ -48,7 +48,7 @@ def test_a_failed_mixer_is_not_reprobed_on_every_sound(main_window, qt_app, monk
             assert ensure() is False
         assert mixer.attempts == 2
 
-        clock[0] += view.MIXER_RETRY_SECONDS
+        clock[0] += view.audio.MIXER_RETRY_SECONDS
         assert ensure() is False
         assert mixer.attempts == 3, "a device connected later would never be found"
     finally:

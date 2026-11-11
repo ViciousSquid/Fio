@@ -174,8 +174,8 @@ def test_sound_and_music_volumes_are_the_settings_volumes(playing):
         _press(view, Qt.Key_Left)
     assert window.config.get("Audio", "sound_volume") == "90"
     assert window.config.get("Audio", "music_volume") == "80"
-    assert view.sound_volume == pytest.approx(0.9)
-    assert view.music_volume == pytest.approx(0.8)
+    assert view.audio.sound_volume == pytest.approx(0.9)
+    assert view.audio.music_volume == pytest.approx(0.8)
 
     dialog = SettingsWindow(window.config, window)
     assert dialog.sound_volume_slider.value() == 90
@@ -231,13 +231,13 @@ def test_music_plays_at_the_music_volume_and_everything_else_at_the_sound_volume
         def play(self, loops=0):
             return Channel(self.name)
 
-    monkeypatch.setattr(view, "_get_sound_instance", lambda name: Sound(name))
+    monkeypatch.setattr(view.audio, "_get_sound_instance", lambda name: Sound(name))
     main_window.set_sound_volume(50)
     main_window.set_music_volume(25)
     for name in ("x.wav", "assets/sounds/ui/click.wav", "assets/music/theme.ogg",
                  "music/act1/boss.mp3"):
         view.game_state.queue_sound({"file": name, "volume": 0.8})
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert volumes == {
         "x.wav": (pytest.approx(0.4),),
         "assets/sounds/ui/click.wav": (pytest.approx(0.4),),
@@ -249,12 +249,12 @@ def test_music_plays_at_the_music_volume_and_everything_else_at_the_sound_volume
     volumes.clear()
     view.game_state.queue_sound({"file": "assets/music/theme.ogg", "volume": 1.0,
                                  "looping": True, "entity_id": 7})
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     main_window.set_music_volume(60)
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert volumes["assets/music/theme.ogg"] == (pytest.approx(0.6),)
-    view._speaker_channels.clear()
-    view._speaker_mix.clear()
+    view.audio._speaker_channels.clear()
+    view.audio._speaker_mix.clear()
 
 
 def test_quit_closes_fio_without_asking(main_window, qt_app, monkeypatch):

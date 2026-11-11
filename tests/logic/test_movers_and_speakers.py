@@ -127,11 +127,11 @@ class _FakeSound:
 
 def _real_speaker(main_window, monkeypatch, requests, sound):
     view = main_window.view_3d
-    view.stop_all_sounds()
+    view.audio.stop_all_sounds()
     view.game_state.queue_sound(requests[0]) if requests else None
     for request in requests[1:]:
         view.game_state.queue_sound(request)
-    monkeypatch.setattr(view, "_get_sound_instance", lambda _name: sound)
+    monkeypatch.setattr(view.audio, "_get_sound_instance", lambda _name: sound)
     return view
 
 
@@ -149,10 +149,10 @@ def test_looping_speaker_plays_with_infinite_loops(main_window, monkeypatch):
         }],
         snd,
     )
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert snd.plays[0][0] == -1
     assert snd.plays[0][1].volume == 0.5
-    assert 1 in view._speaker_channels
+    assert 1 in view.audio._speaker_channels
 
 
 def test_non_looping_speaker_plays_once_and_is_not_tracked(main_window, monkeypatch):
@@ -168,9 +168,9 @@ def test_non_looping_speaker_plays_once_and_is_not_tracked(main_window, monkeypa
         }],
         snd,
     )
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert snd.plays[0][0] == 0
-    assert 2 not in view._speaker_channels
+    assert 2 not in view.audio._speaker_channels
 
 
 def test_stop_sound_silences_a_looping_channel(main_window, monkeypatch):
@@ -186,12 +186,12 @@ def test_stop_sound_silences_a_looping_channel(main_window, monkeypatch):
         }],
         snd,
     )
-    view._process_sound_queue()
-    channel = view._speaker_channels[3]
+    view.audio._process_sound_queue()
+    channel = view.audio._speaker_channels[3]
     view.game_state.queue_sound({"action": "stop", "entity_id": 3})
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert channel.stopped
-    assert 3 not in view._speaker_channels
+    assert 3 not in view.audio._speaker_channels
 
 
 def test_retriggering_a_looping_speaker_does_not_stack(main_window, monkeypatch):
@@ -207,17 +207,17 @@ def test_retriggering_a_looping_speaker_does_not_stack(main_window, monkeypatch)
         }],
         snd,
     )
-    view._process_sound_queue()
-    first = view._speaker_channels[4]
+    view.audio._process_sound_queue()
+    first = view.audio._speaker_channels[4]
     view.game_state.queue_sound({
         "action": "play",
         "file": "hum.wav",
         "looping": True,
         "entity_id": 4,
     })
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert first.stopped
-    assert view._speaker_channels[4] is not first
+    assert view.audio._speaker_channels[4] is not first
 
 
 def test_stop_for_an_unknown_entity_is_harmless(main_window, monkeypatch):
@@ -228,7 +228,7 @@ def test_stop_for_an_unknown_entity_is_harmless(main_window, monkeypatch):
         [{"action": "stop", "entity_id": 999}],
         snd,
     )
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
 
 
 def test_legacy_request_without_action_still_plays(main_window, monkeypatch):
@@ -240,7 +240,7 @@ def test_legacy_request_without_action_still_plays(main_window, monkeypatch):
         [{"file": "splash.wav", "volume": 0.8}],
         snd,
     )
-    view._process_sound_queue()
+    view.audio._process_sound_queue()
     assert snd.plays[0][0] == 0
     assert snd.plays[0][1].volume == 0.8
 
@@ -259,7 +259,7 @@ def test_speaker_start_on_is_consumed_at_player_spawn():
 
 
 def test_sound_radius_gain_is_linear_and_zero_at_edge():
-    src = read_source("engine", "qt_game_view.py")
+    src = read_source("engine", "view_audio.py")
     assert "return 1.0 - (distance / radius)" in src
     assert "if distance >= radius:" in src
     assert "meta.get('radius', 512.0)" in src
