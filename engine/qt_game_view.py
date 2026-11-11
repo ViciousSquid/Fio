@@ -1204,6 +1204,11 @@ class QtGameView(QOpenGLWidget):
                 self.hud._draw_hud_splitscreen(painter, render_state)
             else:
                 self.hud._draw_hud(painter, render_state)
+        if (self.play_mode and render_state is not None
+                and render_state.damage_marks and not render_state.player_dead):
+            # Not part of the HUD's style or opacity: its own setting
+            # ([Display] damage_indicators). Player one's, over the whole view.
+            self.hud._draw_damage_indicators(painter, render_state)
         if self.play_mode and render_state and render_state.player_dead:
             self.hud._draw_death_screen(painter)
         if self.play_mode and self._cached_level_complete_ui:

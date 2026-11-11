@@ -23,8 +23,8 @@ import ctypes
 from typing import Optional
 from PyQt5 import sip
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
-from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QRectF, QEvent, QThread, pyqtSignal
+from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase, QPainterPath, QConicalGradient
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -347,6 +347,110 @@ class ViewHud:
         grad.setColorAt(0.55, QColor(int(r * 0.6), int(g * 0.7), int(b * 0.75), 130))
         grad.setColorAt(1.0, QColor(int(r * 0.3), int(g * 0.4), int(b * 0.5), 165))
         painter.fillRect(x, y, w, h, QBrush(grad))
+
+    #: Directional damage indicators: an arc at the very edge of the view, on
+    #: the side a hit came from, with an arrow head pointing out at it. Never
+    #: opaque: the game stays visible through them.
+    DAMAGE_ARC_SPAN = 34.0        # degrees
+    DAMAGE_ARC_OPACITY = 0.55     # at the hit; fades to nothing
+    DAMAGE_ARC_RADIUS = 0.46      # of the view's shorter side: the arc's curve
+    DAMAGE_ARC_WIDTH = 0.030
+    DAMAGE_ARC_COLOUR = (225, 24, 24)
+
+    @staticmethod
+    def damage_bearing(view, player_pos, source):
+        """Screen bearing of *source* from the player, radians clockwise from up.
+
+        The horizontal offset is turned into view space; what lies ahead of
+        the camera (-z) and what lies up the screen (+y) both count as "up".
+        So one rule serves both cameras: in first person the offset has no
+        height and "ahead" decides; looking straight down from overhead it
+        has no depth and "up the screen" decides; a tilted overhead camera
+        has both, and they agree. None when the source is on the player.
+        """
+        dx = float(source[0]) - float(player_pos[0])
+        dz = float(source[2]) - float(player_pos[2])
+        if dx * dx + dz * dz < 1.0:
+            return None
+        vx = view[0][0] * dx + view[2][0] * dz
+        vy = view[0][1] * dx + view[2][1] * dz
+        vz = view[0][2] * dx + view[2][2] * dz
+        return math.atan2(vx, vy - vz)
+
+    @staticmethod
+    def damage_edge_point(bearing, width, height, margin):
+        """Where a line from the view's middle along *bearing* meets its edge,
+        *margin* pixels in: (x, y) from the middle, y down."""
+        dx, dy = math.sin(bearing), -math.cos(bearing)
+        half_w = max(1.0, width / 2.0 - margin)
+        half_h = max(1.0, height / 2.0 - margin)
+        reach = min(half_w / abs(dx) if abs(dx) > 1e-9 else math.inf,
+                    half_h / abs(dy) if abs(dy) > 1e-9 else math.inf)
+        return dx * reach, dy * reach
+
+    def _draw_damage_indicators(self, painter, render_state,
+                                viewport_width=None, viewport_height=None):
+        marks = render_state.damage_marks if render_state is not None else ()
+        if not marks or render_state.cinematic_camera_active:
+            return
+        if not self.view.editor.config.getboolean(
+                'Display', 'damage_indicators', fallback=True):
+            return
+        width = viewport_width or self.view.width()
+        height = viewport_height or self.view.height()
+        side = min(width, height)
+        radius = side * self.DAMAGE_ARC_RADIUS
+        band = side * self.DAMAGE_ARC_WIDTH
+        outer, inner = radius + band / 2.0, radius - band / 2.0
+        span = self.DAMAGE_ARC_SPAN
+        start = 90.0 - span / 2.0
+
+        # The arc, pointing up, the tip of its arrow head at the origin; each
+        # mark puts that on the edge of the view and turns it to its bearing.
+        drop = outer + band * 1.15
+        margin = max(3.0, band * 0.25)
+        path = QPainterPath()
+        ring = QRectF(-outer, drop - outer, 2 * outer, 2 * outer)
+        hole = QRectF(-inner, drop - inner, 2 * inner, 2 * inner)
+        path.arcMoveTo(ring, start)
+        path.arcTo(ring, start, span)
+        path.arcTo(hole, start + span, -span)
+        path.closeSubpath()
+        head = QPainterPath()
+        head.moveTo(0.0, 0.0)
+        head.lineTo(band * 0.95, band * 0.95)
+        head.lineTo(-band * 0.95, band * 0.95)
+        head.closeSubpath()
+
+        red, green, blue = self.DAMAGE_ARC_COLOUR
+        view = render_state.camera_view_matrix
+        player_pos = render_state.player_pos
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.translate(width / 2.0, height / 2.0)
+        for x, y, z, strength in marks:
+            bearing = self.damage_bearing(view, player_pos, (x, y, z))
+            if bearing is None:
+                continue
+            # Full for the first half of its life, then fading out.
+            alpha = self.DAMAGE_ARC_OPACITY * max(0.0, min(1.0, strength * 2.0))
+            solid = QColor(red, green, blue, int(255 * alpha))
+            clear = QColor(red, green, blue, 0)
+            # Strongest in the middle of the arc, gone at its ends.
+            sweep = QConicalGradient(0.0, drop, start)
+            sweep.setColorAt(0.0, clear)
+            sweep.setColorAt(span / 720.0, solid)
+            sweep.setColorAt(span / 360.0, clear)
+            sweep.setColorAt(1.0, clear)
+            edge_x, edge_y = self.damage_edge_point(bearing, width, height, margin)
+            painter.save()
+            painter.translate(edge_x, edge_y)
+            painter.rotate(math.degrees(bearing))
+            painter.fillPath(path, QBrush(sweep))
+            painter.fillPath(head, solid)
+            painter.restore()
+        painter.restore()
 
     def _draw_fps_counter(self, painter):
         painter.setFont(self.view._fps_font)

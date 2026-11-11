@@ -32,6 +32,9 @@ def _sealed(array):
 class LogicRender:
     """Render-facing projection and culling for LogicThread."""
 
+    #: Seconds a directional damage indicator stays, fading as it goes.
+    DAMAGE_MARK_TIME = 1.6
+
     def __init__(self, logic):
         self.logic = logic
         self.view_distance = ViewDistance()
@@ -539,6 +542,22 @@ class LogicRender:
         combat = logic.combat_runtime
         write_state.decals = combat.blood.frame(
             current_time, combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
+
+        # Where recent hits on the player came from, each with what is left
+        # of it (1 at the hit, 0 when DAMAGE_MARK_TIME has passed). The HUD
+        # turns a position into a bearing with the camera it draws under.
+        marks = logic.player_runtime.damage_marks
+        if marks:
+            clock = current_time
+            life = self.DAMAGE_MARK_TIME
+            live = tuple(
+                (m[0], m[1], m[2], 1.0 - (clock - m[3]) / life)
+                for m in list(marks) if clock - m[3] < life)
+            if not live:
+                del marks[:]
+            write_state.damage_marks = live
+        else:
+            write_state.damage_marks = ()
 
         far = (
             self.view_distance.far_plane

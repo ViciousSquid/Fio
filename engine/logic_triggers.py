@@ -9,6 +9,7 @@ duplicating those systems here.
 
 import math
 import random
+import time
 
 import glm
 import numpy as np
@@ -59,6 +60,8 @@ class LogicTriggers:
     TRIGGER_POLL_TICK = 0.25
     TRIGGER_POLL_EPSILON = 1.0e-9
     HURT_INTERVAL = 0.5
+    #: Directional damage marks kept for the HUD (the newest ones).
+    DAMAGE_MARKS_KEPT = 8
 
     def __init__(self, logic):
         self.logic = logic
@@ -619,6 +622,8 @@ class LogicTriggers:
 
     def _apply_player_damage(self, damage):
         with self.logic.player_runtime.damage_lock:
+            source = self.logic.player_runtime.damage_source
+            self.logic.player_runtime.damage_source = None
             if self.logic.player_runtime.god_mode:
                 return
             was_alive = self.logic.player_runtime.player_health > 0
@@ -633,6 +638,11 @@ class LogicTriggers:
                 self.logic.player_runtime.player_health = 2
             became_dead = was_alive and self.logic.player_runtime.player_health <= 0
             took_damage = was_alive and damage > 0
+            if took_damage and source is not None:
+                marks = player_runtime.damage_marks
+                marks.append([float(source[0]), float(source[1]),
+                              float(source[2]), time.perf_counter()])
+                del marks[:-self.DAMAGE_MARKS_KEPT]
 
             # Queue the pain response at the instant damage is applied. Copy the
             # player position so subsequent movement cannot move the sound

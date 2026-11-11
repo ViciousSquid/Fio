@@ -844,6 +844,7 @@ class DeathmatchSession:
             self.logic.monster_ai._apply_monster_damage(victim.entity, damage, attacker=shooter.entity)
         else:
             self._human_attacker = shooter
+            self.logic.player_runtime.damage_source = tuple(shooter.actor.pos)
             try:
                 self.logic.trigger_runtime._apply_player_damage(damage)
             finally:

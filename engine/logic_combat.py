@@ -671,11 +671,13 @@ class LogicCombat:
             else:
                 self._update_monster_projectiles_dense(projectiles, delta)
 
-    def _projectile_damage(self, victim, damage, owner_id):
+    def _projectile_damage(self, victim, damage, owner_id, at=None):
         previous = self.projectile_damage_owner
         self.projectile_damage_owner = int(owner_id)
         try:
             if victim is None:
+                # *at*: where the projectile was -- the side the hit came from.
+                self.logic.player_runtime.damage_source = at
                 self.logic.trigger_runtime._apply_player_damage(damage)
             else:
                 self.logic.monster_ai._apply_monster_damage(victim, damage, attacker=None)
@@ -750,7 +752,7 @@ class LogicCombat:
                 dz = pz - float(player_pos[2])
                 if dx * dx + dy * dy + dz * dz < player_radius_sq:
                     damage = float(projectiles.damage[i])
-                    self._projectile_damage(None, damage, owner_id)
+                    self._projectile_damage(None, damage, owner_id, at=(px, py, pz))
                     if logic.monster_ai.monster_debug_active:
                         debug_log(
                             "MonsterAI",
@@ -919,7 +921,9 @@ class LogicCombat:
                 and not logic.player_runtime.player_dead
             ):
                 damage = float(projectiles.damage[i])
-                self._projectile_damage(None, damage, int(projectiles.owner_id[i]))
+                self._projectile_damage(
+                    None, damage, int(projectiles.owner_id[i]),
+                    at=tuple(pos32[i].tolist()))
                 if logic.monster_ai.monster_debug_active:
                     debug_log(
                         "MonsterAI",

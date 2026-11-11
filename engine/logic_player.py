@@ -50,6 +50,13 @@ class LogicPlayer:
         self.player_max_armor = 100
         self.player_dead = False
         self.damage_lock = threading.Lock()
+        #: Where the next damage comes from, as (x, y, z), set by an attacker
+        #: just before it calls LogicTriggers._apply_player_damage and taken
+        #: there. None for damage with no direction (a hurt trigger, a crush).
+        self.damage_source = None
+        #: Recent damage with a direction, newest last: [x, y, z, time taken].
+        #: The HUD's directional indicators (LogicRender publishes them).
+        self.damage_marks = []
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
