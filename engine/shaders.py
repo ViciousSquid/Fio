@@ -755,10 +755,14 @@ void main()
     vec2 dxz = vec2(0.0);
     vec3 n = vec3(0.0, 1.0, 0.0);
     if (amp > 0.001) {
-        addWave(vec2( 0.788,  0.616), 190.0, amp * 0.42, 1.05, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.552,  0.834), 118.0, amp * 0.28, 1.45, worldPos.xz, dy, dxz, n);
-        addWave(vec2( 0.943, -0.333),  74.0, amp * 0.19, 1.95, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.673, -0.740),  38.0, amp * 0.11, 2.70, worldPos.xz, dy, dxz, n);
+        // Wavelengths in world units (a player is ~64 tall). They were 190,
+        // 118, 74 and 38: crests a couple of strides apart, which read as a
+        // lumpy sheet rather than a body of water. Each is 2.2x longer now,
+        // and slower by sqrt(2.2), as longer waves on real water are.
+        addWave(vec2( 0.788,  0.616), 420.0, amp * 0.42, 0.71, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.552,  0.834), 260.0, amp * 0.28, 0.98, worldPos.xz, dy, dxz, n);
+        addWave(vec2( 0.943, -0.333), 163.0, amp * 0.19, 1.31, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.673, -0.740),  84.0, amp * 0.11, 1.82, worldPos.xz, dy, dxz, n);
         worldPos.y  += dy;
         worldPos.xz += dxz * 0.75 * edgeFade;
     }
@@ -823,7 +827,14 @@ uniform vec3 waterTint;
 uniform highp sampler2D sceneDepth;
 uniform int hasSceneDepth;
 uniform int ssrEnabled;
-uniform highp mat4 invProjection;""" + FOG_GLSL + """
+uniform highp mat4 invProjection;
+// Effects (ORB, FIRE, custom GIFs) reflected directly: the nearest few drawn
+// this frame, as the camera-facing quads they are. xyz centre (world), w
+// half width; the half heights beside them.
+#define MAX_REFLECTED_EFFECTS 4
+uniform int effectCount;
+uniform highp vec4 effectQuads[MAX_REFLECTED_EFFECTS];
+uniform float effectHalfHeights[MAX_REFLECTED_EFFECTS];""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
 const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
@@ -897,6 +908,64 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
     return vec4(0.0);
 }
 
+// An effect is a flat, camera-facing quad: the ray march above steps through
+// or past it. It is reflected directly instead. Where the reflected ray
+// passes the effect's centre, its offset from the centre says which texel of
+// the quad it meets; that texel is on screen, in the scene copy. The depth
+// copy says whether the effect's solid part is really what is drawn there
+// (the effect pass writes it for texels at least half opaque), so neither
+// the transparent corners of the quad nor something standing in front of it
+// is reflected. Returns the colour (rgb) and a confidence (a).
+vec4 reflectEffects(highp vec3 P, vec3 R) {
+    vec3 camRight = vec3(view[0][0], view[1][0], view[2][0]);
+    vec3 camUp = vec3(view[0][1], view[1][1], view[2][1]);
+    // "Up" and "right" across the ray.
+    vec3 upAcross = vec3(0.0, 1.0, 0.0) - R * R.y;
+    float upLength = length(upAcross);
+    if (upLength < 0.001) return vec4(0.0);
+    upAcross /= upLength;
+    vec3 rightAcross = cross(upAcross, R);
+    if (dot(rightAcross, camRight) < 0.0) rightAcross = -rightAcross;
+    for (int i = 0; i < effectCount && i < MAX_REFLECTED_EFFECTS; i++) {
+        highp vec3 centre = effectQuads[i].xyz;
+        float halfWidth = effectQuads[i].w;
+        float halfHeight = effectHalfHeights[i];
+        highp float along = dot(centre - P, R);
+        if (along <= 0.0) continue;
+        highp vec3 offset = P + R * along - centre;
+        float ox = dot(offset, rightAcross);
+        float oy = dot(offset, upAcross);
+        if (abs(ox) >= halfWidth || abs(oy) >= halfHeight) continue;
+        highp vec3 texel = centre + camRight * ox + camUp * oy;
+        highp vec4 clip = projection * view * vec4(texel, 1.0);
+        if (clip.w <= 0.0) continue;
+        highp vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
+        // Is the effect's solid part drawn there? At that pixel or beside
+        // it: an animated texture has pin-holes just under half opaque,
+        // which would otherwise speckle the reflection.
+        highp float texelZ = (view * vec4(texel, 1.0)).z;
+        highp float tolerance = 2.0 + abs(texelZ) * 0.004;
+        highp vec2 px = 1.5 / vec2(textureSize(sceneDepth, 0));
+        float solid = 0.0;
+        for (int k = 0; k < 5; k++) {
+            highp vec2 at = uv + px * (k == 0 ? vec2(0.0)
+                                    : k == 1 ? vec2(1.0, 0.0) : k == 2 ? vec2(-1.0, 0.0)
+                                    : k == 3 ? vec2(0.0, 1.0) : vec2(0.0, -1.0));
+            highp float d = textureLod(sceneDepth, at, 0.0).r;
+            if (d < 0.99999 && abs(viewPosFromDepth(at, d).z - texelZ) <= tolerance) {
+                solid = 1.0;
+                break;
+            }
+        }
+        if (solid == 0.0) continue;
+        vec2 edge = smoothstep(vec2(0.0), vec2(0.04), uv)
+                  * smoothstep(vec2(0.0), vec2(0.04), vec2(1.0) - uv);
+        return vec4(textureLod(sceneColor, uv, 0.0).rgb, edge.x * edge.y);
+    }
+    return vec4(0.0);
+}
+
 // Procedural sky remains the zero-cost fallback when reflections are disabled.
 vec3 skyColor(vec3 dir) {
     float h = clamp(dir.y, 0.0, 1.0);
@@ -937,9 +1006,11 @@ void main()
     } else {
         wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
     }
-    vec2 r1 = texture(normalMap, wuv * 0.0110 + time * vec2( 0.021,  0.014)).xy - 0.5;
-    vec2 r2 = texture(normalMap, wuv * 0.0047 + time * vec2(-0.011,  0.008)).xy - 0.5;
-    vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
+    // The ripple detail is spread with the waves (it was 0.0110, 0.0047 and
+    // 0.0310 of a tile per world unit): the same pattern, 1.7x broader.
+    vec2 r1 = texture(normalMap, wuv * 0.0065 + time * vec2( 0.021,  0.014)).xy - 0.5;
+    vec2 r2 = texture(normalMap, wuv * 0.0028 + time * vec2(-0.011,  0.008)).xy - 0.5;
+    vec2 r3 = texture(normalMap, wuv * 0.0182 + time * vec2( 0.016, -0.029)).xy - 0.5;
     vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
 
     // Broad world-space variation breaks up normal-map repetition on large water brushes.
@@ -1156,6 +1227,17 @@ void main()
         vec4 ssr = traceReflection(surfaceView, normalize(mat3(view) * R));
         sceneReflection = ssr.a * (1.0 - roughness * 0.6);
         reflection = mix(reflection, ssr.rgb, sceneReflection);
+        if (effectCount > 0) {
+            // By the wave's own normal, with only a little of the ripple
+            // detail: a small object a few hundred units off, reflected by
+            // the full detail normal, scatters into speckle.
+            vec3 calm = normalize(mix(geoN, N, 0.2));
+            vec4 effect = reflectEffects(FragPos, reflect(-viewDir, calm));
+            if (effect.a > 0.0) {
+                reflection = mix(reflection, effect.rgb, effect.a);
+                sceneReflection = max(sceneReflection, effect.a);
+            }
+        }
     }
 
     // Keep authored reflectivity visible at normal viewing angles. Physical

@@ -1938,8 +1938,57 @@ class PassesMixin:
             )
             self.render_stats.draw_calls += 1
 
+        if self._effects_write_depth:
+            self._write_effect_depth(uniforms, ordered_textures, run_starts)
+            # Centre and size of the nearest few (drawn back to front), for
+            # the water pass to reflect: numbers from the instance buffer.
+            self._reflected_effects = data[-self.MAX_REFLECTED_EFFECTS:, 0:5].copy()
         gl.glBindVertexArray(0)
         return count
+
+    #: An effect's texels at least this opaque count as solid for reflections.
+    EFFECT_DEPTH_ALPHA = 0.5
+    #: Effects one water pass reflects (water.frag MAX_REFLECTED_EFFECTS).
+    MAX_REFLECTED_EFFECTS = 4
+    #: How far across the water an effect's reflection is looked for, as a
+    #: multiple of its height above the surface.
+    EFFECT_REFLECTION_REACH = 4.0
+
+    def _write_effect_depth(self, uniforms, ordered_textures, run_starts):
+        """Write the solid part of the effects just drawn into the depth
+        buffer (colour untouched), so high-quality water finds them.
+
+        Water reflects by marching the copied depth buffer; effects are
+        blended and write no depth, so a reflected ray passed straight
+        through an orb floating over a pool. Only texels at least
+        EFFECT_DEPTH_ALPHA opaque are written: a flame's soft edge stays
+        depthless, as before. Done only in a frame that has high-quality
+        water (render_scene sets ``_effects_write_depth``)."""
+        cutoff = uniforms.get('alphaCutoff', -1)
+        if cutoff is None or cutoff < 0:
+            return
+        depth_write = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
+        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glUniform1f(cutoff, self.EFFECT_DEPTH_ALPHA)
+        current_tex = None
+        try:
+            for run in range(len(run_starts) - 1):
+                begin = int(run_starts[run])
+                length = int(run_starts[run + 1]) - begin
+                if length <= 0:
+                    continue
+                tex_id = int(ordered_textures[begin])
+                if tex_id != current_tex:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+                self._point_sprite_instances_at(begin)
+                gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, length)
+                self.render_stats.draw_calls += 1
+        finally:
+            gl.glUniform1f(cutoff, 0.0)
+            gl.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
+            gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
 
     def _create_water_surface_vao(self, subdivisions=64):
         """Tessellated unit-square grid on the cube's top face (y = +0.5).
@@ -2047,6 +2096,31 @@ class PassesMixin:
         gl.glUniform1i(uniforms['sceneDepth'], depth_unit)
         has_depth_loc = uniforms['hasSceneDepth']
         ssr_loc = uniforms['ssrEnabled']
+        # The effects this frame drew, nearest last: high-quality water
+        # reflects them directly (water.frag reflectEffects).
+        effects = self._reflected_effects if has_depth else None
+        if effects is not None and len(effects):
+            # Only those that can show in this water: above its surface and
+            # near it (a reflection reaches about four times as far across
+            # the water as the effect is high). Every water fragment tests
+            # each one kept, so the far side of the map is not sent.
+            bounds = table.bounds[brushes]
+            lo = (bounds[:, 0:3] - bounds[:, 3:6]).min(axis=0)
+            hi = (bounds[:, 0:3] + bounds[:, 3:6]).max(axis=0)
+            height = effects[:, 1] - hi[1]
+            dx = np.maximum(np.maximum(lo[0] - effects[:, 0], effects[:, 0] - hi[0]), 0.0)
+            dz = np.maximum(np.maximum(lo[2] - effects[:, 2], effects[:, 2] - hi[2]), 0.0)
+            reach = self.EFFECT_REFLECTION_REACH * (height + effects[:, 4])
+            effects = effects[(height > -effects[:, 4]) & (dx * dx + dz * dz < reach * reach)]
+        count = 0 if effects is None else len(effects)
+        gl.glUniform1i(uniforms['effectCount'], count)
+        if count:
+            quads = np.empty((count, 4), dtype=np.float32)
+            quads[:, 0:3] = effects[::-1, 0:3]
+            quads[:, 3] = effects[::-1, 3] * 0.5
+            heights = np.ascontiguousarray(effects[::-1, 4] * 0.5, dtype=np.float32)
+            gl.glUniform4fv(uniforms['effectQuads'], count, quads)
+            gl.glUniform1fv(uniforms['effectHalfHeights'], count, heights)
         brush_depth = None
         if not has_depth:
             gl.glUniform1i(has_depth_loc, 0)

@@ -178,6 +178,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
+        #: Effects also write depth this frame (see _write_effect_depth), and
+        #: the nearest few's centre and size, for the water pass to reflect.
+        self._effects_write_depth = False
+        self._reflected_effects = None
         #: (publication key, TerrainGL): the GL side of the terrain drawn.
         self._terrain_gl_state = None
         self._light_shadow_index = {}       # id(light) -> shadow slot index for this frame
@@ -617,6 +621,14 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 lights, config)
         if etable is not None and len(etable.effect_slots):
             self.ensure_effect_frames(etable)
+        # High-quality water reflects what is in the depth buffer: in a frame
+        # that has some, effects write their solid part there too.
+        self._reflected_effects = None
+        self._effects_write_depth = bool(
+            current_mode == RENDER_MODE_LIT and len(water_brushes)
+            and getattr(self, 'water_quality', 'expensive') == 'expensive'
+            and getattr(self, 'water_enabled', True)
+            and bool(_tbl.water_high_quality[water_brushes].any()))
         if effect_slots is not None and len(effect_slots):
             self.draw_effects_instanced(
                 projection, view, etable, effect_slots,

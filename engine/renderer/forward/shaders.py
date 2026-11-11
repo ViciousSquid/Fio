@@ -363,10 +363,20 @@ layout (location = 10) in vec4 iPayload;
             'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
             1,
         )
+        # alphaCutoff (0 unless set): the depth-only pass that lets water
+        # reflect effects keeps just their solid part (draw_fire_effects_instanced).
+        cutoff = 'if(texColor.a < 0.1) discard;'
+        if cutoff in frag:
+            frag = frag.replace(
+                'uniform sampler2D sprite_texture;',
+                'uniform sampler2D sprite_texture;\nuniform float alphaCutoff;', 1)
+            frag = frag.replace(
+                cutoff, 'if(texColor.a < max(0.1, alphaCutoff)) discard;', 1)
         if self._register_instanced_shader('sprite_instanced', source, frag,
                                            extra_uniforms=['projection', 'view',
                                                            'sprite_texture',
-                                                           'use_fixed_facing']):
+                                                           'use_fixed_facing',
+                                                           'alphaCutoff']):
             print(f'{_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
         self._compile_layered_sprite_shader(source, frag)
 
