@@ -2160,6 +2160,8 @@ class PassesMixin:
         models, normals = self._frame_transforms(table, brushes)
         sizes = table.half[brushes] * 2.0
         params = table.water_params[brushes]
+        spreads = table.water_wave_spread[brushes].tolist()
+        spread_loc = uniforms['waveSpread']
         tints = table.water_tint[brushes]
         planes = table.water_plane[brushes]
         bits = table.class_bits[brushes]
@@ -2196,6 +2198,7 @@ class PassesMixin:
             gl.glUniform1f(distortion_loc, float(params[i, 4]))
             gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
             gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
+            gl.glUniform1f(spread_loc, spreads[i])
             upload_tint(tint_loc, i)
             gl.glUniform3f(
                 brush_size_loc,

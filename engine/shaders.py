@@ -718,6 +718,7 @@ uniform mat3 normalMatrix;
 
 uniform float waveAmp;    // total wave amplitude in world units
 uniform vec3 brushSize;   // world-space brush dimensions
+uniform float waveSpread; // "Wave Spacing": 0 tight and choppy, 1 broad
 
 // One Gerstner wave: displaces the vertex and accumulates normal derivatives.
 void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
@@ -755,14 +756,17 @@ void main()
     vec2 dxz = vec2(0.0);
     vec3 n = vec3(0.0, 1.0, 0.0);
     if (amp > 0.001) {
-        // Wavelengths in world units (a player is ~64 tall). They were 190,
-        // 118, 74 and 38: crests a couple of strides apart, which read as a
-        // lumpy sheet rather than a body of water. Each is 2.2x longer now,
-        // and slower by sqrt(2.2), as longer waves on real water are.
-        addWave(vec2( 0.788,  0.616), 420.0, amp * 0.42, 0.71, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.552,  0.834), 260.0, amp * 0.28, 0.98, worldPos.xz, dy, dxz, n);
-        addWave(vec2( 0.943, -0.333), 163.0, amp * 0.19, 1.31, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.673, -0.740),  84.0, amp * 0.11, 1.82, worldPos.xz, dy, dxz, n);
+        // Wavelengths in world units (a player is ~64 tall). At 190, 118, 74
+        // and 38 -- "Wave Spacing" fully left -- crests are a couple of
+        // strides apart: tight, choppy water. Fully right (the default)
+        // each is 2.2x longer, and slower by sqrt(2.2), as longer waves on
+        // real water are: a broad, calm swell.
+        float longer = mix(1.0, 2.2, clamp(waveSpread, 0.0, 1.0));
+        float slower = inversesqrt(longer);
+        addWave(vec2( 0.788,  0.616), 190.0 * longer, amp * 0.42, 1.05 * slower, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.552,  0.834), 118.0 * longer, amp * 0.28, 1.45 * slower, worldPos.xz, dy, dxz, n);
+        addWave(vec2( 0.943, -0.333),  74.0 * longer, amp * 0.19, 1.95 * slower, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.673, -0.740),  38.0 * longer, amp * 0.11, 2.70 * slower, worldPos.xz, dy, dxz, n);
         worldPos.y  += dy;
         worldPos.xz += dxz * 0.75 * edgeFade;
     }
@@ -810,6 +814,7 @@ uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
 uniform highp float time;
 
+uniform float waveSpread;   // "Wave Spacing": 0 tight and choppy, 1 broad
 uniform float waterOpacity;
 uniform float waterReflectivity;
 uniform float distortionStrength;
@@ -1006,11 +1011,12 @@ void main()
     } else {
         wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
     }
-    // The ripple detail is spread with the waves (it was 0.0110, 0.0047 and
-    // 0.0310 of a tile per world unit): the same pattern, 1.7x broader.
-    vec2 r1 = texture(normalMap, wuv * 0.0065 + time * vec2( 0.021,  0.014)).xy - 0.5;
-    vec2 r2 = texture(normalMap, wuv * 0.0028 + time * vec2(-0.011,  0.008)).xy - 0.5;
-    vec2 r3 = texture(normalMap, wuv * 0.0182 + time * vec2( 0.016, -0.029)).xy - 0.5;
+    // The ripple detail is spread with the waves ("Wave Spacing"): the same
+    // pattern, up to 1.7x broader.
+    highp vec2 ruv = wuv * mix(1.0, 0.59, clamp(waveSpread, 0.0, 1.0));
+    vec2 r1 = texture(normalMap, ruv * 0.0110 + time * vec2( 0.021,  0.014)).xy - 0.5;
+    vec2 r2 = texture(normalMap, ruv * 0.0047 + time * vec2(-0.011,  0.008)).xy - 0.5;
+    vec2 r3 = texture(normalMap, ruv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
     vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
 
     // Broad world-space variation breaks up normal-map repetition on large water brushes.

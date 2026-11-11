@@ -1852,6 +1852,15 @@ class PropertyEditor(QWidget):
         wave_layout.addRow("Wave Height:", _hbox(slider, label, stretch=False))
         self._widgets['water_wave_h_slider'] = slider
 
+        spread = min(max(float(brush.get('water_wave_spread', 1.0)), 0.0), 1.0)
+        slider, label = _make_slider(
+            self, spread, 0, 100,
+            callback=lambda v: self.update_object_prop('water_wave_spread', v),
+            tooltip="How far apart the waves are. Left: tight, choppy water "
+                    "(the earlier look). Right: a broad, calm swell.")
+        wave_layout.addRow("Wave Spacing:", _hbox(slider, label, stretch=False))
+        self._widgets['water_wave_spread_slider'] = slider
+
         layout.addWidget(wave_group)
 
         return group
@@ -4760,7 +4769,7 @@ class PropertyEditor(QWidget):
             shader_keys = ('glass_color', 'glass_opacity', 'glass_distortion', 'glass_refraction',
                            'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
-                           'water_wave_height', 'water_plane', 'water_high_quality', 'water_reflections',
+                           'water_wave_height', 'water_wave_spread', 'water_plane', 'water_high_quality', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
                            'fog_color', 'fog_density')
             for key in shader_keys:
@@ -4795,6 +4804,8 @@ class PropertyEditor(QWidget):
                 self.current_object['water_wave_enabled'] = True
             if 'water_wave_height' not in self.current_object:
                 self.current_object['water_wave_height'] = 0.5
+            if 'water_wave_spread' not in self.current_object:
+                self.current_object['water_wave_spread'] = 1.0
             if 'water_distortion' not in self.current_object:
                 self.current_object['water_distortion'] = 0.5
             if 'water_refraction' not in self.current_object:

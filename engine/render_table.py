@@ -344,6 +344,9 @@ _COLUMNS = (
     #: refraction IOR, roughness
     ('water_params', (7,), np.float32, 0.0),
     ('water_plane', (), bool, False),
+    #: "Wave Spacing": 0 the tight, choppy waves, 1 the broad ones (the
+    #: default); the water shaders blend their wavelengths between the two.
+    ('water_wave_spread', (), np.float32, 0.0),
     #: The brush's "High quality" flag: depth-based colour, shoreline foam,
     #: caustics and screen-space reflections (see engine.renderer.WATER_QUALITIES).
     ('water_high_quality', (), bool, False),
@@ -889,7 +892,7 @@ class RenderTable:
 
     #: The special-shader columns, and the fill a row of no special class
     #: holds (nothing reads them for such a row, but a rebuild gives it too).
-    _SPECIAL_COLUMNS = ('water_tint', 'water_params', 'water_plane',
+    _SPECIAL_COLUMNS = ('water_tint', 'water_params', 'water_plane', 'water_wave_spread',
                         'water_high_quality', 'glass_color', 'glass_params', 'fog_color', 'fog_params')
 
     def _resolve_special_rows(self, idx, special):
@@ -914,6 +917,8 @@ class RenderTable:
                     _num(brush.get('water_roughness'), 0.0),
                 )
                 self.water_plane[slot] = bool(brush.get('water_plane', False))
+                self.water_wave_spread[slot] = min(max(
+                    _num(brush.get('water_wave_spread'), 1.0), 0.0), 1.0)
                 self.water_high_quality[slot] = water_high_quality(brush)
             if b & CLASS_GLASS:
                 self.glass_color[slot] = normalize_color(
