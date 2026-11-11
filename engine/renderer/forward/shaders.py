@@ -299,6 +299,40 @@ layout (location = 10) in vec4 iPayload;
     #: staging array is shared and a stale value is somebody else's sprite.
     SPRITE_INSTANCE_FLOATS = 8
 
+    #: Blood on a wounded actor's sprite. Stains what the sprite's image
+    #: already shows (it is applied to the texel, so never outside the
+    #: figure): blotches round the body's middle that grow and join as the
+    #: wound count rises. *wound* is (amount 0..1,
+    #: pattern 0..15); the pattern is the actor's own, so two actors differ.
+    SPRITE_WOUND_GLSL = """
+float woundHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float woundNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(woundHash(i), woundHash(i + vec2(1.0, 0.0)), f.x),
+               mix(woundHash(i + vec2(0.0, 1.0)), woundHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+vec3 woundedColour(vec3 colour, vec2 uv, vec2 wound) {
+    float amount = wound.x;
+    // In blocks, like the pixels of the sprite it is on.
+    uv = (floor(uv * 72.0) + 0.5) / 72.0;
+    vec2 seed = vec2(wound.y * 7.31, wound.y * 3.17);
+    // Blotches: two octaves; more of them pass the threshold as it falls.
+    float blot = 0.65 * woundNoise(uv * 7.0 + seed) + 0.35 * woundNoise(uv * 17.0 + seed * 2.0);
+    // Mostly the torso: the middle of the image, a little above centre.
+    vec2 d = (uv - vec2(0.5, 0.42)) * vec2(2.4, 1.7);
+    float body = exp(-dot(d, d) * mix(1.6, 0.85, amount));
+    float cover = mix(0.74, 0.47, amount);
+    float stain = smoothstep(cover, cover + 0.05, blot * body);
+    // Blood keeps the sprite's shading: dark, red, slightly wet.
+    float shade = dot(colour, vec3(0.299, 0.587, 0.114));
+    vec3 blood = vec3(0.40, 0.012, 0.012) * (0.40 + 0.85 * shade);
+    return mix(colour, blood, clamp(stain, 0.0, 1.0) * 0.92);
+}
+"""
+
     def _compile_instanced_sprite_shader(self):
         """Compile the billboard shader with its centre and size per instance.
 
@@ -345,22 +379,32 @@ layout (location = 10) in vec4 iPayload;
             return
         source = source.replace(
             'out vec2 TexCoords;',
-            'out vec2 TexCoords;\nflat out float InstanceAlpha;',
+            'out vec2 TexCoords;\nflat out float InstanceAlpha;\n'
+            'flat out vec2 InstanceWound;',
             1,
         )
+        # The opacity attribute carries blood too: alpha + 2 * (steps + 16 *
+        # pattern). A pass that writes only an opacity (0..1) gets none.
         source = source.replace(
             'void main() {',
-            'void main() {\n    InstanceAlpha = iSpriteAlpha;',
+            'void main() {\n'
+            '    float packedWound = floor(iSpriteAlpha * 0.5);\n'
+            '    InstanceAlpha = iSpriteAlpha - 2.0 * packedWound;\n'
+            '    InstanceWound = vec2(mod(packedWound, 16.0) / 15.0,\n'
+            '                         floor(packedWound / 16.0));',
             1,
         )
         frag = frag.replace(
             'in highp vec3 FragPos;',
-            'in highp vec3 FragPos;\nflat in float InstanceAlpha;',
+            'in highp vec3 FragPos;\nflat in float InstanceAlpha;\n'
+            'flat in vec2 InstanceWound;\n' + self.SPRITE_WOUND_GLSL,
             1,
         )
         frag = frag.replace(
             'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);',
-            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
+            'if (InstanceWound.x > 0.0)\n'
+            '        texColor.rgb = woundedColour(texColor.rgb, TexCoords, InstanceWound);\n'
+            '    FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
             1,
         )
         # alphaCutoff (0 unless set): the depth-only pass that lets water

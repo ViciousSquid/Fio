@@ -195,3 +195,29 @@ def test_the_gore_setting_reads_levels_and_old_on_off_values():
         assert gore_level_from(config) == level, raw
     assert len(LogicCombat.GORE_NAMES) == len(LogicCombat.GORE_LEVELS) == 4
     assert LogicCombat.GORE_NAMES[0] == "Off" and LogicCombat.GORE_NAMES[3] == "Verhoeven"
+
+
+def test_a_hit_puts_blood_on_the_actors_sprite(fio_session):
+    """Wounds: steps on the entity, published as the sprite_wound column."""
+    session = fio_session(MAP, size=(200, 160))
+    combat, _, _ = _shoot(session, 'gun1', 1)
+    monster = _human(session)
+    light, heavy = combat.WOUND_PER_HIT[1]
+    assert monster.properties['_wounds'] == light
+    session.step(2)
+    table = session.view.game_state.published('entity_table')
+    slot = table.things.index(monster) if hasattr(table.things, 'index') else None
+    packed = float(table.sprite_wound[slot])
+    # Even (it rides on the opacity), and the steps are its low four bits.
+    assert packed % 2.0 == 0.0 and int(packed / 2) % 16 == light
+    others = [float(v) for i, v in enumerate(table.sprite_wound[:len(table.things)]) if i != slot]
+    assert not any(others)
+
+
+def test_wounds_stop_at_the_most_there_is_and_gore_off_leaves_none(fio_session):
+    session = fio_session(MAP, size=(200, 160))
+    combat, _, _ = _shoot(session, 'gun2', 3, shots=3)
+    assert _human(session).properties['_wounds'] == combat.WOUND_STEPS
+    session.stop_play()
+    combat, _, _ = _shoot(session, 'gun2', 0)
+    assert not _human(session).properties.get('_wounds')

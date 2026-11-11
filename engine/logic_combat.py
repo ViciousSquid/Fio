@@ -242,6 +242,7 @@ class LogicCombat:
                         target = monsters[row]
                         if self.gore_level:
                             bleeding.append((centres[row], direction))
+                            self._wound(weapon, target)
                         break
                 if target is not None:
                     if self._damage_monster(weapon, target):
@@ -285,6 +286,22 @@ class LogicCombat:
         self.gore_level = max(0, min(int(level), len(self.GORE_LEVELS) - 1))
         if not self.gore_level:
             self.blood.clear()
+
+    #: Wounds shown on an actor's sprite: steps a hit adds (light, heavy)
+    #: at each gore level, up to WOUND_STEPS.
+    WOUND_STEPS = 15
+    WOUND_PER_HIT = ((0, 0), (2, 5), (3, 8), (5, 15))
+
+    def _wound(self, weapon, monster):
+        """Mark *monster*'s sprite with the hit: more blood on it per hit."""
+        light, heavy = self.WOUND_PER_HIT[self.gore_level]
+        is_heavy = weapon.pellets > 1 or weapon.damage >= self.BLOOD_HEAVY_DAMAGE
+        props = monster.properties
+        before = int(props.get('_wounds', 0))
+        after = min(self.WOUND_STEPS, before + (heavy if is_heavy else light))
+        if after != before:
+            props['_wounds'] = after
+            touch(monster)
 
     def _spawn_blood(self, weapon, rows, bleeding):
         """Throw blood from each actor hit, away from the shooter.

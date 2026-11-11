@@ -1457,6 +1457,8 @@ class PassesMixin:
         np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
         np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
         np.take(table.render_alpha, sorted_slots, out=data[:, 6])
+        # Blood on the sprite rides on the opacity (see EntityTable.sprite_wound).
+        data[:, 6] += table.sprite_wound[sorted_slots]
         if layers is not None:
             data[:, 7] = layers
         else:

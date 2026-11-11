@@ -643,6 +643,10 @@ _COLUMNS = (
     ('sprite_size', (2,), np.float32, 0.0),
     #: Runtime opacity (a respawning Prop fades in).
     ('render_alpha', (), np.float32, 1.0),
+    # Blood on the sprite: 2 * (steps + 16 * pattern), steps 0..15 from the
+    # entity's '_wounds', pattern 0..15 its own. Even, so the sprite pass adds
+    # it to render_alpha (0..1) and the shader takes the two apart.
+    ('sprite_wound', (), np.float32, 0.0),
     #: Locked world-facing yaw for a carried billboard; -10000 means an
     #: ordinary camera-facing billboard.
     ('sprite_fixed_yaw', (), np.float32, -10000.0),
@@ -1335,6 +1339,9 @@ class EntityTable:
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
         self.render_alpha[slot] = _render_alpha(thing)
+        wounds = int(props.get('_wounds', 0) or 0)
+        self.sprite_wound[slot] = (
+            2.0 * (min(15, wounds) + 16 * ((id(thing) >> 4) % 16)) if wounds > 0 else 0.0)
         carry_yaw = _carry_sprite_yaw(thing)
         self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_overlay[slot] = bool(props.get('_sprite_overlay', False))
