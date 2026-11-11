@@ -176,9 +176,9 @@ def test_a_drag_bakes_only_the_dragged_stamp_and_ends_exact(checker, which, monk
     terrain.move_paint_stamps({stamp['id']}, 3.0, 2.0, defer=True)     # fills the cache
 
     baked = []
-    real = Terrain._bake_stamp
-    monkeypatch.setattr(Terrain, '_bake_stamp',
-                        lambda self, s, *a, **k: (baked.append(s['id']), real(self, s, *a, **k))[1])
+    real = terrain._bake_stamp
+    monkeypatch.setattr(terrain, '_bake_stamp',
+                        lambda s, *a, **k: (baked.append(s['id']), real(s, *a, **k))[1])
     terrain.move_paint_stamps({stamp['id']}, 3.0, 2.0, defer=True)
     assert baked and set(baked) == {stamp['id']}
     monkeypatch.undo()

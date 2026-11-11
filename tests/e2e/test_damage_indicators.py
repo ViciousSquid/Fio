@@ -11,6 +11,8 @@ import pytest
 
 pytest.importorskip("PyQt5")
 
+pytestmark = pytest.mark.qt
+
 from engine.view_hud import ViewHud
 
 MAP = "maps/Simple_Map_Test_Extended.json"
