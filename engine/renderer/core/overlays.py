@@ -199,20 +199,18 @@ class OverlaysMixin:
         gl.glUniform1f(uniforms['alpha'], 1.0)
         edge_vao = self._ensure_edge_vao()
         gl.glLineWidth(1.0)
-        # Editor selection is still represented by the authored selection dict,
-        # but convex geometry comes from the dense RenderTable geometry records.
-        # Do not reintroduce the removed object-based mesh lookup here.
+        # The selection is a SelectionOverlay (an id and copied numbers); a
+        # convex brush's mesh is the one its geometry handle already resolved
+        # for the brush passes -- no geometry record is read here.
         mesh = None
         if table is not None:
             slot = table.slot_of_id.get(brush_id)
             if slot is not None:
-                slot = int(slot)
-                gid = int(table.geometry_id[slot])
-                if gid >= 0 and gid < len(table.geometry_records):
-                    record = table.geometry_records[gid]
-                    mesh = self._get_geo_mesh_record(
-                        record, geometry_id=gid,
-                        geometry_generation=table.generation)
+                gid = int(table.geometry_id[int(slot)])
+                if gid >= 0:
+                    meshes = self._geo_handles(table).meshes
+                    if gid < len(meshes):
+                        mesh = meshes[gid]
         if mesh is not None and mesh.edge_count:
             # Angled brush: outline its real convex edges instead of the AABB.
             gl.glBindVertexArray(mesh.edge_vao)

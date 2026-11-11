@@ -38,6 +38,10 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
     def __init__(self, texture_loader=None):
         self.texture_manager = {}
         self.loaded_models = {}
+        # id(model) -> (model, its resolved draw groups); manual texture
+        # name -> GL name. Both hold GL names: emptied with the textures.
+        self._model_draw_group_cache = {}
+        self._manual_model_textures = {}
         #: model path -> perf_counter() of its last failed load.
         self._failed_models = {}
 
@@ -236,6 +240,8 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         if textures:
             gl.glDeleteTextures(textures)
         self.texture_manager.clear()
+        self._model_draw_group_cache.clear()
+        self._manual_model_textures.clear()
         self._animated_texture_table = {}
         for model in {id(m): m for m in self.loaded_models.values()}.values():
             model.cleanup()

@@ -31,12 +31,11 @@ def _tinted(colour, tint):
 
 
 @contextmanager
-def _model_material(uniforms, material):
+def _model_material(uniforms, alpha):
     """Blend clear model surfaces without writing their depth over the ink.
 
     Opaque materials retain the caller's state, including respawn fades.
     """
-    alpha = material.get('alpha', 1.0)
     gl.glUniform1f(uniforms['alpha'], alpha)
     if alpha >= 1.0:
         yield
@@ -56,12 +55,6 @@ def _model_material(uniforms, material):
         gl.glBlendFuncSeparate(*blend_func)
         if not blend:
             gl.glDisable(gl.GL_BLEND)
-
-
-def _model_groups(obj):
-    # Ink and edge geometry must establish depth before the acrylic surfaces.
-    return sorted(obj.groups or (), key=lambda group:
-                  obj.materials.get(group['material'], {}).get('alpha', 1.0) < 1.0)
 
 
 def _set_model_tint(uniforms, tint):
@@ -1118,7 +1111,7 @@ class PassesMixin:
             self._ensure_model_instance_vao(obj.vao)
             gl.glBindVertexArray(obj.vao)
 
-            groups = _model_groups(obj)
+            groups = self._model_draw_groups(obj)
             if manual_texture:
                 shader_kind = (
                     'textured' if self.shaders.get('textured_instanced')
@@ -1133,7 +1126,7 @@ class PassesMixin:
                 u = self.uniforms[shader_name]
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
-                    self._model_texture_id(manual_texture, manual=True))
+                    self._manual_model_texture_id(manual_texture))
                 gl.glUniform1f(u['alpha'], 1.0)
                 if shader_kind != 'textured':
                     colour = _tinted(override_color or (0.8, 0.8, 0.8), tint)
@@ -1168,12 +1161,8 @@ class PassesMixin:
                 continue
 
             for group in groups:
-                material = obj.materials.get(
-                    group['material'],
-                    {'color': [0.8, 0.8, 0.8], 'texture': None})
-                use_texture = material.get('texture')
                 shader_kind = (
-                    'textured' if use_texture and self.shaders.get('textured_instanced')
+                    'textured' if group.textured and self.shaders.get('textured_instanced')
                     else 'lit' if self.shaders.get('lit_instanced') else None)
                 if not shader_kind:
                     continue
@@ -1184,22 +1173,20 @@ class PassesMixin:
                     continue
                 u = self.uniforms[shader_name]
                 if shader_kind == 'textured':
-                    gl.glBindTexture(
-                        gl.GL_TEXTURE_2D,
-                        self._model_texture_id(use_texture, material, manual=False))
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
                     if tint:
                         _set_model_tint(u, tint)
                 else:
-                    colour = _tinted(material.get('color', [0.8, 0.8, 0.8]), tint)
+                    colour = _tinted(group.colour, tint)
                     gl.glUniform3fv(u['object_color'], 1, colour)
-                with _model_material(u, material):
-                    if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                with _model_material(u, group.alpha):
+                    if group.indexed:
                         gl.glDrawElementsInstanced(
-                            gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                            ctypes.c_void_p(group['start'] * 4), len(run_slots))
+                            gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
+                            ctypes.c_void_p(group.start * 4), len(run_slots))
                     else:
                         gl.glDrawArraysInstanced(
-                            gl.GL_TRIANGLES, group['start'], group['count'], len(run_slots))
+                            gl.GL_TRIANGLES, group.start, group.count, len(run_slots))
                 if tint and shader_kind == 'textured':
                     _set_model_tint(u, None)
                 self.render_stats.draw_calls += 1
@@ -1231,7 +1218,7 @@ class PassesMixin:
         if not obj or not obj.is_loaded:
             return 0
 
-        groups = _model_groups(obj)
+        groups = self._model_draw_groups(obj)
         if manual_texture:
             shader_kind = (
                 'textured' if self.shaders.get('textured') else
@@ -1247,7 +1234,7 @@ class PassesMixin:
             if shader_kind == 'textured':
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
-                    self._model_texture_id(manual_texture, manual=True))
+                    self._manual_model_texture_id(manual_texture))
             else:
                 gl.glUniform3fv(
                     u['object_color'], 1,
@@ -1269,15 +1256,13 @@ class PassesMixin:
         current_shader = None
         draws = 0
         for group in groups_to_draw:
-            material = (
-                obj.materials.get(
-                    group['material'],
-                    {'color': [0.8, 0.8, 0.8], 'texture': None})
-                if group is not None else
-                {'color': override_color or [0.8, 0.8, 0.8],
-                 'texture': manual_texture}
-            )
-            use_texture = material.get('texture')
+            # A whole-model draw (no groups, or a manual texture) takes the
+            # row's own colour and texture; a group, its material's.
+            if group is not None:
+                use_texture, colour, alpha = group.textured, group.colour, group.alpha
+            else:
+                use_texture = bool(manual_texture)
+                colour, alpha = override_color or (0.8, 0.8, 0.8), 1.0
             shader_kind = (
                 'textured' if use_texture and self.shaders.get('textured') else
                 'lit' if self.shaders.get('lit') else None)
@@ -1294,13 +1279,12 @@ class PassesMixin:
             if shader_kind == 'textured':
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
-                    self._model_texture_id(
-                        use_texture, material, manual=manual_texture is not None))
+                    group.texture if group is not None
+                    else self._manual_model_texture_id(manual_texture))
                 if tint:
                     _set_model_tint(u, tint)
             else:
-                color = _tinted(material.get('color', [0.8, 0.8, 0.8]), tint)
-                gl.glUniform3fv(u['object_color'], 1, color)
+                gl.glUniform3fv(u['object_color'], 1, _tinted(colour, tint))
 
             gl.glUniformMatrix4fv(
                 u['model'], 1, gl.GL_FALSE, base)
@@ -1310,16 +1294,16 @@ class PassesMixin:
                     normal_loc, 1, gl.GL_FALSE, normal)
 
             gl.glBindVertexArray(obj.vao)
-            with _model_material(u, material):
+            with _model_material(u, alpha):
                 if group is None:
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
-                elif group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                elif group.indexed:
                     gl.glDrawElements(
-                        gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                        ctypes.c_void_p(group['start'] * 4))
+                        gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
+                        ctypes.c_void_p(group.start * 4))
                 else:
                     gl.glDrawArrays(
-                        gl.GL_TRIANGLES, group['start'], group['count'])
+                        gl.GL_TRIANGLES, group.start, group.count)
             if tint and shader_kind == 'textured':
                 _set_model_tint(u, None)
             self.render_stats.draw_calls += 1

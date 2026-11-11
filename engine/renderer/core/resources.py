@@ -133,6 +133,23 @@ class ShaderLoader:
             raise
 
 
+class ModelDrawGroup:
+    """One draw of a loaded model, as the model pass submits it: the vertex
+    or index range and the material's values, with its texture already a GL
+    name. Built by :meth:`ResourcesMixin._model_draw_groups`."""
+
+    __slots__ = ('start', 'count', 'indexed', 'alpha', 'colour', 'textured', 'texture')
+
+    def __init__(self, start, count, indexed, alpha, colour, textured, texture):
+        self.start = start
+        self.count = count
+        self.indexed = indexed
+        self.alpha = alpha
+        self.colour = colour
+        self.textured = textured
+        self.texture = texture
+
+
 class ResourcesMixin:
     """Textures, models, effect frames and shader helpers."""
 
@@ -637,6 +654,51 @@ class ResourcesMixin:
     # --------------------------------------------------------------------------
     # Model and sprite textures
     # --------------------------------------------------------------------------
+    def _model_draw_groups(self, obj):
+        """*obj*'s draw groups as the model pass submits them, resolved once.
+
+        A loaded model's groups and MTL/GLB materials are dictionaries; the
+        pass used to walk them every frame (sort the groups by material
+        alpha, look each material up, resolve its texture path with two
+        file probes). They are resolved here on the first draw of a model
+        -- a GL resource miss, like the model's own load -- into a tuple of
+        :class:`ModelDrawGroup`, opaque groups first, and the frame reads
+        only that. Keyed by the model object: a reloaded model is a new one.
+        """
+        entry = self._model_draw_group_cache.get(id(obj))
+        if entry is not None and entry[0] is obj:
+            return entry[1]
+        materials = obj.materials or {}
+        has_ebo = getattr(obj, 'ebo', None) is not None
+        resolved = []
+        for group in obj.groups or ():
+            material = materials.get(
+                group['material'], {'color': [0.8, 0.8, 0.8], 'texture': None})
+            texture = material.get('texture')
+            colour = material.get('color', [0.8, 0.8, 0.8])
+            resolved.append(ModelDrawGroup(
+                int(group['start']), int(group['count']),
+                bool(group.get('indexed', False)) and has_ebo,
+                float(material.get('alpha', 1.0)),
+                (float(colour[0]), float(colour[1]), float(colour[2])),
+                bool(texture),
+                int(self._model_texture_id(texture, material, manual=False))
+                if texture else 0))
+        # Ink and edge geometry must establish depth before the acrylic
+        # surfaces (a stable sort: authored order within each half).
+        resolved.sort(key=lambda g: g.alpha < 1.0)
+        groups = tuple(resolved)
+        self._model_draw_group_cache[id(obj)] = (obj, groups)
+        return groups
+
+    def _manual_model_texture_id(self, tex_name):
+        """The GL name of a model row's manual texture, resolved once a name."""
+        tex_id = self._manual_model_textures.get(tex_name)
+        if tex_id is None:
+            tex_id = int(self._model_texture_id(tex_name, manual=True))
+            self._manual_model_textures[tex_name] = tex_id
+        return tex_id
+
     def _model_texture_id(self, tex_name, material=None, manual=False):
         if not tex_name:
             return 0

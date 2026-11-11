@@ -166,3 +166,96 @@ def test_the_built_in_renderer_reads_only_the_documented_frame_input():
             if isinstance(target, str):
                 read.add(target)
     assert read and read <= set(api.FRAME_INPUT), sorted(read - set(api.FRAME_INPUT))
+
+
+# -- tables all the way to GL ------------------------------------------------
+#
+# A frame reads the published dense tables and the renderer's own caches.
+# Authored-shaped objects -- a loaded model's group and material dictionaries,
+# a geometry record's convex solid and face materials, brush dictionaries,
+# Things -- may be read only where a GPU resource is built on a cache miss.
+# Those places are listed here; the list is to shrink, not to grow.
+
+AUTHORED_ATTRIBUTES = {
+    "materials", "groups", "convex", "geometry_records",
+    "brushes", "things", "properties", "editor", "mtl_dir",
+}
+RESOURCE_BUILDERS = {
+    # A model's draw groups, resolved once per loaded model.
+    ("core/resources.py", "_model_draw_groups"): {"materials", "groups"},
+    # A convex brush's mesh, built when its geometry handle is first resolved
+    # (only when the table's geometry_version has moved).
+    ("core/geometry.py", "tessellate_geo"): {"convex"},
+    ("core/geometry.py", "_get_geo_mesh_record"): {"convex"},
+    ("core/geometry.py", "_resolve_face_run"): {"materials"},
+    ("core/geometry.py", "_sync_geo_handles"): {"geometry_records"},
+}
+# Dictionary keys of the authored formats (brush, material). A subscript or
+# ``.get`` with one of these names is a read of such a dictionary.
+AUTHORED_KEYS = {"mtl_dir", "material", "textures", "is_trigger", "is_mover"}
+AUTHORED_KEY_READERS = {
+    ("core/resources.py", "_model_draw_groups"),      # group['material']
+    ("core/resources.py", "_resolve_model_texture_path"),   # on a texture miss
+}
+
+
+def _functions(tree):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node
+
+
+def _own_nodes(function):
+    """The nodes of *function* itself, nested functions' bodies included."""
+    return ast.walk(function)
+
+
+def test_authored_objects_are_read_only_where_a_gpu_resource_is_built():
+    found = {}
+    for path in _package_files():
+        relative = path.relative_to(PACKAGE).as_posix()
+        for function in _functions(ast.parse(path.read_text(encoding="utf-8"))):
+            for node in _own_nodes(function):
+                if isinstance(node, ast.Attribute) and node.attr in AUTHORED_ATTRIBUTES:
+                    found.setdefault((relative, function.name), set()).add(node.attr)
+    unexpected = {where: sorted(names) for where, names in found.items()
+                  if not names <= RESOURCE_BUILDERS.get(where, set())}
+    assert not unexpected, unexpected
+    stale = sorted(set(RESOURCE_BUILDERS) - set(found))
+    assert not stale, "no longer reads authored objects; drop from the list: %s" % stale
+
+
+def test_authored_dictionary_keys_are_read_only_on_a_resource_miss():
+    found = set()
+    for path in _package_files():
+        relative = path.relative_to(PACKAGE).as_posix()
+        for function in _functions(ast.parse(path.read_text(encoding="utf-8"))):
+            for node in _own_nodes(function):
+                key = None
+                if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+                    key = node.slice.value
+                elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "get" and node.args
+                      and isinstance(node.args[0], ast.Constant)):
+                    key = node.args[0].value
+                if key in AUTHORED_KEYS:
+                    found.add((relative, function.name))
+    assert found <= AUTHORED_KEY_READERS, sorted(found - AUTHORED_KEY_READERS)
+
+
+def test_the_model_passes_read_no_material_dictionary():
+    """The forward renderer draws models from resolved draw groups alone."""
+    source = (PACKAGE / "forward" / "passes.py").read_text(encoding="utf-8")
+    for needle in ("obj.materials", "obj.groups", "material.get(", "group['", "group.get("):
+        assert needle not in source, needle
+
+
+def test_the_host_hands_the_renderer_no_authored_object_arrays():
+    """``render_refs``/``entity_refs`` (the brush dictionaries and Things
+    behind the tables' rows) stay with the host: they are not frame input."""
+    source = (ROOT / "engine" / "qt_game_view.py").read_text(encoding="utf-8")
+    for key in ("render_refs", "entity_refs"):
+        assert '_render_config["%s"]' % key not in source
+        assert "_render_config['%s']" % key not in source
+    package = "".join(p.read_text(encoding="utf-8") for p in _package_files())
+    assert "render_refs" not in package and "entity_refs]" not in package

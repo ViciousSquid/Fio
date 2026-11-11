@@ -1922,11 +1922,9 @@ class QtGameView(QOpenGLWidget):
         # Both editor and play rendering consume the same canonical dense
         # projection published by LogicRender. There is no editor-side table.
         self._render_config["render_table"] = render_state.render_table
-        self._render_config["render_refs"] = render_state.render_refs
         self._render_config["all_brush_slots"] = render_state.all_brush_slots
         _main_brush_slots = render_state.visible_brush_slots
         self._render_config["entity_table"] = render_state.entity_table
-        self._render_config["entity_refs"] = render_state.entity_refs
         self._render_config["visible_thing_slots"] = render_state.visible_thing_slots
         self._render_config["thing_hidden"] = render_state.thing_hidden
         # In play only the lights near the player light (nearest first), so a
