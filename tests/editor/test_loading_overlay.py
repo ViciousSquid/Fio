@@ -36,16 +36,57 @@ def test_it_is_a_small_panel_in_the_middle_not_a_veil(qt_app):
     host.resize(1280, 800)
     overlay = LoadingOverlay(host)
     with overlay.busy('Loading village', 'Reading map'):
-        rect = overlay.geometry()
+        rect = overlay.panel_rect()
         assert (rect.width(), rect.height()) == (PANEL_WIDTH, PANEL_HEIGHT)
-        assert rect.center().x() in (639, 640) and rect.center().y() in (399, 400)
-        # It covers a small part of the window, and is no progress bar.
+        assert rect.center().x() == 640 and rect.center().y() == 400
+        # The panel is a small part of the window, and is no progress bar.
         assert rect.width() * rect.height() < 0.04 * 1280 * 800
         assert not hasattr(overlay, 'bar')
         host.resize(640, 480)
         qt_app.processEvents()
         overlay._layout()
-        assert overlay.geometry().center().x() in (319, 320)
+        assert overlay.panel_rect().center().x() == 320
+
+
+def test_the_editor_behind_it_is_shown_blurred_not_hidden(qt_app):
+    """A picture of the window, softened: detail goes, the layout stays."""
+    from PyQt5.QtWidgets import QLabel
+    host = QWidget()
+    host.resize(600, 400)
+    host.setStyleSheet("background: black;")
+    stripes = QLabel(host)
+    stripes.setGeometry(0, 0, 600, 400)
+    stripes.setStyleSheet(
+        "background: qlineargradient(x1:0, y1:0, x2:0.02, y2:0, spread:repeat,"
+        " stop:0 white, stop:0.5 white, stop:0.51 black, stop:1 black);")
+    host.show()
+    qt_app.processEvents()
+
+    def edges(image, y=40):
+        """(the sharpest step between neighbouring pixels, the mean level)."""
+        values = [QColor(image.pixel(x, y)).red() for x in range(40, 560)]
+        steps = [abs(a - b) for a, b in zip(values, values[1:])]
+        return max(steps), sum(values) / len(values)
+
+    sharp, sharp_mean = edges(host.grab().toImage())
+    overlay = LoadingOverlay(host)
+    with overlay.busy('Loading village', 'Reading map'):
+        assert overlay.backdrop is not None
+        assert overlay.geometry() == host.rect()
+        soft, soft_mean = edges(overlay.grab().toImage())
+    assert overlay.backdrop is None                  # dropped when it lowers
+    assert sharp > 200, "the fixture has no hard edges to blur"
+    assert soft < sharp * 0.5, "the backdrop is not noticeably blurred"
+    assert abs(soft_mean - sharp_mean) < 40, "the backdrop was darkened, not blurred"
+    host.close()
+
+
+def test_a_window_that_cannot_be_pictured_still_gets_its_panel(qt_app):
+    host = QWidget()                                 # never shown
+    overlay = LoadingOverlay(host)
+    with overlay.busy('Loading'):
+        assert overlay.backdrop is None
+        assert overlay.active
 
 
 def test_the_throbber_line_crosses_the_track_and_comes_back():

@@ -8,11 +8,13 @@ used to sit frozen on whatever it showed last, which looks exactly like a
 crash.
 
 :class:`LoadingOverlay` is a small panel floating in the middle of the
-window -- the rest of the editor stays visible behind it -- with a title
-("Loading cave01"), a throbber (a short horizontal line travelling back and
-forth along a track) and the stage under way ("Building terrain"). It used
-to be a veil over the whole window with a percentage bar, which for a load
-of a second or two was a full-screen flash.
+window with a title ("Loading cave01"), a throbber (a short horizontal line
+travelling back and forth along a track) and the stage under way ("Building
+terrain"). The editor stays visible behind it, slightly blurred -- a picture
+of the window taken as the panel is raised, softened and drawn under it --
+so it reads as set aside for a moment rather than frozen. It used to be a
+dark veil over the whole window with a percentage bar, which for a load of a
+second or two was a full-screen flash.
 
 Work on the UI thread cannot be interrupted to animate anything, so the long
 operations call :meth:`step` between their stages: each call names the stage
@@ -41,7 +43,7 @@ import contextlib
 import time
 
 from PyQt5.QtCore import QEvent, QObject, QRectF, Qt
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QWidget
 
 #: Where a stage named without a percentage puts the progress: this share of
@@ -60,6 +62,22 @@ PANEL_HEIGHT = 92
 THROB_LINE = 0.28
 THROB_SECONDS = 1.6
 FIO_ORANGE = QColor(240, 128, 0)
+#: The backdrop's blur: the window's picture is shrunk by this factor with
+#: smooth filtering and drawn back at full size. Slight, but plain to see.
+BLUR_FACTOR = 3
+
+
+def blurred(pixmap, factor: int = BLUR_FACTOR):
+    """*pixmap* softened: shrunk in two smooth steps and scaled back (the
+    cheap, even blur the pause menu uses), at its original size."""
+    if pixmap is None or pixmap.isNull():
+        return None
+    w, h = pixmap.width(), pixmap.height()
+    half = pixmap.scaled(max(1, w // 2), max(1, h // 2),
+                         Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    small = half.scaled(max(1, w // factor), max(1, h // factor),
+                        Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    return small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
 
 def throbber_span(seconds: float, width: float):
@@ -75,17 +93,19 @@ def throbber_span(seconds: float, width: float):
 
 
 class LoadingOverlay(QWidget):
-    """A small floating "loading" panel with a throbber; see the module docstring."""
+    """A small floating "loading" panel with a throbber over the blurred
+    window; see the module docstring."""
 
     def __init__(self, parent):
         super().__init__(parent)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.title = ""
         self.stage = ""
         self._depth = 0
         self._value = 0
         self._started = 0.0
+        #: The window as it looked when the panel was raised, blurred.
+        self.backdrop = None
         #: Injected by tests: the clock the throbber is placed by.
         self.clock = time.perf_counter
         parent.installEventFilter(self)
@@ -108,6 +128,7 @@ class LoadingOverlay(QWidget):
             self.title = str(title)
             self._value = 0
             self._started = self.clock()
+            self.backdrop = self._grab_backdrop()
             self._layout()
             self.show()
             self.raise_()
@@ -120,6 +141,7 @@ class LoadingOverlay(QWidget):
         self._depth -= 1
         if self._depth == 0:
             self.hide()
+            self.backdrop = None
 
     @contextlib.contextmanager
     def busy(self, title: str, stage: str = "", percent: int = None):
@@ -147,12 +169,27 @@ class LoadingOverlay(QWidget):
         except RuntimeError:
             pass   # the window is being torn down
 
-    def _layout(self):
-        """Centre the panel in the window; it covers nothing else."""
+    def _grab_backdrop(self):
+        """A blurred picture of the window as it is now (taken before the
+        panel shows, so the panel is not in it), or None if it cannot be
+        taken -- the panel then floats over the live window."""
         parent = self.parentWidget()
-        w = min(PANEL_WIDTH, max(160, parent.width() - 24))
-        h = min(PANEL_HEIGHT, max(60, parent.height() - 24))
-        self.setGeometry((parent.width() - w) // 2, (parent.height() - h) // 2, w, h)
+        try:
+            if not parent.isVisible() or parent.width() < 2 or parent.height() < 2:
+                return None
+            return blurred(parent.grab())
+        except Exception:
+            return None
+
+    def _layout(self):
+        """Cover the window (to draw its blurred picture); the panel itself
+        is :meth:`panel_rect`, in the middle."""
+        self.setGeometry(self.parentWidget().rect())
+
+    def panel_rect(self) -> QRectF:
+        w = min(PANEL_WIDTH, max(160, self.width() - 24))
+        h = min(PANEL_HEIGHT, max(60, self.height() - 24))
+        return QRectF((self.width() - w) // 2, (self.height() - h) // 2, w, h)
 
     def eventFilter(self, obj, event):
         if obj is self.parentWidget() and event.type() == QEvent.Resize:
@@ -161,25 +198,31 @@ class LoadingOverlay(QWidget):
 
     # ------------------------------------------------------------------ paint
     def throbber_track(self) -> QRectF:
-        """The throbber's track within the panel."""
+        """The throbber's track, in this widget's coordinates."""
+        panel = self.panel_rect()
         margin = 22.0
-        return QRectF(margin, self.height() / 2.0 + 2.0, self.width() - 2 * margin, 2.0)
+        return QRectF(panel.left() + margin, panel.center().y() + 2.0,
+                      panel.width() - 2 * margin, 2.0)
 
     def paintEvent(self, _event):
         p = QPainter(self)
+        if self.backdrop is not None:
+            p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            p.drawPixmap(self.rect(), self.backdrop)
         p.setRenderHint(QPainter.Antialiasing, True)
-        panel = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        panel = self.panel_rect().adjusted(0.5, 0.5, -0.5, -0.5)
         p.setPen(QPen(QColor(85, 85, 90), 1.0))
         p.setBrush(QColor(24, 24, 28, 245))
         p.drawRoundedRect(panel, 6.0, 6.0)
 
         track = self.throbber_track()
+        left, width = panel.left() + 10, panel.width() - 20
         p.setPen(QColor(240, 236, 230))
         p.setFont(QFont("Fio UI", 11, QFont.Bold))
         fm = p.fontMetrics()
-        p.drawText(QRectF(10, track.top() - fm.height() - 10, self.width() - 20, fm.height() + 4),
+        p.drawText(QRectF(left, track.top() - fm.height() - 10, width, fm.height() + 4),
                    Qt.AlignHCenter | Qt.AlignTop,
-                   fm.elidedText(self.title, Qt.ElideMiddle, self.width() - 24))
+                   fm.elidedText(self.title, Qt.ElideMiddle, int(width) - 4))
 
         # The track, and the line where the clock has carried it.
         p.setPen(Qt.NoPen)
@@ -193,9 +236,9 @@ class LoadingOverlay(QWidget):
         p.setPen(QColor(190, 188, 184))
         p.setFont(self.font())
         fm = p.fontMetrics()
-        p.drawText(QRectF(10, track.bottom() + 9, self.width() - 20, fm.height() + 4),
+        p.drawText(QRectF(left, track.bottom() + 9, width, fm.height() + 4),
                    Qt.AlignHCenter | Qt.AlignTop,
-                   fm.elidedText(self.stage, Qt.ElideRight, self.width() - 24))
+                   fm.elidedText(self.stage, Qt.ElideRight, int(width) - 4))
         p.end()
 
 
