@@ -228,6 +228,45 @@ Tests that scan the view's source now scan these modules too
   The wiki's Renderer Development Guide is outside this repository and was
   not updated.
 
+### Gore and damage indicators (the user's requests; after the full-suite gate)
+
+* **Projected blood decals** (`2c8120e`). `engine/decal_table.py` (no GL): a
+  ring of 128 boxes; `LogicCombat._spawn_blood` throws them from a shot
+  actor's centre along the ray, onto the wall behind or the floor;
+  `RenderState.decals` / frame input `decals` = `(models (n,16), params
+  (n,4))`; `engine/renderer/forward/decals.py` paints each box onto the
+  depth already drawn (one instanced draw, after the opaque world). Gore
+  level in Settings > Play Modes (`Settings/gore`: Off, Normal, Heavy,
+  Verhoeven). Images: `assets/textures/decals/blood_{wall,floor}_*.png`,
+  drawn by `tools/make_blood_decals.py`. Measured (llvmpipe): a shotgun hit
+  0.6-1.0 ms at Normal, 1.7-2.3 at Verhoeven; frame 6.8 ms with 0-8 decals,
+  7.5 with 16, 9.6-10.8 with 40. Unverified on a GPU.
+* **Directional damage indicators** (`363290d`, `edaa293`). An attacker sets
+  `player_runtime.damage_source` before `_apply_player_damage` (signature
+  unchanged: plugins hook it); `RenderState.damage_marks`;
+  `ViewHud._draw_damage_indicators` draws an arc at the edge of the view
+  per mark, 55% opaque at most, 1.6 s. `ViewHud.damage_bearing` is one rule
+  for first person and overhead. `[Display] damage_indicators` in
+  `settings.ini`. Split screen: player one's only, over the whole view.
+* **Blood on the actor's sprite: a prototype, NOT committed** -- the user
+  asked to see it first. It is `git stash` entry "sprite gore prototype"
+  in the session's container and is lost with it; the design, to rebuild:
+  `props['_wounds']` (0..15, added per bleeding hit in `_fire_rays`, then
+  `touch`), an `EntityTable.sprite_wound` column = `2 * (steps + 16 *
+  pattern)` added to the sprite instance's opacity float (no ninth
+  attribute), taken apart in the instanced sprite vertex shader, and a
+  noise stain on the texel in the fragment shader (torso-weighted, in 72
+  blocks to match the pixel art). Adding the column will need the entity
+  row budget checked.
+* **Terrain stamps look muddy and stretched: diagnosed, not changed.** A
+  chunk's paint map is 128x128 (2-4 world units a texel; terrain textures
+  are 16 px a unit), and a stamp stretches one image over its footprint.
+  The fix (tile the source texture in the shader under a baked mask, or
+  tile at bake with a larger map) changes the map's format and look: the
+  user's decision.
+* Not rerun since these: the full suite. Tiers run: e2e (new files),
+  logic, regression, visual, deathmatch plugin -- all passed.
+
 ### Behaviour changes to know about
 
 * In play the top/side/front views update ten times a second
