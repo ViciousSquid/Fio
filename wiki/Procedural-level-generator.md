@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 **Tools > Procedural Generator** builds a complete, playable level -- rooms, corridors, a Player Start, monsters and health -- as an ordinary Fio map that can be played at once or edited like any other. Module: `editor/procedural_generator.py`; command line: `tools/procedural_map_gen.py`.
 

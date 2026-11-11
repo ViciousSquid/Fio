@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 This page is the complete reference for every console command in Fio: the built-in commands registered by `editor/console_commands.py: ConsoleCommandHandler`, and the commands registered by the bundled plugins. Commands are typed into the [Debug Console](https://github.com/ViciousSquid/Fio/wiki/Debug-console), into the in-play command line, bound to a key with `bind`, or queued by map logic through a [`logic_command`](https://github.com/ViciousSquid/Fio/wiki/LogicCommand) entity.
 

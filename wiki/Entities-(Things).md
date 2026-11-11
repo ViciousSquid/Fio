@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 An **entity** ("thing") is a placed object with a position and properties: `{"type": ..., "pos": [x, y, z], "properties": {...}}` in a map, an `editor.things.Thing` subclass in memory. Every entity has `name`, a stable `id` ([Stable UUIDs](https://github.com/ViciousSquid/Fio/wiki/Stable-UUIDs)) and `io_enabled`, and takes part in the [I/O system](https://github.com/ViciousSquid/Fio/wiki/Triggers-&-The-I-O-Logic-System). Place one from the 2D views' context menu. The registry is `editor.things.ENTITY_TYPES`; an entity whose type is not registered (a missing plugin, a legacy type) is kept as an inert `UnresolvedThing` and saved back untouched.
 

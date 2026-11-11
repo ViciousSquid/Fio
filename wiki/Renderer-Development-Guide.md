@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 How to change or replace Fio's renderer. Read [Renderer Technical overview](https://github.com/ViciousSquid/Fio/wiki/Renderer-Technical-overview) first for what the built-in renderer does; this page is about the boundary. The authoritative contract text is `plugins/API.md` (API 1.9.0) and `engine/renderer/api.py`.
 

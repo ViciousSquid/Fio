@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Fio has one physics: the player, monsters, props and physics bodies share one world and one gravity. Modules: `engine/player.py` (player movement), `engine/physics.py` (the `PhysicsWorld`, bodies, queries), `engine/logic_collision.py` (collision rows), `engine/brush_placement.py` and `engine/mover_table.py` (where a brush is), `engine/constants.py` (the numbers).
 

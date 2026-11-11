@@ -1,8 +1,8 @@
 # Changelog
 
-## 3.1.0.0611 (CANARY)
+## 3.5.0.1111
 
-Canary build of 3.1.0. Maps saved by this build are **map version 5**: 3.0.0
+Developed on the `3.1.0.0611_CANARY` branch. Maps saved by this build are **map version 5**: 3.0.0
 maps load and are converted, but 3.0.0 does not understand version 5 (it
 would misplace angled brushes). Exported `.fiopak` packages still carry
 version 4 and play in both.

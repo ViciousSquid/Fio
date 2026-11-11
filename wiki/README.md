@@ -14,7 +14,7 @@ git clone https://github.com/ViciousSquid/Fio.wiki.git
 cp wiki/*.md wiki/.fiopak-archive.md Fio.wiki/
 rm Fio.wiki/README.md
 mv Fio.wiki/Basic-concept---Brushes.md "Fio.wiki/Basic-concept:--Brushes.md"
-cd Fio.wiki && git add -A && git commit -m "Wiki for 3.1.0.0611 (CANARY)" && git push
+cd Fio.wiki && git add -A && git commit -m "Wiki for 3.5.0.1111" && git push
 ```
 
 Two file names contain a U+2010 hyphen, as on the live wiki:

@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 **Deathmatch** (`plugins/deathmatch/`) adds free-for-all Deathmatch, Team Deathmatch and Capture the Flag with bots and LAN play. It runs in the editor's Play mode and in the [Android player](https://github.com/ViciousSquid/Fio/wiki/Fio-Player-(Android)). It ships off and turns on for a map that contains its entities. Its files carry `SPDX-License-Identifier: GPL-2.0-or-later` and the folder has its own `LICENSE` (GNU GPL version 2).
 

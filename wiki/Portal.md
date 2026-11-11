@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A **Portal** (`type: "portal"`, class `editor.things.Portal`) is a window onto another place that the player can walk through. Two portals are linked through `portal_target`. Example: `maps/Portal_Test.json`. Rendering: [Portal Rendering ‐ Technical Overview](https://github.com/ViciousSquid/Fio/wiki/Portal-Rendering-%E2%80%90-Technical-Overview).
 

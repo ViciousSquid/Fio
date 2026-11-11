@@ -2,7 +2,7 @@
 
 #### Latest release is [3.0.0.3010](https://github.com/ViciousSquid/Fio/releases/tag/3.0.0.3010) for Windows, macOS, Linux and Android | [changelog](https://github.com/ViciousSquid/Fio/wiki/changelog)
 
-> This wiki describes **Fio 3.1.0.0611 (CANARY)**, the [`3.1.0.0611_CANARY`](https://github.com/ViciousSquid/Fio/tree/3.1.0.0611_CANARY) branch. Where 3.0.0 differs, the [changelog](https://github.com/ViciousSquid/Fio/wiki/changelog) says how.
+> This wiki describes **Fio 3.5.0.1111**, built from the [`3.1.0.0611_CANARY`](https://github.com/ViciousSquid/Fio/tree/3.1.0.0611_CANARY) branch. Where 3.0.0 differs, the [changelog](https://github.com/ViciousSquid/Fio/wiki/changelog) says how.
 
 ## Start here
 

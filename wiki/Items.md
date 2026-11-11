@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 An **item** is something the player holds or collects. Fio has four stable item slots whose ids never change; maps refer to them (`Prop.collect_item`) and the loadout carries them. Module: `engine/items.py` (no GL, no Qt); editor: `editor/item_editor.py`.
 

@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 **SysMon** is the overlay in the 3D view that shows what a frame costs. Toggle it with **F3** (`[Shortcuts] key_sysmon`); `[Display] always_show_sysmon` shows it at start-up. Module: `engine/sysmon.py`. It is switched off when a package is played in kiosk mode (F3 brings it back).
 

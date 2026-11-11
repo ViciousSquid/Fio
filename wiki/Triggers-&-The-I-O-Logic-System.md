@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Fio's map logic is an **Input/Output (I/O) event system**: an entity fires a named **output**, the dispatcher follows the **connections** stored on that entity, and each connection calls a named **input** on a target entity, optionally after a delay and with a parameter. Brushes (triggers, doors, movers, plain brushes), [Things](https://github.com/ViciousSquid/Fio/wiki/Entities-(Things)) and [Logic Entities](https://github.com/ViciousSquid/Fio/wiki/Logic-Entities) all take part. There is no scripting language; the connections in the map file are the program.
 

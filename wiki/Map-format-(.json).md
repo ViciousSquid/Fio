@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A Fio map is one UTF-8 JSON document. It is the serialised form of `editor/editor_state.py: EditorState` and is loaded directly by the editor, by Play and by the standalone player; there is no compiled or baked level format. This page is the schema of **map version 5**, the version this build writes: every top-level key, the brush and entity records, what is checked on load, what loading migrates from older versions, and what is rewritten on save.
 

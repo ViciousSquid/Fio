@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 The **Fio Player** (`player/`) plays exported [`.fiopak`](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive) worlds on Android. Authoring and export happen in desktop Fio; the player only plays. App version: **3.5.0** (`player/buildozer.spec`, `player.__version__`).
 

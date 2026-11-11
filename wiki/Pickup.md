@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 <img width="50" height="50" alt="Sprite" title="Default Pickup sprite" src="https://github.com/user-attachments/assets/3f8c7df3-b540-43a5-8a54-8c8bf73ae29b" />
 

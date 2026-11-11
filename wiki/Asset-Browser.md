@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 The **Asset Browser** (`editor/asset_browser.py`) has four tabs.
 

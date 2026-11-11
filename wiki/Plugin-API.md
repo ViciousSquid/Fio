@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A Fio plugin is a Python package under `plugins/` that adds entity types, I/O, console commands, menus, HUD text, renderers and per-tick behaviour without editing the editor or the engine. The same package is loaded by the editor, by Play Mode and by the standalone Android player. This page is the reference for the plugin API, version **1.9.0** (`plugins.api.API_VERSION`).
 

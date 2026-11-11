@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 <img width="50" height="50" src="https://github.com/user-attachments/assets/9a9603f0-a1cb-4547-98e6-f6bdb125d33d" />
 

@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 The **Property editor** (side panel; `editor/property_editor.py`) shows and edits whatever is selected: a brush's flags and behaviour, or an entity's properties. Every edit is one undo step.
 

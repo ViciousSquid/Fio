@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 <img width="45" height="45" alt="LogicRelay" title="LogicRelay" src="https://github.com/user-attachments/assets/5e794714-b5f9-4a05-a3a8-0af16e819a10" />
 <img width="45" height="45" alt="LogicGate" title="LogicGate" src="https://github.com/user-attachments/assets/8ceb4c08-1524-4d53-95cc-5245ce3270df" />

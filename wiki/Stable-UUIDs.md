@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Every brush and every entity carries a stable identifier in `id` (a brush dict's `id`; a thing's `properties['id']`): a UUID4 string assigned once and kept for the life of the object, across saves, renames and reordering.
 

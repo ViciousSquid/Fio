@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A **saved game** captures a play session: the level as it now is plus the live state the map format never stores. Module: `engine/savegame.py`; the session operations (`save_session` / `load_session`) belong to `engine/logic_session.py`. It is engine-native: no plugin is involved.
 

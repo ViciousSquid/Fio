@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Split-screen puts a second local player in the running game. In Play, press **F9** or run the console command `ss` (Play only). Example: enter Play (F5), F12 for full screen, then F9.
 

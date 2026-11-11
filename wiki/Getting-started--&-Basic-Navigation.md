@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Fio is a world editor and the engine that runs the world: you build with brushes and entities, press **Play**, and the world you are editing runs. To run from source see [Building and Running from Source](https://github.com/ViciousSquid/Fio/wiki/Building-and-Running-from-Source).
 

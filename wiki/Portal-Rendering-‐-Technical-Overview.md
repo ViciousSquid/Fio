@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Fio's [portals](https://github.com/ViciousSquid/Fio/wiki/Portal) are drawn with **stencil apertures**: the scene beyond a portal is rendered again from a transformed camera, clipped to the portal's opening by the stencil buffer. There is no BSP, no PVS and no pre-computation; a portal is an entity that can be moved, linked and switched at any time.
 

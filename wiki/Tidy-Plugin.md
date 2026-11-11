@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 Tidy is a shipped plugin (`plugins/tidy/`, plugin name `tidy`, version 2.0.0) that adds put-it-away gameplay: the player carries ordinary Props to a receptacle, which arranges them into slots, and a goal counts progress and fires an output when the target is reached. Tidy owns no carryable object and no physics. A tidyable object is a core [Prop](https://github.com/ViciousSquid/Fio/wiki/Prop) with a non-empty `tidy_category`; the engine's `PropSession` (`engine/prop_runtime.py`) still does the carrying, dropping and simulation, and Tidy only intercepts the drop.
 

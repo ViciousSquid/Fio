@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 The **Scene Hierarchy** is a tree of everything in the level: brushes, entities and the terrain. Module: `editor/scene_hierarchy.py`; its dock, `editor/hierarchy_dock.py`, is 200 px wide on every platform.
 

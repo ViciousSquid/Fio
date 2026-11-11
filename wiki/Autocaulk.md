@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 **Tools > Autocaulk** applies the `nodraw.jpg` texture to every box-brush face that can never be seen, so those faces are not drawn. One undo step restores them. Implementation: `MainWindow.autocaulk` in `editor/main_window.py`.
 

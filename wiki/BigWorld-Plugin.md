@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 **Big World** (`plugins/bigworld/`) lets one map hold a very large world while only the region around the player is resident, active and simulated. It is a plugin over Fio's existing spatial grid, physics, renderer, terrain and save system -- not a new engine mode, world format or renderer -- and costs nothing on maps that do not opt in. Test map: `maps/BigWorld_streaming_test.json`.
 

@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 The Debug Console is Fio's log viewer and command line. It shows every message the engine, the I/O system, the AI and the plugins log through `editor.debug_console.debug_log`, and it accepts the commands listed on the [Console commands](https://github.com/ViciousSquid/Fio/wiki/Console-commands) page. It is a tab in the Properties/Console dock in the editor and a one-line overlay at the bottom of the 3D view during Play.
 

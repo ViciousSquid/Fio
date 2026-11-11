@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A **brush** is a convex solid: the building block of walls, floors, doors and volumes. In a map it is a record in `brushes`; in memory a dict shared by the editor, the logic thread, the renderer and plugins. Modules: `engine/brush_geometry.py` (shape), `engine/brush_faces.py` (materials), `engine/brush_placement.py` (where it is).
 

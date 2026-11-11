@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A **Player Start** (`type: "playerstart"`, class `editor.things.PlayerStart`) is where the player spawns when Play begins or a level is entered. A level needs at least one: with none, Play is refused with a "No Player Start" message and the editor stays as it was. In the editor it is drawn as a player-sized model (`engine/entity_models.py`, `docs/playerstart-model.md`), never in Play.
 

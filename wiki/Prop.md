@@ -1,4 +1,4 @@
-> Applies to Fio 3.1.0.0611 (CANARY).
+> Applies to Fio 3.5.0.1111.
 
 A **Prop** (`type: "prop"`, `engine/prop_entity.py`, runtime in `engine/prop_runtime.py`) is a world object drawn as a billboard sprite or a model. Optionally it can be carried, collected, or simulated as a physics body. By default it is scenery: not solid, not carryable, not collectable.
 
