@@ -279,10 +279,24 @@ Tests that scan the view's source now scan these modules too
   GPU mostly does not; unverified on Adreno. Still slow: the first step
   and the release when dragging a stamp with many stamps above it.
 * The full suite was rerun after all of these: see Tests at handoff.
-* Asked for and not started: cutting the cost of editing stamps further
-  (the user redirected to closing the audit). Where it still is: the
-  first step and the release of a drag with many stamps above the one
-  dragged, about 130 ms each; a click 18 ms.
+* **Stamp editing, second pass** (`bcd0f55`): changed chunks compressed
+  on threads; the bake copies where a stamp is solid and blends only the
+  feathered ring; a chunk under a selection is composed only inside the
+  selection's texel box (exactly, with clipped bakes, for the stored
+  paint); a chunk a drag enters uses its stored paint as kept
+  (`Terrain._stored_with_selection`); the tint is mixed into the tile
+  image once. Measured (CPU, this container; 24 scattered stamps), start
+  of the stamp work -> now: click 32 -> 10.4 ms; drag step 65 -> 5.8 ms
+  (newest) and 44 -> 6.4 ms (oldest); release 162 -> 17 ms and 205 -> 33
+  ms; worst step 93-130 -> 48 ms (building the layer of the stamps above
+  the dragged one for a chunk it has just entered, once a chunk).
+* **No grass on painted ground**: `_generate_grass_blades` drops blades
+  by the stored paint's alpha (`_paint_cover_at`), blade by blade, so a
+  stamp or painted path is a clearing and a feathered edge thins out.
+  The stored paint changing marks that chunk's grass due
+  (`_paint_changed_grass`); during a drag the grass follows on release.
+  Not rerun after these two: the full suite (terrain, stamp, editor
+  stamp-editing, visual terrain and integrity tests pass).
 
 ### Behaviour changes to know about
 

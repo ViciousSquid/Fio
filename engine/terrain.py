@@ -1251,19 +1251,75 @@ class Terrain:
         bx = np.repeat(tx, per_tuft) + np.cos(angle) * radius
         bz = np.repeat(tz, per_tuft) + np.sin(angle) * radius
 
+        size_roll = rng.uniform(0.65, 1.25, count)
+        yaw_roll = rng.uniform(0.0, 6.2831853, count)
+        tint_roll = rng.uniform(0.82, 1.12, count)
+        # No grass on painted ground: a stamp or a painted path is a
+        # clearing. Blade by blade, so the edge of the paint is the edge of
+        # the grass, thinning out across a feathered one. (Drawn after the
+        # rolls above, so painting changes no other blade.)
+        if self.texture_paint_maps:
+            covered = self._paint_cover_at(bx, bz)
+            if covered is not None:
+                grows = rng.random(count) >= covered
+                if not np.all(grows):
+                    bx, bz = bx[grows], bz[grows]
+                    size_roll, yaw_roll, tint_roll = (
+                        size_roll[grows], yaw_roll[grows], tint_roll[grows])
+                    tuft_of = np.repeat(np.arange(len(tx)), per_tuft)[grows]
+                    tuft_raw, tuft_slope = tuft_raw[tuft_of], tuft_slope[tuft_of]
+                    per_tuft, count = 1, len(bx)
+                    if count == 0:
+                        return np.empty((0, 9), dtype=np.float32)
+
         data = np.empty((count, 9), dtype=np.float32)
         data[:, 0] = bx
         data[:, 1] = self._get_heights_batch(bx, bz)
         data[:, 2] = bz
-        data[:, 3] = rng.uniform(0.65, 1.25, count)
-        data[:, 4] = rng.uniform(0.0, 6.2831853, count)
-        data[:, 5] = rng.uniform(0.82, 1.12, count)
+        data[:, 3] = size_roll
+        data[:, 4] = yaw_roll
+        data[:, 5] = tint_roll
         # The colour of the ground each blade stands on, for grass that
         # matches the terrain (the default until a blade colour is chosen).
         data[:, 6:9] = self._ground_colors(
             slot, data[:, 1], np.repeat(tuft_raw, per_tuft),
             np.repeat(tuft_slope, per_tuft))
         return data
+
+    def _paint_cover_at(self, x, z):
+        """How covered by paint the ground is at world points, 0..1 (the
+        stored paint's alpha); None when none of their chunks is painted."""
+        res = self.TERRAIN_PAINT_RESOLUTION
+        cs = float(self.chunk_size)
+        fx = (np.asarray(x, dtype=np.float64) - self.offset_x) / cs
+        fz = (np.asarray(z, dtype=np.float64) - self.offset_z) / cs
+        cx = np.floor(fx).astype(np.int64)
+        cz = np.floor(fz).astype(np.int64)
+        out = None
+        maps = self.texture_paint_maps
+        for key in {(int(a), int(b)) for a, b in zip(cx.tolist(), cz.tolist())}:
+            paint = maps.get(key)
+            if paint is None:
+                continue
+            here = (cx == key[0]) & (cz == key[1])
+            ix = np.clip(((fx[here] - key[0]) * res).astype(np.int64), 0, res - 1)
+            iz = np.clip(((fz[here] - key[1]) * res).astype(np.int64), 0, res - 1)
+            if out is None:
+                out = np.zeros(len(fx), dtype=np.float32)
+            out[here] = paint[ix, iz, 3] * np.float32(1.0 / 255.0)
+        return out
+
+    def _paint_changed_grass(self, keys):
+        """The stored paint of chunks *keys* changed: their grass is due."""
+        if not self.grass_enabled or not keys:
+            return
+        table = self.table
+        cap = table._capacity
+        coords = table.coord[:cap]
+        live = table.live[:cap]
+        dirty = table.grass_dirty[:cap]
+        for cx, cz in keys:
+            dirty[live & (coords[:, 0] == cx) & (coords[:, 1] == cz)] = True
 
     def _ground_colors(self, slot: int, y: np.ndarray, raw: np.ndarray,
                        slope: np.ndarray) -> np.ndarray:
@@ -2370,6 +2426,8 @@ class Terrain:
                     # survive a reload and a rebake after it would differ.
                     out[out[:, 3] == 0, :3] = 0
                     region[covered] = out
+                if target is self.texture_paint_maps:
+                    self._paint_changed_grass((key,))
                 self._touch_texture_paint(key)
                 changed = True
         return changed
@@ -2741,6 +2799,7 @@ class Terrain:
                 else:
                     self.texture_paint_maps[key] = paint
                 self._stamp_dirty_chunks.discard(key)
+            self._paint_changed_grass(keys)
             held = self._stored_with_selection
             if held is not None:
                 # These chunks' stored paint is current again.
@@ -2879,6 +2938,8 @@ class Terrain:
 
     def clear_texture_paint(self):
         """Erase all baked terrain texture paint and placed stamps."""
+        if self.texture_paint_maps:
+            self.table.mark_grass_dirty()
         self.texture_paint_maps = {}
         self._paint_epoch += 1
         self.texture_paint_base = {}
@@ -2946,7 +3007,10 @@ class Terrain:
         self._paint_map_versions = {}
         self._paint_epoch += 1
         self._paint_version_counter = 0
+        had_paint = bool(self.texture_paint_maps)
         self.texture_paint_maps = self._decode_texture_paint(entries, saved_res)
+        if had_paint or self.texture_paint_maps:
+            self.table.mark_grass_dirty()
         self._paint_epoch += 1
         for key in self.texture_paint_maps:
             self._touch_texture_paint(key)
