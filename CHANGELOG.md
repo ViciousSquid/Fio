@@ -23,9 +23,11 @@ version 4 and play in both.
   `draw_collision_visualization` take vertex arrays. Only plugins that move
   brushes or implement a renderer are affected; see `plugins/API.md`.
 - **Packages and asset archives are read in place.** Tools > Play Game Package
-  no longer extracts a `.fiopak` to a temporary folder. The
-  `assets/*.fiopak` category archives are no longer committed to the
-  repository; assets are loose files there.
+  no longer extracts a `.fiopak` to a temporary folder. The editor's own
+  images (toolbar and button icons) ship in `assets/editor.fiopak` and are
+  read from it in place; the few a build or Qt stylesheet needs by path
+  (`icon.ico`, `logo.png`, `splash.png`, `close.png`, `undock.png`) are also
+  kept as loose files. Textures, sprites and models are loose files.
 
 ### New
 

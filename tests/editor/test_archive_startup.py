@@ -8,6 +8,21 @@ import pytest
 pytestmark = pytest.mark.qt
 
 
+def _repository_image(root, name):
+    """*name* as the repository holds it: a loose file, or -- the editor's
+    own images ship only inside assets/editor.fiopak -- that archive's bytes,
+    read with zipfile and decoded by Qt, not through the code under test."""
+    import zipfile
+    from PyQt5.QtGui import QImage, QPixmap
+    path = root / 'assets' / name
+    if path.is_file():
+        return QPixmap(str(path)).toImage()
+    with zipfile.ZipFile(root / 'assets' / 'editor.fiopak') as archive:
+        image = QImage.fromData(archive.read('assets/' + name))
+    assert not image.isNull(), name
+    return QPixmap.fromImage(image).toImage()
+
+
 def test_archive_only_assets_start_the_editor_with_the_same_icon_pixels(
         qt_app, tmp_path, monkeypatch):
     from PyQt5.QtGui import QIcon, QPixmap
@@ -36,7 +51,7 @@ def test_archive_only_assets_start_the_editor_with_the_same_icon_pixels(
         from engine.asset_qt import load_icon, load_pixmap
         assert not window.undo_action.icon().isNull()
         for name in ('b_save.png', 'b_undo.png', 'splash.png', 'sprites/logic_camera.png'):
-            expected = QPixmap(str(root / 'assets' / name)).toImage()
+            expected = _repository_image(root, name)
             actual = load_pixmap(str(assets / name)).toImage()
             assert not actual.isNull()
             assert actual == expected
