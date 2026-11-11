@@ -207,12 +207,14 @@ did), then input; `_paint_frame` last, by pass.
 
 ### Tests at handoff
 
-Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `e62ac25`
-(M5 complete): **7,442 passed, 177 skipped, 6 failed** (24 minutes). The
-six: the three `test_portal_fade` cases and the position window (the
-documented environment failures); the play-cycle memory guard and one
-case of the player-start focus test, which fail inside the full run and
-pass on their own (both rerun alone after it: 11 passed).
+Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `d827b77`
+(M5 and the boundary complete): **7,466 passed, 177 skipped, 5 failed** (24
+minutes). The five: the three `test_portal_fade` cases and the position
+window (the documented environment failures), and the play-cycle memory
+guard, which fails inside the full run and passes on its own (rerun alone
+after it). The gate before the boundary fixes, at `e62ac25`: 7,442 passed,
+6 failed (the same five and one timing-sensitive case of the player-start
+focus test, which passed alone and passed in this run).
 
 ### Environment notes (this session)
 
