@@ -4,9 +4,9 @@ State at handoff (2026-11-11, after the fifth session; read *Fifth session*
 first). **Stage 2 is accepted**; **M3**, **M3.1** and **M4** are complete.
 **The whole-engine performance audit is done** (`docs/performance-audit.md`)
 and so is the renderer's "tables all the way to GL" audit
-(`docs/renderer-boundary-audit.md`). **M5 (the terrain through tables to GL) is started: profiled, the
-vertex load cut (M5.1); chunk generation off the paint thread and the
-boundary itself are not done.** The user wants millisecond-scale costs found and fixed, not
+(`docs/renderer-boundary-audit.md`). **M5 (the terrain through tables to GL) is done: profiled, the vertex
+load cut (M5.1), height grids built off the paint thread (M5.2), the
+renderer off the live Terrain object (M5.3).** The user wants millisecond-scale costs found and fixed, not
 microsecond tuning. Earlier sections are kept as history.
 
 ## Fifth session: the audit finished, the renderer boundary, M5 recommended (read this first)
@@ -27,6 +27,7 @@ microsecond tuning. Earlier sections are kept as history.
 * `9a9049b` -- M5.1: the terrain heightfield drawn indexed
   (`tools/bench_terrain.py`).
 * `618a552` -- the view's audio moved to `engine/view_audio.py`.
+* `e62ac25` -- M5.2/M5.3: the terrain published as tables; `TerrainGL`.
 
 ### What the audit found (numbers in `docs/performance-audit.md`)
 
@@ -68,14 +69,13 @@ model passes' material dictionaries (V1), the selection outline's record
 read (V5), authored arrays in the frame input (V6). **Open**: the face
 highlight takes a brush dictionary and writes `_world_cache` on it (V2; a
 protocol change, not made without review); the connection-line and
-collision overlays (V3); the terrain, an editor object the renderer drives
-and mutates every frame (V4); the occlusion index's state written on the
+collision overlays (V3); the occlusion index's state written on the
 published `RenderTable`, with a set shared across threads (R1).
 `tests/renderer/test_renderer_boundary.py` holds the ratchet: add keys as
 V2 and V3 are fixed. Debug Tables (`tools/debug_tables.py`) reads the same
 published snapshot and is the oracle for any column V2-V4 add.
 
-### M5: terrain tables all the way to GL (started; M5.1 done)
+### M5: terrain tables all the way to GL (done)
 
 The user asked for M5 in full: no renderer access to the live `Terrain`;
 versioned `TerrainTable` data and immutable appearance state published;
@@ -109,32 +109,57 @@ CPU-mesh draw pass unchanged. GPU gain unverified. (Tried and discarded:
 flat outputs computed at the provoking vertex only, still unindexed -- no
 gain; llvmpipe's vectorised shader runs both sides of the branch.)
 
-**Not done -- M5.2, chunk generation off the paint thread.** Measured: 297
-builds on the paint thread over 240 walked frames, 263 ms in all, 3.7 ms the
-longest (`Terrain._upload_chunk` = `_chunk_heights` + `table.store`; the GL
-upload already happens later, in `draw_heightfield_slots`, by version). The
-table's `store` is written as a seqlock (`seq` odd while writing) for this.
-Plan: a worker takes the `schedule()` queue; the paint thread only uploads
-rows whose `version` moved. Watch: `_chunk_heights` reads sculpt, heightmap
-and CSG state the editor mutates (snapshot the inputs or lock per build);
-the stream/evict of slots while a build is in flight (check the slot's key
-again before `store`); `bench_terrain.py` already reports builds on and off
-the paint thread.
+**Done -- M5.2 and M5.3** (`e62ac25`): the terrain published as tables,
+its GL owned by the renderer.
 
-**Not done -- M5.3, the boundary** (`docs/renderer-boundary-audit.md` V4).
-`terrain` in the frame input is still the editor's live object, and
-`render_terrain` / `setup_terrain_shader` still write on it. Plan: the logic
-thread publishes the `TerrainTable` and a frozen appearance record
-(`appearance_uniforms()`, gradient, flags, texture names, chunk size and
-offsets) on `RenderState`; a renderer-side object owns the height and paint
-pages, the index arrays, the grass buffers and both programs, keyed by
-terrain slot and version; `Terrain` keeps authoring, heights and
-serialisation. `terrain.py` is 3,400 lines with GL through it; this is the
-large step and was not started. Debug Tables is the oracle for the
-published rows.
+* `engine/terrain_frame.py` (no GL): `Terrain.publish()` returns an
+  immutable `TerrainFrame` -- the dense `TerrainTable`, the per-slot
+  `TerrainProducts` (grass instances, block-terrace meshes; versioned, tagged
+  with the slot's allocation `order`), the paint maps behind read-only
+  views, the frame's appearance as numbers. Nothing in it leads back to the
+  Terrain.
+* `Terrain.advance(camera, planes)`: streaming, pruning, LOD hysteresis and
+  building, before the frame, without GL. `engine/terrain.py` imports no
+  OpenGL (a test starts a fresh interpreter to check).
+* `engine/renderer/core/terrain_gl.py` `TerrainGL`: the programs, height
+  and paint pages, index arrays, grass and block buffers and the versions
+  uploaded. The draw code moved there unchanged. The forward renderer keeps
+  one under the frame's `key` (`passes.py` `_terrain_gl`) and frees it when
+  the key changes or the renderer is retired. A freed or reused slot is
+  recognised by `table.order`.
+* The host: `QtGameView._publish_terrain` (advance + publish, per view) and
+  `_collect_terrain_stats` (the renderer's `RenderStats.terrain_*` copied
+  back for SysMon, the terrain editor and Debug Tables).
+* The builder thread (`Terrain.BACKGROUND_BUILDS`, on in `main.py` and in
+  `audit_play.py --loop`; off by default, so tests and tools step builds
+  inline). It computes a height grid from numbers captured when the build
+  was asked for; the table is written on the GUI thread by
+  `_collect_built`. An edit that lands mid-build keeps the row dirty; a
+  grid for a slot evicted or reused meanwhile is dropped; `cleanup()` stops
+  the thread.
+* Tests: `tests/engine/test_terrain_publication.py` (frame immutability,
+  products, the builder's three races), `tests/helpers/terrain_draw.py`
+  (how a test draws a terrain now), the boundary ratchet (the renderer
+  imports no `engine.terrain`, writes nothing on the frame).
 
-Next after those: the remaining ~25 ms of rasterising in BigWorld's terrain
-is llvmpipe's; judge it on the Snapdragon.
+Measured on one host (`tools/bench_terrain.py`, BigWorld, llvmpipe; the
+tree before against HEAD with `--background`, two runs each): held frame
+38.6-42.5 -> 40.7-48.0 ms (minima 36.8-39.6 -> 39.2-39.4), walked frame
+median 46.2-49.6 -> 46.6-49.9: level within the noise. Chunk building on
+the paint thread over 240 walked frames: 224-232 ms (longest 3.1-3.5) ->
+0, with 297 grids built off it. Same 64 chunks and 294,912 triangles.
+As shipped (`audit_play --loop`, after a worker restart, so not comparable
+with earlier tables): BigWorld 15.5 fps, Terrain_Test_medium 60.3,
+MonsterTest 61.2, Office 57.2.
+
+**Still on the GUI thread, inside `advance`, budgeted as before**: grass
+blade generation and block-mesh building (they read the built grid and the
+terrain's height functions). Moving them needs the same capture-the-inputs
+treatment as the grids.
+
+**Not done**: LOD by projected size (a fidelity decision, see above); the
+~25 ms of rasterising left in BigWorld's terrain is llvmpipe's -- judge it
+on the Snapdragon.
 
 ### `engine/qt_game_view.py` being broken up (started)
 
@@ -173,20 +198,20 @@ did), then input; `_paint_frame` last, by pass.
 
 ### Tests at handoff
 
-Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `618a552`'s
-code (everything this session changed): **7,424 passed, 177 skipped, 5
-failed** (24 minutes). The five: the three `test_portal_fade` cases and the
-position window (the documented environment failures), and the play-cycle
-memory guard, which fails inside the full run and passes on its own (478
-KiB of 512, measured before M5.1) -- run it on its own, as before. The
-earlier run at `bdf9998` also failed the timing-sensitive player-start
-focus test; it passed this time.
+Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `e62ac25`
+(M5 complete): **7,442 passed, 177 skipped, 6 failed** (24 minutes). The
+six: the three `test_portal_fade` cases and the position window (the
+documented environment failures); the play-cycle memory guard and one
+case of the player-start focus test, which fail inside the full run and
+pass on their own (both rerun alone after it: 11 passed).
 
 ### Environment notes (this session)
 
 * The container needed `pip install -r requirements.txt pytest py-spy` and
   `apt-get update && apt-get install -y` the xcb libraries listed under the
   second session, plus `libegl1`.
+* The session's worker was restarted once (a different host afterwards):
+  compare timings only within one stretch, and commit before a long run.
 * `py-spy --native` gives no Python line numbers worth reading; aggregate by
   the innermost Python frame and the leaf library (Mesa, libc, Qt).
 * cProfile on 3.13 records every thread: the logic thread's sleeps appear
