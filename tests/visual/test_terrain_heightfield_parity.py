@@ -450,9 +450,9 @@ class _RecordingGL:
             self.uniforms[name] = int(value)
         return self._gl.glUniform1i(location, value)
 
-    def glDrawArrays(self, mode, first, count):
+    def glDrawElements(self, mode, count, kind, offset):
         self.draws.append((dict(self.uniforms), dict(self.bound)))
-        return self._gl.glDrawArrays(mode, first, count)
+        return self._gl.glDrawElements(mode, count, kind, offset)
 
 
 def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatch):

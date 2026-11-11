@@ -2328,6 +2328,95 @@ void main() {
 }"""
 
 
+def _terrain_indexed_sources():
+    """The heightfield terrain program as it is drawn: ``terrain_indexed.vert``
+    and ``terrain_flat.frag``, derived from ``terrain.vert``/``terrain.frag``.
+
+    ``terrain.vert`` draws a chunk as six unshared vertices a quad, and works
+    out a triangle's flat normal and colour at each of its three vertices.
+    Here the two are ``flat`` outputs, taken from the triangle's provoking
+    vertex (its last: GL's default convention, which nothing in Fio changes),
+    and the chunk is drawn indexed (``engine.terrain.heightfield_indices``)
+    over two layers of the grid's points:
+
+    * layer 0, ``id = i * (res + 1) + k``: grid point (i, k), carrying the
+      face values of the first triangle of quad (i, k);
+    * layer 1, ``id = (res + 1)^2 + i * (res + 1) + k``: the same point,
+      carrying those of the second triangle of quad (i - 1, k - 1).
+
+    So ``2 (res + 1)^2`` vertices are shaded instead of ``6 res^2`` (4,802
+    against 13,824 at res 48). Every value that reaches a fragment comes from
+    the same expressions on the same operands as in ``terrain.vert``, which
+    stays as the reference the parity tests capture vertex by vertex;
+    ``terrain.frag`` (smooth inputs) still serves the block-terrace mesh.
+    """
+    vert = DEFAULT_SHADERS['terrain.vert']
+    head, marker, _ = vert.partition('void main() {')
+    assert marker, 'terrain.vert: main() not found'
+    for name in ('Normal', 'VertexColor'):
+        old = 'out mediump vec3 %s;' % name
+        assert old in head, name
+        head = head.replace(old, 'flat ' + old)
+    main = """void main() {
+    int res = uChunkI.x;
+    int side = res + 1;
+    int points = side * side;
+    bool second = gl_VertexID >= points;
+    int g = second ? gl_VertexID - points : gl_VertexID;
+    int i = g / side;
+    int k = g - i * side;
+    ivec2 me = ivec2(i, k);
+
+    // The triangle this vertex provokes, with terrain.vert's corners a, b, c:
+    // the first of quad (i, k), or the second of quad (i - 1, k - 1).
+    int ix = second ? i - 1 : i;
+    int iz = second ? k - 1 : k;
+    ivec2 a = second ? ivec2(ix + 1, iz)     : ivec2(ix, iz);
+    ivec2 b = second ? ivec2(ix + 1, iz + 1) : ivec2(ix + 1, iz);
+    ivec2 c = ivec2(ix, iz + 1);
+
+    vec3 pa = gridPoint(a);
+    vec3 pb = gridPoint(b);
+    vec3 pc = gridPoint(c);
+    vec3 p  = second ? pb : pa;
+
+    // Flat face normal: cross(v1 - v0, v2 - v0) / |.|, as stored.
+    vec3 n = cross(pb - pa, pc - pa);
+    float nlen = sqrt(dot(n, n));
+    Normal = nlen == 0.0 ? n : n / nlen;
+
+    if (uFlatMode != 0) {
+        VertexColor = vec3(0.7);
+    } else {
+        float meanHeight = (pa.y + pb.y + pc.y) / 3.0;
+        float norm = clamp((meanHeight - uChunkY.x) / uChunkY.y, 0.0, 1.0);
+        int seed = second ? ((ix + 1000) * 1000 + iz + 1000) % 100
+                          : (ix * 1000 + iz) % 100;
+        float variation = (float(seed) / 100.0 - 0.5) * 0.08;
+        VertexColor = clamp(gradientColour(norm) + variation, 0.0, 1.0);
+    }
+
+    float gx = gradientAlong(me.x, me.y, true);
+    float gz = gradientAlong(me.x, me.y, false);
+    SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
+
+    TexCoords = p.xz / uTiling;
+    PaintCoords = vec2(float(me.x), float(me.y)) / float(max(res, 1));
+    FragPos = p;
+    gl_Position = projection * view * vec4(p, 1.0);
+}"""
+    frag = DEFAULT_SHADERS['terrain.frag']
+    for name in ('Normal', 'VertexColor'):
+        old = 'in vec3 %s;' % name
+        assert frag.count(old) == 1, name
+        frag = frag.replace(old, 'flat in vec3 %s;' % name)
+    return head + main, frag
+
+
+(DEFAULT_SHADERS['terrain_indexed.vert'],
+ DEFAULT_SHADERS['terrain_flat.frag']) = _terrain_indexed_sources()
+
+
 # Central Registry: (Shader Name) -> (Vertex Filename, Fragment Filename)
 SHADER_MAP = {
     'simple':        ('simple.vert',         'simple.frag'),
@@ -2338,5 +2427,5 @@ SHADER_MAP = {
     'fog':           ('fog.vert',            'fog.frag'),
     'water':         ('water.vert',          'water.frag'),
     'glass':         ('glass.vert',          'glass.frag'),
-    'terrain':       ('terrain.vert',        'terrain.frag'),
+    'terrain':       ('terrain_indexed.vert', 'terrain_flat.frag'),
 }

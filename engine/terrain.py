@@ -46,6 +46,34 @@ DEFAULT_GRASS_HEIGHT = 5.0
 GRASS_HEIGHT_LIMITS = (0.1, 256.0)
 
 
+def heightfield_indices(res: int) -> np.ndarray:
+    """The index list one heightfield chunk of *res* quads a side is drawn
+    with (``terrain_indexed.vert``): ``6 * res * res`` indices over two
+    layers of the ``(res + 1)^2`` grid points.
+
+    Quads in the order the unindexed draw used (``q = ix * res + iz``), each
+    as its two triangles with the same corners and winding, rotated so that
+    the last index -- the provoking vertex -- is the one that carries the
+    triangle's flat normal and colour: the layer-0 point (ix, iz) for the
+    first, the layer-1 point (ix + 1, iz + 1) for the second.
+    """
+    side = res + 1
+    ix, iz = np.meshgrid(np.arange(res, dtype=np.uint32),
+                         np.arange(res, dtype=np.uint32), indexing='ij')
+    ix, iz = ix.ravel(), iz.ravel()
+
+    def point(i, k, layer=0):
+        return layer * side * side + i * side + k
+
+    # terrain.vert: (a, b, c) = (ix,iz) (ix+1,iz) (ix,iz+1), then
+    #               (a, b, c) = (ix+1,iz) (ix+1,iz+1) (ix,iz+1).
+    quads = np.stack([
+        point(ix + 1, iz), point(ix, iz + 1), point(ix, iz),            # b c a
+        point(ix, iz + 1), point(ix + 1, iz), point(ix + 1, iz + 1, 1),  # c a b
+    ], axis=1)
+    return np.ascontiguousarray(quads.ravel(), dtype=np.uint32)
+
+
 def grass_vertex_count(segments: int) -> int:
     """Vertices per blade instance: (segments - 1) quads plus the tip."""
     return (max(1, int(segments)) - 1) * 6 + 3
@@ -485,6 +513,7 @@ class Terrain:
         self._paint_page_layers = 0
         self._paint_gpu_version = np.zeros(0, dtype=np.int64)
         self._empty_vao = 0
+        self._index_vaos = {}          # resolution -> (vertex array, index buffer)
         self._gradient_warned = False
         # Grass is a separate GL 3.3 instanced pass. The CPU scatters tufts,
         # places every blade of a tuft on the terrain surface and uploads one
@@ -593,8 +622,12 @@ class Terrain:
             return 0
         try:
             vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
+            # The heightfield draws with flat face outputs; the block mesh
+            # keeps the smooth-input fragment shader (engine/shaders.py).
+            fragment_name = ('terrain_flat.frag' if vertex_name == 'terrain_indexed.vert'
+                             else 'terrain.frag')
             fragment_code = shaders.light_ubo_source(
-                shaders.DEFAULT_SHADERS['terrain.frag'])
+                shaders.DEFAULT_SHADERS[fragment_name])
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
             program = compileProgram(vertex_shader, fragment_shader, validate=False)
@@ -620,7 +653,7 @@ class Terrain:
         return program
 
     def _init_shader(self):
-        self.shader_program = self._compile_program('terrain.vert')
+        self.shader_program = self._compile_program('terrain_indexed.vert')
         if not self.shader_program:
             return
         self._init_grass_shader()
@@ -1433,6 +1466,23 @@ class Terrain:
         gl.glUniform1fv(u['uGradW'], limit, W)
         gl.glUniform3fv(u['uGradD'], limit, D)
 
+    def _index_vao(self, res: int) -> int:
+        """The vertex array a chunk of *res* quads a side is drawn with: no
+        attributes (the vertex shader reads the height grid), only the index
+        list of :func:`heightfield_indices`. One per resolution, made on
+        first use, in the context the terrain draws in."""
+        entry = self._index_vaos.get(res)
+        if entry is None:
+            vao = int(gl.glGenVertexArrays(1))
+            buffer = int(gl.glGenBuffers(1))
+            indices = heightfield_indices(res)
+            gl.glBindVertexArray(vao)
+            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, buffer)
+            gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices,
+                            gl.GL_STATIC_DRAW)
+            entry = self._index_vaos[res] = (vao, buffer)
+        return entry[0]
+
     def draw_heightfield_slots(self, u, slots, unit, lod_level_loc=-1,
                                paint_unit=None):
         """Draw built terrain chunks with their baked material paint."""
@@ -1454,9 +1504,7 @@ class Terrain:
             for slot, version in zip(order, paint):
                 if version and gpu_version[slot] != version:
                     self._upload_paint_chunk(slot)
-        if not self._empty_vao:
-            self._empty_vao = int(gl.glGenVertexArrays(1))
-        gl.glBindVertexArray(self._empty_vao)
+        bound_res = -1
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
         lods = table.lod[slots].tolist() if lod_level_loc != -1 else None
         loc_chunk_i, loc_chunk_x, loc_chunk_y = (
@@ -1496,7 +1544,11 @@ class Terrain:
             gl.glUniform2i(loc_chunk_i, res, layer)
             gl.glUniform3f(loc_chunk_x, *cx)
             gl.glUniform2f(loc_chunk_y, *cy)
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6 * res * res)
+            if res != bound_res:
+                gl.glBindVertexArray(self._index_vao(res))
+                bound_res = res
+            gl.glDrawElements(gl.GL_TRIANGLES, 6 * res * res,
+                              gl.GL_UNSIGNED_INT, None)
             triangles += 2 * res * res
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindVertexArray(0)
@@ -3109,6 +3161,10 @@ class Terrain:
         if self._empty_vao:
             gl.glDeleteVertexArrays(1, [self._empty_vao])
             self._empty_vao = 0
+        for vao, buffer in self._index_vaos.values():
+            gl.glDeleteVertexArrays(1, [vao])
+            gl.glDeleteBuffers(1, [buffer])
+        self._index_vaos = {}
         self._gpu_version[:] = 0
         self._paint_gpu_version[:] = 0
     

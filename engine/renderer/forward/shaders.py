@@ -91,9 +91,9 @@ class ShadersMixin:
 
             # terrain
             try:
-                terrain_vs = compileShader(DEFAULT_SHADERS['terrain.vert'], gl.GL_VERTEX_SHADER)
+                terrain_vs = compileShader(DEFAULT_SHADERS['terrain_indexed.vert'], gl.GL_VERTEX_SHADER)
                 terrain_fs = compileShader(
-                    shaders.light_ubo_source(DEFAULT_SHADERS['terrain.frag']),
+                    shaders.light_ubo_source(DEFAULT_SHADERS['terrain_flat.frag']),
                     gl.GL_FRAGMENT_SHADER,
                 )
                 terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
