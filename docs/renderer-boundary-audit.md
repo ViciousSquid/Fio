@@ -23,9 +23,9 @@ any future column added for V2-V4.
 * Fixed this session (`a6c85a9`): model material dictionaries read every
   frame (V1); the selection outline's geometry-record read (V5); authored
   object arrays in the frame input (V6).
-* Remaining: the face highlight (V2), two editor/debug overlays (V3), the
-  terrain (V4), and one shared-state write (R1). Recommendations below; V4
-  is proposed as M5.
+* Fixed in M5: the terrain (V4).
+* Remaining: the face highlight (V2), two editor/debug overlays (V3), and
+  one shared-state write (R1). Recommendations below.
 
 Files with no authored-world access: `core/visibility.py`,
 `core/light_stream.py`, `core/slot_transforms.py`, `core/uniform_rows.py`,
@@ -90,22 +90,43 @@ review.
   (`qt_game_view.py:2078`). Debug only. Fix: the collision runtime publishes
   one line-vertex array when it builds.
 
-### V4. The terrain -- OPEN, the largest crossing (proposed as M5)
+### V4. The terrain -- FIXED (M5)
 
-`forward/passes.py:1004-1047` `render_terrain`; `forward/renderer.py:489`;
-`forward/shaders.py:685-712`. The frame input's `terrain` is the editor's
-live `engine.terrain.Terrain` (`qt_game_view.py:1927`), not published by the
-logic thread. Every frame the renderer reads `terrain.enabled`, **writes**
-`terrain.shader_program`, `terrain.uniforms[...]`, `terrain.grass_tex`...
-and calls `terrain.update_and_render`, which streams and generates chunks
-and mutates the `TerrainTable` on the paint thread. `api.FRAME_INPUT`
-documents the key, so it is sanctioned, but it is an authored-world object
-read, written and driven per frame.
+Was: the frame input's `terrain` was the editor's live
+`engine.terrain.Terrain`. Every frame the renderer read `terrain.enabled`,
+**wrote** `terrain.shader_program`, `terrain.uniforms[...]` and the four
+ground-texture names on it, and called `terrain.update_and_render`, which
+streamed, scheduled and generated chunks and owned every GL object, on the
+paint thread.
 
-Fix (not minimal; see `docs/performance-audit.md` §4): publish
-`TerrainTable` rows and a small frozen appearance record at
-`prepare_render_state`; chunk generation off the paint thread; GL names in
-renderer-side arrays by terrain slot.
+Now:
+
+* `Terrain.publish()` returns a `TerrainFrame` (`engine/terrain_frame.py`,
+  GL-free, immutable): the dense `TerrainTable`, the per-slot products
+  (`TerrainProducts`: grass instances and block-terrace meshes, each with a
+  version and the slot's allocation order), the paint maps and their
+  versions behind read-only views, and that frame's appearance as numbers
+  (uniform values, gradient, grass settings, flags). Nothing in it leads
+  back to the Terrain.
+* `Terrain.advance(camera, planes)` does the CPU upkeep before the frame:
+  streaming, pruning, LOD hysteresis, and building what is due. No GL:
+  `engine/terrain.py` no longer imports OpenGL.
+* `engine/renderer/core/terrain_gl.py` `TerrainGL` owns the GL side:
+  programs, height and paint texture pages, index arrays, grass and block
+  buffers, the per-slot versions it has uploaded. The forward renderer
+  keeps one under the frame's key (`passes.py` `_terrain_gl`) and frees it
+  when the key changes or the renderer is retired. A slot freed or reused
+  is recognised by its allocation `order` in the table.
+* The host (`QtGameView._publish_terrain`) advances and publishes per view,
+  and copies the renderer's terrain counters (`RenderStats.terrain_*`) back
+  onto the terrain for SysMon, the terrain editor and Debug Tables.
+* Height grids can be built on a `TerrainBuilder` thread
+  (`Terrain.BACKGROUND_BUILDS`, on in `main.py`): it computes a grid from
+  numbers captured when the build was asked for; the table is still written
+  on the GUI thread, so table writes stay on one thread.
+
+Left on the GUI thread, inside `advance` and budgeted as before: grass
+blade generation and block-mesh building. The draw code moved unchanged.
 
 ### V5. Selection outline read the geometry record -- FIXED
 
@@ -143,9 +164,9 @@ not recommended without a measured reason.
   only); now a list index. Not measured separately.
 * `draw_collision_visualization` creates and deletes a VAO and VBO per
   brush per frame (`core/overlays.py:789-803`). Debug only.
-* V4: the terrain is 70 of 84 ms of BigWorld's frame under llvmpipe, and
-  generates chunks on the paint thread (0.8 ms p50, 6.6 ms max per chunk).
-  See the performance audit, F3.
+* V4 (fixed): the terrain was 70 of 84 ms of BigWorld's frame under
+  llvmpipe and generated chunks on the paint thread. See the performance
+  audit, F3, and the handoff's M5 section for the numbers after.
 
 ## C. Correctness risks
 
@@ -173,6 +194,8 @@ ratchet over the package: `materials`, `groups`, `convex`,
 `geometry_records`, `brushes`, `things`, `properties`, `editor`, `mtl_dir`
 may be read only in the listed resource builders (the list must shrink when
 one stops); the model passes contain no dictionary read; the host puts no
-`render_refs` / `entity_refs` in the frame input. It does not yet catch
+`render_refs` / `entity_refs` in the frame input; the package imports no
+`engine.terrain`, calls nothing the Terrain had and writes no attribute on
+the terrain it is handed; `engine/terrain.py` imports no OpenGL. It does not yet catch
 `brush['pos']`-style reads in the overlays (V2, V3): add those keys when
 they are fixed.

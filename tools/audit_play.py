@@ -140,6 +140,8 @@ if args.loop:
     # As main.py runs: its switch interval, and the classes' frame entry
     # points timed before any instance exists.
     sys.setswitchinterval(0.001)
+    from engine.terrain import Terrain                        # noqa: E402
+    Terrain.BACKGROUND_BUILDS = True
     from engine.qt_game_view import QtGameView                # noqa: E402
     from editor.view_2d import View2D                         # noqa: E402
     from editor.main_window import MainWindow                 # noqa: E402

@@ -259,3 +259,34 @@ def test_the_host_hands_the_renderer_no_authored_object_arrays():
         assert "_render_config['%s']" % key not in source
     package = "".join(p.read_text(encoding="utf-8") for p in _package_files())
     assert "render_refs" not in package and "entity_refs]" not in package
+
+
+def test_the_renderer_never_holds_the_terrain_object():
+    """M5: the terrain frame input is a published ``TerrainFrame``. The
+    package imports no ``engine.terrain`` (only the GL-free publication and
+    table modules), calls nothing the Terrain object had, and writes no
+    attribute on what it is handed."""
+    assert not _offenders(_package_files(), ("engine.terrain",))
+    source = "".join(p.read_text(encoding="utf-8") for p in _package_files())
+    for needle in ("update_and_render(", ".advance(", ".publish(", "get_tri_count",
+                   "release_renderer_resources"):
+        assert needle not in source, needle
+    passes = (PACKAGE / "forward" / "passes.py").read_text(encoding="utf-8")
+    body = passes[passes.index("def render_terrain("):passes.index("def _terrain_gl(")]
+    tree = ast.parse(textwrap.dedent(body))
+    written = [ast.unparse(target) for node in ast.walk(tree)
+               if isinstance(node, (ast.Assign, ast.AugAssign))
+               for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+               if ast.unparse(target).startswith("terrain.")]
+    assert not written, written
+
+
+def test_the_terrain_and_its_publication_need_no_gl():
+    for name in ("terrain.py", "terrain_frame.py", "terrain_table.py"):
+        assert not _offenders([ROOT / "engine" / name], ("OpenGL",))
+
+
+def test_the_host_publishes_the_terrain_instead_of_passing_it():
+    source = (ROOT / "engine" / "qt_game_view.py").read_text(encoding="utf-8")
+    assert 'self._render_config["terrain"] = terrain.publish()' in source
+    assert "release_renderer_resources" not in source

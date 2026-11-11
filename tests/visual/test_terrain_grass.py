@@ -110,10 +110,9 @@ def test_configured_blade_height_reaches_the_live_shader(context):
     terrain = terrain_with_grass()
     terrain.set_grass(True, height=17.5)
     eye, target = player_view(terrain)
-    render(context, terrain, eye, target)
     value = np.zeros(1, dtype=np.float32)
-    gl.glGetUniformfv(terrain.grass_shader_program,
-                      terrain.grass_uniforms['uBladeHeight'], value)
+    render(context, terrain, eye, target, inspect=lambda held: gl.glGetUniformfv(
+        held.grass_shader_program, held.grass_uniforms['uBladeHeight'], value))
     assert value[0] == 17.5
 
 

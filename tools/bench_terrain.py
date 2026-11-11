@@ -2,6 +2,7 @@
 
     xvfb-run -a python tools/bench_terrain.py [MAP] [--frames 40] [--tree PATH]
                                               [--json OUT] [--dump PNG]
+                                              [--background]
 
 Plays *MAP* (default ``BigWorld_streaming_test.json``) with the logic thread
 stepped from here, walks the scripted path until the terrain around the
@@ -14,7 +15,7 @@ player has streamed in, then holds the camera still and times complete frames
 * with the terrain's draws skipped -- the frame without terrain.
 
 It also reports what the terrain drew (chunks, their resolutions, triangles,
-vertex-shader runs against distinct grid points), the LOD each chunk was
+indices against distinct grid points), the LOD each chunk was
 given and why (its distance against the protected zone and the LOD bands),
 and the paint-thread time spent generating chunk heights while moving.
 ``--dump`` writes the held frame as a PNG, for parity between two trees.
@@ -37,6 +38,8 @@ ap.add_argument('--frames', type=int, default=40)
 ap.add_argument('--walk', type=int, default=240, help='frames walked before holding still')
 ap.add_argument('--json')
 ap.add_argument('--dump')
+ap.add_argument('--background', action='store_true',
+                help='build height grids on the builder thread, as main.py runs')
 ap.add_argument('--tree', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 args = ap.parse_args()
 tree = os.path.abspath(args.tree)
@@ -56,9 +59,15 @@ import bench_compare as bc                                    # noqa: E402
 import engine.terrain as terrain_module                       # noqa: E402
 
 Terrain = terrain_module.Terrain
+try:                                    # M5.3 on: the GL side is the renderer's
+    from engine.renderer.core.terrain_gl import TerrainGL as Drawer   # noqa: E402
+except ImportError:                     # a tree before it
+    Drawer = Terrain
+if args.background:
+    Terrain.BACKGROUND_BUILDS = True
 mode = {'draw': 'normal'}
 draws, builds = [], []
-real_draw = Terrain.draw_heightfield_slots
+real_draw = Drawer.draw_heightfield_slots
 
 
 def draw(self, u, slots, unit, *a, **k):
@@ -77,8 +86,12 @@ def draw(self, u, slots, unit, *a, **k):
     return triangles
 
 
-Terrain.draw_heightfield_slots = draw
-BUILDERS = [name for name in ('_upload_chunk', '_build_chunk') if hasattr(Terrain, name)]
+Drawer.draw_heightfield_slots = draw
+BUILDERS = [name for name in ('_upload_chunk', '_build_chunk', '_grid_heights',
+                                '_build_grass', '_upload_grass_chunk')
+            if hasattr(Terrain, name)]
+if '_grid_heights' in BUILDERS and '_build_chunk' in BUILDERS:
+    BUILDERS.remove('_build_chunk')     # the grid is the work; count it once
 for name in BUILDERS:
     def timed(self, *a, _real=getattr(Terrain, name), **k):
         started = time.perf_counter()
@@ -172,7 +185,7 @@ try:
             'chunks_drawn': int(len(slots)), 'chunks_resident': int(len(table.live_slots())),
             'chunk_size': float(terrain.chunk_size),
             'resolutions': dict(collections.Counter(res.tolist())),
-            'triangles': triangles, 'vertex_shader_runs': triangles * 3,
+            'triangles': triangles, 'indices': triangles * 3,
             'distinct_grid_points': distinct,
             'chunk_distance': {'min': round(float(dist.min()), 1),
                                'median': round(float(np.median(dist)), 1),

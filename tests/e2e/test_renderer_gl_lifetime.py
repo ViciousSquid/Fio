@@ -29,6 +29,7 @@ from editor.things import Light, Portal, PlayerStart  # noqa: E402
 from engine.effect_entity import Effect             # noqa: E402
 from engine.prop_entity import Prop                 # noqa: E402
 from engine.renderer import registry                # noqa: E402
+from engine.renderer.core.terrain_gl import TerrainGL   # noqa: E402
 from engine.terrain import Terrain                  # noqa: E402
 from tests.helpers.renderers import FlatRenderer    # noqa: E402
 from tests.helpers.worlds import (                  # noqa: E402
@@ -167,7 +168,7 @@ def test_no_gl_name_outlives_the_renderer_that_owns_it(fio_session, flat):
     session.view.sysmon.set_active(False)
     view = session.view
     forward_type = type(view.renderer)
-    ledger = GLObjectLedger((forward_type, FlatRenderer, Terrain, type(view)))
+    ledger = GLObjectLedger((forward_type, FlatRenderer, Terrain, TerrainGL, type(view)))
     ledger.install()
     try:
         # A Forward renderer whose whole life is on the ledger.
@@ -192,11 +193,12 @@ def test_no_gl_name_outlives_the_renderer_that_owns_it(fio_session, flat):
     # The host keeps none of the retired renderer's names.
     retired = {name for kind, name in owned if kind == "texture"}
     assert not retired & {int(t) for t in view.sprite_textures.values()}
+    # The terrain holds no GL name at all: it publishes tables, and what a
+    # renderer built from them was that renderer's.
     terrain = session.window.terrain
     if terrain is not None:
-        assert not retired & {terrain.grass_tex, terrain.rock_tex,
-                              terrain.sand_tex, terrain.snow_tex}
-        assert terrain.shader_program not in {n for k, n in owned if k == "program"}
+        assert not [name for name in vars(terrain)
+                    if name.endswith(("_tex", "_program", "_vao", "_vbo", "_pages"))]
     for value in view._render_config.values():
         if isinstance(value, (tuple, list)):
             assert not retired & {v for v in value if isinstance(v, int)}
@@ -214,7 +216,7 @@ def test_a_renderer_that_fails_to_start_leaves_no_gl_names(fio_session, flat):
             return False
 
     registry.register_renderer("NotReady", NotReady)
-    ledger = GLObjectLedger((forward_type, Terrain, type(view)))
+    ledger = GLObjectLedger((forward_type, Terrain, TerrainGL, type(view)))
     ledger.install()
     try:
         assert view.switch_renderer("NotReady") is False
@@ -231,36 +233,42 @@ def test_a_renderer_that_fails_to_start_leaves_no_gl_names(fio_session, flat):
 
 
 def test_the_terrain_keeps_no_name_of_a_retired_renderer(fio_session, flat):
-    """The terrain is bound to the renderer's program and ground textures; a
-    swap releases that binding before the renderer is retired."""
+    """The terrain's GL side belongs to the renderer that draws it: a swap
+    frees it with that renderer, and the next one builds its own."""
     session = fio_session("maps/Terrain_Test_medium.json", size=(160, 120))
     session.view.sysmon.set_active(False)
     view, terrain = session.view, session.window.terrain
     assert terrain is not None and terrain.enabled
-    ledger = GLObjectLedger((type(view.renderer), FlatRenderer, Terrain, type(view)))
+    ledger = GLObjectLedger((type(view.renderer), FlatRenderer, Terrain, type(view),
+                             TerrainGL))
     ledger.install()
     try:
         assert view.switch_renderer("Flat") and view.switch_renderer("Forward")
         forward = view.renderer
-        session.publish()
-        session.paint()
-        assert terrain.shader_program and terrain.grass_tex, "the terrain was not drawn"
-        owned = ledger.owned_by(forward)
+        for _ in range(3):                   # build, then draw built chunks
+            session.publish()
+            session.paint()
+        held = forward._terrain_gl_state[1]
+        assert held.shader_program and held.grass_tex, "the terrain was not drawn"
+        assert held._height_pages or held._block_vao.any(), \
+            "nothing of the terrain was uploaded"
+        owned = ledger.owned_by(forward) + ledger.owned_by(held)
         assert view.switch_renderer("Flat")
-        names = {name for _kind, name in owned}
-        assert terrain.shader_program == 0 and terrain.uniforms == {}
-        assert not names & {terrain.grass_tex, terrain.rock_tex,
-                            terrain.sand_tex, terrain.snow_tex} - {0}
+        assert forward._terrain_gl_state is None
+        assert held.shader_program == 0 and held.uniforms == {}
+        assert not held._height_pages and not held._block_vao.any()
         view.makeCurrent()
         try:
             survivors = [(k, n) for k, n in owned if _still_alive(k, n)]
         finally:
             view.doneCurrent()
-        # And the next renderer binds its own the first time it draws it.
+        # And the next renderer builds its own the first time it draws it.
         assert view.switch_renderer("Forward")
         session.publish()
         session.paint()
-        assert terrain.shader_program == view.renderer.shaders["terrain"]
+        again = view.renderer._terrain_gl_state[1]
+        assert again is not held
+        assert again.shader_program == view.renderer.shaders["terrain"]
     finally:
         ledger.uninstall()
     assert not survivors, survivors

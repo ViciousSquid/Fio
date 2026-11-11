@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from tests.helpers import gl as glh
+from tests.helpers import terrain_draw
 
 pytestmark = [pytest.mark.gl, pytest.mark.slow]
 
@@ -41,27 +42,29 @@ def map_terrain(textured):
     return t
 
 
-def render(context, t, eye, target, up=(0.0, 1.0, 0.0), fov=70.0):
+def render(context, t, eye, target, up=(0.0, 1.0, 0.0), fov=70.0, inspect=None):
     import glm
     import OpenGL.GL as gl
     from engine.view_distance import ViewDistance
     renderer = glh.make_renderer()
     renderer.view_distance = ViewDistance(3000.0)
-    renderer.setup_terrain_shader(t)
     eye_v = glm.vec3(*eye)
     projection = glm.perspective(glm.radians(fov), 1.0, 1.0, 3000.0)
     view = glm.lookAt(eye_v, glm.vec3(*target), glm.vec3(*up))
-    config = glh.render_config(all_brushes=[], all_things=[], terrain=t,
+    config = glh.render_config(all_brushes=[], all_things=[], terrain=None,
                                shadows_enabled=False)
     t.MAX_UPDATES_PER_FRAME = 100000
     t.UPDATE_BUDGET_MS = 1e9
     for _ in range(2):
         context.bind()
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        renderer.render_scene(projection, view, eye_v, None, config,
-                              brush_slots=config["all_brush_slots"])
+        terrain_draw.scene(renderer, t, projection, view, eye_v, config,
+                           brush_slots=config["all_brush_slots"])
         gl.glFinish()
     image = context.read_pixels()[:, :, :3].astype(float)
+    if inspect is not None:
+        # The renderer's GL side of the terrain, before it is freed.
+        inspect(terrain_draw.scene_gl(renderer))
     try:
         renderer.cleanup()
     except Exception:
@@ -91,7 +94,9 @@ def test_the_terrain_textures_are_visible_and_not_darker(context):
     textured = map_terrain(True)
     eye, target = player_view(plain)
     a = render(context, plain, eye, target)[160:]     # the ground half
-    b = render(context, textured, eye, target)[160:]
+    bound = []
+    b = render(context, textured, eye, target, inspect=lambda held: bound.append(
+        all(getattr(held, a) for a in terrain_draw.TEXTURES)))[160:]
     assert detail(b) > 3 * detail(a), (
         f"textured ground shows no texture detail ({detail(b):.2f} vs "
         f"{detail(a):.2f} untextured)")
@@ -100,7 +105,7 @@ def test_the_terrain_textures_are_visible_and_not_darker(context):
     real = [os.path.join(ROOT, "assets", "textures", "terrain", n)
             for n in ("grass.jpg", "rock.jpg", "sand.jpg", "snow.jpg")]
     assert all(os.path.exists(p) for p in real)
-    assert all(getattr(textured, a) for a in ("grass_tex", "rock_tex", "sand_tex", "snow_tex"))
+    assert bound == [True], "the renderer bound no ground textures"
 
 
 def solid_texture(rgb):

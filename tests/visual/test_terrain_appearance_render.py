@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from tests.helpers import gl as glh
+from tests.helpers import terrain_draw
 
 pytestmark = [pytest.mark.gl, pytest.mark.slow]
 
@@ -50,7 +51,7 @@ def _render(ctx, terrain, eye=(0.0, 380.0, 380.0), target=(0.0, 60.0, -60.0), fr
         gl.glClearColor(*SKY, 1.0)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
-        terrain.update_and_render(proj, view, eye_v, None, None, 0, env_uniforms=env)
+        terrain_draw.draw(terrain, proj, view, eye_v, env_uniforms=env)
     assert glh.drain_gl_errors() == []
     return ctx.read_pixels().astype(np.float64)
 
@@ -75,9 +76,9 @@ def test_every_look_renders_and_differs(context):
     from engine import terrain_style as ts
     for name in ts.PRESETS:
         t = _terrain(white)
-        assert t.shader_program, "terrain fallback program failed to link"
         t.apply_appearance_preset(name)
         images[name] = _render(context, t)
+        assert terrain_draw.gl_for(t).shader_program, "terrain fallback program failed to link"
         assert _ground(images[name]).mean() > 0.2, name
     names = list(images)
     for i, a in enumerate(names):
@@ -120,7 +121,6 @@ def test_textured_terrain_blends_height_layers(context):
 
 def test_grass_draws_in_both_detail_levels(context):
     t = _terrain(glh._white_texture())
-    assert t.grass_shader_program, "grass program failed to link"
     bare = _render(context, t, eye=(40.0, 0.0, 120.0), target=(40.0, 0.0, 0.0))
     t.set_grass(True, density=0.06)
     t.set_appearance(layer_heights=(0.0, 1.0, 1.0))
@@ -130,6 +130,7 @@ def test_grass_draws_in_both_detail_levels(context):
     target = (40.0, t._get_height_scalar(40.0, 0.0), 0.0)
     bare = _render(context, _terrain(glh._white_texture()), eye=eye, target=target)
     near = _render(context, t, eye=eye, target=target)
+    assert terrain_draw.gl_for(t).grass_shader_program, "grass program failed to link"
     assert np.abs(near - bare).mean() > 2.0
 
     # Far blades: push the detail distance in so every chunk draws the
@@ -153,12 +154,12 @@ def test_block_terrain_draws_through_the_block_mesh_program(context):
     assert blocks.appearance.terrace_mode == 'blocks'
     image = _render(context, blocks)
 
-    assert blocks.block_program, "terrain_mesh.vert + terrain.frag failed to link"
+    assert terrain_draw.gl_for(blocks).block_program, "terrain_mesh.vert + terrain.frag failed to link"
     drawn = [int(s) for s in blocks.drawn_slots]
     assert drawn, "no terrain chunk was drawn"
     # Independent of the renderer's own counter: the triangles drawn are the
     # vertex counts uploaded to the block VBOs, not a heightfield grid.
-    block_triangles = sum(int(blocks._block_count[s]) // 3 for s in drawn)
+    block_triangles = sum(int(terrain_draw.gl_for(blocks)._block_count[s]) // 3 for s in drawn)
     assert block_triangles > 0
     assert blocks.total_triangles == block_triangles
     assert _ground(image).mean() > 0.2
@@ -174,7 +175,7 @@ def test_a_terrain_program_that_fails_to_compile_is_not_retried_every_frame(
         context, monkeypatch):
     """A genuine compile error is reported once, then the frame goes on."""
     from engine import shaders
-    from engine import terrain as terrain_module
+    from engine.renderer.core import terrain_gl as terrain_module
 
     broken = shaders.DEFAULT_SHADERS['terrain_mesh.vert'].replace(
         'void main() {', 'void main() { undeclared_identifier = 1.0;')
@@ -190,6 +191,6 @@ def test_a_terrain_program_that_fails_to_compile_is_not_retried_every_frame(
     t = _terrain(glh._white_texture())
     t.apply_appearance_preset('voxel_blocks')
     _render(context, t, frames=5)
-    assert not t.block_program
+    assert not terrain_draw.gl_for(t).block_program
     # One compile attempt for the broken program, not one per frame.
     assert compiles.count(broken) == 1

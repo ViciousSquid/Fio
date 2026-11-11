@@ -71,6 +71,7 @@ from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIR
 from editor.debug_console import CommandInput, DebugConsole, debug_log
 from .sysmon import SysMon
 from .view_audio import ViewAudio
+from .terrain_frame import frustum_planes
 from .floating_windows import CallbackWindow, WindowManager
 
 # Pygame for gamepad support
@@ -148,6 +149,7 @@ class QtGameView(QOpenGLWidget):
 
         #: The mixer, the sound cache and the speakers' mix (engine/view_audio.py).
         self.audio = ViewAudio(self)
+        self._frame_terrain = None
 
         self.render_mode_names = {
             RENDER_MODE_LIT: "Lit",
@@ -912,14 +914,6 @@ class QtGameView(QOpenGLWidget):
 
 
     def initializeGL(self):
-        # Terrain deletes its GL objects from the GUI thread too (opening a
-        # map, the terrain editor); they must go to this view's context.
-        # Held weakly: a class attribute outlives the view, and a bound method
-        # there would keep this view -- and its editor window -- alive after
-        # it closes, then hand the next view's terrain a deleted context.
-        from engine.terrain import Terrain
-        gl_context = weakref.WeakMethod(self.gl_context)
-        Terrain.gl_context = lambda: (gl_context() or contextlib.nullcontext)()
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         self._log_gl_context()
         config = self.editor.config
@@ -1399,6 +1393,30 @@ class QtGameView(QOpenGLWidget):
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
 
+    def _publish_terrain(self, projection, view, camera_pos):
+        """Bring the terrain up to date for one view's camera and put what it
+        publishes in the frame input. The renderer is handed a TerrainFrame
+        (engine/terrain_frame.py), never the terrain: streaming, LOD and
+        chunk building happen here, before the scene is drawn."""
+        terrain = self._frame_terrain
+        if terrain is None or not terrain.enabled:
+            self._render_config["terrain"] = None
+            return
+        terrain.advance(camera_pos, frustum_planes(projection * view))
+        self._render_config["terrain"] = terrain.publish()
+
+    def _collect_terrain_stats(self):
+        """What the renderer drew of the terrain, kept on it for the panels
+        that show it (SysMon, the terrain editor, Debug Tables)."""
+        terrain = self._frame_terrain
+        stats = getattr(self.renderer, 'render_stats', None)
+        if terrain is None or stats is None:
+            return
+        terrain.visible_chunks = stats.terrain_visible_chunks
+        terrain.culled_chunks = stats.terrain_culled_chunks
+        terrain.total_triangles = stats.terrain_triangles
+        terrain.drawn_slots = stats.terrain_drawn_slots
+
     def paintGL(self):
         if not self.renderer or not self.renderer.ready:
             return
@@ -1417,6 +1435,7 @@ class QtGameView(QOpenGLWidget):
             # paint is done, even if the paint raised.
             if render_state is not None:
                 self.game_state.release_render_state(render_state)
+            self._collect_terrain_stats()
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
         if self._gl_error_checks_left:
@@ -1604,9 +1623,12 @@ class QtGameView(QOpenGLWidget):
             + (False,) * len(_spectator_positions))
         self._render_config["grid_visible"] = self.grid_visible and not self.play_mode
         _filters = self.editor.state.view_filters
-        self._render_config["terrain"] = (
+        # The terrain this frame shows; each view publishes it for its own
+        # camera just before it is drawn (_publish_terrain).
+        self._frame_terrain = (
             None if not self.play_mode and not _filters.shows('terrain')
             else self.editor.terrain)
+        self._render_config["terrain"] = None
         # Both editor and play rendering consume the same canonical dense
         # projection published by LogicRender. There is no editor-side table.
         self._render_config["render_table"] = render_state.render_table
@@ -1659,6 +1681,7 @@ class QtGameView(QOpenGLWidget):
             gl.glDisable(gl.GL_BLEND)
             gl.glDisable(gl.GL_STENCIL_TEST)
 
+            self._publish_terrain(_split_proj, self.view_matrix, camera_pos)
             self.renderer.render_scene(
                 _split_proj, self.view_matrix, camera_pos,
                 _selection, self._render_config,
@@ -1698,6 +1721,7 @@ class QtGameView(QOpenGLWidget):
             # narrowing from these slots; using P1's already-visible slots here
             # would incorrectly hide geometry that only P2 can see.
             _p2_brush_slots = self._render_config.get("all_brush_slots")
+            self._publish_terrain(_split_proj, _p2_view, _p2_cam_pos)
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
                 _selection, self._render_config,
@@ -1725,6 +1749,7 @@ class QtGameView(QOpenGLWidget):
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
         else:
+            self._publish_terrain(self.projection_matrix, self.view_matrix, camera_pos)
             self.renderer.render_scene(
                 self.projection_matrix, self.view_matrix, camera_pos,
                 _selection, self._render_config,
@@ -2981,9 +3006,6 @@ class QtGameView(QOpenGLWidget):
                 new.water_quality = old.water_quality
             # Drop every GL name the host holds from the old renderer before it
             # is retired; the new one hands out its own.
-            terrain = self.editor.terrain
-            if terrain is not None:
-                terrain.release_renderer_resources()
             self.renderer = new
             self._renderer_mode = mode
             self._sync_view_distance()

@@ -16,6 +16,7 @@ from engine import render_table
 from engine import shaders
 from engine.render_keys import runs_in_order, sort_into_runs
 from ..api import WATER_QUALITIES
+from ..core.terrain_gl import TerrainGL
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
 from ..core.geometry import RUN_NODRAW, RUN_SKIP
@@ -1002,17 +1003,20 @@ class PassesMixin:
     # --------------------------------------------------------------------------
     @timed_pass('terrain')
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
+        """Draw the published terrain: *terrain* is a ``TerrainFrame`` (the
+        dense table, its products and this frame's appearance), never the
+        terrain object. Every GL name it is drawn with is this renderer's,
+        held in a ``TerrainGL`` under the frame's key."""
         if terrain is None or not terrain.enabled:
             return
-        # A Terrain compiles its own program when it is built with a context
-        # current; bind this renderer's program whenever the frame's terrain
-        # does not hold it (new, reloaded, or bound by a previous renderer).
-        # Its texture names go with it: a previous renderer freed its own, so
-        # this one loads its copies.
-        if terrain.shader_program != self.shaders.get('terrain'):
-            terrain.grass_tex = terrain.rock_tex = terrain.sand_tex = terrain.snow_tex = 0
-            self.setup_terrain_shader(terrain)
-        self._ensure_terrain_textures(terrain)
+        terrain_gl = self._terrain_gl(terrain.key)
+        # This renderer's program and ground textures, the first time it
+        # draws this terrain.
+        if terrain_gl.shader_program != self.shaders.get('terrain'):
+            terrain_gl.grass_tex = terrain_gl.rock_tex = 0
+            terrain_gl.sand_tex = terrain_gl.snow_tex = 0
+            self.setup_terrain_shader(terrain_gl)
+        self._ensure_terrain_textures(terrain_gl)
         if not (isinstance(lights, tuple) and len(lights) == 2
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("terrain rendering requires (LightTable, slots)")
@@ -1031,20 +1035,36 @@ class PassesMixin:
         # light UBO, so the terrain program must be current before that call.
         # Without this, glUniform1i/uFogEnabled can raise GL_INVALID_OPERATION
         # when terrain follows a pass that has left another program bound.
-        gl.glUseProgram(terrain.shader_program)
-        self._current_shader = terrain.shader_program
+        gl.glUseProgram(terrain_gl.shader_program)
+        self._current_shader = terrain_gl.shader_program
         self._upload_lights_once('terrain', terrain_lights)
         active_lights_count = len(terrain_lights[1])
         gl.glDisable(gl.GL_CULL_FACE)
-        if hasattr(terrain, 'get_tri_count'):
-            self.render_stats.visible_tris += terrain.get_tri_count()
-        terrain.update_and_render(
-            projection, view, camera_pos, frustum_planes, terrain_lights, active_lights_count,
+        stats = self.render_stats
+        stats.visible_tris += terrain.triangle_count
+        terrain_gl.render(
+            terrain, projection, view, camera_pos, frustum_planes,
+            active_lights_count,
             shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
-            shadow_index_map=self._light_shadow_index,
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
             env_uniforms=self.env_uniform_values(),
         )
+        stats.terrain_visible_chunks = terrain_gl.visible_chunks
+        stats.terrain_culled_chunks = terrain_gl.culled_chunks
+        stats.terrain_triangles = terrain_gl.total_triangles
+        stats.terrain_drawn_slots = terrain_gl.drawn_slots
+
+    def _terrain_gl(self, key):
+        """The GL side of the terrain published under *key*. One terrain is
+        drawn at a time: another key means the map's terrain was replaced,
+        and what was built for the old one is freed here, with the context
+        current."""
+        held = self._terrain_gl_state
+        if held is None or held[0] != key:
+            if held is not None:
+                held[1].cleanup()
+            held = self._terrain_gl_state = (key, TerrainGL())
+        return held[1]
 
     # --------------------------------------------------------------------------
     # Models

@@ -155,6 +155,10 @@ if __name__ == "__main__":
     from PyQt5.QtGui import QPixmap, QSurfaceFormat, QIcon
     from PyQt5.QtCore import Qt
     from editor.main_window import MainWindow
+    # Terrain height grids are built on a background thread, not in the
+    # frame (engine/terrain.py: Terrain.advance).
+    from engine.terrain import Terrain
+    Terrain.BACKGROUND_BUILDS = True
 
     # ---------------------------------------------------------
     # PATH RESOLUTION

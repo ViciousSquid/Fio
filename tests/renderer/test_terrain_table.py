@@ -178,12 +178,7 @@ def test_sculpt_marking_and_a_bounds_prune_match_the_old_loops():
 @pytest.fixture(scope="module")
 def terrain():
     import engine.terrain as T
-    original = T.Terrain._init_shader
-    T.Terrain._init_shader = lambda self: None      # no GL context needed
-    try:
-        t = T.Terrain()
-    finally:
-        T.Terrain._init_shader = original
+    t = T.Terrain()                                 # GL-free since M5
     with open(os.path.join(ROOT, "maps", "BigWorld_streaming_test.json")) as f:
         t.from_dict(json.load(f)["terrain_data"])
     return t

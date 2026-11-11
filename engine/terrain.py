@@ -2,13 +2,6 @@ import contextlib
 import os
 import sys
 import numpy as np
-try:
-    import OpenGL.GL as gl
-    from OpenGL.GL.shaders import compileProgram, compileShader
-except ImportError:  # Headless/core tier: terrain data logic is still usable.
-    gl = None
-    compileProgram = None
-    compileShader = None
 import glm
 import ctypes
 from dataclasses import dataclass, field
@@ -18,24 +11,14 @@ import time
 import random
 from . import shaders
 from . import terrain_style
+import queue
+import threading
+from .terrain_frame import (                      # noqa: F401
+    TerrainFrame, TerrainProducts, grass_vertex_count, heightfield_indices,
+    new_publication_key, read_only)
 from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
 
 
-def _no_current_gl_context():
-    """True only when macOS reports that no GL context is current.
-
-    A Terrain is built before any view's context exists (map load, the terrain
-    panel). Calling into GL then raises elsewhere, which _compile_program
-    handles, but crashes the process on macOS, so ask CGL first. Other
-    platforms may mix GLX and EGL, where the query could miss Qt's context.
-    """
-    if sys.platform != 'darwin':
-        return False
-    try:
-        from OpenGL import platform as gl_platform
-        return not gl_platform.PLATFORM.GetCurrentContext()
-    except Exception:
-        return False
 
 
 # Old maps keep their exact scatter/cap below the previous density ceiling.
@@ -46,37 +29,8 @@ DEFAULT_GRASS_HEIGHT = 5.0
 GRASS_HEIGHT_LIMITS = (0.1, 256.0)
 
 
-def heightfield_indices(res: int) -> np.ndarray:
-    """The index list one heightfield chunk of *res* quads a side is drawn
-    with (``terrain_indexed.vert``): ``6 * res * res`` indices over two
-    layers of the ``(res + 1)^2`` grid points.
-
-    Quads in the order the unindexed draw used (``q = ix * res + iz``), each
-    as its two triangles with the same corners and winding, rotated so that
-    the last index -- the provoking vertex -- is the one that carries the
-    triangle's flat normal and colour: the layer-0 point (ix, iz) for the
-    first, the layer-1 point (ix + 1, iz + 1) for the second.
-    """
-    side = res + 1
-    ix, iz = np.meshgrid(np.arange(res, dtype=np.uint32),
-                         np.arange(res, dtype=np.uint32), indexing='ij')
-    ix, iz = ix.ravel(), iz.ravel()
-
-    def point(i, k, layer=0):
-        return layer * side * side + i * side + k
-
-    # terrain.vert: (a, b, c) = (ix,iz) (ix+1,iz) (ix,iz+1), then
-    #               (a, b, c) = (ix+1,iz) (ix+1,iz+1) (ix,iz+1).
-    quads = np.stack([
-        point(ix + 1, iz), point(ix, iz + 1), point(ix, iz),            # b c a
-        point(ix, iz + 1), point(ix + 1, iz), point(ix + 1, iz + 1, 1),  # c a b
-    ], axis=1)
-    return np.ascontiguousarray(quads.ravel(), dtype=np.uint32)
 
 
-def grass_vertex_count(segments: int) -> int:
-    """Vertices per blade instance: (segments - 1) quads plus the tip."""
-    return (max(1, int(segments)) - 1) * 6 + 3
 
 # ============================================================================
 # OPTIMIZED NOISE FUNCTIONS
@@ -396,12 +350,15 @@ class Terrain:
     LOD_RESOLUTIONS = [48, 32, 16, 8]
     LOD_HYSTERESIS_FRAMES = 10
     MAX_UPDATES_PER_FRAME = 2
-    #: Set by the 3D view: a callable returning a context manager that makes
-    #: its GL context current. Terrain's GL objects belong to that context, so
-    #: deleting them from the GUI thread (opening a map, the terrain editor)
-    #: must happen inside it; outside it the deletes reach whatever context Qt
-    #: last made current and corrupt the driver's state. ``None`` headless.
-    gl_context = None
+    #: Build height grids on a background thread (``TerrainBuilder``) instead
+    #: of inside :meth:`advance`. ``main.py`` turns it on for the editor and
+    #: the game; off, a terrain is built where it is advanced, a bounded
+    #: number of chunks a call, which is what tests and tools step through.
+    BACKGROUND_BUILDS = False
+    #: Most grids waiting on the builder thread at once: the nearest work is
+    #: asked for first, and what is further waits for a later frame's queue,
+    #: so the camera moving on re-orders it.
+    BUILD_QUEUE_LIMIT = 8
     #: Milliseconds of chunk meshing a frame may spend before the rest waits
     #: for the next frame. One chunk is always built, so terrain keeps
     #: streaming however slow the machine; a second only fits on a fast one.
@@ -452,11 +409,6 @@ class Terrain:
         #: Dense per-chunk state (residency, LOD, the one heightfield both
         #: rendering and collision read). See engine.terrain_table.
         self.table = TerrainTable()
-        # GL objects per table slot. The table is GL-free; these arrays are
-        # the terrain renderer's half, indexed by the same slot.
-        self._grass_vao = np.zeros(0, dtype=np.int64)
-        self._grass_vbo = np.zeros(0, dtype=np.int64)
-        self._grass_count = np.zeros(0, dtype=np.int64)
         self.min_chunk_x: int = -2
         self.max_chunk_x: int = 2
         self.min_chunk_z: int = -2
@@ -466,14 +418,6 @@ class Terrain:
         self.drawn_slots = np.zeros(0, dtype=np.intp)
         self.visible_chunks: int = 0
         self.culled_chunks: int = 0
-        self.shader_program: int = 0
-        self.uniforms: Dict[str, int] = {}
-        # Height-grid texture pages (GL_TEXTURE_2D_ARRAY, R32F), slot ->
-        # (page, layer); the table version each slot was last uploaded at;
-        # the empty VAO an attribute-less draw needs in a core profile.
-        self._height_pages: List[int] = []
-        self._page_layers = 0
-        self._gpu_version = np.zeros(0, dtype=np.int64)
         # Baked terrain material paint. Each resident chunk owns one RGBA8
         # albedo map at TERRAIN_PAINT_RESOLUTION². The source image is sampled
         # once by the editor and the resulting colour/coverage becomes part
@@ -509,11 +453,9 @@ class Terrain:
         self._heightmap_blob_cache: tuple = (None, None)
         self._paint_map_versions: Dict[Tuple[int, int], int] = {}
         self._paint_version_counter = 0
-        self._paint_pages: List[int] = []
-        self._paint_page_layers = 0
-        self._paint_gpu_version = np.zeros(0, dtype=np.int64)
-        self._empty_vao = 0
-        self._index_vaos = {}          # resolution -> (vertex array, index buffer)
+        #: Bumped when the paint dictionaries are replaced (a clear, a
+        #: load): a renderer then forgets every paint version it holds.
+        self._paint_epoch = 0
         self._gradient_warned = False
         # Grass is a separate GL 3.3 instanced pass. The CPU scatters tufts,
         # places every blade of a tuft on the terrain surface and uploads one
@@ -530,9 +472,6 @@ class Terrain:
         #: (lowest, highest) heights grass grows at, as fractions of the
         #: terrain's height range; None follows the grass texture layer.
         self.grass_height_range: Optional[Tuple[float, float]] = None
-        self.grass_shader_program: int = 0
-        self.grass_uniforms: Dict[str, int] = {}
-        self.grass_time = 0.0
         self.GRASS_MAX_PER_CHUNK = 4096          # tufts per chunk
         self.GRASS_BLADES_PER_TUFT = 5
         self.GRASS_TUFT_RADIUS = 2.5             # world units
@@ -554,11 +493,6 @@ class Terrain:
         self._height_range: Optional[Tuple[float, float]] = None
         # 'blocks' terracing draws square columns from per-chunk meshes with
         # a mesh vertex shader instead of the heightfield.
-        self.block_program: int = 0
-        self.block_uniforms: Dict[str, int] = {}
-        self._block_vao = np.zeros(0, dtype=np.int64)
-        self._block_vbo = np.zeros(0, dtype=np.int64)
-        self._block_count = np.zeros(0, dtype=np.int64)
         self.enabled: bool = True
         self.wireframe: bool = False
         self.solid: bool = True
@@ -594,116 +528,21 @@ class Terrain:
         # saved to the map file.
         self._authored_bounds: Optional[Tuple[int, int, int, int]] = None
         self._authored_enabled: Optional[bool] = None
-        self.grass_tex = 0
-        self.rock_tex = 0
-        self.sand_tex = 0
-        self.snow_tex = 0
-        self._placeholder_cubemap = 0
-        #: Vertex shaders whose program genuinely failed to compile. A compile
-        #: error is deterministic, so it is reported once and not retried on
-        #: every frame (which cost a full compile per frame and spammed the log).
-        self._failed_programs = set()
-        if texture_manager:
-            self.load_terrain_textures(texture_manager)
-        self._init_shader()
+        # What a renderer is handed (engine/terrain_frame.py): the table
+        # above, the per-slot products, and this key naming the publication.
+        self.products = TerrainProducts()
+        self._publication_key = new_publication_key()
+        # The builder thread (BACKGROUND_BUILDS): slot -> the allocation
+        # order it was asked for, the requests and the finished grids.
+        self._building: Dict[int, int] = {}
+        self._build_requests: "queue.Queue" = queue.Queue()
+        self._build_results: "queue.Queue" = queue.Queue()
+        self._builder = None
+        self._builder_stop = False
     
-    def _compile_program(self, vertex_name):
-        """Compile the terrain fragment shader against *vertex_name*.
 
-        Returns the program, or 0 when there is no GL context yet (harmless:
-        update_and_render() recompiles on the GL thread at first draw) or the
-        compile genuinely failed (reported).
-        """
-        if gl is None or compileProgram is None or compileShader is None:
-            return 0
-        if _no_current_gl_context():
-            return 0
-        if vertex_name in self._failed_programs:
-            return 0
-        try:
-            vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
-            # The heightfield draws with flat face outputs; the block mesh
-            # keeps the smooth-input fragment shader (engine/shaders.py).
-            fragment_name = ('terrain_flat.frag' if vertex_name == 'terrain_indexed.vert'
-                             else 'terrain.frag')
-            fragment_code = shaders.light_ubo_source(
-                shaders.DEFAULT_SHADERS[fragment_name])
-            vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
-            fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
-            program = compileProgram(vertex_shader, fragment_shader, validate=False)
-            if not program:
-                print("ERROR: Failed to compile terrain shader program!")
-                self._failed_programs.add(vertex_name)
-                return 0
-        except Exception as e:
-            msg = str(e)
-            # The Terrain can be constructed before the view's GL context is
-            # current (e.g. during map load), so glCreateShader isn't bound yet.
-            # Stay quiet then; only a genuine compile failure is worth reporting.
-            if ("glCreateShader" in msg or "undefined alternate function" in msg
-                    or "context" in msg.lower()):
-                return 0
-            print(f"ERROR: Exception during terrain shader compilation: {e}")
-            self._failed_programs.add(vertex_name)
-            return 0
-        block_index = gl.glGetUniformBlockIndex(program, 'FioLightBlock')
-        invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)
-        if block_index != invalid:
-            gl.glUniformBlockBinding(program, block_index, shaders.LIGHT_UBO_BINDING)
-        return program
 
-    def _init_shader(self):
-        self.shader_program = self._compile_program('terrain_indexed.vert')
-        if not self.shader_program:
-            return
-        self._init_grass_shader()
-        self.uniforms = {}
 
-    def _init_grass_shader(self):
-        try:
-            vertex_code = shaders.DEFAULT_SHADERS['grass.vert']
-            fragment_code = shaders.DEFAULT_SHADERS['grass.frag']
-            vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
-            fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
-            self.grass_shader_program = compileProgram(
-                vertex_shader, fragment_shader, validate=False)
-        except Exception as e:
-            msg = str(e)
-            if ("glCreateShader" in msg or "undefined alternate function" in msg
-                    or "context" in msg.lower()):
-                self.grass_shader_program = 0
-                return
-            print(f"ERROR: Exception during grass shader compilation: {e}")
-            self.grass_shader_program = 0
-            return
-
-        self.grass_uniforms = {
-            'projection': gl.glGetUniformLocation(self.grass_shader_program, 'projection'),
-            'view': gl.glGetUniformLocation(self.grass_shader_program, 'view'),
-            'time': gl.glGetUniformLocation(self.grass_shader_program, 'time'),
-            'grassColor': gl.glGetUniformLocation(self.grass_shader_program, 'grassColor'),
-            'cameraPos': gl.glGetUniformLocation(self.grass_shader_program, 'cameraPos'),
-            'windStrength': gl.glGetUniformLocation(self.grass_shader_program, 'windStrength'),
-            'uFogEnabled': gl.glGetUniformLocation(self.grass_shader_program, 'uFogEnabled'),
-            'uFogColor': gl.glGetUniformLocation(self.grass_shader_program, 'uFogColor'),
-            'uFogStart': gl.glGetUniformLocation(self.grass_shader_program, 'uFogStart'),
-            'uFogEnd': gl.glGetUniformLocation(self.grass_shader_program, 'uFogEnd'),
-            'uFogDensity': gl.glGetUniformLocation(self.grass_shader_program, 'uFogDensity'),
-            'uFogCamPos': gl.glGetUniformLocation(self.grass_shader_program, 'uFogCamPos'),
-            'uAmbient': gl.glGetUniformLocation(self.grass_shader_program, 'uAmbient'),
-        }
-        for name in ('grassTipColor', 'uMatchGround', 'uTipAuto', 'uSegments', 'uLodStart', 'uLodEnd',
-                     'uFadeStart', 'uFadeEnd', 'uBladeHeight', 'uBladeWidth'):
-            self.grass_uniforms[name] = gl.glGetUniformLocation(
-                self.grass_shader_program, name)
-
-    def load_terrain_textures(self, tex_manager):
-        self.grass_tex = tex_manager.get('assets/textures/terrain/grass.jpg')
-        self.rock_tex = tex_manager.get('assets/textures/terrain/rock.jpg')
-        self.sand_tex = tex_manager.get('assets/textures/terrain/sand.jpg')
-        self.snow_tex = tex_manager.get('assets/textures/terrain/snow.jpg')
-        if any(t == -1 for t in [self.grass_tex, self.rock_tex, self.sand_tex, self.snow_tex]):
-            print("Warning: Some terrain textures failed to load!")
     
     def is_solid(self) -> bool:
         return self.enabled and self.solid
@@ -910,21 +749,6 @@ class Terrain:
             self.appearance, self._layer_height_range(), self._layer_heights(),
             self.mesh_scale, (self.offset_x, self.offset_z))
 
-    def _upload_appearance_uniforms(self, u):
-        for name, value in self.appearance_uniforms().items():
-            loc = u.get(name, -1)
-            if loc is None or loc == -1:
-                continue
-            if name == 'uPalette':
-                gl.glUniform3fv(loc, len(value), np.ascontiguousarray(value, dtype=np.float32))
-            elif isinstance(value, int):
-                gl.glUniform1i(loc, value)
-            elif isinstance(value, float):
-                gl.glUniform1f(loc, value)
-            elif len(value) == 2:
-                gl.glUniform2f(loc, *value)
-            else:
-                gl.glUniform3f(loc, *value)
 
     def set_biome(self, biome_name: str):
         if biome_name in BIOMES:
@@ -1073,7 +897,7 @@ class Terrain:
             camera_pos.x, camera_pos.z, self.chunk_size, self.stream_radius,
             self.stream_evict_padding, self._chunk_bounds(),
             self.offset_x, self.offset_z)
-        self._free_gl(freed)
+        self._released(freed)
         self.streamed_chunks = self.table.count
 
     # -- Editor "fill world with terrain" preview -------------------------
@@ -1125,48 +949,11 @@ class Terrain:
         self.table.mark_all_dirty()
 
     def _remove_out_of_bounds_chunks(self):
-        self._free_gl(self.table.prune_out_of_bounds(self._chunk_bounds()))
+        self._released(self.table.prune_out_of_bounds(self._chunk_bounds()))
 
-    def _sync_gl_columns(self):
-        """Grow the per-slot GL arrays to the table's capacity."""
-        cap = self.table.capacity
-        if len(getattr(self, '_grass_count', ())) >= cap:
-            return
-        for name in ('_grass_vao', '_grass_vbo', '_grass_count', '_gpu_version',
-                     '_paint_gpu_version', '_block_vao', '_block_vbo', '_block_count'):
-            old = getattr(self, name, np.zeros(0, dtype=np.int64))
-            new = np.zeros(cap, dtype=np.int64)
-            new[:len(old)] = old
-            setattr(self, name, new)
 
-    def _gl_scope(self):
-        """Context manager making the terrain's GL context current, if known."""
-        provider = type(self).gl_context
-        return provider() if provider is not None else contextlib.nullcontext()
 
-    def _free_gl(self, slots):
-        """Delete the GL objects of freed table slots (a GL-thread call)."""
-        if not len(slots):
-            return
-        with self._gl_scope():
-            self._free_gl_slots(slots)
 
-    def _free_gl_slots(self, slots):
-        self._sync_gl_columns()
-        for slot in slots:
-            if self._grass_vao[slot]:
-                gl.glDeleteVertexArrays(1, [int(self._grass_vao[slot])])
-            if self._grass_vbo[slot]:
-                gl.glDeleteBuffers(1, [int(self._grass_vbo[slot])])
-            self._grass_vao[slot] = self._grass_vbo[slot] = 0
-            self._grass_count[slot] = 0
-            if self._block_vao[slot]:
-                gl.glDeleteVertexArrays(1, [int(self._block_vao[slot])])
-            if self._block_vbo[slot]:
-                gl.glDeleteBuffers(1, [int(self._block_vbo[slot])])
-            self._block_vao[slot] = self._block_vbo[slot] = 0
-            self._block_count[slot] = 0
-            self._paint_gpu_version[slot] = 0
 
     def _get_heights_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
         """Surface heights including any terracing."""
@@ -1261,9 +1048,16 @@ class Terrain:
         at the same spacing, run beyond each edge for the smooth normals.
         """
         table = self.table
-        step = float(table.size[slot]) / resolution
-        base_x = float(table.world[slot, 0])
-        base_z = float(table.world[slot, 1])
+        return self._grid_heights(float(table.world[slot, 0]),
+                                  float(table.world[slot, 1]),
+                                  float(table.size[slot]), resolution)
+
+    def _grid_heights(self, base_x: float, base_z: float, size: float,
+                      resolution: int) -> np.ndarray:
+        """The bordered grid of a chunk with origin (*base_x*, *base_z*) and
+        edge *size*: :meth:`_chunk_heights` without the table, so the builder
+        thread can run it from numbers taken when the build was asked for."""
+        step = size / resolution
         b = GRID_BORDER
         m = resolution + 1 + 2 * b
 
@@ -1281,19 +1075,6 @@ class Terrain:
         heights_flat = self._get_heights_batch(wx_flat, wz_flat)
         return heights_flat.reshape((m, m))
 
-    def _upload_chunk(self, slot: int, resolution: int):
-        """Build one chunk at *resolution*: its heights, then its GPU copy.
-
-        The height grid is the whole of a chunk: the vertex shader rebuilds
-        position, normals, colour and UVs from it (see terrain.vert).
-        """
-        heights = self._chunk_heights(slot, resolution)
-        lod_index = (self.LOD_RESOLUTIONS.index(resolution)
-                     if resolution in self.LOD_RESOLUTIONS else 0)
-        self.table.store(slot, resolution, lod_index, heights)
-        self._upload_heightfield(slot)
-        if self.appearance.terrace_mode == 'blocks':
-            self._upload_block_mesh(slot)
 
     # -- Blocks ---------------------------------------------------------------
 
@@ -1319,87 +1100,12 @@ class Terrain:
             (min_x, max_x, min_z, max_z), floor_height, self.TILING_SCALE)
         return vertices
 
-    def _upload_block_mesh(self, slot: int):
-        self._sync_gl_columns()
-        data = np.ascontiguousarray(self._block_mesh(slot), dtype=np.float32)
-        if not self._block_vao[slot]:
-            self._block_vao[slot] = int(gl.glGenVertexArrays(1))
-            self._block_vbo[slot] = int(gl.glGenBuffers(1))
-        gl.glBindVertexArray(int(self._block_vao[slot]))
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, int(self._block_vbo[slot]))
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, max(data.nbytes, 4),
-                        data if data.nbytes else None, gl.GL_STATIC_DRAW)
-        stride = 14 * 4
-        for loc, size, offset in ((0, 3, 0), (1, 3, 12), (2, 3, 24), (3, 2, 36), (4, 3, 44)):
-            gl.glVertexAttribPointer(loc, size, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                                     ctypes.c_void_p(offset))
-            gl.glEnableVertexAttribArray(loc)
-        gl.glBindVertexArray(0)
-        self._block_count[slot] = len(data)
 
-    def _ensure_block_program(self) -> int:
-        if not self.block_program:
-            self.block_program = self._compile_program('terrain_mesh.vert')
-            self.block_uniforms = {}
-        return self.block_program
 
-    def draw_block_slots(self, slots) -> int:
-        """Draw built *slots* from their block meshes (the program is current)."""
-        triangles = 0
-        for slot in slots:
-            slot = int(slot)
-            if not self._block_vao[slot] or self._block_count[slot] <= 0:
-                continue
-            gl.glBindVertexArray(int(self._block_vao[slot]))
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, int(self._block_count[slot]))
-            triangles += int(self._block_count[slot]) // 3
-        gl.glBindVertexArray(0)
-        return triangles
 
     # -- GPU heightfield --------------------------------------------------
 
-    def _ensure_height_page(self, page: int) -> int:
-        """The texture array holding height-grid page *page*, created on demand.
 
-        One layer per table slot (slot = page * layers + layer), R32F, every
-        layer the bordered LOD-0 grid size; a lower LOD uses the top-left
-        corner.
-        """
-        if not self._page_layers:
-            limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
-            self._page_layers = max(1, min(self.HEIGHT_PAGE_LAYERS, limit))
-        while len(self._height_pages) <= page:
-            tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
-            gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_R32F,
-                            STORED_GRID, STORED_GRID, self._page_layers, 0,
-                            gl.GL_RED, gl.GL_FLOAT, None)
-            for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
-                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
-                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
-                                 (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
-                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
-            self._height_pages.append(tex)
-        return self._height_pages[page]
-
-    def _upload_heightfield(self, slot: int):
-        """Copy a slot's height grid into its texture layer."""
-        table = self.table
-        self._sync_gl_columns()
-        if not self._page_layers:
-            self._ensure_height_page(0)
-        page, layer = divmod(int(slot), self._page_layers)
-        tex = self._ensure_height_page(page)
-        n = int(table.grid_res[slot]) + 1 + 2 * GRID_BORDER
-        # Stored row i is texel row y = i, column k is x = k; the drawn grid
-        # starts GRID_BORDER texels in (terrain.vert offsets by the same).
-        data = np.ascontiguousarray(table.heights[slot, :n, :n], dtype=np.float32)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-        gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
-        gl.glTexSubImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, n, n, 1,
-                           gl.GL_RED, gl.GL_FLOAT, data)
-        self._gpu_version[slot] = table.version[slot]
 
     def gradient_uniforms(self):
         """``(count, H, C, W, D)``: the biome gradient as the shader reads it.
@@ -1430,129 +1136,9 @@ class Terrain:
             D[i] = [c1[j] - c0[j] for j in range(3)]
         return len(stops), H, C, W, D
 
-    def chunk_uniforms(self, slots):
-        """``(uChunkI, uChunkX, uChunkY)`` for each of *slots*, in order.
 
-        Python ints and floats, the floats rounded to the float32 the shader
-        receives. One set of column operations for a whole draw, rather than
-        a dozen NumPy scalar reads per chunk.
-        """
-        table = self.table
-        slots = np.asarray(slots, dtype=np.intp)
-        res = table.grid_res[slots].astype(np.int64)
-        layer = (slots % self._page_layers if self._page_layers
-                 else np.zeros(len(slots), dtype=np.intp))
-        lo = table.min_y[slots]
-        hi = table.max_y[slots]
-        cx = np.empty((len(slots), 3), dtype=np.float32)
-        cx[:, :2] = table.world[slots]
-        cx[:, 2] = table.size[slots] / res
-        cy = np.empty((len(slots), 2), dtype=np.float32)
-        cy[:, 0] = lo
-        cy[:, 1] = np.where(hi > lo, hi - lo, 1.0)
-        return list(zip(zip(res.tolist(), layer.tolist()),
-                        cx.tolist(), cy.tolist()))
 
-    def set_heightfield_frame_uniforms(self, u, unit):
-        """Per-frame heightfield uniforms: sampler unit, tiling, gradient."""
-        count, H, C, W, D = self.gradient_uniforms()
-        limit = self.MAX_GRADIENT_STOPS
-        gl.glUniform1i(u['uHeights'], unit)
-        gl.glUniform1f(u['uTiling'], float(np.float32(self.TILING_SCALE)))
-        gl.glUniform1i(u['uFlatMode'], 1 if self.flat_mode else 0)
-        gl.glUniform1i(u['uGradCount'], count)
-        gl.glUniform1fv(u['uGradH'], limit, H)
-        gl.glUniform3fv(u['uGradC'], limit, C)
-        gl.glUniform1fv(u['uGradW'], limit, W)
-        gl.glUniform3fv(u['uGradD'], limit, D)
 
-    def _index_vao(self, res: int) -> int:
-        """The vertex array a chunk of *res* quads a side is drawn with: no
-        attributes (the vertex shader reads the height grid), only the index
-        list of :func:`heightfield_indices`. One per resolution, made on
-        first use, in the context the terrain draws in."""
-        entry = self._index_vaos.get(res)
-        if entry is None:
-            vao = int(gl.glGenVertexArrays(1))
-            buffer = int(gl.glGenBuffers(1))
-            indices = heightfield_indices(res)
-            gl.glBindVertexArray(vao)
-            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, buffer)
-            gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices,
-                            gl.GL_STATIC_DRAW)
-            entry = self._index_vaos[res] = (vao, buffer)
-        return entry[0]
-
-    def draw_heightfield_slots(self, u, slots, unit, lod_level_loc=-1,
-                               paint_unit=None):
-        """Draw built terrain chunks with their baked material paint."""
-        table = self.table
-        stale = slots[self._gpu_version[slots] != table.version[slots]]
-        for slot in stale:
-            self._upload_heightfield(int(slot))
-        order = slots.tolist()
-        # Each slot's paint version, 0 where it has none; None when the map
-        # has no paint, which is most maps. Uploads happen here, before the
-        # loop binds any height page: an upload binds the paint page on the
-        # active unit.
-        paint = None
-        versions = self._paint_map_versions
-        if paint_unit is not None and versions:
-            paint = [versions.get(tuple(coord), 0)
-                     for coord in table.coord[slots].tolist()]
-            gpu_version = self._paint_gpu_version
-            for slot, version in zip(order, paint):
-                if version and gpu_version[slot] != version:
-                    self._upload_paint_chunk(slot)
-        bound_res = -1
-        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-        lods = table.lod[slots].tolist() if lod_level_loc != -1 else None
-        loc_chunk_i, loc_chunk_x, loc_chunk_y = (
-            u['uChunkI'], u['uChunkX'], u['uChunkY'])
-        page_layers = self._page_layers
-        bound_page = -1
-        bound_paint_page = -1
-        # The program keeps a uniform's value between draws, so uPaintEnabled
-        # is sent when it changes, starting with the first chunk.
-        paint_enabled = None
-        triangles = 0
-        for i, ((res, layer), cx, cy) in enumerate(self.chunk_uniforms(slots)):
-            slot = order[i]
-            page = slot // page_layers
-            if page != bound_page:
-                gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
-                bound_page = page
-            if paint_unit is not None:
-                if paint is not None and paint[i]:
-                    paint_page = slot // self._paint_page_layers
-                    if paint_page != bound_paint_page:
-                        gl.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
-                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
-                                         self._paint_pages[paint_page])
-                        bound_paint_page = paint_page
-                        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-                    if paint_enabled != 1:
-                        gl.glUniform1i(u['uPaintEnabled'], 1)
-                        paint_enabled = 1
-                    gl.glUniform1i(u['uPaintLayer'],
-                                   slot % self._paint_page_layers)
-                elif paint_enabled != 0:
-                    gl.glUniform1i(u['uPaintEnabled'], 0)
-                    paint_enabled = 0
-            if lods is not None:
-                gl.glUniform1i(lod_level_loc, lods[i])
-            gl.glUniform2i(loc_chunk_i, res, layer)
-            gl.glUniform3f(loc_chunk_x, *cx)
-            gl.glUniform2f(loc_chunk_y, *cy)
-            if res != bound_res:
-                gl.glBindVertexArray(self._index_vao(res))
-                bound_res = res
-            gl.glDrawElements(gl.GL_TRIANGLES, 6 * res * res,
-                              gl.GL_UNSIGNED_INT, None)
-            triangles += 2 * res * res
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindVertexArray(0)
-        return triangles
 
     def _generate_grass_blades(self, slot: int) -> np.ndarray:
         """Deterministic per-blade instance records ``(x, y, z, size, yaw, tint)``.
@@ -1665,127 +1251,7 @@ class Terrain:
         out = self._get_colors_batch(y, (np.asarray(y) - lo) / max(hi - lo, 1e-3)) * 1.1
         return np.clip(out, 0.0, 1.0).astype(np.float32)
 
-    def _upload_grass_chunk(self, slot: int):
-        """Generate deterministic grass instances for one chunk and upload them."""
-        table = self.table
-        self._sync_gl_columns()
-        if not self.grass_enabled:
-            self._grass_count[slot] = 0
-            table.grass_dirty[slot] = False
-            return
-        if not self.grass_shader_program:
-            self._init_grass_shader()
-            if not self.grass_shader_program:
-                return
 
-        data = self._generate_grass_blades(slot)
-        count = len(data)
-        if count <= 0:
-            self._grass_count[slot] = 0
-            table.grass_dirty[slot] = False
-            return
-
-        if not self._grass_vao[slot]:
-            self._grass_vao[slot] = int(gl.glGenVertexArrays(1))
-            self._grass_vbo[slot] = int(gl.glGenBuffers(1))
-        gl.glBindVertexArray(int(self._grass_vao[slot]))
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, int(self._grass_vbo[slot]))
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_STATIC_DRAW)
-        stride = 9 * 4
-        gl.glVertexAttribPointer(6, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(24))
-        gl.glEnableVertexAttribArray(6)
-        gl.glVertexAttribDivisor(6, 1)
-        gl.glVertexAttribPointer(2, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
-        gl.glEnableVertexAttribArray(2)
-        gl.glVertexAttribDivisor(2, 1)
-        gl.glVertexAttribPointer(3, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(12))
-        gl.glEnableVertexAttribArray(3)
-        gl.glVertexAttribDivisor(3, 1)
-        gl.glVertexAttribPointer(4, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(16))
-        gl.glEnableVertexAttribArray(4)
-        gl.glVertexAttribDivisor(4, 1)
-        gl.glVertexAttribPointer(5, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(20))
-        gl.glEnableVertexAttribArray(5)
-        gl.glVertexAttribDivisor(5, 1)
-        gl.glBindVertexArray(0)
-        self._grass_count[slot] = count
-        table.grass_dirty[slot] = False
-
-    def _draw_grass(self, visible_slots, projection, view, camera_pos, env_uniforms):
-        if not self.grass_enabled or not self.grass_shader_program:
-            return
-        # A monotonic frame clock keeps wind speed independent of actual FPS.
-        import time
-        now = time.perf_counter()
-        last = getattr(self, '_grass_last_time', now)
-        self.grass_time = (self.grass_time + max(0.0, min(now - last, 0.1))) % 100000.0
-        self._grass_last_time = now
-        gl.glUseProgram(self.grass_shader_program)
-        u = self.grass_uniforms
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniform1f(u['time'], self.grass_time)
-        gl.glUniform3f(u['grassColor'], *self.grass_color)
-        gl.glUniform3f(u['cameraPos'], float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
-        gl.glUniform1f(u['windStrength'], 0.65)
-        gl.glUniform3f(u['grassTipColor'], *self.grass_tip_colour())
-        gl.glUniform1i(u['uMatchGround'], 0 if self.grass_color_custom else 1)
-        gl.glUniform1i(u['uTipAuto'], 1 if self.grass_tip_color is None else 0)
-        gl.glUniform1f(u['uLodStart'], self.GRASS_LOD_START)
-        gl.glUniform1f(u['uLodEnd'], self.GRASS_LOD_DISTANCE)
-        gl.glUniform1f(u['uFadeStart'], min(self.GRASS_FADE_START, self.GRASS_MAX_DISTANCE))
-        gl.glUniform1f(u['uFadeEnd'], self.GRASS_MAX_DISTANCE)
-        gl.glUniform1f(u['uBladeHeight'], self.grass_height)
-        gl.glUniform1f(u['uBladeWidth'], self.GRASS_BLADE_WIDTH)
-
-        if env_uniforms:
-            for name, value in env_uniforms.items():
-                loc = u.get(name, -1)
-                if loc == -1:
-                    continue
-                if isinstance(value, int):
-                    gl.glUniform1i(loc, value)
-                elif isinstance(value, float):
-                    gl.glUniform1f(loc, value)
-                else:
-                    gl.glUniform3f(loc, *value)
-
-        # Opaque tapered blades. Explicitly restore the depth state here:
-        # grass must test against the already-rendered terrain, not inherit
-        # depth state from a preceding renderer pass.
-        gl.glDisable(gl.GL_BLEND)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LEQUAL)
-        gl.glDepthMask(gl.GL_TRUE)
-        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        dist_sq = self.table.nearest_dist_sq(
-            visible_slots, float(camera_pos.x), float(camera_pos.z))
-        max_sq = self.GRASS_MAX_DISTANCE * self.GRASS_MAX_DISTANCE
-        for slot, d in zip(visible_slots, dist_sq):
-            if self._grass_count[slot] <= 0 or not self._grass_vao[slot]:
-                continue
-            if d > max_sq:
-                continue
-            # Whole chunks swap between detailed and single-triangle blades.
-            # The shader has already morphed every blade past
-            # GRASS_LOD_DISTANCE onto the far shape, and a chunk's nearest
-            # point is never further than any of its blades, so the swap
-            # cannot be seen.
-            lod_sq = self.GRASS_LOD_DISTANCE * self.GRASS_LOD_DISTANCE
-            segments = self.GRASS_SEGMENTS if d < lod_sq else 1
-            gl.glUniform1i(u['uSegments'], segments)
-            gl.glBindVertexArray(int(self._grass_vao[slot]))
-            gl.glDrawArraysInstanced(
-                gl.GL_TRIANGLES, 0, grass_vertex_count(segments),
-                int(self._grass_count[slot]))
-        gl.glBindVertexArray(0)
-        # Grass blades are double-sided. Put culling back the way it was
-        # found -- the terrain pass runs with it off. Forcing it on leaked
-        # into Qt's overlay painter, which then culled the SysMon panel.
-        if cull_was:
-            gl.glEnable(gl.GL_CULL_FACE)
 
     def _get_lod_resolution(self, dist_sq: float) -> int:
         for i, threshold in enumerate(self.LOD_DISTANCES_SQ):
@@ -1805,223 +1271,234 @@ class Terrain:
             return min(self.NEAR_DETAIL_RADIUS, float(self.stream_radius))
         return self.NEAR_DETAIL_RADIUS
 
-    def _ensure_placeholder_cubemap(self) -> int:
-        """Lazily create a 1x1 complete cube-map used for shadow sampler units
-        that have no real depth cube-map (shadows off, or fewer cube-maps than
-        sampler slots).  A complete texture on every unit guarantees no
-        samplerCube is left referencing texture unit 0 or an incomplete texture,
-        either of which can make glDrawArrays raise GL_INVALID_OPERATION."""
-        if self._placeholder_cubemap:
-            return self._placeholder_cubemap
-        tex = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
-        black = (ctypes.c_ubyte * 4)(0, 0, 0, 255)
-        for face in range(6):
-            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA,
-                            1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, black)
-        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
-        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
-        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-        self._placeholder_cubemap = tex
-        return self._placeholder_cubemap
 
-    def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0,
-                          shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4,
-                          env_uniforms=None):
-        if not self.enabled: return
-        if not self.shader_program:
-            self._init_shader()
-        prog = self.shader_program
-        if not prog:
+    # -- publication (engine/terrain_frame.py) -----------------------------
+
+    def publish(self) -> TerrainFrame:
+        """This frame's terrain, as a renderer may see it: the dense table,
+        the per-slot products and paint maps, and the appearance as numbers.
+        Immutable; nothing in it leads back to this object."""
+        return TerrainFrame(
+            key=self._publication_key, enabled=bool(self.enabled),
+            table=self.table, products=self.products,
+            flat_mode=bool(self.flat_mode), wireframe=bool(self.wireframe),
+            use_textures=bool(getattr(self, 'use_textures', True)),
+            blocks=self.appearance.terrace_mode == 'blocks',
+            appearance=read_only(self.appearance_uniforms()),
+            gradient=self.gradient_uniforms(),
+            tiling=self.TILING_SCALE,
+            grass_enabled=bool(self.grass_enabled),
+            grass_color=tuple(self.grass_color),
+            grass_tip_colour=tuple(self.grass_tip_colour()),
+            grass_match_ground=not self.grass_color_custom,
+            grass_tip_auto=self.grass_tip_color is None,
+            grass_height=float(self.grass_height),
+            grass_lod_start=self.GRASS_LOD_START,
+            grass_lod_distance=self.GRASS_LOD_DISTANCE,
+            grass_fade_start=self.GRASS_FADE_START,
+            grass_max_distance=self.GRASS_MAX_DISTANCE,
+            grass_segments=self.GRASS_SEGMENTS,
+            grass_blade_width=self.GRASS_BLADE_WIDTH,
+            paint_display=read_only(self._paint_display),
+            paint_maps=read_only(self.texture_paint_maps),
+            paint_versions=read_only(self._paint_map_versions),
+            paint_epoch=self._paint_epoch,
+            paint_resolution=self.TERRAIN_PAINT_RESOLUTION,
+            paint_page_layers=self.PAINT_PAGE_LAYERS,
+            height_page_layers=self.HEIGHT_PAGE_LAYERS,
+            max_gradient_stops=self.MAX_GRADIENT_STOPS,
+            triangle_count=self.table.triangle_count())
+
+    def _released(self, slots):
+        """Table slots were freed: their published products go with them. (A
+        renderer frees what it built for a slot when it next sees the table.)"""
+        if len(slots):
+            self.products.drop(slots)
+            for slot in slots:
+                self._building.pop(int(slot), None)
+
+    def cleanup(self):
+        """Drop every chunk. No GL here: a renderer's side goes with the
+        publication key, which a cleaned-up terrain no longer offers."""
+        self.stop_builder()
+        self._released(self.table.clear())
+        self.products.clear_store(self.products.grass)
+        self.products.clear_store(self.products.blocks)
+
+    # -- upkeep: what exists, at what detail, built (no GL) -------------------
+
+    def advance(self, camera_pos, frustum_planes=None):
+        """Bring the published terrain up to date for a camera, before the
+        frame is drawn: stream chunks in and out, advance the LOD hysteresis,
+        and build what is due -- height grids (inline within the frame's
+        budget, or on the builder thread when :attr:`BACKGROUND_BUILDS`), then
+        block meshes and grass. Everything it writes is what
+        :meth:`publish` hands a renderer; it makes no GL call."""
+        if not self.enabled:
             return
-        u = self.uniforms
-        # Blocks are drawn from per-chunk meshes by their own vertex shader;
-        # everything else from the heightfield.
-        blocks = (self.appearance.terrace_mode == 'blocks'
-                  and bool(self._ensure_block_program()))
-        if blocks:
-            prog = self.block_program
-            u = self.block_uniforms
-
-        # Terrain can be constructed before the GL context exists. In that
-        # case _init_shader() cannot create the grass program either, and the
-        # renderer may later inject an externally compiled terrain program
-        # without calling _init_shader() again. Retry grass independently once
-        # a real GL context is current.
-        if self.grass_enabled and not self.grass_shader_program:
-            self._init_grass_shader()
-
-        # Re-resolve late-bound uniforms against the *current* program.  The
-        # renderer can swap in an externally-compiled program whose uniform
-        # table only covers a subset of locations (see
-        # ForwardRenderer.setup_terrain_shader), so any sampler we rely on must be
-        # looked up here or it stays unbound.  An unassigned ``samplerCube``
-        # defaults to texture unit 0, collides with the ``sampler2D`` terrain
-        # textures bound there, and makes glDrawArrays raise
-        # GL_INVALID_OPERATION.
-        names = self._UNIFORM_NAMES + tuple(env_uniforms or ())
-        names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
-        for name in names:
-            if name not in u:
-                u[name] = gl.glGetUniformLocation(prog, name)
-
-        self.visible_chunks = 0
-        self.culled_chunks = 0
-        self.total_triangles = 0
-
-        # Apply any bounds change that deferred its prune to the GL thread.
         if self._pending_prune:
             self._remove_out_of_bounds_chunks()
             self._pending_prune = False
         # Rows made before the chunk size or offset changed (from_dict on a
-        # terrain that already drew a frame -- the loading overlay's repaint
-        # can draw the fresh default terrain mid-load -- or an offset edit)
-        # would hold their chunk indices at the old geometry for good.
-        self._free_gl(self.table.prune_stale_geometry(
+        # terrain that already drew a frame, or an offset edit) would hold
+        # their chunk indices at the old geometry for good.
+        self._released(self.table.prune_stale_geometry(
             self.chunk_size, self.offset_x, self.offset_z))
-
         if self.streaming:
             # The stream radius is the caller's to set (Big World derives it
-            # from its activation radius) and is not inflated here. It used to
-            # be raised to the 4096-unit protected zone plus a chunk every
-            # frame, which on a Big World map meant ~1000 resident full-detail
-            # chunks whatever the map asked for. The protected zone shrinks to
-            # the stream radius instead -- see _near_detail_radius().
+            # from its activation radius) and is not inflated here; the
+            # protected zone shrinks to it instead (_near_detail_radius()).
             self._stream_chunks(camera_pos)
         else:
             self.table.ensure_bounds(self._chunk_bounds(), self.chunk_size,
                                      self.offset_x, self.offset_z)
-        
-        gl.glUseProgram(prog)
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(u['texGrass'], 0)
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
-        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)
-        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(u['texSnow'],  3)
-        height_texture_unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
-        paint_texture_unit = height_texture_unit + 1
-        self._upload_appearance_uniforms(u)
-        loc = u.get('terrainPaintMap', -1)
-        if loc != -1:
-            gl.glUniform1i(loc, paint_texture_unit)
-        
-        # Force textures off if flat_mode is enabled or textures aren't loaded
-        textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
-                           and self.sand_tex != 0 and self.snow_tex != 0)
-        use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
-        gl.glUniform1i(u['use_textures'], use_tex)
-
-        # Distance fog + global ambient (engine.shaders.FOG_GLSL). The terrain
-        # owns its program and its own uniform table, so the renderer hands the
-        # already-resolved values across rather than writing them itself --
-        # otherwise a terrain running its own fallback program would be the one
-        # surface in the level that ignored the fog and stayed sharp right up
-        # to the far plane.
-        if env_uniforms:
-            for name, value in env_uniforms.items():
-                loc = u.get(name, -1)
-                if loc is None or loc == -1:
-                    continue
-                if isinstance(value, int):
-                    gl.glUniform1i(loc, value)
-                elif isinstance(value, float):
-                    gl.glUniform1f(loc, value)
-                else:
-                    gl.glUniform3f(loc, *value)
-        
-        # The renderer has already selected the terrain light subset and
-        # packed it into the shared std140 light UBO.
-        gl.glUniform1i(u['active_lights'], active_lights_count)
-
-        # Bind depth cube-maps so terrain receives point-light shadows.
-        #
-        # Every ``samplerCube shadowMaps[i]`` uniform must be pointed at its own
-        # reserved texture unit *unconditionally*.  GLSL samplers default to
-        # texture unit 0, which already holds a ``sampler2D`` (texGrass).  The
-        # spec forbids two different sampler types referencing the same texture
-        # image unit, so leaving the cube samplers on unit 0 makes the driver
-        # raise GL_INVALID_OPERATION on the very next draw call.  We therefore
-        # always assign the units and bind a *complete* cube-map to each — the
-        # real depth cube-map when available, otherwise a 1x1 placeholder — even
-        # when shadows are disabled or fewer cube-maps than sampler slots are
-        # supplied.  Binding the incomplete default texture (name 0) would leave
-        # an active samplerCube pointing at an incomplete texture, which some
-        # drivers also reject at draw time.
-        shadow_cubemaps = shadow_cubemaps or []
-        placeholder = self._ensure_placeholder_cubemap()
-        for i in range(shaders.MAX_SHADOW_LIGHTS):
-            loc = u.get(f'shadowMaps[{i}]', -1)
-            if loc is None or loc == -1:
-                continue
-            cm = shadow_cubemaps[i] if (i < len(shadow_cubemaps) and shadow_cubemaps[i]) else placeholder
-            gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-            gl.glUniform1i(loc, shadow_unit_base + i)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        
-        lod_level_loc = u.get('lod_level', -1)
         table = self.table
-        self._sync_gl_columns()
+        self._collect_built()
         slots = table.live_slots()
         cam_x = float(camera_pos.x)
         cam_z = float(camera_pos.z)
-        # Frustum (far plane included, so the view distance applies) only
-        # decides what is *drawn*. Mesh upkeep still runs for every resident
-        # chunk, so turning round never exposes a chunk that was skipped while
-        # it was behind the camera. Nearest chunk-point distance, so an edge
-        # cannot drop LOD while it is still inside the protected radius; the
-        # protected zone is pre-promoted a whole chunk ring wide, so there is
-        # no visible LOD upgrade as the player crosses its boundary.
+        # The frustum only orders the work: mesh upkeep runs for every
+        # resident chunk, so turning round never exposes one that was skipped
+        # while it was behind the camera. Nearest chunk-point distance, so an
+        # edge cannot drop LOD while it is still inside the protected radius.
         visible = table.visible(slots, frustum_planes)
         dist_sq = table.nearest_dist_sq(slots, cam_x, cam_z)
         queue_slots, queue_res = table.schedule(
             slots, dist_sq, visible, self._near_detail_radius(),
             self.LOD_RESOLUTIONS, self.LOD_DISTANCES_SQ,
             self.LOD_HYSTERESIS_FRAMES)
-        self.culled_chunks = int(len(slots) - np.count_nonzero(visible))
-
-        if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        # The height grids live in texture units above the shadow cube-maps.
-        unit = height_texture_unit
-        drawn = slots[visible & table.built[slots]]
-        if blocks:
-            self.total_triangles = self.draw_block_slots(drawn)
+        if self.BACKGROUND_BUILDS:
+            self._request_builds(queue_slots, queue_res)
         else:
-            self.set_heightfield_frame_uniforms(u, unit)
-            self.total_triangles = self.draw_heightfield_slots(
-                u, drawn, unit, lod_level_loc, paint_texture_unit)
-        self.visible_chunks = int(len(drawn))
-        #: The slots drawn this frame, in draw order (tests, Debug Tables).
-        self.drawn_slots = drawn
-        if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        # Dirty meshes first, then what the camera can see, nearest first.
-        budget_end = time.perf_counter() + self.UPDATE_BUDGET_MS / 1000.0
-        limit = self.MAX_UPDATES_PER_FRAME
-        for i, (slot, resolution) in enumerate(zip(queue_slots[:limit], queue_res[:limit])):
-            if i and time.perf_counter() >= budget_end:
-                break
-            self._upload_chunk(int(slot), int(resolution))
+            # Dirty meshes first, then what the camera can see, nearest first.
+            budget_end = time.perf_counter() + self.UPDATE_BUDGET_MS / 1000.0
+            limit = self.MAX_UPDATES_PER_FRAME
+            for i, (slot, resolution) in enumerate(zip(queue_slots[:limit], queue_res[:limit])):
+                if i and time.perf_counter() >= budget_end:
+                    break
+                self._build_chunk(int(slot), int(resolution))
 
-        # Grass has its own dirty queue. It is rebuilt in the same bounded
-        # fashion as terrain meshes, so moving the density slider cannot spike
-        # the frame by rebuilding every resident chunk at once.
+        # Grass has its own dirty queue, built in the same bounded fashion,
+        # so moving the density slider cannot spike a frame by rebuilding
+        # every resident chunk at once.
         if self.grass_enabled:
-            grass_updates = slots[table.grass_dirty[slots]]
+            grass_updates = slots[table.grass_dirty[slots] & table.built[slots]]
             for slot in grass_updates[:self.MAX_UPDATES_PER_FRAME]:
-                self._upload_grass_chunk(int(slot))
-        else:
-            self._grass_count[slots] = 0
+                self._build_grass(int(slot))
+        elif self.products.grass:
+            self.products.clear_store(self.products.grass)
 
-        if self.grass_enabled:
-            # After this frame's builds, as the chunk bounds may have moved.
-            candidates = slots[table.built[slots] & (self._grass_count[slots] > 0)]
-            visible_grass = candidates[table.visible(candidates, frustum_planes)]
-            self._draw_grass(
-                visible_grass, projection, view, camera_pos, env_uniforms)
+    def _store_heights(self, slot: int, resolution: int, heights):
+        lod_index = (self.LOD_RESOLUTIONS.index(resolution)
+                     if resolution in self.LOD_RESOLUTIONS else 0)
+        self.table.store(slot, resolution, lod_index, heights)
+        if self.appearance.terrace_mode == 'blocks':
+            self.products.put(self.products.blocks, slot,
+                              self.table.order[slot], self._block_mesh(slot))
+
+    def _build_chunk(self, slot: int, resolution: int):
+        """Build one chunk at *resolution*, here and now: its height grid --
+        the whole of a chunk, from which the vertex shader rebuilds position,
+        normals, colour and UVs -- and, terraced as blocks, its mesh."""
+        self._store_heights(slot, resolution, self._chunk_heights(slot, resolution))
+
+    def _build_grass(self, slot: int):
+        """Publish one chunk's deterministic grass instances."""
+        self.products.put(self.products.grass, slot, self.table.order[slot],
+                          self._generate_grass_blades(slot))
+        self.table.grass_dirty[slot] = False
+
+    # -- the builder thread ---------------------------------------------------
+
+    def _request_builds(self, queue_slots, queue_res):
+        """Hand the build queue to the builder thread, nearest work first.
+
+        Only the height grid is computed there, from the chunk's frozen
+        origin and size; the table is written back here, on the caller's
+        thread, by :meth:`_collect_built`, so every table write stays on one
+        thread. A slot waits at most once in the queue."""
+        table = self.table
+        for slot, resolution in zip(queue_slots.tolist(), queue_res.tolist()):
+            if slot in self._building or len(self._building) >= self.BUILD_QUEUE_LIMIT:
+                continue
+            order = int(table.order[slot])
+            self._building[slot] = order
+            # An edit that arrives while this is in flight must dirty the
+            # row again: clear the flag now, restore whatever it is on return.
+            table.dirty[slot] = False
+            self._build_requests.put((slot, order, int(resolution),
+                                      float(table.world[slot, 0]),
+                                      float(table.world[slot, 1]),
+                                      float(table.size[slot])))
+        if self._building and (self._builder is None or not self._builder.is_alive()):
+            self._builder_stop = False
+            self._builder = threading.Thread(
+                target=self._builder_loop, name='TerrainBuilder', daemon=True)
+            self._builder.start()
+
+    def _builder_loop(self):
+        requests, results = self._build_requests, self._build_results
+        while not self._builder_stop:
+            try:
+                job = requests.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if job is None:                     # stop_builder's wake-up
+                break
+            slot, order, resolution, world_x, world_z, size = job
+            try:
+                heights = self._grid_heights(world_x, world_z, size, resolution)
+            except Exception:
+                # The editor changed what the heights are read from mid-build
+                # (a sculpt array resized): the row stays unbuilt or is
+                # dirtied again by that edit, and is asked for next frame.
+                heights = None
+            results.put((slot, order, resolution, heights))
+
+    def _collect_built(self):
+        """Store the grids the builder thread has finished (this thread)."""
+        table = self.table
+        while True:
+            try:
+                slot, order, resolution, heights = self._build_results.get_nowait()
+            except queue.Empty:
+                return
+            if self._building.get(slot) == order:
+                del self._building[slot]
+            if (heights is None or slot >= table.capacity or not table.live[slot]
+                    or int(table.order[slot]) != order):
+                if (heights is None and slot < table.capacity and table.live[slot]
+                        and int(table.order[slot]) == order):
+                    table.dirty[slot] = True
+                continue
+            edited = bool(table.dirty[slot])
+            self._store_heights(slot, resolution, heights)
+            table.dirty[slot] = edited
+
+    def stop_builder(self):
+        """Stop the builder thread and forget what it was asked for."""
+        self._builder_stop = True
+        builder, self._builder = self._builder, None
+        if builder is not None and builder.is_alive() \
+                and builder is not threading.current_thread():
+            self._build_requests.put(None)
+            builder.join(2.0)
+        for q in (self._build_requests, self._build_results):
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+        table = self.table
+        for slot, order in self._building.items():
+            if slot < table.capacity and table.live[slot] and int(table.order[slot]) == order:
+                table.dirty[slot] = True
+        self._building.clear()
+
+    def builds_pending(self) -> int:
+        """Grids asked of the builder thread and not yet stored."""
+        return len(self._building)
+
 
     def get_2d_contours(self, axis1: str, axis2: str, view_bounds: Tuple[float, float, float, float], resolution: int = 32) -> List[Tuple[List[float], List[float], float]]:
         if not self.enabled: return []
@@ -2998,64 +2475,23 @@ class Terrain:
     def clear_texture_paint(self):
         """Erase all baked terrain texture paint and placed stamps."""
         self.texture_paint_maps = {}
+        self._paint_epoch += 1
         self.texture_paint_base = {}
         self.paint_stamps = []
         self.selected_stamp_ids = set()
         self._paint_display = {}
+        self._paint_epoch += 1
         self._stamp_dirty_chunks = set()
         self._invalidate_stamp_index()
         self._paint_map_versions = {}
         self._paint_version_counter += 1
-        self._paint_gpu_version[:] = 0
+        self._paint_epoch += 1
 
     def clear_texture_stamps(self):
         """Compatibility alias for the old stamp tool name."""
         self.clear_texture_paint()
 
-    def _ensure_paint_page(self, page: int) -> int:
-        if not self._paint_page_layers:
-            limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
-            self._paint_page_layers = max(1, min(self.PAINT_PAGE_LAYERS, limit))
-        while len(self._paint_pages) <= page:
-            tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
-            gl.glTexImage3D(
-                gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8,
-                self.TERRAIN_PAINT_RESOLUTION, self.TERRAIN_PAINT_RESOLUTION,
-                self._paint_page_layers, 0,
-                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
-            for pname, value in (
-                (gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
-                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
-                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
-                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
-                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
-            self._paint_pages.append(tex)
-        return self._paint_pages[page]
 
-    def _upload_paint_chunk(self, slot: int):
-        table = self.table
-        self._sync_gl_columns()
-        coord = (int(table.coord[slot, 0]), int(table.coord[slot, 1]))
-        paint = self._paint_display.get(coord)
-        if paint is None:
-            paint = self.texture_paint_maps.get(coord)
-        if paint is None:
-            self._paint_gpu_version[slot] = 0
-            return
-        if not self._paint_page_layers:
-            self._ensure_paint_page(0)
-        page, layer = divmod(int(slot), self._paint_page_layers)
-        tex = self._ensure_paint_page(page)
-        data = np.ascontiguousarray(paint, dtype=np.uint8)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-        gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
-        gl.glTexSubImage3D(
-            gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
-            self.TERRAIN_PAINT_RESOLUTION, self.TERRAIN_PAINT_RESOLUTION, 1,
-            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
-        self._paint_gpu_version[slot] = self._paint_map_versions.get(coord, 0)
 
     def _serialize_texture_paint(self, maps=None):
         """Paint chunks as compressed entries, reusing unchanged chunks.
@@ -3095,8 +2531,10 @@ class Terrain:
 
     def _restore_texture_paint(self, entries):
         self._paint_map_versions = {}
+        self._paint_epoch += 1
         self._paint_version_counter = 0
         self.texture_paint_maps = self._decode_texture_paint(entries)
+        self._paint_epoch += 1
         for key in self.texture_paint_maps:
             self._touch_texture_paint(key)
 
@@ -3123,50 +2561,8 @@ class Terrain:
                 continue
         return maps
 
-    def release_renderer_resources(self):
-        """Drop every GL name the renderer gave this terrain.
 
-        The terrain program and the four ground textures belong to the
-        renderer that bound them (``setup_terrain_shader``). The host calls
-        this before that renderer is retired, so no retired name is kept; the
-        next renderer binds its own the first time it draws the terrain.
-        """
-        self.shader_program = 0
-        self.uniforms = {}
-        self.grass_tex = self.rock_tex = self.sand_tex = self.snow_tex = 0
 
-    def cleanup(self):
-        with self._gl_scope():
-            self._cleanup_gl()
-
-    def _cleanup_gl(self):
-        self._free_gl(self.table.clear())
-        if self.block_program:
-            try:
-                gl.glDeleteProgram(self.block_program)
-            except Exception:
-                pass
-            self.block_program = 0
-            self.block_uniforms = {}
-        if self._paint_pages:
-            try:
-                gl.glDeleteTextures(len(self._paint_pages), self._paint_pages)
-            except Exception:
-                pass
-            self._paint_pages = []
-            self._paint_page_layers = 0
-        if self._height_pages:
-            gl.glDeleteTextures(len(self._height_pages), self._height_pages)
-            self._height_pages = []
-        if self._empty_vao:
-            gl.glDeleteVertexArrays(1, [self._empty_vao])
-            self._empty_vao = 0
-        for vao, buffer in self._index_vaos.values():
-            gl.glDeleteVertexArrays(1, [vao])
-            gl.glDeleteBuffers(1, [buffer])
-        self._index_vaos = {}
-        self._gpu_version[:] = 0
-        self._paint_gpu_version[:] = 0
     
     def to_dict(self) -> dict:
         # While the editor is previewing a Big World fill the live bounds are
@@ -3362,6 +2758,7 @@ class Terrain:
             self.texture_paint_base = dict(self.texture_paint_maps)
         self.selected_stamp_ids = set()
         self._paint_display = {}
+        self._paint_epoch += 1
         self._stamp_dirty_chunks = set()
         self._invalidate_stamp_index()
 

@@ -72,8 +72,10 @@ FRAME_INPUT = {
                    '(default engine.renderer.core.visibility.ACTIVE_LIGHT_RANGE)',
     'light_fade_range': 'optional float: finish the intensity fade before this '
                        'world-streaming boundary; does not change light selection',
-    'terrain': 'engine.terrain.Terrain or None; the renderer prepares whatever '
-               'GPU state it needs from it when it first sees it',
+    'terrain': 'engine.terrain_frame.TerrainFrame or None: the published terrain '
+               '(its dense TerrainTable, per-slot products, paint maps and '
+               'this frame\'s appearance). Never the Terrain object; a '
+               'renderer owns every GL resource it builds from it',
     # Selection (same object as render_scene's primary_selection argument)
     'primary_selection': 'SelectionOverlay or None',
     # View settings
@@ -111,7 +113,9 @@ class RenderStats:
     """
     __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
                  'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
-                 'entity_candidates', 'culled_entities', 'pass_ms', 'details')
+                 'entity_candidates', 'culled_entities', 'pass_ms', 'details',
+                 'terrain_visible_chunks', 'terrain_culled_chunks',
+                 'terrain_triangles', 'terrain_drawn_slots')
     def __init__(self):
         #: CPU milliseconds spent submitting each pass this frame, measured by
         #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
@@ -129,6 +133,11 @@ class RenderStats:
         #: Sprite and model rows offered to the main view's entity passes,
         #: and how many of them its frustum rejected.
         self.entity_candidates = self.culled_entities = 0
+        #: What the terrain pass drew: chunks, chunks the frustum rejected,
+        #: triangles, and the table slots drawn, in draw order.
+        self.terrain_visible_chunks = self.terrain_culled_chunks = 0
+        self.terrain_triangles = 0
+        self.terrain_drawn_slots = ()
         self.pass_ms.clear()
 
 

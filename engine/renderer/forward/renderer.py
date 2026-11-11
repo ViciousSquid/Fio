@@ -178,6 +178,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
+        #: (publication key, TerrainGL): the GL side of the terrain drawn.
+        self._terrain_gl_state = None
         self._light_shadow_index = {}       # id(light) -> shadow slot index for this frame
         # Per-slot cache so a light's cube-map is only re-rendered when it (or one
         # of its in-range casters) actually moves — static lights become ~free.
@@ -672,6 +674,12 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # renderer rebuild (a render-mode or shadow-quality change) strands the
         # whole cube-map pool -- MAX_SHADOW_LIGHTS cube-maps at shadow_map_size,
         # tens of megabytes of VRAM, every time.
+        if self._terrain_gl_state is not None:
+            try:
+                self._terrain_gl_state[1].cleanup()
+            except Exception:
+                pass
+            self._terrain_gl_state = None
         if self._shadow_cubemaps:
             try:
                 gl.glDeleteTextures(self._shadow_cubemaps)

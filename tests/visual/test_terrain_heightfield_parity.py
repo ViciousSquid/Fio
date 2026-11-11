@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from tests.helpers import gl as glh
+from tests.helpers import terrain_draw
 
 pytestmark = [
     pytest.mark.gl, pytest.mark.slow,
@@ -69,7 +70,7 @@ def build(t, cx, cz, res):
     slot = t.table.ensure(cx, cz, t.chunk_size, t.offset_x, t.offset_z)
     heights = t._chunk_heights(slot, res)
     t.table.store(slot, res, t.LOD_RESOLUTIONS.index(res), heights)
-    t._upload_heightfield(slot)
+    terrain_draw.bound(t)._upload_heightfield(slot)
     return slot
 
 
@@ -133,11 +134,12 @@ class Capture:
         gl.glUniformMatrix4fv(self.u['projection'], 1, gl.GL_FALSE, glm.value_ptr(identity))
         gl.glUniformMatrix4fv(self.u['view'], 1, gl.GL_FALSE, glm.value_ptr(identity))
         unit = 8
-        t.set_heightfield_frame_uniforms(self.u, unit)
-        (res_u, layer), cx, cy = t.chunk_uniforms([slot])[0]
+        held = terrain_draw.bound(t)
+        held.set_heightfield_frame_uniforms(self.u, unit)
+        (res_u, layer), cx, cy = held.chunk_uniforms([slot])[0]
         gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
-                         t._height_pages[slot // t._page_layers])
+                         held._height_pages[slot // held._page_layers])
         gl.glUniform2i(self.u['uChunkI'], res_u, layer)
         gl.glUniform3f(self.u['uChunkX'], *cx)
         gl.glUniform2f(self.u['uChunkY'], *cy)
@@ -319,7 +321,6 @@ def render_pair(context, t, eye, target, far, lights=True, seamless=False):
 
     renderer = glh.make_renderer()
     renderer.view_distance = ViewDistance(far)
-    renderer.setup_terrain_shader(t)
     things = []
     if lights:
         things.append(make_thing(
@@ -329,7 +330,7 @@ def render_pair(context, t, eye, target, far, lights=True, seamless=False):
     eye_v = glm.vec3(*eye)
     projection = glm.perspective(glm.radians(70.0), 1.0, 1.0, far)
     view = glm.lookAt(eye_v, glm.vec3(*target), glm.vec3(0, 1, 0))
-    config = glh.render_config(all_brushes=[], all_things=things, terrain=t,
+    config = glh.render_config(all_brushes=[], all_things=things, terrain=None,
                                shadows_enabled=False)
     t.MAX_UPDATES_PER_FRAME = 100000              # build everything at once
     t.UPDATE_BUDGET_MS = 1e9
@@ -337,8 +338,8 @@ def render_pair(context, t, eye, target, far, lights=True, seamless=False):
     def frame():
         context.bind()
         gl.glClearColor(0.1, 0.1, 0.15, 1.0)
-        renderer.render_scene(projection, view, eye_v, None, config,
-                              brush_slots=config["all_brush_slots"])
+        terrain_draw.scene(renderer, t, projection, view, eye_v, config,
+                           brush_slots=config["all_brush_slots"])
         gl.glFinish()
         return context.read_pixels()
 
@@ -350,7 +351,7 @@ def render_pair(context, t, eye, target, far, lights=True, seamless=False):
 
     # Reference: identical uniform state, the frozen meshes, the old shader.
     ref = ReferenceDraw()
-    ref.copy_uniforms_from(t.shader_program)
+    ref.copy_uniforms_from(terrain_draw.scene_gl(renderer).shader_program)
     context.bind()
     gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
     gl.glUseProgram(ref.program)
@@ -461,7 +462,7 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     painted (and which layer), and its own height page is bound."""
     import glm
     import OpenGL.GL as gl
-    from engine import terrain as terrain_module
+    from engine.renderer.core import terrain_gl as terrain_gl_module
     from engine.view_distance import ViewDistance
 
     t = map_terrain()
@@ -471,31 +472,34 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     t._load_texture_rgba = lambda _path: source
     renderer = glh.make_renderer()
     renderer.view_distance = ViewDistance(3000.0)
-    renderer.setup_terrain_shader(t)
     t.MAX_UPDATES_PER_FRAME = 100000
     t.UPDATE_BUDGET_MS = 1e9
     eye, target = sculpted_view(t)
     eye_v = glm.vec3(*eye)
     projection = glm.perspective(glm.radians(70.0), 1.0, 1.0, 3000.0)
     view = glm.lookAt(eye_v, glm.vec3(*target), glm.vec3(0, 1, 0))
-    config = glh.render_config(all_brushes=[], all_things=[], terrain=t,
+    config = glh.render_config(all_brushes=[], all_things=[], terrain=None,
                                shadows_enabled=False)
 
     def frame():
         context.bind()
-        renderer.render_scene(projection, view, eye_v, None, config,
-                              brush_slots=config["all_brush_slots"])
+        terrain_draw.scene(renderer, t, projection, view, eye_v, config,
+                           brush_slots=config["all_brush_slots"])
         gl.glFinish()
         return context.read_pixels()
 
     frame()                                       # stream + build
     frame()
     assert t.paint_texture_at(0.0, -600.0, 300.0, "synthetic", feather=0.0)
-    recorder = _RecordingGL(gl, t.uniforms["uPaintEnabled"],
-                            t.uniforms["uPaintLayer"])
-    monkeypatch.setattr(terrain_module, "gl", recorder)
+    held = terrain_draw.scene_gl(renderer)
+    recorder = _RecordingGL(gl, held.uniforms["uPaintEnabled"],
+                            held.uniforms["uPaintLayer"])
+    monkeypatch.setattr(terrain_gl_module, "gl", recorder)
     painted_frame = frame()                       # uploads, then draws
     monkeypatch.undo()
+    # The renderer frees these with itself: keep what the frame drew with.
+    height_pages, page_layers = list(held._height_pages), held._page_layers
+    paint_pages, paint_layers = list(held._paint_pages), held._paint_page_layers
     try:
         renderer.cleanup()
     except Exception:
@@ -508,14 +512,14 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     painted = 0
     for slot, (uniforms, bound) in zip(drawn, recorder.draws):
         coord = (int(t.table.coord[slot, 0]), int(t.table.coord[slot, 1]))
-        assert bound[height_unit] == t._height_pages[slot // t._page_layers], (
+        assert bound[height_unit] == height_pages[slot // page_layers], (
             "chunk %s drew with another texture as its height grid" % (coord,))
         if t._paint_map_versions.get(coord):
             painted += 1
             assert uniforms["enabled"] == 1, coord
-            assert uniforms["layer"] == slot % t._paint_page_layers, coord
+            assert uniforms["layer"] == slot % paint_layers, coord
             assert bound[height_unit + 1] == \
-                t._paint_pages[slot // t._paint_page_layers], coord
+                paint_pages[slot // paint_layers], coord
         else:
             assert uniforms["enabled"] == 0, coord
     assert 0 < painted < len(drawn), "need painted and unpainted chunks"
