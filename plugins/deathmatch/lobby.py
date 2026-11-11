@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout,
     QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from .lan import Discovery, LanClient, LanHost, GAME_PORT, PROTOCOL
-from .network_game import HostGame, ClientGame
+from .network_game import HostGame, ClientGame, check_map, handshake
 
 
 class LanLobby(QDialog):
@@ -90,13 +90,16 @@ class LanLobby(QDialog):
 
     def pump(self):
         if self.scan is not None:
+            changed = False
             while True:
                 try:
                     offer = self.scan.results.get_nowait()
                 except queue.Empty:
                     break
                 self.offers[(offer["address"], offer["port"])] = offer
-                self.update_table()
+                changed = True
+            if changed:
+                self.update_table()   # Once per pump, however many offers arrived.
             if self.scan.done.is_set():
                 if not self.pending:
                     self.status.setText(f"Found {len(self.offers)} LAN game(s)." if self.offers else
@@ -104,7 +107,9 @@ class LanLobby(QDialog):
                 self.scan = None
         if self.pending is not None:
             connection = self.pending
-            for packet in list(connection.drain()):
+            # Lazily: whatever follows the welcome (a disconnect, say) stays
+            # queued for the game that takes the connection over.
+            for packet in connection.drain():
                 if packet.get("type") == "welcome":
                     self.start_client(connection, packet)
                     break
@@ -168,6 +173,7 @@ class LanLobby(QDialog):
             capture_limit=self.capture_limit.value(), player_team="blue" if self.team.currentText() == "blue" else "red")
         transport = None
         try:
+            check_map(data)
             transport = LanHost(self.game_name.text().strip() or "Fio LAN Arena", mode)
             if not self.window._load_level(data):
                 raise ValueError("Map could not be loaded")
@@ -192,6 +198,7 @@ class LanLobby(QDialog):
         try:
             if packet.get("protocol") != PROTOCOL or not isinstance(packet.get("map"), dict):
                 raise ValueError("Incompatible arena handshake")
+            handshake(packet)
             data = packet["map"]
             self.window.state.validate_level_data(data)
             if not self.window.check_unsaved_changes():

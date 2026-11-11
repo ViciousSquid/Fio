@@ -181,7 +181,9 @@ class Lobby:
         if self.pending is None:
             return None
         connection = self.pending
-        for packet in list(connection.drain()):
+        # Lazily: whatever follows the welcome (a disconnect, say) stays
+        # queued for the game that takes the connection over.
+        for packet in connection.drain():
             if packet.get('type') == 'welcome':
                 self.pending = None
                 return connection, packet
@@ -197,6 +199,8 @@ class Lobby:
         """The host map from a welcome, or raise ValueError."""
         if packet.get('protocol') != _lan().PROTOCOL or not isinstance(packet.get('map'), dict):
             raise ValueError('Incompatible arena handshake')
+        from plugins.deathmatch.network_game import handshake
+        handshake(packet)
         data = packet['map']
         if not isinstance(data.get('things'), list) or not isinstance(data.get('brushes', []), list):
             raise ValueError('The host sent an invalid map')
@@ -223,6 +227,8 @@ class Lobby:
         settings.setdefault('properties', {}).update(
             game_type=self.mode, frag_limit=self.frag_limit, capture_limit=self.capture_limit,
             player_team='blue' if self.team == 'blue' else 'red')
+        from plugins.deathmatch.network_game import check_map
+        check_map(data)
         return data
 
     def open_host(self):

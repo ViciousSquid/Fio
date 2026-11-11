@@ -2,8 +2,9 @@
 """Host-authoritative LAN actors and snapshots, pumped on Fio's logic thread."""
 import math
 from engine.glasses import normalize_glasses
+from engine.level_validation import finite_number
 
-from .lan import PROTOCOL
+from .lan import PROTOCOL, encode
 from .entities import DeathmatchBot
 from .supplies import BotSupplies
 
@@ -12,14 +13,166 @@ def finite(value, fallback=0.0):
     try:
         value = float(value)
         return value if math.isfinite(value) else fallback
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):  # float(10 ** 400) overflows.
         return fallback
+
+
+def clean_name(value, fallback="Player", limit=32):
+    """A peer's name as one printable line: it reaches the HUD, feed and console."""
+    if not isinstance(value, str):
+        return fallback
+    return "".join(ch for ch in value[:4 * limit] if ch.isprintable())[:limit].strip() or fallback
+
+
+def handshake(welcome):
+    """``(own actor key, own name)`` from a host's welcome, or raise ValueError."""
+    if not isinstance(welcome, dict) or welcome.get("protocol", PROTOCOL) != PROTOCOL:
+        raise ValueError("Incompatible arena handshake")
+    you = welcome.get("you")
+    if not isinstance(you, str) or not 0 < len(you) <= 128:
+        raise ValueError("Incompatible arena handshake")
+    return you, clean_name(welcome.get("name", "You"), "You")
+
+
+def check_map(map_data):
+    """Raise ValueError unless a welcome carrying *map_data* fits one frame.
+
+    Otherwise every join fails with nothing but a dropped connection, and the
+    host is never told why.
+    """
+    try:
+        encode(dict(type="welcome", protocol=PROTOCOL, you="x" * 128, name="x" * 32, map=map_data))
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"This map is too large or cannot be sent to LAN players ({error}).") from None
+
+
+class _Bad(ValueError):
+    pass
+
+
+def _number(value, low=-1e12, high=1e12):
+    # Comparisons, not float(): a 400-digit JSON integer is a valid int.
+    if not finite_number(value) or not low <= value <= high:
+        raise _Bad("number")
+    return value
+
+
+def _whole(value, low=-10 ** 9, high=10 ** 9):
+    if type(value) is not int or not low <= value <= high:
+        raise _Bad("integer")
+    return value
+
+
+def _flag(value):
+    if type(value) is not bool:
+        raise _Bad("boolean")
+    return value
+
+
+def _text(value, limit=64):
+    if not isinstance(value, str):
+        raise _Bad("text")
+    return "".join(ch for ch in value[:4 * limit] if ch.isprintable())[:limit]
+
+
+def _key(value):
+    if not isinstance(value, str) or not 0 < len(value) <= 128:
+        raise _Bad("key")
+    return value
+
+
+def _vector(value):
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise _Bad("vector")
+    return [float(_number(v, -1e7, 1e7)) for v in value]
+
+
+def _items(value, limit):
+    if not isinstance(value, (list, tuple)) or len(value) > limit:
+        raise _Bad("list")
+    return value
+
+
+TEAM_NAMES = ("red", "blue")
+WEAPON_IDS = ("gun1", "gun2", "custom1", "custom2")
+ROLES = ("bot", "remote", "player")
+
+
+def clean_snapshot(packet):
+    """A host snapshot with every field checked, or ``None`` to ignore it.
+
+    Raises ValueError for anything a real host never sends. The world is only
+    touched with the result, so a refused snapshot leaves it exactly as it was.
+    """
+    try:
+        records = packet.get("actors", [])
+        if not isinstance(records, list) or len(records) > 128:
+            return None
+        actors = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise _Bad("actor")
+            target = record.get("spectator_target")
+            carrying = record.get("carrying")
+            weapon = record.get("weapon")
+            actors.append(dict(
+                key=_key(record["key"]), name=_text(record["name"], 48) or "Player",
+                role=record.get("role") if record.get("role") in ROLES else "bot",
+                team=record.get("team") if record.get("team") in TEAM_NAMES else "",
+                pos=_vector(record["pos"]),
+                angle=_number(record.get("angle", 0.0), -1e6, 1e6),
+                pitch=_number(record.get("pitch", 0.0), -1e6, 1e6),
+                ducked=_flag(record.get("ducked", False)),
+                spectator=_flag(record.get("spectator", False)),
+                spectator_target=_key(target) if target else None,
+                glasses=normalize_glasses(record.get("glasses") if isinstance(record.get("glasses"), str) else None),
+                hp=_number(record["hp"], -1e9, 1e9), alive=_flag(record["alive"]),
+                frags=_whole(record["frags"]), deaths=_whole(record["deaths"]),
+                carrying=carrying if carrying in TEAM_NAMES else None,
+                captures=_whole(record["captures"]),
+                respawn=_number(record["respawn"]), protection=_number(record["protection"]),
+                shoot_until=_number(record.get("shoot_until", 0.0)),
+                weapons=[w for w in _items(record.get("weapons", ()), 16) if w in WEAPON_IDS],
+                ammo=_number(record.get("ammo", 0), -1e9, 1e9), armor=_number(record.get("armor", 0), -1e9, 1e9),
+                weapon=weapon if weapon in WEAPON_IDS else None))
+        flags = []
+        for info in _items(packet.get("flags", ()), 8):
+            if not isinstance(info, dict):
+                raise _Bad("flag")
+            if info.get("team") in TEAM_NAMES:
+                flags.append(dict(team=info["team"], pos=tuple(_vector(info["pos"])),
+                                  carrier=_key(info["carrier"]) if info.get("carrier") else None,
+                                  dropped=_flag(info["dropped"])))
+        pickups = []
+        for entry in _items(packet.get("pickups", ()), 32768):
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2 or type(entry[0]) not in (str, int):
+                raise _Bad("pickup")
+            pickups.append((entry[0], bool(entry[1])))
+        scores = packet["scores"]
+        if not isinstance(scores, dict):
+            raise _Bad("scores")
+        winner = packet.get("winner")
+        return dict(
+            actors=actors, flags=flags, pickups=pickups,
+            clock=_number(packet["clock"], 0, 1e9), finished=_flag(packet["finished"]),
+            reason=_text(packet.get("reason") or "", 80),
+            winner=None if winner is None else _text(winner, 48),
+            scores={team: _whole(scores.get(team, 0)) for team in TEAM_NAMES},
+            limit=_whole(packet["limit"], 0), captures=_whole(packet["captures"], 0),
+            paused=_flag(packet.get("paused", False)),
+            # The host keeps four lines; the HUD draws every line it is given.
+            feed=[_text(text, 120) for text in _items(packet.get("feed", ()), 64)[-4:]])
+    except (KeyError, TypeError, AttributeError, OverflowError) as error:
+        raise ValueError(f"Invalid host snapshot ({type(error).__name__})") from None
 
 
 class HostGame:
     is_client = False
+    #: Seconds a connection may hold a player slot without a valid hello.
+    HELLO_TIMEOUT = 10
 
     def __init__(self, session, transport, map_data, name="Host"):
+        check_map(map_data)
         self.session, self.transport, self.map_data = session, transport, map_data
         self.peers = {}
         self.inputs = {}
@@ -27,22 +180,28 @@ class HostGame:
         session.fighters["player"].name = name
         session.network = self
 
+    def _leave(self, key):
+        s = self.session
+        fighter = self.peers.pop(key, None)
+        self.inputs.pop(key, None)
+        if fighter is not None:
+            s.remove_bot(fighter.key, allow_remote=True)
+            if fighter.entity in s._spawned:
+                s._spawned.remove(fighter.entity)   # One per join, for as long as Play lasts.
+
     def tick(self, dt):
         s = self.session
         for event in self.transport.drain():
             kind, key, *data = event
             if kind == "disconnected":
-                fighter = self.peers.pop(key, None)
-                self.inputs.pop(key, None)
-                if fighter is not None:
-                    s.remove_bot(fighter.key, allow_remote=True)
+                self._leave(key)
             elif kind == "message":
                 packet = data[0]
                 if packet.get("type") == "hello" and key not in self.peers:
                     if packet.get("protocol") != PROTOCOL:
                         self.transport.send(key, dict(type="error", message="Incompatible Fio arena protocol."))
                         continue
-                    name = str(packet.get("name", "Player"))[:32].strip() or "Player"
+                    name = clean_name(packet.get("name", "Player"))
                     existing = {f.name.casefold() for f in s.fighters.values()}
                     base, index = name, 2
                     while name.casefold() in existing:
@@ -87,6 +246,14 @@ class HostGame:
                         weapon=packet.get("weapon") if packet.get("weapon") in ("gun1", "gun2", "custom1", "custom2") else "gun1",
                         shoot=(old.get("shoot", False) or packet.get("shoot") is True),
                         use=packet.get("use") is True, at=s.clock)
+        # The bounded event queue drops events when it is full, so membership
+        # is reconciled with the transport itself, never trusted to events.
+        live = self.transport.connections()
+        for key in [key for key in self.peers if key not in live]:
+            self._leave(key)
+        for key, age in live.items():
+            if key not in self.peers and age > self.HELLO_TIMEOUT:
+                self.transport.drop(key)
         self.elapsed += dt
         if self.elapsed >= 0.1:
             self.elapsed = 0
@@ -160,7 +327,8 @@ class ClientGame:
     is_client = True
 
     def __init__(self, session, transport, welcome):
-        self.session, self.transport, self.you = session, transport, welcome["you"]
+        you, name = handshake(welcome)
+        self.session, self.transport, self.you = session, transport, you
         self.pending_spectate = None
         self.elapsed, self.shot = 0, None
         self.disconnected = False
@@ -169,7 +337,7 @@ class ClientGame:
         for fighter in list(s.fighters.values()):
             if fighter.entity is not None:
                 s.remove_bot(fighter.key)
-        s.fighters["player"].name = welcome.get("name", "You")
+        s.fighters["player"].name = name
         s.network = self
         s._hook(s.logic.prop_runtime, "_collect", lambda original, prop, **kw: False)
 
@@ -211,12 +379,12 @@ class ClientGame:
         from engine.player import Player
         from .runtime import Fighter
         s = self.session
+        packet = clean_snapshot(packet)   # Raises before anything is touched.
+        if packet is None:
+            return
         mapping = lambda key: "player" if key == self.you else "host" if key == "player" else key
         seen, topology = {"player"}, False
-        records = packet.get("actors", [])
-        if not isinstance(records, list) or len(records) > 128:
-            return
-        for record in records:
+        for record in packet["actors"]:
             key = mapping(record["key"])
             seen.add(key)
             if key == 'player' and self.pending_spectate is not None:
@@ -269,13 +437,17 @@ class ClientGame:
             if key not in seen and f.entity is not None:
                 if f.entity in s.logic.editor_state.things:
                     s.logic.editor_state.things.remove(f.entity)
+                if f.entity in s._spawned:
+                    s._spawned.remove(f.entity)
                 s.fighters.pop(key)
                 topology = True
-        for identifier, collected in packet.get("pickups", []):
-            prop = next((p for p in s.logic.prop_runtime.props if p.properties["id"] == identifier), None)
-            if prop is not None:
-                prop.properties["collect_collected"] = collected
-        for info in packet.get("flags", []):
+        if packet["pickups"]:
+            props = {p.properties.get("id"): p for p in s.logic.prop_runtime.props}
+            for identifier, collected in packet["pickups"]:
+                prop = props.get(identifier)
+                if prop is not None:
+                    prop.properties["collect_collected"] = collected
+        for info in packet["flags"]:
             flag = s.game.flags.get(info["team"])
             if flag:
                 flag.pos, flag.dropped = tuple(info["pos"]), info["dropped"]
@@ -284,8 +456,8 @@ class ClientGame:
         s.clock, s.finished, s.reason = packet["clock"], packet["finished"], packet["reason"]
         s.result_winner, s.game.scores = packet["winner"], dict(packet["scores"])
         s.limit, s.game.capture_limit = packet["limit"], packet["captures"]
-        s.feed = [(s.clock + 5, text) for text in packet.get("feed", [])]
-        s.logic.session_runtime.set_world_paused("lan_host", packet.get("paused", False))
+        s.feed = [(s.clock + 5, text) for text in packet["feed"]]
+        s.logic.session_runtime.set_world_paused("lan_host", packet["paused"])
         if topology:
             s.logic.world_runtime.build_entity_caches()
         s.publish()
