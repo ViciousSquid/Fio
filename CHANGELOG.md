@@ -1,5 +1,120 @@
 # Changelog
 
+## 3.1.0.0611 (CANARY)
+
+Canary build of 3.1.0. Maps saved by this build are **map version 5**: 3.0.0
+maps load and are converted, but 3.0.0 does not understand version 5 (it
+would misplace angled brushes). Exported `.fiopak` packages still carry
+version 4 and play in both.
+
+### Breaking changes
+
+- **Map format version 5.** An angled (convex) brush stores its planes in the
+  brush's own frame, centred on its `pos`, with one material record per face
+  on the plane; the per-tag copies and the play-state keys older builds wrote
+  into maps (`original_pos`, `rotation_yaw`) are gone. Older maps are
+  converted when loaded. Package export writes the version 4 layout
+  (`engine.brush_placement.export_world_level`).
+- **Plugin API 1.9.0.** 1.8.0: a brush's `pos` is its authored placement and
+  never moves in play; plugins read a moving brush through
+  `engine.brush_placement.placement(brush)`. 1.9.0: the renderer contract takes
+  published tables only -- the frame's `terrain` is an immutable
+  `TerrainFrame`, and `draw_face_highlight`, `draw_connection_lines` and
+  `draw_collision_visualization` take vertex arrays. Only plugins that move
+  brushes or implement a renderer are affected; see `plugins/API.md`.
+- **Packages and asset archives are read in place.** Tools > Play Game Package
+  no longer extracts a `.fiopak` to a temporary folder. The
+  `assets/*.fiopak` category archives are no longer committed to the
+  repository; assets are loose files there.
+
+### New
+
+- **Deathmatch plugin**: free-for-all, team play and Capture the Flag with
+  bots (difficulty levels, weapon and pickup seeking, a waypoint navigation
+  graph with automatic links, Ctrl-K manual links and mover/door routes), a
+  bot diagnostics window (`botdebug`), spectators with a spectator menu,
+  glasses, and LAN play with lobby discovery and a host-authoritative game.
+  Two arenas ship with it. See `plugins/deathmatch/README.md` and
+  `NAVIGATION_GUIDE.md`.
+- **Android player parity**: Deathmatch (LAN included), Bigworld and Tidy run
+  in the Android player, with their menus and scoreboard.
+- **Cell-group occlusion culling** in Play: hardware occlusion queries over
+  the spatial cells, with a probe budget that pays for itself or parks.
+  `[Renderer] occlusion_culling` turns it off.
+- **Gore**: projected blood decals where a shot actor's blood meets the world,
+  blood on a wounded actor's sprite, and a gore level (Off, Normal, Heavy,
+  Verhoeven) in Settings > Play Modes.
+- **Directional damage indicators** at the edges of the view
+  (`[Display] damage_indicators`, on by default).
+- **Eight-direction monster sprites** with persistent facing.
+- **Terrain paint and stamps**: paint maps at 256 texels a chunk, stamp
+  textures tiled at a fixed world scale, cheaper stamp placing and dragging,
+  and no grass on painted ground. Maps with older paint are converted.
+- **Water**: a Wave Spacing slider, broader waves, and high-quality water
+  reflects the effects above it.
+- **Parked movers sleep**: a mover outside the simulated area costs nothing
+  per tick; its I/O stays live and its state catches up on demand.
+- Editor: **H** hides the selection (entities included) and **Shift+H** shows
+  everything hidden; the scene hierarchy shows tag, hidden and lock
+  indicators left of the name and is 200 px wide on every platform; loading
+  shows a small floating panel; the Player Start is a player-sized model;
+  SysMon is smaller and keeps its frame-time graph when collapsed.
+- `tools/package_e2e/`: an end-to-end check that builds a world in the editor,
+  exports it, and plays the package in a pristine install and in the staged
+  Android runtime, comparing the engine's dense tables.
+
+### Engine
+
+- **Brush model, Stage 2**: one placement and bounds resolver
+  (`engine/brush_placement.py`), one material record per face
+  (`engine/brush_faces.py`), the mover table owns runtime transforms, and
+  collision uses a brush's shape in its own frame.
+- **Renderer**: tables all the way to GL. Angled brushes share GPU storage
+  with resident transforms; passes keep what they derive from the tables and
+  re-upload only what changed; the terrain is published as tables and its GL
+  is owned by the renderer (`engine/renderer/core/terrain_gl.py`), with height
+  grids built off the paint thread; models are drawn from resolved draw
+  groups; overlays are fed arrays.
+- `QtGameView` is broken up into the classes it delegates to
+  (`engine/view_audio.py`, `view_components.py`, `view_debug_draw.py`,
+  `view_hud.py`, `view_messages.py`, `view_pause.py`, `view_picking.py`,
+  `view_terrain_edit.py`).
+- Logic ticks are paced to their due time; garbage collection is settled at
+  load and at Play changes rather than during play.
+
+### Performance
+
+- A map's textures are loaded with the map rather than every texture at
+  start-up; FIRE and ORB animations load when a map's effects use them.
+- The editor's 2D views repaint at 10 Hz while a game is played.
+- Movers publish only what moved; the player's movers come from a dense broad
+  phase over the mover table; a stationary scene asks the placement resolver
+  nothing per frame.
+- The terrain heightfield is drawn indexed.
+
+### Fixes
+
+- **Android player builds again.** Its engine adapter no longer applied to
+  the reworked engine, so the Android workflow failed on every push: packaged
+  cutscenes, model collision from a package and terrain (now drawn through
+  the engine's `TerrainGL`) are restored, the water program links under GLSL
+  ES again, and angled brushes are loaded in the engine's local-frame layout
+  instead of displaced by their own position.
+- Console: `help` raised whenever an enabled plugin had registered commands;
+  `showcollision` raised on its first toggle and refused `all`; `bind` stored
+  keys as typed (so `bind f5 ...` never fired), accepted anything as a key,
+  and keys such as `Ctrl+=` or commands containing `%` left `settings.ini`
+  bindings unwritable.
+- Debug > Position (P) raised instead of opening the position window.
+- F1 in Play raised when the main window, not the 3D view, had the keyboard.
+- Play refused for lack of a Player Start switched the side panel to the
+  Debug Console and never switched it back.
+- SysMon asks for GPU memory only where the driver advertises the query.
+- Stopping Play with a brush that is both a mover and a door.
+- Duplicate plugin submenus in the 2D context menu.
+- Deathmatch opponents rendering below the floor.
+- Angled brushes and water unlit on macOS (a uniform at location 0).
+
 ## 3.0.0
 
 3.0.0 is a deliberate clean break from the 2.x line. Compatibility shims for
