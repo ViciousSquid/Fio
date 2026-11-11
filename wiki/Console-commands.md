@@ -110,7 +110,7 @@ A `logic_command` entity's `RunCommand` input calls `ThreadedGameState.queue_con
 | `message2` | | `"text"` | Play only. The same on the second line. |
 | `message3` | | `"text"` | Play only. The same on the third line, drawn in the Rushford font. |
 
-`message`, `message2` and `message3` strip one pair of matching outer quotes, truncate the text to 50 characters, and show it for 7 seconds with a 1-second fade at each end (`QtGameView._draw_queued_view_message`). Each line has its own FIFO queue: a message that arrives while that line is busy is shown after the current one finishes.
+`message`, `message2` and `message3` strip one pair of matching outer quotes, truncate the text to 50 characters, and show it for 7 seconds with a 1-second fade at each end (`engine/view_messages.py: ViewMessages._draw_queued_view_message`, delegated from `QtGameView`). Each line has its own FIFO queue: a message that arrives while that line is busy is shown after the current one finishes.
 
 ## Physics (dynamic bodies)
 

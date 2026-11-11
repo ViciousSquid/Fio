@@ -86,7 +86,7 @@ Other effects:
 
 ## JSON cutscene file
 
-Files live in `<project>/cutscenes/`. `CutsceneRuntime._cutscene_file_path` resolves `cutscene_file` against the played package's root first (`logic.package_root`), then the project root, and accepts it only if the real path is inside that root's `cutscenes/` directory. A file is rejected (logged under the `Cutscene` category as `FAILED: …`) when it is missing, outside `cutscenes/`, not valid JSON, not an object, or has no `camera` list. A successful load logs `LOADED: '<file>'`.
+Files live in `<project>/cutscenes/`. While a game package is being played (`logic.package` is set; see [.fiopak archive](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive)), `CutsceneRuntime._package_cutscene` looks the name up first as an exact member of the package under `cutscenes/` and reads it in place with `package.load_json`; nothing is extracted. Otherwise `CutsceneRuntime._cutscene_file_path` resolves `cutscene_file` against the project root and accepts it only if the real path is inside the project's `cutscenes/` directory. A file is rejected (logged under the `Cutscene` category as `FAILED: …`) when it is missing, outside `cutscenes/`, not valid JSON, not an object, or has no `camera` list. A successful load logs `LOADED: '<file>'`.
 
 ### Top level
 

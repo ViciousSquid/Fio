@@ -10,8 +10,8 @@ It runs in **Play mode, main view only**, changes no pixel, never blocks on the 
 |---|---|
 | GPU half | `engine/renderer/forward/occlusion.py` — `OcclusionMixin` (mixed into `ForwardRenderer`) |
 | GL-free half | `engine/cell_cull.py` — `group_rows_by_cell`, `CellGroupIndex`, `select_probe_groups`, `OcclusionProbeBook`, `ProbeGovernor` |
-| Change journal | `engine/render_table.py` — `RenderTable._occlusion_index`, `RenderTable._occlusion_dirty` |
-| Thread | The GUI thread that owns the GL context (inside `ForwardRenderer.render_scene`). The logic thread only journals changed slots. |
+| Change record | `engine/render_table.py` — `RenderTable.row_changes_since(serial)` / `row_change_serial`: the rows the table refreshed since the renderer last looked |
+| Thread | The GUI thread that owns the GL context (inside `ForwardRenderer.render_scene`). The logic thread only logs the rows it refreshes; the renderer writes nothing on the published table. |
 | Setting | `[Renderer] occlusion_culling` in `settings.ini` (default `True`) |
 | Scope | Built-in `"Forward"` renderer only. It is not part of the `engine.renderer.Renderer` contract; another renderer sees only the `splitscreen_active` frame-input key. |
 
@@ -36,6 +36,8 @@ brush_slots (logic thread's frustum result)
 Hook 1 runs before pass classification, so every brush pass (opaque, glow, water, glass, fog, trigger) receives the same narrowed slot list. Hook 2 runs after the fog volumes, when the frame's depth buffer is complete, and before `render_scene` disables the depth test for the selection overlays.
 
 With the feature off, unavailable or inactive, both hooks return without touching the slots or issuing GL calls (hook 2 still polls and recycles any outstanding queries while the probe pass is ready).
+
+The narrowed slot array hook 1 returns is read-only and is handed back as the **same object** while its inputs stand — the same visible-set array from the distance cull, the same `(table.generation, table.transform_version)` and the same set of culled groups (kept per view in `_occlusion_kept`). The passes and instance streams downstream recognise an unchanged visible set by identity, so a still frame with culling active re-derives nothing.
 
 ---
 
@@ -106,7 +108,7 @@ The table is float64 but the probe's model matrix, the cube vertices and the GPU
 
 ## The cached index: `CellGroupIndex`
 
-Grouping is not redone per frame. Each `RenderTable` owns one lazily built `CellGroupIndex` in `table._occlusion_index`, and a set of changed slots in `table._occlusion_dirty`. Both are `None` until the renderer first uses them, so the editor (where the feature never runs) pays nothing.
+Grouping is not redone per frame. The **renderer** keeps one `CellGroupIndex` per published `RenderTable`, in `OcclusionMixin._occlusion_by_table`: `id(table) -> [weakref(table), table.generation, index, row_change_serial last applied]`. Nothing is stored on the table (`tests/renderer/test_renderer_boundary.py::test_the_renderer_writes_nothing_on_a_published_table`). An index is built the first time its table reaches hook 1 with the feature active, so the editor (where the feature never runs) pays nothing; entries whose table has been collected are dropped when a new index is made.
 
 | Field | Content |
 |---|---|
@@ -124,13 +126,12 @@ There are two render buffers ([double-buffered publication](https://github.com/V
 
 | Event | Code | Effect |
 |---|---|---|
-| First occlusion frame on a table | `occlusion.py: _occlusion_filter_slots_impl` | `CellGroupIndex(table)`; `table._occlusion_dirty = set()`; `renderer._occlusion_index_rebuilds += 1` |
-| Journalled move, hide/show, park/unpark | `RenderTable.refresh_transforms` | slots added to `_occlusion_dirty` (only if it is not `None`) |
-| Journalled semantic change (material, class, shape) | `RenderTable.refresh_rows` | slots added to `_occlusion_dirty` |
+| First occlusion frame on a table, or its `generation` moved (a reconcile or an `adopt`) | `occlusion.py: _occlusion_filter_slots_impl` | a new `CellGroupIndex(table)`; the entry records `table.row_change_serial`; `renderer._occlusion_index_rebuilds += 1` |
+| Journalled move, hide/show, park/unpark | `RenderTable.refresh_transforms` | the slots are logged as one batch (`_note_row_changes`); `row_change_serial` moves |
+| Journalled semantic change (material, class, shape) | `RenderTable.refresh_rows` | as above |
 | Editor drag of the selection | `RenderTable.refresh_edited` -> `refresh_transforms` / `refresh_rows` | as above |
-| Next frame that draws this table | hook 1 | `index.update(table, dirty)`, then `dirty.clear()` |
-| Structural reconcile (rows added/removed/replaced) | `RenderTable._reconcile` | `_occlusion_index = None`, `_occlusion_dirty = None`; rebuilt on next use |
-| Table adopts its peer's columns | `RenderTable.adopt` | same reset |
+| Next frame that draws this table | hook 1 | `changed = table.row_changes_since(serial)`: an empty array does nothing, an array of slots goes to `index.update(table, changed)`, `None` (the log of `ROW_CHANGE_LOG` = 128 batches no longer reaches back) goes to `index.rebuild(table)`; the entry then records the table's current serial |
+| Mover or door moved by the tick | `MoverTable.publish` -> `RenderTable.write_transforms_many` | logged in the **transform** log only (`transforms_since`), not in the row-change log: the index is not updated (see [Conservativeness](#conservativeness)) |
 
 `CellGroupIndex.update(table, dirty)`:
 
@@ -191,7 +192,7 @@ After polling (below), `_occlusion_end_of_frame_impl` issues this frame's probes
 
 Probe state: blend off, stencil test off, face culling off (both faces of the cube are rasterised, so the eye inside or outside the box and whatever cull state a brush pass left do not matter), depth test on with `GL_LESS`, depth writes off, colour writes off. Afterwards the pass unbinds the VAO, restores the colour and depth masks and unbinds the program. Probe draws are **not** counted in `RenderStats.draw_calls`.
 
-The probes are tested against whatever wrote depth this frame: opaque and glow brushes, terrain, opaque models, and each portal aperture (whose depth `_portal_flatten_depth` resets to the aperture plane). Everything `render_scene` draws after it turns depth writes off — fading models, effects, sprites, trigger volumes, water, glass and fog — never hides a cell.
+The probes are tested against whatever wrote depth this frame: opaque and glow brushes, terrain, opaque models, and each portal aperture (whose depth `_portal_flatten_depth` resets to the aperture plane). What `render_scene` draws after it turns depth writes off — fading models, projected decals, sprites, trigger volumes, water, glass and fog — never hides a cell. Effects are the one exception: in a frame that has high-quality water, `_write_effect_depth` writes the texels of each effect that are at least 50 % opaque into the depth buffer, and those can occlude a probe.
 
 ### Polling results (hook 2, start)
 
@@ -261,7 +262,7 @@ On either, the view epoch is incremented, the whole book is retired (`book.retir
 | Cells with fewer than 16 (32 low-power) of the frame's slots | Never probed, so never culled |
 | Cells beyond the governor's budget rank | Never probed, so never culled |
 | Entities: sprites, models, effects, lights, path nodes | No. Entity passes use their own distance and frustum culls. Lights keep lighting. |
-| Terrain | No. Terrain chunks are frustum-culled by `Terrain.update_and_render`. |
+| Terrain | No. Terrain chunks are frustum-culled by `TerrainGL` (`engine/renderer/core/terrain_gl.py`). |
 | Portal virtual scenes, shadow casters | No (see [When it runs](#when-it-runs)) |
 | Anything in the editor | No |
 
@@ -271,7 +272,7 @@ Transparent brushes (water, glass, fog) are *subject to* culling like any eligib
 
 The argument for correctness: a group's padded union box contains every member box; if no fragment of the box passes `GL_LESS` against the frame's depth, no fragment of any member would. The mechanisms that keep the answer valid across frames are the two-probe streak, the two-frame result age, signature invalidation, the view epoch, the 32-unit eye drift check and the 1024-unit near exemption. The failure direction of each is a wasted draw.
 
-**Known limitation — movers and doors.** In Play, movers and doors are positioned every frame by `MoverTable.publish` (`engine/mover_table.py`), which writes `RenderTable.bounds[slot, :3]` directly. It does not go through `refresh_transforms`, so the slots are not added to `_occlusion_dirty` and the `CellGroupIndex` is not updated. An unrotated box mover or door therefore stays in the cell group, union box and signature it had when the index was built (or when it was last journalled), wherever it travels: it is skipped or drawn with its original cell. Doors and short-travel movers stay inside or next to their original box; a mover that travels far from a cell that is itself hidden can be skipped while visible. Spinning movers (`rot` angle != 0 when the index is built) and angled movers are ineligible and unaffected. Setting `occlusion_culling = False` removes the effect.
+**Known limitation — movers and doors.** In Play, movers and doors are positioned by `MoverTable.publish` (`engine/mover_table.py`) through `RenderTable.write_transforms_many`, which logs the rows in the transform log (`transform_version`) but not in the row-change log that the occlusion index reads, so the `CellGroupIndex` is not updated. An unrotated box mover or door therefore stays in the cell group, union box and signature it had when the index was built (or when it was last journalled), wherever it travels: it is skipped or drawn with its original cell. Doors and short-travel movers stay inside or next to their original box; a mover that travels far from a cell that is itself hidden can be skipped while visible. Spinning movers (`rot` angle != 0 when the index is built) and angled movers are ineligible and unaffected. Setting `occlusion_culling = False` removes the effect.
 
 ---
 
@@ -442,7 +443,8 @@ All headless (no GL context); run with `pytest tests/renderer/<file>`.
 | `tests/renderer/test_probe_governor.py` | paying window keeps the budget; the boundary counts as paying; halving; park and re-arm; step back up; unsampled frames do not count; the low-power 4 -> 2 -> park sequence; the CPU-cost guardrail and its strong-savings exemption |
 | `tests/renderer/test_probe_box.py` | `_probe_model_matrix` maps the unit cube's corners onto the full union box; the probe vertex buffer spans both extremes of every axis |
 | `tests/renderer/test_query_target.py` | target selection against fake contexts: conservative when accepted, `GL_ANY_SAMPLES_PASSED` on a 3.3 core context, `GL_SAMPLES_PASSED` as last resort, a missing constant skipped, no target disables the feature, a leftover GL error is drained rather than misread |
-| `tests/renderer/test_render_table.py` | `test_occlusion_index_is_lazy_and_row_updates_are_journalled`, `test_render_table_peer_adoption_invalidates_occlusion_cache` |
+| `tests/renderer/test_render_table.py` | the table carries no occlusion state; `row_changes_since` reports refreshed rows, nothing when current, and `None` after a reconcile |
+| `tests/renderer/test_renderer_boundary.py` | no attribute of a published table is assigned anywhere in `engine/renderer/` |
 | `tests/renderer/test_occlusion_compare.py` | `tools/occlusion_compare.py` compares measured frame times, does not infer benefit from skip counts, rejects mismatched runs |
 | `tests/editor/test_default_layout.py` | **Show whole world** is a checkable View-menu action bound to `[Display] show_whole_world` and disabled during Play |
 

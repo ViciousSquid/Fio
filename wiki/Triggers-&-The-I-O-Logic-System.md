@@ -25,7 +25,7 @@ All four methods edit the same `OutputConnection` records.
    * **Environment & Audio** — Flickering Light, Ambient Soundscape, Trap Corridor, Scripted Reveal, Timed Hazard
    * **Complex Logic** — Arena Battle, Security System, Puzzle Door (Multi-Switch), Gauntlet Sequence, Level Exit Sequence, Relay Chain, Disable on Trigger
 
-   When the Logic Graph window is open the wizard adds wires to its scene and they are written to the map when **Apply** is pressed there; otherwise the wizard writes the connections straight onto the entities.
+   The wizard adds its connections as wires to a Logic Graph scene (`LogicGraphScene.add_connection_by_name`) and they reach the map when **Apply** is pressed in the Logic Graph window; a connection the graph cannot represent (an unnamed entity, a pin the type does not declare) is written straight onto the source entity instead. Run the wizard from the Logic Graph window's **Wizard…** button, or from the Tools menu after the Logic Graph has been opened for this map: started from the Tools menu before that, the wires go to a temporary scene that is never applied, and the Logic Graph window that opens afterwards is rebuilt from the unchanged entities (see *Known limitations*).
 4. **Entity linking** (`Ctrl+K`, `editor/entity_linking.py`): select exactly one source entity, press `Ctrl+K`, drag to a destination in any 2D or 3D view and release (`Esc` or right-click cancels). Not available in Play. Both entities must be unlocked. The link created depends on the pair:
 
    | Source → destination | What is written |
@@ -245,7 +245,7 @@ Input and output names are case-insensitive at runtime. "generic" marks an input
 | `Hide`, `Show`, `ToggleVisibility`, `SetTint`, `ClearTint` | as trigger | |
 | `Enable`, `Disable`, `Kill` | — | generic |
 
-No outputs. Water and fog brushes resolve to the runtime types `water` and `fog`, which register no handlers: they accept the generic inputs only, so `Toggle` does nothing on them even though the editor (which classifies them as `brush`) offers it.
+No outputs. A brush with `is_fog` (set by choosing the *Fog* shader) or `is_water` resolves to the runtime type `fog` / `water`. Neither type is in `IO_REGISTRY` and neither registers handlers, so such a brush accepts the generic inputs only: `Toggle` does nothing on it even though the editor (whose `get_entity_type_for_io` classifies it as `brush`) offers it, and `Hide` / `Show` go through the generic path. The editor's *Water* shader sets `shader: "Water"` but not `is_water`, so an ordinary water brush is dispatched as `brush`.
 
 ### Things
 
@@ -302,13 +302,15 @@ Run from the [Debug console](https://github.com/ViciousSquid/Fio/wiki/Debug-cons
 
 | Command | Effect |
 | :--- | :--- |
-| `ent_fire <entity> <input> [parameter]` (alias `fire`) | Runs an input through `IOManager._execute_input`, with source name `console` |
-| `send <entity> <input> [param]` | Sends an input |
+| `ent_fire <entity> <input> [parameter]` (alias `fire`) | Finds the entity by name and calls `IOManager._execute_input(name, input, parameter, "console", target_id=<its UUID>)` under the logic thread's tick lock: the registered handler or the generic fallback runs exactly as for a connection. Works in the editor and in Play. Only if no `IOManager` is available does it fall back to the entity's own `on_input()` (LevelChanger implements one) |
+| `send <entity> <input> [param]` | The same dispatch, addressed by name only (no UUID) |
 | `toggle <entity>` | `send <entity> Toggle` |
-| `inputs <entity>` / `outputs <entity>` | Lists the declared inputs / outputs of the entity's type |
+| `inputs <entity>` / `outputs <entity>` | Lists the declared input / output names of the entity's type (`get_entity_type_for_io`); generic inputs are not listed |
 | `connections` (alias `list_connections`) | Lists every connection in the scene |
-| `connect <source> <output> <target> <input> [delay] [param]` | Adds a connection |
-| `disconnect <source> [output] [target] [input]` | Removes the source's connections matching the given filters (all of them with none) |
+| `connect <source> <output> <target> <input> [delay] [param…]` | Adds a connection (`fire_once` false) with the target's UUID when the target exists; a missing target only warns. A non-numeric delay is refused. One undo step |
+| `disconnect <source> [output] [target] [input]` | Removes the source's connections matching every filter given (case-insensitive; all of them with none). One undo step |
+
+Console-dispatched inputs have no source and no activator: `current_source()` is `None`, so an unnamed LogicGate signal is filed as `anonymous` and LogicState object-local inputs log an error.
 
 I/O activity is logged to the debug console under the `IO` category (`io_system.io_log`); errors use the `Error` category.
 
@@ -316,6 +318,7 @@ I/O activity is logged to the debug console under the `IO` category (`io_system.
 
 * `LogicRelay.CancelPending` replaces the manager's pending list; when it is itself delivered as a delayed event (inside `IOManager.update`), the update loop finishes over the old list and writes it back, so nothing is cancelled. It works when delivered with zero delay from a trigger, an interaction or the console.
 * A trigger's `Teleport` and `TouchTest` inputs act on the player only, regardless of `trigger_filters`.
+* Tools → Logic Wizard… started while no Logic Graph window exists for the map (`MainWindow.open_logic_wizard`) builds a temporary `LogicGraphScene`, adds the scenario's wires to it and never calls `apply_to_entities()`; the connections are lost. Open the Logic Graph first (`Ctrl+L`) or use its **Wizard…** button.
 
 ## Tests
 

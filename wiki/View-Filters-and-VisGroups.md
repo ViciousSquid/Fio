@@ -18,7 +18,9 @@ They hide objects from the 3D view, the 2D views, picking and connection lines. 
 | Scene hierarchy *Visgroup* submenu | `editor/scene_hierarchy.py`: `_add_visgroup_menu` |
 | 3D publication | `engine/logic_render.py`: `prepare_render_state` |
 | 2D drawing and hit-testing | `editor/view_2d.py` (`_filtered`, `_hidden`, `draw_cordon`) |
-| 3D picking, connection lines, terrain | `engine/qt_game_view.py` |
+| 3D picking | `engine/view_picking.py`: `ViewPicking` (delegated from `QtGameView`) |
+| Connection lines | `engine/view_debug_draw.py`: `ViewDebugDraw._gather_io_connections` |
+| Terrain | `engine/qt_game_view.py` (the frame's terrain is `None` while the `terrain` group is hidden and the view is not in Play) |
 
 ## Using it
 
@@ -81,15 +83,15 @@ An object is filtered out (`ViewFilters.hides(obj)`) when any of these holds:
 
 1. its filter group is hidden;
 2. its id is in a hidden visgroup;
-3. the cordon is on and the object does not reach into it — a brush is tested by its box (`pos ± size / 2`) touching the cordon, an entity by its position being inside it (bounds inclusive).
+3. the cordon is on and the object does not reach into it — a brush is tested by its derived bounds (`engine.brush_placement.world_bounds`: a box's `pos ± size / 2`, an angled brush's planes at its `pos`, a turned brush's turned box) touching the cordon, an entity by its position being inside it (bounds inclusive). The dense path (`hidden_brush_rows`) tests the `RenderTable` bounds turned by each row's rotation (`brush_placement.turned_bounds`).
 
 | Where | Effect | Code |
 |---|---|---|
 | 3D view | Filtered brushes and entities are not published to the renderer: the logic thread drops their rows while building the render state (`hidden_brush_rows`, `hidden_entity_rows`). No renderer has filter code. A filtered light still lights the editor view | `engine/logic_render.py` |
 | Terrain | With the `terrain` group hidden the 3D view passes no terrain to the renderer. The cordon and visgroups do not apply to terrain | `engine/qt_game_view.py` |
 | 2D views | Filtered objects are not drawn and cannot be hit by clicks or the rubber band; path-node links, monster and portal overlays skip them. The cordon is drawn as a dashed orange rectangle labelled "Cordon" | `editor/view_2d.py` |
-| 3D picking | `get_object_at_3d` skips filtered brushes and entities; face picking (`get_brush_face_at_coords`) skips filtered brushes | `engine/qt_game_view.py` |
-| Connection lines | An I/O or path link is drawn only between objects the filters show; the cache is keyed on `ViewFilters.version` | `engine/qt_game_view.py: _gather_io_connections` |
+| 3D picking | `get_object_at_3d` skips filtered brushes and entities; face picking (`get_brush_face_at_coords`) skips filtered brushes | `engine/view_picking.py` |
+| Connection lines | An I/O or path link is drawn only between objects the filters show; the cache is keyed on `ViewFilters.version` | `engine/view_debug_draw.py: _gather_io_connections` |
 | Selection | Filtering does not deselect anything. A filtered object simply cannot be picked in the views; it can still be selected from the scene hierarchy or with *Select Members* |
 | Play | Ignored. `prepare_render_state` filters only when `view_filters.active and not play_mode`, and the terrain is always passed in Play |
 | Saving, export | Unaffected: filtered objects are saved and exported like any other |
@@ -129,6 +131,15 @@ These are map data, not view filters, but they interact with what the views show
 | `lock` | `brush['lock']`, `thing.properties['lock']` | The object cannot be dragged or nudged in the 2D views and is skipped by 3D click-picking. With `[Display] locked_not_selectable_2d` on, locked objects also cannot be selected in the 2D views |
 
 Both are toggled from the scene hierarchy context menu (*Lock* / *Unlock*, *Hide* / *Show*; on a section header *Lock All*, *Unlock All*, *Hide All*, *Show All*) and shown there as an icon before the name (hidden takes precedence over lock). There is no tag system for objects.
+
+`hidden` also has keyboard shortcuts, handled in `MainWindow.keyPressEvent` and mirrored by *Edit → Hide Selected* / *Unhide All*:
+
+| Key | Effect | Code |
+|---|---|---|
+| `H` | Sets `hidden` on every selected brush and entity, then clears the selection. One undo step. Does nothing without a selection | `MainWindow.hide_selected_brush` |
+| `Shift+H` | Clears `hidden` on every brush and entity in the map, whether or not anything is selected. One undo step; does nothing when nothing is hidden | `MainWindow.unhide_all_brushes` |
+
+Tests: `tests/editor/test_hide_shortcuts.py`.
 
 ## View menu entries
 
