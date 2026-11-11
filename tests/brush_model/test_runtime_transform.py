@@ -380,7 +380,7 @@ def test_the_mover_preview_drives_a_runtime_transform(main_window):
 
 def test_the_plugin_accessor_reads_the_table(logic):
     from plugins.api import API_VERSION, placement
-    assert API_VERSION == "1.8.0"
+    assert tuple(int(part) for part in API_VERSION.split(".")) >= (1, 8, 0)
     _tick(logic, 30)
     lift = _named(logic, "lift")
     p = placement(lift)

@@ -81,8 +81,13 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   placement and no longer changes in play; ``original_pos``, ``_rot_angle``
 #:   and ``rotation_yaw`` are no longer written. A plugin that read a mover's
 #:   live position from ``brush['pos']`` reads :func:`placement` instead.
-API_VERSION = "1.8.0"
-API_VERSION_INFO = (1, 8, 0)
+#: * 1.9.0 — the renderer contract takes published tables only. The frame
+#:   input's ``terrain`` is an ``engine.terrain_frame.TerrainFrame`` (never the
+#:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
+#:   ``draw_collision_visualization`` take vertex arrays. Only renderer
+#:   implementations are affected; every other plugin loads unchanged.
+API_VERSION = "1.9.0"
+API_VERSION_INFO = (1, 9, 0)
 
 
 def version_tuple(value: str) -> tuple:
