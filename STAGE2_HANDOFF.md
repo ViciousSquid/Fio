@@ -94,7 +94,12 @@ the precondition; it is still not set up.
 
 ### Tests at handoff
 
-SUITE_RESULT_PLACEHOLDER
+Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `bdf9998`'s
+code: **7,399 passed, 175 skipped, 6 failed** (24 minutes). The six: the
+three `test_portal_fade` cases and the position window (the documented
+environment failures); the player-start focus test (timing-sensitive, as
+before); and the play-cycle memory guard, which fails inside the full run
+and passes on its own (478 KiB of 512) -- run it on its own, as before.
 
 ### Environment notes (this session)
 

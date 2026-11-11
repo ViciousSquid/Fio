@@ -53,7 +53,7 @@ def window(qt_app):
     file_menu.addAction(QAction('&Save', win, shortcut='Ctrl+S'))
 
     edit_menu = bar.addMenu('Edit')
-    edit_menu.addAction(QAction('Hide Brush', win, shortcut='H'))
+    edit_menu.addAction(QAction('Hide Selected', win, shortcut='H'))
 
     select_menu = bar.addMenu('Select')
     select_menu.addAction(QAction('Select Touching', win, shortcut='Ctrl+T'))
@@ -155,7 +155,7 @@ def test_a_real_binding_wins_over_the_declared_description(window):
     matches = [s for s in _all(grouped) if s.keys == 'H']
 
     assert len(matches) == 1
-    assert matches[0].description == 'Hide Brush'
+    assert matches[0].description == 'Hide Selected'
 
 
 def test_nothing_is_listed_twice(window):
@@ -282,7 +282,7 @@ def test_filtering_matches_the_key(window, qt_app):
 def test_filtering_matches_the_description(window, qt_app):
     panel = ShortcutsWindow(window)
 
-    panel.search.setText('hide brush')
+    panel.search.setText('hide selected')
 
     assert [r.text(0) for r in _visible_rows(panel)] == ['H']
 

@@ -61,7 +61,7 @@ DECLARED = (
     ('Edit', 'Shift+Space', 'Clone the selection and place the copy'),
     ('Tools', 'Ctrl+K', 'Drag an arrow from the selected entity to another entity to link them'),
     ('Edit', 'H', 'Hide the selected brush'),
-    ('Edit', 'Shift+H', 'Unhide every brush'),
+    ('Edit', 'Shift+H', 'Unhide everything hidden'),
 
     ('Selection', 'Ctrl+T', 'Select touching'),
     ('Selection', 'Ctrl+I', 'Select inside'),

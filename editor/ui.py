@@ -564,8 +564,8 @@ class Ui_MainWindow(object):
         edit_menu.addAction(MainWindow.paste_action)
 
         edit_menu.addSeparator()
-        edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
-        edit_menu.addAction(QAction('Unhide All Brushes', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
+        edit_menu.addAction(QAction('Hide Selected', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
+        edit_menu.addAction(QAction('Unhide All', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
 
         edit_menu.addSeparator()
         grid_colours_action = QAction('Grid colours…', MainWindow)

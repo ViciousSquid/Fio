@@ -4007,12 +4007,14 @@ class MainWindow(QMainWindow):
             self.set_selected_objects([])
             return
 
-        # H / Shift+H
-        if self.primary_selection() and event.key() == Qt.Key_H:
-            if event.modifiers() == Qt.ShiftModifier:
-                self.unhide_all_brushes()
-            elif isinstance(self.primary_selection(), dict):
-                self.hide_selected_brush()
+        # H hides the selection (brushes and things); Shift+H shows everything
+        # hidden again, whether or not anything is selected.
+        if event.key() == Qt.Key_H and event.modifiers() == Qt.ShiftModifier:
+            self.unhide_all_brushes()
+            return
+        if (event.key() == Qt.Key_H and event.modifiers() == Qt.NoModifier
+                and self.primary_selection()):
+            self.hide_selected_brush()
             return
 
         # Shift+Space: clone the selection and hand it to the cursor to place.
@@ -4059,18 +4061,36 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def hide_selected_brush(self):
-        if isinstance(self.primary_selection(), dict):
-            self.save_state()
-            self.primary_selection()['hidden'] = True
-            touch(self.primary_selection())
-            self.update_all_ui()
+        """Hide every selected object -- brushes and things (H)."""
+        selected = list(self.state.selected_objects) or (
+            [self.primary_selection()] if self.primary_selection() else [])
+        if not selected:
+            return
+        self.save_state()
+        for obj in selected:
+            if isinstance(obj, dict):
+                obj['hidden'] = True
+                touch(obj)
+            else:
+                obj.properties['hidden'] = True
+                touch(obj)
+        # What is hidden cannot be seen selected.
+        self.set_selected_objects([])
+        self.update_all_ui()
 
     def unhide_all_brushes(self):
+        """Show every hidden brush and thing again (Shift+H)."""
+        hidden_brushes = [b for b in self.state.brushes if b.get('hidden')]
+        hidden_things = [t for t in self.state.things if t.properties.get('hidden')]
+        if not hidden_brushes and not hidden_things:
+            return
         self.save_state()
-        for brush in self.state.brushes:
-            if 'hidden' in brush:
-                brush['hidden'] = False
-                touch(brush)
+        for brush in hidden_brushes:
+            brush['hidden'] = False
+            touch(brush)
+        for thing in hidden_things:
+            thing.properties['hidden'] = False
+            touch(thing)
         self.update_all_ui()
 
     def keyReleaseEvent(self, event):
