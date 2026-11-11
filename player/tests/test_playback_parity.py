@@ -212,3 +212,38 @@ def test_real_pickup_activates_weapon_hud_and_muzzle_flash():
         paint(cinematic,{'game_hud':hud},Pictures())
         assert cinematic.getbbox() is None
     finally:world.close()
+
+
+@pytest.mark.parametrize('version', [4, 5])
+def test_an_angled_brush_is_where_it_was_authored(version):
+    """A package holds map version 4, whose angled brushes store world-space
+    planes; the engine keeps them in the brush's own frame. Loading has to
+    convert, as the desktop loader does, or the brush is drawn, culled and
+    collided displaced by its own position."""
+    from engine import brush_placement
+    from engine.brush_geometry import box_to_geometry, clip_brush, get_convex
+    authored = {'id': 'pillar', 'pos': [200.0, 96.0, 250.0], 'size': [96.0, 192.0, 96.0],
+                'textures': {'top': 'wall'}}
+    box_to_geometry(authored)
+    assert clip_brush(authored, [0.7071, 0.0, 0.7071], 0.7071 * 470.0)
+    expected = np.asarray(get_convex(authored).verts)
+    record = brush_placement.world_layout(authored) if version == 4 else {
+        k: v for k, v in authored.items() if not k.startswith('_')}
+    data = level()
+    data['version'] = version
+    data['brushes'].append(record)
+    world = PlayerWorld(data)
+    try:
+        brush = world.brushes[-1]
+        loaded = np.asarray(get_convex(brush).verts)
+        assert sorted(map(tuple, np.round(loaded, 3))) == sorted(map(tuple, np.round(expected, 3)))
+        bounds = brush_placement.world_bounds(brush)
+        assert np.allclose(np.asarray(bounds).reshape(-1)[:3], expected.min(axis=0), atol=1e-3) or \
+            np.allclose(np.asarray(bounds).reshape(-1)[:3], (expected.min(axis=0) + expected.max(axis=0)) / 2, atol=1e-3)
+        # The record handed in is the package's and is not modified.
+        assert data['brushes'][-1] is record and 'geometry' in record
+        vertices = np.concatenate(list(build_textured_batches({'brushes': [brush]}).values())).reshape(-1, 8)
+        assert np.all(vertices[:, :3] >= expected.min(axis=0) - 1e-3)
+        assert np.all(vertices[:, :3] <= expected.max(axis=0) + 1e-3)
+    finally:
+        world.close()

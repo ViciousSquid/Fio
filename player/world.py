@@ -66,8 +66,32 @@ class PlayerWorld:
                 plugin.config.update(config)
         if manager:
             manager.auto_enable_for_map(data)
+        # A brush record is brought to the engine's in-memory layout as the
+        # desktop does when it loads a map (EditorState._deserialize_brushes):
+        # play state dropped, an angled face's material on its plane only, and
+        # the planes in the brush's own frame. A package holds map version 4,
+        # whose planes are in world space (brush_placement.export_world_level);
+        # left as they were the engine reads them as local and every angled
+        # brush is drawn, culled and collided displaced by its own position.
+        from engine import brush_faces, brush_placement
+        try:
+            version = int(data.get('version') or 0)
+        except (TypeError, ValueError):
+            version = 0
+        legacy_faces = version < brush_faces.CANONICAL_MAP_VERSION
+        world_planes = version < brush_placement.MAP_VERSION
         for record in data.get('brushes', []):
             brush = dict(record)
+            brush_placement.drop_play_state(brush)
+            if 'geometry' in brush:
+                if legacy_faces:
+                    brush_faces.migrate_legacy(brush)
+                else:
+                    brush_faces.drop_tag_copies(brush)
+                if world_planes:
+                    brush_placement.localise_legacy(brush)
+                else:
+                    brush_placement.normalise_loaded(brush)
             brush['_io_connections'] = [OutputConnection.from_dict(c) for c in brush.get('io_connections', [])]
             self.state.brushes.append(brush)
         for record in data.get('things', []):
