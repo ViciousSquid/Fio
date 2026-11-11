@@ -263,7 +263,7 @@ Rows 11–24 inside a portal's virtual scene are issued by `PortalsMixin._draw_p
 | Entity frustum | `VisibilityMixin._cull_entity_rows` | GUI | sprites, models | bounding sphere against this view's planes: half the billboard diagonal, or mesh radius × longest model axis |
 | Portal view | `_portal_numeric_scene_inputs` | GUI | each portal's virtual scene | starts from `all_brush_slots` and every entity row; bounding-sphere test against the oblique virtual frustum |
 | Shadow casters | `_shadow_caster_slots`, `_casters_in_reach` | GUI | each shadow light | `CLASS_SHADOW_CASTER` rows of `all_brush_slots` whose bounding sphere the light reaches |
-| Terrain | `Terrain.update_and_render` | GUI | terrain chunks | the main view's frustum planes |
+| Terrain | `Terrain.advance` (host, before the frame) then `TerrainGL.render` | GUI | terrain chunks | the main view's frustum planes |
 | Far plane | projection | GPU | fragments | the view distance, per fragment |
 | Back faces | `_portal_begin_cull` | GPU | opaque brushes | see [section 8](#8-brushes) |
 
@@ -511,7 +511,7 @@ Volumetric fog brushes are unrelated to the distance fog of section 12.
 
 ## 14. Terrain
 
-`render_terrain` hands the frame to `engine.terrain.Terrain.update_and_render(projection, view, camera_pos, frustum_planes, lights, active_lights_count, shadow_cubemaps, shadow_index_map, shadow_unit_base, env_uniforms)`. The terrain owns its buffers and draw code; the renderer supplies:
+`render_terrain` draws the published terrain: the frame input's `terrain` is an immutable `engine.terrain_frame.TerrainFrame` (the host called `Terrain.advance` and `Terrain.publish` before the frame), never the `Terrain` object. The renderer keeps a `engine.renderer.core.terrain_gl.TerrainGL` under the frame's key and calls `TerrainGL.render(frame, projection, view, camera_pos, frustum_planes, active_lights_count, shadow_cubemaps, shadow_unit_base, env_uniforms)`. `TerrainGL` owns the buffers and draw code; the renderer supplies:
 
 - its `terrain` program and uniform table (`setup_terrain_shader`), rebound whenever `terrain.shader_program` is not this renderer's program (new terrain, or a renderer swap);
 - the four ground textures (`grass.jpg`, `rock.jpg`, `sand.jpg`, `snow.jpg` from `assets/textures/terrain`);

@@ -59,7 +59,8 @@ DEPENDENCY_LIGHT_MODULES = [
     # The player
     "player.render.glmath",
     "player.render.scene",
-    "player.fiopak",
+    "engine.fiopak",
+    "engine.package_assets",
 ]
 
 BLOCKED = ("PyQt5", "OpenGL")

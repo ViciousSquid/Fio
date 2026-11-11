@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from player.fiopak import FioPackage, PackageError
+from engine.fiopak import FioPackage, PackageError
 
 
 def _bytes(entries):

@@ -39,6 +39,7 @@ jobs:
         run: |
           python -m nuitka `
             --standalone `
+            --nofollow-import-to=player `
             --output-filename=Fio `
             --assume-yes-for-downloads `
             --plugin-enable=pyqt5 `

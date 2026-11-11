@@ -66,6 +66,6 @@ Team modes use red and blue; `auto` balances. Friendly fire is off by default. I
 | Liveness | A frame must complete within 10 s; an idle side sends `{"type": "ping"}` every 2.5 s, which the transport swallows. A connection that has not said `hello` within 10 s is dropped. A guest sending more than 200 messages a second is dropped. |
 | Validation | Every guest message and every snapshot is checked whole before it touches the match; names become one printable line; a map whose `welcome` would exceed 1 MiB is refused at hosting. |
 
-Only JSON crosses the wire: peers need the same assets and plugins installed. The host's map is map *logic*, though, like any map file -- it can contain `logic_command` entities and level changers -- so join only hosts you would accept a map from.
+Only JSON crosses the wire: peers need the same assets and plugins installed. By design the host's map behaves on a guest exactly as that map file would if opened locally: its `logic_command` entities run console commands (within the map-logic gate: `bind`, `r_renderer`, `vsync`, `r_vsync`, `quit` and `botdebug` are user-only) and its level changers work.
 
 Tests: `plugins/deathmatch/tests/` (including `test_lan_hardening.py`).

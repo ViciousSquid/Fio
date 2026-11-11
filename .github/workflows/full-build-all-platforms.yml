@@ -54,6 +54,7 @@ jobs:
         run: |
           python -m nuitka `
             --standalone `
+            --nofollow-import-to=player `
             --output-filename=Fio `
             --assume-yes-for-downloads `
             --plugin-enable=pyqt5 `
@@ -259,6 +260,7 @@ jobs:
           call "%VCVARS%" arm64
           python -m nuitka ^
             --standalone ^
+            --nofollow-import-to=player ^
             --output-filename=Fio ^
             --assume-yes-for-downloads ^
             --plugin-enable=pyqt5 ^
@@ -404,6 +406,7 @@ jobs:
         run: |
           python -m nuitka \
             --standalone \
+            --nofollow-import-to=player \
             --macos-create-app-bundle \
             --macos-app-name=Fio \
             --macos-app-version="$FIO_VERSION" \
@@ -612,6 +615,7 @@ jobs:
         run: |
           python -m nuitka \
             --standalone \
+            --nofollow-import-to=player \
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \

@@ -148,7 +148,12 @@ if __name__ == "__main__":
     # desktop-only dependencies are never touched on mobile.
     # ---------------------------------------------------------
     if os.environ.get("ANDROID_ARGUMENT") or os.environ.get("FIO_PLAYER"):
-        from player.main import main as _player_main
+        # Desktop builds leave the player out (Nuitka: --nofollow-import-to=
+        # player); it is run from the staged Android runtime, not from here.
+        try:
+            from player.main import main as _player_main
+        except ImportError as error:
+            raise SystemExit(f"The Fio Player is not part of this build: {error}")
         raise SystemExit(_player_main([]))
 
     from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QProgressBar

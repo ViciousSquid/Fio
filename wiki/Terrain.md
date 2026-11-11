@@ -120,7 +120,7 @@ Each call marks the chunks overlapping the brush dirty (`TerrainTable.mark_dirty
 
 ### Texture paint and stamps
 
-Paint is baked into the terrain: each painted chunk owns one RGBA8 map of `TERRAIN_PAINT_RESOLUTION`² = 128×128 texels (`texture_paint_maps[(cx, cz)]`), blended over the ground colour by its alpha in `terrain.frag`.
+Paint is baked into the terrain: each painted chunk owns one RGBA8 map of `TERRAIN_PAINT_RESOLUTION`² = 256×256 texels (`texture_paint_maps[(cx, cz)]`), blended over the ground colour by its alpha in `terrain.frag`.
 
 - A **stamp** is a record `{id, texture, x, z, radius, angle, feather, opacity}` (`Terrain.make_paint_stamp`; `feather` and `opacity` are clamped to 0..1, `id` defaults to a new `uuid4().hex`, the texture path uses forward slashes). The stamp is an ellipse-in-square footprint of the source image, centred at `(x, z)`, rotated by `angle` radians, with a smoothstep edge over `radius * feather` world units.
 - `paint_stamps` keeps the records so the editor can select and move them; their baked result is in `texture_paint_maps`, which is what renders and what the game loads.
@@ -239,8 +239,8 @@ The terrain is the top-level `terrain_data` object of the map file (see [Map for
 | `sculpt_offsets` | `[[gx, gz, offset], …]` | none | Written only when non-empty |
 | `sculpt_grid_resolution` | float | 4.0 | |
 | `csg_subtractions` | `[[min_x, min_y, min_z, max_x, max_y, max_z], …]` | none | Entries that are not six numbers or have no volume are dropped on load |
-| `texture_paint_resolution` | int | — | Always 128 when written; not read back |
-| `texture_paint` | `[{"coord": [cx, cz], "data": "<base64 of zlib of 128·128·4 RGBA bytes>"}, …]` | none | Baked paint; chunks with no alpha are not written; an entry that does not decode to exactly 65536 bytes is skipped |
+| `texture_paint_resolution` | int | 128 when absent | Written as `TERRAIN_PAINT_RESOLUTION` (256). Read back on load: paint saved at another resolution is converted (stamps re-baked from their records, free paint resampled) |
+| `texture_paint` | `[{"coord": [cx, cz], "data": "<base64 of zlib of resolution·resolution·4 RGBA bytes>"}, …]` | none | Baked paint; chunks with no alpha are not written; an entry that does not decode to exactly 65536 bytes is skipped |
 | `paint_stamps` | list of stamp records | none | |
 | `texture_paint_base` | same shape as `texture_paint` | — | Written only when there are stamp records; without records the whole of `texture_paint` becomes the base layer |
 | `texture_stamps` | legacy list of `{texture, bounds: [min_x, min_z, max_x, max_z], angle, feather, opacity}` | — | Read-only migration: baked into the paint once on load, never written |
@@ -344,11 +344,11 @@ Mouse and keys in the 3D view while the brush is active (`engine/qt_game_view.py
 
 `MAX_GRID` = 49 (LOD 0 has 48 quads per side), `STORED_GRID` = 51. `slot_of_coord` maps `(cx, cz)` to a slot. `generation` is bumped when the columns are reallocated. Rows whose frozen `world`/`size` no longer match the terrain's `chunk_size`/offset are released each frame by `prune_stale_geometry` and re-created.
 
-Threading: the table has one writer (the thread that builds chunks, i.e. the render thread inside `Terrain.update_and_render`). `TerrainTable.height_at` is safe from any thread: it reads `seq` and `generation` before and after and returns `None` if either changed, if the row is being written, or if the chunk is not built.
+Threading: the table has one writer (the thread that builds chunks, i.e. the GUI thread in `Terrain.advance`; with `Terrain.BACKGROUND_BUILDS` (on in `main.py`) a `TerrainBuilder` thread computes a height grid from numbers captured when it was requested and the GUI thread still writes the table). `TerrainTable.height_at` is safe from any thread: it reads `seq` and `generation` before and after and returns `None` if either changed, if the row is being written, or if the chunk is not built.
 
 ### Residency, LOD and culling
 
-All of this runs inside `Terrain.update_and_render` each frame:
+Since M5 the terrain holds no GL. Each frame the host calls `Terrain.advance(camera_pos, frustum_planes)` -- streaming, pruning, LOD hysteresis and chunk building, before the frame and without GL -- then `Terrain.publish()`, which returns an immutable `TerrainFrame` (`engine/terrain_frame.py`: the dense `TerrainTable`, per-slot grass and block-mesh products, the paint maps, the appearance as numbers). The renderer draws that frame with `engine/renderer/core/terrain_gl.py: TerrainGL`, which owns the programs, height and paint pages, index arrays and grass and block buffers:
 
 1. **Residency.** Without streaming, `TerrainTable.ensure_bounds` makes every chunk inside the bounds resident. With `Terrain.streaming` on, `TerrainTable.stream` keeps every in-bounds chunk whose nearest point is within `stream_radius` (default 4096) of the camera in XZ and evicts chunks beyond `stream_radius + stream_evict_padding` (512).
 2. **Culling.** `TerrainTable.visible` tests each chunk's box (measured height span ± 10 for built chunks; unbounded height for unbuilt ones) against the frustum planes the renderer passes in. Those are the same planes the entity passes cull against and their far plane is the view distance. Culling decides only what is drawn; mesh upkeep runs for every resident chunk.
@@ -371,10 +371,10 @@ In the editor, a camera-streamed (Big World) map turns streaming on at load with
 
 `ForwardRenderer` draws the terrain in `render_terrain` (`engine/renderer/forward/passes.py`) when `config['terrain']` is a `Terrain` with `enabled` set. The 3D view passes `None` there when the `terrain` view-filter class is hidden outside Play.
 
-1. The renderer binds its own `terrain` program to the terrain (`setup_terrain_shader`) and loads the four ground textures. `Terrain.release_renderer_resources()` drops those names before a renderer is retired.
+1. The renderer binds its own `terrain` program to the terrain (`setup_terrain_shader`) and loads the four ground textures. The renderer keeps one `TerrainGL` under the frame's key and frees it when the key changes or the renderer is retired.
 2. Lights: the terrain shader takes at most `shaders.MAX_LIGHTS_TERRAIN` = 8 lights; when more are in range the 8 nearest the camera are used. Up to `MAX_SHADOW_LIGHTS` = 8 shadow cube maps are bound (a 1×1 placeholder fills unused units). Fog and ambient values are handed over as `env_uniforms`.
-3. `Terrain.update_and_render` draws every visible built chunk.
-   - **Heightfield** (all modes except `blocks`): there is no vertex buffer. Each chunk's height grid is one layer of an `R32F` `GL_TEXTURE_2D_ARRAY` page (up to 512 layers per page, 51×51 texels), and the chunk is drawn with `glDrawArrays(GL_TRIANGLES, 0, 6 * res * res)` on an empty VAO; `terrain.vert` rebuilds position, flat normal, colour, UV and smooth normal from the grid. Paint maps live in `RGBA8` array pages of 128×128.
+3. `TerrainGL.render(frame, ...)` draws every visible built chunk.
+   - **Heightfield** (all modes except `blocks`): there is no vertex buffer. Each chunk's height grid is one layer of an `R32F` `GL_TEXTURE_2D_ARRAY` page (up to 512 layers per page, 51×51 texels), and the chunk is drawn indexed (`terrain_indexed.vert` with flat face outputs, one shared index array per resolution); `terrain.vert` rebuilds position, flat normal, colour, UV and smooth normal from the grid. Paint maps live in `RGBA8` array pages of 128×128.
    - **Blocks**: each chunk has a 14-float-per-vertex mesh (`terrain_style.build_block_mesh`: position 3, normal 3, colour 3, uv 2, smooth normal 3) drawn with `terrain_mesh.vert`.
 4. Chunk builds for this frame, then the grass pass.
 

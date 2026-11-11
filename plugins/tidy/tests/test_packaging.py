@@ -50,7 +50,7 @@ def test_required_plugin_resolution():
 
 def test_plugin_payload_is_rejected_by_fiopak():
     print("[2] .fiopak rejects executable plugin payloads")
-    from player.fiopak import FioPackage, PackageError
+    from engine.fiopak import FioPackage, PackageError
 
     data = _pak_with({
         "metadata.json": json.dumps({"title": "Tidy Demo"}).encode(),
@@ -68,7 +68,7 @@ def test_plugin_payload_is_rejected_by_fiopak():
 
 def test_plugin_dependency_metadata_is_allowed():
     print("[3] plugin dependency names may be recorded without code")
-    from player.fiopak import FioPackage
+    from engine.fiopak import FioPackage
 
     data = _pak_with({
         "metadata.json": json.dumps({

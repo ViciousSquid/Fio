@@ -164,7 +164,7 @@ def test_a_package_that_inflates_past_the_budget_is_refused(
         tmp_path, main_window, monkeypatch):
     """A tiny archive of highly compressible data is refused before anything
     is read from it: the session keeps to the player's asset budget."""
-    import player.fiopak as fiopak
+    import engine.fiopak as fiopak
 
     # Shrink the budget so the test archive stays small on disk.
     monkeypatch.setattr(fiopak, "MAX_TOTAL_ASSET_BYTES", 1024 * 1024)

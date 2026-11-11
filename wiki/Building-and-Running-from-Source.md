@@ -74,6 +74,6 @@ The old `[Renderer] arm_mode` key is not read; use `lowpower_mode`.
 
 ## Release builds
 
-`.github/workflows/build.yml` builds Windows, Linux and macOS with **Nuitka 4.2.2** in `--standalone` mode (`--output-filename=Fio`), including the `engine`, `editor`, `plugins` and `PIL` packages and the `assets`, `maps`, `cutscenes` and `tools` folders, `settings.ini` and `editor/version.txt`. `build-windows-arm64.yml` builds Windows ARM64. `macos_app.py` and `.github/macos-dmg/` make the macOS bundle and disk image. The Android APK is built by `android-build.yml` with Buildozer.
+`.github/workflows/build.yml` builds Windows, Linux and macOS with **Nuitka 4.2.2** in `--standalone` mode (`--output-filename=Fio`), including the `engine`, `editor`, `plugins` and `PIL` packages and the `assets`, `maps`, `cutscenes` and `tools` folders, `settings.ini` and `editor/version.txt`. The standalone player is deliberately left out of desktop builds (`--nofollow-import-to=player`); the package reader and export asset collector the editor needs are in the engine (`engine/fiopak.py`, `engine/package_assets.py`). `build-windows-arm64.yml` builds Windows ARM64. `macos_app.py` and `.github/macos-dmg/` make the macOS bundle and disk image. The Android APK is built by `android-build.yml` with Buildozer.
 
 `clean.py` removes Python caches.

@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from editor.package_exporter import PackageExporter
-from player.fiopak import FioPackage
+from engine.fiopak import FioPackage
 
 
 def _write_json(path, data):
@@ -310,7 +310,7 @@ def test_archived_model_companions_and_new_asset_properties_are_self_contained(p
     # Remove the project completely: every required byte must be in the ZIP.
     import shutil
     shutil.rmtree(project)
-    from player.runtime.fiopak import FioPackage as AndroidPackage
+    from engine.fiopak import FioPackage as AndroidPackage
     with AndroidPackage.open(out) as world:
         assert world.read_asset('assets/models/demo/mesh.obj').startswith(b'mtllib')
         assert world.read_asset('assets/models/demo/mesh.mtl').startswith(b'newmtl')

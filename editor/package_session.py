@@ -8,7 +8,7 @@ the project's own. The archive is opened per read and never held, so the
 file stays free (and is never written: it is an input, not an output).
 
 A package is checked when the session opens, before anything changes: the
-player's own reader (``player.fiopak.FioPackage``: no bundled plugin code, a
+player's own reader (``engine.fiopak.FioPackage``: no bundled plugin code, a
 manifest that names a start map), member names that cannot climb out of the
 package, and the player's size budget, per entry and in total -- the limits
 extraction used to enforce on the bytes it would write.
@@ -29,7 +29,7 @@ class PackageSession:
 
     def __init__(self, path):
         import os
-        import player.fiopak as fiopak
+        import engine.fiopak as fiopak
         self.path = os.path.abspath(path)
         with fiopak.FioPackage.open(self.path) as package:
             self.start_map = package.start_map_path()
@@ -65,7 +65,7 @@ class PackageSession:
 
     def load_json(self, member):
         """*member* parsed as JSON (a map or a cutscene)."""
-        import player.fiopak as fiopak
+        import engine.fiopak as fiopak
         with zipfile.ZipFile(self.path) as archive:
             info = archive.getinfo(member)
             if info.file_size > fiopak.MAX_DOCUMENT_BYTES:

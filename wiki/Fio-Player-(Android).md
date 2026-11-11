@@ -20,7 +20,7 @@ The player runs Fio's own simulation: `player/world.py: PlayerWorld` hosts a `Lo
 
 ## Loading a world
 
-- `player/runtime/fiopak.py: FioPackage` reads the archive in place. Limits: 128 MiB an asset entry, 512 MiB of cached assets, 64 MiB a map or JSON document; an import is copied to private storage with a 1 GiB limit. A package that contains plugin code is refused: plugins must be installed with the APK.
+- `engine/fiopak.py: FioPackage` reads the archive in place (the reader is shared with the desktop editor; `player.runtime.fiopak` is an alias of it). Limits: 128 MiB an asset entry, 512 MiB of cached assets, 64 MiB a map or JSON document; an import is copied to private storage with a 1 GiB limit. A package that contains plugin code is refused: plugins must be installed with the APK.
 - Assets resolve exactly, with `assets/` added or removed, in the conventional sub-folders, then by basename. `member()` and `load_json()` answer the engine's own package calls (packaged cutscenes).
 - Each brush record is brought to the engine's in-memory layout on load, as the desktop does: play state dropped, an angled face's material on its plane, and planes moved into the brush's own frame (packages carry map version 4, with world-space planes).
 - Level changes resolve inside the package (`resolve_map`), carrying the loadout.

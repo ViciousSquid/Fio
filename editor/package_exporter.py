@@ -114,7 +114,7 @@ class PackageExporter:
                     if cutscene is not None:
                         referenced_assets |= self._cutscene_asset_references(cutscene)
 
-            from player.runtime.package_assets import ProjectAssets, companion_assets
+            from engine.package_assets import ProjectAssets, companion_assets
             sources = asset_sources = ProjectAssets(root)
             asset_entries = {}
             # Built-in gameplay sprites/audio are implicit references (monster
@@ -217,7 +217,7 @@ class PackageExporter:
 
     def _asset_references(self, data: dict) -> Set[str]:
         """Every asset name a map's brushes and things refer to."""
-        from player.runtime.package_assets import map_assets
+        from engine.package_assets import map_assets
         return map_assets(data)
 
     def _cutscene_references(self, data: dict) -> Set[str]:
