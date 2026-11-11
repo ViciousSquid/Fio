@@ -27,6 +27,9 @@ version 4 and play in both.
 
 ### New
 
+- **Python 3.13 is supported again.** Fio runs on CPython 3.13 or newer with
+  the GIL (3.0.0 required 3.14); releases are still built with 3.14.
+  Free-threaded builds are refused as before.
 - **Deathmatch plugin**: free-for-all, team play and Capture the Flag with
   bots (difficulty levels, weapon and pickup seeking, a waypoint navigation
   graph with automatic links, Ctrl-K manual links and mover/door routes), a

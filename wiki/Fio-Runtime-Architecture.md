@@ -6,7 +6,7 @@ Fio edits and plays one world. The editor's `EditorState` (`editor/editor_state.
 
 ## Process requirements
 
-`python_runtime.py: require_supported_python()` is called first by `main.py` and aborts unless the interpreter is CPython 3.14 or newer (`MINIMUM_PYTHON = (3, 14)`) with the GIL enabled. A free-threaded build (`Py_GIL_DISABLED`, or `sys._is_gil_enabled()` false) is refused: several lock-free fast paths in the runtime rely on single dict/deque operations being atomic under the GIL.
+`python_runtime.py: require_supported_python()` is called first by `main.py` and aborts unless the interpreter is CPython 3.13 or newer (`MINIMUM_PYTHON = (3, 14)`) with the GIL enabled. A free-threaded build (`Py_GIL_DISABLED`, or `sys._is_gil_enabled()` false) is refused: several lock-free fast paths in the runtime rely on single dict/deque operations being atomic under the GIL.
 
 `main.py` then sets, before anything else is imported:
 

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- **CPython 3.14 or newer, with the GIL.** `python_runtime.require_supported_python()` stops start-up on anything else, and refuses free-threaded builds (3.14t) explicitly.
+- **CPython 3.13 or newer, with the GIL.** `python_runtime.require_supported_python()` stops start-up on anything older, and refuses free-threaded builds (3.13t, 3.14t) explicitly. Releases and most CI jobs use 3.14; the fast test tier also runs on 3.13.
 - **OpenGL 3.3 core** (the surface format `main.py` requests), 24-bit depth, 8-bit stencil.
 - The pinned dependencies in `requirements.txt`:
 

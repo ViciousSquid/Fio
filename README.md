@@ -242,7 +242,7 @@ The same engine architecture is also being developed toward a dedicated player f
 
 ## 🚀 Quickstart
 
-Fio requires CPython 3.14 (GIL-enabled). Free-threaded Python is not supported.
+Fio requires CPython 3.13 or newer (GIL-enabled); releases are built with 3.14. Free-threaded Python is not supported.
 
 ```bash
 git clone https://github.com/ViciousSquid/Fio.git

@@ -9,7 +9,7 @@ pip install -r requirements.txt pytest
 python -m pytest            # everything except benchmarks
 ```
 
-Run from the repository root. Python must be CPython 3.14 or newer with the GIL enabled (see [Building and Running from Source](https://github.com/ViciousSquid/Fio/wiki/Building-and-Running-from-Source)).
+Run from the repository root. Python must be CPython 3.13 or newer with the GIL enabled (see [Building and Running from Source](https://github.com/ViciousSquid/Fio/wiki/Building-and-Running-from-Source)).
 
 ## Tiers and markers
 
@@ -263,7 +263,7 @@ The JSON maps each path name to its measurements:
 
 ## GitHub workflows
 
-All in `.github/workflows/`. Every job that runs Python uses 3.14 except the Android APK jobs (3.12 for the build tooling).
+All in `.github/workflows/`. Every job that runs Python uses 3.14 (the no-GPU fast tier also runs on 3.13) except the Android APK jobs (3.12 for the build tooling).
 
 | Workflow | Triggers | What it does | Artifacts |
 |---|---|---|---|
