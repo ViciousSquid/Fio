@@ -31,7 +31,9 @@ def test_convex_water_preserves_clipped_shape_and_ignores_trigger_material():
     from engine.brush_geometry import box_to_geometry, get_convex, make_plane
     brush = dict(pos=[20,5,40],size=[100,20,80],textures={'top':'trigger.jpg'})
     box_to_geometry(brush)
-    brush['geometry']['planes'].append(make_plane([1,0,1],[20,0,40],texture='trigger.jpg'))
+    # A convex brush's planes are in its own frame, centred on pos: this is
+    # the world plane x + z = 60, which passes through the brush's centre.
+    brush['geometry']['planes'].append(make_plane([1,0,1],[0,0,0],texture='trigger.jpg'))
     convex = get_convex(brush)
     vertices = water_mesh(brush)
     points = vertices[:,:3]*brush['size']+brush['pos']

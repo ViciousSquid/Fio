@@ -206,3 +206,58 @@ class TestPackageDocumentLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnginePackageCalls(unittest.TestCase):
+    """``member`` and ``load_json``: what the shared engine calls on a played
+    package (a packaged cutscene, engine/cutscene_runtime.py). The desktop's
+    PackageSession answers the same two, so the engine needs no adapter."""
+
+    def _package(self, entries):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("metadata.json", json.dumps({"map_path": "maps/a.json"}))
+            zf.writestr("maps/a.json", json.dumps({"version": 3, "brushes": [], "things": []}))
+            for name, text in entries.items():
+                zf.writestr(name, text)
+        return FioPackage.from_bytes(buf.getvalue())
+
+    def test_member_names_an_entry_exactly_or_nothing(self):
+        with self._package({"cutscenes/intro.json": "{}"}) as package:
+            self.assertEqual(package.member("cutscenes/intro.json"), "cutscenes/intro.json")
+            self.assertEqual(package.member("cutscenes\\intro.json"), "cutscenes/intro.json")
+            self.assertEqual(package.member("cutscenes/./intro.json"), "cutscenes/intro.json")
+            # No searching by basename or folder: the engine asks for one file.
+            self.assertIsNone(package.member("intro.json"))
+            self.assertIsNone(package.member("cutscenes/missing.json"))
+            for unsafe in ("", None, "/cutscenes/intro.json", "C:/cutscenes/intro.json",
+                           "../cutscenes/intro.json", "cutscenes/../../intro.json"):
+                self.assertIsNone(package.member(unsafe), unsafe)
+
+    def test_load_json_parses_a_member(self):
+        cutscene = {"camera": [{"t": 0, "pos": [0, 0, 0]}]}
+        with self._package({"cutscenes/intro.json": json.dumps(cutscene)}) as package:
+            self.assertEqual(package.load_json("cutscenes/intro.json"), cutscene)
+            with self.assertRaises(KeyError):
+                package.load_json("cutscenes/missing.json")
+
+    def test_load_json_reports_bad_documents_as_the_engine_expects(self):
+        """The cutscene loader catches ValueError (and OSError, KeyError,
+        TypeError); a package error escaping it would end the play session."""
+        with self._package({"cutscenes/bad.json": "{not json"}) as package:
+            with self.assertRaises(ValueError):
+                package.load_json("cutscenes/bad.json")
+        with self._package({"cutscenes/huge.json": "{}"}) as package:
+            # Declared over the document limit, without writing 64 MiB.
+            package._zf.getinfo("cutscenes/huge.json").file_size = MAX_DOCUMENT_BYTES + 1
+            with self.assertRaises(ValueError):
+                package.load_json("cutscenes/huge.json")
+
+    def test_a_packaged_cutscene_loads_through_the_engine(self):
+        from types import SimpleNamespace
+        from engine.cutscene_runtime import CutsceneRuntime
+        cutscene = {"camera": [{"t": 0, "pos": [0, 0, 0]}]}
+        with self._package({"cutscenes/intro.json": json.dumps(cutscene)}) as package:
+            runtime = CutsceneRuntime(SimpleNamespace(package=package, root_dir=None))
+            self.assertEqual(runtime._load_cutscene_file("cutscenes/intro.json"), cutscene)
+            self.assertIsNone(runtime._load_cutscene_file("cutscenes/missing.json"))

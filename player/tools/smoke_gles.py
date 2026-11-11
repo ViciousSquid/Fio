@@ -108,7 +108,7 @@ def main():
                              'view': glmath.look_at((128, 1000, 128), (128, 0, 128), (0, 0, -1))}
             for _ in range(5):
                 renderer.render(terrain_state)
-            assert world.terrain.total_triangles > 0, 'Terrain drew no geometry'
+            assert renderer._terrain_gl.total_triangles > 0, 'Terrain drew no geometry'
             assert GL.glGetError() == GL.GL_NO_ERROR
         finally:
             world.close()

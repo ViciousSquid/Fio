@@ -19,7 +19,7 @@ RUNTIME_MODULES = {
 }
 ENGINE_ADAPTERS = (
     'logic_combat', 'logic_thread', 'logic_session', 'logic_player', 'threaded_game_state',
-    'cutscene_runtime', 'glb_loader', 'obj_loader', 'logic_collision', 'terrain',
+    'glb_loader', 'obj_loader', 'logic_collision',
 )
 
 

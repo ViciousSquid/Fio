@@ -324,6 +324,30 @@ class FioPackage:
         data = self.read_asset(relative_path)
         return _decode(data) if data is not None else None
 
+    # The two calls the shared engine makes on a played package
+    # (``logic.package``): the desktop's editor.package_session.PackageSession
+    # answers the same ones, so engine code needs no Android adapter for them.
+
+    def member(self, relative_path: str) -> Optional[str]:
+        """The entry *relative_path* names exactly (``cutscenes/intro.json``),
+        or None: absent, absolute, or climbing out of the package."""
+        raw = str(relative_path or '').replace('\\', '/').strip()
+        parts = raw.split('/')
+        if not raw or raw.startswith('/') or ':' in parts[0] or '..' in parts:
+            return None
+        name = posixpath.normpath(raw)
+        return name if name in self._names else None
+
+    def load_json(self, member: str):
+        """*member* (a name from :meth:`member`) parsed as JSON."""
+        try:
+            raw = self._read_raw(member)
+        except PackageError as exc:
+            raise ValueError(str(exc)) from exc
+        if raw is None:
+            raise KeyError(member)
+        return json.loads(_decode(raw))
+
     def has_asset(self, relative_path: str) -> bool:
         return self._resolve(_normalize(relative_path)) is not None
 

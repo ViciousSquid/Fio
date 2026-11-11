@@ -94,12 +94,22 @@ def test_core_never_reaches_into_the_forward_renderer():
     assert not _offenders(sorted((PACKAGE / "core").rglob("*.py")), ("engine.renderer.forward",))
 
 
+#: A renderer implementation that lives outside the package: the standalone
+#: player's GLES renderer. A renderer may reuse ``core`` (plugins/API.md:
+#: "engine.renderer.core.terrain_gl.TerrainGL is the built-in implementation,
+#: reusable as it stands"); it still may not reach the forward renderer or
+#: the package's private modules.
+OUTSIDE_RENDERERS = (ROOT / "player" / "render",)
+
+
 def test_outside_code_imports_only_the_public_package():
     outside = [p for top in ("engine", "editor", "plugins", "player") for p in (ROOT / top).rglob("*.py")
                if PACKAGE not in p.parents and "tests" not in p.parts]
-    internal = ("engine.renderer.core", "engine.renderer.forward",
-                "engine.renderer.api", "engine.renderer.registry")
-    assert not _offenders(outside, internal)
+    private = ("engine.renderer.forward", "engine.renderer.api", "engine.renderer.registry")
+    renderers = [p for p in outside if any(root in p.parents for root in OUTSIDE_RENDERERS)]
+    hosts = [p for p in outside if p not in renderers]
+    assert not _offenders(hosts, private + ("engine.renderer.core",))
+    assert not _offenders(renderers, private)
 
 
 def test_world_logic_and_editor_state_do_not_import_the_renderer():

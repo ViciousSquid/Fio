@@ -65,7 +65,12 @@ def test_nodraw_skips_only_the_marked_face_without_loading_its_texture(texture, 
     assert not np.any(np.all(normals == hidden_normal, axis=1))
     # Rendering must leave collision bounds and authored materials intact.
     assert brush['pos'] == [0,0,0] and brush['size'] == [64,64,64]
-    assert brush['textures']['south'] == texture
+    if convex:
+        # A convex face's material is its plane's (engine/brush_faces.py):
+        # converting a box moves the per-tag copies onto the planes.
+        assert plane['texture'] == texture
+    else:
+        assert brush['textures']['south'] == texture
     if not convex:
         vertices, count = build_brush_mesh({'brushes':[brush]})
         assert count == 30 and vertices.size == count*6

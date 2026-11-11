@@ -125,3 +125,50 @@ class TestCameraMath(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_NUMPY, "numpy not installed")
+class TestTerrainPrograms(unittest.TestCase):
+    """The player draws terrain through the engine's TerrainGL with its own
+    compiler (player/render/terrain_gl.py); the sources it compiles must be
+    the ones the engine pairs."""
+
+    VERTEX_SHADERS = ("terrain_indexed.vert", "terrain_mesh.vert")
+
+    def test_the_fragment_paired_with_each_vertex_shader_is_the_engines(self):
+        from unittest import mock
+        import engine.renderer.core.terrain_gl as engine_gl
+        from engine import shaders
+        from player.render.terrain_gl import fragment_for
+        for vertex in self.VERTEX_SHADERS:
+            compiled = []
+            with mock.patch.object(engine_gl, "compileShader", lambda source, kind: source), \
+                 mock.patch.object(engine_gl, "compileProgram",
+                                   lambda v, f, validate=False: compiled.append((v, f)) or 0), \
+                 mock.patch.object(engine_gl, "_no_current_gl_context", lambda: False), \
+                 mock.patch("builtins.print"):
+                engine_gl.TerrainGL()._compile_program(vertex)
+            self.assertEqual(compiled, [(
+                shaders.DEFAULT_SHADERS[vertex],
+                shaders.light_ubo_source(shaders.DEFAULT_SHADERS[fragment_for(vertex)]))])
+
+    def test_programs_come_from_the_hosts_compiler(self):
+        from engine import shaders
+        from player.render.terrain_gl import PlayerTerrainGL, fragment_for
+        compiled = []
+        terrain_gl = PlayerTerrainGL(lambda v, f: compiled.append((v, f)) or 7)
+        for vertex in self.VERTEX_SHADERS:
+            self.assertEqual(terrain_gl._compile_program(vertex), 7)
+        self.assertEqual(compiled, [(shaders.DEFAULT_SHADERS[v],
+                                     shaders.DEFAULT_SHADERS[fragment_for(v)])
+                                    for v in self.VERTEX_SHADERS])
+
+    def test_a_failed_compile_is_not_retried_every_frame(self):
+        from unittest import mock
+        from player.render.terrain_gl import PlayerTerrainGL
+        calls = []
+        terrain_gl = PlayerTerrainGL(lambda v, f: calls.append(v) or 0)
+        with mock.patch("builtins.print"):
+            self.assertEqual(terrain_gl._compile_program("terrain_indexed.vert"), 0)
+            self.assertEqual(terrain_gl._compile_program("terrain_indexed.vert"), 0)
+        self.assertEqual(len(calls), 1)

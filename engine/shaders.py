@@ -814,7 +814,7 @@ uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
 uniform highp float time;
 
-uniform float waveSpread;   // "Wave Spacing": 0 tight and choppy, 1 broad
+uniform highp float waveSpread;   // "Wave Spacing": 0 tight and choppy, 1 broad
 uniform float waterOpacity;
 uniform float waterReflectivity;
 uniform float distortionStrength;

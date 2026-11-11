@@ -45,6 +45,8 @@ class GLESRenderer:
         self._bounds = {}
         self._tints = {}
         self._terrain = None
+        #: The GL side of ``_terrain`` (player/render/terrain_gl.py).
+        self._terrain_gl = None
         self._projection = None
         self._images = None
         self._context_lost = False
@@ -229,14 +231,12 @@ class GLESRenderer:
         return world.logic.render_runtime if world else self._fallback_runtime
 
     def _release_terrain(self):
-        if self._terrain:
-            gl = _gl()
-            program = self._terrain.shader_program
-            self._terrain.cleanup()
-            if program:
-                gl.glDeleteProgram(program)
-            self._terrain.release_renderer_resources()
-            self._terrain = None
+        """Free the GL side of the terrain drawn (the context is current).
+        After a lost context its names are already gone and are only dropped."""
+        if self._terrain_gl is not None and not self._context_lost:
+            self._terrain_gl.cleanup()
+        self._terrain_gl = None
+        self._terrain = None
 
     def clear_scene(self):
         gl = _gl()
@@ -365,28 +365,38 @@ class GLESRenderer:
         gl.glBindVertexArray(0)
 
     def _prepare_terrain(self, world):
-        from engine.terrain import Terrain
+        """Give *world*'s terrain its GL side: a ``TerrainGL`` whose programs
+        are compiled for this context and whose ground textures are this
+        renderer's. The terrain itself holds no GL and is never rebuilt."""
         from ..gles_shaders import translate, for_desktop
-        # Recreate GPU ownership from retained terrain data after context loss.
-        if self._terrain is world.terrain and not self._context_lost:
-            self._terrain.load_terrain_textures(type('Textures', (), {'get': lambda _, name: self._load_texture(name)})())
+        from .terrain_gl import PlayerTerrainGL
+        if (self._terrain is world.terrain and self._terrain_gl is not None
+                and not self._context_lost):
+            self._load_terrain_textures()
             return
-        if self._terrain is world.terrain:
-            terrain = Terrain(defer_gl=True)
-            terrain.from_dict(world.terrain.to_dict())
-            world.terrain = world.logic.world_runtime.terrain = terrain
-        self._terrain = world.terrain
+        # Another terrain, or the same one after a lost context: what was
+        # built for the old context is freed (or, lost, only forgotten).
+        self._release_terrain()
+
         def compiler(vertex, fragment):
             if self.gles:
                 vertex, fragment = translate(vertex, 'vertex'), translate(fragment, 'fragment')
             else:
                 vertex, fragment = for_desktop(vertex), for_desktop(fragment)
             return compile_program(vertex, fragment)
-        self._terrain.shader_compiler = compiler
-        self._terrain.load_terrain_textures(type('Textures', (), {'get': lambda _, name: self._load_texture(name)})())
-        self._terrain._init_shader()
-        if not self._terrain.shader_program:
+        self._terrain = world.terrain
+        self._terrain_gl = PlayerTerrainGL(compiler)
+        self._load_terrain_textures()
+        self._terrain_gl._init_shader()
+        if not self._terrain_gl.shader_program:
             raise RuntimeError('Terrain shaders could not be compiled')
+
+    def _load_terrain_textures(self):
+        terrain_gl = self._terrain_gl
+        for attribute, name in (('grass_tex', 'grass'), ('rock_tex', 'rock'),
+                                ('sand_tex', 'sand'), ('snow_tex', 'snow')):
+            setattr(terrain_gl, attribute,
+                    self._load_texture(f'assets/textures/terrain/{name}.jpg'))
 
     def _draw_billboards(self, billboards, prog, view, eye):
         """Camera-facing images that are not scene entities.
@@ -576,10 +586,15 @@ class GLESRenderer:
         def draw_surfaces():
             # Terrain belongs in the scene capture; transparent billboards
             # follow water so foreground effects remain in front of it.
-            if world and world.terrain:
+            if world and world.terrain and self._terrain_gl is not None:
                 import glm
-                world.terrain.update_and_render(
-                    glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), glm.vec3(*eye),
+                camera = glm.vec3(*eye)
+                # Streaming, LOD and chunk building, then the immutable frame
+                # the GL side draws (engine/terrain_frame.py).
+                world.terrain.advance(camera, visibility.planes)
+                self._terrain_gl.render(
+                    world.terrain.publish(),
+                    glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), camera,
                     frustum_planes=visibility.planes, env_uniforms=env)
             import time
             return self.water.render(view, projection, eye, visibility, env, self._lights,
