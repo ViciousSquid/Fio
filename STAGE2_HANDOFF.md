@@ -173,12 +173,14 @@ did), then input; `_paint_frame` last, by pass.
 
 ### Tests at handoff
 
-Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `bdf9998`'s
-code: **7,399 passed, 175 skipped, 6 failed** (24 minutes). The six: the
-three `test_portal_fade` cases and the position window (the documented
-environment failures); the player-start focus test (timing-sensitive, as
-before); and the play-cycle memory guard, which fails inside the full run
-and passes on its own (478 KiB of 512) -- run it on its own, as before.
+Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `618a552`'s
+code (everything this session changed): **7,424 passed, 177 skipped, 5
+failed** (24 minutes). The five: the three `test_portal_fade` cases and the
+position window (the documented environment failures), and the play-cycle
+memory guard, which fails inside the full run and passes on its own (478
+KiB of 512, measured before M5.1) -- run it on its own, as before. The
+earlier run at `bdf9998` also failed the timing-sensitive player-start
+focus test; it passed this time.
 
 ### Environment notes (this session)
 
