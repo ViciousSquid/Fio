@@ -1,16 +1,114 @@
 # Fio 3.1 brush model, Stage 2: handoff
 
-State at handoff (2026-11-10, after the fourth session; read *Fourth
-session* first). **Stage 2 is accepted** (`docs/brush-model-stage2.md`
-§11.10); **M3**, **M3.1** and **M4** are complete (M4 on the user's
-condition: Office and the all-moving mover workloads no slower than M3.1;
-see the M4 section, `docs/renderer-m4.md`, `docs/renderer-m3-profiling.md`).
-**The whole-engine performance audit is under way: three findings fixed,
-the rest listed below with what to measure next; M5 is to be chosen from
-it.** The user wants millisecond-scale costs found and fixed, not
+State at handoff (2026-11-11, after the fifth session; read *Fifth session*
+first). **Stage 2 is accepted**; **M3**, **M3.1** and **M4** are complete.
+**The whole-engine performance audit is done** (`docs/performance-audit.md`)
+and so is the renderer's "tables all the way to GL" audit
+(`docs/renderer-boundary-audit.md`). **M5 is recommended, not started: the
+terrain through tables to GL, beginning with a measurement on the
+Snapdragon.** The user wants millisecond-scale costs found and fixed, not
 microsecond tuning. Earlier sections are kept as history.
 
-## Fourth session: M4 closed, the audit begun, archives read in place (read this first)
+## Fifth session: the audit finished, the renderer boundary, M5 recommended (read this first)
+
+### Commits on `3.1.0.0611_CANARY` this session (all pushed)
+
+* `adbe6e6` -- `tools/audit_play.py --loop` (Qt's own frame loop, as
+  shipped), `--hide-2d`, `--span`; `tools/audit_startup.py`.
+* `3c1f53b` -- a map's textures loaded with the map, not all of
+  `assets/textures` at start-up.
+* `a6c85a9` -- models drawn from resolved draw groups, not material
+  dictionaries; selection outline from the geometry handles; `render_refs` /
+  `entity_refs` out of the frame input; the boundary ratchet tests.
+* `bf29bd0` -- the 2D views repaint at 10 Hz in play.
+* `2cf304f` -- SysMon asks only for an advertised memory query.
+* then the two documents and this section (see `git log`).
+
+### What the audit found (numbers in `docs/performance-audit.md`)
+
+Everything was measured under llvmpipe in a container; **nothing on the
+Snapdragon**. GL-bound numbers are host-specific.
+
+* **The old harness misled in three ways**: it painted each frame twice
+  (from the script and from Qt), ran with a 5 ms switch interval (`main.py`
+  ships 1 ms), and its first runs paid llvmpipe's shader compilation
+  (`~/.cache/mesa_shader_cache`). Use `--loop` for frame numbers, run twice.
+* **Fixed, measured**: the 2D view repainted on every frame of play (4-9 ms
+  of GUI-thread CPU; now 0.6-1.4; MonsterTest 41 -> 51-53 fps here); every
+  texture decoded at start-up (`initializeGL` 455-527 -> 184-197 ms, 50 MB
+  less resident memory).
+* **Open**: BigWorld's frame is the terrain draw (70 of 84 ms; 930k vertex
+  runs a frame for 160k grid points; no LOD inside the view; chunks
+  generated on the paint thread). Qt composing the window: 11-15 ms wall a
+  frame under llvmpipe, unknown on a GPU. One 2D repaint still costs 4-9 ms
+  (editing, and one play frame in six). Sprite and model textures still
+  decode on first sight in play (up to 17 ms). Shadow cube maps allocated
+  for every map (12 ms, 27 MB).
+* **Explained, no fix**: Portal_Test's 0.9 s play entry is llvmpipe
+  compiling shader variants on first draw with a cold cache (654 ms cold,
+  19-250 ms warm). The GIL: tick p99 2.3-5.5 ms as shipped; the main thread
+  holds it ~17 % of the time on BigWorld, mostly the 2D paint (now paced).
+* **SysMon's VRAM**: llvmpipe advertises the NVIDIA and ATI extensions and
+  reports invented numbers; the guard is for drivers without them and is
+  unverified on Adreno.
+* **Play-cycle memory guard**: passes at this head, 478 KiB of 512 (one
+  run; cause of the drop from 631-647 not isolated; `json/decoder.py` still
+  the largest retainer, ~75 objects a session).
+* `Light_Test` has no PlayerStart: it cannot be played, and the old harness
+  hung on the editor's dialogue. It is measured in the editor view now.
+
+### The renderer boundary (`docs/renderer-boundary-audit.md`)
+
+The brush, entity, light, shadow and portal passes are columnar. Fixed: the
+model passes' material dictionaries (V1), the selection outline's record
+read (V5), authored arrays in the frame input (V6). **Open**: the face
+highlight takes a brush dictionary and writes `_world_cache` on it (V2; a
+protocol change, not made without review); the connection-line and
+collision overlays (V3); the terrain, an editor object the renderer drives
+and mutates every frame (V4); the occlusion index's state written on the
+published `RenderTable`, with a set shared across threads (R1).
+`tests/renderer/test_renderer_boundary.py` holds the ratchet: add keys as
+V2 and V3 are fixed. Debug Tables (`tools/debug_tables.py`) reads the same
+published snapshot and is the oracle for any column V2-V4 add.
+
+### M5 (recommended; not started)
+
+The terrain through tables to GL. 1. Measure on the Snapdragon first (a GL
+timer query around the terrain pass; the frame with terrain off): if the
+Adreno shades it in a millisecond or two, drop steps 3-4. 2. Chunk heights
+generated off the paint thread, published as `TerrainTable` rows. 3. Fewer
+vertex runs (two a quad, or indexed with the flat normal in the fragment
+shader), with pixel parity. 4. LOD that engages inside the view distance.
+5. `terrain` out of the frame input. The self-hosted Snapdragon runner is
+the precondition; it is still not set up.
+
+### Behaviour changes to know about
+
+* In play the top/side/front views update ten times a second
+  (`QtGameView.PLAY_2D_VIEWS_HZ`), and their camera cone and arrow
+  animation with them.
+* A texture not named by the open map's brushes is decoded when first
+  drawn (as textures in subfolders always were), not at start-up.
+* A texture file added for an already loaded model appears when the model
+  reloads, not on the next frame.
+
+### Tests at handoff
+
+SUITE_RESULT_PLACEHOLDER
+
+### Environment notes (this session)
+
+* The container needed `pip install -r requirements.txt pytest py-spy` and
+  `apt-get update && apt-get install -y` the xcb libraries listed under the
+  second session, plus `libegl1`.
+* `py-spy --native` gives no Python line numbers worth reading; aggregate by
+  the innermost Python frame and the leaf library (Mesa, libc, Qt).
+* cProfile on 3.13 records every thread: the logic thread's sleeps appear
+  in a main-thread profile.
+* Remove `~/.cache/mesa_shader_cache` to reproduce a cold start; never
+  compare a cold run with a warm one.
+
+## Fourth session: M4 closed, the audit begun, archives read in place
 
 ### Commits on `3.1.0.0611_CANARY` this session (all pushed)
 
