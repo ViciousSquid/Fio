@@ -99,6 +99,7 @@ class SysMon:
 
         # VRAM cache
         self._vram_cache = (None, None)
+        self._vram_extension_flags = None      # (NVX, ATI), once known
         self._vram_cache_time = 0
 
         # FPS string cache
@@ -525,6 +526,26 @@ class SysMon:
     # VRAM helper
     # ------------------------------------------------------------------
 
+    def _vram_extensions(self):
+        """Which vendor memory queries this context advertises: (NVX, ATI),
+        read once. A driver without them answers GL_INVALID_ENUM and writes
+        nothing, and with PyOpenGL's error checking off (as Fio runs) the
+        panel then showed whatever the result buffer held. (Mesa's llvmpipe
+        advertises both and reports numbers of its own invention: that line
+        is the driver's.)"""
+        found = self._vram_extension_flags
+        if found is None:
+            names = set()
+            try:
+                for index in range(int(gl.glGetIntegerv(gl.GL_NUM_EXTENSIONS))):
+                    name = gl.glGetStringi(gl.GL_EXTENSIONS, index)
+                    names.add(name.decode() if isinstance(name, bytes) else str(name))
+            except Exception:
+                names = set()
+            found = self._vram_extension_flags = (
+                'GL_NVX_gpu_memory_info' in names, 'GL_ATI_meminfo' in names)
+        return found
+
     def _get_vram_info(self):
         """Get GPU VRAM info. Cached to avoid per-frame GL queries."""
         current_time = time.perf_counter()
@@ -532,24 +553,20 @@ class SysMon:
             return getattr(self, '_vram_cache', (None, None))
 
         result = (None, None)
+        nvx, ati = self._vram_extensions()
         try:
-            total_kb = gl.glGetIntegerv(GL_GPU_MEM_INFO_DEDICATED_VIDMEM_NVX)
-            available_kb = gl.glGetIntegerv(GL_GPU_MEM_INFO_CURRENT_AVAILABLE_MEM_NVX)
-            gl.glGetError()
-            if total_kb > 0:
-                total_mb = total_kb // 1024
-                used_mb = total_mb - (available_kb // 1024)
-                result = (used_mb, total_mb)
+            if nvx:
+                total_kb = int(gl.glGetIntegerv(GL_GPU_MEM_INFO_DEDICATED_VIDMEM_NVX))
+                available_kb = int(gl.glGetIntegerv(GL_GPU_MEM_INFO_CURRENT_AVAILABLE_MEM_NVX))
+                if total_kb > 0:
+                    total_mb = total_kb // 1024
+                    result = (total_mb - (available_kb // 1024), total_mb)
+            elif ati:
+                mem_info = gl.glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI)
+                if mem_info is not None and len(mem_info) > 0 and mem_info[0] > 0:
+                    result = (None, int(mem_info[0]) // 1024)
         except Exception:
             gl.glGetError()
-            try:
-                mem_info = gl.glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI)
-                gl.glGetError()
-                if mem_info and len(mem_info) > 0 and mem_info[0] > 0:
-                    free_mb = mem_info[0] // 1024
-                    result = (None, free_mb)
-            except Exception:
-                gl.glGetError()
 
         self._vram_cache = result
         self._vram_cache_time = current_time
