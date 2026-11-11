@@ -31,7 +31,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: Modules that are generic engine/editor infrastructure: they may know that
 #: plugins exist, and must not know which ones.
 _GENERIC_SOURCES = ("engine/logic_thread.py", "engine/savegame.py",
-                    "engine/qt_game_view.py", "engine/spatial.py",
+                    "engine/qt_game_view.py", "engine/view_audio.py",
+                    "engine/view_components.py", "engine/view_debug_draw.py",
+                    "engine/view_hud.py", "engine/view_messages.py",
+                    "engine/view_pause.py", "engine/view_picking.py",
+                    "engine/view_terrain_edit.py", "engine/spatial.py",
                     "engine/physics.py")
 
 #: The lifecycle hooks ``PluginManager`` owns the dispatch of.  ``register`` and

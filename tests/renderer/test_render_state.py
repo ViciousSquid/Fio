@@ -281,8 +281,9 @@ def test_editor_mode_publishes_the_editor_camera_and_dense_projection(logic):
 def test_qt_game_view_has_no_editor_side_render_projection():
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[2] / "engine" / "qt_game_view.py"
-    source = path.read_text(encoding="utf-8")
+    engine = Path(__file__).resolve().parents[2] / "engine"
+    source = "".join(path.read_text(encoding="utf-8")
+                     for path in [engine / "qt_game_view.py"] + sorted(engine.glob("view_*.py")))
 
     assert "_editor_render_table" not in source
     assert "_editor_entity_table" not in source

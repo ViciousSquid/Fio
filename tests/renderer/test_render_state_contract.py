@@ -15,7 +15,8 @@ import pytest
 from engine.threaded_game_state import RenderState
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-READERS = ("engine/qt_game_view.py",)
+READERS = ("engine/qt_game_view.py",) + tuple(
+    "engine/%s.py" % name for name in ("view_audio", "view_components", "view_debug_draw", "view_hud", "view_messages", "view_pause", "view_picking", "view_terrain_edit"))
 READER_PACKAGE = "engine/renderer"
 
 

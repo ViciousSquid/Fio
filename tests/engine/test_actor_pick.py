@@ -227,8 +227,8 @@ def _key(v, key):
 
 def test_arming_a_pick_pauses_the_real_world_and_frees_the_cursor(view):
     v, host, logic = view()
-    assert v.begin_actor_pick() is True
-    assert v.actor_pick_active
+    assert v.picking.begin_actor_pick() is True
+    assert v.picking.actor_pick_active
     assert logic.session_runtime.world_pause_owners() == {
         QtGameView.ACTOR_PICK_PAUSE
     }
@@ -238,8 +238,8 @@ def test_arming_a_pick_pauses_the_real_world_and_frees_the_cursor(view):
 def test_there_is_no_pick_outside_play_mode_on_the_real_view(view):
     v, _host, logic = view()
     v.play_mode = False
-    assert v.begin_actor_pick() is False
-    assert not v.actor_pick_active
+    assert v.picking.begin_actor_pick() is False
+    assert not v.picking.actor_pick_active
     assert not logic.session_runtime.world_pause_owners()
 
 
@@ -247,10 +247,10 @@ def test_clicking_an_actor_uses_the_real_published_tables(view):
     npc = _actor("npc", (500, 64, 0))
     v, _host, logic = view([npc])
     chosen = []
-    v.begin_actor_pick(chosen.append)
+    v.picking.begin_actor_pick(chosen.append)
     _press(v, Qt.LeftButton)
     assert chosen == [npc]
-    assert not v.actor_pick_active
+    assert not v.picking.actor_pick_active
     assert not logic.session_runtime.world_pause_owners()
     assert QApplication.overrideCursor().shape() == Qt.BlankCursor
 
@@ -258,22 +258,22 @@ def test_clicking_an_actor_uses_the_real_published_tables(view):
 @pytest.mark.parametrize("cancel", ["escape", "right_click"])
 def test_a_real_pick_can_be_cancelled(cancel, view):
     v, _host, logic = view([_actor("npc", (500, 64, 0))])
-    v.begin_actor_pick()
+    v.picking.begin_actor_pick()
     if cancel == "escape":
         _key(v, Qt.Key_Escape)
     else:
         _press(v, Qt.RightButton)
-    assert not v.actor_pick_active
+    assert not v.picking.actor_pick_active
     assert not logic.session_runtime.world_pause_owners()
 
 
 def test_a_real_pick_hover_tracks_the_actual_actor(view):
     npc = _actor("npc", (500, 64, 0))
     v, _host, _logic = view([npc])
-    v.begin_actor_pick()
-    v._update_actor_pick_hover(*_centre(v))
+    v.picking.begin_actor_pick()
+    v.picking._update_actor_pick_hover(*_centre(v))
     assert v.actor_pick_hover is npc
-    v._update_actor_pick_hover(5, 5)
+    v.picking._update_actor_pick_hover(5, 5)
     assert v.actor_pick_hover is None
 
 
@@ -282,7 +282,7 @@ def test_the_real_view_ray_comes_from_the_frame_camera(view):
         eye=(100.0, 300.0, -40.0),
         target=(100.0, 0.0, -39.0),
     )
-    origin, direction = v._pick_ray(*_centre(v))
+    origin, direction = v.picking._pick_ray(*_centre(v))
     assert glm.distance(origin, glm.vec3(100.0, 300.0, -40.0)) < 1e-3
     assert direction.y < -0.99
 
@@ -296,7 +296,7 @@ def test_an_overhead_real_view_picks_the_actor_below_the_cursor(view):
         target=(0.0, 0.0, 0.0),
     )
     chosen = []
-    v.begin_actor_pick(chosen.append)
+    v.picking.begin_actor_pick(chosen.append)
     _press(v, Qt.LeftButton)
     assert chosen == [npc]
 
@@ -304,10 +304,10 @@ def test_an_overhead_real_view_picks_the_actor_below_the_cursor(view):
 def test_closing_the_real_console_overlay_keeps_an_armed_pick(view):
     v, _host, _logic = view()
     v.console_overlay_active = True
-    v.begin_actor_pick()
+    v.picking.begin_actor_pick()
     v._close_console_overlay()
     assert QApplication.overrideCursor().shape() == Qt.CrossCursor
-    assert v.actor_pick_active
+    assert v.picking.actor_pick_active
 
 def test_the_main_window_arms_the_views_pick(qt_app):
     from editor.main_window import MainWindow
@@ -317,8 +317,8 @@ def test_the_main_window_arms_the_views_pick(qt_app):
     host.view_3d.play_mode = True
     try:
         assert host.begin_actor_pick() is True
-        assert host.view_3d.actor_pick_active
-        host.view_3d.cancel_actor_pick()
+        assert host.view_3d.picking.actor_pick_active
+        host.view_3d.picking.cancel_actor_pick()
 
         host.view_3d.play_mode = False
         assert host.begin_actor_pick() is False

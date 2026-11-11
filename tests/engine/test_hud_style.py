@@ -32,11 +32,12 @@ def test_hud_style_2_health_text_uses_compact_bounds():
 def test_hud_style_3_uses_a_white_spaced_ammo_counter():
     import inspect
 
-    source = inspect.getsource(QtGameView._draw_hud)
+    from engine.view_hud import ViewHud
+    source = inspect.getsource(ViewHud._draw_hud)
 
     assert 'if style == 3:' in source
     assert 'ammo_x += 2 * metrics.horizontalAdvance(" ")' in source
-    assert 'Qt.white if style == 3 else self._hud_ammo_green' in source
+    assert 'Qt.white if style == 3 else self.view._hud_ammo_green' in source
 
 
 # -- ammo and armor ----------------------------------------------------------

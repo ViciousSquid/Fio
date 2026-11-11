@@ -427,7 +427,7 @@ def test_a_ray_hits_a_displaced_convex_mover_where_it_is_drawn():
 def _aim(view, monkeypatch, ray_o, ray_d):
     """Point the 3D view's mouse ray (the one thing a test cannot click)."""
     import glm
-    monkeypatch.setattr(view, 'get_ray_from_mouse',
+    monkeypatch.setattr(view.picking, 'get_ray_from_mouse',
                         lambda mx, my: (glm.vec3(*ray_o), glm.vec3(*ray_d)))
 
 
@@ -440,11 +440,11 @@ def test_the_editor_pickers_hit_a_spinning_bar_where_it_is_drawn(main_window, mo
     # Straight down at x = 150: inside the turned bar (it lies along X),
     # outside its unturned box (which lies along Z).
     _aim(view, monkeypatch, (150.0, 500.0, 0.0), (0.0, -1.0, 0.0))
-    assert view.get_object_at_3d(0, 0) is bar
-    assert view.get_brush_face_at_coords(0, 0) == (bar, 'top')
+    assert view.picking.get_object_at_3d(0, 0) is bar
+    assert view.picking.get_brush_face_at_coords(0, 0) == (bar, 'top')
     _aim(view, monkeypatch, (0.0, 500.0, 150.0), (0.0, -1.0, 0.0))
-    assert view.get_object_at_3d(0, 0) is None
-    assert view.get_brush_face_at_coords(0, 0) is None
+    assert view.picking.get_object_at_3d(0, 0) is None
+    assert view.picking.get_brush_face_at_coords(0, 0) is None
 
 
 @pytest.mark.qt
@@ -458,9 +458,9 @@ def test_the_editor_pickers_ignore_a_stale_copy(main_window, monkeypatch):
     lo_x = bp.world_bounds(brush)[0]
     # Down through the phantom strip the stale copy claims: nothing there.
     _aim(view, monkeypatch, (lo_x - 30.0, 500.0, 0.0), (0.0, -1.0, 0.0))
-    assert view.get_object_at_3d(0, 0) is None
+    assert view.picking.get_object_at_3d(0, 0) is None
     _aim(view, monkeypatch, (lo_x + 30.0, 500.0, 0.0), (0.0, -1.0, 0.0))
-    assert view.get_object_at_3d(0, 0) is brush
+    assert view.picking.get_object_at_3d(0, 0) is brush
 
 
 # ---------------------------------------------------------------------------

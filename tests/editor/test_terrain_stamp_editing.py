@@ -25,11 +25,11 @@ def stamp_view(main_window, tmp_path, monkeypatch):
 
     view = main_window.view_3d
     view.terrain_sculpt_mode = 'stamp'
-    view.set_terrain_sculpt_active(True)
+    view.terrain_edit.set_terrain_sculpt_active(True)
     cursor = {'hit': (0.0, 0.0, 0.0)}
-    monkeypatch.setattr(view, 'raycast_terrain', lambda mx, my: cursor['hit'])
+    monkeypatch.setattr(view.terrain_edit, 'raycast_terrain', lambda mx, my: cursor['hit'])
     yield view, terrain, a, b, cursor
-    view.set_terrain_sculpt_active(False)
+    view.terrain_edit.set_terrain_sculpt_active(False)
 
 
 def _mouse(view, kind, shift=False):

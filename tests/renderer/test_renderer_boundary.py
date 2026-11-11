@@ -109,6 +109,15 @@ def test_world_logic_and_editor_state_do_not_import_the_renderer():
     assert not _offenders(layers, ("engine.renderer",))
 
 
+#: The viewport's delegated responsibilities, each a class holding the view.
+HOST_PARTS = ("view_audio", "view_components", "view_debug_draw", "view_hud", "view_messages", "view_pause", "view_picking", "view_terrain_edit")
+
+
+def _host_files():
+    return [ROOT / "engine" / "qt_game_view.py"] + [
+        ROOT / "engine" / ("%s.py" % name) for name in HOST_PARTS]
+
+
 def _protocol_members():
     tree = ast.parse((PACKAGE / "api.py").read_text(encoding="utf-8"))
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Renderer")
@@ -135,11 +144,19 @@ def test_the_protocol_exposes_no_forward_renderer_internals():
 def test_the_host_uses_only_the_protocol():
     """Every ``self.renderer.<name>`` the viewport touches is a contract member."""
     members = _protocol_members()
-    tree = ast.parse((ROOT / "engine" / "qt_game_view.py").read_text(encoding="utf-8"))
-    used = {node.attr for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
-            and node.value.attr == "renderer"
-            and isinstance(node.value.value, ast.Name) and node.value.value.id == "self"}
+    used = set()
+    # The viewport and the classes it delegates to (engine/view_*.py), which
+    # reach the renderer as ``self.view.renderer``.
+    for path in _host_files():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
+                    and node.value.attr == "renderer"):
+                continue
+            owner = node.value.value
+            if (isinstance(owner, ast.Name) and owner.id == "self") or (
+                    isinstance(owner, ast.Attribute) and owner.attr == "view"
+                    and isinstance(owner.value, ast.Name) and owner.value.id == "self"):
+                used.add(node.attr)
     assert used and used <= members, sorted(used - members)
 
 

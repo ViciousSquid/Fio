@@ -123,7 +123,7 @@ def test_three_dimensional_view_uses_the_same_drag_link_workflow(main_window, qt
     view.projection_matrix = glm.perspective(glm.radians(60.0), view.width()/max(1, view.height()), 1.0, 3000.0)
     view.view_matrix = glm.lookAt(glm.vec3(0, 90, 1000), glm.vec3(0, 90, 0), glm.vec3(0, 1, 0))
     view.logic_thread.camera.get_editor_camera().pos = glm.vec3(0, 90, 1000)
-    start, end = view._world_to_screen(a.pos), view._world_to_screen(b.pos)
+    start, end = view.picking._world_to_screen(a.pos), view.picking._world_to_screen(b.pos)
     main_window.entity_link_tool.begin()
     QTest.mousePress(view, Qt.LeftButton, pos=start)
     QTest.mouseMove(view, end)

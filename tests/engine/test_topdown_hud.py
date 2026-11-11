@@ -8,7 +8,7 @@ first-person gun artwork and the crosshair remain hidden overhead.
 import ast
 from pathlib import Path
 
-GAME_VIEW = Path(__file__).parents[2] / "engine" / "qt_game_view.py"
+GAME_VIEW = Path(__file__).parents[2] / "engine" / "view_hud.py"
 
 
 def _draw_hud_tree():

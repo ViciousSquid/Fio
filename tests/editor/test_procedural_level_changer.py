@@ -155,7 +155,7 @@ def test_continue_generates_a_new_level_and_play_carries_on_there(
         "active": True, "target_map": "", "destination_spawn": "",
         "generate_level": True, "generator_params": exit_thing.generator_params(),
     }
-    view._confirm_level_complete()
+    view.hud._confirm_level_complete()
 
     assert window.view_3d.play_mode, "Play should carry on in the new level"
     assert window.file_path is None

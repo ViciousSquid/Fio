@@ -119,7 +119,7 @@ def test_reload_hud_settings_ignores_legacy_hudstyle(main_window):
     config.set("Display", "hudopacity", "80")
     config.set("Display", "hudfade", "False")
 
-    view._reload_hud_settings()
+    view.hud._reload_hud_settings()
 
     assert view._hud_style == 1
     assert view._hud_font_override is None

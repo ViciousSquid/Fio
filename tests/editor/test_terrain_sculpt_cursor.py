@@ -13,10 +13,10 @@ def test_sculpting_can_start_before_the_mouse_moves(main_window, qt_app):
     the mouse crossed the view."""
     view = main_window.view_3d
 
-    view.set_terrain_sculpt_active(True)
+    view.terrain_edit.set_terrain_sculpt_active(True)
     try:
         view.repaint()
         qt_app.processEvents()
         assert view._terrain_brush_hit is None
     finally:
-        view.set_terrain_sculpt_active(False)
+        view.terrain_edit.set_terrain_sculpt_active(False)

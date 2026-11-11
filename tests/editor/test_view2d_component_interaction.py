@@ -215,7 +215,7 @@ def test_escape_cancels_a_stretch_and_restores_the_brush(editor):
     press(view, (32, 20))
     move(view, (96, 20))
     assert brush['size'][0] != 64
-    view.cancel_component_drag()
+    view.components.cancel_component_drag()
 
     assert brush['size'] == [64, 64, 64]
     assert undo_depth(host) == before
@@ -1342,7 +1342,7 @@ def test_a_cancelled_drag_does_not_throw_away_the_redo_branch(editor):
 
     # Start a drag and abandon it without moving.
     press(view, (32, 20))
-    view.cancel_component_drag()
+    view.components.cancel_component_drag()
 
     assert host.state.redo_stack
     assert host.state.redo()

@@ -48,7 +48,7 @@ def playing(fio_session, tmp_path, monkeypatch):
 def test_esc_pauses_the_world_and_esc_again_plays_on(playing):
     view, logic = playing.view, playing.logic
     _press(view, Qt.Key_Escape)
-    assert view.pause_menu_active and logic.session_runtime.pause_menu_open
+    assert view.pause.pause_menu_active and logic.session_runtime.pause_menu_open
     assert _labels(view.pause_menu) == [
         "Resume", "Save Game", "Load Game", "Options", "Exit to Editor"]
 
@@ -57,7 +57,7 @@ def test_esc_pauses_the_world_and_esc_again_plays_on(playing):
     assert tuple(logic.player_runtime.player.pos) == before, "the world moved behind the pause menu"
 
     _press(view, Qt.Key_Escape)
-    assert not view.pause_menu_active and not logic.session_runtime.pause_menu_open
+    assert not view.pause.pause_menu_active and not logic.session_runtime.pause_menu_open
     playing.step(30, keys={Qt.Key_W})
     assert tuple(logic.player_runtime.player.pos) != before
 
@@ -76,12 +76,12 @@ def test_keys_choose_and_activate(playing):
     _press(view, Qt.Key_Up)
     _press(view, Qt.Key_Up)                            # Resume
     _press(view, Qt.Key_Return)
-    assert not view.pause_menu_active
+    assert not view.pause.pause_menu_active
 
 
 def test_three_save_slots_round_trip_a_session(playing, tmp_path):
     view, logic = playing.view, playing.logic
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Load Game")
     assert [item.enabled for item in menu.page.items] == [False, False, False, True]
@@ -95,22 +95,22 @@ def test_three_save_slots_round_trip_a_session(playing, tmp_path):
     assert not _labels(menu)[0].endswith("Empty")
     saved = tuple(logic.player_runtime.player.pos)
 
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
     playing.step(60, keys={Qt.Key_W})
     assert tuple(logic.player_runtime.player.pos) != saved
 
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Load Game")
     assert [item.enabled for item in menu.page.items] == [True, False, False, True]
     menu.activate(0)
-    assert not view.pause_menu_active, "a load plays on"
+    assert not view.pause.pause_menu_active, "a load plays on"
     assert tuple(logic.player_runtime.player.pos) == pytest.approx(saved)
 
 
 def test_exit_to_editor_leaves_play(playing):
     view = playing.view
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     _choose(view.pause_menu, "Exit to Editor")
     assert not view.play_mode and view.pause_menu is None
     assert not playing.logic.session_runtime.pause_menu_open
@@ -131,15 +131,15 @@ def test_plugin_items_sit_before_exit_and_run_with_the_window_and_logic(playing,
                                 close_menu=False)
 
     view = playing.view
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     assert _labels(view.pause_menu)[-3:] == ["Map", "Journal", "Exit to Editor"]
     _choose(view.pause_menu, "Journal")
-    assert calls == ["j"] and view.pause_menu_active
+    assert calls == ["j"] and view.pause.pause_menu_active
     _choose(view.pause_menu, "Map")
-    assert calls[-1] == (playing.window, playing.logic) and not view.pause_menu_active
+    assert calls[-1] == (playing.window, playing.logic) and not view.pause.pause_menu_active
 
     plugin.enabled = False
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     assert "Map" not in _labels(view.pause_menu)
 
 
@@ -153,9 +153,9 @@ def test_a_failing_plugin_item_does_not_take_play_down(playing, monkeypatch):
 
     mgr._record_pause_menu_item(object(), "Broken", broken)
     view = playing.view
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     _choose(view.pause_menu, "Broken")
-    assert view.play_mode and not view.pause_menu_active
+    assert view.play_mode and not view.pause.pause_menu_active
 
 
 def test_sound_and_music_volumes_are_the_settings_volumes(playing):
@@ -163,7 +163,7 @@ def test_sound_and_music_volumes_are_the_settings_volumes(playing):
     window, view = playing.window, playing.view
     window.set_sound_volume(100)
     window.set_music_volume(100)
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Options")
     assert _labels(menu) == ["Sound", "Music", "Video", "Back"]
@@ -190,7 +190,7 @@ def test_sound_and_music_volumes_are_the_settings_volumes(playing):
 def test_video_is_the_settings_display_mode(playing):
     from editor.SettingsWindow import SettingsWindow
     window, view = playing.window, playing.view
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     menu = view.pause_menu
     _choose(menu, "Options")
     _choose(menu, "Video")
@@ -299,7 +299,7 @@ def test_the_game_is_blurred_behind_the_menu(fio_session):
     view = session.view
     before = session.paint()
 
-    assert view.open_pause_menu()
+    assert view.pause.open_pause_menu()
     backdrop = view._pause_backdrop
     assert backdrop is not None and not backdrop.isNull()
     scale = view.devicePixelRatioF()
@@ -308,10 +308,10 @@ def test_the_game_is_blurred_behind_the_menu(fio_session):
     behind = session.paint()
     assert (behind != before).any(), "the menu drew nothing"
 
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
     assert view._pause_backdrop is not None              # fading out over the game
-    view._pause_clock = lambda: float("inf")
-    view._pause_fade_level()
+    view.pause._pause_clock = lambda: float("inf")
+    view.pause._pause_fade_level()
     assert view._pause_backdrop is None
 
 
@@ -330,7 +330,7 @@ def test_the_menu_is_a_floating_window_like_sysmon(playing):
     from engine.floating_windows import FloatingWindow
     view = playing.view
     view.resize(800, 600)
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     window = view._pause_window
     assert isinstance(window, FloatingWindow) and window.title == "Paused"
     rect = window.window_rect
@@ -340,7 +340,7 @@ def test_the_menu_is_a_floating_window_like_sysmon(playing):
     from PyQt5.QtGui import QImage, QPainter
     image = QImage(800, 600, QImage.Format_ARGB32)
     painter = QPainter(image)
-    view._draw_pause_menu(painter)
+    view.pause._draw_pause_menu(painter)
     painter.end()
     assert window.title == "Options"
 
@@ -352,30 +352,30 @@ def test_the_menu_is_a_floating_window_like_sysmon(playing):
     _mouse(view, "release", (start[0] - 100, start[1] - 50), buttons=Qt.NoButton)
     moved = (window.window_rect.x(), window.window_rect.y())
     assert moved == (origin[0] - 100, origin[1] - 50)
-    assert view.pause_menu_active
+    assert view.pause.pause_menu_active
 
     # [X] closes it and play goes on.
     _mouse(view, "press", (window.window_rect.right() - 10, window.window_rect.y() + 10))
-    assert not view.pause_menu_active
+    assert not view.pause.pause_menu_active
     assert not playing.logic.session_runtime.pause_menu_open
 
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     assert (view._pause_window.window_rect.x(), view._pause_window.window_rect.y()) == moved
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
 
 
 def test_clicking_a_row_in_the_window_activates_it(playing):
     from PyQt5.QtGui import QImage, QPainter
     view = playing.view
     view.resize(800, 600)
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     image = QImage(800, 600, QImage.Format_ARGB32)
     painter = QPainter(image)
-    view._draw_pause_menu(painter)                       # lays the rows out
+    view.pause._draw_pause_menu(painter)                       # lays the rows out
     painter.end()
     row, _bar = view.pause_menu.rects[0]                 # Resume
     _mouse(view, "press", (row.center().x(), row.center().y()))
-    assert not view.pause_menu_active
+    assert not view.pause.pause_menu_active
 
 
 def test_the_cursor_is_free_while_the_menu_is_open(playing, monkeypatch):
@@ -384,7 +384,7 @@ def test_the_cursor_is_free_while_the_menu_is_open(playing, monkeypatch):
     view._capture_play_cursor()
     assert QApplication.overrideCursor().shape() == Qt.BlankCursor
 
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     assert QApplication.overrideCursor().shape() == Qt.ArrowCursor
     recentred = []
     monkeypatch.setattr(gv.QCursor, "setPos", lambda *a: recentred.append(a))
@@ -396,7 +396,7 @@ def test_the_cursor_is_free_while_the_menu_is_open(playing, monkeypatch):
     assert QApplication.overrideCursor().shape() == Qt.ArrowCursor
 
     monkeypatch.undo()
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
     assert QApplication.overrideCursor().shape() == Qt.BlankCursor
     while QApplication.overrideCursor() is not None:
         QApplication.restoreOverrideCursor()
@@ -440,46 +440,46 @@ def test_the_backdrop_fades_in_and_out_over_a_second(playing, monkeypatch):
     from PyQt5.QtGui import QImage
     view, session = playing.view, playing.logic.session_runtime
     now = [100.0]
-    monkeypatch.setattr(view, "_pause_clock", lambda: now[0])
-    monkeypatch.setattr(view, "_blurred_backdrop", lambda: QImage(8, 8, QImage.Format_RGB32))
-    assert view.PAUSE_FADE_SECONDS == 1.0
+    monkeypatch.setattr(view.pause, "_pause_clock", lambda: now[0])
+    monkeypatch.setattr(view.pause, "_blurred_backdrop", lambda: QImage(8, 8, QImage.Format_RGB32))
+    assert view.pause.PAUSE_FADE_SECONDS == 1.0
 
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     assert session.pause_menu_open                        # paused at once
     backdrop = view._pause_backdrop
     levels = []
     for dt in (0.0, 0.5, 0.5, 0.5):
         now[0] += dt
-        levels.append(round(view._pause_fade_level(), 3))
+        levels.append(round(view.pause._pause_fade_level(), 3))
     assert levels == [0.0, 0.5, 1.0, 1.0]
     assert view._pause_fade is None and not view._pause_fade_timer.isActive()
 
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
     assert not session.pause_menu_open                    # play resumes at once
     assert view._pause_fade_timer.isActive()
     now[0] += 0.5
-    assert view._pause_fade_level() == pytest.approx(0.5)
+    assert view.pause._pause_fade_level() == pytest.approx(0.5)
     assert view._pause_backdrop is backdrop               # still fading out
 
-    view.open_pause_menu()                                # back in, mid-fade
+    view.pause.open_pause_menu()                                # back in, mid-fade
     assert view._pause_backdrop is backdrop
-    assert view._pause_fade_level() == pytest.approx(0.5)
+    assert view.pause._pause_fade_level() == pytest.approx(0.5)
     now[0] += 0.25
-    assert view._pause_fade_level() == pytest.approx(0.625)
-    view.close_pause_menu()
+    assert view.pause._pause_fade_level() == pytest.approx(0.625)
+    view.pause.close_pause_menu()
     now[0] += 1.0
-    assert view._pause_fade_level() == 0.0
+    assert view.pause._pause_fade_level() == 0.0
     assert view._pause_backdrop is None and not view._pause_fade_timer.isActive()
 
     # The overlay is drawn for as long as it fades out, and no longer.
     from PyQt5.QtGui import QPainter
     image = QImage(64, 64, QImage.Format_RGB32)
     image.fill(0xFFFFFFFF)
-    view.open_pause_menu()
+    view.pause.open_pause_menu()
     now[0] += 1.0
-    view.close_pause_menu()
+    view.pause.close_pause_menu()
     now[0] += 0.5
     painter = QPainter(image)
-    view._draw_pause_menu(painter)
+    view.pause._draw_pause_menu(painter)
     painter.end()
     assert image.pixelColor(2, 2).red() < 255             # half-faded dim

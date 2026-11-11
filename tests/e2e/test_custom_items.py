@@ -83,11 +83,11 @@ def test_a_maps_custom_items_play_as_defined(fio_session):
     assert _published(session, "player_armor") == 30
 
     # The HUD draws what the session compiled for the item in hand.
-    held = session.view._session_item(_published(session, "active_weapon"))
+    held = session.view.hud._session_item(_published(session, "active_weapon"))
     assert (held.hud_sprite, held.hud_align) == ("assets/sprites/gun2HUD.png", "center")
     assert held.weapon.muzzle_flash == "assets/sprites/gun2HUD_flash.png"
-    assert session.view._hud_pixmap(held.hud_sprite) is not None
-    assert session.view._hud_pixmap(held.world_sprite) is not None
+    assert session.view.hud._hud_pixmap(held.hud_sprite) is not None
+    assert session.view.hud._hud_pixmap(held.world_sprite) is not None
 
     target = next(t for t in session.logic.editor_state.things
                   if t.properties.get("name") == "target")

@@ -156,18 +156,18 @@ def test_pause_menu_opens_live_spectator_controls_and_resumes_play(fio_session):
         game.start_play()
         game.step(5)
         session = plugin._sessions[game.logic]
-        game.view.open_pause_menu()
+        game.view.pause.open_pause_menu()
         assert game.logic.session_runtime.pause_menu_open
         _choose(game.view.pause_menu, 'Spectator')
         menu = game.window._spectator_menu
-        assert menu.isVisible() and not game.view.pause_menu_active
+        assert menu.isVisible() and not game.view.pause.pause_menu_active
         assert not game.logic.session_runtime.pause_menu_open
         menu.free.click()
         assert session.fighters['player'].spectator
         before = game.logic.player_runtime.player.pos.y
         game.step(5, keys={0x20})
         assert game.logic.player_runtime.player.pos.y > before
-        game.view.open_pause_menu()
+        game.view.pause.open_pause_menu()
         _choose(game.view.pause_menu, 'Spectator')
         menu.join.click()
         assert session.fighters['player'].alive and not session.fighters['player'].spectator

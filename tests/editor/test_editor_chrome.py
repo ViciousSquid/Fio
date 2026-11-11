@@ -81,7 +81,7 @@ def test_p_opens_the_position_window_from_anywhere(main_window, qt_app):
     assert view.pos_window is not None and view.pos_window.active
 
     # Typing "p" in a text field types it.
-    view._close_pos_window()
+    view.debug_draw._close_pos_window()
     field = QLineEdit(main_window)
     field.show()
     field.setFocus()
