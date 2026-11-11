@@ -164,6 +164,34 @@ class PerlinNoise:
 # TERRAIN FEATURE GENERATION
 # ============================================================================
 
+_PAINT_PACKERS = None
+
+
+def _pack_paint(paint):
+    """One paint chunk as base64 text of its zlib stream."""
+    import base64, zlib
+    # Level 1: a 256 chunk in under half the time of level 6 for the same
+    # size (measured: 2.2 against 5.1 ms a chunk, 85 KB either way).
+    payload = zlib.compress(np.ascontiguousarray(paint).tobytes(), 1)
+    return base64.b64encode(payload).decode('ascii')
+
+
+def _compress_paint(paints):
+    """:func:`_pack_paint` of each of *paints*, in order; several at once
+    when there are several (the arrays are never written after they are
+    stored, so reading them from other threads is safe)."""
+    global _PAINT_PACKERS
+    if len(paints) < 2:
+        return [_pack_paint(paint) for paint in paints]
+    if _PAINT_PACKERS is None:
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+        _PAINT_PACKERS = ThreadPoolExecutor(
+            max_workers=max(1, min(4, os.cpu_count() or 1)),
+            thread_name_prefix='TerrainPaintPack')
+    return list(_PAINT_PACKERS.map(_pack_paint, paints))
+
+
 class TerrainFeatures:
     def __init__(self, noise: PerlinNoise, seed: int = 42):
         self.noise = noise
@@ -448,6 +476,12 @@ class Terrain:
         self._stamp_dirty_chunks: set = set()
         # What a drag does not move, by chunk (see _drag_layers).
         self._drag_cache: dict = {}
+        # Chunks whose *stored* paint has a selected stamp in it; None when
+        # that is not known. Known from the start of a move of selected
+        # stamps (the stored paint is current then) until anything else
+        # changes the paint. For any other chunk the stored paint is already
+        # "the chunk without the selection", and needs no baking.
+        self._stored_with_selection = None
         self._paint_image_cache: Dict[str, Optional[np.ndarray]] = {}
         # Stamp lookup index (see _stamp_index); None until first needed.
         self._stamp_rows: Optional[Dict[str, int]] = None
@@ -2080,6 +2114,20 @@ class Terrain:
             self._paint_image_cache[key] = hit
         return hit
 
+    def _tinted_tile(self, texture, image, tint):
+        """*image* (a :meth:`_tile_image` of *texture*) with *tint* mixed in."""
+        rgb, mix = tint
+        key = ('tint', texture, image.shape, tuple(float(c) for c in rgb), float(mix))
+        hit = self._paint_image_cache.get(key)
+        if hit is None or hit[0] is not image:
+            mixed = image.astype(np.float32)
+            mixed[..., :3] *= np.float32(1.0 - mix)
+            mixed[..., :3] += np.asarray(rgb, np.float32) * np.float32(255.0 * mix)
+            mixed += np.float32(0.5)
+            hit = (image, np.clip(mixed, 0, 255, out=mixed).astype(np.uint8))
+            self._paint_image_cache[key] = hit
+        return hit[1]
+
     @staticmethod
     def _sample_tiled_image(image, px, py):
         """Bilinear RGBA sample at pixel coordinates, the image repeating."""
@@ -2109,8 +2157,9 @@ class Terrain:
         An unturned stamp samples the image on a grid of its own rows and
         columns, so each tap is a row-and-column pick rather than a pick a
         texel -- and where the paint's texels sit on the image's pixels (the
-        usual case: the image is reduced to exactly that) one pick is all.
-        Returns (len(px), len(py), 4) in 0..1.
+        usual case: the image is reduced to exactly that) one pick is all,
+        and it is returned as the image's own bytes. Returns (len(px),
+        len(py), 4) in 0..255: uint8 for the one pick, float32 otherwise.
         """
         h, w = image.shape[:2]
         px = px.astype(np.float64) - 0.5
@@ -2122,7 +2171,7 @@ class Terrain:
         x0 = np.mod(fx0.astype(np.int64), w)
         y0 = np.mod(fy0.astype(np.int64), h)
         if np.all(np.abs(fx) < 1e-3) and np.all(np.abs(fy) < 1e-3):
-            picked = image[np.ix_(y0, x0)].astype(np.float32)
+            return image[np.ix_(y0, x0)].transpose(1, 0, 2)
         else:
             x1 = np.mod(x0 + 1, w)
             y1 = np.mod(y0 + 1, h)
@@ -2133,18 +2182,20 @@ class Terrain:
             bottom = (image[np.ix_(y1, x0)].astype(np.float32) * (1.0 - wx)
                       + image[np.ix_(y1, x1)].astype(np.float32) * wx)
             picked = top * (1.0 - wy) + bottom * wy
-        picked *= 1.0 / 255.0
         return picked.transpose(1, 0, 2)
 
     def _bake_texture_rect(self, bounds, texture, angle=0.0,
                            feather=0.0, opacity=1.0, target=None,
-                           only=None, tint=None, tiled=False):
+                           only=None, tint=None, tiled=False, clip=None):
         """Bake one source image directly into terrain's per-chunk albedo.
 
         *target* is the chunk dict written (default: texture_paint_maps,
         whose arrays are replaced rather than written in place, since
         texture_paint_base may share them). *only* limits the bake to a set of
         chunk keys; *tint* is ``(rgb, amount)`` mixed into the source colour.
+        *clip* limits it further to texels (ix0, ix1, iz0, iz1), inclusive,
+        of each chunk written: a texel's result does not depend on its
+        neighbours, so a clipped bake is the whole bake inside the clip.
         """
         try:
             min_x, min_z, max_x, max_z = [float(v) for v in bounds]
@@ -2196,8 +2247,14 @@ class Terrain:
                 iz1 = min(res - 1, int(math.floor((max_z - chunk_min_z) / cell)) + 1)
                 if iz1 < iz0:
                     continue
+                kx0, kx1 = ix0, ix1
+                if clip is not None:
+                    kx0, kx1 = max(ix0, clip[0]), min(ix1, clip[1])
+                    iz0, iz1 = max(iz0, clip[2]), min(iz1, clip[3])
+                    if kx1 < kx0 or iz1 < iz0:
+                        continue
 
-                xs = chunk_min_x + (np.arange(ix0, ix1 + 1, dtype=np.float32) + 0.5) * cell
+                xs = chunk_min_x + (np.arange(kx0, kx1 + 1, dtype=np.float32) + 0.5) * cell
                 zs = chunk_min_z + (np.arange(iz0, iz1 + 1, dtype=np.float32) + 0.5) * cell
                 turned = abs(angle) > 1e-6
                 if turned:
@@ -2235,6 +2292,8 @@ class Terrain:
                 if not np.any(amount > 1e-6):
                     continue
 
+                # *source*: the texture over the box, 0..255 -- the image's
+                # own bytes where the paint's texels sit on its pixels.
                 if tile is not None:
                     # The texture lies on the world, turned by the stamp's
                     # angle about the world's origin: stamps of one texture
@@ -2243,23 +2302,32 @@ class Terrain:
                     if turned:
                         tx = wx * ca + wz * sa
                         tz = -wx * sa + wz * ca
-                        sampled = self._sample_tiled_image(
+                        source = self._sample_tiled_image(
                             tile_image, tx * per_unit, -tz * per_unit)
+                        source *= np.float32(255.0)
                     else:
-                        sampled = self._sample_tiled_grid(
+                        if tint is not None:
+                            # The selection's tint, mixed into the image once
+                            # rather than into every texel of every step.
+                            tile_image = self._tinted_tile(texture, tile_image, tint)
+                        source = self._sample_tiled_grid(
                             tile_image, xs * per_unit, -zs * per_unit)
                 else:
                     if not turned:
                         qx, qz = np.meshgrid(qx_row, qz_row, indexing='ij')
                     uv_x = 0.5 + qx * 0.5
                     uv_z = 0.5 + qz * 0.5
-                    sampled = self._sample_paint_image(image, uv_x, uv_z)
-                if tint is not None:
+                    source = self._sample_paint_image(image, uv_x, uv_z)
+                    source *= np.float32(255.0)
+                if tint is not None and not (tile is not None and not turned):
                     rgb, mix = tint
-                    sampled[..., :3] = (sampled[..., :3] * (1.0 - mix)
-                                        + np.asarray(rgb, np.float32) * mix)
-                src_a = sampled[..., 3] * amount
-                if not np.any(src_a > 1e-6):
+                    source = source.astype(np.float32)
+                    source[..., :3] *= np.float32(1.0 - mix)
+                    source[..., :3] += np.asarray(rgb, np.float32) * np.float32(255.0 * mix)
+                src_a = source[..., 3] * amount
+                src_a *= np.float32(1.0 / 255.0)
+                covered = src_a > 1e-6
+                if not np.any(covered):
                     continue
 
                 key = (int(cx), int(cz))
@@ -2269,25 +2337,39 @@ class Terrain:
                 elif copy_on_write:
                     paint = paint.copy()
                 target[key] = paint
-                # Source over destination, whole arrays at a time (a mask
-                # pick a texel was most of a bake). Where nothing covers a
-                # texel its alpha rounds to 0 and its colour is cleared below.
-                dst = paint[ix0:ix1 + 1, iz0:iz1 + 1].astype(np.float32)
-                dst *= np.float32(1.0 / 255.0)
-                under = dst[..., 3] * (1.0 - src_a)
-                out_a = src_a + under
-                dst[..., :3] *= under[..., None]
-                dst[..., :3] += sampled[..., :3] * src_a[..., None]
-                dst[..., :3] /= np.maximum(out_a, np.float32(1e-6))[..., None]
-                dst[..., 3] = out_a
-                dst *= np.float32(255.0)
-                dst += np.float32(0.5)
-                out = np.clip(dst, 0, 255, out=dst).astype(np.uint8)
-                # A texel whose alpha rounds to 0 carries no colour: chunks with
-                # no alpha are not saved, so colour there would not survive a
-                # reload and a rebake after it would differ.
-                out[out[..., 3] == 0, :3] = 0
-                paint[ix0:ix1 + 1, iz0:iz1 + 1] = out
+                region = paint[kx0:kx1 + 1, iz0:iz1 + 1]
+                # Most of a stamp is solid -- inside the feather, the texture
+                # opaque -- and there the result is the texture: bytes moved,
+                # no arithmetic. Only the feathered ring (and a translucent
+                # texture) is blended, source over destination.
+                solid = src_a >= 0.9999
+                if np.any(solid):
+                    if source.dtype == np.uint8:
+                        np.copyto(region, source, where=solid[..., None])
+                    else:
+                        rows = source[solid]
+                        rows += np.float32(0.5)
+                        np.clip(rows, 0, 255, out=rows)
+                        rows[:, 3] = 255.0
+                        region[solid] = rows.astype(np.uint8)
+                    covered &= ~solid
+                if np.any(covered):
+                    src = source[covered].astype(np.float32)
+                    alpha = src_a[covered]
+                    dst = region[covered].astype(np.float32)
+                    under = dst[:, 3] * np.float32(1.0 / 255.0) * (1.0 - alpha)
+                    out_a = alpha + under
+                    dst[:, :3] *= under[:, None]
+                    dst[:, :3] += src[:, :3] * alpha[:, None]
+                    dst[:, :3] /= np.maximum(out_a, np.float32(1e-6))[:, None]
+                    dst[:, 3] = out_a * np.float32(255.0)
+                    dst += np.float32(0.5)
+                    out = np.clip(dst, 0, 255, out=dst).astype(np.uint8)
+                    # A texel whose alpha rounds to 0 carries no colour: chunks
+                    # with no alpha are not saved, so colour there would not
+                    # survive a reload and a rebake after it would differ.
+                    out[out[:, 3] == 0, :3] = 0
+                    region[covered] = out
                 self._touch_texture_paint(key)
                 changed = True
         return changed
@@ -2315,6 +2397,7 @@ class Terrain:
             feather=radius * float(np.clip(feather, 0.0, 1.0)),
             opacity=opacity, target=self.texture_paint_base, tiled=True)
         if changed:
+            self._drop_drag_cache()
             self._recompose_paint(self._chunks_in_bounds(bounds))
         return changed
 
@@ -2404,7 +2487,7 @@ class Terrain:
 
     def _invalidate_stamp_index(self):
         self._stamp_rows = None
-        self._drag_cache = {}
+        self._drop_drag_cache()
 
     def _stamps_over(self, key):
         """Rows of the stamps over chunk *key*, in placement order."""
@@ -2431,18 +2514,19 @@ class Terrain:
                 keys |= self._range_keys(self._stamp_ranges[row])
         return keys
 
-    def _bake_stamp(self, stamp, target, only, tint=None):
+    def _bake_stamp(self, stamp, target, only, tint=None, clip=None):
         return self._bake_texture_rect(
             self._stamp_bounds(stamp), stamp['texture'],
             angle=stamp['angle'], feather=stamp['radius'] * stamp['feather'],
             opacity=stamp['opacity'], target=target, only=only, tint=tint,
-            tiled=stamp.get('tiled', True))
+            tiled=stamp.get('tiled', True), clip=clip)
 
     #: Chunks the drag cache holds (two paint maps each) before it is emptied.
     DRAG_CACHE_CHUNKS = 96
 
     def _drop_drag_cache(self):
         self._drag_cache = {}
+        self._stored_with_selection = None
 
     def _drag_layers(self, key):
         """What does not move while the selected stamps do, for chunk *key*.
@@ -2481,52 +2565,79 @@ class Terrain:
                 return None
         res = self.TERRAIN_PAINT_RESOLUTION
         only = {key}
-        out = {key: (base.copy() if base is not None
-                     else np.zeros((res, res, 4), dtype=np.uint8))}
-        for row in below:
-            self._bake_stamp(stamps[row], out, only)
+        # A chunk the selection was not on when the stored paint was last
+        # written -- one a drag has just entered -- is stored as exactly
+        # what it is without the selection.
+        held = self._stored_with_selection
+        rest = None
+        if held is not None and key not in held:
+            rest = self.texture_paint_maps.get(key)
+            if rest is None:
+                rest = np.zeros((res, res, 4), dtype=np.uint8)
+        if rest is not None and not above_rows:
+            under = rest
+        else:
+            out = {key: (base.copy() if base is not None
+                         else np.zeros((res, res, 4), dtype=np.uint8))}
+            for row in below:
+                self._bake_stamp(stamps[row], out, only)
+            under = out[key]
         above = None
         if above_rows:
             layer = {key: np.zeros((res, res, 4), dtype=np.uint8)}
             for row in above_rows:
                 self._bake_stamp(stamps[row], layer, only)
             above = layer[key]
-        rest = out[key]
-        if above_rows:
-            exact = {key: rest.copy()}
-            for row in above_rows:
-                self._bake_stamp(stamps[row], exact, only)
-            rest = exact[key]
-        layers = (out[key], above, above_rows, rest)
+        if rest is None:
+            rest = under
+            if above_rows:
+                exact = {key: rest.copy()}
+                for row in above_rows:
+                    self._bake_stamp(stamps[row], exact, only)
+                rest = exact[key]
+        layers = (under, above, above_rows, rest)
         if len(self._drag_cache) >= self.DRAG_CACHE_CHUNKS:
             self._drag_cache = {}
         self._drag_cache[key] = (base, (low, high), layers)
         return layers
 
     @staticmethod
-    def _paint_over(paint, layer):
-        """*layer* composited over *paint* (both RGBA8, straight alpha), in place."""
-        src_a = layer[..., 3].astype(np.float32)
-        src_a *= np.float32(1.0 / 255.0)
-        dst = paint.astype(np.float32)
-        under = dst[..., 3] * (1.0 - src_a)
-        out_a = src_a * np.float32(255.0) + under
-        dst[..., :3] *= under[..., None]
-        dst[..., :3] += layer[..., :3] * (src_a * np.float32(255.0))[..., None]
-        dst[..., :3] /= np.maximum(out_a, np.float32(1e-4))[..., None]
-        dst[..., 3] = out_a
+    def _paint_over(region, layer):
+        """*layer* composited over *region* (both RGBA8, straight alpha), in
+        place. Where the layer is opaque it is copied; only its translucent
+        texels are blended."""
+        alpha = layer[..., 3]
+        solid = alpha == 255
+        if np.any(solid):
+            np.copyto(region, layer, where=solid[..., None])
+        partial = alpha != 0
+        partial &= ~solid
+        if not np.any(partial):
+            return
+        src = layer[partial].astype(np.float32)
+        dst = region[partial].astype(np.float32)
+        src_a = src[:, 3] * np.float32(1.0 / 255.0)
+        under = dst[:, 3] * (1.0 - src_a)
+        out_a = src[:, 3] + under
+        dst[:, :3] *= under[:, None]
+        dst[:, :3] += src[:, :3] * src[:, 3:4]
+        dst[:, :3] /= np.maximum(out_a, np.float32(1e-4))[:, None]
+        dst[:, 3] = out_a
         dst += np.float32(0.5)
-        paint[...] = np.clip(dst, 0, 255, out=dst)
-        paint[paint[..., 3] == 0, :3] = 0
+        out = np.clip(dst, 0, 255, out=dst).astype(np.uint8)
+        out[out[:, 3] == 0, :3] = 0
+        region[partial] = out
 
     def _compose_paint_chunk(self, key, tint_ids=(), preview=False):
         """Base paint plus every stamp over chunk *key*, in placement order.
 
-        While stamps are selected, what lies under them is taken from the
-        drag cache rather than baked again (the same bakes, kept). With
-        *preview* -- the editor's display during a drag -- what lies over
-        them is one cached layer as well; it can differ from the exact
-        composition by a rounding step, which the stored paint never does.
+        While stamps are selected the chunk is taken from the drag cache as
+        it is without them, and only the box of texels they cover is
+        composed: what lies under them (kept), the selected stamps, and what
+        lies over them. For the stored paint those are the stamps above,
+        baked in order inside the box -- the exact composition. With
+        *preview* (the editor's display during a drag) they are one kept
+        layer, which can differ from the exact result by a rounding step.
         """
         res = self.TERRAIN_PAINT_RESOLUTION
         only = {key}
@@ -2536,36 +2647,51 @@ class Terrain:
             base = self.texture_paint_base.get(key)
             out = {key: (base.copy() if base is not None
                          else np.zeros((res, res, 4), dtype=np.uint8))}
-            rows = self._stamps_over(key)
-        else:
-            under, above, above_rows, rest = layers
-            out = {key: under.copy()}
-            selected = self.selected_stamp_ids
-            rows = [row for row in self._stamps_over(key)
-                    if stamps[row]['id'] in selected]
-            if not preview:
-                rows += above_rows
-        for row in rows:
-            stamp = stamps[row]
-            tint = self.STAMP_SELECT_TINT if stamp['id'] in tint_ids else None
-            self._bake_stamp(stamp, out, only, tint)
-        paint = out[key]
-        if layers is not None and preview and layers[1] is not None:
-            # The one-layer shortcut is a rounding step off; keep it to the
-            # texels the selection covers. Everywhere else the chunk is what
-            # it is without the selection, exactly.
-            self._paint_over(paint, layers[1])
-            shown = layers[3].copy()
+            for row in self._stamps_over(key):
+                stamp = stamps[row]
+                tint = self.STAMP_SELECT_TINT if stamp['id'] in tint_ids else None
+                self._bake_stamp(stamp, out, only, tint)
+            paint = out[key]
+            return paint if np.any(paint[..., 3]) else None
+
+        under, above, above_rows, rest = layers
+        selected = self.selected_stamp_ids
+        box = None          # (ix0, ix1, iz0, iz1) round every selected stamp here
+        rows = []
+        for row in self._stamps_over(key):
+            if stamps[row]['id'] not in selected:
+                continue
+            reach = self._stamp_texel_box(stamps[row], key)
+            if reach is None:
+                continue
+            rows.append(row)
+            box = reach if box is None else (
+                min(box[0], reach[0]), max(box[1], reach[1]),
+                min(box[2], reach[2]), max(box[3], reach[3]))
+        paint = rest.copy()
+        if box is not None:
+            work = {key: under.copy()}
             for row in rows:
-                box = self._stamp_texel_box(stamps[row], key)
-                if box is not None:
-                    shown[box] = paint[box]
-            paint = shown
+                stamp = stamps[row]
+                tint = self.STAMP_SELECT_TINT if stamp['id'] in tint_ids else None
+                self._bake_stamp(stamp, work, only, tint)
+            cut = (slice(box[0], box[1] + 1), slice(box[2], box[3] + 1))
+            if preview:
+                if above is not None:
+                    self._paint_over(work[key][cut], above[cut])
+            else:
+                for row in above_rows:
+                    reach = self._stamp_texel_box(stamps[row], key)
+                    if (reach is None or reach[0] > box[1] or reach[1] < box[0]
+                            or reach[2] > box[3] or reach[3] < box[2]):
+                        continue
+                    self._bake_stamp(stamps[row], work, only, clip=box)
+            paint[cut] = work[key][cut]
         return paint if np.any(paint[..., 3]) else None
 
     def _stamp_texel_box(self, stamp, key):
-        """Slices of chunk *key*'s paint whose texel centres lie in the
-        stamp's bounding square, or None if none do."""
+        """The texels of chunk *key* whose centres lie in the stamp's
+        bounding square, as inclusive (ix0, ix1, iz0, iz1); None if none."""
         res = self.TERRAIN_PAINT_RESOLUTION
         cell = self.chunk_size / float(res)
         min_x, min_z, max_x, max_z = self._stamp_bounds(stamp)
@@ -2577,7 +2703,7 @@ class Terrain:
         iz1 = min(res - 1, int(math.floor((max_z - z0) / cell - 0.5)))
         if ix1 < ix0 or iz1 < iz0:
             return None
-        return (slice(ix0, ix1 + 1), slice(iz0, iz1 + 1))
+        return (ix0, ix1, iz0, iz1)
 
     def _refresh_paint_display(self, keys):
         """Rebuild the tinted overrides for *keys* and mark them for upload."""
@@ -2615,6 +2741,12 @@ class Terrain:
                 else:
                     self.texture_paint_maps[key] = paint
                 self._stamp_dirty_chunks.discard(key)
+            held = self._stored_with_selection
+            if held is not None:
+                # These chunks' stored paint is current again.
+                now = self._selected_stamp_keys(self.selected_stamp_ids)
+                held -= keys
+                held |= keys & now
         self._refresh_paint_display(keys)
 
     def finish_stamp_edit(self):
@@ -2681,6 +2813,9 @@ class Terrain:
         if not set(ids) <= self.selected_stamp_ids:
             # The cache holds the stamps that are not selected, as they lie.
             self._drop_drag_cache()
+        elif self._stored_with_selection is None and not self._stamp_dirty_chunks:
+            self._stored_with_selection = self._selected_stamp_keys(
+                self.selected_stamp_ids)
         for stamp_id in ids:
             row = rows.get(stamp_id)
             if row is None:
@@ -2777,20 +2912,26 @@ class Terrain:
         res = self.TERRAIN_PAINT_RESOLUTION
         fresh = {}
         entries = []
-        for (cx, cz), paint in sorted(maps.items()):
+        ordered = sorted(maps.items())
+        # The chunks whose arrays were replaced since the last call are
+        # compressed together on a few threads (zlib works without the GIL):
+        # a stamp click replaces four to nine, and their compression was
+        # most of the click.
+        stale = [paint for (cx, cz), paint in ordered
+                 if not ((cache.get((cx, cz)) or (None,))[0] is paint)
+                 and paint is not None and paint.shape == (res, res, 4)
+                 and np.any(paint[..., 3])]
+        packed = dict(zip(map(id, stale), _compress_paint(stale)))
+        for (cx, cz), paint in ordered:
             hit = cache.get((cx, cz))
             if hit is not None and hit[0] is paint:
                 entry = hit[1]
-            elif (paint is None or paint.shape != (res, res, 4)
-                    or not np.any(paint[..., 3])):
+            elif id(paint) not in packed:
                 entry = None
             else:
-                # Level 1: a 256 chunk in under half the time of level 6
-                # for the same size (measured: 4.5 against 10 ms, 183 KB).
-                payload = zlib.compress(np.ascontiguousarray(paint).tobytes(), 1)
                 entry = {
                     'coord': [int(cx), int(cz)],
-                    'data': base64.b64encode(payload).decode('ascii'),
+                    'data': packed[id(paint)],
                 }
             fresh[(cx, cz)] = (paint, entry)
             if entry is not None:

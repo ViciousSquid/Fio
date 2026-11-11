@@ -225,3 +225,68 @@ def test_the_cache_is_dropped_when_what_it_holds_changes(checker):
     fresh.merge_paint_stamps([dict(s) for s in terrain.paint_stamps])
     for key, paint in fresh.texture_paint_maps.items():
         assert np.array_equal(terrain.texture_paint_maps[key], paint), key
+
+
+def test_dragging_the_newest_stamp_into_a_fresh_chunk_bakes_only_it(checker, monkeypatch):
+    """A chunk the drag enters is stored as it is without the selection:
+    nothing under the dragged stamp is baked again."""
+    terrain = Terrain(seed=1)
+    for x in (300.0, 330.0, 360.0, 390.0):          # chunk (1, 0), well inside
+        terrain.add_paint_stamp(x, 128.0, 50.0, checker)
+    mover = terrain.add_paint_stamp(128.0, 128.0, 40.0, checker)    # chunk (0, 0)
+    terrain.set_selected_stamps({mover['id']})
+    baked = []
+    real = terrain._bake_stamp
+    monkeypatch.setattr(terrain, '_bake_stamp',
+                        lambda s, *a, **k: (baked.append(s['id']), real(s, *a, **k))[1])
+    terrain.move_paint_stamps({mover['id']}, 110.0, 0.0, defer=True)   # crosses into (1, 0)
+    assert (1, 0) in terrain._stamp_chunks(mover)
+    assert set(baked) == {mover['id']}
+    monkeypatch.undo()
+
+    terrain.finish_stamp_edit()
+    terrain.set_selected_stamps(())
+    fresh = Terrain(seed=1)
+    fresh.merge_paint_stamps([dict(s) for s in terrain.paint_stamps])
+    assert set(fresh.texture_paint_maps) == set(terrain.texture_paint_maps)
+    for key, paint in fresh.texture_paint_maps.items():
+        assert np.array_equal(terrain.texture_paint_maps[key], paint), key
+
+
+def test_a_clipped_bake_is_the_whole_bake_inside_the_clip(checker):
+    whole, part = Terrain(seed=1), Terrain(seed=1)
+    stamp = whole.make_paint_stamp(120.0, 130.0, 90.0, checker, feather=0.4, opacity=0.7)
+    key, clip = (0, 0), (40, 150, 60, 199)
+    a = {key: np.full((256, 256, 4), 90, dtype=np.uint8)}
+    b = {key: a[key].copy()}
+    whole._bake_stamp(stamp, a, {key})
+    part._bake_stamp(stamp, b, {key}, clip=clip)
+    cut = (slice(clip[0], clip[1] + 1), slice(clip[2], clip[3] + 1))
+    assert np.array_equal(a[key][cut], b[key][cut])
+    outside = np.ones((256, 256), bool)
+    outside[cut] = False
+    assert np.all(b[key][outside] == 90)
+
+
+def test_chunks_compressed_together_are_the_chunks_compressed_alone(checker):
+    from engine import terrain as terrain_module
+    terrain = _scatter(checker)
+    paints = list(terrain.texture_paint_maps.values())
+    assert len(paints) > 2
+    assert terrain_module._compress_paint(paints) == [
+        terrain_module._pack_paint(p) for p in paints]
+
+
+def test_the_selection_tint_shows_and_is_never_stored(checker):
+    terrain = Terrain(seed=1)
+    stamp = terrain.add_paint_stamp(128.0, 128.0, 60.0, checker, feather=0.0)
+    stored = terrain.texture_paint_maps[(0, 0)].copy()
+    terrain.set_selected_stamps({stamp['id']})
+    shown = terrain._paint_display[(0, 0)]
+    assert not np.array_equal(shown, stored)
+    rgb, mix = Terrain.STAMP_SELECT_TINT
+    want = stored[128, 128, :3] * (1.0 - mix) + np.asarray(rgb) * 255.0 * mix
+    assert np.all(np.abs(shown[128, 128, :3].astype(float) - want) <= 1.5)
+    assert np.array_equal(terrain.texture_paint_maps[(0, 0)], stored)
+    terrain.set_selected_stamps(())
+    assert (0, 0) not in terrain._paint_display
