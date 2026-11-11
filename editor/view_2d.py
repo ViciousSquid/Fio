@@ -2887,7 +2887,7 @@ class View2D(QWidget):
         This runs at ~60 FPS but only repaints when the camera actually changes,
         keeping CPU usage minimal while providing smooth viewcone updates.
         """
-        if not self.isVisible():
+        if not self.isVisible() or self._paced_by_play():
             return
 
         camera = self.editor.view_3d.camera
@@ -3144,8 +3144,17 @@ class View2D(QWidget):
         painter.setBrush(QBrush(color))
         painter.drawPolygon(QPolygonF([p2, p_arrow1, p_arrow2]))
     
+    def _paced_by_play(self):
+        """True while a game is played: the 3D view then repaints the 2D
+        views itself, at ``QtGameView.PLAY_2D_VIEWS_HZ``, and this view's own
+        60 Hz timers (the camera cone, the connection arrows) stand down --
+        the camera moves every frame of play, and a repaint here is the whole
+        view: 4-9 ms of the GUI thread a frame."""
+        return bool(self.editor.view_3d.play_mode)
+
     def _update_connection_animations(self):
-        if not self.isVisible() or not self.editor.show_logic_links:
+        if (not self.isVisible() or not self.editor.show_logic_links
+                or self._paced_by_play()):
             return
         animation_speed = 0.05
         arrow_speed = 0.015  # Speed of traveling arrows

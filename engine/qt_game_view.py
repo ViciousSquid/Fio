@@ -401,6 +401,7 @@ class QtGameView(QOpenGLWidget):
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         self.setAttribute(Qt.WA_NoSystemBackground)
 
+        self._play_views_due = 0.0
         timer = QTimer(self)
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
@@ -460,6 +461,8 @@ class QtGameView(QOpenGLWidget):
 
     #: Seconds between attempts to open the audio device after one failed.
     MIXER_RETRY_SECONDS = 10.0
+    #: How often the editor's 2D views are repainted while a game is played.
+    PLAY_2D_VIEWS_HZ = 10.0
 
     def _ensure_pygame_mixer(self) -> bool:
         """Initialize pygame mixer if it isn't already active.
@@ -1325,7 +1328,12 @@ class QtGameView(QOpenGLWidget):
             # overlays asks Qt for a paint on its own (``update()``).
             if self.game_state.try_swap():
                 self.update()
-                if self.play_mode:
+                if self.play_mode and current_time >= self._play_views_due:
+                    # The editor's 2D views follow play at PLAY_2D_VIEWS_HZ,
+                    # not at the frame rate: one repaint of the visible one
+                    # is 4-9 ms of this thread (more than the 3D frame's own
+                    # Python on most maps), and it holds the GIL throughout.
+                    self._play_views_due = current_time + 1.0 / self.PLAY_2D_VIEWS_HZ
                     self.editor.update_views()
         else:
             self.repaint()
