@@ -197,9 +197,9 @@ def test_hiding_path_nodes_hides_their_connection_lines(fio_session):
     session = fio_session(_level())
     window, view3d = session.window, session.view
     olive = (128.0 / 255.0, 128.0 / 255.0, 0.0)
-    assert any(line["color"] == olive for line in view3d._gather_io_connections())
+    assert any(line["color"] == olive for line in view3d.debug_draw._gather_io_connections())
     window.set_view_filter("pathnodes", False)
-    assert not any(line["color"] == olive for line in view3d._gather_io_connections())
+    assert not any(line["color"] == olive for line in view3d.debug_draw._gather_io_connections())
 
 
 @pytest.mark.gl

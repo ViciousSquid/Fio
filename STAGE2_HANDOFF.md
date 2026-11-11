@@ -28,8 +28,10 @@ microsecond tuning. Earlier sections are kept as history.
   (`tools/bench_terrain.py`).
 * `618a552` -- the view's audio moved to `engine/view_audio.py`.
 * `e62ac25` -- M5.2/M5.3: the terrain published as tables; `TerrainGL`.
-* then the last boundary violations (overlays as arrays, the occlusion
-  index renderer-side); see `git log`.
+* `d827b77` -- the last boundary violations (overlays as arrays, the
+  occlusion index renderer-side).
+* `403401a` API 1.9.0 documented; `d6c8e1a`, `ebe6cd8` the loading panel;
+  `bb36145`, `4d3bfeb` water; `85140e2` the view broken up.
 
 ### What the audit found (numbers in `docs/performance-audit.md`)
 
@@ -170,28 +172,61 @@ treatment as the grids.
 ~25 ms of rasterising left in BigWorld's terrain is llvmpipe's -- judge it
 on the Snapdragon.
 
-### `engine/qt_game_view.py` being broken up (started)
+### `engine/qt_game_view.py` broken up (done)
 
-The user asked for it to be split as `logic_thread` was. Done: the audio
-(`618a552`, `engine/view_audio.py`, `view.audio`; 4,812 -> 4,488 lines).
-By size, what is left in the class: the HUD (22 methods, ~655 lines), mouse
-and keyboard handling (~570), `_paint_frame` (~440, one method), the pause
-menu (20 methods, ~270), terrain editing and stamps (~220), view messages
-(~160), component editing (~140), actor picking (~110). Suggested order:
-pause menu, HUD, view messages (each has its own state and tests that name
-its methods: move the tests' references with the code, as the audio slice
-did), then input; `_paint_frame` last, by pass.
+The user asked for it to be split as `logic_thread` was. 4,812 lines at the
+start of the session, 2,330 now. Each responsibility is a small class
+holding the view (`self.view`), in its own module:
 
-### Asked for and not started
+| module | class | on the view as | what |
+|---|---|---|---|
+| `view_audio.py` | `ViewAudio` | `view.audio` | mixer, sound cache, speakers' mix (owns its state) |
+| `view_hud.py` | `ViewHud` | `view.hud` | play HUD, death and level-complete screens, overlays |
+| `view_messages.py` | `ViewMessages` | `view.messages` | on-screen message lines |
+| `view_pause.py` | `ViewPause` | `view.pause` | the pause menu |
+| `view_terrain_edit.py` | `ViewTerrainEdit` | `view.terrain_edit` | sculpting, paint stamps |
+| `view_components.py` | `ViewComponents` | `view.components` | vertex/edge/face editing |
+| `view_picking.py` | `ViewPicking` | `view.picking` | rays, objects, faces, the actor pick |
+| `view_debug_draw.py` | `ViewDebugDraw` | `view.debug_draw` | link records, debug rays, grid, position window |
 
-* **Water** (the user's `_SHOWCASE` screenshot): the waves read as too close
-  together (`water.vert` Gerstner wavelengths 190/118/74/38 units; the
-  ripple normal map at 0.011/0.0047/0.031 in `water.frag`), and high-quality
-  water does not reflect the EFFECT floating above it. The reflection is
-  screen-space (`traceReflection` marches the copied depth buffer): effects
-  are blended and write no depth, so a ray never finds them. It needs the
-  effect in the depth copy (alpha-tested depth for opaque-centred effects)
-  or a separate reflection of effects; not a parameter change.
+What stayed in `qt_game_view.py`: construction, `_paint_frame` (one 430-line
+method), the Qt input events, play and renderer switching, and thin
+delegates for the 41 names other code calls on the view. **Limits of this
+split, deliberately:** except for the audio, the methods moved but their
+state did not -- it is still attributes of the view, reached as
+`self.view.<attr>`. Moving each class's state into it, and breaking
+`_paint_frame` up by pass, are the next steps if wanted. The move was
+mechanical (a script rewrote `self.x`); the one thing it missed was
+string-named access (`getattr(self, '_cached_...')`), found by a failing
+end-to-end test and fixed -- look for that pattern if more is moved.
+Tests that scan the view's source now scan these modules too
+(`HOST_PARTS` in `tests/renderer/test_renderer_boundary.py`).
+
+### Water, the loading panel, the API document (the user's requests)
+
+* **Water** (`bb36145`, `4d3bfeb`). *Wave Spacing* (`water_wave_spread`,
+  0-1, a `RenderTable` column and a slider in Water Properties): left is the
+  earlier tight waves, right -- the default -- waves 2.2x longer and slower.
+  High-quality water **reflects the effects above it**: the effect pass
+  writes the depth of its solid texels (alpha >= 0.5) in a frame that has
+  high-quality water, and the water pass reflects the nearest few directly
+  (`water.frag` `reflectEffects`; a thin camera-facing quad is no target for
+  the depth march, which is unchanged). No map entity is needed: Fio has no
+  baked cube maps (the user asked, thinking of Hammer's `env_cubemap`).
+  Cost here: the showcase pool filling the view 26-28 -> 31-34 ms a frame
+  under llvmpipe (software fragment shading; unverified on a GPU). Limits:
+  only what is on screen is reflected; the Android player's own water
+  (`player/render/water.py`) was not changed.
+* **Loading** (`d6c8e1a`, `ebe6cd8`): a 320x92 floating panel with a
+  throbber (a line travelling along a track, placed by the clock and painted
+  at each stage -- the load still blocks the UI thread) over the window
+  slightly blurred, instead of a veil and a percentage bar. The blur's
+  picture costs 42-45 ms per raise here (each load and each Play start).
+* **Plugin API 1.9.0** (`403401a`, `plugins/API.md`): the renderer contract
+  as published tables -- the terrain frame, `row_changes_since`, the three
+  overlay members that take arrays. Renderer implementations only; no shim.
+  The wiki's Renderer Development Guide is outside this repository and was
+  not updated.
 
 ### Behaviour changes to know about
 
@@ -204,17 +239,33 @@ did), then input; `_paint_frame` last, by pass.
   reloads, not on the next frame.
 * H hides every selected object and clears the selection; Shift+H works
   with nothing selected.
+* Water's waves are broader by default (Wave Spacing 1.0); set it to 0 for
+  the earlier look. High-quality water shows effects reflected.
+* Loading shows a small panel over a blurred window, not a full veil.
+* Plugin API is 1.9.0: a third-party renderer must take the terrain frame
+  and the array overlays.
 
 ### Tests at handoff
 
-Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `d827b77`
-(M5 and the boundary complete): **7,466 passed, 177 skipped, 5 failed** (24
-minutes). The five: the three `test_portal_fade` cases and the position
-window (the documented environment failures), and the play-cycle memory
-guard, which fails inside the full run and passes on its own (rerun alone
-after it). The gate before the boundary fixes, at `e62ac25`: 7,442 passed,
-6 failed (the same five and one timing-sensitive case of the player-start
-focus test, which passed alone and passed in this run).
+Full suite under xvfb with GL and `FIO_RENDER_ORACLE=record`, at `4d3bfeb`
+(everything up to the Wave Spacing slider): **7,480 passed, 177 skipped, 10
+failed** (24 minutes). Five are the known set: the three `test_portal_fade`
+cases and the position window (environment), and the play-cycle memory
+guard. **Five were regressions from the last batch, fixed in the commit
+after it and rerun (all pass)**: two table-size budgets the new 4-byte
+`water_wave_spread` column exceeded (the budgets are now 357 and 545 B a
+row, stated in the test); two 2D-view component tests and one
+connection-line test that the view split's test rewrite had pointed at the
+wrong object. The full suite has **not** been rerun since that fix.
+
+The play-cycle memory guard is at its limit: alone it measured 478 KiB
+earlier, then 513 (failing) and a pass on consecutive runs here. It is
+noise around 512 KiB, not a new leak -- the largest retainers are the same
+(`json/decoder.py`, the Debug Console's log lines) -- but it will keep
+flickering until those are looked at.
+
+The gates before: `d827b77` 7,466 passed, 5 failed; `e62ac25` 7,442 passed,
+6 failed (the known set each time).
 
 ### Environment notes (this session)
 

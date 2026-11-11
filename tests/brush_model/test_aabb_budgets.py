@@ -5,8 +5,9 @@ dearer. Measured on the 3,604-box Big World streaming map (CPython 3.13,
 x86-64) when the budgets were set:
 
 * **1,359 B** of Python heap per box dict, as the map loads it;
-* **353 B** per RenderTable row (the column bytes) and **541 B** per row
-  retained by a synced table (columns plus id map and interned names);
+* **357 B** per RenderTable row (the column bytes) and **545 B** per row
+  retained by a synced table (columns plus id map and interned names) --
+  353 and 541 until water's Wave Spacing added one float32 column;
 * a box gains no keys from being projected (table sync, collision rows,
   model matrices): no plane dicts, no cached shape, no second copy;
 * projecting boxes runs no convex machinery.
@@ -35,8 +36,8 @@ pytestmark = pytest.mark.perf
 
 MEASURED_ON = (3, 13)
 BOX_HEAP_BYTES = 1359
-ROW_COLUMN_BYTES = 353
-ROW_RETAINED_BYTES = 541
+ROW_COLUMN_BYTES = 357
+ROW_RETAINED_BYTES = 545
 
 
 def _budget(value):
