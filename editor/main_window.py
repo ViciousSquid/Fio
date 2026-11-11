@@ -3855,8 +3855,9 @@ class MainWindow(QMainWindow):
                 return
 
             elif event.key() == Qt.Key_F1:
-                self.view_3d.show_connections_in_play_mode = not self.view_3d.show_connections_in_play_mode
-                self.update_all_ui()
+                # As the 3D view does when it has the keyboard (QtGameView.
+                # keyPressEvent): F1 shows or hides the connection lines.
+                self.set_connection_links_enabled(not self.show_logic_links)
                 return
 
             elif event.key() == Qt.Key_F12:

@@ -124,3 +124,22 @@ def test_gun2_is_published_as_not_ready_while_it_cools_down(fio_session):
     session.step(1)
     with session.render_state() as frame:
         assert frame.shot_ready
+
+
+def test_f1_in_play_toggles_connection_lines_when_the_window_has_the_keyboard(fio_session):
+    """In Play a key reaches the 3D view or, with focus elsewhere (a dock was
+    clicked), the main window. The window's F1 flipped an attribute the view
+    never had and raised; both paths now toggle the same setting."""
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QKeyEvent
+    from editor.things import PlayerStart
+    from tests.helpers.worlds import level_data, make_thing, room
+    session = fio_session(level_data(
+        brushes=room(), things=[make_thing(PlayerStart, "spawn", (0.0, 40.0, 0.0))])).start_play()
+    window = session.window
+    before = window.show_logic_links
+    window.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F1, Qt.NoModifier))
+    assert window.show_logic_links is (not before)
+    window.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_F1, Qt.NoModifier))
+    assert window.show_logic_links is before
+    assert session.playing
