@@ -1,31 +1,92 @@
-"""A single, thin progress bar survives nested loads and exceptions."""
+"""A long load shows one small floating panel with a throbber -- not a veil
+over the window -- and it survives nested loads and exceptions."""
 
 import json
 
 import pytest
 
 pytest.importorskip('PyQt5')
-from PyQt5.QtWidgets import QWidget
-from editor.loading_overlay import BAR_HEIGHT, LoadingOverlay
+from PyQt5.QtGui import QColor                      # noqa: E402
+from PyQt5.QtWidgets import QWidget                 # noqa: E402
+from editor.loading_overlay import (                # noqa: E402
+    FIO_ORANGE, PANEL_HEIGHT, PANEL_WIDTH, THROB_LINE, THROB_SECONDS,
+    LoadingOverlay, throbber_span)
 
 pytestmark = pytest.mark.qt
 
 
-def test_progress_stays_ten_pixels_high_and_keeps_its_stage(qt_app):
+def test_nested_stages_keep_one_panel_and_its_stage(qt_app):
     host = QWidget()
     host.resize(900, 600)
     overlay = LoadingOverlay(host)
     with overlay.busy('Loading village', 'Reading map', 5):
         overlay.step('Building terrain', 50)
-        assert overlay.bar.height() == BAR_HEIGHT == 10
-        assert not overlay.bar.isTextVisible()
         assert overlay.stage == 'Building terrain'
         assert overlay.value == 50
         with overlay.busy('Nested', 'Uploading geometry', 30):
             assert overlay.value == 50
+            assert overlay.title == 'Loading village'
         assert overlay.active
     assert not overlay.active
     assert overlay.isHidden()
+
+
+def test_it_is_a_small_panel_in_the_middle_not_a_veil(qt_app):
+    host = QWidget()
+    host.resize(1280, 800)
+    overlay = LoadingOverlay(host)
+    with overlay.busy('Loading village', 'Reading map'):
+        rect = overlay.geometry()
+        assert (rect.width(), rect.height()) == (PANEL_WIDTH, PANEL_HEIGHT)
+        assert rect.center().x() in (639, 640) and rect.center().y() in (399, 400)
+        # It covers a small part of the window, and is no progress bar.
+        assert rect.width() * rect.height() < 0.04 * 1280 * 800
+        assert not hasattr(overlay, 'bar')
+        host.resize(640, 480)
+        qt_app.processEvents()
+        overlay._layout()
+        assert overlay.geometry().center().x() in (319, 320)
+
+
+def test_the_throbber_line_crosses_the_track_and_comes_back():
+    width = 200.0
+    line = width * THROB_LINE
+    assert throbber_span(0.0, width) == (0.0, line)
+    start, end = throbber_span(THROB_SECONDS / 2, width)
+    assert end == pytest.approx(width) and end - start == pytest.approx(line)
+    assert throbber_span(THROB_SECONDS, width)[0] == pytest.approx(0.0)
+    quarter = throbber_span(THROB_SECONDS / 4, width)[0]
+    assert 0.0 < quarter < width - line
+    # Going back mirrors going out.
+    assert throbber_span(3 * THROB_SECONDS / 4, width)[0] == pytest.approx(quarter)
+
+
+def test_each_step_paints_the_line_where_the_clock_has_carried_it(qt_app):
+    host = QWidget()
+    host.resize(900, 600)
+    host.show()
+    overlay = LoadingOverlay(host)
+    now = [100.0]
+    overlay.clock = lambda: now[0]
+
+    def line_centre():
+        image = overlay.grab().toImage()
+        track = overlay.throbber_track()
+        y = int(track.center().y())
+        xs = [x for x in range(image.width())
+              if QColor(image.pixel(x, y)).red() > 200
+              and QColor(image.pixel(x, y)).blue() < 80]
+        assert xs, "no throbber line was painted"
+        return sum(xs) / len(xs)
+
+    with overlay.busy('Loading village', 'Reading map'):
+        left = line_centre()
+        now[0] += THROB_SECONDS / 2
+        overlay.step('Building terrain')
+        right = line_centre()
+    assert right - left > 100
+    assert FIO_ORANGE.red() > 200
+    host.close()
 
 
 def test_progress_closes_after_a_failed_stage(qt_app):

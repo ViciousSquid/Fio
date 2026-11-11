@@ -1,5 +1,5 @@
 """
-A "still working" overlay for the long, blocking stretches of the editor.
+A "still working" panel for the long, blocking stretches of the editor.
 
 Opening a big map parses tens of megabytes of JSON, rebuilds the terrain and
 uploads the scene to the GPU, and starting play builds the world's streaming
@@ -7,55 +7,87 @@ and physics; all of it runs on the UI thread. For those seconds the window
 used to sit frozen on whatever it showed last, which looks exactly like a
 crash.
 
-:class:`LoadingOverlay` covers the window with a dark veil, a title ("Loading
-cave01") and the same progress bar as the startup splash
-(``main.py``), reading "Building terrain (50%)". Work on the UI thread cannot
-be interrupted to animate anything, so the long operations call :meth:`step`
-between their stages: each call names the stage, moves the bar on and repaints
-the overlay at once (``QWidget.repaint`` paints and flushes without running the
-event loop, so nothing else, such as a half-loaded frame of the 3D view, gets a
-chance to run).
+:class:`LoadingOverlay` is a small panel floating in the middle of the
+window -- the rest of the editor stays visible behind it -- with a title
+("Loading cave01"), a throbber (a short horizontal line travelling back and
+forth along a track) and the stage under way ("Building terrain"). It used
+to be a veil over the whole window with a percentage bar, which for a load
+of a second or two was a full-screen flash.
+
+Work on the UI thread cannot be interrupted to animate anything, so the long
+operations call :meth:`step` between their stages: each call names the stage
+and repaints the panel at once (``QWidget.repaint`` paints and flushes
+without running the event loop, so nothing else, such as a half-loaded frame
+of the 3D view, gets a chance to run). The throbber's line is placed by the
+clock, so each repaint shows it where the time has carried it; no timer, no
+thread and no second process draws it.
 
 Use it as a context manager; nesting is counted, so an operation built from
-others (a level change = load its map + restart play) shows one bar
-throughout, which only ever moves forward::
+others (a level change = load its map + restart play) shows one panel
+throughout::
 
     with window.loading_overlay.busy("Loading cave01", "Reading the map", 5):
         ...
         window.loading_overlay.step("Building terrain", 40)
+
+The percentages are still taken (and only ever move forward, see
+:attr:`LoadingOverlay.value`) so callers and tools can tell how far a load
+has got; the panel does not show them.
 """
 
 from __future__ import annotations
 
 import contextlib
+import time
 
 from PyQt5.QtCore import QEvent, QObject, QRectF, Qt
-from PyQt5.QtGui import QColor, QFont, QPainter
-from PyQt5.QtWidgets import QProgressBar, QWidget
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+from PyQt5.QtWidgets import QWidget
 
-#: Where a stage named without a percentage puts the bar: this share of the
-#: way from where it is to the end, so it always moves and never fills.
+#: Where a stage named without a percentage puts the progress: this share of
+#: the way from where it is to the end, so it always moves and never fills.
 _ADVANCE = 0.25
 _CEILING = 95
 
-#: The bar's height, as on the splash.
+#: The height of the startup splash's progress bar (``main.py``).
 BAR_HEIGHT = 10
 
+#: The floating panel, in logical pixels.
+PANEL_WIDTH = 320
+PANEL_HEIGHT = 92
+#: The throbber: a track with a line this share of its width, crossing it
+#: and coming back once every THROB_SECONDS.
+THROB_LINE = 0.28
+THROB_SECONDS = 1.6
+FIO_ORANGE = QColor(240, 128, 0)
+
+
+def throbber_span(seconds: float, width: float):
+    """``(start, end)`` in pixels of the throbber's line on a track *width*
+    wide, *seconds* after it started: left to right and back, eased at the
+    turns."""
+    phase = (seconds / THROB_SECONDS) % 1.0
+    travel = 1.0 - abs(2.0 * phase - 1.0)            # 0 -> 1 -> 0
+    travel = travel * travel * (3.0 - 2.0 * travel)  # smoothstep
+    line = width * THROB_LINE
+    start = (width - line) * travel
+    return start, start + line
+
+
 class LoadingOverlay(QWidget):
-    """Full-window "loading" veil with a progress bar; see the module docstring."""
+    """A small floating "loading" panel with a throbber; see the module docstring."""
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.title = ""
         self.stage = ""
         self._depth = 0
-        self.bar = QProgressBar(self)
-        self.bar.setRange(0, 100)
-        self.bar.setFixedHeight(BAR_HEIGHT)
-        self.bar.setTextVisible(False)
-        self.bar.setAlignment(Qt.AlignCenter)
+        self._value = 0
+        self._started = 0.0
+        #: Injected by tests: the clock the throbber is placed by.
+        self.clock = time.perf_counter
         parent.installEventFilter(self)
         self.hide()
 
@@ -66,21 +98,23 @@ class LoadingOverlay(QWidget):
 
     @property
     def value(self) -> int:
-        return self.bar.value()
+        """How far the operation has got, 0-95; not drawn."""
+        return self._value
 
     def begin(self, title: str, stage: str = "", percent: int = None) -> None:
-        """Raise the overlay (or, nested, just move on to *stage*)."""
+        """Raise the panel (or, nested, just move on to *stage*)."""
         self._depth += 1
         if self._depth == 1:
             self.title = str(title)
-            self.bar.setValue(0)
+            self._value = 0
+            self._started = self.clock()
             self._layout()
             self.show()
             self.raise_()
         self.step(stage or "", percent)
 
     def end(self) -> None:
-        """Lower the overlay once the outermost operation is done."""
+        """Lower the panel once the outermost operation is done."""
         if self._depth <= 0:
             return
         self._depth -= 1
@@ -96,18 +130,17 @@ class LoadingOverlay(QWidget):
             self.end()
 
     def step(self, stage: str, percent: int = None) -> None:
-        """Name the stage now under way, move the bar on and show it at once."""
+        """Name the stage now under way and show it, and the throbber, at once."""
         if not self.active:
             return
         if stage:
             self.stage = str(stage)
-        current = self.bar.value()
+        current = self._value
         if percent is None:
             target = current + max(1, int((_CEILING - current) * _ADVANCE))
         else:
             target = int(percent)
-        self.bar.setValue(max(current, min(_CEILING, target)))
-        self.bar.setFormat(f"{self.stage} (%p%)" if self.stage else "%p%")
+        self._value = max(current, min(_CEILING, target))
         try:
             self.raise_()
             self.repaint()
@@ -115,11 +148,11 @@ class LoadingOverlay(QWidget):
             pass   # the window is being torn down
 
     def _layout(self):
+        """Centre the panel in the window; it covers nothing else."""
         parent = self.parentWidget()
-        self.setGeometry(parent.rect())
-        w, h = self.width(), self.height()
-        bar_w = max(240, min(640, int(w * 0.5)))
-        self.bar.setGeometry((w - bar_w) // 2, h // 2, bar_w, BAR_HEIGHT)
+        w = min(PANEL_WIDTH, max(160, parent.width() - 24))
+        h = min(PANEL_HEIGHT, max(60, parent.height() - 24))
+        self.setGeometry((parent.width() - w) // 2, (parent.height() - h) // 2, w, h)
 
     def eventFilter(self, obj, event):
         if obj is self.parentWidget() and event.type() == QEvent.Resize:
@@ -127,22 +160,42 @@ class LoadingOverlay(QWidget):
         return False
 
     # ------------------------------------------------------------------ paint
+    def throbber_track(self) -> QRectF:
+        """The throbber's track within the panel."""
+        margin = 22.0
+        return QRectF(margin, self.height() / 2.0 + 2.0, self.width() - 2 * margin, 2.0)
+
     def paintEvent(self, _event):
-        w = self.width()
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(14, 14, 18, 235))
+        p.setRenderHint(QPainter.Antialiasing, True)
+        panel = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        p.setPen(QPen(QColor(85, 85, 90), 1.0))
+        p.setBrush(QColor(24, 24, 28, 245))
+        p.drawRoundedRect(panel, 6.0, 6.0)
+
+        track = self.throbber_track()
         p.setPen(QColor(240, 236, 230))
-        size = max(13, min(22, w // 60))
-        p.setFont(QFont("Fio UI", size, QFont.Bold))
+        p.setFont(QFont("Fio UI", 11, QFont.Bold))
         fm = p.fontMetrics()
-        top = self.bar.y() - fm.height() - 14
-        p.drawText(QRectF(0, top, w, fm.height() + 4),
-                   Qt.AlignHCenter | Qt.AlignTop, self.title)
-        # Keep the stage readable without squeezing text into a 10px bar.
+        p.drawText(QRectF(10, track.top() - fm.height() - 10, self.width() - 20, fm.height() + 4),
+                   Qt.AlignHCenter | Qt.AlignTop,
+                   fm.elidedText(self.title, Qt.ElideMiddle, self.width() - 24))
+
+        # The track, and the line where the clock has carried it.
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(70, 70, 76))
+        p.drawRoundedRect(track, 1.0, 1.0)
+        start, end = throbber_span(self.clock() - self._started, track.width())
+        p.setBrush(FIO_ORANGE)
+        p.drawRoundedRect(QRectF(track.left() + start, track.top() - 0.5,
+                                 end - start, track.height() + 1.0), 1.5, 1.5)
+
+        p.setPen(QColor(190, 188, 184))
         p.setFont(self.font())
-        stage_height = p.fontMetrics().height()
-        p.drawText(QRectF(8, self.bar.geometry().bottom() + 10, w - 16, stage_height + 4),
-                   Qt.AlignHCenter | Qt.AlignTop, f"{self.stage} ({self.value}%)")
+        fm = p.fontMetrics()
+        p.drawText(QRectF(10, track.bottom() + 9, self.width() - 20, fm.height() + 4),
+                   Qt.AlignHCenter | Qt.AlignTop,
+                   fm.elidedText(self.stage, Qt.ElideRight, self.width() - 24))
         p.end()
 
 
