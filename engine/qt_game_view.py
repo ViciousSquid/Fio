@@ -2323,8 +2323,10 @@ class QtGameView(QOpenGLWidget):
     def set_terrain_sculpt_active(self, *args, **kwargs):
         return self.terrain_edit.set_terrain_sculpt_active(*args, **kwargs)
 
-    def show_pos_window(self, *args, **kwargs):
-        return self.debug_draw.show_pos_window(*args, **kwargs)
+    def show_pos_window(self, *_signal_args):
+        # Debug > Position (P) is connected here, and QAction.triggered
+        # passes its "checked" flag, which the window has no use for.
+        return self.debug_draw.show_pos_window()
 
     def show_view_message(self, *args, **kwargs):
         return self.messages.show_view_message(*args, **kwargs)
