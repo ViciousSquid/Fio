@@ -223,6 +223,21 @@ def test_play_without_a_start_still_refuses(window, monkeypatch):
     assert not window.view_3d.play_mode
 
 
+def test_a_refused_play_leaves_the_side_panel_tab_alone(window, monkeypatch):
+    """Play switches the panel to the Debug Console and Stop switches it back;
+    a Play refused for want of a start never reaches Stop, so it must not
+    switch at all."""
+    from PyQt5.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a: None))
+    tabs = window.properties_tab_widget
+    console = tabs.indexOf(window.debug_console)
+    before = next(i for i in range(tabs.count()) if i != console)
+    tabs.setCurrentIndex(before)
+    window.enter_play_mode()
+    assert not window.view_3d.play_mode
+    assert tabs.currentIndex() == before
+
+
 # -- persistence ----------------------------------------------------------------
 
 def test_names_primary_and_destination_spawn_survive_save_and_reload(window):

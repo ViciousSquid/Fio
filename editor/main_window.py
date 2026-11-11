@@ -2655,11 +2655,13 @@ class MainWindow(QMainWindow):
 
     def _start_play(self, player_start):
         """Enter play mode with the player at *player_start* (a PlayerStart)."""
-        self._store_and_switch_to_debug_console()
-
         if not player_start:
             QMessageBox.warning(self, "No Player Start", "Add a Player Start object to the scene before entering play mode.")
             return
+
+        # Only once Play is certain to start: a refused Play must leave the
+        # side panel on the tab the author was using.
+        self._store_and_switch_to_debug_console()
 
         if hasattr(self, 'mode_label'):
             self.mode_label.setText("PLAY MODE")
