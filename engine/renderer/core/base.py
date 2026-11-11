@@ -124,6 +124,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         self._portal_normal_vbo = None
         self._conn_line_vao = None
         self._conn_line_vbo = None
+        self._conn_line_capacity = 0
         self.face_highlight_vao = None
         self.face_highlight_vbo = None
         # Component-edit handle overlay (editor only).  The buffer is refilled

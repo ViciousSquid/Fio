@@ -435,7 +435,7 @@ class RenderTable:
         '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
         '_shown_mask', '_shown_slots', '_shown_stale',
-        '_occlusion_index', '_occlusion_dirty', 'turning',
+        '_row_changes', 'row_change_serial', '_row_change_base', 'turning',
         'material_version', 'extent_version', 'transform_version',
         '_transform_log', '_writing', 'shown_version', '_row_list',
         '_row_list_version', '__weakref__'))
@@ -508,8 +508,13 @@ class RenderTable:
         # Lazy: an editor that never enables occlusion never builds a cell
         # index or pays to track changed rows. When used, the publisher
         # journals only the rows it was going to refresh anyway.
-        self._occlusion_index = None
-        self._occlusion_dirty = None
+        # The rows refreshed since, in batches, for a reader that keeps
+        # something per row (the renderer's occlusion index): it asks
+        # row_changes_since(the serial it last saw). Nothing of the reader's
+        # is kept here.
+        self._row_changes = []
+        self.row_change_serial = 0
+        self._row_change_base = 0
         #: Whether any row has ever been given a spin (a non-zero ``rot``
         #: angle) -- by this table's row resolution or the mover table's
         #: publication, the column's writers. Never cleared: until it is set,
@@ -562,6 +567,40 @@ class RenderTable:
             if self._transform_log is None:
                 self._transform_log = deque(maxlen=TRANSFORM_LOG)
             self._transform_log.append((self.transform_version, rows))
+
+    #: Batches of refreshed rows kept for :meth:`row_changes_since`.
+    ROW_CHANGE_LOG = 128
+
+    def _note_row_changes(self, slots):
+        """Log one batch of refreshed rows (a copy: O(the batch), no per-row
+        Python)."""
+        log = self._row_changes
+        log.append(np.array(slots, dtype=np.intp))
+        self.row_change_serial += 1
+        if len(log) > self.ROW_CHANGE_LOG:
+            drop = len(log) // 2
+            del log[:drop]
+            self._row_change_base += drop
+
+    def _forget_row_changes(self):
+        """Every row may have changed (a reconcile, an adopt): readers
+        further back than now find no log and rebuild."""
+        self._row_changes = []
+        self.row_change_serial += 1
+        self._row_change_base = self.row_change_serial
+
+    def row_changes_since(self, serial):
+        """The rows refreshed (``refresh_transforms``, ``refresh_rows``)
+        after *serial* -- slot indices, possibly repeated -- or ``None``
+        when the log does not reach back that far and the caller must treat
+        every row as changed. The caller then records
+        :attr:`row_change_serial`. Readers also check :attr:`generation`."""
+        if serial >= self.row_change_serial:
+            return _NO_ROWS
+        if serial < self._row_change_base:
+            return None
+        batches = self._row_changes[serial - self._row_change_base:]
+        return batches[0] if len(batches) == 1 else np.concatenate(batches)
 
     def _forget_transforms(self):
         """Every row is to be treated as written (a reconcile, an adopt):
@@ -1049,8 +1088,7 @@ class RenderTable:
         self._row_list = None               # compared once, next frame
         self._slot_of_obj = dict(peer._slot_of_obj)
         self._shown_stale = True
-        self._occlusion_index = None
-        self._occlusion_dirty = None
+        self._forget_row_changes()
         self.generation += 1
         self.material_version += 1
         self.extent_version += 1
@@ -1200,8 +1238,7 @@ class RenderTable:
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
-        self._occlusion_index = None  # mapping or row set may have changed
-        self._occlusion_dirty = None
+        self._forget_row_changes()    # mapping or row set may have changed
         self.generation += 1
         self.material_version += 1
         self.extent_version += 1
@@ -1216,8 +1253,7 @@ class RenderTable:
         are read one at a time; a batch (a Big World cell crossing parks
         thousands) is read with one column store each.
         """
-        if self._occlusion_dirty is not None:
-            self._occlusion_dirty.update(int(slot) for slot in slots)
+        self._note_row_changes(slots)
         idx = np.asarray(slots, dtype=np.intp)
         half = self.bounds[idx, 3:]
         if len(slots) > 16:
@@ -1239,8 +1275,7 @@ class RenderTable:
         geometry layout, so that case falls back to a full reconcile.
         """
         slots = sorted({int(slot) for slot in slots})
-        if self._occlusion_dirty is not None:
-            self._occlusion_dirty.update(slots)
+        self._note_row_changes(slots)
         self.rows_read += len(slots)
         # What the rows held, to tell whether this edit changed any of it
         # (an edit-time cost: a handful of rows).

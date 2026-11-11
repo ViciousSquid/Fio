@@ -55,16 +55,16 @@ class StubRenderer:
     def draw_bullet_marks(self, projection, view, marks):
         pass
 
-    def draw_connection_lines(self, projection, view, connections):
+    def draw_connection_lines(self, projection, view, segments, colours):
         pass
 
-    def draw_face_highlight(self, projection, view, brush, face_name):
+    def draw_face_highlight(self, projection, view, triangles):
         pass
 
     def draw_component_overlay(self, projection, view, overlay, version=None):
         pass
 
-    def draw_collision_visualization(self, projection, view, brushes):
+    def draw_collision_visualization(self, projection, view, vertices, runs):
         pass
 
 

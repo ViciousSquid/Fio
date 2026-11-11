@@ -256,14 +256,18 @@ class Renderer(Protocol):
     def draw_bullet_marks(self, projection, view, marks: Sequence[Mapping]) -> None:
         """Impact marks: ``{'pos': (x, y, z), 'alpha': float}`` each."""
 
-    def draw_connection_lines(self, projection, view, connections: Sequence[Mapping]) -> None:
-        """Editor I/O links: ``{'src', 'dst', 'color'}`` each."""
+    def draw_connection_lines(self, projection, view, segments, colours) -> None:
+        """Editor I/O links: ``segments`` (n, 2, 3) and ``colours`` (n, 3)
+        float32 (``engine.overlay_geometry.connection_segments``)."""
 
-    def draw_face_highlight(self, projection, view, brush: Mapping, face_name: str) -> None:
-        """Highlight one face of a brush (a brush dict in the world format)."""
+    def draw_face_highlight(self, projection, view, triangles) -> None:
+        """Highlight one face: world-space ``triangles`` (n, 3) float32
+        (``engine.overlay_geometry.face_highlight_triangles``)."""
 
     def draw_component_overlay(self, projection, view, overlay, version=None) -> None:
         """Vertex/edge/face handles from the editor's component controller."""
 
-    def draw_collision_visualization(self, projection, view, brushes: Sequence[Mapping]) -> None:
-        """Debug wireframes of collision boxes (``pos``/``size`` dicts)."""
+    def draw_collision_visualization(self, projection, view, vertices, runs) -> None:
+        """Debug wireframes of collision shapes: GL_LINES ``vertices`` (n, 3)
+        float32 and ``runs`` of ``(first, count, colour)``
+        (``engine.overlay_geometry.collision_wireframes``)."""

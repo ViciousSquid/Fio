@@ -290,3 +290,57 @@ def test_the_host_publishes_the_terrain_instead_of_passing_it():
     source = (ROOT / "engine" / "qt_game_view.py").read_text(encoding="utf-8")
     assert 'self._render_config["terrain"] = terrain.publish()' in source
     assert "release_renderer_resources" not in source
+
+
+def test_the_overlays_take_arrays_not_authored_objects():
+    """The face highlight, the I/O links and the collision wireframes are
+    drawn from arrays the host builds (engine/overlay_geometry.py): the
+    renderer reads no brush or record key and imports no brush geometry."""
+    path = PACKAGE / "core" / "overlays.py"
+    source = path.read_text(encoding="utf-8")
+    assert not _offenders([path], ("engine.brush_geometry",))
+    tree = ast.parse(source)
+    wanted = {"draw_face_highlight", "draw_connection_lines",
+              "draw_collision_visualization"}
+    found = {}
+    for function in _functions(tree):
+        if function.name not in wanted:
+            continue
+        found[function.name] = [a.arg for a in function.args.args]
+        for node in ast.walk(function):
+            key = None
+            if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+                key = node.slice.value
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "get" and node.args
+                  and isinstance(node.args[0], ast.Constant)):
+                key = node.args[0].value
+            assert not (isinstance(key, str) and key in {
+                "pos", "size", "src", "dst", "_model_collision",
+                "_collision_mode", "_mesh_triangles"}), (function.name, key)
+    assert found == {
+        "draw_face_highlight": ["self", "projection", "view", "triangles"],
+        "draw_connection_lines": ["self", "projection", "view", "segments", "colours"],
+        "draw_collision_visualization": ["self", "projection", "view", "vertices", "runs"],
+    }
+
+
+def test_the_renderer_writes_nothing_on_a_published_table():
+    """Per-table state (the occlusion index, the geometry handles) is kept
+    by the renderer under the table's identity; no attribute of a table is
+    assigned anywhere in the package."""
+    written = []
+    for path in _package_files():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+                targets = [node.target]
+            for target in targets:
+                if (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                        and target.value.id in {"table", "etable", "entity_table",
+                                                "render_table", "light_table"}):
+                    written.append("%s:%d %s" % (path.relative_to(ROOT), node.lineno,
+                                                 ast.unparse(target)))
+    assert not written, written

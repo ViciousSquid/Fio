@@ -193,9 +193,13 @@ def test_angled_brush_geometry_helpers_survive():
 
 def test_cut_face_highlight_and_texturing_survive():
     core = _read("engine/renderer/core/overlays.py")
-    assert "_geo_face_highlight_verts" in core
     assert "_draw_face_highlight_verts" in core
     assert "def draw_face_highlight(" in core
+    # The cut face's polygon is built by the host now, from the brush; the
+    # renderer is handed its triangles.
+    geometry = _read("engine/overlay_geometry.py")
+    assert "def _convex_face_triangles(" in geometry
+    assert "brush_geometry.face_key(f) == face_name" in geometry
 
     # Addressing a cut face's texture moved out of the Surface Inspector into
     # a shared, Qt-free layer, so the inspector and anything else reach a cut

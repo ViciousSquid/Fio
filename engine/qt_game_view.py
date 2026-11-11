@@ -72,6 +72,8 @@ from editor.debug_console import CommandInput, DebugConsole, debug_log
 from .sysmon import SysMon
 from .view_audio import ViewAudio
 from .terrain_frame import frustum_planes
+from .overlay_geometry import (
+    collision_wireframes, connection_segments, face_highlight_triangles)
 from .floating_windows import CallbackWindow, WindowManager
 
 # Pygame for gamepad support
@@ -1780,9 +1782,11 @@ class QtGameView(QOpenGLWidget):
                         if mode == 'all' or mode == b_mode:
                             filtered.append(b)
                     if filtered:
+                        # The collision records stay here: the renderer is
+                        # handed line vertices (engine/overlay_geometry.py).
+                        _lines, _runs = collision_wireframes(filtered)
                         self.renderer.draw_collision_visualization(
-                            self.projection_matrix, self.view_matrix, filtered
-                        )
+                            self.projection_matrix, self.view_matrix, _lines, _runs)
             if render_state:
                 self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
             if render_state is not None and len(render_state.projectiles):
@@ -1800,10 +1804,17 @@ class QtGameView(QOpenGLWidget):
                 self._io_conn_scene_ver = _scene_ver
             conn_lines = self._io_conn_cache
             if conn_lines:
-                self.renderer.draw_connection_lines(self.projection_matrix, self.view_matrix, conn_lines)
+                # The records' ends are the live position lists of brushes
+                # and Things, so a dragged object's line follows it; they
+                # are read here, and the renderer is handed arrays.
+                _segments, _colours = connection_segments(conn_lines)
+                self.renderer.draw_connection_lines(
+                    self.projection_matrix, self.view_matrix, _segments, _colours)
         if self.face_mode_active and self.hovered_face_info:
             brush, face_name = self.hovered_face_info
-            self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
+            self.renderer.draw_face_highlight(
+                self.projection_matrix, self.view_matrix,
+                face_highlight_triangles(brush, face_name))
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.

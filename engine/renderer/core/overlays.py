@@ -13,7 +13,6 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine.constants import brush_aabb_bounds
-from engine import brush_geometry
 from .diagnostics import timed_pass
 
 
@@ -357,8 +356,11 @@ class OverlaysMixin:
         gl.glDrawArrays(gl.GL_LINES, 0, len(vertices) // 3)
         gl.glBindVertexArray(0)
 
-    def draw_face_highlight(self, projection, view, brush, face_name):
-        if 'simple' not in self.shaders:
+    def draw_face_highlight(self, projection, view, triangles):
+        """Highlight a face: *triangles* is ``(n, 3)`` float32, world space
+        (``engine.overlay_geometry.face_highlight_triangles``, built by the
+        host from the hovered brush -- the renderer sees no brush)."""
+        if triangles is None or not len(triangles) or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
@@ -369,79 +371,10 @@ class OverlaysMixin:
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9)
         gl.glUniform1f(uniforms['alpha'], 0.4)
-
-        # Angled (clipped) brushes: highlight the real convex face polygon so
-        # the sloped cut face lights up under the cursor, not an AABB side.
-        if brush_geometry.brush_has_geometry(brush):
-            verts = self._geo_face_highlight_verts(brush, face_name)
-            if not verts:
-                gl.glUseProgram(0)
-                return
-            self._draw_face_highlight_verts(verts, uniforms)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glUseProgram(0)
-            return
-
-        pos, size = brush['pos'], brush['size']
-        hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
-        cx, cy, cz = pos[0], pos[1], pos[2]
-        bias = 0.5
-        verts = []
-        if face_name == 'north':
-            z = cz + hz + bias
-            verts = [cx-hx, cy-hy, z, cx+hx, cy-hy, z, cx+hx, cy+hy, z,
-                     cx-hx, cy-hy, z, cx+hx, cy+hy, z, cx-hx, cy+hy, z]
-        elif face_name == 'south':
-            z = cz - hz - bias
-            verts = [cx+hx, cy-hy, z, cx-hx, cy-hy, z, cx-hx, cy+hy, z,
-                     cx+hx, cy-hy, z, cx-hx, cy+hy, z, cx+hx, cy+hy, z]
-        elif face_name == 'east':
-            x = cx + hx + bias
-            verts = [x, cy-hy, cz+hz, x, cy-hy, cz-hz, x, cy+hy, cz-hz,
-                     x, cy-hy, cz+hz, x, cy+hy, cz-hz, x, cy+hy, cz+hz]
-        elif face_name == 'west':
-            x = cx - hx - bias
-            verts = [x, cy-hy, cz-hz, x, cy-hy, cz+hz, x, cy+hy, cz+hz,
-                     x, cy-hy, cz-hz, x, cy+hy, cz+hz, x, cy+hy, cz-hz]
-        elif face_name == 'top':
-            y = cy + hy + bias
-            verts = [cx-hx, y, cz+hz, cx+hx, y, cz+hz, cx+hx, y, cz-hz,
-                     cx-hx, y, cz+hz, cx+hx, y, cz-hz, cx-hx, y, cz-hz]
-        elif face_name == 'down':
-            y = cy - hy - bias
-            verts = [cx-hx, y, cz-hz, cx+hx, y, cz-hz, cx+hx, y, cz+hz,
-                     cx-hx, y, cz-hz, cx+hx, y, cz+hz, cx-hx, y, cz+hz]
-        if not verts:
-            return
-
-        self._draw_face_highlight_verts(verts, uniforms)
+        self._draw_face_highlight_verts(
+            np.ascontiguousarray(triangles, dtype=np.float32).ravel(), uniforms)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
-
-    @staticmethod
-    def _geo_face_highlight_verts(brush, face_name):
-        """Triangle-fan positions (world space, nudged outward) for one convex
-        face of an angled brush, or ``None`` when the face can't be resolved."""
-        convex = brush_geometry.get_convex(brush)
-        if convex is None or not convex.is_valid:
-            return None
-        face = None
-        for f in convex.faces:
-            if brush_geometry.face_key(f) == face_name:
-                face = f
-                break
-        if face is None:
-            return None
-        idx = face['indices']
-        if len(idx) < 3:
-            return None
-        ring = convex.verts[idx] + np.array(face['normal']) * 0.5   # bias off surface
-        out = []
-        v0 = ring[0]
-        for k in range(1, len(idx) - 1):
-            for p in (v0, ring[k], ring[k + 1]):
-                out.extend((float(p[0]), float(p[1]), float(p[2])))
-        return out
 
     def _draw_face_highlight_verts(self, verts, uniforms):
         """Upload and draw a fill+wire face highlight for arbitrary geometry."""
@@ -701,155 +634,68 @@ class OverlaysMixin:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_connection_lines(self, projection, view, connections):
-        if not connections or 'simple' not in self.shaders:
-            return
-        line_data = []
-        line_colors = []
-        for conn in connections:
-            sx,sy,sz = conn['src']
-            dx,dy,dz = conn['dst']
-            line_data.extend([float(sx), float(sy), float(sz), float(dx), float(dy), float(dz)])
-            line_colors.append(conn.get('color', (0.0,1.0,1.0)))
-        if not line_data:
-            return
-        vertices = np.array(line_data, dtype=np.float32)
+    def _line_buffer(self, vertices):
+        """Bind the shared dynamic line buffer holding *vertices* (float32,
+        flat xyz): one vertex array for every overlay that draws loose lines,
+        grown when a frame needs more."""
         if self._conn_line_vao is None:
             self._conn_line_vao = gl.glGenVertexArrays(1)
             self._conn_line_vbo = gl.glGenBuffers(1)
+            self._conn_line_capacity = 0
             gl.glBindVertexArray(self._conn_line_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 1024*1024, None, gl.GL_DYNAMIC_DRAW)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
+        gl.glBindVertexArray(self._conn_line_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
+        if vertices.nbytes > self._conn_line_capacity:
+            self._conn_line_capacity = max(vertices.nbytes, 1024 * 1024)
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, self._conn_line_capacity, None,
+                            gl.GL_DYNAMIC_DRAW)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+
+    def draw_connection_lines(self, projection, view, segments, colours):
+        """Editor I/O links: *segments* ``(n, 2, 3)`` and *colours* ``(n, 3)``
+        float32 (``engine.overlay_geometry.connection_segments``)."""
+        if segments is None or not len(segments) or 'simple' not in self.shaders:
+            return
+        vertices = np.ascontiguousarray(segments, dtype=np.float32).ravel()
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
-        gl.glBindVertexArray(self._conn_line_vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+        self._line_buffer(vertices)
         color_loc = uniforms['color']
-        for i, (r,g,b) in enumerate(line_colors):
+        for i, (r, g, b) in enumerate(np.asarray(colours, dtype=np.float32).tolist()):
             gl.glUniform3f(color_loc, r, g, b)
             gl.glDrawArrays(gl.GL_LINES, i*2, 2)
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_collision_visualization(self, projection, view, brushes):
-        """
-        Draw wireframe overlays for collision meshes and AABB boxes.
-        Helps debug why collision doesn't match the visual model.
-        """
-        if 'simple' not in self.shaders:
+    def draw_collision_visualization(self, projection, view, vertices, runs):
+        """Debug wireframes of collision shapes: GL_LINES *vertices*
+        ``(n, 3)`` float32 and *runs* of ``(first, count, (r, g, b))``, drawn
+        in order (``engine.overlay_geometry.collision_wireframes``)."""
+        if vertices is None or not len(vertices) or 'simple' not in self.shaders:
             return
-        
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
-        
-        # Clamp the line width to what the driver supports (a core profile is
-        # only required to offer 1.0).  The helper caches the queried range,
-        # so this no longer stalls the pipeline with a glGetFloatv per call.
+        # Clamped to what the driver supports (a core profile need only
+        # offer 1.0); the helper caches the queried range.
         self._set_line_width(2.0)
-        
-        for brush in brushes:
-            if not brush.get('_model_collision'):
-                continue
-            
-            mode = brush.get('_collision_mode', 'aabb')
-            
-            if mode == 'aabb':
-                # Draw yellow wireframe box
-                pos = brush.get('pos', [0, 0, 0])
-                size = brush.get('size', [64, 64, 64])
-                self._draw_wireframe_box(pos, size, (1.0, 1.0, 0.0), uniforms)
-                
-            elif mode == 'mesh':
-                # Draw cyan wireframe triangles
-                mesh_tris = brush.get('_mesh_triangles', [])
-                gl.glUniform3f(uniforms['color'], 0.0, 1.0, 1.0)  # Cyan
-                
-                # Build line data from triangles
-                line_verts = []
-                for (v0, v1, v2), normal in mesh_tris:
-                    line_verts.extend([v0[0], v0[1], v0[2], v1[0], v1[1], v1[2]])
-                    line_verts.extend([v1[0], v1[1], v1[2], v2[0], v2[1], v2[2]])
-                    line_verts.extend([v2[0], v2[1], v2[2], v0[0], v0[1], v0[2]])
-                
-                if line_verts:
-                    verts = np.array(line_verts, dtype=np.float32)
-                    # Use dynamic VAO
-                    vao = gl.glGenVertexArrays(1)
-                    vbo = gl.glGenBuffers(1)
-                    gl.glBindVertexArray(vao)
-                    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-                    gl.glBufferData(gl.GL_ARRAY_BUFFER, verts.nbytes, verts, gl.GL_DYNAMIC_DRAW)
-                    gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-                    gl.glEnableVertexAttribArray(0)
-                    
-                    gl.glDrawArrays(gl.GL_LINES, 0, len(line_verts) // 3)
-                    
-                    gl.glBindVertexArray(0)
-                    gl.glDeleteVertexArrays(1, [vao])
-                    gl.glDeleteBuffers(1, [vbo])
-        
+        self._line_buffer(np.ascontiguousarray(vertices, dtype=np.float32).ravel())
+        for first, count, colour in runs:
+            gl.glUniform3f(uniforms['color'], *colour)
+            gl.glDrawArrays(gl.GL_LINES, int(first), int(count))
+        gl.glBindVertexArray(0)
         gl.glLineWidth(1.0)
         gl.glUseProgram(0)
-
-    def _draw_wireframe_box(self, pos, size, color, uniforms):
-        """Draw a wireframe AABB box at position with size."""
-        hx, hy, hz = size[0]/2, size[1]/2, size[2]/2
-        cx, cy, cz = pos[0], pos[1], pos[2]
-        
-        # 12 edges of a box
-        edges = [
-            # Bottom face
-            (cx-hx, cy-hy, cz-hz, cx+hx, cy-hy, cz-hz),
-            (cx+hx, cy-hy, cz-hz, cx+hx, cy-hy, cz+hz),
-            (cx+hx, cy-hy, cz+hz, cx-hx, cy-hy, cz+hz),
-            (cx-hx, cy-hy, cz+hz, cx-hx, cy-hy, cz-hz),
-            # Top face
-            (cx-hx, cy+hy, cz-hz, cx+hx, cy+hy, cz-hz),
-            (cx+hx, cy+hy, cz-hz, cx+hx, cy+hy, cz+hz),
-            (cx+hx, cy+hy, cz+hz, cx-hx, cy+hy, cz+hz),
-            (cx-hx, cy+hy, cz+hz, cx-hx, cy+hy, cz-hz),
-            # Vertical edges
-            (cx-hx, cy-hy, cz-hz, cx-hx, cy+hy, cz-hz),
-            (cx+hx, cy-hy, cz-hz, cx+hx, cy+hy, cz-hz),
-            (cx+hx, cy-hy, cz+hz, cx+hx, cy+hy, cz+hz),
-            (cx-hx, cy-hy, cz+hz, cx-hx, cy+hy, cz+hz),
-        ]
-        
-        verts = []
-        for e in edges:
-            verts.extend(e)
-        
-        if not verts:
-            return
-        
-        v_data = np.array(verts, dtype=np.float32)
-        gl.glUniform3f(uniforms['color'], *color)
-        
-        vao = gl.glGenVertexArrays(1)
-        vbo = gl.glGenBuffers(1)
-        gl.glBindVertexArray(vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, v_data.nbytes, v_data, gl.GL_DYNAMIC_DRAW)
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-        
-        gl.glDrawArrays(gl.GL_LINES, 0, len(verts) // 3)
-        
-        gl.glBindVertexArray(0)
-        gl.glDeleteVertexArrays(1, [vao])
-        gl.glDeleteBuffers(1, [vbo])
 
     def _draw_selection_overlays(self, projection, view, selection, table):
         """Outline, dashed bounds, Effect box and gizmo of a SelectionOverlay."""

@@ -28,6 +28,8 @@ microsecond tuning. Earlier sections are kept as history.
   (`tools/bench_terrain.py`).
 * `618a552` -- the view's audio moved to `engine/view_audio.py`.
 * `e62ac25` -- M5.2/M5.3: the terrain published as tables; `TerrainGL`.
+* then the last boundary violations (overlays as arrays, the occlusion
+  index renderer-side); see `git log`.
 
 ### What the audit found (numbers in `docs/performance-audit.md`)
 
@@ -62,18 +64,25 @@ Snapdragon**. GL-bound numbers are host-specific.
 * `Light_Test` has no PlayerStart: it cannot be played, and the old harness
   hung on the editor's dialogue. It is measured in the editor view now.
 
-### The renderer boundary (`docs/renderer-boundary-audit.md`)
+### The renderer boundary (`docs/renderer-boundary-audit.md`): closed
 
-The brush, entity, light, shadow and portal passes are columnar. Fixed: the
-model passes' material dictionaries (V1), the selection outline's record
-read (V5), authored arrays in the frame input (V6). **Open**: the face
-highlight takes a brush dictionary and writes `_world_cache` on it (V2; a
-protocol change, not made without review); the connection-line and
-collision overlays (V3); the occlusion index's state written on the
-published `RenderTable`, with a set shared across threads (R1).
-`tests/renderer/test_renderer_boundary.py` holds the ratchet: add keys as
-V2 and V3 are fixed. Debug Tables (`tools/debug_tables.py`) reads the same
-published snapshot and is the oracle for any column V2-V4 add.
+Every violation the audit found is fixed. The brush, entity, light, shadow
+and portal passes were already columnar; then: the model passes' material
+dictionaries (V1), the selection outline's record read (V5), authored arrays
+in the frame input (V6), the terrain (V4, M5), and last the face highlight
+(V2), the connection-line and collision overlays (V3) and the occlusion
+index's state on the published table (R1). The host now builds overlay
+geometry as arrays (`engine/overlay_geometry.py`), and three contract
+members changed signature: `draw_face_highlight(projection, view,
+triangles)`, `draw_connection_lines(projection, view, segments, colours)`,
+`draw_collision_visualization(projection, view, vertices, runs)` -- a
+third-party renderer written against the old ones must follow.
+`RenderTable.row_changes_since(serial)` is how a reader learns which rows
+were refreshed; nothing in the renderer assigns an attribute of a table.
+What remains by design: GPU resource builders on a cache miss (a model's
+draw groups, a convex brush's mesh). `tests/renderer/test_renderer_boundary.py`
+holds the ratchets. Debug Tables (`tools/debug_tables.py`) reads the same
+published snapshot and is the oracle for any column added later.
 
 ### M5: terrain tables all the way to GL (done)
 

@@ -24,8 +24,11 @@ any future column added for V2-V4.
   frame (V1); the selection outline's geometry-record read (V5); authored
   object arrays in the frame input (V6).
 * Fixed in M5: the terrain (V4).
-* Remaining: the face highlight (V2), two editor/debug overlays (V3), and
-  one shared-state write (R1). Recommendations below.
+* Fixed after it: the face highlight (V2), the connection-line and
+  collision overlays (V3), the occlusion index's state on the published
+  table (R1). **No violation found by this audit remains open.** What the
+  renderer still reads of authored shape is the resource builders listed
+  under "Necessary GPU resource management".
 
 Files with no authored-world access: `core/visibility.py`,
 `core/light_stream.py`, `core/slot_transforms.py`, `core/uniform_rows.py`,
@@ -53,42 +56,29 @@ indexed, alpha, colour, GL texture name), opaque first;
 texture. The passes read only those. Per-entity data was already published
 (`EntityTable.model_recipe_id`, `model_recipes()`).
 
-### V2. `draw_face_highlight` takes a live brush dictionary -- OPEN
+### V2. `draw_face_highlight` took a live brush dictionary -- FIXED
 
-`core/overlays.py:360-420`, `_geo_face_highlight_verts` `:422-445`; called
-from `qt_game_view.py:2101` each frame a face is hovered in face mode
-(editor only). Reads `brush['pos']`, `brush['size']` (`:385`),
-`brush_geometry.brush_has_geometry(brush)` (`:375`) and
-`brush_geometry.get_convex(brush)` (`:425`), which **writes**
-`brush['_world_cache']` (`engine/brush_geometry.py:1023`) -- the paint path
-mutating the authored dictionary. The protocol sanctions the argument
-(`api.py`, "a brush dict in the world format").
+Was: `core/overlays.py` read `brush['pos']`, `brush['size']` and called
+`brush_geometry.get_convex(brush)`, which writes `brush['_world_cache']` --
+the paint path mutating the authored dictionary. Now the host builds the
+face's world-space triangles (`engine/overlay_geometry.py`
+`face_highlight_triangles`, the same arithmetic, moved) and the contract is
+`draw_face_highlight(projection, view, triangles)`. `overlays.py` no longer
+imports `brush_geometry`.
 
-Minimal fix: the host passes `(brush_id, face name)`; the renderer takes the
-box from `RenderTable` (`slot_of_id` -> `bounds`, `rot`) or the convex face's
-range from the geometry handles it already holds (`_geo_handles(table)`).
-Alternative: the editor builds a float32 triangle array on hover change.
-Either changes one protocol member (`api.py`, `tests/helpers/renderers.py`,
-`test_renderer_contract.py`; check
-`tests/integration/test_backport_boundaries.py`, which names these
-functions). No effect on play; pixel parity is checkable with the existing
-face-highlight tests. Not done here: a protocol change deserves its own
-review.
+### V3. Editor/debug overlays fed dictionaries -- FIXED
 
-### V3. Editor/debug overlays fed dictionaries -- OPEN, low priority
-
-* `draw_connection_lines` (`core/overlays.py:704-740`): host-built dicts
-  whose `src`/`dst` **alias the authored `brush['pos']` / `thing.pos` lists**
-  (`qt_game_view.py:1559-1606`). Editor only, with logic links shown. Fix:
-  the host builds a float32 `(n, 2, 3)` array and colours. Note the host's
-  cache key is only `(len(brushes), len(things), filter version)`: today the
-  aliasing is what keeps a dragged object's line current, so the copy must
-  come with a real invalidation (the state's `world_epoch`).
-* `draw_collision_visualization` (`core/overlays.py:742-805`): reads
-  `brush.get('_model_collision' | '_collision_mode' | 'pos' | 'size' |
-  '_mesh_triangles')` from the collision runtime's brush-shaped dicts
-  (`qt_game_view.py:2078`). Debug only. Fix: the collision runtime publishes
-  one line-vertex array when it builds.
+* `draw_connection_lines(projection, view, segments, colours)`: float32
+  `(n, 2, 3)` and `(n, 3)`. The host's records still alias the live
+  position lists of brushes and Things (that is what keeps a dragged
+  object's line current, given the host's coarse cache key); they are read
+  into arrays by the host each frame (`connection_segments`), not by the
+  renderer.
+* `draw_collision_visualization(projection, view, vertices, runs)`: one
+  GL_LINES vertex array and `(first, count, colour)` runs in the records'
+  order (`collision_wireframes`). It also no longer creates and deletes a
+  vertex array and buffer per collision shape per frame: every loose-line
+  overlay shares one dynamic buffer.
 
 ### V4. The terrain -- FIXED (M5)
 
@@ -170,19 +160,21 @@ not recommended without a measured reason.
 
 ## C. Correctness risks
 
-* **R1.** `forward/occlusion.py:382-390` writes private state on the
-  published `RenderTable` (`_occlusion_index`, `_occlusion_dirty`) and
-  clears a set the logic thread adds to (`engine/render_table.py`). The
-  renderer mutating published data, and a set shared across threads without
-  a lock: a row marked dirty between the renderer's `update` and `clear` is
-  lost, leaving a stale occluder until its next move. Play only, with
-  occlusion on. Fix: keep the index renderer-side, keyed by table identity
-  like `_geo_by_table`, and take changed rows from the table's change log
-  (`transforms_since`). Not reproduced as a visible fault; not changed here.
-* V2: the paint path writes `brush['_world_cache']` on the authored dict.
-  The GUI thread owns the dict in the editor, so no race today.
-* V3: connection lines read authored position lists the editor may be
-  mutating in the same thread; benign, but tied to the weak cache key.
+* **R1 -- FIXED.** `forward/occlusion.py` wrote its index and a dirty set
+  onto the published `RenderTable` (`_occlusion_index`, `_occlusion_dirty`),
+  and cleared a set the publisher added to. (With double-buffered
+  publication the logic thread writes only the buffer the renderer is not
+  reading, so no lost update was reproduced; the fault was the renderer
+  owning state on published data.) Now the index is the renderer's, held
+  under the table's identity and generation, and the table reports which
+  rows it refreshed since a serial (`RenderTable.row_changes_since`, a
+  bounded log of batches -- one array copy per refresh call, no per-row
+  Python, which also replaces a per-slot generator on the logic thread).
+  No attribute of a table is assigned anywhere in the package (ratchet).
+* V3 (remaining, host side): the I/O link records are cached under
+  `(len(brushes), len(things), filter version)`; a link added or removed
+  without changing those counts shows a frame late at most until one does.
+  Not a renderer matter any more.
 * V1 after the fix: a model's texture is resolved once. A texture file
   added for an already loaded model appears when the model is reloaded, not
   on the next frame as before.
@@ -196,6 +188,6 @@ may be read only in the listed resource builders (the list must shrink when
 one stops); the model passes contain no dictionary read; the host puts no
 `render_refs` / `entity_refs` in the frame input; the package imports no
 `engine.terrain`, calls nothing the Terrain had and writes no attribute on
-the terrain it is handed; `engine/terrain.py` imports no OpenGL. It does not yet catch
-`brush['pos']`-style reads in the overlays (V2, V3): add those keys when
-they are fixed.
+the terrain it is handed; `engine/terrain.py` imports no OpenGL; the three
+overlays take arrays and read no brush or record key; no attribute of a
+published table is assigned in the package.

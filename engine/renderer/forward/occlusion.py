@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import ctypes
 import time
+import weakref
 
 import glm
 import numpy as np
@@ -178,6 +179,9 @@ class OcclusionMixin:
         self._occlusion_cpu_query_ms = 0.0
         self._occlusion_cpu_probe_ms = 0.0
         self._occlusion_index_rebuilds = 0
+        #: id(RenderTable) -> [weakref, generation, CellGroupIndex, the
+        #: table's row_change_serial last applied].
+        self._occlusion_by_table = {}
         self._occlusion_view_epoch = 0
         self._occlusion_last_eye = None
         self._occlusion_last_forward = None
@@ -375,19 +379,28 @@ class OcclusionMixin:
             return slots
         self._occlusion_budget = budget
 
-        # The index is created once per published RenderTable buffer.
-        # Mutation paths journal only touched slots; the renderer applies
-        # those changes once and then needs no per-frame group rebuild.
+        # One index per published RenderTable buffer, kept here and found by
+        # the table's identity; the table only reports which rows it has
+        # refreshed since (row_changes_since), so a frame applies those and
+        # needs no per-frame group rebuild. Nothing is written on the table.
         t_index = time.perf_counter_ns()
-        index = table._occlusion_index
-        if index is None:
+        held = self._occlusion_by_table.get(id(table))
+        if held is None or held[0]() is not table or held[1] != table.generation:
             index = cell_cull.CellGroupIndex(table)
-            table._occlusion_index = index
-            table._occlusion_dirty = set()
+            self._occlusion_by_table = {
+                key: entry for key, entry in self._occlusion_by_table.items()
+                if entry[0]() is not None}
+            self._occlusion_by_table[id(table)] = [
+                weakref.ref(table), table.generation, index, table.row_change_serial]
             self._occlusion_index_rebuilds += 1
-        elif table._occlusion_dirty:
-            index.update(table, table._occlusion_dirty)
-            table._occlusion_dirty.clear()
+        else:
+            index = held[2]
+            changed = table.row_changes_since(held[3])
+            if changed is None:
+                index.rebuild(table)
+            elif len(changed):
+                index.update(table, changed.tolist())
+            held[3] = table.row_change_serial
         slots = np.asarray(slots, dtype=np.intp)
         visible = index.visible(slots)
         self._occlusion_cpu_index_ms = (
