@@ -347,6 +347,8 @@ def test_player_world_carries_implicit_gameplay_assets_without_a_monster(project
 def _saved_v5_level():
     """A level as this editor saves it (map version 5): a box, an angled
     brush moved after it was cut, and a rotated angled brush."""
+    # The editor state is the saver, and it needs Qt (editor.things).
+    pytest.importorskip("PyQt5", reason="saves a map through the editor state")
     from editor.editor_state import EditorState
     from engine import brush_geometry as bg
     from tests.helpers.worlds import angled_brush, box_brush
