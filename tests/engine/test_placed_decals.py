@@ -15,6 +15,10 @@ from engine import decal_textures
 from engine.decal_table import FLOOR, IMAGE, WALL, WET, DecalTable, placed_row
 from tests.helpers.worlds import make_thing
 
+# The Decal entity is editor.things', which imports PyQt5 at module level:
+# the module belongs to the Qt tier (the no-Qt jobs cannot import it).
+pytestmark = pytest.mark.qt
+
 
 def test_the_shared_image_list_orders_layers_and_blood_ranges():
     names = ('blood_floor_01.png', 'blood_floor_02.png', 'blood_wall_01.png',
