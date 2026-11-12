@@ -416,7 +416,7 @@ def run_audit(audit, window, sections):
         audit.modal("dialogs/open-map-picker", lambda: QtWidgets.QFileDialog.getOpenFileName(
             window, 'Open Map', 'maps', 'Maps (*.json)'), size=(36 * line, 24 * line))
         audit.modal("dialogs/project-overview", window.open_project_overview)
-        audit.modal("dialogs/grid-colours", window.open_grid_colours_dialog)
+        audit.modal("dialogs/colours", window.open_colours_dialog)
         audit.modal("dialogs/about", window.show_about)
 
     if enabled("debug"):
