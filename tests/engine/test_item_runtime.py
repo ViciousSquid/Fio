@@ -40,8 +40,10 @@ def _custom(item_id, **changes):
 
 def _monster_ahead(name, distance, **props):
     """A monster whose hitscan sphere is centred on the eye ray *distance* ahead."""
-    return make_thing(Monster, name, (0, EYE_Y - 128 * 0.45, distance),
-                      health=100, **props)
+    monster = make_thing(Monster, name, (0, 0, distance), health=100, **props)
+    # pos is the billboard's centre; the sphere sits 5% of the sprite below it.
+    monster.pos[1] = EYE_Y + float(monster.properties["sprite_height"]) * 0.05
+    return monster
 
 
 @pytest.fixture
@@ -230,7 +232,8 @@ def test_hitscan_marks_the_wall_it_misses_onto(world):
 
 
 def test_a_projectile_weapon_fires_into_the_shared_projectile_store(world):
-    target = make_thing(Monster, "target", (0, EYE_Y - 64, 300), health=100)
+    # Its projectile hit sphere is centred on its origin, the billboard centre.
+    target = make_thing(Monster, "target", (0, EYE_Y, 300), health=100)
     logic = world([target], items={"custom1": _custom("custom1", weapon={
         "mode": "projectile", "damage": 40.0, "projectile_speed": 600.0})})
     combat = _arm(logic, "custom1")

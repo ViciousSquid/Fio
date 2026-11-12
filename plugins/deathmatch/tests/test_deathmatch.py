@@ -57,7 +57,9 @@ def place(fighter, feet, angle=0):
     fighter.actor.velocity = glm.vec3(0)
     fighter.protected_until = 0
     if fighter.entity is not None:
-        fighter.entity.pos = feet[:]
+        # The billboard's centre above the feet, as sync_entity_position does.
+        from engine.entity_table import sprite_size
+        fighter.entity.pos = [feet[0], feet[1] + sprite_size(fighter.entity)[1] / 2, feet[2]]
 
 
 def walls(logic, *extra):

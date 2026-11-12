@@ -37,7 +37,7 @@ def _shoot(session, weapon_id, level, shots=1):
     combat.set_gore_level(level)
     monster = _human(session)
     height = float(monster.properties.get('sprite_height', 128.0))
-    centre = glm.vec3(monster.pos[0], monster.pos[1] + height * 0.45, monster.pos[2])
+    centre = glm.vec3(monster.pos[0], monster.pos[1] - height * 0.05, monster.pos[2])
     rows = session.logic.collision_runtime.collision_rows()
     best = None
     for k in range(16):

@@ -92,7 +92,8 @@ def _walk_monsters(things, ray_origin, ray_dir, reach, closest_brush_dist):
         sprite_width = float(thing.properties.get('sprite_width', 64.0))
         sprite_height = float(thing.properties.get('sprite_height', 128.0))
         radius = max(sprite_width * 0.75, sprite_height * 0.4, 48.0)
-        center = glm.vec3(thing.pos[0], thing.pos[1] + sprite_height * 0.45, thing.pos[2])
+        # pos is the billboard's centre: the feet are half the sprite below it.
+        center = glm.vec3(thing.pos[0], thing.pos[1] - sprite_height * 0.05, thing.pos[2])
         oc = ray_origin - center
         a = glm.dot(ray_dir, ray_dir)
         b = 2.0 * glm.dot(oc, ray_dir)
@@ -350,7 +351,7 @@ def test_a_monster_against_a_wall_at_its_exact_distance_is_decided_as_the_walk_d
     sprite_width = float(monster.properties.get('sprite_width', 64.0))
     sprite_height = float(monster.properties.get('sprite_height', 128.0))
     radius = max(sprite_width * 0.75, sprite_height * 0.4, 48.0)
-    center = glm.vec3(monster.pos[0], monster.pos[1] + sprite_height * 0.45, monster.pos[2])
+    center = glm.vec3(monster.pos[0], monster.pos[1] - sprite_height * 0.05, monster.pos[2])
     oc = origin - center
     a = glm.dot(direction, direction)
     b = 2.0 * glm.dot(oc, direction)

@@ -414,6 +414,14 @@ class LogicCombat:
         rounds them, ``radii`` float64. The sphere is wider than the sprite,
         for a more forgiving feel: width matters more than height when
         shooting. Taken under ``monster_lock``.
+
+        ``Monster.pos`` is the centre of the billboard (the AI grounds a
+        monster at ``floor + sprite_height / 2`` and the sprite pass draws the
+        quad centred on ``pos``), so the feet are half the sprite below it and
+        the sphere sits just under the middle of what is drawn. Measuring
+        from ``pos`` as if it were the feet put the sphere on the head: on a
+        192-tall human the whole lower half of the body, eye height included,
+        could not be hit.
         """
         monsters = []
         centres = []
@@ -427,7 +435,8 @@ class LogicCombat:
             sprite_width = float(props.get('sprite_width', 64.0))
             sprite_height = float(props.get('sprite_height', 128.0))
             monsters.append(thing)
-            centres.append((thing.pos[0], thing.pos[1] + sprite_height * 0.45, thing.pos[2]))
+            feet_y = thing.pos[1] - sprite_height * 0.5
+            centres.append((thing.pos[0], feet_y + sprite_height * 0.45, thing.pos[2]))
             radii.append(max(sprite_width * 0.75, sprite_height * 0.4, 48.0))
         return (monsters,
                 np.array(centres, dtype=np.float32).reshape(len(monsters), 3),
@@ -543,9 +552,11 @@ class LogicCombat:
             )
 
 
-    #: Monster hit sphere for projectiles: centred 64 units above the
-    #: monster's origin, radius 64.
-    PROJECTILE_MONSTER_LIFT = 64.0
+    #: Monster hit sphere for projectiles: centred on the monster's origin
+    #: -- the middle of its billboard (see _hitscan_monster_snapshot) --
+    #: radius 64. It was 64 units above it, as if the origin were the feet,
+    #: which put it over the head of a 192-tall human.
+    PROJECTILE_MONSTER_LIFT = 0.0
     PROJECTILE_MONSTER_RADIUS = 64.0
     #: Player hit sphere for projectiles.
     PROJECTILE_PLAYER_RADIUS = 32.0

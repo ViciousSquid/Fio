@@ -54,7 +54,10 @@ def _shotgun(damage=10.0, spread=1.0):
 def _monster_ahead(name, distance, **props):
     """A monster whose hitscan sphere is centred on the eye ray *distance* ahead."""
     props.setdefault("health", 100)
-    return make_thing(Monster, name, (0, EYE_Y - 128 * 0.45, distance), **props)
+    monster = make_thing(Monster, name, (0, 0, distance), **props)
+    # pos is the billboard's centre; the sphere sits 5% of the sprite below it.
+    monster.pos[1] = EYE_Y + float(monster.properties["sprite_height"]) * 0.05
+    return monster
 
 
 @pytest.fixture
@@ -200,7 +203,7 @@ def test_effects_apply_in_pellet_scatter_order(world, monkeypatch):
         centre = origin + direction * (1000.0 - 100.0 * pellet)
         monsters.append(make_thing(
             Monster, "pellet%d" % pellet,
-            (centre.x, centre.y - 128 * 0.45, centre.z),
+            (centre.x, centre.y + 128 * 0.05, centre.z),
             health=100, sprite_width=64, sprite_height=128))
     logic = world(list(reversed(monsters)), spread=WIDE_SPREAD)
     logic.player_runtime.player.pos.y += lift

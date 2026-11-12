@@ -13,13 +13,17 @@ import random
 import numpy as np
 import pytest
 
-from engine.logic_combat import ProjectileStore
+from engine.logic_combat import LogicCombat, ProjectileStore
 from tests.helpers.worlds import make_thing
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
 from editor.things import Monster, LogicRelay, Thing  # noqa: E402
 
 pytestmark = pytest.mark.qt
+
+#: Height of a monster's projectile hit sphere above its origin (the centre
+#: of its billboard).
+LIFT = LogicCombat.PROJECTILE_MONSTER_LIFT
 
 
 def _logic(things, projectiles):
@@ -50,7 +54,7 @@ def _reference_hit(things, pos, owner_id):
         team = thing.properties.get('team', '')
         if owner_team and team and owner_team == team:
             continue
-        centre = (thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+        centre = (thing.pos[0], thing.pos[1] + LIFT, thing.pos[2])
         if math.dist(pos, centre) < 64.0:
             return thing.properties['name']
     return None
@@ -89,7 +93,7 @@ def test_small_projectile_set_uses_scalar_path_but_matches_dense():
     owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
     target = make_thing(Monster, "target", (10, 0, 0), team="blue")
     things = [owner, target]
-    projectile = ((0, 64, 0), owner)
+    projectile = ((0, LIFT, 0), owner)
     scalar_things = [Thing.from_dict(thing.to_dict()) for thing in things]
     dense_things = [Thing.from_dict(thing.to_dict()) for thing in things]
     scalar_owner = scalar_things[0]
@@ -127,7 +131,7 @@ def test_the_first_eligible_monster_in_order_is_hit():
         make_thing(Monster, "second", (0, 0, 10), team="blue"),
         make_thing(Monster, "far", (500, 0, 0), team="blue"),
     ]
-    logic = _logic(things, [((0, 64, 0), owner)])
+    logic = _logic(things, [((0, LIFT, 0), owner)])
     before = {m.properties["name"]: m.properties.get("health", 100) for m in logic.world_runtime.monster_things}
     logic.combat_runtime._update_monster_projectiles(0.0)
     after = {m.properties["name"]: m.properties.get("health", 100) for m in logic.world_runtime.monster_things}
@@ -164,8 +168,8 @@ def test_a_monster_killed_by_one_projectile_is_not_hit_by_the_next():
     second = make_thing(Monster, "second", (0, 0, 40), team="blue")
     things = [owner, first, second]
     first.properties["health"] = 5
-    logic = _logic(things, [((0, 64, 30), owner),
-                            ((0, 64, 30), owner)])
+    logic = _logic(things, [((0, LIFT, 30), owner),
+                            ((0, LIFT, 30), owner)])
     logic.combat_runtime._update_monster_projectiles(0.0)
     assert first.properties["dead"] is True
     assert second.properties["health"] == 95
