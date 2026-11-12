@@ -1,6 +1,9 @@
 """Generate Fio's sample decals (assets/textures/decals/).
 
-    python tools/make_sample_decals.py
+    python tools/make_sample_decals.py [--force]
+
+Existing files are kept (they may have been replaced with real artwork)
+unless ``--force`` is given.
 
 Two images and two wet masks, placed with the Decal tool:
 
@@ -117,14 +120,19 @@ def full(_rng):
     return np.ones((SIZE, SIZE, 3)) * WET_TINT, np.clip(rim / 4.0, 0, 1)
 
 
-def build():
+def build(force=False):
     OUT.mkdir(parents=True, exist_ok=True)
     for name, maker, seed in (('grime_01.png', grime, 11), ('scorch_01.png', scorch, 23),
                               ('wet_puddle_01.png', puddles, 37), ('wet_damp_01.png', damp, 41),
                               ('wet_full.png', full, 0)):
+        if (OUT / name).exists() and not force:
+            # Never over an image someone has replaced with their own.
+            print('kept', OUT / name, '(exists; --force to regenerate)')
+            continue
         save(name, *maker(np.random.default_rng(seed)))
         print('wrote', OUT / name)
 
 
 if __name__ == '__main__':
-    build()
+    import sys
+    build(force='--force' in sys.argv[1:])
