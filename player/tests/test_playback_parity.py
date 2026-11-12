@@ -177,6 +177,10 @@ def test_point_blank_hits_damage_then_kill_without_changing_weapon_balance():
         combat=world.logic.combat_runtime
         combat.give_weapon(combat.items.resolve('gun1'))
         monster=world.state.things[1]
+        # A monster's pos is the centre of its billboard: stand it on the
+        # floor (y=0) rather than half buried, as the AI would ground it.
+        height=float(monster.properties.get('sprite_height',128))
+        monster.pos=[0,height/2,-20]
         inp=InputState();inp.set_button(ACTION_FIRE,True)
         eye,direction,_,_=world.camera()
         world.step(1/60,inp,-90,0)
