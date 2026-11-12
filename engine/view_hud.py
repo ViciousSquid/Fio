@@ -855,8 +855,7 @@ class ViewHud:
         painter.fillRect(x, y, width, height, QColor(20, 20, 20, 230))
         painter.setPen(QPen(QColor(100, 100, 100), 1))
         painter.drawRect(x, y, width, height)
-        font = QFont()
-        font.setPointSize(11)
+        font = QFont("Fio UI", 11)                 # HUD text is Fio UI
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QColor(255, 255, 255))
