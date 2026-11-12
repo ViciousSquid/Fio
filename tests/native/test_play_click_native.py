@@ -111,6 +111,10 @@ def _cg():
     cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
                                            CGPoint, ctypes.c_uint32]
     cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    cg.CGEventSourceCreate.restype = ctypes.c_void_p
+    cg.CGEventSourceCreate.argtypes = [ctypes.c_int32]
+    cg.CGEventSourceSetLocalEventsSuppressionInterval.argtypes = [ctypes.c_void_p, ctypes.c_double]
+    cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
     cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
     cf.CFRelease.argtypes = [ctypes.c_void_p]
     return cg, cf
@@ -148,16 +152,10 @@ def os_click():
     if name == 'wayland':
         _wayland['pointer'].send('click')
     elif name == 'cocoa':
-        cg, cf = _cg()
-        probe = cg.CGEventCreate(None)
-        where = cg.CGEventGetLocation(probe)
-        cf.CFRelease(probe)
-        kCGEventLeftMouseDown, kCGEventLeftMouseUp, kCGHIDEventTap = 1, 2, 0
-        for kind in (kCGEventLeftMouseDown, kCGEventLeftMouseUp):
-            event = cg.CGEventCreateMouseEvent(None, kind, where, 0)
-            cg.CGEventPost(kCGHIDEventTap, event)
-            cf.CFRelease(event)
-            time.sleep(0.03)
+        kCGEventLeftMouseDown, kCGEventLeftMouseUp = 1, 2
+        kCGMouseEventClickState = 1
+        _post_macos_mouse(((kCGEventLeftMouseDown, 1), (kCGEventLeftMouseUp, 1)),
+                          kCGMouseEventClickState)
     elif name == 'xcb':
         subprocess.run([shutil.which('xdotool'), 'click', '--delay', '30', '1'],
                        check=True, timeout=10)
@@ -167,6 +165,38 @@ def os_click():
         user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.03)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+def _post_macos_mouse(events, click_state_field=None):
+    """Post (event type, click count) pairs at the pointer, from an event
+    source whose events nothing suppresses (CGWarpMouseCursorPosition otherwise
+    holds back mouse events for a quarter of a second)."""
+    cg, cf = _cg()
+    kCGEventSourceStateHIDSystemState, kCGHIDEventTap = 1, 0
+    source = cg.CGEventSourceCreate(kCGEventSourceStateHIDSystemState)
+    cg.CGEventSourceSetLocalEventsSuppressionInterval(source, 0.0)
+    probe = cg.CGEventCreate(None)
+    where = cg.CGEventGetLocation(probe)
+    cf.CFRelease(probe)
+    for kind, clicks in events:
+        event = cg.CGEventCreateMouseEvent(source, kind, where, 0)
+        if click_state_field is not None:
+            cg.CGEventSetIntegerValueField(event, click_state_field, clicks)
+        cg.CGEventPost(kCGHIDEventTap, event)
+        cf.CFRelease(event)
+        time.sleep(0.03)
+    if source:
+        cf.CFRelease(source)
+
+
+def warm_up_input(app):
+    """macOS drops the first event a process posts (seen on the runner: the
+    first click never arrived, every later one did). Spend it on a harmless
+    mouse move where the pointer already is."""
+    if platform_name() == 'cocoa':
+        kCGEventMouseMoved = 5
+        _post_macos_mouse(((kCGEventMouseMoved, 0),))
+        pump(app, 0.3)
 
 
 class PressCounter(QObject):
@@ -255,6 +285,7 @@ def armed(fio_session, qt_app):
             f'the editor did not go full screen: {window.size()} on {screen}'
     window.raise_()
     window.activateWindow()
+    warm_up_input(qt_app)
     if not pump_until(qt_app, window.isActiveWindow, 5.0):
         # Windows refuses activation to a process that has not had input:
         # a real click on the status bar (inert) gives it some.
