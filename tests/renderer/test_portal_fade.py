@@ -65,7 +65,10 @@ def _render(ctx, fade):
         renderer._portal_upload_quad([(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)])
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glUseProgram(renderer._portal_rim_shader)
-        ident = glm.value_ptr(glm.mat4(1.0))
+        # Keep the matrix alive while GL reads it: value_ptr of a temporary
+        # points into freed memory (garbage on CPython 3.13, which reuses it).
+        identity = glm.mat4(1.0)
+        ident = glm.value_ptr(identity)
         gl.glUniformMatrix4fv(renderer._portal_rim_proj_loc, 1, gl.GL_FALSE, ident)
         gl.glUniformMatrix4fv(renderer._portal_rim_view_loc, 1, gl.GL_FALSE, ident)
         gl.glUniform4f(renderer._portal_rim_color_loc, 0.0, 0.0, 1.0, 1.0)
