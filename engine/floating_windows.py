@@ -26,9 +26,10 @@ from PyQt5.QtGui import QColor, QFont, QPen, QBrush, QFontMetrics
 
 
 # Shared palette (matches engine.sysmon so popups look like one family).
-#: The floating windows' colours (Edit > Colours > Floating Windows). Every
-#: window drawn in the 3D view -- SysMon, the pause menu, the editor's
-#: overlays -- reads them as it draws; :func:`set_theme` changes them all.
+#: The floating windows' colours. Every window drawn in the 3D view --
+#: SysMon, the pause menu, the editor's overlays -- reads them as it draws;
+#: :func:`set_theme` changes them all. Edit > Colours > Windows sets the
+#: title bar; the dragged title bar follows it.
 DEFAULT_THEME = {
     'header': '#425f5d',          # the title bar
     'header_active': '#5a8280',   # the title bar of the window being dragged
@@ -46,6 +47,12 @@ def set_theme(colours=None):
     """Use *colours* (``DEFAULT_THEME``'s keys, as ``#rrggbb``; any missing
     or unreadable keep their defaults) for every floating window."""
     colours = dict(colours or {})
+    if not colours.get('header_active'):
+        # The dragged title bar follows the title bar: the same lift as the
+        # default pair, exactly the default when the title bar is.
+        header = QColor(str(colours.get('header') or ''))
+        if header.isValid() and header.name() != DEFAULT_THEME['header']:
+            colours['header_active'] = header.lighter(135).name()
     for key, default in DEFAULT_THEME.items():
         colour = QColor(str(colours.get(key) or default))
         if not colour.isValid():

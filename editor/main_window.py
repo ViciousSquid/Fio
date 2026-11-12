@@ -5824,25 +5824,23 @@ class MainWindow(QMainWindow):
 
     def apply_window_colours(self):
         """The floating windows (SysMon, the pause menu, the editor's
-        overlays) take their colours from settings.ini [WindowColours]."""
+        overlays) take their title bar colour from settings.ini
+        [WindowColours]; the rest of their colours are fixed."""
         from engine import floating_windows
-        section = 'WindowColours'
-        floating_windows.set_theme({
-            key: self.config.get(section, key, fallback=default)
-            for key, default in floating_windows.DEFAULT_THEME.items()})
+        floating_windows.set_theme({'header': self.config.get(
+            'WindowColours', 'header', fallback=floating_windows.DEFAULT_THEME['header'])})
 
 
 class ColoursDialog(QDialog):
-    """Edit > Colours: a tab for the grid, a tab for the floating windows."""
+    """Edit > Colours: a tab for the grid, a tab for the floating windows'
+    title bar. OK saves every colour of both tabs to settings.ini."""
 
     GRID_SECTION = "GridColours"
     GRID_DEFAULTS = {"major": "#5a5a5a", "minor": "#404040", "background": "#2b2b2b"}
     GRID_LABELS = (("major", "Major colour:"), ("minor", "Minor colour:"),
                    ("background", "Background:"))
     WINDOW_SECTION = "WindowColours"
-    WINDOW_LABELS = (("header", "Title bar:"), ("header_active", "Title bar (dragging):"),
-                     ("background", "Background:"), ("border", "Border:"),
-                     ("text", "Text:"))
+    WINDOW_LABELS = (("header", "Title bar:"),)
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -5856,7 +5854,8 @@ class ColoursDialog(QDialog):
         self.colours = {}
         self.buttons = {}
         self.defaults = {self.GRID_SECTION: dict(self.GRID_DEFAULTS),
-                         self.WINDOW_SECTION: dict(DEFAULT_THEME)}
+                         self.WINDOW_SECTION: {key: DEFAULT_THEME[key]
+                                               for key, _text in self.WINDOW_LABELS}}
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -5864,7 +5863,7 @@ class ColoursDialog(QDialog):
         self.tabs.addTab(self._tab(self.GRID_SECTION, self.GRID_LABELS), "Grid")
         self.tabs.addTab(self._tab(self.WINDOW_SECTION, self.WINDOW_LABELS,
                                    "SysMon, the pause menu and the other windows "
-                                   "floating in the 3D view."), "Floating Windows")
+                                   "floating in the 3D view."), "Windows")
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.button_box.accepted.connect(self.accept)
@@ -5928,5 +5927,11 @@ class ColoursDialog(QDialog):
             if not self.config.has_section(section):
                 self.config.add_section(section)
             self.config.set(section, key, colour.name())
+        # Window colours the dialog no longer offers are not kept: a value
+        # left from an older version could not be seen or reset.
+        if self.config.has_section(self.WINDOW_SECTION):
+            for key in list(self.config.options(self.WINDOW_SECTION)):
+                if (self.WINDOW_SECTION, key) not in self.colours:
+                    self.config.remove_option(self.WINDOW_SECTION, key)
         self.parent_window.save_config()
         super().accept()
