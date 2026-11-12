@@ -146,7 +146,11 @@ def test_the_decal_button_shows_textures_decals_and_goes_back_after(main_window,
     tab.decal_btn.click()
     assert tool.active and tab.decal_btn.isChecked()
     assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(tab.decals_path())
-    assert 'wet_full.png' in [item.name_text for item in tab.items]
+    names = [item.name_text for item in tab.items]
+    assert 'wet_full.png' in names
+    # Blood (gore's own images) always last, after the decals you place.
+    blood = [n.startswith('blood_') for n in names]
+    assert any(blood) and blood == sorted(blood)
     tab.decal_btn.click()                                   # again: back where we were
     assert not tool.active and not tab.decal_btn.isChecked()
     assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(start)

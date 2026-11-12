@@ -512,6 +512,12 @@ class AssetItem(QWidget):
         self._update_border()
 
 
+def browser_order(name):
+    """The order the browser lists a folder in: by name, except blood decal
+    images (``blood_*``, gore's own) always last, after the decals you place."""
+    return (name.lower().startswith('blood_'), name.casefold())
+
+
 class AssetBrowserTab(QWidget):
     #: The Textures tab's Tint and DECAL buttons: both this size.
     SIDE_BUTTON_SIZE = QSize(60, 36)
@@ -965,7 +971,7 @@ class AssetBrowserTab(QWidget):
 
         try:
             # Loose files and the category archive's members, read in place.
-            files = asset_listdir(path)
+            files = sorted(asset_listdir(path), key=browser_order)
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
                 if ext in self.extensions:
