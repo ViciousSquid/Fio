@@ -212,3 +212,39 @@ def test_a_decal_on_screen_leaves_the_brushes_drawn_after_it_alone(fio_session):
         session.close()
     trigger = (slice(40, 110), slice(110, 210))        # above the decal
     assert np.abs(frames[0][trigger].astype(int) - frames[1][trigger].astype(int)).max() <= 2
+
+
+def test_decals_are_batched_one_draw_whatever_their_count():
+    """Every image and blood decal is one instanced draw; wet ones one more."""
+    import OpenGL.GL as gl
+    from engine import decal_textures
+    from engine.decal_table import placed_row
+    from tests.helpers import gl as glh
+    from tests.helpers.worlds import box_brush
+    glh.reset_texture_cache()
+    with glh.GLTestContext(160, 120) as context:
+        renderer = glh.make_renderer()
+        floor = box_brush('floor', (0, -16, -500), (2000, 32, 2000))
+        projection, view, eye = glh.camera_matrices(eye=(0, 500, 300), target=(0, 0, -500))
+        names = decal_textures.images()[1]
+
+        def calls(n, image):
+            rows = [placed_row((x * 7.0 - n * 3.5, 0.0, -500.0), {'texture': image},
+                               names.index(image)) for x in range(n)]
+            rows = None if not n else (np.stack([r[0] for r in rows]),
+                                       np.stack([r[1] for r in rows]))
+            cfg = glh.render_config(all_brushes=[floor], all_things=[], decals=rows)
+            context.bind()
+            renderer.render_stats.draw_calls = 0
+            renderer.render_scene(projection, view, eye, None, cfg,
+                                  brush_slots=cfg['all_brush_slots'])
+            gl.glFinish()
+            return renderer.render_stats.draw_calls, renderer.decals_drawn
+
+        base, _ = calls(0, 'scorch_01.png')
+        assert calls(10, 'scorch_01.png') == (base + 1, 10)
+        assert calls(300, 'scorch_01.png') == (base + 1, 300)
+        wet = next(n for n in names if decal_textures.is_wet_image(n))
+        assert calls(300, wet) == (base + 2, 300)
+        renderer.cleanup()
+    glh.reset_texture_cache()
