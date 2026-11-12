@@ -26,6 +26,7 @@ the selected decals.
 """
 
 import math
+import os
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
@@ -215,6 +216,15 @@ class DecalTool:
             is_error=True)
         return None
 
+    def type_for(self, image):
+        """The type a new decal of *image* gets: a ``wet_*`` image is a mask
+        of where a surface is wet, so always Wet -- painted as an Image it
+        would change nothing (its colour is the surface's own); any other
+        image takes the panel's Type."""
+        if os.path.basename(str(image)).lower().startswith('wet_'):
+            return 'wet'
+        return self.settings['decal_type']
+
     def place_at(self, point, normal, image):
         """Place a new decal of *image* on the surface at *point* facing
         *normal*; it becomes the selection. One undo step."""
@@ -222,7 +232,7 @@ class DecalTool:
         s = self.settings
         self.editor.save_state()
         decal = Decal(pos=[float(v) for v in point], properties={
-            'decal_type': s['decal_type'], 'texture': image,
+            'decal_type': self.type_for(image), 'texture': image,
             'width': float(s['width']), 'height': float(s['height']),
             'depth': float(s['depth']), 'yaw': yaw, 'pitch': pitch,
             'roll': float(s['roll']), 'opacity': float(s['opacity'])})

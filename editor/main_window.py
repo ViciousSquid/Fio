@@ -4057,7 +4057,12 @@ class MainWindow(QMainWindow):
                 self.show_toast("Nothing to paste", is_error=True)
             return
 
-        # Delete / Backspace
+        # Delete / Backspace: the Decal tool's selection first (wherever the
+        # keyboard is), then the editor's.
+        if (event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
+                and not self.view_3d.play_mode
+                and self.view_3d.decal_tool.delete_selected()):
+            return
         if self.primary_selection() and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.save_state()
             for obj in list(self.state.selected_objects):

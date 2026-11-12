@@ -199,3 +199,37 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     tab._side_button_menu(empty)
     assert len(shown) == 1
     tab.set_side_button_size('small')
+
+
+def test_a_wet_mask_is_placed_as_a_wet_decal_whatever_the_panel_says(main_window, tool):
+    tool.settings['decal_type'] = 'image'
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    press(tool, 10, 10)                       # the fixture's image: wet_puddle_01.png
+    placed, = decals(main_window)
+    assert placed.properties['decal_type'] == 'wet'
+    assert tool.type_for('scorch_01.png') == 'image'
+    assert tool.type_for('assets/textures/decals/WET_full.png') == 'wet'
+
+
+@pytest.mark.parametrize('key', [Qt.Key_Backspace, Qt.Key_Delete])
+def test_backspace_and_delete_remove_the_selection_wherever_the_keyboard_is(
+        main_window, tool, key):
+    from PyQt5.QtGui import QKeyEvent
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    press(tool, 10, 10)
+    assert len(decals(main_window)) == 1
+    # Not the 3D view: the main window (the Asset Browser, the panel) gets it.
+    main_window.keyPressEvent(QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
+    assert decals(main_window) == []
+    # And in the 3D view, as before.
+    press(tool, 10, 10)
+    main_window.view_3d.keyPressEvent(QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier))
+    assert decals(main_window) == []
+
+
+def test_an_unselected_decal_stays_in_the_level(main_window, tool):
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    press(tool, 10, 10)
+    tool.escape()                              # clears the selection
+    tool.escape()                              # leaves the tool
+    assert not tool.active and len(decals(main_window)) == 1

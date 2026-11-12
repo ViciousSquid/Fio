@@ -78,6 +78,12 @@ def scorch(rng):
     return rgb, alpha
 
 
+#: The wet masks' colour: a dark, wet-looking grey-blue. Placed as Wet
+#: decals only their alpha is read; placed as Images they still darken the
+#: surface visibly rather than leaving it as it was (mid grey would).
+WET_TINT = np.array((0.34, 0.38, 0.44))
+
+
 def puddles(rng):
     """Clusters of rounded blobs, solid in the middle: standing water."""
     field = np.zeros((SIZE, SIZE))
@@ -91,7 +97,7 @@ def puddles(rng):
     field += warp * 1.3 + (fbm(rng, SIZE, 4, 14) - 0.5) * 0.5
     edge = np.clip((1.0 - radial(SIZE, rx=0.5, ry=0.5)) * 3.0, 0, 1)
     alpha = np.clip(field * 2.2, 0, 1) * edge
-    return np.ones((SIZE, SIZE, 3)) * 0.5, alpha
+    return np.ones((SIZE, SIZE, 3)) * WET_TINT, alpha
 
 
 def damp(rng):
@@ -101,14 +107,14 @@ def damp(rng):
     stretched = value_noise(rng, SIZE, 24)[:, ::1] * 0.5 + 0.5 * np.roll(streaks, 7, axis=1)
     body = 1.0 - radial(SIZE, rx=0.47, ry=0.42)
     alpha = np.clip((streaks * 0.8 + stretched * 0.4 + body * 1.2 - 1.05) * 2.4, 0, 1)
-    return np.ones((SIZE, SIZE, 3)) * 0.5, alpha * 0.85
+    return np.ones((SIZE, SIZE, 3)) * WET_TINT, alpha * 0.85
 
 
 def full(_rng):
     """Solid wetness to the edges (a 4-pixel soft rim): a whole surface."""
     y, x = np.mgrid[0:SIZE, 0:SIZE]
     rim = np.minimum.reduce([x, y, SIZE - 1 - x, SIZE - 1 - y]).astype(float)
-    return np.ones((SIZE, SIZE, 3)) * 0.5, np.clip(rim / 4.0, 0, 1)
+    return np.ones((SIZE, SIZE, 3)) * WET_TINT, np.clip(rim / 4.0, 0, 1)
 
 
 def build():
