@@ -214,6 +214,58 @@ def test_thumbnails_are_decoded_off_the_ui_thread(qt_app, tmp_path, monkeypatch)
         tab.close()
 
 
+@pytest.mark.parametrize('kind', ['decode', 'sizes'])
+def test_thumbnail_workers_can_finish_after_their_tab_is_deleted(
+        qt_app, tmp_path, monkeypatch, kind):
+    import threading
+    from PyQt5 import sip
+    from PyQt5.QtCore import QThreadPool
+    from PyQt5.QtWidgets import QWidget
+    from editor.asset_browser import AssetItem, ThumbnailLoader
+
+    path = tmp_path / 'late.png'
+    _write(path, 64, 32, '#00ff00')
+    entered, resume = threading.Event(), threading.Event()
+    operation = 'decode_image' if kind == 'decode' else 'read_size'
+    original = getattr(asset_thumbnails, operation)
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert resume.wait(5), 'test did not release the thumbnail worker'
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(asset_thumbnails, operation, paused)
+    pool = QThreadPool()
+    monkeypatch.setattr(ThumbnailLoader, '_pool', pool)
+    tab = QWidget()
+    loader = ThumbnailLoader(tab)
+    signals = loader._signals
+    completed = []
+    if kind == 'decode':
+        signals.ready.connect(lambda *args: completed.append(args))
+        loader.pixmap(AssetItem(path.name, str(path)), (58, 58))
+    else:
+        signals.sizes.connect(lambda *args: completed.append(args))
+        loader.read_sizes([str(path)])
+    try:
+        assert entered.wait(5), 'thumbnail worker did not start'
+        sip.delete(tab)
+        assert sip.isdeleted(loader)
+    finally:
+        resume.set()
+        assert pool.waitForDone(5000), 'thumbnail worker did not finish'
+        qt_app.processEvents()
+        if not sip.isdeleted(tab):
+            sip.delete(tab)
+    # A real worker emits after deletion, rather than checking a deletion
+    # flag that can race with the emit. Qt drops delivery to the dead loader.
+    assert completed
+    if kind == 'decode':
+        assert completed[0][2].size().width() == 64
+    else:
+        assert completed == [(1, [(str(path), (64, 32))]), (1, None)]
+
+
 def test_an_unreadable_file_shows_a_question_mark_and_is_not_retried(qt_app, tmp_path):
     (tmp_path / "broken.png").write_bytes(b"not a png")
     tab = _tab(qt_app, tmp_path)
