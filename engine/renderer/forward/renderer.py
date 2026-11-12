@@ -16,6 +16,7 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import entity_table as entity_projection
+from engine import render_table
 from engine import shaders
 from engine.constants import (
     PLAYER_HULL_SIZE,
@@ -39,6 +40,15 @@ from .decals import DecalsMixin
 from .distance import DistanceMixin
 from .shaders import ShadersMixin
 
+
+
+def nodraw_brushes(table, slots):
+    """The brushes among *slots* with a ``nodraw`` face: 'Solid Lit' draws
+    them textured, so the faces play will not draw stay plain to see."""
+    if table is None or not len(slots):
+        return np.empty(0, dtype=np.int32)
+    ids = table.tex_name_id[slots]
+    return slots[(ids == render_table.TEX_ID_NODRAW).any(axis=1)]
 
 class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
                       DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
@@ -556,7 +566,18 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                     self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
                 else:
-                    self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
+                    # 'Solid Lit': nodraw brushes keep their texture, so what
+                    # will not be drawn in play stays plain to see; water is
+                    # never textured -- a shaded brush in its colour, drawn
+                    # with the solid ones (see the water pass below).
+                    nodraw = nodraw_brushes(_tbl, opaque_brushes)
+                    solid = opaque_brushes
+                    if len(nodraw):
+                        solid = opaque_brushes[np.isin(opaque_brushes, nodraw, invert=True)]
+                        self.draw_textured_brushes_optimized(projection, view, camera_pos, nodraw, lights, config, _tbl)
+                    if len(water_brushes):
+                        solid = np.concatenate((solid, water_brushes))
+                    self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights, config, table=_tbl)
             else:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
         finally:
@@ -659,7 +680,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
-        if current_mode == RENDER_MODE_LIT:
+        if current_mode == RENDER_MODE_LIT and brush_display_mode == 'Solid Lit':
+            pass        # water was drawn as a solid, shaded brush (above)
+        elif current_mode == RENDER_MODE_LIT:
             self.draw_water_brushes(
                 projection, view, camera_pos, water_brushes, lights, config,
                 table=_tbl)
