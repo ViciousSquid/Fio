@@ -34,6 +34,25 @@ import time
 from tests.helpers.paths import REPO_ROOT
 
 
+def process_events(app):
+    """Run one pass of the event loop.
+
+    On macOS a bare ``processEvents()`` can enter Cocoa's own
+    ``[NSApplication run]`` and never come back when nothing stops it (seen on
+    the macOS runner: the first pass after the editor window opened waited in
+    it for good). There, a ``QEventLoop`` that quits itself is the supported
+    way: Qt starts NSApplication and stops it again. Elsewhere this is plain
+    ``processEvents()``.
+    """
+    if app.platformName() == "cocoa":
+        from PyQt5.QtCore import QEventLoop, QTimer
+        loop = QEventLoop()
+        QTimer.singleShot(0, loop.quit)
+        loop.exec_()
+    else:
+        app.processEvents()
+
+
 class FioTestSession:
     def __init__(self, app, level, *, size=(320, 180)):
         """Open the editor on *level*: a repo-relative map path or level data."""
@@ -51,7 +70,7 @@ class FioTestSession:
         # Building the window sets the application font, which re-lays the
         # window out once its events are processed; size the view after that,
         # or the layout pass replaces the requested size.
-        self.app.processEvents()
+        process_events(self.app)
         self.view.resize(*size)
         if app.platformName() == "offscreen":
             # No GL context, so initializeGL (which starts the logic thread
@@ -74,7 +93,7 @@ class FioTestSession:
         # not the input a user can deliver to the editor.
         self.window.activateWindow()
         self.view.setFocus()
-        self.app.processEvents()
+        process_events(self.app)
 
     # -- the live objects -------------------------------------------------
 
@@ -191,7 +210,7 @@ class FioTestSession:
             os.chdir(self._previous_cwd)
             deadline = time.perf_counter() + 2.0
             while window() is not None and time.perf_counter() < deadline:
-                self.app.processEvents()
+                process_events(self.app)
                 self.app.sendPostedEvents(None, QEvent.DeferredDelete)
                 gc.collect()
                 time.sleep(0.01)
@@ -201,5 +220,5 @@ class FioTestSession:
         deadline = time.perf_counter() + timeout
         while not predicate():
             assert time.perf_counter() < deadline, "editor did not finish starting"
-            self.app.processEvents()
+            process_events(self.app)
             time.sleep(0.005)

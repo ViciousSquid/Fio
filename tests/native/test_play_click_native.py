@@ -28,6 +28,8 @@ pytest.importorskip('PyQt5')
 from PyQt5.QtCore import QEvent, QObject, QPoint, Qt
 from PyQt5.QtGui import QCursor, QGuiApplication, QSurfaceFormat
 
+from tests.helpers.session import process_events
+
 # The editor's OpenGL format, as main.py sets it before the QApplication
 # exists: every context Qt makes (its shared one included) must be 3.3 core.
 # Without it macOS cannot share the 3D view's context with Qt's ("Could not
@@ -190,14 +192,14 @@ def pump(app, seconds):
     """Run the real event loop (the view's 16 ms frame timer included)."""
     deadline = time.perf_counter() + seconds
     while time.perf_counter() < deadline:
-        app.processEvents()
+        process_events(app)
         time.sleep(0.005)
 
 
 def pump_until(app, predicate, timeout):
     deadline = time.perf_counter() + timeout
     while time.perf_counter() < deadline:
-        app.processEvents()
+        process_events(app)
         if predicate():
             return True
         time.sleep(0.01)
