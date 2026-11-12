@@ -77,7 +77,8 @@ GL_RENDERBUFFER_FREE_MEMORY_ATI = 0x87FD
 
 class ViewPause:
     #: Bundled face the menu is set in (assets/fonts), and the fallback.
-    PAUSE_MENU_FONT = "HornetDisplay-Regular.ttf"
+    #: The pause menu's font family: Fio UI, as the rest of the HUD.
+    PAUSE_MENU_FONT = "Fio UI"
     PAUSE_MENU_FALLBACK_FONT = "Fio UI"
     #: Seconds the blurred backdrop takes to fade in, and out again.
     PAUSE_FADE_SECONDS = 1.0
@@ -352,8 +353,7 @@ class ViewPause:
 
     def _pause_font(self, size):
         if self.view._pause_menu_family is None:
-            self.view._pause_menu_family = (self.view.hud._resolve_hud_font_family(self.PAUSE_MENU_FONT)
-                                       or self.PAUSE_MENU_FALLBACK_FONT)
+            self.view._pause_menu_family = self.PAUSE_MENU_FONT
         font = QFont(self.view._pause_menu_family)
         font.setPixelSize(size)
         return font
