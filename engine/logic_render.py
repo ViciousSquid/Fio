@@ -543,9 +543,11 @@ class LogicRender:
         ]
 
         combat = logic.combat_runtime
-        # The level's placed decals are rows of the same table as blood.
+        # The level's placed decals are rows of the same table as blood;
+        # the world revision and the change journal say which to remake.
         combat.blood.place(logic.editor_state.things,
-                           show_selection=not logic.session_runtime.play_mode)
+                           show_selection=not logic.session_runtime.play_mode,
+                           epoch=getattr(logic.editor_state, 'world_epoch', None))
         write_state.decals = combat.blood.frame(
             current_time, combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
 

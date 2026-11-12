@@ -76,10 +76,11 @@ FRAME_INPUT = {
                '(its dense TerrainTable, per-slot products, paint maps and '
                'this frame\'s appearance). Never the Terrain object; a '
                'renderer owns every GL resource it builds from it',
-    'decals': 'projected decals, or None: (models (n, 16), params (n, 4)) float32 '
-              'from the logic thread\'s DecalTable -- each a box (the unit cube\'s '
-              'model matrix, column-major) and (texture variant, opacity, 0, 0); '
-              'drawn onto whatever lies inside the box',
+    'decals': 'projected decals, or None: (models (n, 16), params (n, 4), '
+              'inverses (n, 16)) float32 from the logic thread\'s DecalTable -- '
+              'each a box (the unit cube\'s model matrix, column-major), '
+              '(texture layer/variant, opacity, kind, flags) and the box\'s '
+              'inverse; drawn onto whatever lies inside the box',
     # Selection (same object as render_scene's primary_selection argument)
     'primary_selection': 'SelectionOverlay or None',
     # View settings

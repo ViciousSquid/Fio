@@ -14,6 +14,7 @@ pytest.importorskip("PyQt5")
 pytest.importorskip("OpenGL")
 
 from engine.shaders import REFLECTION_FADE_END                     # noqa: E402
+from engine.change_journal import touch                           # noqa: E402
 
 pytestmark = pytest.mark.gl
 
@@ -97,6 +98,7 @@ def test_an_image_decal_stains_the_floor(fio_session):
     stained = session.paint()
     decal = next(t for t in session.state.things if isinstance(t, Decal))
     decal.properties['opacity'] = 0.0
+    touch(decal)            # as whoever changes a rendered value does
     session.step(1)
     clean = session.paint()
     assert _changed(stained, clean) > 200
@@ -117,6 +119,7 @@ def test_the_decal_tools_selection_is_tinted_in_the_editor(fio_session):
     plain = session.paint()
     decal = next(t for t in session.state.things if isinstance(t, Decal))
     decal.editor_selected = True
+    touch(decal)            # the Decal tool does this when it selects
     session.publish()
     tinted = session.paint()
     diff = tinted.astype(int) - plain.astype(int)
@@ -215,7 +218,8 @@ def test_a_decal_on_screen_leaves_the_brushes_drawn_after_it_alone(fio_session):
 
 
 def test_decals_are_batched_one_draw_whatever_their_count():
-    """Every image and blood decal is one instanced draw; wet ones one more."""
+    """Every image and blood decal is one instanced draw; wet ones one more;
+    none when none can be seen."""
     import OpenGL.GL as gl
     from engine import decal_textures
     from engine.decal_table import placed_row
@@ -228,9 +232,12 @@ def test_decals_are_batched_one_draw_whatever_their_count():
         projection, view, eye = glh.camera_matrices(eye=(0, 500, 300), target=(0, 0, -500))
         names = decal_textures.images()[1]
 
-        def calls(n, image):
-            rows = [placed_row((x * 7.0 - n * 3.5, 0.0, -500.0), {'texture': image},
-                               names.index(image)) for x in range(n)]
+        def calls(n, images, z=-500.0):
+            images = (images,) if isinstance(images, str) else images
+            # All within the view: 300 of them over 600 units of floor.
+            rows = [placed_row((x * 600.0 / max(n, 1) - 300.0, 0.0, z),
+                               {'texture': images[x % len(images)]},
+                               names.index(images[x % len(images)])) for x in range(n)]
             rows = None if not n else (np.stack([r[0] for r in rows]),
                                        np.stack([r[1] for r in rows]))
             cfg = glh.render_config(all_brushes=[floor], all_things=[], decals=rows)
@@ -245,6 +252,10 @@ def test_decals_are_batched_one_draw_whatever_their_count():
         assert calls(10, 'scorch_01.png') == (base + 1, 10)
         assert calls(300, 'scorch_01.png') == (base + 1, 300)
         wet = next(n for n in names if decal_textures.is_wet_image(n))
-        assert calls(300, wet) == (base + 2, 300)
+        assert calls(300, wet) == (base + 1, 300)               # the wet draw alone
+        assert calls(300, (wet, 'scorch_01.png')) == (base + 2, 300)   # one of each
+        # Behind the camera: left out before anything is drawn or copied.
+        assert calls(300, 'scorch_01.png', z=900.0) == (base, 0)
+        assert renderer.decals_culled == 300
         renderer.cleanup()
     glh.reset_texture_cache()

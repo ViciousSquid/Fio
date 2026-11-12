@@ -97,7 +97,8 @@ class RenderState:
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
-        #: Projected decals (blood): (models (n, 16), params (n, 4)) float32
+        #: Projected decals (blood and placed): (models (n, 16), params (n, 4),
+        #: inverses (n, 16)) float32
         #: from the combat runtime's DecalTable, or None (engine/decal_table.py).
         self.decals = None
         #: Directional damage for the HUD: ((x, y, z, strength 0..1), ...) --

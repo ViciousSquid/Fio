@@ -2455,7 +2455,13 @@ layout (location = 3) in vec4 iModel0;
 layout (location = 4) in vec4 iModel1;
 layout (location = 5) in vec4 iModel2;
 layout (location = 6) in vec4 iModel3;
-layout (location = 7) in vec4 iParams;      // variant, opacity, kind, mirrored
+layout (location = 7) in vec4 iParams;      // variant, opacity, kind, flags
+// The box's inverse, worked out once on the CPU when the row was made
+// (DecalTable), not for every vertex of every frame.
+layout (location = 8) in vec4 iInverse0;
+layout (location = 9) in vec4 iInverse1;
+layout (location = 10) in vec4 iInverse2;
+layout (location = 11) in vec4 iInverse3;
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -2465,7 +2471,7 @@ flat out vec4 Params;
 
 void main() {
     mat4 model = mat4(iModel0, iModel1, iModel2, iModel3);
-    WorldToBox = inverse(model);
+    WorldToBox = mat4(iInverse0, iInverse1, iInverse2, iInverse3);
     Params = iParams;
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }"""

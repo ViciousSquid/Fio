@@ -59,7 +59,7 @@ def _centres(combat):
     frame = combat.blood.frame(time.perf_counter(), combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
     if frame is None:
         return np.zeros((0, 3)), np.zeros((0, 4)), np.zeros((0, 16))
-    models, params = frame
+    models, params = frame[:2]
     return models[:, 12:15].astype(np.float64), params, models
 
 

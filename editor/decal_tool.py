@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (QDialog, QDoubleSpinBox, QFormLayout, QLabel,
                              QVBoxLayout)
 
 from editor.things import Decal
+from engine.change_journal import touch
 
 
 def orientation_from_normal(normal):
@@ -93,7 +94,10 @@ class DecalTool:
     def _sync_highlight(self):
         """Selected decals draw tinted (DecalTable.place reads this)."""
         for decal in self.decals():
-            decal.editor_selected = decal.properties.get('id') in self.selected_ids
+            selected = decal.properties.get('id') in self.selected_ids
+            if decal.editor_selected != selected:
+                decal.editor_selected = selected
+                touch(decal)                     # its row is remade, tinted or not
         self.view.update()
 
     def select(self, ids):
@@ -288,8 +292,8 @@ class DecalTool:
         for decal in self.selected():
             if decal.properties.get('id') == drag['primary']:
                 # The decal under the cursor follows the surface it is on.
-                decal.pos = [float(v) for v in point]
                 decal.properties['yaw'], decal.properties['pitch'] = yaw, pitch
+                decal.pos = [float(v) for v in point]     # journals it, turn and all
             else:
                 decal.pos = [float(a + b) for a, b in zip(decal.pos, delta)]
         drag['last'] = point
@@ -375,6 +379,7 @@ class DecalTool:
         self.editor.save_state()
         for decal in decals:
             decal.properties[key] = value
+            touch(decal)
         self.view.update()
 
 
