@@ -26,11 +26,47 @@ from PyQt5.QtGui import QColor, QFont, QPen, QBrush, QFontMetrics
 
 
 # Shared palette (matches engine.sysmon so popups look like one family).
-_BG = QColor(20, 20, 25, 235)
-_BORDER = QColor(80, 80, 90)
-_HEADER = QColor(66, 95, 93)
-_HEADER_ACTIVE = QColor(90, 130, 128)
-_TEXT = QColor(220, 220, 220)
+#: The floating windows' colours (Edit > Colours > Floating Windows). Every
+#: window drawn in the 3D view -- SysMon, the pause menu, the editor's
+#: overlays -- reads them as it draws; :func:`set_theme` changes them all.
+DEFAULT_THEME = {
+    'header': '#425f5d',          # the title bar
+    'header_active': '#5a8280',   # the title bar of the window being dragged
+    'background': '#141419',
+    'border': '#50505a',
+    'text': '#dcdcdc',
+}
+#: The background stays a little see-through, whatever its colour.
+_BACKGROUND_ALPHA = 235
+_theme = {}
+_theme_version = [0]
+
+
+def set_theme(colours=None):
+    """Use *colours* (``DEFAULT_THEME``'s keys, as ``#rrggbb``; any missing
+    or unreadable keep their defaults) for every floating window."""
+    colours = dict(colours or {})
+    for key, default in DEFAULT_THEME.items():
+        colour = QColor(str(colours.get(key) or default))
+        if not colour.isValid():
+            colour = QColor(default)
+        if key == 'background':
+            colour.setAlpha(_BACKGROUND_ALPHA)
+        _theme[key] = colour
+    _theme_version[0] += 1
+
+
+def theme(key):
+    """The current colour for *key* (see ``DEFAULT_THEME``)."""
+    return _theme[key]
+
+
+def theme_version():
+    """Bumped by every :func:`set_theme`: a window caching pens re-reads."""
+    return _theme_version[0]
+
+
+set_theme()
 _WHITE = QColor(255, 255, 255)
 _MUTED = QColor(150, 150, 160)
 _ACCENT = QColor(240, 128, 0)
@@ -68,7 +104,7 @@ class FloatingWindow:
 
     def draw_body(self, painter, x, y, w):
         """Paint the body. Override in subclasses. (x, y) is the body's top-left."""
-        painter.setPen(_TEXT)
+        painter.setPen(theme('text'))
         painter.setFont(self.font)
         painter.drawText(x + 10, y + 20, "(empty)")
 
@@ -87,13 +123,13 @@ class FloatingWindow:
         # Keep window_rect height in sync so hit-testing matches what's drawn.
         self.window_rect.setHeight(rect.height())
 
-        painter.setPen(QPen(_BORDER, 1))
-        painter.setBrush(QBrush(_BG))
+        painter.setPen(QPen(theme('border'), 1))
+        painter.setBrush(QBrush(theme('background')))
         painter.drawRect(rect)
 
         header = QRect(rect.x(), rect.y(), rect.width(), self.HEADER_H)
-        painter.fillRect(header, _HEADER_ACTIVE if focused else _HEADER)
-        painter.setPen(QPen(_BORDER, 1))
+        painter.fillRect(header, theme('header_active') if focused else theme('header'))
+        painter.setPen(QPen(theme('border'), 1))
         painter.drawLine(rect.x(), rect.y() + self.HEADER_H,
                          rect.right(), rect.y() + self.HEADER_H)
 

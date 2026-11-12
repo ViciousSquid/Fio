@@ -568,11 +568,12 @@ class Ui_MainWindow(object):
         edit_menu.addAction(QAction('Unhide All', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
 
         edit_menu.addSeparator()
-        grid_colours_action = QAction('Grid colours…', MainWindow)
-        grid_colours_action.setToolTip("Customise grid line colours")
-        grid_colours_action.triggered.connect(MainWindow.open_grid_colours_dialog)
-        edit_menu.addAction(grid_colours_action)
-        MainWindow.grid_colours_action = grid_colours_action
+        colours_action = QAction('Colours…', MainWindow)
+        colours_action.setToolTip("Customise the grid's colours and the floating windows' "
+                                  "(SysMon, the pause menu)")
+        colours_action.triggered.connect(MainWindow.open_colours_dialog)
+        edit_menu.addAction(colours_action)
+        MainWindow.colours_action = colours_action
 
         # --- Select menu: component modes + Radiant-style area selections ---
         MainWindow.component_mode_actions = {}
