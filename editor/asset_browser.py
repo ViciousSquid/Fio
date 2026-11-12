@@ -535,6 +535,8 @@ class AssetBrowserTab(QWidget):
     SIDE_BUTTON_SETTING = ('AssetBrowser', 'asset_browser_toolbar_size')
     SIDE_BUTTON_SIZES = ('small', 'large')
     ACTION_BAR_HEIGHT = 50
+    #: Pixels between the Tint and DECAL buttons (the toolbar's spacing).
+    SIDE_BUTTON_GAP = 4
 
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
@@ -694,7 +696,12 @@ class AssetBrowserTab(QWidget):
             self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
-            button_layout.addWidget(self.tint_btn)
+            # Tint and DECAL sit close together, as toolbar buttons do.
+            pair = QHBoxLayout()
+            pair.setContentsMargins(0, 0, 0, 0)
+            pair.setSpacing(self.SIDE_BUTTON_GAP)
+            pair.addWidget(self.tint_btn)
+            button_layout.addLayout(pair)
 
             # The Decal tool: shows textures/decals while it is on, and goes
             # back to the folder you were in when it is turned off.
@@ -707,7 +714,7 @@ class AssetBrowserTab(QWidget):
                 "3D view to place it. Shift-click a decal to select it, drag or\n"
                 "nudge it. Click again to go back to the folder you were in.")
             self.decal_btn.clicked.connect(self.on_decal_clicked)
-            button_layout.addWidget(self.decal_btn)
+            pair.addWidget(self.decal_btn)
             self.apply_side_button_size(self.side_button_size())
 
             # Right-click the empty space beside them: Size > Small / Large.
