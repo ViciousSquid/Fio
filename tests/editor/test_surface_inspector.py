@@ -431,15 +431,18 @@ def test_the_asset_browser_owns_no_texture_controls(qt_app, tmp_path):
 
 
 def test_the_asset_browser_action_bar_keeps_only_the_expected_buttons(qt_app, tmp_path):
-    """The hamburger folder toggle, INSPECTOR, and Tint button are the action bar."""
+    """The hamburger folder toggle, INSPECTOR, and the Tint and Decal icon
+    buttons are the action bar."""
     from PyQt5.QtWidgets import QPushButton
 
     from editor.asset_browser import AssetBrowserTab
 
     tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
-    labels = [b.text() for b in tab.action_bar.findChildren(QPushButton)]
+    buttons = tab.action_bar.findChildren(QPushButton)
+    labels = [b.text() for b in buttons]
 
-    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR', ''])
+    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR', '', ''])
+    assert {b for b in buttons if not b.text()} == {tab.tint_btn, tab.decal_btn}
 
 
 def test_the_inspector_button_needs_no_texture_selected(qt_app, tmp_path):
