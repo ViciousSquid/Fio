@@ -180,11 +180,9 @@ def collect_monsters(owner):
 #: (tab, [(column header, row key)]), in tab order: Perception first.
 TABLES = {
     'Perception': [('Monster', 'name'), ('Doing', 'decision'), ('Target', 'target'),
-                   ('Distance', 'distance'), ('Awake', 'awake'),
-                   ('Wakes on sight', 'wake_on_sight'), ('Sight range', 'sight_range'),
-                   ('Target in range', 'in_sight'), ('Eye height', 'eye_y'),
-                   ('Can hear', 'can_hear'), ('Hearing range', 'hearing_range'),
-                   ('Investigating', 'noise'), ('Time left (s)', 'noise_left')],
+                   ('Distance', 'distance'), ('Eye height', 'eye_y'),
+                   ('Can hear', 'can_hear'), ('Investigating', 'noise'),
+                   ('Time left (s)', 'noise_left')],
     'Combat': [('Monster', 'name'), ('Health', 'health'), ('Damage', 'damage'),
                ('Attacking', 'attacking'), ('Next shot (s)', 'shoot_timer'),
                ('Eye height', 'eye_y'), ('Hit sphere centre', 'hit_centre'),

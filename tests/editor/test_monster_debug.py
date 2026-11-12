@@ -80,7 +80,10 @@ def test_f7_in_play_opens_it_live_with_working_switches(fio_session):
     assert float(_column(window, "Perception", "Distance")["Grunt"]) == pytest.approx(400, abs=60)
     assert _column(window, "Combat", "Damage")["Grunt"] == "7"
     assert _column(window, "Combat", "Hit sphere radius")["Grunt"] == "96.0"
-    assert _column(window, "Perception", "Sight range")["Grunt"] == "1024.0"
+    perception = [window.tables["Perception"].horizontalHeaderItem(c).text()
+                  for c in range(window.tables["Perception"].columnCount())]
+    assert perception == ["Monster", "Doing", "Target", "Distance", "Eye height",
+                          "Can hear", "Investigating", "Time left (s)"]
 
     # A flyer sees from its middle; a human from near the top of its figure.
     eyes = _column(window, "Perception", "Eye height")
