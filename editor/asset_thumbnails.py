@@ -26,6 +26,10 @@ from engine.asset_archives import asset_bytes, asset_source, asset_stamp
 #: The largest tile's thumbnail edge (THUMBNAIL_SIZES['medium']); smaller
 #: tiles scale the cached image down.
 THUMBNAIL_EDGE = 90
+#: A texture this many times wider than it is tall (or taller than wide)
+#: takes two grid slots across (or down): 2:1 takes two, 4:3 one.
+WIDE = 1.5
+
 #: Bytes of image data kept; the least recently used goes first.
 CACHE_BYTES = 100 * 1024 * 1024
 
@@ -42,34 +46,67 @@ def _key(path):
     return os.path.normcase(os.path.abspath(os.fspath(path)))
 
 
+def spans(width, height):
+    """``(across, down)``: the grid slots a *width* x *height* texture
+    takes -- (2, 1) for a wide one, (1, 2) for a tall one, else (1, 1)."""
+    if width <= 0 or height <= 0:
+        return (1, 1)
+    ratio = width / height
+    if ratio >= WIDE:
+        return (2, 1)
+    if ratio <= 1.0 / WIDE:
+        return (1, 2)
+    return (1, 1)
+
+
+def fit_box(width, height, edge=THUMBNAIL_EDGE):
+    """The box a *width* x *height* image's thumbnail fits in: *edge* per
+    slot it takes, so a wide texture keeps its detail across two."""
+    across, down = spans(width, height)
+    return edge * across, edge * down
+
+
 def shrink(image, edge=THUMBNAIL_EDGE):
-    """*image* fitted inside *edge* x *edge* (aspect kept); as it is when it
-    already fits or is null."""
+    """*image* fitted inside its :func:`fit_box` (aspect kept); as it is
+    when it already fits or is null."""
     from PyQt5.QtCore import Qt
-    if image.isNull() or (image.width() <= edge and image.height() <= edge):
+    if image.isNull():
         return image
-    return image.scaled(edge, edge, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    box_w, box_h = fit_box(image.width(), image.height(), edge)
+    if image.width() <= box_w and image.height() <= box_h:
+        return image
+    return image.scaled(box_w, box_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
-def cached(path, make, edge=THUMBNAIL_EDGE):
-    """The thumbnail ``QImage`` of the asset at *path*: the cached one while
-    the asset is unchanged, else ``make()`` (a QImage, a QPixmap or None),
-    shrunk to *edge* and kept. A null image is kept too: an unreadable
-    file is not tried again until it changes. An asset with no stamp (it
-    exists nowhere) is made each time and not kept."""
-    from PyQt5.QtGui import QImage, QPixmap
+def lookup(path, edge=THUMBNAIL_EDGE, stamp=None):
+    """The cached thumbnail of *path* while the asset is unchanged (its
+    :func:`~engine.asset_archives.asset_stamp` is the one it was made
+    from), else None. *stamp*: the asset's stamp when the caller has it.
+    Main thread only, as :func:`store` is."""
     key = _key(path)
-    stamp = asset_stamp(path)
     held = _cache.get(key)
-    if held is not None and stamp is not None and held[0] == (stamp, edge):
-        _cache.move_to_end(key)
-        stats['hits'] += 1
-        return held[1]
-    made = make()
-    stats['decoded'] += 1
-    if isinstance(made, QPixmap):
-        made = made.toImage()
-    image = shrink(made, edge) if isinstance(made, QImage) else QImage()
+    if held is None:
+        return None
+    if stamp is None:
+        stamp = asset_stamp(path)
+    if stamp is None or held[0] != (stamp, edge):
+        return None
+    _cache.move_to_end(key)
+    stats['hits'] += 1
+    return held[1]
+
+
+def store(path, stamp, image, edge=THUMBNAIL_EDGE):
+    """Keep *image* (a QImage, a QPixmap or None; shrunk to *edge*) as the
+    thumbnail of *path* at *stamp*, dropping the least recently used past
+    :data:`CACHE_BYTES`; returns the image kept. A null image is kept too,
+    so an unreadable file is not tried again until it changes; with no
+    *stamp* (the asset exists nowhere) nothing is kept."""
+    from PyQt5.QtGui import QImage, QPixmap
+    if isinstance(image, QPixmap):
+        image = image.toImage()
+    image = shrink(image, edge) if isinstance(image, QImage) else QImage()
+    key = _key(path)
     _forget(key)
     if stamp is not None:
         _cache[key] = ((stamp, edge), image)
@@ -77,6 +114,21 @@ def cached(path, make, edge=THUMBNAIL_EDGE):
         while _held[0] > CACHE_BYTES and len(_cache) > 1:
             _forget(next(iter(_cache)))
     return image
+
+
+def cached(path, make, edge=THUMBNAIL_EDGE):
+    """The thumbnail ``QImage`` of the asset at *path*: the cached one while
+    the asset is unchanged, else ``make()`` (a QImage, a QPixmap or None),
+    shrunk to *edge* and kept (see :func:`store`). Synchronous: the Asset
+    Browser decodes on worker threads instead (``decode_image`` there,
+    :func:`store` here)."""
+    stamp = asset_stamp(path)
+    image = lookup(path, edge, stamp)
+    if image is not None:
+        return image
+    made = make()
+    stats['decoded'] += 1
+    return store(path, stamp, made, edge)
 
 
 def _forget(key):
@@ -108,8 +160,9 @@ def decode_image(path, edge=THUMBNAIL_EDGE):
         buffer.open(QIODevice.ReadOnly)
         reader = QImageReader(buffer)
     size = reader.size()
-    if size.isValid() and (size.width() > edge or size.height() > edge):
-        target = size.scaled(edge, edge, Qt.KeepAspectRatio)
+    box_w, box_h = fit_box(size.width(), size.height(), edge) if size.isValid() else (edge, edge)
+    if size.isValid() and (size.width() > box_w or size.height() > box_h):
+        target = size.scaled(box_w, box_h, Qt.KeepAspectRatio)
         target.setWidth(max(1, target.width()))
         target.setHeight(max(1, target.height()))
         reader.setScaledSize(target)
@@ -120,13 +173,62 @@ def decode_image(path, edge=THUMBNAIL_EDGE):
         try:
             from PIL import Image
             with Image.open(asset_source(full) or full) as source:
-                source.thumbnail((edge, edge))
+                source.thumbnail(fit_box(*source.size, edge))
                 rgba = source.convert('RGBA')
             image = QImage(rgba.tobytes(), rgba.width, rgba.height,
                            rgba.width * 4, QImage.Format_RGBA8888).copy()
         except Exception:
             return QImage()
     return shrink(image, edge)
+
+
+#: normalised path -> (stamp, (width, height)): image sizes read from
+#: headers, so the grid knows a tile's shape before its thumbnail.
+_sizes = {}
+
+
+def known_size(path):
+    """The last size read for *path* (not checked against the file: the
+    grid uses it at once, and a background read corrects it), or None."""
+    held = _sizes.get(_key(path))
+    return held[1] if held is not None else None
+
+
+def read_size(path, stamp=None):
+    """*path*'s ``(width, height)`` from its header (cached by stamp);
+    ``(0, 0)`` when unreadable. Safe on a worker thread."""
+    key = _key(path)
+    if stamp is None:
+        stamp = asset_stamp(path)
+    held = _sizes.get(key)
+    if held is not None and held[0] == stamp:
+        return held[1]
+    from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
+    from PyQt5.QtGui import QImageReader
+    full = os.fspath(path)
+    size = (0, 0)
+    try:
+        if os.path.isfile(full):
+            found = QImageReader(full).size()
+        else:
+            data = asset_bytes(full)
+            found = None
+            if data is not None:
+                buffer = QBuffer()
+                buffer.setData(QByteArray(data))
+                buffer.open(QIODevice.ReadOnly)
+                found = QImageReader(buffer).size()
+        if found is not None and found.isValid():
+            size = (found.width(), found.height())
+        else:
+            from PIL import Image
+            with Image.open(asset_source(full) or full) as source:
+                size = source.size
+    except Exception:
+        pass
+    if stamp is not None:
+        _sizes[key] = (stamp, size)
+    return size
 
 
 def image_thumbnail(path, edge=THUMBNAIL_EDGE):
@@ -137,5 +239,6 @@ def image_thumbnail(path, edge=THUMBNAIL_EDGE):
 def clear():
     """Forget every thumbnail (tests; a project switch)."""
     _cache.clear()
+    _sizes.clear()
     _held[0] = 0
     stats['decoded'] = stats['hits'] = 0

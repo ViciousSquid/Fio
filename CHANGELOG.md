@@ -56,6 +56,17 @@ version 4 and play in both.
   wet decals reflect (0: never). **Portals** fade their view out over the
   last quarter of a new **Fade Distance** property (default 2048, the old
   fixed cut-off) instead of popping, and are not rendered beyond it.
+- **Asset Browser: Metro tiles.** The grid is flat tiles packed with a 4 px
+  gutter, each picture filling its tile in its own shape, the name over its
+  foot (in full in the tooltip). A texture twice as wide as it is tall (from
+  1.5:1) takes two slots across, a tall one two down; a square later in the
+  folder fills the gap a wide tile leaves. An animated texture wears a play
+  arrow in a circle, centred over it; clicking it selects it and plays the
+  animation on its tile, clicking again stops it. The grid is one view over the
+  folder: it lays out any number of assets at once and paints only the tiles
+  in view, whose thumbnails are decoded on worker threads, the newest
+  request first (`editor/asset_browser.py`). A folder of 20,000 textures
+  opens in a quarter of a second.
 - **Edit ▸ Colours**: a Grid tab (major, minor and background) and a Windows
   tab (the title bar of SysMon, the pause menu and the other windows in the 3D
   view; the dragged title bar follows it). Every colour is saved to

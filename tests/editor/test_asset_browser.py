@@ -7,12 +7,13 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
-from PyQt5.QtCore import QCoreApplication  # noqa: E402
+from PyQt5.QtCore import QCoreApplication, QSize  # noqa: E402
 from PyQt5.QtGui import QImage  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from editor.asset_browser import (  # noqa: E402
-    AssetBrowser, AssetBrowserTab, DEFAULT_THUMBNAIL_SIZE, THUMBNAIL_SIZES,
+    AssetBrowser, AssetBrowserTab, AssetItem, DEFAULT_THUMBNAIL_SIZE, THUMBNAIL_SIZES,
+    TILE_SPACING,
 )
 
 pytestmark = pytest.mark.qt
@@ -71,10 +72,6 @@ def test_asset_browser_uses_directory_watcher_not_polling_timer(qt_app, tmp_path
     assert not hasattr(tab, "asset_refresh_timer")
     assert tab.asset_watcher.directories() == [str(tmp_path)]
 
-    # The existing resize timer is unrelated UI debouncing; it must not be
-    # responsible for discovering filesystem changes.
-    assert tab.resize_timer.isSingleShot()
-
 
 def test_thumbnail_rows_fit_the_viewport_including_layout_margins(qt_app, tmp_path):
     for index in range(10):
@@ -83,11 +80,13 @@ def test_thumbnail_rows_fit_the_viewport_including_layout_margins(qt_app, tmp_pa
     tab.resize(550, 500)
     tab.show()
     try:
-        assert _pump_until(qt_app, lambda: (
-            not tab.resize_timer.isActive()
-            and tab.scroll_area.horizontalScrollBar().maximum() == 0
-            and tab.grid_container.minimumSizeHint().width() <= tab.scroll_area.viewport().width()
-        ))
+        view = tab.view
+        assert _pump_until(qt_app, lambda: view.horizontalScrollBar().maximum() == 0)
+        # Every tile lies inside the viewport's width: rows wrap, never scroll.
+        width = view.viewport().width()
+        for row in range(tab.model.rowCount()):
+            rect = view.visualRect(tab.model.index(row))
+            assert rect.left() >= 0 and rect.left() + AssetItem.tile_size(tab.thumb_size)[0] <= width
     finally:
         tab.close()
         tab.deleteLater()
@@ -113,9 +112,14 @@ def test_thumbnail_sizes_scale_tiles_and_columns(qt_app, tmp_path, name, edge):
     tab.set_thumbnail_size(edge)
     qt_app.processEvents()
     item = tab.items[0]
-    assert item.thumb_label.size().width() == edge
-    assert (item.width(), item.height()) == AssetItem.tile_size(edge)
-    assert item.thumb_label.pixmap().width() <= edge
+    tile = AssetItem.tile_size(edge)
+    assert tab.delegate.sizeHint(None, tab.model.index(0)) == QSize(*tile)
+    # Tiles are laid out a tile plus the spacing apart.
+    first, second = (tab.view.visualRect(tab.model.index(i)) for i in (0, 1))
+    assert second.left() - first.left() == tile[0] + TILE_SPACING
+    pixmap = tab.thumbnail_pixmap(item)
+    assert pixmap.width() <= edge and pixmap.height() <= edge
+    assert max(pixmap.width(), pixmap.height()) == edge
     tab.close()
 
 
@@ -134,10 +138,10 @@ def test_right_clicking_blank_space_offers_thumbnail_sizes(qt_app, tmp_path, mon
         menu.actions()[2].trigger()
 
     monkeypatch.setattr(QMenu, "exec_", choose_smallest)
-    container = tab.grid_container
-    tab._show_grid_menu(tab.items[0].geometry().center())
+    viewport = tab.view.viewport()
+    tab._show_grid_menu(tab.view.visualRect(tab.model.index(0)).center())
     assert offered == []  # right-clicking an asset is not blank space
-    tab._show_grid_menu(QPoint(container.width() - 2, container.height() - 2))
+    tab._show_grid_menu(QPoint(viewport.width() - 2, viewport.height() - 2))
     assert offered == [[("Medium", False), ("Small", False), ("Smallest", True)]]
     assert tab.thumb_size == 58
     tab.close()
@@ -151,7 +155,8 @@ def test_new_asset_browser_uses_smallest_thumbnails(qt_app, tmp_path):
         assert browser.thumbnail_size == "smallest"
         for tab in (browser.tab_textures, browser.tab_models, browser.tab_audio):
             assert tab.thumb_size == THUMBNAIL_SIZES["smallest"]
-        assert browser.tab_textures.items[0].thumb_label.width() == 58
+        tab = browser.tab_textures
+        assert tab.delegate.sizeHint(None, tab.model.index(0)).width() == 58
     finally:
         browser.close()
         browser.deleteLater()
