@@ -292,6 +292,10 @@ def test_a_showcase_frame_sends_no_row_uniform_through_the_wrappers(
     from engine.renderer.core import uniform_rows as ur
 
     session = fio_session("maps/_SHOWCASE.json")
+    # The repository's settings.ini shows SysMon at launch; its live figures
+    # (the last frame's draws, VRAM) differ from one paint to the next, so it
+    # made this pixel comparison flaky. The renderer is what is compared.
+    session.view.sysmon.set_active(False)
     session.start_play()
     session.step(20)
     session.publish()
