@@ -43,11 +43,11 @@ def test_click_places_shift_click_selects_and_escape_clears_then_leaves(main_win
     assert tool.active and main_window.asset_browser.tab_textures.decal_btn.isChecked()
     assert main_window.decal_tool_action.isChecked()
     tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
-    tool.settings.update(decal_type='wet', width=300.0, height=200.0)
+    tool.settings.update(width=300.0, height=200.0)
     press(tool, 10, 10)
     placed, = decals(main_window)
     assert placed.properties['texture'] == 'wet_puddle_01.png'
-    assert placed.properties['decal_type'] == 'wet'
+    assert 'decal_type' not in placed.properties             # the name decides
     assert (placed.properties['width'], placed.properties['height']) == (300.0, 200.0)
     assert placed.properties['pitch'] == pytest.approx(-90.0)        # onto the floor
     assert tool.selected() == [placed] and placed.editor_selected
@@ -114,9 +114,8 @@ def test_panel_changes_apply_to_the_selected_decal(main_window, tool):
     placed, = decals(main_window)
     panel = tool.panel()
     panel.width_spin.setValue(2048.0)                     # scale it over a whole floor
-    panel.type_combo.setCurrentIndex(0)
     assert placed.properties['width'] == 2048.0
-    assert placed.properties['decal_type'] == 'image'
+    assert not hasattr(panel, 'type_combo')               # no Image / Wet setting
 
 
 def test_decals_are_not_in_the_2d_views(main_window, tool):
@@ -199,16 +198,6 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     tab._side_button_menu(empty)
     assert len(shown) == 1
     tab.set_side_button_size('small')
-
-
-def test_a_wet_mask_is_placed_as_a_wet_decal_whatever_the_panel_says(main_window, tool):
-    tool.settings['decal_type'] = 'image'
-    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
-    press(tool, 10, 10)                       # the fixture's image: wet_puddle_01.png
-    placed, = decals(main_window)
-    assert placed.properties['decal_type'] == 'wet'
-    assert tool.type_for('scorch_01.png') == 'image'
-    assert tool.type_for('assets/textures/decals/WET_full.png') == 'wet'
 
 
 @pytest.mark.parametrize('key', [Qt.Key_Backspace, Qt.Key_Delete])

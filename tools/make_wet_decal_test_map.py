@@ -28,21 +28,21 @@ brushes = [
     box_brush('red_box', (-60, 48, 740), (64, 96, 64), textures=tex('curtains.png')),
     box_brush('far_panel', (0, 150, -1250), (360, 70, 16), textures=tex('StripLight.jpg')),
 ]
-def decal(name, pos, image, kind='image', size=192, yaw=0.0, pitch=-90.0, roll=0.0, opacity=1.0, height=None):
-    return make_thing(Decal, name, pos, decal_type=kind, texture=image, width=float(size),
+def decal(name, pos, image, size=192, yaw=0.0, pitch=-90.0, roll=0.0, opacity=1.0, height=None):
+    return make_thing(Decal, name, pos, texture=image, width=float(size),
                       height=float(height or size), depth=48.0, yaw=yaw, pitch=pitch,
                       roll=roll, opacity=opacity)
 things = [
     make_thing(PlayerStart, 'spawn', (0.0, 50.0, 1250.0), angle=90.0, primary=True),
     make_thing(Light, 'lamp_near', (0.0, 240.0, 800.0), radius=1400.0, intensity=1.6),
     make_thing(Light, 'lamp_far', (0.0, 240.0, -900.0), radius=1400.0, intensity=1.6),
-    decal('Puddles_near', (20.0, 0.0, 860.0), 'wet_puddle_01.png', 'wet', size=340),
-    decal('Damp_floor', (-300.0, 0.0, 980.0), 'wet_damp_01.png', 'wet', size=300, roll=30.0),
+    decal('Puddles_near', (20.0, 0.0, 860.0), 'wet_puddle_01.png', size=340),
+    decal('Damp_floor', (-300.0, 0.0, 980.0), 'wet_damp_01.png', size=300, roll=30.0),
     decal('Grime_floor', (300.0, 0.0, 1050.0), 'grime_01.png', size=200),
     decal('Scorch_wall', (W / 2, 110.0, 980.0), 'scorch_01.png', size=170, yaw=0.0, pitch=0.0),
-    decal('Damp_wall', (-W / 2, 90.0, 820.0), 'wet_damp_01.png', 'wet', size=260, yaw=180.0, pitch=0.0),
+    decal('Damp_wall', (-W / 2, 90.0, 820.0), 'wet_damp_01.png', size=260, yaw=180.0, pitch=0.0),
     # A whole section of floor made wet: wet_full.png scaled to 1000 x 700.
-    decal('Wet_floor_far', (0.0, 0.0, -850.0), 'wet_full.png', 'wet', size=1000, height=700),
+    decal('Wet_floor_far', (0.0, 0.0, -850.0), 'wet_full.png', size=1000, height=700),
 ]
 state = EditorState()
 state.load_from_data({'brushes': [dict(b) for b in brushes], 'things': [t.to_dict() for t in things]})

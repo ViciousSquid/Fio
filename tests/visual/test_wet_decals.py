@@ -41,7 +41,7 @@ def _level(decals):
 
 
 def _wet(name, z, size=600.0):
-    return (name, (0.0, 0.0, z), dict(decal_type='wet', texture='wet_full.png',
+    return (name, (0.0, 0.0, z), dict(texture='wet_full.png',
                                        width=size, height=size, depth=48.0))
 
 
@@ -176,19 +176,6 @@ def test_decalfade_sets_how_far_wet_decals_reflect(fio_session, monkeypatch):
     assert any("4000 units" in text for text in said)
     console.handle_command("decalfade far")
     assert renderer.decal_reflection_fade == 4000.0   # unchanged
-
-
-def test_a_wet_mask_painted_as_an_image_still_shows_unselected(fio_session):
-    # Its colour is a dark, wet-looking tint, not mid grey (which would leave
-    # the surface exactly as it was: the decal invisible once deselected).
-    session = _session(fio_session, [('mask', (0.0, 0.0, -220.0),
-                                      dict(decal_type='image', texture='wet_full.png',
-                                           width=300.0, height=300.0, depth=48.0))])
-    with_mask = session.paint()
-    session.state.things[:] = [t for t in session.state.things
-                               if type(t).__name__ != 'Decal']
-    session.step(1)
-    assert _changed(with_mask, session.paint()) > 200
 
 
 def _trigger_level(with_decal):

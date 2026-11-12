@@ -89,7 +89,6 @@
                 860.0
             ],
             "properties": {
-                "decal_type": "wet",
                 "texture": "wet_puddle_01.png",
                 "width": 340.0,
                 "height": 340.0,
@@ -114,7 +113,6 @@
                 980.0
             ],
             "properties": {
-                "decal_type": "wet",
                 "texture": "wet_damp_01.png",
                 "width": 300.0,
                 "height": 300.0,
@@ -139,7 +137,6 @@
                 1050.0
             ],
             "properties": {
-                "decal_type": "image",
                 "texture": "grime_01.png",
                 "width": 200.0,
                 "height": 200.0,
@@ -164,7 +161,6 @@
                 980.0
             ],
             "properties": {
-                "decal_type": "image",
                 "texture": "scorch_01.png",
                 "width": 170.0,
                 "height": 170.0,
@@ -189,7 +185,6 @@
                 820.0
             ],
             "properties": {
-                "decal_type": "wet",
                 "texture": "wet_damp_01.png",
                 "width": 260.0,
                 "height": 260.0,
@@ -214,7 +209,6 @@
                 -850.0
             ],
             "properties": {
-                "decal_type": "wet",
                 "texture": "wet_full.png",
                 "width": 1000.0,
                 "height": 700.0,
@@ -232,7 +226,7 @@
             "io_connections": []
         }
     ],
-    "created": "2026-11-12T13:49:20",
+    "created": "2026-11-12T15:47:29",
     "brushes": [
         {
             "id": "feb071f2-dba2-58c1-81c7-f877c556b583",

@@ -15,8 +15,12 @@ It works the way terrain stamps do:
 * **Arrow keys** nudge the selection one grid step (five with Shift), on a
   floor along X/Z as stamps do (Up is -Z), on a wall along it and up/down.
   A run of key repeats is one undo step.
-* **Delete** removes the selection; **Escape** clears it, then leaves the
-  tool.
+* **Delete** or **Backspace** removes the selection; **Escape** clears it,
+  then leaves the tool.
+
+An image with "wet" or "puddle" in its name places a Wet decal -- a mask of
+where the surface is wet (darkened, reflecting the scene); any other image
+is painted. There is no separate setting.
 
 A decal is a ``Decal`` entity -- saved with the map, undone with the rest of
 it -- and nothing else draws it: the logic thread makes it a row of the decal
@@ -30,7 +34,7 @@ import os
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QLabel,
+from PyQt5.QtWidgets import (QDialog, QDoubleSpinBox, QFormLayout, QLabel,
                              QVBoxLayout)
 
 from editor.things import Decal
@@ -67,7 +71,7 @@ class DecalTool:
         self.view = view
         self.active = False
         #: What new decals get (the panel edits these).
-        self.settings = {'decal_type': 'image', 'width': 128.0, 'height': 128.0,
+        self.settings = {'width': 128.0, 'height': 128.0,
                          'depth': 32.0, 'roll': 0.0, 'opacity': 1.0}
         self.selected_ids = set()
         self._drag = None
@@ -216,15 +220,6 @@ class DecalTool:
             is_error=True)
         return None
 
-    def type_for(self, image):
-        """The type a new decal of *image* gets: a ``wet_*`` image is a mask
-        of where a surface is wet, so always Wet -- painted as an Image it
-        would change nothing (its colour is the surface's own); any other
-        image takes the panel's Type."""
-        if os.path.basename(str(image)).lower().startswith('wet_'):
-            return 'wet'
-        return self.settings['decal_type']
-
     def place_at(self, point, normal, image):
         """Place a new decal of *image* on the surface at *point* facing
         *normal*; it becomes the selection. One undo step."""
@@ -232,7 +227,7 @@ class DecalTool:
         s = self.settings
         self.editor.save_state()
         decal = Decal(pos=[float(v) for v in point], properties={
-            'decal_type': self.type_for(image), 'texture': image,
+            'texture': image,
             'width': float(s['width']), 'height': float(s['height']),
             'depth': float(s['depth']), 'yaw': yaw, 'pitch': pitch,
             'roll': float(s['roll']), 'opacity': float(s['opacity'])})
@@ -396,21 +391,14 @@ class DecalToolPanel(QDialog):
         hint = QLabel(
             "Left-click a surface to place the image selected in the Asset "
             "Browser (textures/decals). Shift-click a decal to select it, then "
-            "drag it or nudge it with the arrow keys. Delete removes it.")
+            "drag it or nudge it with the arrow keys. Delete removes it. "
+            "Images with \"wet\" or \"puddle\" in the name make the surface wet.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #aaa; font-style: italic;")
         layout.addWidget(hint)
         form = QFormLayout()
         layout.addLayout(form)
         s = tool.settings
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(['Image', 'Wet'])
-        self.type_combo.setCurrentIndex(1 if s['decal_type'] == 'wet' else 0)
-        self.type_combo.setToolTip("Image paints it; Wet uses it as a mask of where the "
-                                   "surface is wet (darkened, reflecting the scene)")
-        self.type_combo.currentIndexChanged.connect(
-            lambda i: tool.apply_setting('decal_type', 'wet' if i == 1 else 'image'))
-        form.addRow("Type:", self.type_combo)
 
         def spin(key, label, lo, hi, step, decimals=0, suffix=''):
             box = QDoubleSpinBox()
@@ -436,17 +424,16 @@ class DecalToolPanel(QDialog):
         widgets = ((self.width_spin, 'width'), (self.height_spin, 'height'),
                    (self.depth_spin, 'depth'), (self.roll_spin, 'roll'),
                    (self.opacity_spin, 'opacity'))
-        for widget in (self.type_combo,) + tuple(w for w, _ in widgets):
+        for widget, _key in widgets:
             widget.blockSignals(True)
         try:
-            self.type_combo.setCurrentIndex(1 if props.get('decal_type') == 'wet' else 0)
             for widget, key in widgets:
                 try:
                     widget.setValue(float(props.get(key, widget.value())))
                 except (TypeError, ValueError):
                     pass
         finally:
-            for widget in (self.type_combo,) + tuple(w for w, _ in widgets):
+            for widget, _key in widgets:
                 widget.blockSignals(False)
 
     def closeEvent(self, event):

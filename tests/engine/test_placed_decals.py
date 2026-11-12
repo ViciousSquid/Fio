@@ -40,11 +40,25 @@ def _decal(name='d', pos=(0.0, 0.0, 0.0), **props):
 
 
 def test_a_decal_is_saved_and_loaded_as_a_decal():
-    decal = _decal(decal_type='wet', texture='wet_full.png', width=900.0, height=300.0)
+    decal = _decal(texture='wet_full.png', width=900.0, height=300.0)
     loaded = Thing.from_dict(decal.to_dict())
     assert type(loaded) is Decal
-    assert loaded.properties['decal_type'] == 'wet'
+    assert loaded.properties['texture'] == 'wet_full.png'
     assert loaded.properties['width'] == 900.0
+    # An older map's decal_type is dropped: the image's name decides.
+    old = decal.to_dict()
+    old['properties']['decal_type'] = 'image'
+    assert 'decal_type' not in Thing.from_dict(old).properties
+
+
+@pytest.mark.parametrize('name, wet', [
+    ('wet_full.png', True), ('Puddle_02.PNG', True), ('my_WET_floor.png', True),
+    ('assets/textures/decals/oil_puddle.png', True), ('scorch_01.png', False),
+    ('grime_01.png', False), ('blood_floor_01.png', False), ('', False)])
+def test_a_decal_is_wet_exactly_when_its_image_says_so(name, wet):
+    assert decal_textures.is_wet_image(name) is wet
+    _model, params = placed_row((0, 0, 0), {'texture': name}, 0)
+    assert params[2] == (WET if wet else IMAGE)
 
 
 def test_a_placed_row_throws_its_box_along_yaw_and_pitch():
@@ -58,7 +72,7 @@ def test_a_placed_row_throws_its_box_along_yaw_and_pitch():
     assert tuple(params) == (7.0, 1.0, float(IMAGE), 0.0)
     # Yaw 90, level: thrown along -Z, into a wall.
     model, params = placed_row((0, 0, 0), {'yaw': 90.0, 'pitch': 0.0, 'depth': 10.0,
-                                           'decal_type': 'wet', 'mirrored': True}, 2)
+                                           'texture': 'wet_full.png', 'mirrored': True}, 2)
     m = np.asarray(model).reshape(4, 4).T
     np.testing.assert_allclose(m[:3, 2], (0.0, 0.0, -10.0), atol=1e-4)
     assert tuple(params) == (2.0, 1.0, float(WET), 1.0)
@@ -66,7 +80,7 @@ def test_a_placed_row_throws_its_box_along_yaw_and_pitch():
 
 def test_place_makes_rows_and_frame_publishes_them_with_blood():
     table = DecalTable()
-    things = [_decal('a', (0, 0, 0)), _decal('b', (100, 0, 0), decal_type='wet',
+    things = [_decal('a', (0, 0, 0)), _decal('b', (100, 0, 0),
                                              texture='wet_puddle_01.png', opacity=0.5)]
     assert table.place(things)
     assert not table.place(things)                          # nothing changed: kept

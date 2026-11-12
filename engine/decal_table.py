@@ -21,7 +21,8 @@ table: the same box, image layer, kind and mirroring, published in the same
 two arrays and painted by the same pass. They differ only in living until
 the entity changes rather than fading, and in naming their image: ``IMAGE``
 rows paint one (``engine.decal_textures`` gives its layer), ``WET`` rows use
-it as a mask of where the surface is wet. :meth:`DecalTable.place` keeps
+it as a mask of where the surface is wet (an image with "wet" or
+"puddle" in its name). :meth:`DecalTable.place` keeps
 them in step with the entities, rebuilding only when one has changed.
 """
 
@@ -44,7 +45,7 @@ _SIDE = np.array([1.0, 0.0, 0.0])
 WALL, FLOOR, IMAGE, WET = 0, 1, 2, 3
 
 #: The ``Decal`` entity properties a placed row is made from.
-PLACED_KEYS = ('decal_type', 'texture', 'width', 'height', 'depth', 'yaw',
+PLACED_KEYS = ('texture', 'width', 'height', 'depth', 'yaw',
                'pitch', 'roll', 'mirrored', 'opacity', 'hidden')
 
 
@@ -64,7 +65,9 @@ def placed_row(pos, props, layer):
                -math.cos(pitch) * math.sin(yaw))
     model = box_matrix(tuple(float(v) for v in pos), forward, width, depth,
                        math.radians(_number(props.get('roll'), 0.0)), height)
-    kind = WET if str(props.get('decal_type', 'image')).lower() == 'wet' else IMAGE
+    from engine.decal_textures import is_wet_image
+    # Wet or Image by the image's name (wet / puddle): nothing else says so.
+    kind = WET if is_wet_image(props.get('texture')) else IMAGE
     opacity = min(max(_number(props.get('opacity'), 1.0), 0.0), 1.0)
     params = np.array((float(layer), opacity, float(kind),
                        1.0 if props.get('mirrored') else 0.0), dtype=np.float32)

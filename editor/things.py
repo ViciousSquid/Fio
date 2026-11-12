@@ -607,10 +607,10 @@ class Decal(Thing):
 
     Properties
     ----------
-    decal_type  'image' paints *texture*; 'wet' uses it as a mask of where the
-                surface is wet: darkened, and reflecting the scene (faded out
-                with distance, off with ``reflections 0``).
-    texture     An image in assets/textures/decals (a file name).
+    texture     An image in assets/textures/decals (a file name). One with
+                "wet" or "puddle" in its name is a mask of where the surface
+                is wet -- darkened and reflecting the scene (faded out with
+                distance, off with ``reflections 0``); any other is painted.
     width, height, depth   The box: across, up the image, and along the throw.
     yaw, pitch  The direction it is thrown: yaw 0 along +X, 90 along -Z;
                 pitch -90 straight down (a floor), 0 level (a wall).
@@ -624,17 +624,17 @@ class Decal(Thing):
     #: The Decal tool's selection; selected decals draw tinted.
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
-        'decal_type', 'texture', 'width', 'height', 'depth',
+        'texture', 'width', 'height', 'depth',
         'yaw', 'pitch', 'roll', 'mirrored', 'opacity',
     )
-    DECAL_TYPES = ('image', 'wet')
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'decal'
-        self.properties.setdefault('decal_type', 'image')
-        self.properties.setdefault('texture', self.default_texture(
-            self.properties.get('decal_type')))
+        # Wet or Image is the image's name (wet / puddle), not a setting:
+        # an older map's decal_type is dropped.
+        self.properties.pop('decal_type', None)
+        self.properties.setdefault('texture', self.default_texture())
         self.properties.setdefault('width', 128.0)
         self.properties.setdefault('height', 128.0)
         self.properties.setdefault('depth', 32.0)
@@ -645,20 +645,17 @@ class Decal(Thing):
         self.properties.setdefault('opacity', 1.0)
 
     @staticmethod
-    def default_texture(decal_type='image'):
-        """A sensible first image: a wet mask for 'wet', else any image that
-        is not blood (blood belongs to gore), else whatever there is."""
+    def default_texture():
+        """A sensible first image: any that is not blood (gore's own) nor a
+        wet mask, else whatever there is."""
         try:
-            from engine.decal_textures import images
+            from engine.decal_textures import images, is_wet_image
             names = images()[1]
         except Exception:
             return ''
-        wet = [n for n in names if 'wet' in n.lower() or 'puddle' in n.lower()]
-        plain = [n for n in names if not n.lower().startswith('blood_') and n not in wet]
-        for group in ((wet, plain) if decal_type == 'wet' else (plain, wet)):
-            if group:
-                return group[0]
-        return names[0] if names else ''
+        plain = [n for n in names
+                 if not n.lower().startswith('blood_') and not is_wet_image(n)]
+        return (plain or list(names) or [''])[0]
 
     def throw_direction(self):
         """The unit direction the decal is thrown in (into the surface)."""

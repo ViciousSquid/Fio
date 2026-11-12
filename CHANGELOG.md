@@ -40,10 +40,10 @@ version 4 and play in both.
   surface in the 3D view -- brush, terrain or model -- to place the image
   selected in the Asset Browser (`textures/decals`); Shift-click to select,
   drag across surfaces, nudge with the arrow keys, Delete, Escape, as terrain
-  stamps work. Two types: **Image** paints the picture (modulate 2×, keeping
-  the surface's own light), **Wet** uses it as a mask of where the surface is
-  wet -- darkened, and reflecting the scene (standing water where the mask is
-  strongest, damp at its edges). Scale one over a whole floor with
+  stamps work. An image paints itself (modulate 2×, keeping the surface's own
+  light); one with **wet** or **puddle** in its name is instead a mask of where
+  the surface is wet -- darkened, and reflecting the scene (standing water
+  where the mask is strongest, damp at its edges). There is no type setting. Scale one over a whole floor with
   `wet_full.png` to make all of it wet. A decal is a row of the same table
   blood uses, drawn by the same pass. Samples: `grime_01`, `scorch_01`,
   `wet_puddle_01`, `wet_damp_01`, `wet_full`; try them in

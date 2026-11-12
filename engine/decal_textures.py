@@ -56,6 +56,14 @@ def refresh():
         return _state['version'], _state['names']
 
 
+def is_wet_image(name):
+    """Whether decal image *name* is a wet mask: its file name has ``wet`` or
+    ``puddle`` in it (any case). A decal of one is a Wet decal -- the image
+    says where the surface is wet -- and any other is an Image decal."""
+    base = os.path.basename(str(name or '').replace('\\', '/')).casefold()
+    return 'wet' in base or 'puddle' in base
+
+
 def layer_of(name, names=None):
     """The layer of decal image *name* (a file name or a path ending in
     one; any case), or -1."""
