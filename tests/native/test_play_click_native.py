@@ -200,7 +200,10 @@ def clear_shots(game_state):
 
 def report(label, session):
     view, button = session.view, session.window.play_button
+    screen = session.window.screen().geometry()
     print(f'[{label}] platform={QGuiApplication.platformName()} '
+          f'screen={screen.width()}x{screen.height()} '
+          f'window={session.window.geometry()} '
           f'play_mode={view.play_mode} active={session.window.isActiveWindow()} '
           f'grabber_is_view={view.mouseGrabber() is view} '
           f'cursor={QCursor.pos()} '
@@ -215,6 +218,14 @@ def armed(fio_session, qt_app):
     """_SHOWCASE in Play, the window active, the shotgun equipped and ready."""
     session = fio_session('maps/_SHOWCASE.json', size=(800, 450))
     window = session.window
+    if platform_name() != 'wayland':
+        # Wholly on screen, or a click meant for the Play button lands on the
+        # desktop instead (a hosted runner's screen can be small).
+        available = window.screen().availableGeometry()
+        frame = window.frameGeometry().size() - window.size()
+        window.resize(window.size().boundedTo(available.size() - frame))
+        window.move(available.topLeft())
+        pump(qt_app, 0.5)
     if platform_name() == 'wayland':
         _wayland['pointer'] = WaylandPointer()
         # Wayland clients do not know where their window is; full screen, the
