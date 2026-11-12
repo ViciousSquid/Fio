@@ -562,7 +562,9 @@ class PassesMixin:
             self._current_shader = shader
             gl.glActiveTexture(gl.GL_TEXTURE0)
             gl.glBindVertexArray(self.vaos['cube'])
-        else:
+        elif len(rows):
+            # No box faces (every visible brush angled, or all caulk/nodraw):
+            # nothing to draw here, and no matrices were gathered for it.
             last_row = -1
             upload_model = uniform_rows('mat4', models)
             upload_normal = uniform_rows('mat3', normals)
