@@ -278,6 +278,49 @@ def report(label, session):
           f'shots={shots_queued(session.game_state)}', flush=True)
 
 
+def _activate_macos_app():
+    """[NSApp activateIgnoringOtherApps:YES]: make this process frontmost."""
+    import ctypes.util
+    import macos_app
+    try:
+        ctypes.cdll.LoadLibrary(ctypes.util.find_library('AppKit'))
+        objc = macos_app._objc()
+        app = macos_app._send(objc, ctypes.c_void_p, objc.objc_getClass(b'NSApplication'),
+                              b'sharedApplication')
+        if app:
+            macos_app._send(objc, None, app, b'activateIgnoringOtherApps:',
+                            (ctypes.c_bool, True))
+    except Exception as error:      # a diagnostic aid, never the verdict
+        print(f'[macOS] could not activate the app: {error}', flush=True)
+
+
+@pytest.fixture(scope='module', autouse=True)
+def macos_first_window(qt_app):
+    """macOS: open and close one editor first, and bring the app to the front.
+
+    On the macOS runner the first editor window of the process never received
+    a click -- wherever it landed, warm-up click or not -- while every later
+    window received them all: a Python process started from a shell is not
+    frontmost until it has been. Spend that first window on a small room.
+    """
+    if platform_name() != 'cocoa':
+        yield
+        return
+    from editor.things import PlayerStart
+    from tests.helpers.session import FioTestSession
+    from tests.helpers.worlds import level_data, make_thing, room
+    _activate_macos_app()
+    first = FioTestSession(qt_app, level_data(
+        brushes=room(), things=[make_thing(PlayerStart, 'start', (0, 8, 0))]))
+    first.window.raise_()
+    first.window.activateWindow()
+    pump(qt_app, 1.0)
+    first.close()
+    _activate_macos_app()
+    pump(qt_app, 0.5)
+    yield
+
+
 @pytest.fixture
 def armed(fio_session, qt_app):
     """_SHOWCASE in Play, the window active, the shotgun equipped and ready."""
@@ -300,6 +343,8 @@ def armed(fio_session, qt_app):
         pump_until(qt_app, lambda: window.size() == screen.size(), 5.0)
         assert window.size() == screen.size(), \
             f'the editor did not go full screen: {window.size()} on {screen}'
+    if platform_name() == 'cocoa':
+        _activate_macos_app()
     window.raise_()
     window.activateWindow()
     warm_up_input(qt_app, session.view)
