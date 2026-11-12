@@ -22,8 +22,10 @@ from engine.asset_archives import ASSET_CATEGORIES, category_member, _entries
 def pack_category(root, category):
     root = Path(root).resolve()
     assets = root / 'assets'
-    base = assets if category == 'editor' else assets / category
-    candidates = base.glob('*') if category == 'editor' else base.rglob('*')
+    if category == 'editor':        # root images + assets/editor/** artwork
+        candidates = [*assets.glob('*'), *(assets / 'editor').rglob('*')]
+    else:
+        candidates = (assets / category).rglob('*')
     files = sorted((p for p in candidates if p.is_file()
                     and category_member(p.relative_to(root).as_posix(), category)),
                    key=lambda p: p.relative_to(root).as_posix())

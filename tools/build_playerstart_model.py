@@ -1,7 +1,8 @@
 """Regenerate the private, 100-unit playerstart sign from the reference artwork.
 
 Y is up; the player's centre is the origin (feet -50, top +50).
-The sign faces +Z. This is editor artwork, never a placeable model preset.
+The sign faces +Z. This is editor artwork, never a placeable model preset. It is packed into
+assets/editor.fiopak (as assets/editor/playerstart.obj and .mtl).
 """
 
 import math
@@ -149,6 +150,14 @@ def build():
     for x in (-27, 27):
         mesh.face([(x, .12, -14), (x, .12, 14), (x, 17, 0)], 'acrylic')
     mesh.write(ROOT / 'assets/editor/playerstart.obj')
+    # The sign ships inside assets/editor.fiopak (read in place); the loose
+    # pair is only the packer's input, so it does not linger as an override.
+    from tools.pack_assets import pack_category
+    pack_category(ROOT, 'editor')
+    for name in ('playerstart.obj', 'playerstart.mtl'):
+        (ROOT / 'assets/editor' / name).unlink(missing_ok=True)
+    if not any((ROOT / 'assets/editor').iterdir()):
+        (ROOT / 'assets/editor').rmdir()
 
 
 if __name__ == '__main__':

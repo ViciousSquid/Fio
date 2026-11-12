@@ -2,7 +2,10 @@
 
 ``assets/<category>.fiopak`` (``editor``, ``sprites``, ``textures``,
 ``models``, ``fonts``, ``music``, ``sounds``) holds members under their
-project-relative paths (``assets/textures/Dev/256.jpg``). Nothing is
+project-relative paths (``assets/textures/Dev/256.jpg``). ``editor`` holds
+the root images (``assets/b_save.png``) and the editor's private artwork
+under ``assets/editor/`` (``assets/editor/playerstart.obj``). Desktop
+archiver litter (``__MACOSX/``, ``.DS_Store``, ``Thumbs.db``) is skipped. Nothing is
 extracted: :func:`prepare_asset_archives` indexes each archive once, and a
 loader asks for an asset by the path it always used --
 :func:`asset_bytes`, :func:`asset_source` (a path or an in-memory file for
@@ -40,6 +43,16 @@ MAX_TOTAL_BYTES = 512 * 1024 * 1024
 MAX_ENTRIES = 10000
 
 
+def junk_member(member: str) -> bool:
+    """Metadata a desktop archiver adds (macOS Finder's ``__MACOSX/`` and
+    ``._name`` resource forks, ``.DS_Store``, Windows ``Thumbs.db``): never
+    an asset, and no reason to refuse an otherwise good archive."""
+    parts = member.replace('\\', '/').split('/')
+    name = parts[-1]
+    return (parts[0] == '__MACOSX' or name in ('.DS_Store', 'Thumbs.db', 'desktop.ini')
+            or name.startswith('._'))
+
+
 def category_member(member: str, category: str) -> bool:
     """Safe data-only project-relative member in exactly one category."""
     parts = member.split('/')
@@ -51,6 +64,8 @@ def category_member(member: str, category: str) -> bool:
     if category == 'textures' and member == 'assets/noise_3d.bin':
         return True
     if category == 'editor':
+        if len(parts) >= 3 and parts[1] == 'editor':    # private artwork
+            return suffix in _DATA_SUFFIXES
         return len(parts) == 2 and suffix in _ROOT_IMAGES
     return (category in ASSET_CATEGORIES and len(parts) >= 3
             and parts[1] == category
@@ -58,7 +73,8 @@ def category_member(member: str, category: str) -> bool:
 
 
 def _entries(archive, category):
-    infos = [info for info in archive.infolist() if not info.is_dir()]
+    infos = [info for info in archive.infolist()
+             if not info.is_dir() and not junk_member(info.filename)]
     if len(infos) > MAX_ENTRIES:
         raise ValueError('too many asset entries')
     total = 0

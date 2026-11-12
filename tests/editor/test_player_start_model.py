@@ -36,7 +36,8 @@ def test_right_click_places_a_playerstart_with_private_model(main_window, monkey
     assert start.primary
     expected_feet_y = 0 if view_name == 'view_top' else clicked.y()
     assert start.pos[1] - 50.0 == expected_feet_y
-    assert Path(model_path(start)).is_file()
+    from engine.asset_archives import asset_exists
+    assert asset_exists(model_path(start))      # shipped in editor.fiopak
     assert start.get_instance_pixmap() is None
 
 

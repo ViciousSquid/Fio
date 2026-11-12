@@ -27,7 +27,12 @@ version 4 and play in both.
   images (toolbar and button icons) ship in `assets/editor.fiopak` and are
   read from it in place; the few a build or Qt stylesheet needs by path
   (`icon.ico`, `logo.png`, `splash.png`, `close.png`, `undock.png`) are also
-  kept as loose files. Textures, sprites and models are loose files.
+  kept as loose files. The editor's private player-start sign
+  (`assets/editor/playerstart.obj`/`.mtl`) ships in the same archive. A
+  hand-rebuilt archive is no longer refused whole over macOS Finder litter
+  (`__MACOSX/`, `.DS_Store`, `._*`) or over the `assets/editor/` artwork --
+  either used to blank every toolbar icon and hide the player start.
+  Textures, sprites and models are loose files.
 
 ### New
 

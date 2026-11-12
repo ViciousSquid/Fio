@@ -185,3 +185,47 @@ def test_qt_images_icons_and_fonts_come_from_the_archive(qt_app, tmp_path, monke
     assert font_id >= 0 and QFontDatabase.applicationFontFamilies(font_id)
     assert load_pixmap('assets/missing.png').isNull()
     assert _files(tmp_path) == ['assets/editor.fiopak', 'assets/fonts.fiopak']
+
+
+def test_editor_archive_holds_private_artwork_and_ignores_desktop_litter(
+        tmp_path, monkeypatch):
+    """An editor.fiopak rebuilt by hand (Finder's Compress adds __MACOSX and
+    .DS_Store) that also carries assets/editor/playerstart.obj still serves
+    every icon and the playerstart model: one such member used to make the
+    whole archive unreadable -- blank toolbar icons and no player start."""
+    monkeypatch.chdir(tmp_path)
+    write_archive(tmp_path, 'editor', {
+        'assets/select.png': b'icon',
+        'assets/editor/playerstart.obj': b'mtllib playerstart.mtl\n',
+        'assets/editor/playerstart.mtl': b'newmtl ink\n',
+        '__MACOSX/assets/._select.png': b'resource fork',
+        'assets/.DS_Store': b'finder',
+        'assets/editor/.DS_Store': b'finder',
+    })
+    assert prepare_asset_archives(tmp_path) == ('editor',)
+    assert asset_bytes('assets/select.png') == b'icon'
+    model = tmp_path / 'assets' / 'editor' / 'playerstart.obj'
+    assert asset_exists(model)
+    assert asset_bytes(model.with_suffix('.mtl')) == b'newmtl ink\n'
+    assert not asset_exists('assets/.DS_Store')
+    assert _files(tmp_path) == ['assets/editor.fiopak']     # nothing extracted
+
+
+@pytest.mark.parametrize('name', ['assets/editor/code.py', 'assets/editor/../x.png',
+                                  'assets/sprites/a.png'])
+def test_editor_archive_still_refuses_what_is_not_editor_data(
+        tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    write_archive(tmp_path, 'editor', {'assets/select.png': b'icon', name: b'bad'})
+    prepare_asset_archives(tmp_path)
+    assert asset_bytes('assets/select.png') is None
+
+
+def test_repository_editor_archive_carries_the_playerstart_model():
+    """The shipped archive alone draws the player start (no loose copy)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    with zipfile.ZipFile(root / 'assets' / 'editor.fiopak') as archive:
+        names = set(archive.namelist())
+    assert {'assets/editor/playerstart.obj', 'assets/editor/playerstart.mtl',
+            'assets/select.png'} <= names
