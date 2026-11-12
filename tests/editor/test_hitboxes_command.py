@@ -12,6 +12,8 @@ pytest.importorskip("PyQt5")
 
 from engine.view_debug_draw import ViewDebugDraw      # noqa: E402
 
+pytestmark = pytest.mark.qt
+
 
 def test_the_outline_is_three_great_circles_on_the_sphere():
     centre, radius = (10.0, 96.0, -40.0), 96.0
@@ -43,7 +45,6 @@ def _pink_pixels(image):
     return int((np.abs(image.astype(int) - pink).max(axis=2) <= 40).sum())
 
 
-@pytest.mark.qt
 @pytest.mark.gl
 def test_hitboxes_publish_the_shot_spheres_and_draw_them_pink(fio_session):
     session = fio_session(_level(), size=(320, 180))
