@@ -10,8 +10,10 @@ keyed by the asset's path and :func:`engine.asset_archives.asset_stamp`: an
 edited, replaced or repacked file is decoded afresh, an unchanged one never.
 Tiles turn the small image into a pixmap of their own size.
 
-The cache is bounded (:data:`CACHE_LIMIT` images, least recently used out):
-at 90x90 RGBA an image is ~32 KB, so the whole cache stays near 64 MB.
+The cache is bounded by the bytes its images hold (:data:`CACHE_BYTES`,
+100 MB; least recently used out). A 90x90 RGBA image is ~32 KB, so that is
+about 3,200 square thumbnails -- more when they are not square. A file
+pushed out is decoded again, small, the next time a tile needs it.
 """
 
 from __future__ import annotations
@@ -24,12 +26,14 @@ from engine.asset_archives import asset_bytes, asset_source, asset_stamp
 #: The largest tile's thumbnail edge (THUMBNAIL_SIZES['medium']); smaller
 #: tiles scale the cached image down.
 THUMBNAIL_EDGE = 90
-#: Images kept; the least recently used goes first.
-CACHE_LIMIT = 2048
+#: Bytes of image data kept; the least recently used goes first.
+CACHE_BYTES = 100 * 1024 * 1024
 
 #: normalised path -> (stamp, QImage). One entry a path: a newer version of
 #: a file replaces the old one's image rather than sitting beside it.
 _cache: "OrderedDict[str, tuple]" = OrderedDict()
+#: The bytes the cached images hold (QImage.sizeInBytes, summed).
+_held = [0]
 #: Decodes performed (tests: a second visit must not decode again).
 stats = {'decoded': 0, 'hits': 0}
 
@@ -66,14 +70,24 @@ def cached(path, make, edge=THUMBNAIL_EDGE):
     if isinstance(made, QPixmap):
         made = made.toImage()
     image = shrink(made, edge) if isinstance(made, QImage) else QImage()
+    _forget(key)
     if stamp is not None:
         _cache[key] = ((stamp, edge), image)
-        _cache.move_to_end(key)
-        while len(_cache) > CACHE_LIMIT:
-            _cache.popitem(last=False)
-    else:
-        _cache.pop(key, None)
+        _held[0] += image.sizeInBytes()
+        while _held[0] > CACHE_BYTES and len(_cache) > 1:
+            _forget(next(iter(_cache)))
     return image
+
+
+def _forget(key):
+    held = _cache.pop(key, None)
+    if held is not None:
+        _held[0] -= held[1].sizeInBytes()
+
+
+def held_bytes():
+    """The bytes the cached thumbnails hold now."""
+    return _held[0]
 
 
 def decode_image(path, edge=THUMBNAIL_EDGE):
@@ -123,4 +137,5 @@ def image_thumbnail(path, edge=THUMBNAIL_EDGE):
 def clear():
     """Forget every thumbnail (tests; a project switch)."""
     _cache.clear()
+    _held[0] = 0
     stats['decoded'] = stats['hits'] = 0

@@ -82,6 +82,7 @@ def test_an_edited_file_is_decoded_again(qt_app, tmp_path):
     assert QColor(blue.pixel(10, 10)).blue() > 200
     assert asset_thumbnails.stats['decoded'] == 2
     assert len(asset_thumbnails._cache) == 1        # replaced, not added
+    assert asset_thumbnails.held_bytes() == blue.sizeInBytes()
 
 
 def test_a_folder_visited_again_decodes_nothing(qt_app, tmp_path):
@@ -107,16 +108,24 @@ def test_an_unreadable_file_shows_a_question_mark_and_is_not_retried(qt_app, tmp
     assert asset_thumbnails.stats['decoded'] == 1
 
 
-def test_the_cache_is_bounded(qt_app, tmp_path, monkeypatch):
-    monkeypatch.setattr(asset_thumbnails, 'CACHE_LIMIT', 3)
+def test_the_cache_is_bounded_by_bytes(qt_app, tmp_path, monkeypatch):
+    assert asset_thumbnails.CACHE_BYTES == 100 * 1024 * 1024
+    one = 64 * 64 * 4
+    monkeypatch.setattr(asset_thumbnails, 'CACHE_BYTES', 3 * one)
     for i in range(5):
         path = tmp_path / f"c{i}.png"
         _write(path, 64, 64, "#00ff00")
         asset_thumbnails.image_thumbnail(str(path))
     assert len(asset_thumbnails._cache) == 3
+    assert asset_thumbnails.held_bytes() == 3 * one
     # The least recently used went first.
     kept = {os.path.basename(k) for k in asset_thumbnails._cache}
     assert kept == {"c2.png", "c3.png", "c4.png"}
+    # Pushed out is not lost: it is decoded again, small, when asked for.
+    decoded = asset_thumbnails.stats['decoded']
+    assert not asset_thumbnails.image_thumbnail(str(tmp_path / "c0.png")).isNull()
+    assert asset_thumbnails.stats['decoded'] == decoded + 1
+    assert asset_thumbnails.held_bytes() == 3 * one
 
 
 def test_a_missing_asset_has_no_stamp_and_is_not_cached(qt_app, tmp_path):

@@ -135,7 +135,8 @@ version 4 and play in both.
   folder visit decoded every file again. Each asset is now decoded once per
   version of its file, at no more than 90 px (JPEG decodes at that size),
   and kept as a small image keyed by path and modification stamp
-  (`editor/asset_thumbnails.py`); tiles make their pixmap from it. Twenty
+  (`editor/asset_thumbnails.py`, at most 100 MB of images, least recently
+  used out); tiles make their pixmap from it. Twenty
   2048² textures: 320 MB held becomes 0.6 MB, a revisit takes 0.1 ms instead
   of ~1 s. Model wireframe thumbnails are cached the same way.
 - A map's textures are loaded with the map rather than every texture at
