@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from engine.monster_table import MonsterTable
-from tests.helpers.crossfire import make_table, sorted_crossfire
+from tests.helpers.crossfire import CENTRE_LIFT, make_table, sorted_crossfire
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.slow]
 COUNTS = (1, 4, 8, 16, 24, 32, 48, 64, 128, 256, 1024)
@@ -30,12 +30,12 @@ def _scenario(count, distribution):
     rng = np.random.default_rng(42 + count)
     if distribution in ('aligned', 'ties', 'stale'):
         pos = np.zeros((count, 3))
-        pos[:, 1] = -64
+        pos[:, 1] = -CENTRE_LIFT
         pos[:, 2] = 200 if distribution == 'ties' else np.linspace(100, 1900, count)
         rng.shuffle(pos[1:])  # hit order is independent of row order
     else:
         pos = rng.uniform(-2000, 2000, (count, 3))
-    pos[0] = (0, -64, -200)
+    pos[0] = (0, -CENTRE_LIFT, -200)
     table = make_table(pos)
     if distribution == 'filtered':
         for row, p in enumerate(table.props):

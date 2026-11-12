@@ -34,6 +34,8 @@ import math
 
 import numpy as np
 
+from engine.monster_constants import MONSTER_BODY_RISE
+
 #: What each row did this tick (``mode`` column; Debug Tables names them).
 MODE_SKIPPED = 0      # hidden or disabled
 MODE_DEAD = 1         # dead: falls to the ground
@@ -222,7 +224,8 @@ class MonsterTable:
         """The first monster a shot from *shooter* at *ray_end* passes through.
 
         A scalar walk below CROSSFIRE_NUMPY_MIN, otherwise a NumPy row query:
-        same sphere (radius 80, 64 above the monster's origin), same
+        same sphere (radius 80, on the middle of the body: feet + 0.45 H,
+        engine.monster_constants.monster_body_rise), same
         exclusions (the shooter, dead or hidden monsters, the shooter's team)
         and the same answer -- the nearest entry point, the earliest row on a
         tie.
@@ -297,7 +300,8 @@ class MonsterTable:
             if shooter_team >= 0 and self.team[row] == shooter_team:
                 continue
             x, y, z = self.pos[row].tolist()
-            x, y, z = sx - x, sy - (y + 64.0), sz - z
+            y += MONSTER_BODY_RISE * float(self.sprite_height[row])
+            x, y, z = sx - x, sy - y, sz - z
             b = 2.0 * (x * dx + y * dy + z * dz)
             c = (x * x + y * y + z * z) - radius_sq
             disc = b * b - 4.0 * c
@@ -360,7 +364,7 @@ class MonsterTable:
             return None
         # Fancy indexing already owns its data; reuse it for the offsets too.
         centre = self.pos[rows]
-        centre[:, 1] += 64.0
+        centre[:, 1] += MONSTER_BODY_RISE * self.sprite_height[rows]
         oc = np.subtract(start, centre, out=centre)
         b = 2.0 * (oc @ direction)
         c = np.einsum('ij,ij->i', oc, oc) - radius * radius

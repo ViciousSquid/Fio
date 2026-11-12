@@ -7,7 +7,13 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from engine.monster_constants import MONSTER_BODY_RISE
 from engine.monster_table import MonsterTable
+
+#: How far above a fixture monster's pos (the centre of its billboard; no
+#: sprite_height, so the table's 128) the crossfire sphere is centred: the
+#: middle of its body, feet + 0.45 H.
+CENTRE_LIFT = MONSTER_BODY_RISE * 128.0
 
 
 def make_table(positions, **properties):
@@ -22,7 +28,8 @@ def sorted_crossfire(self, shooter, ray_start, ray_end, radius=80.0):
     """The first monster a shot from *shooter* at *ray_end* passes through.
 
     The per-monster walk this replaces, as one expression over the rows:
-    same sphere (radius 80, 64 above the monster's origin), same
+    same sphere (radius 80, on the middle of the body: CENTRE_LIFT for the
+    fixture height), same
     exclusions (the shooter, dead or hidden monsters, the shooter's team)
     and the same answer -- the nearest entry point, the earliest row on a
     tie.
@@ -58,7 +65,7 @@ def sorted_crossfire(self, shooter, ray_start, ray_end, radius=80.0):
     if not len(rows):
         return None
     centre = self.pos[rows].copy()
-    centre[:, 1] += 64.0
+    centre[:, 1] += MONSTER_BODY_RISE * self.sprite_height[rows]
     oc = start - centre
     b = 2.0 * (oc @ direction)
     c = np.einsum('ij,ij->i', oc, oc) - radius * radius

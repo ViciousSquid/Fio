@@ -653,7 +653,9 @@ def test_several_monsters_keep_independent_state(monster_factory, ai_world,
 
 def test_several_monsters_targeting_one_player_each_deal_their_own_damage(
         monster_factory, ai_world, flat_ground):
-    monsters = [monster_factory("m%d" % i, (300 + i * 20, 96, 0), damage=i + 1)
+    # Side by side, not in a file: a monster standing in another's line of
+    # fire takes that shot itself (crossfire), which is not under test here.
+    monsters = [monster_factory("m%d" % i, (300, 96, -300 + i * 200), damage=i + 1)
                 for i in range(4)]
     ai, logic = ai_world(brushes=flat_ground, things=monsters)
 

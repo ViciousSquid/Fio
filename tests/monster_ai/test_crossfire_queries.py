@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from engine.monster_table import MonsterTable
-from tests.helpers.crossfire import make_table, sorted_crossfire
+from tests.helpers.crossfire import CENTRE_LIFT, make_table, sorted_crossfire
 
 
 @pytest.fixture(params=[0, 1 << 30], ids=['numpy', 'scalar'])
@@ -51,7 +51,7 @@ def test_matches_sorted_reference(path, count):
 ])
 def test_ray_boundaries(path, centre, end, radius, hit):
     x, y, z = centre
-    table = make_table([(500, 500, 500), (x, y - 64, z)])
+    table = make_table([(500, 500, 500), (x, y - CENTRE_LIFT, z)])
     got = table.crossfire(0, (0, 0, 0), end, radius)
     assert got is (table.monsters[1] if hit else None)
 
@@ -69,7 +69,7 @@ def test_oblique_near_tangents_and_endpoints_keep_numpy_rounding(path):
             normal = np.cross(direction, [0, 0, 1])
             normal /= np.linalg.norm(normal)
             centre = start + direction * 500 + normal * 80
-        centre[1] -= 64
+        centre[1] -= CENTRE_LIFT
         table = make_table([start + 10000, centre])
         expected = sorted_crossfire(table, 0, start, end)
         assert table.crossfire(0, start, end) is expected, trial
@@ -85,8 +85,8 @@ def test_near_equal_oblique_entries_keep_the_reference_winner(path):
         normal /= np.linalg.norm(normal)
         centre = start + direction * 400
         left, right = centre + normal * 40, centre - normal * 40
-        left[1] -= 64
-        right[1] -= 64
+        left[1] -= CENTRE_LIFT
+        right[1] -= CENTRE_LIFT
         table = make_table([start + 10000, left, right])
         end = start + direction * 1000
         expected = sorted_crossfire(table, 0, start, end)
@@ -105,7 +105,7 @@ def test_stale_front_keeps_near_equal_farther_entries_in_reference_order(path):
         left = start + direction * 400 + normal * 40
         right = start + direction * 400 - normal * 40
         for centre in (front, left, right):
-            centre[1] -= 64
+            centre[1] -= CENTRE_LIFT
         table = make_table([start + 10000, front, left, right])
         end = start + direction * 1000
         assert table.crossfire(0, start, end) is table.monsters[1]
@@ -119,7 +119,7 @@ def test_stale_front_keeps_near_equal_farther_entries_in_reference_order(path):
 
 
 def test_equal_distance_is_row_order_even_after_stale_ties(path):
-    table = make_table([(0, -64, -200)] + [(0, -64, 100)] * 5)
+    table = make_table([(0, -CENTRE_LIFT, -200)] + [(0, -CENTRE_LIFT, 100)] * 5)
     for row in range(1, 6):
         assert table.crossfire(0, (0, 0, 0), (0, 0, 300)) is table.monsters[row]
         table.props[row]['dead' if row % 2 else 'hidden'] = True
@@ -128,8 +128,8 @@ def test_equal_distance_is_row_order_even_after_stale_ties(path):
 
 
 def test_exclusions_and_stale_nearest_fall_back_in_distance_order(path):
-    table = make_table([(0, -64, 500), (0, -64, 400), (0, -64, 200),
-                        (0, -64, 100), (0, -64, 300)])
+    table = make_table([(0, -CENTRE_LIFT, 500), (0, -CENTRE_LIFT, 400), (0, -CENTRE_LIFT, 200),
+                        (0, -CENTRE_LIFT, 100), (0, -CENTRE_LIFT, 300)])
     table.props[0]['team'] = table.props[3]['team'] = 'red'
     table.gather(table.monsters)
     shoot = lambda: table.crossfire(0, (0, 0, 0), (0, 0, 600))
@@ -149,8 +149,8 @@ def test_exclusions_and_stale_nearest_fall_back_in_distance_order(path):
 
 
 def test_initially_hidden_target_joins_next_tick_and_far_flags_are_lazy(path):
-    table = make_table([(0, -64, -100), (0, -64, 100),
-                        (0, -64, 200), (0, -64, 300)])
+    table = make_table([(0, -CENTRE_LIFT, -100), (0, -CENTRE_LIFT, 100),
+                        (0, -CENTRE_LIFT, 200), (0, -CENTRE_LIFT, 300)])
     table.props[1]['hidden'] = True
     shoot = lambda: table.crossfire(0, (0, 0, 0), (0, 0, 500))
     assert shoot() is table.monsters[2]
@@ -166,11 +166,11 @@ def test_initially_hidden_target_joins_next_tick_and_far_flags_are_lazy(path):
 
 
 def test_query_does_not_modify_geometry_and_gather_replaces_same_size_rows(path):
-    table = make_table([(0, -64, -200), (0, -64, 100)])
+    table = make_table([(0, -CENTRE_LIFT, -200), (0, -CENTRE_LIFT, 100)])
     before = table.pos.copy()
     assert table.crossfire(0, (0, 0, 0), (0, 0, 300)) is table.monsters[1]
     np.testing.assert_array_equal(table.pos, before)
-    other = make_table([(0, -64, -200), (0, -64, 200)])
+    other = make_table([(0, -CENTRE_LIFT, -200), (0, -CENTRE_LIFT, 200)])
     table.gather(other.monsters)
     assert table._live is None
     assert table.crossfire(0, (0, 0, 0), (0, 0, 300)) is other.monsters[1]
@@ -188,7 +188,7 @@ def test_threshold_dispatch(monkeypatch):
 
 
 def test_common_hit_does_not_sort(path, monkeypatch):
-    table = make_table([(0, -64, -200)] + [(0, -64, 100)] * 100)
+    table = make_table([(0, -CENTRE_LIFT, -200)] + [(0, -CENTRE_LIFT, 100)] * 100)
     def unexpected_sort(*args, **kwargs):
         pytest.fail('a live nearest hit should not sort the hit population')
     monkeypatch.setattr(np, 'lexsort', unexpected_sort)
@@ -198,8 +198,8 @@ def test_common_hit_does_not_sort(path, monkeypatch):
 
 @pytest.mark.parametrize('count', [4, 8, 16, 24])
 def test_small_queries_do_not_dispatch_numpy_even_on_first_shot(monkeypatch, count):
-    table = make_table([(0, -64, -200)] +
-                       [(0, -64, 100 * row) for row in range(1, count)])
+    table = make_table([(0, -CENTRE_LIFT, -200)] +
+                       [(0, -CENTRE_LIFT, 100 * row) for row in range(1, count)])
     monkeypatch.setattr(MonsterTable, 'CROSSFIRE_NUMPY_MIN', count + 1)
     def unexpected_numpy(*args, **kwargs):
         pytest.fail('ordinary small queries must not dispatch NumPy')
@@ -220,7 +220,7 @@ def test_small_queries_do_not_dispatch_numpy_even_on_first_shot(monkeypatch, cou
 
 def test_oblique_one_unit_cutoff_preserves_original_cache_initialization(path):
     rng = np.random.default_rng(83)
-    table = make_table([(0, -64, -200), (0, -64, .75)])
+    table = make_table([(0, -CENTRE_LIFT, -200), (0, -CENTRE_LIFT, .75)])
     for _ in range(100):
         end = rng.normal(size=3)
         end /= np.linalg.norm(end)

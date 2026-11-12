@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover - exercised by the head-less player
         print(f"[{category}] {message}")
 from .change_journal import JOURNAL, STATE, set_positions, touch
 from . import monster_table
+from .monster_constants import (MONSTER_EYE_RISE, monster_body_rise,
+                                monster_eye_rise)
 from .monster_facing import face_direction
 from .spatial import TIER_DORMANT, tier_of
 from .brush_placement import world_bounds
@@ -444,10 +446,14 @@ all accumulated time when it runs, so simulation time is not lost.
                     self._sight_lost(thing, aggro_monster, float(t.dist_sq[row]))
             if fired[row]:
                 target_pos = glm.vec3(*map(float, t.target_pos[row]))
-                eye = glm.vec3(float(pos32[row, 0]), float(pos32[row, 1]) + 64.0,
+                eye = glm.vec3(float(pos32[row, 0]),
+                               float(pos32[row, 1]) + monster_eye_rise(props[row]),
                                float(pos32[row, 2]))
                 if aggro_monster is not None:
-                    target_eye = glm.vec3(target_pos.x, target_pos.y + 64.0, target_pos.z)
+                    target_eye = glm.vec3(
+                        target_pos.x,
+                        target_pos.y + monster_eye_rise(aggro_monster.properties),
+                        target_pos.z)
                 else:
                     target_eye = glm.vec3(px, py + self.lt.player_runtime.player.camera_height, pz)
                 self._monster_attack(thing, props[row].get('monster_type', 'human'),
@@ -673,12 +679,20 @@ all accumulated time when it runs, so simulation time is not lost.
         fired = np.zeros(len(rows), dtype=bool)
         if len(due):
             camera_height = self.lt.player_runtime.player.camera_height
+            # Eye heights from the table's columns (monster_eye_rise).
+            n = t.count
+            eye_rise = (np.where(t.flying[:n], MONSTER_EYE_RISE['flying'],
+                                 MONSTER_EYE_RISE['human'])
+                        * t.sprite_height[:n])
             for i in due:
                 row = rows[i]
-                eye = glm.vec3(float(p32[i, 0]), float(p32[i, 1]) + 64.0, float(p32[i, 2]))
+                eye = glm.vec3(float(p32[i, 0]), float(p32[i, 1]) + float(eye_rise[row]),
+                               float(p32[i, 2]))
                 if target[i] >= 0:
                     tp = target_pos[i]
-                    target_eye = glm.vec3(float(tp[0]), float(tp[1]) + 64.0, float(tp[2]))
+                    target_eye = glm.vec3(float(tp[0]),
+                                          float(tp[1]) + float(eye_rise[target[i]]),
+                                          float(tp[2]))
                 else:
                     target_eye = glm.vec3(float(player32[0]),
                                           float(player32[1]) + camera_height,
@@ -949,9 +963,12 @@ all accumulated time when it runs, so simulation time is not lost.
                     target_pos = player_pos
 
         # ---- Line of sight check ----
-        monster_eye = glm.vec3(thing_pos.x, thing_pos.y + 64.0, thing_pos.z)
+        monster_eye = glm.vec3(thing_pos.x, thing_pos.y + monster_eye_rise(thing.properties),
+                               thing_pos.z)
         if aggro_monster is not None:
-            target_eye = glm.vec3(target_pos.x, target_pos.y + 64.0, target_pos.z)
+            target_eye = glm.vec3(target_pos.x,
+                                  target_pos.y + monster_eye_rise(aggro_monster.properties),
+                                  target_pos.z)
         else:
             target_eye = glm.vec3(player_pos.x, player_pos.y + self.lt.player_runtime.player.camera_height, player_pos.z)
         has_los = self._has_line_of_sight(monster_eye, target_eye)
@@ -1429,9 +1446,9 @@ the scalar fallback for callers that do not have the dense table.
             if shooter_team and target_team and shooter_team == target_team:
                 continue
 
-            # Sphere intersection (same radius used by player shooting)
+            # Sphere intersection on the middle of the body
             radius = 80.0
-            center = glm.vec3(t.pos[0], t.pos[1] + 64.0, t.pos[2])
+            center = glm.vec3(t.pos[0], t.pos[1] + monster_body_rise(t.properties), t.pos[2])
             oc = ray_start - center
             a = glm.dot(ray_dir, ray_dir)
             b = 2.0 * glm.dot(oc, ray_dir)
@@ -1506,7 +1523,10 @@ the scalar fallback for callers that do not have the dense table.
             MONSTER_PROJECTILE_MAX_DIST,
         )
 
-        start_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
+        # From the monster's muzzle (a flying monster's middle), not 64
+        # units above its centre -- over the head of a 160-unit flyer.
+        start_pos = glm.vec3(thing.pos[0], thing.pos[1] + monster_eye_rise(thing.properties),
+                             thing.pos[2])
         direction = target_pos - start_pos
         dir_len = glm.length(direction)
         if dir_len < 0.001:
@@ -1651,7 +1671,8 @@ the scalar fallback for callers that do not have the dense table.
                 f'<span style="color: #FFA726;">investigating {noise_label} within Range at ({sound_pos.x:.0f}, {sound_pos.y:.0f}, {sound_pos.z:.0f})</span>')
             # Draw debug ray to sound source
             self._debug_rays.append({
-                'start': [thing_pos.x, thing_pos.y + 64.0, thing_pos.z],
+                'start': [thing_pos.x, thing_pos.y + monster_eye_rise(monster.properties),
+                          thing_pos.z],
                 'end': [sound_pos.x, sound_pos.y, sound_pos.z],
                 'color': 'orange',
             })

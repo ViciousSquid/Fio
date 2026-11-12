@@ -55,6 +55,40 @@ MONSTER_SPRITE_SIZES = {
 MONSTER_SPRITE_SIZE_DEFAULT = (128, 128)
 
 # ---------------------------------------------------------------------------
+# Where a monster sees and shoots from, and where its body is
+# ---------------------------------------------------------------------------
+# A monster's pos is the centre of its billboard (the AI grounds it at
+# floor + sprite_height / 2). Heights are offsets from that centre, as a
+# share of the sprite's height, so they follow a resized sprite.
+
+#: Eyes (line of sight) and muzzle (shots, projectiles): a human's are near
+#: the top of the figure; a flying monster sees and spits from its middle.
+MONSTER_EYE_RISE = {'human': 0.35, 'flying': 0.0}
+MONSTER_EYE_RISE_DEFAULT = 0.35
+#: The middle of the body, which shots aim at and crossfire tests against:
+#: feet + 0.45 H, as the player's hit sphere (LogicCombat).
+MONSTER_BODY_RISE = -0.05
+
+
+def monster_sprite_height(props):
+    try:
+        return float(props.get('sprite_height', 128.0))
+    except (TypeError, ValueError):
+        return 128.0
+
+
+def monster_eye_rise(props):
+    """How far above a monster's pos its eyes and muzzle are."""
+    share = MONSTER_EYE_RISE.get(props.get('monster_type', 'human'),
+                                 MONSTER_EYE_RISE_DEFAULT)
+    return share * monster_sprite_height(props)
+
+
+def monster_body_rise(props):
+    """How far above a monster's pos the middle of its body is (negative)."""
+    return MONSTER_BODY_RISE * monster_sprite_height(props)
+
+# ---------------------------------------------------------------------------
 # Monster variants — per-type list of alternate sprite folder names.
 #
 # When a monster's 'variant' property is set to one of these values, the
