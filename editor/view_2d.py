@@ -3926,7 +3926,15 @@ class View2D(QWidget):
         elif action == add_logic_timer_action: new_thing = LogicTimer(pos=pos_3d)
         elif action == add_logic_command_action: new_thing = LogicCommand(pos=pos_3d)
         elif action == add_monster_action:
-            new_thing = Monster(pos=pos_3d)
+            # Monster.pos is the billboard's centre (the AI grounds it at
+            # floor + sprite_height / 2), so the clicked height is the feet,
+            # exactly as for a PlayerStart. Placing the centre at the click
+            # sank the lower half of the sprite into the floor.
+            feet_y = 0.0 if self.view_type == 'top' else pos_3d[1]
+            new_thing = Monster(pos=list(pos_3d))
+            centre_y = feet_y + float(
+                new_thing.properties['sprite_height']) / 2.0
+            new_thing.pos = [pos_3d[0], centre_y, pos_3d[2]]
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
