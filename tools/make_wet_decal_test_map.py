@@ -46,7 +46,9 @@ things = [
 ]
 state = EditorState()
 state.load_from_data({'brushes': [dict(b) for b in brushes], 'things': [t.to_dict() for t in things]})
-data = state.get_level_data()
+# Shipped maps are written in the version-4 layout both builds read.
+from engine.brush_placement import export_world_level
+data = export_world_level(state.get_level_data())
 with open(__import__('pathlib').Path(__file__).resolve().parents[1] / 'maps' / 'Wet_Decal_Test.json', 'w') as f:
     json.dump(data, f, indent=4)
 print('things', [t['type'] for t in data['things']], 'version', data.get('version'))
