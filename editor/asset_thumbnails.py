@@ -11,7 +11,7 @@ edited, replaced or repacked file is decoded afresh, an unchanged one never.
 Tiles turn the small image into a pixmap of their own size.
 
 The cache is bounded (:data:`CACHE_LIMIT` images, least recently used out):
-at 90x90 RGBA an image is ~32 KB, so the whole cache stays near 32 MB.
+at 90x90 RGBA an image is ~32 KB, so the whole cache stays near 64 MB.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from engine.asset_archives import asset_bytes, asset_source, asset_stamp
 #: tiles scale the cached image down.
 THUMBNAIL_EDGE = 90
 #: Images kept; the least recently used goes first.
-CACHE_LIMIT = 1024
+CACHE_LIMIT = 2048
 
 #: normalised path -> (stamp, QImage). One entry a path: a newer version of
 #: a file replaces the old one's image rather than sitting beside it.
