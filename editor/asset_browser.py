@@ -1,6 +1,6 @@
 from engine.asset_archives import (asset_bytes, asset_exists, asset_isdir,
                                    asset_listdir, asset_source)
-from engine.asset_qt import load_icon, load_pixmap
+from engine.asset_qt import load_icon
 import io
 import os
 import sys
@@ -262,8 +262,10 @@ class AssetItem(QWidget):
         self.is_model = is_model
         self.is_audio = is_audio
         self.thumb_size = thumb_size
-        #: The loaded image before scaling, kept so a size change is a rescale.
-        self._source_pixmap = None
+        #: The cached thumbnail (editor.asset_thumbnails): a small QImage,
+        #: shared with every tile of the same file, kept so a size change is
+        #: a rescale. Never the full-resolution image.
+        self._source_image = None
 
         self.setFixedSize(*self.tile_size(thumb_size))
         # Reduce layout margins so the border has room
@@ -421,71 +423,60 @@ class AssetItem(QWidget):
             self.preview_btn.setToolTip("Preview the animation")
 
     def _load_thumbnail(self):
-        pixmap = QPixmap()
-
+        from editor.asset_thumbnails import cached, image_thumbnail
         if self.is_audio:
             self._show_thumbnail()
             return
         if self.is_model:
-            # 1. Look for .png sidecar
-            base_path = os.path.splitext(self.file_path)[0]
-            thumb_path = base_path + ".png"
-
+            # 1. A .png sidecar; 2. a wireframe made from the model -- cached
+            # like any thumbnail, so a folder visit renders it once.
+            thumb_path = os.path.splitext(self.file_path)[0] + ".png"
             if asset_exists(thumb_path):
-                pixmap = load_pixmap(thumb_path)
+                image = image_thumbnail(thumb_path)
             else:
-                # 2. Generate wireframe from model
-                ext = os.path.splitext(self.file_path)[1].lower()
-                generated_pix = None
-
-                if ext == '.glb':
-                    generated_pix = render_glb_thumbnail(self.file_path, 90, 90)
-                elif ext == '.obj':
-                    generated_pix = render_obj_thumbnail(self.file_path, 90, 90)
-
-                if generated_pix:
-                    pixmap = generated_pix
-                else:
-                    # 3. Fallback text
-                    pixmap = QPixmap(90, 90)
-                    pixmap.fill(QColor(60, 70, 80))
-                    painter = QPainter(pixmap)
-                    painter.setPen(QColor(200, 200, 200))
-                    font = QFont("Fio UI", 16, QFont.Bold)
-                    painter.setFont(font)
-                    label = "GLB" if ext == '.glb' else "OBJ"
-                    painter.drawText(QRect(0, 0, 90, 90), Qt.AlignCenter, label)
-                    painter.end()
+                image = cached(self.file_path, self._render_model_thumbnail)
+            if image.isNull():
+                image = self._model_label_image()
         else:
-            # Assume image
-            pixmap = load_pixmap(self.file_path)
-            if pixmap.isNull():
-                # No Qt image plugin for it (a GIF without qgif): Pillow
-                # reads it, first frame only for an animation.
-                try:
-                    from PIL import Image
-                    with Image.open(asset_source(self.file_path) or self.file_path) as source:
-                        image = source.convert("RGBA")
-                    qimage = QImage(image.tobytes(), image.width, image.height,
-                                    image.width * 4, QImage.Format_RGBA8888).copy()
-                    pixmap = QPixmap.fromImage(qimage)
-                except Exception:
-                    pixmap = QPixmap()
-
-        self._source_pixmap = None if pixmap.isNull() else pixmap
+            image = image_thumbnail(self.file_path)
+        self._source_image = None if image.isNull() else image
         self._show_thumbnail()
+
+    def _render_model_thumbnail(self):
+        """A wireframe of the model (GLB or OBJ), or None."""
+        from editor.asset_thumbnails import THUMBNAIL_EDGE
+        ext = os.path.splitext(self.file_path)[1].lower()
+        if ext == '.glb':
+            return render_glb_thumbnail(self.file_path, THUMBNAIL_EDGE, THUMBNAIL_EDGE)
+        if ext == '.obj':
+            return render_obj_thumbnail(self.file_path, THUMBNAIL_EDGE, THUMBNAIL_EDGE)
+        return None
+
+    def _model_label_image(self):
+        """3. The model's type in text, when it cannot be drawn."""
+        from editor.asset_thumbnails import THUMBNAIL_EDGE as edge
+        image = QImage(edge, edge, QImage.Format_ARGB32_Premultiplied)
+        image.fill(QColor(60, 70, 80))
+        painter = QPainter(image)
+        painter.setPen(QColor(200, 200, 200))
+        painter.setFont(QFont("Fio UI", 16, QFont.Bold))
+        ext = os.path.splitext(self.file_path)[1].lower()
+        painter.drawText(QRect(0, 0, edge, edge), Qt.AlignCenter, "GLB" if ext == '.glb' else "OBJ")
+        painter.end()
+        return image
 
     def _show_thumbnail(self):
         size = self.thumb_size
+        image = self._source_image
         if self.is_audio:
             self.thumb_label.setPixmap(audio_thumbnail(self.file_path, size))
-        elif self._source_pixmap is None:
+        elif image is None:
             self.thumb_label.setText("?")
-        elif self._source_pixmap.width() == size and self._source_pixmap.height() == size:
-            self.thumb_label.setPixmap(self._source_pixmap)
+        elif image.width() <= size and image.height() <= size and max(image.width(), image.height()) == size:
+            self.thumb_label.setPixmap(QPixmap.fromImage(image))
         else:
-            self.thumb_label.setPixmap(self._source_pixmap.scaled(
-                size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.thumb_label.setPixmap(QPixmap.fromImage(image.scaled(
+                size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
 
 
     def _update_border(self):

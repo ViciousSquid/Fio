@@ -130,6 +130,14 @@ version 4 and play in both.
 
 ### Performance
 
+- **Asset Browser thumbnails are small and cached.** A tile held its
+  texture's full-resolution pixmap (16 MB for a 2048² texture) and every
+  folder visit decoded every file again. Each asset is now decoded once per
+  version of its file, at no more than 90 px (JPEG decodes at that size),
+  and kept as a small image keyed by path and modification stamp
+  (`editor/asset_thumbnails.py`); tiles make their pixmap from it. Twenty
+  2048² textures: 320 MB held becomes 0.6 MB, a revisit takes 0.1 ms instead
+  of ~1 s. Model wireframe thumbnails are cached the same way.
 - A map's textures are loaded with the map rather than every texture at
   start-up; FIRE and ORB animations load when a map's effects use them.
 - The editor's 2D views repaint at 10 Hz while a game is played.

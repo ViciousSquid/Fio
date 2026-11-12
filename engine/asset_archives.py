@@ -335,6 +335,31 @@ def _read(found, info):
         return handle.read(info)
 
 
+def asset_stamp(path):
+    """What changes when the asset at *path* does, without reading it: a
+    loose file's modification time and size; an archived one's archive,
+    the archive's own signature and the member's CRC and size. None when
+    the asset is in neither. For caches keyed on an asset's content."""
+    full = os.fspath(path)
+    try:
+        stat = os.stat(full)
+    except OSError:
+        stat = None
+    if stat is not None and not os.path.isdir(full):
+        return ('file', stat.st_mtime_ns, stat.st_size)
+    found, info = _find(asset_member(full))
+    if found is None:
+        return None
+    category, archive = found
+    if category == 'package':
+        try:
+            stat = os.stat(archive)
+        except OSError:
+            return None
+        return ('package', os.fspath(archive), stat.st_mtime_ns, stat.st_size, info)
+    return (category, archive.signature, info.filename, info.CRC, info.file_size)
+
+
 def asset_bytes(path):
     """The bytes of the asset at *path*: the loose file if there is one,
     else the archive member, else None."""
