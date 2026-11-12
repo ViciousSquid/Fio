@@ -1,0 +1,145 @@
+name: Play - left click fires (native input, every platform)
+
+# On each desktop platform, a real Fio editor plays _SHOWCASE with the shotgun
+# equipped and a left click is sent through the window system's own input
+# queue (tests/native/test_play_click_native.py). The click must fire the
+# weapon -- its ammunition goes down -- including with the hidden pointer
+# resting on the Play/Stop button, where it used to press Stop instead. A
+# control test turns Play's mouse grab off and must see that bug come back,
+# so every platform shows the test really exercises it.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/play-click-native.yml'
+      - 'tests/native/**'
+      - 'engine/qt_game_view.py'
+      - 'macos_app.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play-click-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-click:
+    name: ${{ matrix.platform.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: Windows, os: windows-latest, id: windows }
+          - { name: macOS, os: macos-latest, id: macos }
+          - { name: Linux X11, os: ubuntu-24.04, id: linux-x11 }
+          - { name: Linux Wayland, os: ubuntu-24.04, id: linux-wayland }
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 30
+    env:
+      FIO_NATIVE_INPUT: '1'
+      SDL_AUDIODRIVER: dummy
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install Fio's desktop dependencies
+        run: python -m pip install -r requirements.txt pytest
+
+      # -- platform setup (as editor-screenshots.yml) -------------------------
+      - name: Windows - software OpenGL
+        if: matrix.platform.id == 'windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Hosted runners have no GPU and only OpenGL 1.1; Fio needs 3.3.
+          # Mesa's llvmpipe, beside python.exe, provides it (QT_OPENGL_DLL
+          # points Qt at the same file in the test step).
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $archive = $null
+          $tags = gh release list --repo pal1000/mesa-dist-win --limit 40 --json tagName --jq '.[].tagName'
+          foreach ($tag in $tags) {
+            Remove-Item -Recurse -Force "$env:RUNNER_TEMP\mesa" -ErrorAction SilentlyContinue
+            try {
+              gh release download $tag --repo pal1000/mesa-dist-win --pattern '*-release-msvc.7z' --dir "$env:RUNNER_TEMP\mesa"
+            } catch { continue }
+            $candidate = (Get-ChildItem "$env:RUNNER_TEMP\mesa\*.7z" | Select-Object -First 1).FullName
+            if ($candidate -and ((7z l $candidate) -match 'x64\\opengl32\.dll')) {
+              $archive = $candidate
+              Write-Host "Using mesa-dist-win $tag for OpenGL"
+              break
+            }
+          }
+          if (-not $archive) { throw 'No mesa-dist-win release with a 64-bit OpenGL driver was found' }
+          7z x -y -o"$env:RUNNER_TEMP\mesa\x" $archive | Out-Null
+          $gl = Get-ChildItem "$env:RUNNER_TEMP\mesa\x" -Recurse -Filter opengl32.dll |
+                Where-Object { $_.DirectoryName -match '(^|\\)x64$' } | Select-Object -First 1
+          if (-not $gl) { throw 'The selected Mesa archive has no 64-bit opengl32.dll' }
+          $python = Split-Path (Get-Command python).Source
+          Copy-Item "$($gl.DirectoryName)\*.dll" $python -Force
+      - name: Linux - window system and input tools
+        if: startsWith(matrix.platform.id, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb openbox xdotool sway \
+            libgl1-mesa-dri libglx-mesa0 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-cursor0 libwayland-client0 libwayland-egl1 fonts-dejavu-core
+      - name: Linux Wayland - virtual pointer client
+        if: matrix.platform.id == 'linux-wayland'
+        run: python -m pip install pywayland
+
+      # -- the test, on the platform's own window system and input ------------
+      - name: Left click fires the equipped weapon
+        run: |
+          log="$RUNNER_TEMP/native-click.log"
+          run_tests() {
+            set +e
+            python -m pytest tests/native -v -s -p no:cacheprovider 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+          }
+          case "${{ matrix.platform.id }}" in
+            windows)
+              pydir=$(python -c "import os, sys; print(os.path.dirname(sys.executable))")
+              export QT_QPA_PLATFORM=windows PYOPENGL_PLATFORM=win32 GALLIUM_DRIVER=llvmpipe \
+                     QT_OPENGL=software QT_OPENGL_DLL="$pydir\\opengl32.dll"
+              run_tests ;;
+            macos)
+              export QT_QPA_PLATFORM=cocoa PYOPENGL_PLATFORM=darwin
+              run_tests ;;
+            linux-x11)
+              export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
+              Xvfb :91 -screen 0 1920x1080x24 -nolisten tcp & sleep 2
+              openbox & sleep 1
+              run_tests ;;
+            linux-wayland)
+              export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+              unset DISPLAY
+              printf 'output HEADLESS-1 resolution 2560x1440\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
+              WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+                sway -c "$RUNNER_TEMP/sway.conf" > "$RUNNER_TEMP/sway.log" 2>&1 &
+              for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
+              export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
+              export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock | head -1)
+              export QT_QPA_PLATFORM=wayland PYOPENGL_PLATFORM=egl LIBGL_ALWAYS_SOFTWARE=1
+              run_tests ;;
+          esac
+          {
+            echo "## ${{ matrix.platform.name }}"
+            echo '```'
+            grep -E '^\[(armed|click|control)|shotgun ammo|PASSED|FAILED|SKIPPED|ERROR| passed| failed' "$log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$status" -eq 0 ] || exit "$status"
+          # A skip (no OpenGL, no display) is not a demonstration: all three must run.
+          grep -qE '(^|[^0-9])3 passed' "$log" || { echo "::error::not every native test ran"; exit 1; }
