@@ -520,20 +520,19 @@ def browser_order(name):
 
 def side_button_metrics(size_name):
     """``(button size, Tint icon size, DECAL icon size)`` for the Textures
-    tab's Tint and DECAL buttons at 'small' or 'large': the main toolbar's
-    small or large button (its icon, plus its padding). The DECAL icon keeps
-    its 3:2 shape at the same height; both buttons take the wider one's size."""
+    tab's Tint and DECAL buttons at 'small' or 'large': exactly the main
+    toolbar's small or large button (its icon, plus its padding)."""
     from editor.ui import TOOLBAR_ICON_SIZES
     icon = TOOLBAR_ICON_SIZES[size_name == 'large']
-    decal = QSize(round(icon * 1.5), icon)
-    return QSize(decal.width() + 8, icon + 8), QSize(icon, icon), decal
+    square = QSize(icon, icon)
+    return QSize(icon + 4, icon + 8), square, square
 
 
 class AssetBrowserTab(QWidget):
-    #: settings.ini [AssetBrowser] side_button_size: the Tint and DECAL
-    #: buttons, 'small' (the default) or 'large' -- right-click the empty
+    #: settings.ini [AssetBrowser] asset_browser_toolbar_size: the Tint and
+    #: DECAL buttons, 'small' (the default) or 'large' -- right-click the empty
     #: space beside them. Independent of the toolbar's big_toolbar_buttons.
-    SIDE_BUTTON_SETTING = ('AssetBrowser', 'side_button_size')
+    SIDE_BUTTON_SETTING = ('AssetBrowser', 'asset_browser_toolbar_size')
     SIDE_BUTTON_SIZES = ('small', 'large')
     ACTION_BAR_HEIGHT = 50
 

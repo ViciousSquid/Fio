@@ -169,8 +169,8 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     monkeypatch.setattr(main_window, 'save_config', lambda: None)
     config = main_window.config
     big_toolbar = config.get('Display', 'big_toolbar_buttons', fallback=None)
-    main_window.config.remove_option('AssetBrowser', 'side_button_size') if (
-        config.has_option('AssetBrowser', 'side_button_size')) else None
+    main_window.config.remove_option('AssetBrowser', 'asset_browser_toolbar_size') if (
+        config.has_option('AssetBrowser', 'asset_browser_toolbar_size')) else None
     tab.apply_side_button_size(tab.side_button_size())
     small = TOOLBAR_ICON_SIZES[False]
     assert tab.side_button_size() == 'small'
@@ -182,7 +182,7 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     assert labels[-2:] == ['Small', 'Large']
     next(a for a in menu.actions() if a.text() == 'Large').trigger()
     large = TOOLBAR_ICON_SIZES[True]
-    assert config.get('AssetBrowser', 'side_button_size') == 'large'
+    assert config.get('AssetBrowser', 'asset_browser_toolbar_size') == 'large'
     assert tab.tint_btn.height() == large + 8 and tab.decal_btn.iconSize().height() == large
     assert tab.tint_btn.size() == tab.decal_btn.size()
     assert tab.action_bar.height() >= tab.decal_btn.height() + 4   # not clipped
