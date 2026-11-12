@@ -104,14 +104,14 @@ jobs:
 
       # -- the test, on the platform's own window system and input ------------
       - name: Left click fires the equipped weapon
-        timeout-minutes: 20
+        timeout-minutes: 12
         run: |
           log="$RUNNER_TEMP/native-click.log"
           run_tests() {
             set +e
-            # A test still running after 5 minutes dumps every thread's stack.
+            # A test still running after 3 minutes dumps every thread's stack.
             python -m pytest tests/native -v -s -p no:cacheprovider \
-              -o faulthandler_timeout=300 2>&1 | tee "$log"
+              -o faulthandler_timeout=180 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
           }
@@ -123,6 +123,15 @@ jobs:
               run_tests ;;
             macos)
               export QT_QPA_PLATFORM=cocoa PYOPENGL_PLATFORM=darwin
+              # If the test process is still going after 4 minutes, log where
+              # it is natively (Python's own dump cannot see inside Qt).
+              ( sleep 240
+                pid=$(pgrep -f 'pytest tests/native' | head -1)
+                if [ -n "$pid" ] && sample "$pid" 5 -file "$RUNNER_TEMP/sample.txt" >/dev/null 2>&1; then
+                  echo "::group::Native stack of the test process after 4 minutes"
+                  sed -n '/Call graph:/,/Total number in stack/p' "$RUNNER_TEMP/sample.txt" | head -250
+                  echo "::endgroup::"
+                fi ) &
               run_tests ;;
             linux-x11)
               export DISPLAY=:91 QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
