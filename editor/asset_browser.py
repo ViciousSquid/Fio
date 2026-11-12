@@ -476,7 +476,11 @@ class ThumbnailLoader(QObject):
         self._wireframe_timer = QTimer(self)
         self._wireframe_timer.setSingleShot(True)
         self._wireframe_timer.timeout.connect(self._draw_next_wireframe)
-        self._signals = _DecodeSignals(self)
+        # Pool jobs can finish after the tab (and this loader) is destroyed.
+        # Let their Python references keep the signal object alive: parenting
+        # it to the loader deletes its C++ object underneath a running worker.
+        # Qt disconnects the deleted receiver automatically.
+        self._signals = _DecodeSignals()
         self._signals.ready.connect(self._decoded)
         self._signals.sizes.connect(self._sizes)
         self._size_job = None
