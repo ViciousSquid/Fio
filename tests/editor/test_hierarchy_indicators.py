@@ -7,10 +7,10 @@ import pytest
 pytest.importorskip('PyQt5', reason='the hierarchy is a Qt widget')
 
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from editor.things import Light
+from engine.asset_qt import load_icon
 
 pytestmark = pytest.mark.qt
 
@@ -34,9 +34,9 @@ def hierarchy(main_window, qt_app):
     state.selected_objects = []
     panel = main_window.scene_hierarchy
     # The editor runs from the Fio folder; tests run from a temporary one, so
-    # load the same icon files by absolute path.
+    # resolve the same loose or archived icons by absolute path.
     def icon(path):
-        loaded = QIcon(os.path.join(ROOT, path.replace('/', os.sep)))
+        loaded = load_icon(os.path.join(ROOT, path.replace('/', os.sep)))
         assert not loaded.actualSize(QSize(20, 20)).isEmpty(), path
         return loaded
     panel.lock_icon = icon('assets/lock.png')
