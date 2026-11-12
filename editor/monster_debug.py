@@ -2,9 +2,8 @@
 
 Opened with F7 in play, or ``monsterdebug [on|off]`` from the console. Tabs:
 
-* **Overview** -- every monster: state, target, distance, health.
-* **Inspector** -- one monster, everything known about it.
-* **Perception** -- sight, hearing and what it is investigating.
+* **Perception** (shown first) -- what each monster is doing, its target,
+  sight and hearing, and what it is investigating.
 * **Combat** -- damage, attack timers, eye height and hit sphere.
 * **Patrol** -- patrol route, current node, waiting and blockages.
 
@@ -20,9 +19,8 @@ import math
 import time
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QHeaderView,
-                             QLabel, QTableWidget, QTableWidgetItem, QTabWidget,
-                             QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
+                             QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout)
 
 
 def _format(value):
@@ -179,16 +177,14 @@ def collect_monsters(owner):
             lock.release()
 
 
-#: (tab, [(column header, row key)])
+#: (tab, [(column header, row key)]), in tab order: Perception first.
 TABLES = {
-    'Overview': [('Monster', 'name'), ('Type', 'type'), ('Doing', 'decision'),
-                 ('AI mode', 'ai_mode'), ('Target', 'target'), ('Distance', 'distance'),
-                 ('Health', 'health'), ('Team', 'team')],
-    'Perception': [('Monster', 'name'), ('Awake', 'awake'), ('Wakes on sight', 'wake_on_sight'),
-                   ('Sight range', 'sight_range'), ('Target in range', 'in_sight'),
-                   ('Distance', 'distance'), ('Can hear', 'can_hear'),
-                   ('Hearing range', 'hearing_range'), ('Investigating', 'noise'),
-                   ('Time left (s)', 'noise_left')],
+    'Perception': [('Monster', 'name'), ('Doing', 'decision'), ('Target', 'target'),
+                   ('Distance', 'distance'), ('Awake', 'awake'),
+                   ('Wakes on sight', 'wake_on_sight'), ('Sight range', 'sight_range'),
+                   ('Target in range', 'in_sight'), ('Eye height', 'eye_y'),
+                   ('Can hear', 'can_hear'), ('Hearing range', 'hearing_range'),
+                   ('Investigating', 'noise'), ('Time left (s)', 'noise_left')],
     'Combat': [('Monster', 'name'), ('Health', 'health'), ('Damage', 'damage'),
                ('Attacking', 'attacking'), ('Next shot (s)', 'shoot_timer'),
                ('Eye height', 'eye_y'), ('Hit sphere centre', 'hit_centre'),
@@ -198,26 +194,6 @@ TABLES = {
                ('Blocked updates', 'blocked'), ('Detour', 'detour'), ('Finished', 'finished'),
                ('Route', 'chain')],
 }
-
-#: The Inspector's fields: (label, row key).
-INSPECTOR = [
-    ('Name', 'name'), ('Type', 'type'), ('Variant', 'variant'), ('Doing', 'decision'),
-    ('AI mode (MonsterTable)', 'ai_mode'), ('Target', 'target'), ('Distance', 'distance'),
-    ('Health', 'health'), ('Damage', 'damage'), ('Team', 'team'),
-    ('Position (centre)', 'pos'), ('Feet height', 'feet_y'), ('Eye height', 'eye_y'),
-    ('Body centre height', 'body_y'), ('Sprite size (w, h)', 'sprite'),
-    ('Hit sphere centre', 'hit_centre'), ('Hit sphere radius', 'hit_radius'),
-    ('Awake', 'awake'), ('Wakes on sight', 'wake_on_sight'), ('Triggered', 'triggered'),
-    ('Sight range (fixed)', 'sight_range'), ('Target in sight range', 'in_sight'),
-    ('Can hear', 'can_hear'), ('Hearing range (Range property)', 'hearing_range'),
-    ('Investigating noise at', 'noise'), ('Investigation time left (s)', 'noise_left'),
-    ('Attacking', 'attacking'), ('Next shot (s)', 'shoot_timer'),
-    ('Attack animation (s)', 'anim_timer'),
-    ('Patrols', 'patrol'), ('Patrol mode', 'patrol_mode'), ('Heading to node', 'node'),
-    ('Waiting at node', 'waiting'), ('Wait left (s)', 'wait_left'),
-    ('Blocked updates', 'blocked'), ('Detour node', 'detour'),
-    ('Patrol finished', 'finished'), ('Patrol route', 'chain'),
-]
 
 
 class MonsterDebugWindow(QDialog):
@@ -263,48 +239,14 @@ class MonsterDebugWindow(QDialog):
             header = table.horizontalHeader()
             header.setSectionResizeMode(QHeaderView.ResizeToContents)
             header.setStretchLastSection(True)
-            table.cellDoubleClicked.connect(self._inspect_row)
             self.tables[name] = table
             self.tabs.addTab(table, name)
-            if name == 'Overview':
-                self.tabs.addTab(self._build_inspector(), 'Inspector')
 
         self._rows = ()
         self._timer = QTimer(self)
         self._timer.setInterval(self.REFRESH_MS)
         self._timer.timeout.connect(self.refresh)
         self.refresh()
-
-    # -- Inspector -----------------------------------------------------------
-
-    def _build_inspector(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 4, 0, 0)
-        self.picker = QComboBox()
-        self.picker.currentIndexChanged.connect(lambda _i: self._fill_inspector())
-        layout.addWidget(self.picker)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(['Field', 'Value'])
-        self.tree.setRootIsDecorated(False)
-        self.tree.setColumnWidth(0, 240)
-        self._cells = [QTreeWidgetItem(self.tree, [label, '—']) for label, _key in INSPECTOR]
-        layout.addWidget(self.tree, 1)
-        return widget
-
-    def _inspect_row(self, row, _column):
-        """Double-click a monster in any table to inspect it."""
-        if 0 <= row < len(self._rows):
-            index = self.picker.findData(self._rows[row]['id'])
-            if index >= 0:
-                self.picker.setCurrentIndex(index)
-            self.tabs.setCurrentIndex(self.tabs.indexOf(self.tree.parentWidget()))
-
-    def _fill_inspector(self):
-        wanted = self.picker.currentData()
-        row = next((r for r in self._rows if r['id'] == wanted), None)
-        for cell, (_label, key) in zip(self._cells, INSPECTOR):
-            cell.setText(1, _format(row[key]) if row is not None else '—')
 
     # -- overlays ------------------------------------------------------------
 
@@ -376,18 +318,6 @@ class MonsterDebugWindow(QDialog):
                         item = QTableWidgetItem()
                         table.setItem(r, c, item)
                     item.setText(_format(row[key]))
-        # The picker follows the monsters, keeping the current choice.
-        current = self.picker.currentData()
-        ids = [r['id'] for r in rows]
-        if ids != [self.picker.itemData(i) for i in range(self.picker.count())]:
-            self.picker.blockSignals(True)
-            self.picker.clear()
-            for r in rows:
-                self.picker.addItem(f"{r['name']} ({r['type']})", r['id'])
-            index = self.picker.findData(current)
-            self.picker.setCurrentIndex(index if index >= 0 else (0 if rows else -1))
-            self.picker.blockSignals(False)
-        self._fill_inspector()
 
 
 def show_monster_debug(owner, sight_lines=True):

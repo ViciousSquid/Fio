@@ -1,6 +1,6 @@
 """The floating Monster Debug window (F7 in play, ``monsterdebug``).
 
-Tabs Overview / Inspector / Perception / Combat / Patrol, live from the
+Tabs Perception (first) / Combat / Patrol, live from the
 monster AI; switches for the sight lines and hitboxes overlays. Sampling
 only *tries* the engine's locks, so it can never stall a tick.
 """
@@ -52,9 +52,10 @@ def test_in_the_editor_it_lists_the_monsters_with_the_overlays_unavailable(fio_s
     window = _window(session)
     assert window.isVisible()
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
-        "Overview", "Inspector", "Perception", "Combat", "Patrol"]
+        "Perception", "Combat", "Patrol"]
+    assert window.tabs.tabText(window.tabs.currentIndex()) == "Perception"
     assert window.status.text().startswith("Editor · 2 monsters")
-    assert _column(window, "Overview", "Doing") == {"Grunt": "Not running",
+    assert _column(window, "Perception", "Doing") == {"Grunt": "Not running",
                                                     "Flyer": "Not running"}
     assert not window.sight_lines.isEnabled() and not window.hitboxes.isEnabled()
     session.window.console_handler.handle_command("monsterdebug off")
@@ -72,22 +73,18 @@ def test_f7_in_play_opens_it_live_with_working_switches(fio_session):
     session.step(20)
     window.refresh()
     assert window.status.text().startswith("Live · 2 monsters")
-    doing = _column(window, "Overview", "Doing")
+    doing = _column(window, "Perception", "Doing")
     assert doing["Flyer"] == "Asleep"
     assert doing["Grunt"] in ("Chasing", "Attacking")
-    assert _column(window, "Overview", "Target")["Grunt"] == "Player"
-    assert float(_column(window, "Overview", "Distance")["Grunt"]) == pytest.approx(400, abs=60)
+    assert _column(window, "Perception", "Target")["Grunt"] == "Player"
+    assert float(_column(window, "Perception", "Distance")["Grunt"]) == pytest.approx(400, abs=60)
     assert _column(window, "Combat", "Damage")["Grunt"] == "7"
     assert _column(window, "Combat", "Hit sphere radius")["Grunt"] == "96.0"
     assert _column(window, "Perception", "Sight range")["Grunt"] == "1024.0"
 
-    # Double-click a monster: the Inspector shows it.
-    window._inspect_row(1, 0)
-    assert window.tabs.tabText(window.tabs.currentIndex()) == "Inspector"
-    fields = {window.tree.topLevelItem(i).text(0): window.tree.topLevelItem(i).text(1)
-              for i in range(window.tree.topLevelItemCount())}
-    assert fields["Name"] == "Flyer" and fields["Type"] == "flying"
-    assert fields["Eye height"] == "300.0"                # a flyer sees from its middle
+    # A flyer sees from its middle; a human from near the top of its figure.
+    eyes = _column(window, "Perception", "Eye height")
+    assert eyes["Flyer"] == "300.0" and eyes["Grunt"] == "163.2"
 
     window.hitboxes.setChecked(True)
     assert logic.combat_runtime.show_hitboxes

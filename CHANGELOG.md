@@ -37,9 +37,9 @@ version 4 and play in both.
 ### New
 
 - **Monster Debug window** (F7 in play, or `monsterdebug [on|off]`): a
-  floating, always-on-top window with Overview, Inspector, Perception, Combat
-  and Patrol tabs, live from the monster AI, and switches for the sight-line
-  and hitbox overlays. It samples without ever stalling a tick.
+  floating, always-on-top window with Perception, Combat and Patrol tabs, live
+  from the monster AI, and switches for the sight-line and hitbox overlays.
+  It samples without ever stalling a tick.
 - **`hitboxes 1|0` console command** (play mode): outlines every shootable
   monster's actual hit sphere -- the one player shots and melee test -- in
   bright pink, drawn over the scene.
