@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QMainWindow, QPushButton, QTreeView,
                              QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem, QMenu, QActionGroup)
-from PyQt5.QtCore import Qt, QDir, QModelIndex, QRect, QPointF, QTimer, QFileSystemWatcher
+from PyQt5.QtCore import Qt, QDir, QModelIndex, QRect, QPointF, QSize, QTimer, QFileSystemWatcher
 from PyQt5.QtGui import (QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage,
                          QImageReader, QStandardItem, QStandardItemModel)
 from engine.glb_loader import render_glb_thumbnail
@@ -512,7 +512,32 @@ class AssetItem(QWidget):
         self._update_border()
 
 
+def browser_order(name):
+    """The order the browser lists a folder in: by name, except blood decal
+    images (``blood_*``, gore's own) always last, after the decals you place."""
+    return (name.lower().startswith('blood_'), name.casefold())
+
+
+def side_button_metrics(size_name):
+    """``(button size, Tint icon size, DECAL icon size)`` for the Textures
+    tab's Tint and DECAL buttons at 'small' or 'large': exactly the main
+    toolbar's small or large button (its icon, plus its padding)."""
+    from editor.ui import TOOLBAR_ICON_SIZES
+    icon = TOOLBAR_ICON_SIZES[size_name == 'large']
+    square = QSize(icon, icon)
+    return QSize(icon + 4, icon + 8), square, square
+
+
 class AssetBrowserTab(QWidget):
+    #: settings.ini [AssetBrowser] asset_browser_toolbar_size: the Tint and
+    #: DECAL buttons, 'small' (the default) or 'large' -- right-click the empty
+    #: space beside them. Independent of the toolbar's big_toolbar_buttons.
+    SIDE_BUTTON_SETTING = ('AssetBrowser', 'asset_browser_toolbar_size')
+    SIDE_BUTTON_SIZES = ('small', 'large')
+    ACTION_BAR_HEIGHT = 50
+    #: Pixels between the Tint and DECAL buttons (the toolbar's spacing).
+    SIDE_BUTTON_GAP = 4
+
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
     """
@@ -563,7 +588,7 @@ class AssetBrowserTab(QWidget):
         #    to sit here and duplicated its Fit and Natural, one baking a
         #    scale the other keeps live.
         self.action_bar = QFrame()
-        self.action_bar.setFixedHeight(50)
+        self.action_bar.setFixedHeight(self.ACTION_BAR_HEIGHT)
         self.action_bar.setStyleSheet("""
             QFrame {
                 background-color: #2a2a2a;
@@ -614,6 +639,9 @@ class AssetBrowserTab(QWidget):
         self.add_btn = None
         self.inspector_btn = None
         self.tint_btn = None
+        self.decal_btn = None
+        #: The folder shown before the Decal tool switched to textures/decals.
+        self._folder_before_decals = None
 
         # Create a container widget for buttons to allow stretching.
         # The texture tab keeps INSPECTOR on the left and Tint brush on the
@@ -663,12 +691,36 @@ class AssetBrowserTab(QWidget):
 
             button_layout.addStretch()
 
+            # Tint and DECAL are one size, side by side (apply_side_button_size).
             self.tint_btn = QPushButton(load_icon("assets/tint.png"), "")
-            self.tint_btn.setFixedHeight(36)
             self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
-            button_layout.addWidget(self.tint_btn)
+            # Tint and DECAL sit close together, as toolbar buttons do.
+            pair = QHBoxLayout()
+            pair.setContentsMargins(0, 0, 0, 0)
+            pair.setSpacing(self.SIDE_BUTTON_GAP)
+            pair.addWidget(self.tint_btn)
+            button_layout.addLayout(pair)
+
+            # The Decal tool: shows textures/decals while it is on, and goes
+            # back to the folder you were in when it is turned off.
+            self.decal_btn = QPushButton(load_icon("assets/decal_button.png"), "")
+            self.decal_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.decal_btn.setCheckable(True)
+            self.decal_btn.setToolTip(
+                "Decal Tool\n"
+                "Shows textures/decals: pick an image, then click a surface in the\n"
+                "3D view to place it. Shift-click a decal to select it, drag or\n"
+                "nudge it. Click again to go back to the folder you were in.")
+            self.decal_btn.clicked.connect(self.on_decal_clicked)
+            pair.addWidget(self.decal_btn)
+            self.apply_side_button_size(self.side_button_size())
+
+            # Right-click the empty space beside them: Size > Small / Large.
+            self._side_button_row = button_container
+            button_container.setContextMenuPolicy(Qt.CustomContextMenu)
+            button_container.customContextMenuRequested.connect(self._side_button_menu)
 
         if self.is_model_tab:
             # "Add to Scene" is this tab's primary action and stays centred.
@@ -942,7 +994,7 @@ class AssetBrowserTab(QWidget):
 
         try:
             # Loose files and the category archive's members, read in place.
-            files = asset_listdir(path)
+            files = sorted(asset_listdir(path), key=browser_order)
             for f in files:
                 ext = os.path.splitext(f)[1].lower()
                 if ext in self.extensions:
@@ -1055,6 +1107,97 @@ class AssetBrowserTab(QWidget):
     def on_inspector_clicked(self):
         """Open (or close) the Surface Inspector."""
         self.editor.toggle_surface_inspector()
+
+    # -- the Tint / DECAL button size ------------------------------------------
+
+    def _config(self):
+        return getattr(self.editor, 'config', None)
+
+    def side_button_size(self):
+        """'small' or 'large', from settings.ini (small when unset or odd)."""
+        config = self._config()
+        value = (config.get(*self.SIDE_BUTTON_SETTING, fallback='small')
+                 if config is not None else 'small')
+        value = str(value).strip().lower()
+        return value if value in self.SIDE_BUTTON_SIZES else 'small'
+
+    def apply_side_button_size(self, size_name):
+        button, tint_icon, decal_icon = side_button_metrics(size_name)
+        self.tint_btn.setIconSize(tint_icon)
+        self.decal_btn.setIconSize(decal_icon)
+        for widget in (self.tint_btn, self.decal_btn):
+            widget.setFixedSize(button)
+        # The bar grows to hold large buttons (and keeps its usual height).
+        margins = self.action_bar.layout().contentsMargins()
+        self.action_bar.setFixedHeight(max(
+            self.ACTION_BAR_HEIGHT, button.height() + margins.top() + margins.bottom() + 4))
+
+    def set_side_button_size(self, size_name):
+        """Resize the Tint and DECAL buttons and keep it in settings.ini."""
+        size_name = size_name if size_name in self.SIDE_BUTTON_SIZES else 'small'
+        self.apply_side_button_size(size_name)
+        config = self._config()
+        if config is not None:
+            section, key = self.SIDE_BUTTON_SETTING
+            if not config.has_section(section):
+                config.add_section(section)
+            config.set(section, key, size_name)
+            if hasattr(self.editor, 'save_config'):
+                self.editor.save_config()
+
+    def _side_button_menu(self, pos):
+        """Right-click on the row's empty space (not on a button): Size."""
+        row = self._side_button_row
+        if isinstance(row.childAt(pos), QPushButton):
+            return
+        menu = self.side_button_menu()
+        menu.exec_(row.mapToGlobal(pos))
+
+    def side_button_menu(self):
+        menu = QMenu(self)
+        menu.addSection("Size")
+        current = self.side_button_size()
+        group = QActionGroup(menu)
+        for name in self.SIDE_BUTTON_SIZES:
+            action = menu.addAction(name.capitalize())
+            action.setCheckable(True)
+            action.setChecked(name == current)
+            group.addAction(action)
+            action.triggered.connect(lambda _c=False, n=name: self.set_side_button_size(n))
+        return menu
+
+    def on_decal_clicked(self, checked):
+        """The DECAL button: the Decal tool on (and textures/decals shown) or off."""
+        if self.editor is not None and hasattr(self.editor, 'toggle_decal_tool'):
+            self.editor.toggle_decal_tool(bool(checked))
+        else:
+            self.show_decal_folder(bool(checked))
+
+    def decals_path(self):
+        return os.path.join(self.root_path, 'decals')
+
+    def show_decal_folder(self, on):
+        """Show textures/decals (remembering the folder shown before), or go
+        back to that folder. The DECAL button follows."""
+        if self.decal_btn is not None and self.decal_btn.isChecked() != bool(on):
+            self.decal_btn.blockSignals(True)
+            self.decal_btn.setChecked(bool(on))
+            self.decal_btn.blockSignals(False)
+        decals = os.path.abspath(self.decals_path())
+        if on:
+            if os.path.abspath(self.current_asset_folder) != decals:
+                self._folder_before_decals = self.current_asset_folder
+            self._show_folder(decals)
+        elif self._folder_before_decals is not None:
+            previous, self._folder_before_decals = self._folder_before_decals, None
+            if os.path.abspath(self.current_asset_folder) == decals:
+                self._show_folder(previous)
+
+    def _show_folder(self, path):
+        self.load_directory(path)
+        index = self.dir_model.index(path)
+        if index.isValid():
+            self.tree_view.setCurrentIndex(index)
 
     def on_tint_clicked(self):
         """Tint the selected brush."""

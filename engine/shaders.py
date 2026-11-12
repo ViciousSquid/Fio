@@ -323,6 +323,87 @@ vec3 applyFog(vec3 color, highp vec3 fragPos) {
 # disk (e.g. in a packaged build that doesn't include loose shader files).
 # Keep these in sync with the files under assets/shaders/.
 # ==============================================================================
+#: Screen-space reflections fade out with distance from the camera: full
+#: strength out to REFLECTION_FADE_START world units, none from
+#: REFLECTION_FADE_END -- where no ray is marched at all. A far reflection
+#: is a few pixels, each a full ray march; nobody can see it.
+REFLECTION_FADE_START = 1024.0
+REFLECTION_FADE_END = 1536.0
+
+#: Screen-space reflection, shared by the water and wet decals. The host
+#: shader declares ``sceneDepth``, ``sceneColor`` (copies of the frame so
+#: far), ``projection`` and ``invProjection``.
+SSR_GLSL = """
+// 1 near the camera, 0 from REFLECTION_FADE_END on (see engine/shaders.py):
+// a reflection is not traced where this is 0.
+float reflectionFade(highp vec3 viewPos) {
+    return 1.0 - smoothstep(""" + repr(REFLECTION_FADE_START) + """, """ + \
+    repr(REFLECTION_FADE_END) + """, length(viewPos));
+}
+highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
+    highp vec4 p = invProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
+}
+
+highp vec2 viewToUV(highp vec3 p) {
+    highp vec4 c = projection * vec4(p, 1.0);
+    return c.xy / c.w * 0.5 + 0.5;
+}
+
+// Screen-space reflection: march the reflected ray through the copied depth
+// buffer and return the scene colour it hits (rgb) and a confidence (a).
+// 10 linear steps with a growing stride, then a short binary refinement.
+vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
+                           highp float firstStride) {
+    highp float stride = firstStride;
+    highp vec3 p = originView;
+    highp vec3 prev = p;
+    for (int i = 0; i < 10; i++) {
+        prev = p;
+        p += dirView * stride;
+        stride *= 1.22;
+        if (p.z > -0.5) break;
+        highp vec2 uv = viewToUV(p);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+        // textureLod: no implicit derivatives inside the loop.
+        highp float d = textureLod(sceneDepth, uv, 0.0).r;
+        if (d >= 0.99999) continue;
+        highp float sceneZ = viewPosFromDepth(uv, d).z;
+        highp float gap = sceneZ - p.z;
+        // Only a ray that has just gone behind a surface hits it. Without a
+        // cap on how far behind, a ray passing behind a thin object (a box
+        // standing in the water) counted as hitting it and smeared a long
+        // streak of it across the water.
+        highp float thickness = clamp(stride * 1.5, 2.0, 48.0);
+        if (gap > 0.0 && gap < thickness) {
+            highp vec3 lo = prev;
+            highp vec3 hi = p;
+            for (int j = 0; j < 5; j++) {
+                highp vec3 mid = (lo + hi) * 0.5;
+                highp vec2 muv = viewToUV(mid);
+                highp float mz = viewPosFromDepth(muv, textureLod(sceneDepth, muv, 0.0).r).z;
+                if (mz > mid.z) hi = mid; else lo = mid;
+            }
+            highp vec2 huv = viewToUV(hi);
+            highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
+            if (hz - hi.z > thickness) return vec4(0.0);
+            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
+                      * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
+            float fade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
+            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
+        }
+    }
+    return vec4(0.0);
+}
+
+// The water's march: its first stride grows with distance. A decal that
+// must reach a few hundred units starts with a longer one.
+vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
+    return traceReflectionStride(originView, dirView, max(2.0, -originView.z * 0.02));
+}
+"""
+
+
 DEFAULT_SHADERS = {
     'simple.vert': """#version 330 core
 precision highp float;
@@ -858,61 +939,7 @@ highp float vnoise(highp vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
-    highp vec4 p = invProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-    return p.xyz / p.w;
-}
-
-highp vec2 viewToUV(highp vec3 p) {
-    highp vec4 c = projection * vec4(p, 1.0);
-    return c.xy / c.w * 0.5 + 0.5;
-}
-
-// Screen-space reflection: march the reflected ray through the copied depth
-// buffer and return the scene colour it hits (rgb) and a confidence (a).
-// 10 linear steps with a growing stride, then a short binary refinement.
-vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
-    highp float stride = max(2.0, -originView.z * 0.02);
-    highp vec3 p = originView;
-    highp vec3 prev = p;
-    for (int i = 0; i < 10; i++) {
-        prev = p;
-        p += dirView * stride;
-        stride *= 1.22;
-        if (p.z > -0.5) break;
-        highp vec2 uv = viewToUV(p);
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
-        // textureLod: no implicit derivatives inside the loop.
-        highp float d = textureLod(sceneDepth, uv, 0.0).r;
-        if (d >= 0.99999) continue;
-        highp float sceneZ = viewPosFromDepth(uv, d).z;
-        highp float gap = sceneZ - p.z;
-        // Only a ray that has just gone behind a surface hits it. Without a
-        // cap on how far behind, a ray passing behind a thin object (a box
-        // standing in the water) counted as hitting it and smeared a long
-        // streak of it across the water.
-        highp float thickness = clamp(stride * 1.5, 2.0, 48.0);
-        if (gap > 0.0 && gap < thickness) {
-            highp vec3 lo = prev;
-            highp vec3 hi = p;
-            for (int j = 0; j < 5; j++) {
-                highp vec3 mid = (lo + hi) * 0.5;
-                highp vec2 muv = viewToUV(mid);
-                highp float mz = viewPosFromDepth(muv, textureLod(sceneDepth, muv, 0.0).r).z;
-                if (mz > mid.z) hi = mid; else lo = mid;
-            }
-            highp vec2 huv = viewToUV(hi);
-            highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
-            if (hz - hi.z > thickness) return vec4(0.0);
-            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
-                      * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
-            float fade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
-            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
-        }
-    }
-    return vec4(0.0);
-}
-
+""" + SSR_GLSL + """
 // An effect is a flat, camera-facing quad: the ray march above steps through
 // or past it. It is reflected directly instead. Where the reflected ray
 // passes the effect's centre, its offset from the centre says which texel of
@@ -1227,11 +1254,14 @@ void main()
     vec3 R = reflect(-viewDir, N);
     vec3 reflection = skyColor(R);
     float sceneReflection = 0.0;
-    if (haveDepth && ssrEnabled == 1 && topFace > 0.5) {
+    // The scene's reflection fades out with distance; past the fade no ray
+    // is marched, and the sky is what the far water reflects.
+    float ssrFade = reflectionFade(surfaceView);
+    if (haveDepth && ssrEnabled == 1 && topFace > 0.5 && ssrFade > 0.0) {
         // Reflect the scene itself where the ray finds it on screen; the sky
         // fills in everywhere else. Rougher water blurs towards the sky.
         vec4 ssr = traceReflection(surfaceView, normalize(mat3(view) * R));
-        sceneReflection = ssr.a * (1.0 - roughness * 0.6);
+        sceneReflection = ssr.a * (1.0 - roughness * 0.6) * ssrFade;
         reflection = mix(reflection, ssr.rgb, sceneReflection);
         if (effectCount > 0) {
             // By the wave's own normal, with only a little of the ripple
@@ -1239,6 +1269,7 @@ void main()
             // the full detail normal, scatters into speckle.
             vec3 calm = normalize(mix(geoN, N, 0.2));
             vec4 effect = reflectEffects(FragPos, reflect(-viewDir, calm));
+            effect.a *= ssrFade;
             if (effect.a > 0.0) {
                 reflection = mix(reflection, effect.rgb, effect.a);
                 sceneReflection = max(sceneReflection, effect.a);
@@ -2424,7 +2455,13 @@ layout (location = 3) in vec4 iModel0;
 layout (location = 4) in vec4 iModel1;
 layout (location = 5) in vec4 iModel2;
 layout (location = 6) in vec4 iModel3;
-layout (location = 7) in vec4 iParams;      // variant, opacity, kind, mirrored
+layout (location = 7) in vec4 iParams;      // variant, opacity, kind, flags
+// The box's inverse, worked out once on the CPU when the row was made
+// (DecalTable), not for every vertex of every frame.
+layout (location = 8) in vec4 iInverse0;
+layout (location = 9) in vec4 iInverse1;
+layout (location = 10) in vec4 iInverse2;
+layout (location = 11) in vec4 iInverse3;
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -2434,7 +2471,7 @@ flat out vec4 Params;
 
 void main() {
     mat4 model = mat4(iModel0, iModel1, iModel2, iModel3);
-    WorldToBox = inverse(model);
+    WorldToBox = mat4(iInverse0, iInverse1, iInverse2, iInverse3);
     Params = iParams;
     gl_Position = projection * view * model * vec4(aPos, 1.0);
 }"""
@@ -2445,6 +2482,12 @@ precision highp float;
 // the depth copy -- is put in the decal box's own space. Inside the box it
 // takes the decal's texture; outside, nothing. So one box paints a wall,
 // the floor below it and the corner between, without knowing either.
+//
+// Kinds (Params.z): 0/1 blood on a wall/floor (a variant within that kind's
+// images), 2 a placed image, 3 a placed wet patch (the image is a mask of
+// where the surface is wet). The wet rows are drawn by a second draw of the
+// same pass (wetPass 1), over a copy of the frame so far, darkening the
+// surface and reflecting the scene in it.
 out vec4 FragColor;
 
 flat in mat4 WorldToBox;
@@ -2456,10 +2499,27 @@ uniform vec4 decalRanges;       // first layer and count: wall images, floor ima
 uniform mat4 invViewProjection;
 uniform vec4 viewport;          // x, y, width, height of the depth copy
 uniform vec3 viewPos;
+// The wet pass: the frame so far, and what the reflection march needs.
+uniform int wetPass;
+uniform int reflectionsOn;      // 'reflections 0' turns every one off
+uniform float decalFadeEnd;     // 'decalfade': no reflection from here on
+uniform sampler2D sceneColor;
+uniform highp mat4 view;
+uniform highp mat4 projection;
+uniform highp mat4 invProjection;
+""" + SSR_GLSL + """
+const float BLOOD_STRENGTH = 2.6;
+const float IMAGE_STRENGTH = 2.0;   // modulate 2x: mid grey leaves it as it is
 
-const float DECAL_STRENGTH = 2.6;
+highp vec3 hash3(highp vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+}
 
 void main() {
+    bool wetRow = Params.z > 2.5;
+    if (wetRow != (wetPass == 1)) discard;              // the other draw's rows
     vec2 uv = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
     float depth = texture(sceneDepth, uv).r;
     if (depth >= 0.99999) discard;                      // sky: no surface
@@ -2486,19 +2546,63 @@ void main() {
     // smeared along the throw.
     vec2 at = local.xy + facing.xy * local.z;
     if (any(greaterThan(abs(at), vec2(0.5)))) discard;
-    vec2 range = Params.z > 0.5 ? decalRanges.zw : decalRanges.xy;
-    float layer = range.x + mod(Params.x, max(range.y, 1.0));
-    float across = Params.w > 0.5 ? -at.x : at.x;
+    float layer;
+    if (Params.z > 1.5) {
+        layer = Params.x;                               // a placed decal's image
+    } else {
+        vec2 range = Params.z > 0.5 ? decalRanges.zw : decalRanges.xy;
+        layer = range.x + mod(Params.x, max(range.y, 1.0));
+    }
+    // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted).
+    bool mirrored = mod(Params.w, 2.0) > 0.5;
+    bool picked = Params.w > 1.5;
+    float across = mirrored ? -at.x : at.x;
     vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
+    const vec3 PICKED = vec3(1.0, 0.55, 0.1);
     // Fade at the box's near and far ends rather than cut.
     float ends = 1.0 - smoothstep(0.38, 0.5, abs(local.z));
     float amount = texel.a * Params.y * ends;
     if (amount <= 0.004) discard;
+
+    if (wetRow) {
+        // Wet: where the mask is strongest, standing water -- flat, a sharp
+        // mirror; towards its edges, damp -- a dull, broken-up reflection.
+        // Either way the surface darkens, which is most of looking wet. The
+        // reflection fades out with distance and past that is not traced.
+        float puddle = smoothstep(0.45, 0.9, texel.a);
+        vec3 base = texture(sceneColor, uv).rgb;
+        vec3 colour = base * mix(0.6, 0.45, puddle);
+        highp vec3 surfaceView = (view * world).xyz;
+        // Full strength to two thirds of the fade distance, none from it on.
+        float fade = reflectionsOn == 1 && decalFadeEnd > 0.0
+            ? 1.0 - smoothstep(decalFadeEnd * 0.6667, decalFadeEnd, length(surfaceView))
+            : 0.0;
+        if (fade > 0.0) {
+            float rough = mix(0.32, 0.015, puddle);
+            vec3 n = normalize(normal + (hash3(floor(world.xyz * 4.0)) - 0.5) * rough);
+            vec3 nView = normalize(mat3(view) * n);
+            vec3 toSurface = normalize(surfaceView);
+            float facingCam = clamp(dot(nView, -toSurface), 0.0, 1.0);
+            float fresnel = 0.04 + 0.96 * pow(1.0 - facingCam, 5.0);
+            float strength = mix(0.3, 0.95, puddle) * mix(0.6, 1.0, fresnel);
+            // A longer first stride than the water's: a puddle reflects the
+            // crate standing a few hundred units off, not just its own rim.
+            vec4 ssr = traceReflectionStride(surfaceView, reflect(toSurface, nView),
+                                             max(6.0, -surfaceView.z * 0.06));
+            colour = mix(colour, ssr.rgb, ssr.a * strength * fade);
+        }
+        if (picked) colour = mix(colour, PICKED, 0.35);
+        FragColor = vec4(colour, amount);               // over what is there
+        return;
+    }
     // Stained, not painted: the blend is dst * (src.rgb + 1 - src.a), so
     // the surface keeps its own light and shadow -- blood in a dark room is
     // dark -- while the colour, pushed past 1, stays red on a grey wall
-    // instead of going to black.
-    FragColor = vec4(texel.rgb * (amount * DECAL_STRENGTH), amount);
+    // instead of going to black. A placed image modulates 2x: grey leaves
+    // the surface alone, darker parts darken it, lighter parts lighten it.
+    float strength = Params.z > 1.5 ? IMAGE_STRENGTH : BLOOD_STRENGTH;
+    vec3 stain = picked ? mix(texel.rgb, PICKED, 0.5) : texel.rgb;
+    FragColor = vec4(stain * (amount * strength), amount);
 }"""
 
 

@@ -403,9 +403,40 @@ class VisibilityMixin:
         # the visual aperture is still being rendered.
         keep = (target >= 0) & (table.portal_active[slots] | (table.portal_fade[slots] > 0.01))
         if camera_pos is not None:
+            # Each portal's own "Fade Distance": beyond it the view has faded
+            # out completely (_portal_distance_fade) and is not rendered.
             delta = table.pos[slots] - np.asarray((float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)), dtype=np.float64)
-            keep &= np.einsum('ij,ij->i', delta, delta) <= (self.PORTAL_RENDER_DISTANCE * self.PORTAL_RENDER_DISTANCE)
+            reach = self._portal_reach(table, slots)
+            keep &= np.einsum('ij,ij->i', delta, delta) < reach * reach
         return slots[keep]
+
+    def _portal_reach(self, table, slots):
+        """Each portal's fade distance (PORTAL_RENDER_DISTANCE for a table
+        without the column, or a row that has none)."""
+        column = getattr(table, 'portal_fade_distance', None)
+        if column is None:
+            return np.full(len(slots), self.PORTAL_RENDER_DISTANCE)
+        reach = column[slots].astype(np.float64)
+        return np.where(reach > 0.0, reach, self.PORTAL_RENDER_DISTANCE)
+
+    #: The share of a portal's fade distance its view takes to fade out.
+    PORTAL_FADE_BAND = 0.25
+
+    def _portal_distance_fade(self, table, slot, camera_pos):
+        """1 near a portal, 0 at its fade distance: the opacity of its view
+        from *camera_pos*, over the last PORTAL_FADE_BAND of the distance."""
+        if camera_pos is None:
+            return 1.0
+        reach = float(self._portal_reach(table, np.array([int(slot)]))[0])
+        p = table.pos[int(slot)]
+        distance = math.sqrt((float(camera_pos.x) - p[0]) ** 2
+                             + (float(camera_pos.y) - p[1]) ** 2
+                             + (float(camera_pos.z) - p[2]) ** 2)
+        start = reach * (1.0 - self.PORTAL_FADE_BAND)
+        if distance <= start:
+            return 1.0
+        t = min(1.0, (distance - start) / max(reach - start, 1e-6))
+        return 1.0 - t * t * (3.0 - 2.0 * t)        # smoothstep, falling
 
     @staticmethod
     def _portal_slot_basis(table, slot):

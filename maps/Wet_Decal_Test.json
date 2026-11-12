@@ -1,0 +1,496 @@
+{
+    "version": 4,
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                50.0,
+                1250.0
+            ],
+            "properties": {
+                "angle": 90.0,
+                "primary": true,
+                "name": "spawn",
+                "id": "bb793384-2468-51e7-a184-916795ee8b0d",
+                "type": "playerstart",
+                "io_enabled": true,
+                "creation_index": 0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                240.0,
+                800.0
+            ],
+            "properties": {
+                "radius": 1400.0,
+                "intensity": 1.6,
+                "name": "lamp_near",
+                "id": "60b91329-80ec-520d-9ff6-54a82e077db1",
+                "type": "light",
+                "io_enabled": true,
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                240.0,
+                -900.0
+            ],
+            "properties": {
+                "radius": 1400.0,
+                "intensity": 1.6,
+                "name": "lamp_far",
+                "id": "eee3c572-3e00-5dce-8f27-5a6aa2fe82fd",
+                "type": "light",
+                "io_enabled": true,
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                20.0,
+                0.0,
+                860.0
+            ],
+            "properties": {
+                "texture": "wet_puddle_01.png",
+                "width": 340.0,
+                "height": 340.0,
+                "depth": 48.0,
+                "yaw": 0.0,
+                "pitch": -90.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "name": "Puddles_near",
+                "id": "a1d56c37-ad29-5329-a044-5de17dab833a",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                -300.0,
+                0.0,
+                980.0
+            ],
+            "properties": {
+                "texture": "wet_damp_01.png",
+                "width": 300.0,
+                "height": 300.0,
+                "depth": 48.0,
+                "yaw": 0.0,
+                "pitch": -90.0,
+                "roll": 30.0,
+                "opacity": 1.0,
+                "name": "Damp_floor",
+                "id": "43faeac9-c307-502a-9f01-45807ba06ea2",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                300.0,
+                0.0,
+                1050.0
+            ],
+            "properties": {
+                "texture": "grime_01.png",
+                "width": 200.0,
+                "height": 200.0,
+                "depth": 48.0,
+                "yaw": 0.0,
+                "pitch": -90.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "name": "Grime_floor",
+                "id": "b36f1584-1f27-5b7a-a42b-eedb8adf1661",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                512.0,
+                110.0,
+                980.0
+            ],
+            "properties": {
+                "texture": "scorch_01.png",
+                "width": 170.0,
+                "height": 170.0,
+                "depth": 48.0,
+                "yaw": 0.0,
+                "pitch": 0.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "name": "Scorch_wall",
+                "id": "fc81b980-95ec-5c79-a509-26140d8b12ef",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                -512.0,
+                90.0,
+                820.0
+            ],
+            "properties": {
+                "texture": "wet_damp_01.png",
+                "width": 260.0,
+                "height": 260.0,
+                "depth": 48.0,
+                "yaw": 180.0,
+                "pitch": 0.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "name": "Damp_wall",
+                "id": "3b744bb6-94a0-547e-b185-94d81abe407e",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                0.0,
+                0.0,
+                -850.0
+            ],
+            "properties": {
+                "texture": "wet_full.png",
+                "width": 1000.0,
+                "height": 700.0,
+                "depth": 48.0,
+                "yaw": 0.0,
+                "pitch": -90.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "name": "Wet_floor_far",
+                "id": "14ec133e-d328-5125-aa40-116ec87707bc",
+                "type": "decal",
+                "io_enabled": true,
+                "mirrored": false
+            },
+            "io_connections": []
+        }
+    ],
+    "created": "2026-11-12T15:47:29",
+    "brushes": [
+        {
+            "id": "feb071f2-dba2-58c1-81c7-f877c556b583",
+            "name": "floor",
+            "pos": [
+                0.0,
+                -16.0,
+                0.0
+            ],
+            "size": [
+                1024.0,
+                32.0,
+                3072.0
+            ],
+            "textures": {
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png",
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png"
+            }
+        },
+        {
+            "id": "b7650be7-ccdc-5671-9ee0-e85eede80bda",
+            "name": "ceiling",
+            "pos": [
+                0.0,
+                304.0,
+                0.0
+            ],
+            "size": [
+                1024.0,
+                32.0,
+                3072.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "d6d03636-e844-5d13-a0b0-58e26241d0a0",
+            "name": "north_wall",
+            "pos": [
+                0.0,
+                144.0,
+                1552.0
+            ],
+            "size": [
+                1024.0,
+                288.0,
+                32.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "bd178891-d211-5667-848a-5c396342dd76",
+            "name": "south_wall",
+            "pos": [
+                0.0,
+                144.0,
+                -1552.0
+            ],
+            "size": [
+                1024.0,
+                288.0,
+                32.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "674c91a7-2ed0-52db-b513-d16145dfc7d7",
+            "name": "east_wall",
+            "pos": [
+                528.0,
+                144.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                288.0,
+                3072.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "5dcc782e-2e53-5b31-88ca-706b01ad16f2",
+            "name": "west_wall",
+            "pos": [
+                -528.0,
+                144.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                288.0,
+                3072.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "b67c7580-0bfb-5a25-b258-1dfa9d37cd6a",
+            "name": "crate",
+            "pos": [
+                140.0,
+                40.0,
+                760.0
+            ],
+            "size": [
+                80.0,
+                80.0,
+                80.0
+            ],
+            "textures": {
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg",
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg"
+            }
+        },
+        {
+            "id": "e521834b-5bff-5b74-820b-f2c4911e877e",
+            "name": "pillar",
+            "pos": [
+                -160.0,
+                120.0,
+                640.0
+            ],
+            "size": [
+                64.0,
+                240.0,
+                64.0
+            ],
+            "textures": {
+                "east": "Metal_08-512x512.png",
+                "west": "Metal_08-512x512.png",
+                "top": "Metal_08-512x512.png",
+                "down": "Metal_08-512x512.png",
+                "north": "Metal_08-512x512.png",
+                "south": "Metal_08-512x512.png"
+            }
+        },
+        {
+            "id": "7a924163-72a2-5534-b0de-17c062429e73",
+            "name": "far_crate",
+            "pos": [
+                110.0,
+                40.0,
+                -1050.0
+            ],
+            "size": [
+                80.0,
+                80.0,
+                80.0
+            ],
+            "textures": {
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg",
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg"
+            }
+        },
+        {
+            "id": "7d844880-2fde-55c3-8772-fd6801e74652",
+            "name": "light_panel",
+            "pos": [
+                20.0,
+                150.0,
+                660.0
+            ],
+            "size": [
+                360.0,
+                70.0,
+                16.0
+            ],
+            "textures": {
+                "east": "StripLight.jpg",
+                "west": "StripLight.jpg",
+                "top": "StripLight.jpg",
+                "down": "StripLight.jpg",
+                "north": "StripLight.jpg",
+                "south": "StripLight.jpg"
+            }
+        },
+        {
+            "id": "945438e1-81b0-5286-846f-f30a75a8ace7",
+            "name": "red_box",
+            "pos": [
+                -60.0,
+                48.0,
+                740.0
+            ],
+            "size": [
+                64.0,
+                96.0,
+                64.0
+            ],
+            "textures": {
+                "east": "curtains.png",
+                "west": "curtains.png",
+                "top": "curtains.png",
+                "down": "curtains.png",
+                "north": "curtains.png",
+                "south": "curtains.png"
+            }
+        },
+        {
+            "id": "f301ac93-0c45-56b5-bfc5-704bc7e62278",
+            "name": "far_panel",
+            "pos": [
+                0.0,
+                150.0,
+                -1250.0
+            ],
+            "size": [
+                360.0,
+                70.0,
+                16.0
+            ],
+            "textures": {
+                "east": "StripLight.jpg",
+                "west": "StripLight.jpg",
+                "top": "StripLight.jpg",
+                "down": "StripLight.jpg",
+                "north": "StripLight.jpg",
+                "south": "StripLight.jpg"
+            }
+        }
+    ]
+}

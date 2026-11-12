@@ -160,6 +160,14 @@
    }
   }
  },
+ "Wet_Decal_Test.json": {
+  "brushes": 12,
+  "digest": "161155150b965ae8250a9ec361594514b6ba84d1706ea35272fdc77e4209e1e8",
+  "encodings": {
+   "box": 12
+  },
+  "inconsistencies": {}
+ },
  "_SHOWCASE.json": {
   "brushes": 85,
   "digest": "6b40c7e7c94901adf487dba8e12a8ccac1e418130e94f45f20e1a4def455e166",

@@ -597,6 +597,75 @@ class Speaker(Thing):
         return float(self.properties.get('radius', 512.0))
 
 
+class Decal(Thing):
+    """A decal: an image painted onto whatever surfaces its box meets.
+
+    It is a row of the same decal table blood is (engine.decal_table), drawn
+    by the same pass: a box thrown along (yaw, pitch) -- straight down by
+    default -- that paints walls, floors, the corner between, terrain and
+    models, under water and glass.
+
+    Properties
+    ----------
+    texture     An image in assets/textures/decals (a file name). One with
+                "wet" or "puddle" in its name is a mask of where the surface
+                is wet -- darkened and reflecting the scene (faded out with
+                distance, off with ``reflections 0``); any other is painted.
+    width, height, depth   The box: across, up the image, and along the throw.
+    yaw, pitch  The direction it is thrown: yaw 0 along +X, 90 along -Z;
+                pitch -90 straight down (a floor), 0 level (a wall).
+    roll        The image's rotation about the throw, degrees.
+    mirrored    Flip the image left to right.
+    opacity     How strongly it paints (for 'wet', how wet).
+    """
+    #: No icon and no box: what the decal paints is how the editor shows it
+    #: (placed, selected, dragged and nudged with the Decal tool).
+    pixmap_path = None
+    #: The Decal tool's selection; selected decals draw tinted.
+    editor_selected = False
+    EDITOR_PRIMARY_PROPERTIES = (
+        'texture', 'width', 'height', 'depth',
+        'yaw', 'pitch', 'roll', 'mirrored', 'opacity',
+    )
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'decal'
+        # Wet or Image is the image's name (wet / puddle), not a setting:
+        # an older map's decal_type is dropped.
+        self.properties.pop('decal_type', None)
+        self.properties.setdefault('texture', self.default_texture())
+        self.properties.setdefault('width', 128.0)
+        self.properties.setdefault('height', 128.0)
+        self.properties.setdefault('depth', 32.0)
+        self.properties.setdefault('yaw', 0.0)
+        self.properties.setdefault('pitch', -90.0)
+        self.properties.setdefault('roll', 0.0)
+        self.properties.setdefault('mirrored', False)
+        self.properties.setdefault('opacity', 1.0)
+
+    @staticmethod
+    def default_texture():
+        """A sensible first image: any that is not blood (gore's own) nor a
+        wet mask, else whatever there is."""
+        try:
+            from engine.decal_textures import images, is_wet_image
+            names = images()[1]
+        except Exception:
+            return ''
+        plain = [n for n in names
+                 if not n.lower().startswith('blood_') and not is_wet_image(n)]
+        return (plain or list(names) or [''])[0]
+
+    def throw_direction(self):
+        """The unit direction the decal is thrown in (into the surface)."""
+        import math
+        yaw = math.radians(float(self.properties.get('yaw', 0.0) or 0.0))
+        pitch = math.radians(float(self.properties.get('pitch', -90.0) or 0.0))
+        return (math.cos(pitch) * math.cos(yaw), math.sin(pitch),
+                -math.cos(pitch) * math.sin(yaw))
+
+
 class Monster(Thing):
     """Enemy entity with subtypes (human, flying)."""
     pixmap_path = "assets/sprites/monsters/human/idle.png"   # fallback
@@ -1341,6 +1410,10 @@ class Portal(Thing):
     show_rim       (bool)  Draw outline.
     glasses        (bool)  Looking into this portal shows your own glasses
                            reflected back at you, like a mirror.  Default on.
+    fade_distance  (float) How far away the view through the portal is
+                           drawn. It fades out over the last quarter of this
+                           distance, showing what is behind the portal, and
+                           is not rendered at all beyond it.  Default 2048.
 
     I/O outputs
     -----------
@@ -1383,9 +1456,11 @@ class Portal(Thing):
     'color',
     'show_rim',
     'glasses',
+    'fade_distance',
     )
 
     DEFAULT_WIDTH  = 128.0
+    DEFAULT_FADE_DISTANCE = 2048.0
     DEFAULT_HEIGHT = 256.0
 
     # Transit cooldown prevents rapid back-and-forth oscillation (seconds).
@@ -1412,6 +1487,9 @@ class Portal(Thing):
         # Aperture geometry
         self.properties.setdefault('width',  self.DEFAULT_WIDTH)
         self.properties.setdefault('height', self.DEFAULT_HEIGHT)
+
+        # How far away its view is drawn (faded out over the last quarter).
+        self.properties.setdefault('fade_distance', self.DEFAULT_FADE_DISTANCE)
 
         # Orientation — [yaw_degrees, pitch_degrees, roll_degrees]
         self.properties.setdefault('rotation', [0.0, 0.0, 0.0])
@@ -2040,6 +2118,7 @@ ENTITY_TYPES = {
     'PlayerStart': PlayerStart,
     'Light': Light,
     'Speaker': Speaker,
+    'Decal': Decal,
     'Monster': Monster,
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
@@ -2065,7 +2144,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'Portal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'Portal', 'Decal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

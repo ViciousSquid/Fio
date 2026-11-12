@@ -86,6 +86,9 @@ class ViewTerrainEdit:
             self._end_stamp_drag()
             self.clear_stamp_selection()
         if active:
+            tool = getattr(self.view, 'decal_tool', None)
+            if tool is not None:
+                tool.set_active(False)              # one placing tool at a time
             self.view.setCursor(Qt.CrossCursor)
         else:
             self.view._terrain_brush_mouse_pos = QPoint(-1, -1)

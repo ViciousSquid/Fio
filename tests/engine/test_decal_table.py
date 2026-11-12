@@ -32,7 +32,7 @@ def test_decals_fade_over_the_last_part_of_their_life():
     table = DecalTable()
     assert table.frame(0.0, 90.0, 20.0) is None
     table.add((0, 0, 0), (0, 0, 1), 40.0, 20.0, 3, now=100.0, kind=FLOOR, flip=True)
-    models, params = table.frame(101.0, 90.0, 20.0)
+    models, params, _inverses = table.frame(101.0, 90.0, 20.0)
     assert models.shape == (1, 16) and models.dtype == np.float32
     assert params.tolist() == [[3.0, 1.0, float(FLOOR), 1.0]]
     assert table.frame(180.0, 90.0, 20.0)[1][0, 1] == pytest.approx(0.5)
@@ -43,7 +43,7 @@ def test_the_ring_overwrites_the_oldest_and_a_frame_is_a_copy():
     table = DecalTable(capacity=4)
     for i in range(6):
         table.add((float(i), 0, 0), (0, 0, 1), 10.0, 10.0, i, now=float(i))
-    models, params = table.frame(6.0, 90.0, 20.0)
+    models, params, _inverses = table.frame(6.0, 90.0, 20.0)
     assert params[:, 0].tolist() == [2.0, 3.0, 4.0, 5.0]      # oldest first
     assert params[:, 2].tolist() == [float(WALL)] * 4
     models[:] = 0.0
