@@ -189,14 +189,16 @@ def _post_macos_mouse(events, click_state_field=None):
         cf.CFRelease(source)
 
 
-def warm_up_input(app):
-    """macOS drops the first event a process posts (seen on the runner: the
-    first click never arrived, every later one did). Spend it on a harmless
-    mouse move where the pointer already is."""
+def warm_up_input(app, window):
+    """macOS spends an inactive app's first click on bringing it to the front
+    (seen on the runner: the first click never arrived, every later one did,
+    and a warm-up mouse move did not help). Spend it before Play, on the
+    status bar, where a click does nothing."""
     if platform_name() == 'cocoa':
-        kCGEventMouseMoved = 5
-        _post_macos_mouse(((kCGEventMouseMoved, 0),))
-        pump(app, 0.3)
+        bar = window.statusBar()
+        move_pointer(bar, bar.rect().center())
+        os_click()
+        pump(app, 0.5)
 
 
 class PressCounter(QObject):
@@ -285,7 +287,7 @@ def armed(fio_session, qt_app):
             f'the editor did not go full screen: {window.size()} on {screen}'
     window.raise_()
     window.activateWindow()
-    warm_up_input(qt_app)
+    warm_up_input(qt_app, window)
     if not pump_until(qt_app, window.isActiveWindow, 5.0):
         # Windows refuses activation to a process that has not had input:
         # a real click on the status bar (inert) gives it some.
