@@ -159,3 +159,41 @@ def test_the_decal_button_shows_textures_decals_and_goes_back_after(main_window,
     tool.escape()
     assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(start)
     assert not tab.decal_btn.isChecked()
+
+
+def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_window, monkeypatch):
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QMenu
+    from editor.ui import TOOLBAR_ICON_SIZES
+    tab = main_window.asset_browser.tab_textures
+    monkeypatch.setattr(main_window, 'save_config', lambda: None)
+    config = main_window.config
+    big_toolbar = config.get('Display', 'big_toolbar_buttons', fallback=None)
+    main_window.config.remove_option('AssetBrowser', 'side_button_size') if (
+        config.has_option('AssetBrowser', 'side_button_size')) else None
+    tab.apply_side_button_size(tab.side_button_size())
+    small = TOOLBAR_ICON_SIZES[False]
+    assert tab.side_button_size() == 'small'
+    assert tab.tint_btn.iconSize().height() == small        # the toolbar's small icon
+    assert tab.tint_btn.height() == small + 8
+    assert tab.tint_btn.size() == tab.decal_btn.size()
+    menu = tab.side_button_menu()
+    labels = [a.text() for a in menu.actions() if not a.isSeparator()]
+    assert labels[-2:] == ['Small', 'Large']
+    next(a for a in menu.actions() if a.text() == 'Large').trigger()
+    large = TOOLBAR_ICON_SIZES[True]
+    assert config.get('AssetBrowser', 'side_button_size') == 'large'
+    assert tab.tint_btn.height() == large + 8 and tab.decal_btn.iconSize().height() == large
+    assert tab.tint_btn.size() == tab.decal_btn.size()
+    assert tab.action_bar.height() >= tab.decal_btn.height() + 4   # not clipped
+    # The toolbar's own setting is untouched.
+    assert config.get('Display', 'big_toolbar_buttons', fallback=None) == big_toolbar
+    # Only the empty space offers it, not the buttons.
+    shown = []
+    monkeypatch.setattr(QMenu, 'exec_', lambda self, *a: shown.append(self))
+    tab._side_button_menu(tab.decal_btn.geometry().center())
+    assert shown == []
+    empty = QPoint(tab.inspector_btn.geometry().right() + 20, tab.inspector_btn.geometry().center().y())
+    tab._side_button_menu(empty)
+    assert len(shown) == 1
+    tab.set_side_button_size('small')

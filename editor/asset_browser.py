@@ -518,9 +518,24 @@ def browser_order(name):
     return (name.lower().startswith('blood_'), name.casefold())
 
 
+def side_button_metrics(size_name):
+    """``(button size, Tint icon size, DECAL icon size)`` for the Textures
+    tab's Tint and DECAL buttons at 'small' or 'large': the main toolbar's
+    small or large button (its icon, plus its padding). The DECAL icon keeps
+    its 3:2 shape at the same height; both buttons take the wider one's size."""
+    from editor.ui import TOOLBAR_ICON_SIZES
+    icon = TOOLBAR_ICON_SIZES[size_name == 'large']
+    decal = QSize(round(icon * 1.5), icon)
+    return QSize(decal.width() + 8, icon + 8), QSize(icon, icon), decal
+
+
 class AssetBrowserTab(QWidget):
-    #: The Textures tab's Tint and DECAL buttons: both this size.
-    SIDE_BUTTON_SIZE = QSize(60, 36)
+    #: settings.ini [AssetBrowser] side_button_size: the Tint and DECAL
+    #: buttons, 'small' (the default) or 'large' -- right-click the empty
+    #: space beside them. Independent of the toolbar's big_toolbar_buttons.
+    SIDE_BUTTON_SETTING = ('AssetBrowser', 'side_button_size')
+    SIDE_BUTTON_SIZES = ('small', 'large')
+    ACTION_BAR_HEIGHT = 50
 
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
@@ -572,7 +587,7 @@ class AssetBrowserTab(QWidget):
         #    to sit here and duplicated its Fit and Natural, one baking a
         #    scale the other keeps live.
         self.action_bar = QFrame()
-        self.action_bar.setFixedHeight(50)
+        self.action_bar.setFixedHeight(self.ACTION_BAR_HEIGHT)
         self.action_bar.setStyleSheet("""
             QFrame {
                 background-color: #2a2a2a;
@@ -675,10 +690,8 @@ class AssetBrowserTab(QWidget):
 
             button_layout.addStretch()
 
-            # Tint and DECAL are one size, side by side.
+            # Tint and DECAL are one size, side by side (apply_side_button_size).
             self.tint_btn = QPushButton(load_icon("assets/tint.png"), "")
-            self.tint_btn.setIconSize(QSize(28, 28))
-            self.tint_btn.setFixedSize(self.SIDE_BUTTON_SIZE)
             self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
@@ -687,8 +700,6 @@ class AssetBrowserTab(QWidget):
             # The Decal tool: shows textures/decals while it is on, and goes
             # back to the folder you were in when it is turned off.
             self.decal_btn = QPushButton(load_icon("assets/decal_button.png"), "")
-            self.decal_btn.setIconSize(QSize(48, 32))
-            self.decal_btn.setFixedSize(self.SIDE_BUTTON_SIZE)
             self.decal_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.decal_btn.setCheckable(True)
             self.decal_btn.setToolTip(
@@ -698,6 +709,12 @@ class AssetBrowserTab(QWidget):
                 "nudge it. Click again to go back to the folder you were in.")
             self.decal_btn.clicked.connect(self.on_decal_clicked)
             button_layout.addWidget(self.decal_btn)
+            self.apply_side_button_size(self.side_button_size())
+
+            # Right-click the empty space beside them: Size > Small / Large.
+            self._side_button_row = button_container
+            button_container.setContextMenuPolicy(Qt.CustomContextMenu)
+            button_container.customContextMenuRequested.connect(self._side_button_menu)
 
         if self.is_model_tab:
             # "Add to Scene" is this tab's primary action and stays centred.
@@ -1084,6 +1101,64 @@ class AssetBrowserTab(QWidget):
     def on_inspector_clicked(self):
         """Open (or close) the Surface Inspector."""
         self.editor.toggle_surface_inspector()
+
+    # -- the Tint / DECAL button size ------------------------------------------
+
+    def _config(self):
+        return getattr(self.editor, 'config', None)
+
+    def side_button_size(self):
+        """'small' or 'large', from settings.ini (small when unset or odd)."""
+        config = self._config()
+        value = (config.get(*self.SIDE_BUTTON_SETTING, fallback='small')
+                 if config is not None else 'small')
+        value = str(value).strip().lower()
+        return value if value in self.SIDE_BUTTON_SIZES else 'small'
+
+    def apply_side_button_size(self, size_name):
+        button, tint_icon, decal_icon = side_button_metrics(size_name)
+        self.tint_btn.setIconSize(tint_icon)
+        self.decal_btn.setIconSize(decal_icon)
+        for widget in (self.tint_btn, self.decal_btn):
+            widget.setFixedSize(button)
+        # The bar grows to hold large buttons (and keeps its usual height).
+        margins = self.action_bar.layout().contentsMargins()
+        self.action_bar.setFixedHeight(max(
+            self.ACTION_BAR_HEIGHT, button.height() + margins.top() + margins.bottom() + 4))
+
+    def set_side_button_size(self, size_name):
+        """Resize the Tint and DECAL buttons and keep it in settings.ini."""
+        size_name = size_name if size_name in self.SIDE_BUTTON_SIZES else 'small'
+        self.apply_side_button_size(size_name)
+        config = self._config()
+        if config is not None:
+            section, key = self.SIDE_BUTTON_SETTING
+            if not config.has_section(section):
+                config.add_section(section)
+            config.set(section, key, size_name)
+            if hasattr(self.editor, 'save_config'):
+                self.editor.save_config()
+
+    def _side_button_menu(self, pos):
+        """Right-click on the row's empty space (not on a button): Size."""
+        row = self._side_button_row
+        if isinstance(row.childAt(pos), QPushButton):
+            return
+        menu = self.side_button_menu()
+        menu.exec_(row.mapToGlobal(pos))
+
+    def side_button_menu(self):
+        menu = QMenu(self)
+        menu.addSection("Size")
+        current = self.side_button_size()
+        group = QActionGroup(menu)
+        for name in self.SIDE_BUTTON_SIZES:
+            action = menu.addAction(name.capitalize())
+            action.setCheckable(True)
+            action.setChecked(name == current)
+            group.addAction(action)
+            action.triggered.connect(lambda _c=False, n=name: self.set_side_button_size(n))
+        return menu
 
     def on_decal_clicked(self, checked):
         """The DECAL button: the Decal tool on (and textures/decals shown) or off."""
