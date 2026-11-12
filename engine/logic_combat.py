@@ -53,6 +53,9 @@ class LogicCombat:
 
     def __init__(self, logic):
         self.logic = logic
+        #: ``hitboxes 1``: publish every shootable monster's hit sphere for
+        #: the 3D view to outline (LogicRender, view_debug_draw).
+        self.show_hitboxes = False
         self._monster_projectiles = ProjectileStore()
         self.bullet_marks = []
         self.projectile_positions = NO_PROJECTILES
@@ -441,6 +444,14 @@ class LogicCombat:
         return (monsters,
                 np.array(centres, dtype=np.float32).reshape(len(monsters), 3),
                 np.array(radii, dtype=np.float64))
+
+    def hitbox_snapshot(self):
+        """``(centres, radii)`` of the spheres player shots and melee test
+        (:meth:`_hitscan_monster_snapshot`), as float32 copies the UI thread
+        can draw: exactly what a bullet has to touch."""
+        with self.logic.session_runtime.monster_lock:
+            _monsters, centres, radii = self._hitscan_monster_snapshot()
+        return centres.copy(), radii.astype(np.float32)
 
     @staticmethod
     def _trace_monsters(ray_origin, directions, reach, wall_dists, centres, radii):

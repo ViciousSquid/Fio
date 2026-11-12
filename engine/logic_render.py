@@ -524,6 +524,9 @@ class LogicRender:
         write_state.monster_debug_rays = list(
             logic.monster_ai._debug_rays
         )
+        write_state.monster_hitboxes = (
+            logic.combat_runtime.hitbox_snapshot()
+            if logic.combat_runtime.show_hitboxes else None)
 
         current_time = time.perf_counter()
         write_state.bullet_marks = [

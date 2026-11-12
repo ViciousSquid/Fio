@@ -1017,6 +1017,9 @@ class QtGameView(QOpenGLWidget):
             if render_state and render_state.monster_debug_active:
                 self.debug_draw._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 _split_proj, self.view_matrix)
+            if render_state is not None and render_state.monster_hitboxes is not None:
+                self.debug_draw._render_monster_hitboxes(render_state.monster_hitboxes,
+                                                         _split_proj, self.view_matrix)
             if self.play_mode and self.show_spatial_grid:
                 self.debug_draw._render_spatial_grid(_split_proj, self.view_matrix)
             if (self.show_glasses or _spectator_active) and render_state is not None:
@@ -1057,6 +1060,9 @@ class QtGameView(QOpenGLWidget):
             if render_state and render_state.monster_debug_active:
                 self.debug_draw._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 _split_proj, _p2_view)
+            if render_state is not None and render_state.monster_hitboxes is not None:
+                self.debug_draw._render_monster_hitboxes(render_state.monster_hitboxes,
+                                                         _split_proj, _p2_view)
             if self.play_mode and self.show_spatial_grid:
                 self.debug_draw._render_spatial_grid(_split_proj, _p2_view)
             if (self.show_glasses or _spectator_active) and render_state is not None:
@@ -1114,6 +1120,9 @@ class QtGameView(QOpenGLWidget):
             if render_state and render_state.monster_debug_active:
                 self.debug_draw._render_monster_debug_rays(render_state.monster_debug_rays,
                                                 self.projection_matrix, self.view_matrix)
+            if render_state is not None and render_state.monster_hitboxes is not None:
+                self.debug_draw._render_monster_hitboxes(render_state.monster_hitboxes,
+                                                         self.projection_matrix, self.view_matrix)
             if self.play_mode and self.show_spatial_grid:
                 self.debug_draw._render_spatial_grid(self.projection_matrix, self.view_matrix)
         if not self.play_mode and self.editor.show_logic_links:
@@ -1391,6 +1400,7 @@ class QtGameView(QOpenGLWidget):
             self.show_spatial_grid = False
             if self.logic_thread:
                 self.logic_thread.monster_ai.monster_debug_active = False
+                self.logic_thread.combat_runtime.show_hitboxes = False
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             self.setCursor(Qt.ArrowCursor)

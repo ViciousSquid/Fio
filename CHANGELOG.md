@@ -36,6 +36,9 @@ version 4 and play in both.
 
 ### New
 
+- **`hitboxes 1|0` console command** (play mode): outlines every shootable
+  monster's actual hit sphere -- the one player shots and melee test -- in
+  bright pink, drawn over the scene.
 - **Your own `.fiopak` packs.** Any `.fiopak` in `assets/` other than the
   built-in archives is read in place as a user pack of textures, models,
   sounds, music or sprites: its contents appear in the Asset Browser, load

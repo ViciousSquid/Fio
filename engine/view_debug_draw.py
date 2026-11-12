@@ -272,6 +272,53 @@ class ViewDebugDraw:
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
         gl.glBindVertexArray(0)
 
+    #: ``hitboxes 1``: the outline colour of a monster's hit sphere.
+    HITBOX_COLOR = (1.0, 0.08, 0.72)          # bright pink
+    HITBOX_SEGMENTS = 32
+
+    @classmethod
+    def hitbox_lines(cls, centres, radii):
+        """Line-segment endpoints, ``(N * 3 * SEGMENTS * 2, 3)`` float32,
+        outlining each sphere by its three axis-aligned great circles."""
+        centres = np.asarray(centres, dtype=np.float32).reshape(-1, 3)
+        radii = np.asarray(radii, dtype=np.float32).reshape(-1)
+        n = cls.HITBOX_SEGMENTS
+        angles = np.linspace(0.0, 2.0 * np.pi, n + 1, dtype=np.float32)
+        cos, sin, zero = np.cos(angles), np.sin(angles), np.zeros(n + 1, np.float32)
+        rings = np.stack([np.stack(axes, axis=1) for axes in
+                          ((cos, sin, zero), (cos, zero, sin), (zero, cos, sin))])
+        # Each ring's consecutive points as segment pairs: (3, n, 2, 3).
+        segments = np.stack((rings[:, :-1], rings[:, 1:]), axis=2)
+        unit = segments.reshape(-1, 3)
+        points = (centres[:, None, :]
+                  + radii[:, None, None] * unit[None, :, :])
+        return np.ascontiguousarray(points.reshape(-1, 3), dtype=np.float32)
+
+    def _render_monster_hitboxes(self, hitboxes, proj_matrix, view_matrix):
+        """Outline the monsters' hit spheres, over everything (``hitboxes``)."""
+        if hitboxes is None or not self.view.debug_shader:
+            return
+        centres, radii = hitboxes
+        if not len(radii):
+            return
+        data = self.hitbox_lines(centres, radii)
+        gl.glUseProgram(self.view.debug_shader)
+        gl.glUniformMatrix4fv(self.view._debug_proj_loc, 1, gl.GL_FALSE,
+                              glm.value_ptr(proj_matrix))
+        gl.glUniformMatrix4fv(self.view._debug_view_loc, 1, gl.GL_FALSE,
+                              glm.value_ptr(view_matrix))
+        gl.glUniform3f(self.view._debug_color_loc, *self.HITBOX_COLOR)
+        gl.glBindVertexArray(self.view.debug_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.view.debug_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
+        depth = gl.glIsEnabled(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_DEPTH_TEST)        # the sprite must not hide it
+        gl.glDrawArrays(gl.GL_LINES, 0, len(data))
+        if depth:
+            gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+        gl.glBindVertexArray(0)
+
     def _render_spatial_grid(self, proj_matrix, view_matrix):
         if not self.view.debug_shader or not self.view.logic_thread:
             return

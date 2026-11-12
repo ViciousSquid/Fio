@@ -127,6 +127,9 @@ class RenderState:
         # List of {'start': [x,y,z], 'end': [x,y,z], 'color': str}
         #   color is 'green' (has LOS) or 'red' (blocked)
         self.monster_debug_rays = []
+        #: ``hitboxes 1``: ``(centres (N, 3), radii (N,))`` float32 of the
+        #: monsters' hit spheres, else None.
+        self.monster_hitboxes = None
         
         # Debug / Stats
         self.total_brushes = 0
@@ -208,6 +211,7 @@ class RenderState:
         self.hud_health_alpha = 0.5
         self.monster_debug_active = False
         self.monster_debug_rays = []
+        self.monster_hitboxes = None
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0

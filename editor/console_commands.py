@@ -179,6 +179,7 @@ class ConsoleCommandHandler:
             # Debug
             'notarget': self.cmd_notarget,
             'sg': self.cmd_spatial_grid,
+            'hitboxes': self.cmd_hitboxes,
             'showcollision': self.cmd_show_collision,
             'collisionvis': self.cmd_show_collision,
             'collision': self.cmd_show_collision,
@@ -1049,6 +1050,7 @@ entity to drive them from the I/O system.</i><br>
 <b style="color:orange;">portal_delete</b> &lt;name&gt; [and_pair] — Remove portal(s)<br>
 <b style="color:cyan;">=== Debug ===</b><br>
 <b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
+<b style="color:orange;">hitboxes</b> [1|0] — Outline monsters' actual hit spheres (pink)<br>
 <b style="color:orange;">god</b> — Toggle invincibility<br>
 <b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
 <b style="color:orange;">noclip</b> — Toggle noclip<br>
@@ -2181,6 +2183,27 @@ entity to drive them from the I/O system.</i><br>
         state = "ON" if view_3d.show_spatial_grid else "OFF"
         self.main_window.show_toast(f"Spatial Grid: {state}")
         debug_log("Info", f"Spatial grid display set to {state}")
+
+    def cmd_hitboxes(self, args):
+        """hitboxes [1|0|on|off|toggle] — Outline every shootable monster's
+        actual hit sphere (what player shots and melee test) in bright pink."""
+        if not self._require_play_mode("hitboxes"):
+            return
+        combat = self.main_window.view_3d.logic_thread.combat_runtime
+        arg = args.strip().lower() if args else "toggle"
+        if arg in ("on", "1", "true"):
+            combat.show_hitboxes = True
+        elif arg in ("off", "0", "false"):
+            combat.show_hitboxes = False
+        elif arg == "toggle":
+            combat.show_hitboxes = not combat.show_hitboxes
+        else:
+            debug_log("Error", "Usage: hitboxes [1|0]")
+            return
+        state = "ON" if combat.show_hitboxes else "OFF"
+        self.main_window.show_toast(f"Monster hitboxes: {state}")
+        debug_log("Info", f"Monster hitboxes set to {state}")
+        self.main_window.view_3d.update()
 
     def cmd_physics(self, args):
         if not self._require_play_mode("physics"):
