@@ -129,6 +129,7 @@ class SysMon:
         self._border_pen = QPen(self._border_color, 1)
         self._bg_brush = QBrush(self._bg_color)
         self._header_brush = QBrush(self._header_color)
+        self._theme_version = None          # follows Edit > Colours (_apply_theme)
         self._graph_bg_brush = QBrush(self._graph_bg_color)
         self._graph_fill_brush = QBrush(self._graph_fill_color)
         self._graph_line_pen = QPen(self._graph_line_color, 1)
@@ -425,8 +426,23 @@ class SysMon:
     # Drawing — ALWAYS draws every frame called, no early returns
     # ------------------------------------------------------------------
 
+    def _apply_theme(self):
+        """Take the floating windows' colours (Edit > Colours)."""
+        from engine import floating_windows as fw
+        self._theme_version = fw.theme_version()
+        self._bg_color = fw.theme('background')
+        self._border_color = fw.theme('border')
+        self._header_color = fw.theme('header')
+        self._text_color = fw.theme('text')
+        self._border_pen = QPen(self._border_color, 1)
+        self._bg_brush = QBrush(self._bg_color)
+        self._header_brush = QBrush(self._header_color)
+
     def draw(self, painter, fps, logic_thread, renderer, editor_state, terrain):
         """Draw the sysmon overlay. Always paints — caller controls call rate."""
+        from engine.floating_windows import theme_version
+        if self._theme_version != theme_version():
+            self._apply_theme()
         target_height = self.EXPANDED_HEIGHT if self.expanded else self.COLLAPSED_HEIGHT
         # Clicks land on what is drawn: a collapsed panel no longer takes the
         # clicks below it.
