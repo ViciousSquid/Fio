@@ -71,7 +71,8 @@ class DecalsMixin:
                     name: gl.glGetUniformLocation(program, name)
                     for name in ('projection', 'view', 'sceneDepth', 'decalTextures',
                                  'decalRanges', 'invViewProjection', 'viewport', 'viewPos',
-                                 'wetPass', 'reflectionsOn', 'sceneColor', 'invProjection')}
+                                 'wetPass', 'reflectionsOn', 'sceneColor', 'invProjection',
+                                 'decalFadeEnd')}
         return program
 
     def _decal_texture_array(self):
@@ -180,6 +181,8 @@ class DecalsMixin:
                               glm.value_ptr(inverse_projection))
         gl.glUniform1i(u['reflectionsOn'],
                        1 if getattr(self, 'reflections_enabled', True) else 0)
+        gl.glUniform1f(u['decalFadeEnd'], float(getattr(
+            self, 'decal_reflection_fade', shaders.REFLECTION_FADE_END)))
         gl.glUniform1i(u['wetPass'], 0)
         gl.glUniform4f(u['decalRanges'], *self._decal_ranges)
         gl.glActiveTexture(gl.GL_TEXTURE0)

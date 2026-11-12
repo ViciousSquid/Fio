@@ -50,7 +50,8 @@ version 4 and play in both.
   `maps/Wet_Decal_Test.json`.
 - **Reflections fade out with distance** -- water and wet decals -- and are
   not traced at all beyond 1536 units; `reflections 0|1` turns every
-  screen-space reflection off or on. **Portals** fade their view out over the
+  screen-space reflection off or on, and `decalfade <distance>` sets how far
+  wet decals reflect (0: never). **Portals** fade their view out over the
   last quarter of a new **Fade Distance** property (default 2048, the old
   fixed cut-off) instead of popping, and are not rendered beyond it.
 - **Monster Debug window** (F7 in play, or `monsterdebug [on|off]`): a

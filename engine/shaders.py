@@ -2496,6 +2496,7 @@ uniform vec3 viewPos;
 // The wet pass: the frame so far, and what the reflection march needs.
 uniform int wetPass;
 uniform int reflectionsOn;      // 'reflections 0' turns every one off
+uniform float decalFadeEnd;     // 'decalfade': no reflection from here on
 uniform sampler2D sceneColor;
 uniform highp mat4 view;
 uniform highp mat4 projection;
@@ -2566,7 +2567,10 @@ void main() {
         vec3 base = texture(sceneColor, uv).rgb;
         vec3 colour = base * mix(0.6, 0.45, puddle);
         highp vec3 surfaceView = (view * world).xyz;
-        float fade = reflectionsOn == 1 ? reflectionFade(surfaceView) : 0.0;
+        // Full strength to two thirds of the fade distance, none from it on.
+        float fade = reflectionsOn == 1 && decalFadeEnd > 0.0
+            ? 1.0 - smoothstep(decalFadeEnd * 0.6667, decalFadeEnd, length(surfaceView))
+            : 0.0;
         if (fade > 0.0) {
             float rough = mix(0.32, 0.015, puddle);
             vec3 n = normalize(normal + (hash3(floor(world.xyz * 4.0)) - 0.5) * rough);

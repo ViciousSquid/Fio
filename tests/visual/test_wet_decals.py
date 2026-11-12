@@ -146,3 +146,33 @@ def test_portal_views_fade_out_over_the_last_quarter_of_their_fade_distance():
     slots = table.portal_slots
     assert list(vis._portal_candidate_slots(table, slots, glm.vec3(0, 0, 900.0))) == [0]
     assert list(vis._portal_candidate_slots(table, slots, glm.vec3(0, 0, 1100.0))) == []
+
+
+def test_decalfade_sets_how_far_wet_decals_reflect(fio_session, monkeypatch):
+    session = _session(fio_session, [_wet('near', -250.0)])
+    renderer = session.view.renderer
+    console = session.window.console_handler
+
+    def reflection():
+        on = session.paint()
+        renderer.reflections_enabled = False
+        off = session.paint()
+        renderer.reflections_enabled = True
+        return _changed(on, off)
+
+    assert renderer.decal_reflection_fade == REFLECTION_FADE_END
+    assert reflection() > 200
+    console.handle_command("decalfade 120")          # nearer than the decal
+    assert renderer.decal_reflection_fade == 120.0
+    assert reflection() == 0
+    console.handle_command("decalfade 0")             # off
+    assert reflection() == 0
+    console.handle_command("decalfade 4000")
+    assert reflection() > 200
+    import editor.console_commands as commands
+    said = []
+    monkeypatch.setattr(commands, 'debug_log', lambda kind, text: said.append(text))
+    console.handle_command("decalfade")
+    assert any("4000 units" in text for text in said)
+    console.handle_command("decalfade far")
+    assert renderer.decal_reflection_fade == 4000.0   # unchanged

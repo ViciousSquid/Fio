@@ -182,6 +182,7 @@ class ConsoleCommandHandler:
             'sg': self.cmd_spatial_grid,
             'hitboxes': self.cmd_hitboxes,
             'reflections': self.cmd_reflections,
+            'decalfade': self.cmd_decalfade,
             'showcollision': self.cmd_show_collision,
             'collisionvis': self.cmd_show_collision,
             'collision': self.cmd_show_collision,
@@ -1068,6 +1069,7 @@ entity to drive them from the I/O system.</i><br>
 <b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
 <b style="color:orange;">hitboxes</b> [1|0] — Outline monsters' actual hit spheres (pink)<br>
 <b style="color:orange;">reflections</b> [1|0] — All screen-space reflections (water, wet decals) on or off<br>
+<b style="color:orange;">decalfade</b> [distance] — How far wet decals reflect (default 1536; 0 = never)<br>
 <b style="color:orange;">god</b> — Toggle invincibility<br>
 <b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
 <b style="color:orange;">noclip</b> — Toggle noclip<br>
@@ -2244,6 +2246,32 @@ entity to drive them from the I/O system.</i><br>
         state = "ON" if value else "OFF"
         self.main_window.show_toast(f"Reflections: {state}")
         debug_log("Info", f"Screen-space reflections set to {state}")
+        self.main_window.view_3d.update()
+
+    def cmd_decalfade(self, args):
+        """decalfade [distance] — how far from the camera wet decals reflect:
+        full to two thirds of it, fading to none at it, not traced beyond.
+        0 turns decal reflections off. No argument: says the current one."""
+        renderer = getattr(self.main_window.view_3d, 'renderer', None)
+        if renderer is None:
+            debug_log("Error", "decalfade: no renderer yet")
+            return
+        arg = args.strip()
+        if not arg:
+            debug_log("Info", f"Decal reflection fade: "
+                              f"{float(renderer.decal_reflection_fade):g} units")
+            return
+        try:
+            distance = float(arg)
+        except ValueError:
+            distance = float('nan')
+        if not (distance >= 0.0) or distance == float('inf'):
+            debug_log("Error", "Usage: decalfade <distance>  (0 = no decal reflections)")
+            return
+        renderer.decal_reflection_fade = distance
+        text = "off" if distance == 0 else f"{distance:g} units"
+        self.main_window.show_toast(f"Decal reflections fade: {text}")
+        debug_log("Info", f"Decal reflection fade set to {text}")
         self.main_window.view_3d.update()
 
     def cmd_physics(self, args):
