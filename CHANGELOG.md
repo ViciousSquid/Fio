@@ -32,7 +32,7 @@ version 4 and play in both.
   hand-rebuilt archive is no longer refused whole over macOS Finder litter
   (`__MACOSX/`, `.DS_Store`, `._*`) or over the `assets/editor/` artwork --
   either used to blank every toolbar icon and hide the player start.
-  Textures, sprites and models are loose files.
+  Textures, sprites, models and sounds (`assets/sounds/`) are loose files.
 
 ### New
 

@@ -4,13 +4,13 @@ Fio discovers these category archives in `assets/` at editor startup:
 
 | Archive | Contents |
 | --- | --- |
-| `editor.fiopak` | Root images: toolbar icons, application icons, splash |
+| `editor.fiopak` | Root images: toolbar icons, application icons, splash; `assets/editor/` (the player-start sign) |
 | `sprites.fiopak` | `assets/sprites/` |
 | `textures.fiopak` | `assets/textures/` and `assets/noise_3d.bin` |
 | `models.fiopak` | `assets/models/` |
 | `fonts.fiopak` | `assets/fonts/` |
 | `music.fiopak` | `assets/music/` (currently no music tracks are shipped) |
-| `sounds.fiopak` | `assets/sounds/` |
+| `sounds.fiopak` | `assets/sounds/` (not shipped: sounds are a loose folder) |
 
 These are data-only ZIP archives with project-relative paths, **read in
 place: nothing is extracted**. Startup indexes each archive
@@ -32,7 +32,9 @@ Rebuild all categories from the repository root:
 python tools/pack_assets.py
 ```
 
-Or rebuild one category: `python tools/pack_assets.py sprites`. Packing is
+Or rebuild one category: `python tools/pack_assets.py sprites`. Sounds ship as
+the loose `assets/sounds/` folder, so a bare `pack_assets.py` skips them; name
+the category (`pack_assets.py sounds`) to build `sounds.fiopak` anyway. Packing is
 deterministic and verifies every payload before replacing an archive. Partial
 loose overrides preserve archive-only members; a category without any loose
 files preserves its existing archive. Remove both the loose file and its ZIP
