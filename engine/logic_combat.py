@@ -410,6 +410,17 @@ class LogicCombat:
                 closest_brush_hit = ray_origin + ray_dir * dist
         return closest_brush_dist, closest_brush_hit
 
+    @staticmethod
+    def hit_sphere(pos, props):
+        """``((x, y, z), radius)``: the sphere player shots and melee test
+        for a monster at *pos* (the centre of its billboard) -- centred at
+        feet + 0.45 H, wider than the sprite for a forgiving feel."""
+        sprite_width = float(props.get('sprite_width', 64.0))
+        sprite_height = float(props.get('sprite_height', 128.0))
+        feet_y = pos[1] - sprite_height * 0.5
+        return ((pos[0], feet_y + sprite_height * 0.45, pos[2]),
+                max(sprite_width * 0.75, sprite_height * 0.4, 48.0))
+
     def _hitscan_monster_snapshot(self):
         """The shootable monsters, in things order, with their hit spheres.
 
@@ -435,12 +446,10 @@ class LogicCombat:
             props = thing.properties
             if props.get('dead', False) or props.get('hidden', False):
                 continue
-            sprite_width = float(props.get('sprite_width', 64.0))
-            sprite_height = float(props.get('sprite_height', 128.0))
             monsters.append(thing)
-            feet_y = thing.pos[1] - sprite_height * 0.5
-            centres.append((thing.pos[0], feet_y + sprite_height * 0.45, thing.pos[2]))
-            radii.append(max(sprite_width * 0.75, sprite_height * 0.4, 48.0))
+            centre, radius = self.hit_sphere(thing.pos, props)
+            centres.append(centre)
+            radii.append(radius)
         return (monsters,
                 np.array(centres, dtype=np.float32).reshape(len(monsters), 3),
                 np.array(radii, dtype=np.float64))

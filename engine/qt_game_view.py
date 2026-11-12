@@ -2150,13 +2150,11 @@ class QtGameView(QOpenGLWidget):
             self.editor.toggle_system_monitor()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
-            if self.logic_thread:
-                monster_ai = self.logic_thread.monster_ai
-                monster_ai.monster_debug_active = not monster_ai.monster_debug_active
-                status = "ON" if monster_ai.monster_debug_active else "OFF"
-            else:
-                status = "OFF"
-            self.editor.show_toast(f"Monster Debug: {status}")
+            # The Monster Debug window, with the sight lines it switches on.
+            from editor.monster_debug import toggle_monster_debug
+            opened = toggle_monster_debug(self.editor)
+            self.editor.show_toast(f"Monster Debug: {'ON' if opened else 'OFF'}")
+            self.setFocus()                  # keep playing: keys stay with the game
             self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F6:

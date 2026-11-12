@@ -91,7 +91,7 @@ DECLARED = (
     ('Play mode', 'E', 'Use / interact'),
     ('Play mode', 'Esc', 'Pause menu (Save, Load, Options, Exit)'),
     ('Play mode', 'F6', 'Toggle model collision'),
-    ('Play mode', 'F7', 'Toggle monster debug'),
+    ('Play mode', 'F7', 'Monster Debug window (and its sight lines)'),
     ('Play mode', 'F9', 'Toggle the lighting debug view'),
     ('Play mode', 'F12', 'Leave kiosk mode'),
     ('Play mode', '1 2 3 4', 'Select weapon'),

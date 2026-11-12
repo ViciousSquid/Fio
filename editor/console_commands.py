@@ -53,6 +53,7 @@ class ConsoleCommandHandler:
             'monster_revive':     self.cmd_monster_revive,
             'monster_revive_all': self.cmd_monster_revive_all,
             'botdebug': self.cmd_botdebug,
+            'monsterdebug': self.cmd_monsterdebug,
 
             'ent': self.cmd_info,
             'info': self.cmd_info,
@@ -202,7 +203,8 @@ class ConsoleCommandHandler:
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
     #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
     #: without asking, so a map could throw away the user's unsaved work.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit', 'botdebug'})
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit', 'botdebug',
+                                    'monsterdebug'})
 
     def cmd_botdebug(self, args):
         if args.strip().lower() not in ('', 'on', 'off'):
@@ -215,6 +217,18 @@ class ConsoleCommandHandler:
             return
         from editor.bot_debug import show_bot_debug
         show_bot_debug(self.main_window)
+
+    def cmd_monsterdebug(self, args):
+        """monsterdebug [on|off] — the floating Monster Debug window (F7 in play)."""
+        arg = args.strip().lower()
+        if arg not in ('', 'on', 'off', '1', '0'):
+            debug_log('Error', 'Usage: monsterdebug [on|off]')
+            return
+        from editor.monster_debug import hide_monster_debug, show_monster_debug
+        if arg in ('off', '0'):
+            hide_monster_debug(self.main_window)
+        else:
+            show_monster_debug(self.main_window)
 
     def handle_command(self, cmd_string, *, from_map=False):
         """Run one console command line.
@@ -1002,6 +1016,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">disconnect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;<br>
 <b style="color:cyan;">=== Monsters ===</b><br>
 <b style="color:orange;">botdebug</b> [on|off] — Floating live decisions: overview and one tab per bot<br>
+<b style="color:orange;">monsterdebug</b> [on|off] — Floating Monster Debug window: overview, inspector, perception, combat, patrol (F7 in play)<br>
 <b style="color:orange;">monster_kill</b> &lt;name&gt; — Instantly kill a named monster<br>
 <b style="color:orange;">monster_revive</b> &lt;name&gt; — Restore a named monster to full health<br>
 <b style="color:orange;">monster_revive_all</b> — Restore every monster in the level<br>
