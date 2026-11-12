@@ -199,9 +199,19 @@ def warm_up_input(app, view):
         click_editor_view(app, view)
 
 
+def in_view_point(view):
+    """Where the tests click in the 3D view: inside it, but clear of the
+    screen's centre. On the macOS runner something there (a system alert)
+    takes clicks without taking focus: every click at the view's centre --
+    which is near the screen's -- went missing, while every one by the
+    screen's edge arrived. While Play holds the mouse, where in the view the
+    click lands makes no difference to it."""
+    return QPoint(int(view.width() * 0.85), int(view.height() * 0.85))
+
+
 def click_editor_view(app, view):
-    """A real click in the middle of the 3D view, before Play: inert there."""
-    move_pointer(view, view.rect().center())
+    """A real click in the 3D view before Play, where it does nothing."""
+    move_pointer(view, in_view_point(view))
     os_click()
     pump(app, 0.5)
 
@@ -351,7 +361,7 @@ def assert_click_fired_the_shotgun(session, qt_app, label):
 def test_left_click_fires_the_equipped_weapon(armed, qt_app):
     session = armed
     view = session.view
-    move_pointer(view, view.rect().center())
+    move_pointer(view, in_view_point(view))
     clear_shots(session.game_state)
     os_click()
     assert_click_fired_the_shotgun(session, qt_app, 'click in the view')
