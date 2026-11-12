@@ -609,6 +609,8 @@ _COLUMNS = (
     ('portal_width_height', (2,), np.float32, 0.0),
     ('portal_basis', (3, 3), np.float64, 0.0),
     ('portal_fade', (), np.float32, 0.0),
+    #: How far from the camera the portal's view is drawn ("Fade Distance").
+    ('portal_fade_distance', (), np.float32, 0.0),
     ('portal_color', (3,), np.float32, 1.0),
     ('portal_show_rim', (), bool, False),
     #: The portal's "Glasses" property: looking into it shows your own
@@ -1535,6 +1537,8 @@ class EntityTable:
                 props.get('active', True), True)
             self.portal_fade[slot] = max(0.0, min(1.0, _float_property(
                 getattr(thing, '_fade_alpha', 1.0), 1.0)))
+            self.portal_fade_distance[slot] = max(64.0, _float_property(
+                props.get('fade_distance', 2048.0), 2048.0))
             self.portal_direction[slot] = self._portal_direction_code(
                 props.get('portal_direction', 'both'))
             self.portal_width_height[slot] = (
@@ -1560,6 +1564,7 @@ class EntityTable:
         else:
             self.portal_active[slot] = False
             self.portal_fade[slot] = 0.0
+            self.portal_fade_distance[slot] = 0.0
             self.portal_direction[slot] = 0
             self.portal_width_height[slot] = 0.0
             self.portal_color[slot] = 1.0

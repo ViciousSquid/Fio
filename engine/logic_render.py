@@ -543,6 +543,9 @@ class LogicRender:
         ]
 
         combat = logic.combat_runtime
+        # The level's placed decals are rows of the same table as blood.
+        combat.blood.place(logic.editor_state.things,
+                           show_selection=not logic.session_runtime.play_mode)
         write_state.decals = combat.blood.frame(
             current_time, combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
 

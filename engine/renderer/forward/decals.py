@@ -10,8 +10,16 @@ and before anything blended, so decals lie on walls, floors, terrain and
 models, and under water and glass.
 
 Its GL objects are the renderer's: the program, the instance buffer, a
-vertex array over the shared cube, and one texture array holding every
-``assets/textures/decals/blood_wall_*.png`` and ``blood_floor_*.png``.
+vertex array over the shared cube, and one texture array holding every image
+in ``assets/textures/decals``, in ``engine.decal_textures`` order (blood
+picks among the ``blood_wall_*`` / ``blood_floor_*`` layers; a placed decal
+names its own layer).
+
+Placed wet decals are rows of the same table, drawn by a second draw of the
+same program over a copy of the frame so far: darkened, and reflecting the
+scene by the water's screen-space reflection, faded out with distance (see
+``engine.shaders.REFLECTION_FADE_START``). ``reflections_enabled`` (the
+``reflections`` console command) turns that off with every other one.
 """
 
 import ctypes
@@ -22,7 +30,8 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import shaders
-from engine.asset_archives import asset_listdir, asset_source
+from engine import decal_textures
+from engine.asset_archives import asset_source
 
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
 #: Side of a layer of the decal texture array; images are scaled to it.
@@ -40,6 +49,7 @@ class DecalsMixin:
         self._decal_capacity = 0
         self._decal_textures = 0
         self._decal_layers = 0
+        self._decal_images_version = None
         self._decal_ranges = (0.0, 1.0, 0.0, 1.0)
         self._decal_staging = np.zeros((0, _INSTANCE_FLOATS), dtype=np.float32)
         #: Decals drawn by the last frame (tests, Debug Tables).
@@ -60,39 +70,36 @@ class DecalsMixin:
                 self._decal_uniforms = {
                     name: gl.glGetUniformLocation(program, name)
                     for name in ('projection', 'view', 'sceneDepth', 'decalTextures',
-                                 'decalRanges', 'invViewProjection', 'viewport', 'viewPos')}
+                                 'decalRanges', 'invViewProjection', 'viewport', 'viewPos',
+                                 'wetPass', 'reflectionsOn', 'sceneColor', 'invProjection')}
         return program
 
     def _decal_texture_array(self):
-        """Every decal image as one texture array (made on first use)."""
-        if self._decal_textures or self._decal_layers < 0:
+        """Every decal image as one texture array, in
+        ``engine.decal_textures`` order; rebuilt when that list changes."""
+        version, names = decal_textures.images()
+        if version == self._decal_images_version:
             return self._decal_textures
         from PIL import Image
-        found = sorted(name for name in asset_listdir(DECAL_FOLDER)
-                       if name.lower().startswith('blood_') and name.lower().endswith('.png'))
-        # Wall images, then floor images. With only one kind (or files named
-        # neither), both kinds draw from all of them.
-        walls = [n for n in found if n.lower().startswith('blood_wall_')]
-        floors = [n for n in found if n.lower().startswith('blood_floor_')]
-        if not walls or not floors:
-            walls = floors = found
-            names = found
-            self._decal_ranges = (0.0, float(len(found)), 0.0, float(len(found)))
-        else:
-            names = walls + floors
-            self._decal_ranges = (0.0, float(len(walls)),
-                                  float(len(walls)), float(len(floors)))
+        if self._decal_textures:
+            gl.glDeleteTextures(1, [self._decal_textures])
+            self._decal_textures = 0
+        self._decal_images_version = version
+        self._decal_ranges = decal_textures.blood_ranges(names)
         layers = []
         size = DECAL_TEXTURE_SIZE
+        blank = np.zeros((size, size, 4), dtype=np.uint8)
         for name in names:
             try:
                 image = Image.open(asset_source(os.path.join(DECAL_FOLDER, name)))
                 layers.append(np.asarray(
                     image.convert('RGBA').resize((size, size), Image.LANCZOS), dtype=np.uint8))
             except Exception as exc:
+                # Kept as a blank layer: every later image keeps its layer.
                 print(f'[Renderer] decal texture {name} not loaded: {exc}')
+                layers.append(blank)
         if not layers:
-            self._decal_layers = -1                 # none: asked once
+            self._decal_layers = 0
             return 0
         data = np.ascontiguousarray(np.stack(layers))
         texture = int(gl.glGenTextures(1))
@@ -167,6 +174,13 @@ class DecalsMixin:
         gl.glUniform3f(u['viewPos'], float(camera_pos.x), float(camera_pos.y),
                        float(camera_pos.z))
         gl.glUniform1i(u['sceneDepth'], self._water_depth_texture_unit)
+        gl.glUniform1i(u['sceneColor'], self._glass_scene_texture_unit)
+        inverse_projection = glm.inverse(projection)
+        gl.glUniformMatrix4fv(u['invProjection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(inverse_projection))
+        gl.glUniform1i(u['reflectionsOn'],
+                       1 if getattr(self, 'reflections_enabled', True) else 0)
+        gl.glUniform1i(u['wetPass'], 0)
         gl.glUniform4f(u['decalRanges'], *self._decal_ranges)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
@@ -191,8 +205,21 @@ class DecalsMixin:
         gl.glCullFace(gl.GL_FRONT)
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_FALSE)
+        wet = bool((params[:, 2] > 2.5).any())
         try:
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, count)
+            if wet:
+                # Wet patches: over a copy of the frame so far (blood and
+                # images included), drawn plainly over what is there.
+                if self._capture_glass_scene() is not None:
+                    gl.glActiveTexture(gl.GL_TEXTURE0)
+                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                    gl.glBindVertexArray(self._decal_vao)
+                    gl.glUseProgram(program)
+                    gl.glUniform1i(u['wetPass'], 1)
+                    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, count)
+                    self.render_stats.draw_calls += 1
         finally:
             gl.glCullFace(gl.GL_BACK)
             if not cull:

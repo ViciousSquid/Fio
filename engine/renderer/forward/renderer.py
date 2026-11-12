@@ -61,6 +61,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
         # Glass samples the already-rendered scene for screen-space transmission.
         # Kept lazy because most frames contain no glass at all.
+        #: Screen-space reflections -- water, wet decals -- on or off (the
+        #: ``reflections`` console command). They fade out with distance
+        #: either way (engine.shaders.REFLECTION_FADE_START / END).
+        self.reflections_enabled = True
         self._glass_scene_texture = 0
         self._glass_scene_size = (0, 0)
         self._glass_scene_texture_unit = 2

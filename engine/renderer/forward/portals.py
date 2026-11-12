@@ -175,6 +175,12 @@ class PortalsMixin:
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(main_view)
         fade_a = float(portal_table.portal_fade[portal_a])
+        if depth == 1:
+            # Fading out with distance, as a portal fades when disabled: the
+            # view over what is behind the portal, at that opacity.
+            fade_a *= self._portal_distance_fade(portal_table, portal_a, camera_pos)
+            if fade_a <= 0.001:
+                return
         # A portal fading in or out shows its view at that opacity over what
         # is behind it: keep that picture before the view replaces it.
         behind = self._capture_behind_portal() if depth == 1 and fade_a < 0.999 else None

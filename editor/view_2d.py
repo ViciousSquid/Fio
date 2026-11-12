@@ -6,7 +6,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
+from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster, Decal,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -1246,7 +1246,11 @@ class View2D(QWidget):
         return self.editor.state.view_filters.hides(obj)
 
     def _hidden(self, obj):
-        """Hidden by the map, or filtered out of the editor's views."""
+        """Hidden by the map, or filtered out of the editor's views. Decals
+        are never in the 2D views: the Decal tool edits them in the 3D view,
+        where what they paint is what is shown (as terrain stamps)."""
+        if isinstance(obj, Decal):
+            return True
         props = obj if isinstance(obj, dict) else obj.properties
         return bool(props.get('hidden', False)) or self._filtered(obj)
 

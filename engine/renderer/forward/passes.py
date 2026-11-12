@@ -2193,7 +2193,9 @@ class PassesMixin:
                 wants_depth = bool(high_quality[i])
                 if wants_depth != brush_depth:
                     gl.glUniform1i(has_depth_loc, 1 if wants_depth else 0)
-                    gl.glUniform1i(ssr_loc, 1 if wants_depth else 0)
+                    # 'reflections 0' turns the scene reflection off.
+                    gl.glUniform1i(ssr_loc, 1 if wants_depth and getattr(
+                        self, 'reflections_enabled', True) else 0)
                     brush_depth = wants_depth
 
             gl.glUniform1f(opacity_loc, opacity)

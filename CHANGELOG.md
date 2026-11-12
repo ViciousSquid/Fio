@@ -36,6 +36,23 @@ version 4 and play in both.
 
 ### New
 
+- **Decals** (Tools ▸ Decal Tool, or the toolbar's decal button): click any
+  surface in the 3D view -- brush, terrain or model -- to place the image
+  selected in the Asset Browser (`textures/decals`); Shift-click to select,
+  drag across surfaces, nudge with the arrow keys, Delete, Escape, as terrain
+  stamps work. Two types: **Image** paints the picture (modulate 2×, keeping
+  the surface's own light), **Wet** uses it as a mask of where the surface is
+  wet -- darkened, and reflecting the scene (standing water where the mask is
+  strongest, damp at its edges). Scale one over a whole floor with
+  `wet_full.png` to make all of it wet. A decal is a row of the same table
+  blood uses, drawn by the same pass. Samples: `grime_01`, `scorch_01`,
+  `wet_puddle_01`, `wet_damp_01`, `wet_full`; try them in
+  `maps/Wet_Decal_Test.json`.
+- **Reflections fade out with distance** -- water and wet decals -- and are
+  not traced at all beyond 1536 units; `reflections 0|1` turns every
+  screen-space reflection off or on. **Portals** fade their view out over the
+  last quarter of a new **Fade Distance** property (default 2048, the old
+  fixed cut-off) instead of popping, and are not rendered beyond it.
 - **Monster Debug window** (F7 in play, or `monsterdebug [on|off]`): a
   floating, always-on-top window with Perception, Combat and Patrol tabs, live
   from the monster AI, and switches for the sight-line and hitbox overlays.

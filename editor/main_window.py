@@ -990,8 +990,10 @@ class MainWindow(QMainWindow):
             key = event.key()
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
                 # Selected terrain stamps take the arrows while the stamp
-                # brush is active.
+                # brush is active, selected decals while the Decal tool is.
                 if self._nudge_terrain_stamps(event):
+                    return True
+                if self._nudge_decals(event):
                     return True
                 # Only nudge if we have a selected object and not in play mode
                 selected = self.primary_selection()
@@ -1045,6 +1047,27 @@ class MainWindow(QMainWindow):
         timer.start(350)
         view_3d.update()
         return True
+
+    def _nudge_decals(self, event):
+        """Move the Decal tool's selection with the arrow keys (as stamps)."""
+        view_3d = self.view_3d
+        tool = getattr(view_3d, 'decal_tool', None)
+        if view_3d is None or view_3d.play_mode or tool is None or not tool.active:
+            return False
+        current_view = self.right_tabs.currentWidget() if hasattr(self, 'right_tabs') else None
+        grid_visible = getattr(current_view, 'grid_visible', True)
+        grid = getattr(current_view, 'grid_size', None) or getattr(view_3d, 'grid_size', 16)
+        return tool.nudge(event.key(), bool(event.modifiers() & Qt.ShiftModifier),
+                          grid=grid, grid_visible=grid_visible)
+
+    def toggle_decal_tool(self, checked=None):
+        """Tools > Decal Tool: place, select, drag and nudge decals."""
+        tool = self.view_3d.decal_tool
+        if self.view_3d.play_mode:
+            self.show_toast("Leave Play to edit decals", is_error=True)
+            tool.set_active(False)
+            return
+        tool.set_active(not tool.active if checked is None else bool(checked))
 
     def _finish_stamp_nudge(self):
         if self.terrain is not None:

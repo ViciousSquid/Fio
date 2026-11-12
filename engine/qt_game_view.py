@@ -322,6 +322,9 @@ class QtGameView(QOpenGLWidget):
         self.terrain_sculpt_feather = 0.25
         # A press on a placed stamp: {'last': (x, z), 'moved', 'toggle_off'}.
         self._stamp_drag = None
+        # Decals: placed, selected, dragged and nudged as stamps are.
+        from editor.decal_tool import DecalTool
+        self.decal_tool = DecalTool(self)
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
@@ -1332,6 +1335,7 @@ class QtGameView(QOpenGLWidget):
         """Enter Play with the player at *player_start* (a PlayerStart), or leave it."""
         if not self.play_mode:
             self.stop_editor_mouselook()
+            self.decal_tool.set_active(False)
         self.play_mode = not self.play_mode
         if self.play_mode:
             player_start_pos = player_start.pos
@@ -1648,6 +1652,9 @@ class QtGameView(QOpenGLWidget):
                 return
             self.terrain_edit._apply_sculpt_at_mouse(event.x(), event.y())
             return
+        if self.decal_tool.active and not self.play_mode and event.button() == Qt.LeftButton:
+            self.decal_tool.press(event)
+            return
         if not self.play_mode and self.floating_windows.handle_mouse_press(event):
             if any(getattr(w, "dragging", False) for w in self.floating_windows.windows):
                 self.setCursor(Qt.ClosedHandCursor)
@@ -1862,6 +1869,10 @@ class QtGameView(QOpenGLWidget):
             self._terrain_brush_hit = self.terrain_edit.raycast_terrain(event.x(), event.y())
             self.terrain_edit._drag_terrain_stamps(event.x(), event.y())
             return
+        if (self.decal_tool.dragging() and not self.play_mode
+                and event.buttons() & Qt.LeftButton):
+            self.decal_tool.drag(event.x(), event.y())
+            return
         if (self.terrain_sculpt_active and not self.play_mode
                 and not (event.buttons() & Qt.RightButton)):
             self._terrain_brush_mouse_pos = event.pos()
@@ -1916,6 +1927,9 @@ class QtGameView(QOpenGLWidget):
             return
         if event.button() == Qt.LeftButton and self._stamp_drag is not None:
             self.terrain_edit._end_stamp_drag()
+            return
+        if event.button() == Qt.LeftButton and self.decal_tool.dragging():
+            self.decal_tool.release()
             return
         controller = self.components._components()
         if (event.button() == Qt.LeftButton and controller is not None and
@@ -2084,6 +2098,15 @@ class QtGameView(QOpenGLWidget):
                 and self._actor_pick is not None):
             self.picking.cancel_actor_pick()
             return
+        # The Decal tool owns Escape and Delete while it is on.
+        if self.decal_tool.active and not self.play_mode:
+            if event.key() == Qt.Key_Escape:
+                self.decal_tool.escape()
+                self.setFocus()
+                return
+            if (event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
+                    and self.decal_tool.delete_selected()):
+                return
         # Sculpt mode owns Escape while active. Do this before normal
         # editor/play-mode escape handling.
         if event.key() == Qt.Key_Escape and self.terrain_sculpt_active and not self.play_mode:
