@@ -105,7 +105,7 @@ class View2D(QWidget):
         
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._update_connection_animations)
-        self.animation_timer.start(16)
+        self.animation_timer.start(self.refresh_interval_ms())
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -119,9 +119,10 @@ class View2D(QWidget):
         self._nudge_idle_timer.timeout.connect(self._end_nudge_burst)
 
         # ---- Camera tracking for smooth viewcone updates ----
-        # Watches camera position/yaw/pitch and repaints 2D views only when changed
+        # Watches camera position/yaw/pitch and repaints 2D views only when
+        # changed, at EDITOR_2D_VIEWS_HZ (play paces them itself, slower).
         self._camera_tracking_timer = QTimer(self)
-        self._camera_tracking_timer.setInterval(16)  # ~60 FPS check
+        self._camera_tracking_timer.setInterval(self.refresh_interval_ms())
         self._camera_tracking_timer.timeout.connect(self._check_camera_changed)
         self._camera_tracking_timer.start()
         # Cached camera state for change detection
@@ -2884,7 +2885,7 @@ class View2D(QWidget):
         """
         Check if the 3D camera has moved/rotated since last frame.
         If so, schedule a repaint of this 2D view (only the camera indicator).
-        This runs at ~60 FPS but only repaints when the camera actually changes,
+        This runs at EDITOR_2D_VIEWS_HZ but only repaints when the camera changes,
         keeping CPU usage minimal while providing smooth viewcone updates.
         """
         if not self.isVisible() or self._paced_by_play():
@@ -3144,6 +3145,17 @@ class View2D(QWidget):
         painter.setBrush(QBrush(color))
         painter.drawPolygon(QPolygonF([p2, p_arrow1, p_arrow2]))
     
+    #: How often the 2D views' own timers (the camera cone, the animated
+    #: connection arrows) may repaint outside play. During play the 3D view
+    #: repaints them at ``QtGameView.PLAY_2D_VIEWS_HZ`` (10 Hz) instead.
+    EDITOR_2D_VIEWS_HZ = 30.0
+    #: The arrow animation's steps below were tuned at 60 ticks a second.
+    _ANIMATION_TUNED_HZ = 60.0
+
+    @classmethod
+    def refresh_interval_ms(cls):
+        return max(1, round(1000.0 / cls.EDITOR_2D_VIEWS_HZ))
+
     def _paced_by_play(self):
         """True while a game is played: the 3D view then repaints the 2D
         views itself, at ``QtGameView.PLAY_2D_VIEWS_HZ``, and this view's own
@@ -3156,8 +3168,10 @@ class View2D(QWidget):
         if (not self.isVisible() or not self.editor.show_logic_links
                 or self._paced_by_play()):
             return
-        animation_speed = 0.05
-        arrow_speed = 0.015  # Speed of traveling arrows
+        # Per tick, scaled so the arrows keep the speed they had at 60 Hz.
+        step = self._ANIMATION_TUNED_HZ / self.EDITOR_2D_VIEWS_HZ
+        animation_speed = 0.05 * step
+        arrow_speed = 0.015 * step  # Speed of traveling arrows
         arrow_spacing = 0.25  # Spacing between arrows (as fraction of line length)
         needs_update = False
         
