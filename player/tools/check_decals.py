@@ -48,6 +48,7 @@ def run(renderer, evidence=None):
             renderer.render(state)
             image = pixels()
             assert renderer.frame_stats.get('decals') == 2, renderer.frame_stats
+            assert not renderer.decals.errors, f'GL errors in the decal pass: {renderer.decals.errors}'
             assert GL.glGetError() == GL.GL_NO_ERROR
             if evidence:
                 Path(evidence).mkdir(parents=True, exist_ok=True)
@@ -69,5 +70,5 @@ def run(renderer, evidence=None):
             renderer.clear_scene()
             from engine import decal_textures
             decal_textures.use_source(None)
-    print('PASS: placed image and wet decals from the package, drawn through the '
-          'depth copy; culled when out of view')
+    print('PASS: placed image and wet decals from the package, drawn over the '
+          "target's depth texture with no GL errors; culled when out of view")

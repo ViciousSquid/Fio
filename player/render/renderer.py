@@ -619,7 +619,7 @@ class GLESRenderer:
             # and under water and the billboards drawn after it.
             if self.decals is not None:
                 decal_draws = self.decals.render(view, projection, eye, self._frame_decals,
-                                                 self.width, self.height)
+                                                 self.width, self.height, self._target)
             import time
             return self.water.render(view, projection, eye, visibility, env, self._lights,
                                      time.perf_counter()-self._start_time, self.width, self.height)

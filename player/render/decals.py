@@ -5,15 +5,17 @@ box matrices, ``(variant, opacity, kind, flags)`` and the boxes' inverses
 from ``engine.decal_table.DecalTable`` -- blood and the level's placed image
 and wet decals alike. This pass draws them with the shared ``decal.vert`` /
 ``decal.frag``: each box is an instance of the unit cube, and the fragment
-shader puts the surface under each pixel (read from a copy of the depth
-buffer) in the box's space and paints the decal's image where it lies inside.
+shader puts the surface under each pixel (read from the world target's depth
+texture) in the box's space and paints the decal's image where it lies inside.
 
 What differs from the desktop is only what a phone can afford, as with the
 player's water: wet decals darken the surface but reflect nothing (the
-screen-space reflection march is compiled out), and the depth the boxes are
-tested against is a blit of the world target's depth buffer -- the renderer
-draws into its offscreen target on any frame with a decal to show, since a
-window's own depth buffer cannot be copied portably.
+screen-space reflection march is compiled out). The renderer draws into its
+offscreen target (player.render.target) on any frame with a decal to show:
+its depth is a texture, and the pass draws through the target's colour-only
+framebuffer while sampling it -- no copy, and no format-matching depth blit
+(which an Android emulator's GL translator refused, leaving every decal
+unseen).
 
 The images are one texture array in ``engine.decal_textures`` order, read
 from whatever source the world gave that module (the played package, and
@@ -92,9 +94,10 @@ class PlayerDecals:
         self.layers = 0
         self.images_version = None
         self.ranges = (0.0, 1.0, 0.0, 1.0)
-        self.depth_fbo = self.depth_texture = None
         self.color_texture = None
         self.copy_size = None
+        #: GL errors the pass has reported (each once).
+        self.errors = set()
         self.uniforms = {}
         self.failed = False
         #: Kept between frames: the per-frame instance rows are written here.
@@ -186,25 +189,15 @@ class PlayerDecals:
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         return self.textures
 
-    def _copies(self, width, height):
-        """The depth (and colour, for wet decals) copy textures, sized."""
+    def _color_copy(self, width, height):
+        """The texture the wet pass reads the frame so far from, sized."""
         from OpenGL.raw.GL.VERSION.GL_1_1 import glTexImage2D
         gl = self.gl
-        if self.depth_fbo is None:
-            self.depth_fbo = gl.glGenFramebuffers(1)
-            self.depth_texture, self.color_texture = gl.glGenTextures(2)
+        if self.color_texture is None:
+            self.color_texture = gl.glGenTextures(1)
         if self.copy_size == (width, height):
             return
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.depth_texture)
-        # The world target's own format: a depth blit needs them to match.
-        glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH24_STENCIL8, width, height, 0,
-                     gl.GL_DEPTH_STENCIL, gl.GL_UNSIGNED_INT_24_8, None)
-        for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
-                             (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
-                             (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
-                             (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
-            gl.glTexParameteri(gl.GL_TEXTURE_2D, pname, value)
+        gl.glActiveTexture(gl.GL_TEXTURE2)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.color_texture)
         glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
                      gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
@@ -213,38 +206,14 @@ class PlayerDecals:
                              (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
                              (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
             gl.glTexParameteri(gl.GL_TEXTURE_2D, pname, value)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        previous = int(gl.glGetIntegerv(gl.GL_DRAW_FRAMEBUFFER_BINDING))
-        gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, self.depth_fbo)
-        gl.glFramebufferTexture2D(gl.GL_DRAW_FRAMEBUFFER, gl.GL_DEPTH_STENCIL_ATTACHMENT,
-                                  gl.GL_TEXTURE_2D, self.depth_texture, 0)
-        complete = gl.glCheckFramebufferStatus(gl.GL_DRAW_FRAMEBUFFER) == gl.GL_FRAMEBUFFER_COMPLETE
-        gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, previous)
-        if not complete:
-            raise RuntimeError('decal depth copy framebuffer is incomplete')
         self.copy_size = (width, height)
 
-    def _copy_depth(self, width, height):
-        """Blit the current world target's depth into the depth texture."""
-        gl = self.gl
-        self._copies(width, height)
-        draw = int(gl.glGetIntegerv(gl.GL_DRAW_FRAMEBUFFER_BINDING))
-        read = int(gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
-        gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, draw)
-        gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, self.depth_fbo)
-        try:
-            gl.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
-                                 gl.GL_DEPTH_BUFFER_BIT, gl.GL_NEAREST)
-        finally:
-            gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, draw)
-            gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, read)
-
-    def _copy_color(self, width, height):
+    def _copy_color(self, target, width, height):
         """Copy the frame so far, for the wet pass to darken."""
         gl = self.gl
+        self._color_copy(width, height)
         read = int(gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
-        gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER,
-                             int(gl.glGetIntegerv(gl.GL_DRAW_FRAMEBUFFER_BINDING)))
+        gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, target.color_fbo)
         gl.glActiveTexture(gl.GL_TEXTURE2)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.color_texture)
         try:
@@ -253,11 +222,12 @@ class PlayerDecals:
             gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, read)
 
     # -- the pass --------------------------------------------------------
-    def render(self, view, projection, eye, decals, width, height):
-        """Paint *decals* onto the frame drawn so far, in the world target
-        bound for drawing. Returns the boxes drawn."""
+    def render(self, view, projection, eye, decals, width, height, target=None):
+        """Paint *decals* onto the frame drawn so far in *target* (the
+        renderer's ScaledTarget, bound and *width* x *height*). Returns the
+        boxes drawn."""
         self.drawn = self.culled = 0
-        if self.failed or not has_decals(decals):
+        if self.failed or not has_decals(decals) or target is None or target.fbo is None:
             return 0
         models, params = np.asarray(decals[0], np.float32), np.asarray(decals[1], np.float32)
         clip = np.asarray(projection, dtype=np.float64) @ np.asarray(view, dtype=np.float64)
@@ -290,9 +260,12 @@ class PlayerDecals:
         instances[:, 16:20] = params[order]
         instances[:, 20:36] = inverses[order]
 
-        self._copy_depth(width, height)
+        gl.glGetError()                         # report only this pass's errors
         if wet_count:
-            self._copy_color(width, height)
+            self._copy_color(target, width, height)
+        # Draw through the colour-only framebuffer: the depth texture is
+        # sampled, so it must not be attached while the pass draws.
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target.color_fbo)
         u, prog = self.uniforms, self.program
         gl.glUseProgram(prog)
         gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glmath.column_major(projection))
@@ -310,7 +283,7 @@ class PlayerDecals:
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self.textures)
         gl.glUniform1i(u['decalTextures'], 0)
         gl.glActiveTexture(gl.GL_TEXTURE1)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.depth_texture)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, target.depth)
         gl.glUniform1i(u['sceneDepth'], 1)
         gl.glActiveTexture(gl.GL_TEXTURE2)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.color_texture)
@@ -325,7 +298,7 @@ class PlayerDecals:
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, instances.nbytes, instances)
         # The box's far faces, untested against depth: every covered pixel is
         # reached once, with the camera inside the box or not. The shader
-        # tests against the copy.
+        # tests against the depth texture.
         gl.glEnable(gl.GL_BLEND)
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glFrontFace(gl.GL_CCW)
@@ -352,17 +325,23 @@ class PlayerDecals:
             gl.glDepthMask(True)
             gl.glBindVertexArray(0)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-            for unit, target in ((2, gl.GL_TEXTURE_2D), (1, gl.GL_TEXTURE_2D),
-                                 (0, gl.GL_TEXTURE_2D_ARRAY)):
+            for unit, kind in ((2, gl.GL_TEXTURE_2D), (1, gl.GL_TEXTURE_2D),
+                               (0, gl.GL_TEXTURE_2D_ARRAY)):
                 gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-                gl.glBindTexture(target, 0)
+                gl.glBindTexture(kind, 0)
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target.fbo)
+        error = gl.glGetError()
+        if error and error not in self.errors:
+            # Said once an error: on a device, the log is the evidence.
+            self.errors.add(error)
+            print(f'[Decals] GL error 0x{int(error):04x} in the decal pass', flush=True)
         self.drawn = len(order)
         return self.drawn
 
     def forget(self):
         """The context was lost: its objects went with it."""
         self.program = self.vao = self.cube = self.instances = None
-        self.textures = self.depth_fbo = self.depth_texture = self.color_texture = None
+        self.textures = self.color_texture = None
         self.capacity = self.layers = 0
         self.images_version = self.copy_size = None
         self.failed = False
@@ -376,7 +355,6 @@ class PlayerDecals:
             gl.glDeleteProgram(self.program)
         if self.textures:
             gl.glDeleteTextures([self.textures])
-        if self.depth_fbo:
-            gl.glDeleteFramebuffers(1, [self.depth_fbo])
-            gl.glDeleteTextures([self.depth_texture, self.color_texture])
+        if self.color_texture:
+            gl.glDeleteTextures([self.color_texture])
         self.forget()

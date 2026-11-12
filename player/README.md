@@ -179,7 +179,7 @@ shader: each box projects its image onto whatever opaque surface lies inside
 it (brushes, models, terrain), under water and billboards. Boxes out of view
 or under a pixel across are culled before upload, and the rest are one
 instanced draw (two with wet decals). A frame with a decal on screen draws
-the world into its offscreen target, whose depth is copied once for the pass;
+the world into its offscreen target, whose depth texture the pass reads directly;
 a frame without one does no decal work. Wet decals darken the surface but
 reflect nothing (screen-space reflections are disabled, as for water). Placed
 decals read their images from the package's `textures/decals`; the blood
