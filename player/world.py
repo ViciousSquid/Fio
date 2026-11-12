@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import glm
@@ -18,6 +19,32 @@ from engine.threaded_game_state import ThreadedGameState
 from engine.items import ITEM_IDS
 from .input.state import (ACTION_JUMP, ACTION_CROUCH, ACTION_SPRINT, ACTION_USE, ACTION_FIRE,
                           ACTION_WEAPON)
+
+
+#: The blood decal images ship with the player (staged by
+#: player.tools.stage_runtime); a played package brings its own placed ones.
+BUNDLED_DECALS = Path(__file__).resolve().parent / 'runtime' / 'decals'
+#: Where a development checkout keeps them, for the desktop harness.
+PROJECT_DECALS = Path(__file__).resolve().parents[1] / 'assets' / 'textures' / 'decals'
+
+
+def decal_source(package=None):
+    """The decal images a world plays with (engine.decal_textures): the
+    bundled blood images, and every image in the package's
+    ``textures/decals`` folder, which wins a name both have."""
+    from engine.decal_textures import DecalSource
+    images = {}
+    folder = BUNDLED_DECALS if BUNDLED_DECALS.is_dir() else PROJECT_DECALS
+    if folder.is_dir():
+        for path in folder.glob('blood_*.png'):
+            images[path.name] = path.read_bytes
+    if package is not None:
+        for name in package.namelist():
+            head, _, base = name.rpartition('/')
+            if base.lower().endswith('.png') and (head == 'textures/decals'
+                                                   or head.endswith('/textures/decals')):
+                images[base] = (lambda member=name: package.read_asset(member))
+    return DecalSource(images)
 
 
 class WorldState(SimpleNamespace):
@@ -46,6 +73,10 @@ class PlayerWorld:
         self._closed = False
         definitions = ItemDefinitions()
         definitions.load(data.get('items'))
+        # Before the logic side looks up a placed decal's image, so its
+        # layers are the renderer's.
+        from engine import decal_textures
+        decal_textures.use_source(decal_source(package))
         self.state = WorldState(data, brushes=[], things=[], world_epoch=0,
                                 item_definitions=definitions, view_filters={})
         self.game_state = ThreadedGameState()
@@ -155,6 +186,20 @@ class PlayerWorld:
             self.logic.monster_ai.update(self.STEP)
             self._elapsed -= self.STEP
         return [self.player.pos.x, self.player.pos.y + self.player.view_height, self.player.pos.z]
+
+    def decal_frame(self):
+        """The decals to draw now -- the level's placed ones and live blood --
+        as the desktop's frame projection publishes them (LogicRender): the
+        player builds its frame from the logic tables itself. Only the
+        placed decals the change journal names are remade."""
+        import time
+        combat = self.logic.combat_runtime
+        blood = getattr(combat, 'blood', None)
+        if blood is None:
+            return None
+        blood.place(self.state.things, show_selection=False,
+                    epoch=getattr(self.state, 'world_epoch', None))
+        return blood.frame(time.perf_counter(), combat.BLOOD_LIFETIME, combat.BLOOD_FADE_TIME)
 
     def owned_weapons(self):
         """Weapon slots the player holds, in slot order (desktop keys 1-4)."""

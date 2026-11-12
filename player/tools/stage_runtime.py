@@ -91,6 +91,9 @@ def prepare_runtime(private, project=None):
     # Renderer-owned textures match desktop without depending on map assets.
     copy_source('assets/noise_3d.bin', 'player/runtime/noise_3d.bin')
     copy_source('assets/textures/water_normal.png', 'player/runtime/water_normal.png')
+    # Blood decals are the engine's, not a map's: they ship with the player.
+    for path in sorted((project / 'assets/textures/decals').glob('blood_*.png')):
+        copy_source(f'assets/textures/decals/{path.name}', f'player/runtime/decals/{path.name}')
     for source, digest in sources.items():
         if hashlib.sha256((project / source).read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Project source changed during staging: {source}')

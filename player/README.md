@@ -174,6 +174,17 @@ keeps geometry costs low. Depth-based absorption, caustics and screen-space
 reflections are disabled in the player. The normal map is a renderer-owned
 resource copied into the private Android runtime, independent of map assets.
 
+Decals -- placed image and wet decals, and blood -- use the shared decal
+shader: each box projects its image onto whatever opaque surface lies inside
+it (brushes, models, terrain), under water and billboards. Boxes out of view
+or under a pixel across are culled before upload, and the rest are one
+instanced draw (two with wet decals). A frame with a decal on screen draws
+the world into its offscreen target, whose depth is copied once for the pass;
+a frame without one does no decal work. Wet decals darken the surface but
+reflect nothing (screen-space reflections are disabled, as for water). Placed
+decals read their images from the package's `textures/decals`; the blood
+images ship in the private Android runtime.
+
 Portal virtual views and advanced desktop glass passes remain absent.
 Shared simulation and matching lighting formulas do not establish complete
 visual parity or equivalent performance on every device. See

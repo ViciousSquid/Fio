@@ -18,17 +18,69 @@ DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
 
 _lock = threading.Lock()
 _state = {'version': 0, 'names': None, 'where': None}
+#: A source set by :func:`use_source` (the Android player: its images come
+#: from the played package, not a project's assets folder), or None.
+_source = {'source': None}
+
+
+class DecalSource:
+    """Decal images that are not in a project's ``assets`` folder: *images*
+    maps each file name to a callable returning its bytes (or None)."""
+
+    def __init__(self, images):
+        self.images = dict(images)
+
+    def names(self):
+        return tuple(sorted((n for n in self.images if n.lower().endswith('.png')),
+                            key=str.casefold))
+
+    def read(self, name):
+        reader = self.images.get(name)
+        return reader() if reader is not None else None
+
+
+def use_source(source):
+    """Take the decal images from *source* (a :class:`DecalSource`) instead
+    of ``assets/textures/decals``; None goes back to the folder. The logic
+    side (a placed decal's layer, blood's ranges) and the renderer (the
+    texture array) both read the list from here, so they agree."""
+    with _lock:
+        _source['source'] = source
+    return refresh()
+
+
+def read_image(name):
+    """The bytes of decal image *name*, from the source or the folder; None
+    when it cannot be read."""
+    source = _source['source']
+    if source is not None:
+        return source.read(name)
+    from engine.asset_archives import asset_source
+    try:
+        found = asset_source(os.path.join(DECAL_FOLDER, name))
+        if hasattr(found, 'read'):
+            return found.read()
+        with open(found, 'rb') as handle:
+            return handle.read()
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def _where():
     """The project the list belongs to: the asset index's root and the
-    working directory a relative asset path is read from."""
+    working directory a relative asset path is read from (or the source)."""
     import os
+    source = _source['source']
+    if source is not None:
+        return ('source', id(source))
     from engine import asset_archives
     return (asset_archives._state.get('root'), os.getcwd())
 
 
 def _read():
+    source = _source['source']
+    if source is not None:
+        return source.names()
     from engine.asset_archives import asset_listdir
     return tuple(sorted((n for n in asset_listdir(DECAL_FOLDER)
                          if n.lower().endswith('.png')), key=str.casefold))

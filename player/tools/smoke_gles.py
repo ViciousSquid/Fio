@@ -97,6 +97,8 @@ def main():
         check_mobile(renderer)
         from player.tools.check_water import run as check_water
         check_water(renderer, args.evidence, recreate_context)
+        from player.tools.check_decals import run as check_decals
+        check_decals(renderer, args.evidence)
         from player.world import PlayerWorld
         from player.render import glmath
         world = PlayerWorld({'terrain_data': {'enabled': True, 'solid': True, 'use_textures': False,

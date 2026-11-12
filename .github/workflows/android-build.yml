@@ -57,6 +57,8 @@ jobs:
         run: |
           python -m player.tools.contract_fixture universal.fiopak
           python -m player.tools.export_showcase _SHOWCASE.fiopak
+          # Placed image and wet decals, played on the device after _SHOWCASE.
+          python -m player.tools.export_showcase Wet_Decal_Test.fiopak --map Wet_Decal_Test
       - name: Stage and test the Android-private engine
         env:
           PYOPENGL_PLATFORM: egl
@@ -67,10 +69,13 @@ jobs:
           python -m pytest player/tests -q
           python -m player.tools.verify_package "$GITHUB_WORKSPACE/universal.fiopak"
           python -m player.tools.verify_package "$GITHUB_WORKSPACE/_SHOWCASE.fiopak"
+          python -m player.tools.verify_package "$GITHUB_WORKSPACE/Wet_Decal_Test.fiopak"
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-showcase-world
-          path: _SHOWCASE.fiopak
+          path: |
+            _SHOWCASE.fiopak
+            Wet_Decal_Test.fiopak
           if-no-files-found: error
       - name: Mesa desktop OpenGL and Android GLES checks
         env:
@@ -253,7 +258,9 @@ jobs:
           profile: pixel
           disable-animations: true
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader -feature -Vulkan -memory 3072 -cores 2 -camera-back none -camera-front none
-          script: python -m player.tools.test_device player/bin/*debug*.apk acceptance-world/_SHOWCASE.fiopak --output fio-device-results
+          script: |
+            python -m player.tools.test_device player/bin/*debug*.apk acceptance-world/_SHOWCASE.fiopak --output fio-device-results
+            python -m player.tools.test_device player/bin/*debug*.apk acceptance-world/Wet_Decal_Test.fiopak --skip-install --output fio-device-results/wet-decals
       - name: Log the device evidence for review
         # Artifact downloads can be unavailable to reviewers; the log is not.
         # The Fio process's own log lines, then every screenshot as a small
@@ -266,20 +273,19 @@ jobs:
           from pathlib import Path
           from PIL import Image
           root = Path('fio-device-results')
-          log = root / 'fio-logcat.txt'
-          if log.exists():
+          for log in sorted(root.rglob('fio-logcat.txt')):
               lines = log.read_text(encoding='utf-8', errors='replace').splitlines()
               keep = [l for l in lines if 'python' in l.lower() or 'Fio' in l
                       or 'Traceback' in l or 'Error' in l]
-              print('::group::Fio log (last 400 relevant lines)')
+              print(f'::group::{log.relative_to(root)} (last 400 relevant lines)')
               print('\n'.join(keep[-400:]))
               print('::endgroup::')
-          for path in sorted(root.glob('*.png')):
+          for path in sorted(root.rglob('*.png')):
               image = Image.open(path).convert('RGB')
               image.thumbnail((960, 960))
               buffer = io.BytesIO()
               image.save(buffer, 'JPEG', quality=70, optimize=True)
-              print('FIO_DEVICE_IMAGE', path.name,
+              print('FIO_DEVICE_IMAGE', path.relative_to(root).as_posix().replace('/', '--'),
                     base64.b64encode(buffer.getvalue()).decode(), flush=True)
           PY
       - uses: actions/upload-artifact@v7

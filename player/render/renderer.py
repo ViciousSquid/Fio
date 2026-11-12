@@ -58,6 +58,9 @@ class GLESRenderer:
         self.light_buffer = None
         self.fog_volumes = None
         self.water = None
+        self.decals = None
+        #: The decals published for the frame being drawn (render()).
+        self._frame_decals = None
         from engine.logic_render import LogicRender
         self._fallback_runtime = LogicRender(None)
         self._fallback_runtime.view_distance.distance = self.quality.view_distance
@@ -117,6 +120,10 @@ class GLESRenderer:
         from .water import WaterSurfaces
         self.water = WaterSurfaces(gl, self.gles,
                                    subdivisions=8 if self.quality.name == 'mobile' else 16)
+        from .decals import PlayerDecals
+        if self.decals:
+            self.decals.forget()        # a lost context's names are never reused
+        self.decals = PlayerDecals(gl, self.gles)
 
         if self._scene is not None:
             self._upload_scene()
@@ -182,9 +189,17 @@ class GLESRenderer:
         scale = self.adaptive.scale if self.quality.adaptive else self.quality.render_scale
         scaled = self._scene is not None and scale < .999
         self.width, self.height = self.panel_width, self.panel_height
+        # Decals read a copy of the world's depth, which only the offscreen
+        # target can give portably: a frame with any draws through it.
+        from .decals import has_decals
+        world = self._scene.get('world') if self._scene else None
+        frame = getattr(world, 'decal_frame', None)
+        self._frame_decals = frame() if frame else None
+        offscreen = scaled or has_decals(self._frame_decals)
         if scaled:
             self.adaptive.scale = scale
             self.width, self.height = self.adaptive.render_size(self.panel_width, self.panel_height)
+        if offscreen:
             self._target.begin(self.width, self.height)
         else:
             gl.glViewport(0, 0, self.width, self.height)
@@ -201,7 +216,7 @@ class GLESRenderer:
             self.render_scene(render_state)
         else:
             self._draw_reference_triangle()
-        if scaled:
+        if offscreen:
             self._target.present(self.panel_width, self.panel_height)
         self.frame_stats.update(render_width=self.width, render_height=self.height,
                                 render_scale=scale, quality=self.quality.name)
@@ -267,6 +282,8 @@ class GLESRenderer:
             self.fog_volumes.close()
         if self.water:
             self.water.close()
+        if self.decals:
+            self.decals.close()
         gl = _gl()
         for vao in (self._triangle_vao, self._ui_vao, self._billboard_vao, self.overlay._disc_vao):
             if vao:
@@ -582,8 +599,10 @@ class GLESRenderer:
         max_batch_lights = 0
         surfaces_drawn = False
         water_draws = 0
+        decal_draws = 0
 
         def draw_surfaces():
+            nonlocal decal_draws
             # Terrain belongs in the scene capture; transparent billboards
             # follow water so foreground effects remain in front of it.
             if world and world.terrain and self._terrain_gl is not None:
@@ -596,6 +615,11 @@ class GLESRenderer:
                     world.terrain.publish(),
                     glm.mat4(*projection.T.flatten()), glm.mat4(*view.T.flatten()), camera,
                     frustum_planes=visibility.planes, env_uniforms=env)
+            # Decals lie on everything opaque -- brushes, models, terrain --
+            # and under water and the billboards drawn after it.
+            if self.decals is not None:
+                decal_draws = self.decals.render(view, projection, eye, self._frame_decals,
+                                                 self.width, self.height)
             import time
             return self.water.render(view, projection, eye, visibility, env, self._lights,
                                      time.perf_counter()-self._start_time, self.width, self.height)
@@ -713,6 +737,8 @@ class GLESRenderer:
         self.frame_stats = {'drawn_batches': drawn, 'culled_batches': culled,
                             'billboards': billboards,
                             'water_brushes': water_draws,
+                            'decals': decal_draws,
+                            'decals_culled': self.decals.culled if self.decals else 0,
                             'view_distance': distance.effective_distance,
                             'fog_start': env['uFogStart'], 'fog_end': env['uFogEnd'],
                             'lights': len(self._lights), 'shadow_lights': len(shadow_indices),

@@ -47,13 +47,19 @@ version 4 and play in both.
   `wet_full.png` to make all of it wet. A decal is a row of the same table
   blood uses, drawn by the same pass. Samples: `grime_01`, `scorch_01`,
   `wet_puddle_01`, `wet_damp_01`, `wet_full`; try them in
-  `maps/Wet_Decal_Test.json`.
+  `maps/Wet_Decal_Test.json`. The **Android player** draws them too -- placed
+  image and wet decals from the package, and blood -- with the same shader;
+  wet decals darken without reflecting, as its water does.
 - **Reflections fade out with distance** -- water and wet decals -- and are
   not traced at all beyond 1536 units; `reflections 0|1` turns every
   screen-space reflection off or on, and `decalfade <distance>` sets how far
   wet decals reflect (0: never). **Portals** fade their view out over the
   last quarter of a new **Fade Distance** property (default 2048, the old
   fixed cut-off) instead of popping, and are not rendered beyond it.
+- **Edit ▸ Colours**: a Grid tab (major, minor and background) and a Windows
+  tab (the title bar of SysMon, the pause menu and the other windows in the 3D
+  view; the dragged title bar follows it). Every colour is saved to
+  `settings.ini`.
 - **Monster Debug window** (F7 in play, or `monsterdebug [on|off]`): a
   floating, always-on-top window with Perception, Combat and Patrol tabs, live
   from the monster AI, and switches for the sight-line and hitbox overlays.
