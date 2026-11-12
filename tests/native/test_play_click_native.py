@@ -189,16 +189,21 @@ def _post_macos_mouse(events, click_state_field=None):
         cf.CFRelease(source)
 
 
-def warm_up_input(app, window):
+def warm_up_input(app, view):
     """macOS spends an inactive app's first click on bringing it to the front
     (seen on the runner: the first click never arrived, every later one did,
-    and a warm-up mouse move did not help). Spend it before Play, on the
-    status bar, where a click does nothing."""
+    and a warm-up mouse move did not help). Spend it before Play, in the
+    middle of the 3D view, where a plain click in the editor does nothing --
+    not on the status bar, at the foot of the screen, where it hit the Dock."""
     if platform_name() == 'cocoa':
-        bar = window.statusBar()
-        move_pointer(bar, bar.rect().center())
-        os_click()
-        pump(app, 0.5)
+        click_editor_view(app, view)
+
+
+def click_editor_view(app, view):
+    """A real click in the middle of the 3D view, before Play: inert there."""
+    move_pointer(view, view.rect().center())
+    os_click()
+    pump(app, 0.5)
 
 
 class PressCounter(QObject):
@@ -287,13 +292,11 @@ def armed(fio_session, qt_app):
             f'the editor did not go full screen: {window.size()} on {screen}'
     window.raise_()
     window.activateWindow()
-    warm_up_input(qt_app, window)
+    warm_up_input(qt_app, session.view)
     if not pump_until(qt_app, window.isActiveWindow, 5.0):
         # Windows refuses activation to a process that has not had input:
-        # a real click on the status bar (inert) gives it some.
-        bar = window.statusBar()
-        move_pointer(bar, bar.rect().center())
-        os_click()
+        # a real click in the editor's 3D view (inert before Play) gives it some.
+        click_editor_view(qt_app, session.view)
         pump_until(qt_app, window.isActiveWindow, 5.0)
     assert window.isActiveWindow(), 'the editor window could not be made active'
 
