@@ -36,12 +36,16 @@ different kinds of extension:
 
 | Plugin | Kind | What it demonstrates |
 |--------|------|----------------------|
-| [`tidy`](tidy/) | **Gameplay** | Pick-up-and-put-away games (books back on the shelf, tidy the museum, sort the warehouse). Entities, I/O ports, a carry/place runtime, a HUD goal. |
-| [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming that keeps only the area around the player active in maps of hundreds of thousands of brushes. Uses the event bus, cross-plugin services, and host wrapping rather than adding entities to place. See its own [README](bigworld/README.md). |
+| [`tidy`](tidy/) | **Gameplay** | Put core Props away into categorized receptacles and goals. Demonstrates entity registration, extra property fields, extended core I/O, runtime input handlers and a HUD goal. See its [README](tidy/README.md). |
+| [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming and simulation tiers for large maps. Demonstrates a singleton settings entity, property schemas, engine events, shared services and runtime integration. See its [README](bigworld/README.md). |
+| [`deathmatch`](deathmatch/) | **Game mode** | Deathmatch, Team Deathmatch and Capture the Flag with bots, LAN play and spectator controls. Demonstrates entity properties and I/O, singleton settings, editor and pause-menu actions, console commands, HUD overlays and combat hooks. See its [README](deathmatch/README.md). |
 
-Between them they exercise nearly the whole API: entity registration and I/O
-(`tidy`), and the open-ended [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam)
-extension seam (`bigworld`).
+Together, these three plugins exercise nearly all of Fio's plugin API, from
+entity registration, property extensions and I/O to editor actions, console
+commands, play lifecycle hooks and HUDs. They also demonstrate engine events,
+shared services and runtime integration through the open-ended
+[`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam) extension seam.
+Use them as working examples alongside the [`API.md`](API.md) reference.
 
 ---
 
@@ -258,9 +262,11 @@ are always shown).
   gameplay they don't use. When a level whose `things` reference the plugin's
   entity types is loaded, the manager turns it on automatically
   (`PluginManager.auto_enable_for_map`, wired into level loading in the editor
-  and the standalone player). Both example plugins ship this way: `tidy` stays
-  off until you open a map like `maps/Tidy_Test.json`, and `bigworld` until a map
-  contains a `BigWorldSettings` entity. The flip is symmetric — clearing the
+  and the standalone player). All three example plugins ship this way: `tidy`
+  activates for its receptacles, goals or core Props with a `tidy_category`
+  (as in `plugins/tidy/Tidy_Test.json`), `bigworld` for a `BigWorldSettings`
+  entity, and `deathmatch` for its arena entities. A match requires a
+  `DeathmatchSettings` entity. The flip is symmetric — clearing the
   scene (**File ▸ New**, or loading a map that doesn't use the plugin) reverts a
   level-driven auto-enable via `PluginManager.disable_auto_enabled`, so an empty
   map starts clean. This is a runtime, per-session flip: it never rewrites the
@@ -302,7 +308,7 @@ manifest. This removes executable-code loading from world containers entirely.
 
 ## Running plugins outside the editor
 
-Plugin gameplay runs in **both** hosts:
+The plugin lifecycle is supported in **both** hosts:
 
 - **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
   through the native plugin manager hooks.
@@ -311,7 +317,12 @@ Plugin gameplay runs in **both** hosts:
   entity instances from the map, and drives the same lifecycle/tick from the
   player's frame loop against a camera→player bridge (USE = interact).
 
-To make this work everywhere, the plugin runtime is **dependency-free**: no
+`deathmatch` currently starts matches only in desktop editor Play mode. It
+loads in the standalone player/Android bridge, but that host lacks the world
+combat services required to run a match; see its
+[compatibility notes](deathmatch/README.md#compatibility-and-limits).
+
+The portable `tidy` runtime is **dependency-free**: no
 PyGLM (plain-Python vector math) and no PyQt. Plugin entities normally subclass
 the editor's `Thing`, but when the editor package is absent (the player)
 they fall back to [`entitybase.py`](entitybase.py), a tiny PyQt-free base. So the
@@ -347,6 +358,10 @@ python plugins/tidy/tests/test_player.py                                # player
 
 # Big World plugin (runtime scalability)
 python -m plugins.bigworld.tests.test_bigworld
+
+# Deathmatch plugin (combat, bots, teams, LAN and spectator controls)
+SDL_AUDIODRIVER=dummy QT_QPA_PLATFORM=offscreen PYOPENGL_PLATFORM=egl \
+  python -m pytest plugins/deathmatch/tests -q
 ```
 
 ---
@@ -363,5 +378,6 @@ python -m plugins.bigworld.tests.test_bigworld
 | Use the open-ended engine seam | [`host.py`](host.py) / [API §PluginHost](API.md#pluginhost--the-open-ended-engine-seam) |
 | Read a complete gameplay plugin | [`tidy/`](tidy/) |
 | Read a runtime-layer plugin | [`bigworld/README.md`](bigworld/README.md) |
+| Build an arena game mode with bots, teams and LAN play | [`deathmatch/README.md`](deathmatch/README.md) |
 | Understand editor wiring | `editor/editor_state.py`, `editor/view_2d.py`, `editor/ui.py`, `editor/property_editor.py` |
 | Write for the PyQt-free player | [`entitybase.py`](entitybase.py) |
