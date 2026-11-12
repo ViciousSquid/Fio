@@ -86,6 +86,10 @@ jobs:
           if (-not $gl) { throw 'The selected Mesa archive has no 64-bit opengl32.dll' }
           $python = Split-Path (Get-Command python).Source
           Copy-Item "$($gl.DirectoryName)\*.dll" $python -Force
+          # The runner's desktop is small; the editor and its Play button must
+          # fit on it for the click to land there.
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force }
+          catch { Write-Host "Display mode not changed: $_" }
       - name: Linux - window system and input tools
         if: startsWith(matrix.platform.id, 'linux')
         run: |
@@ -100,11 +104,14 @@ jobs:
 
       # -- the test, on the platform's own window system and input ------------
       - name: Left click fires the equipped weapon
+        timeout-minutes: 20
         run: |
           log="$RUNNER_TEMP/native-click.log"
           run_tests() {
             set +e
-            python -m pytest tests/native -v -s -p no:cacheprovider 2>&1 | tee "$log"
+            # A test still running after 5 minutes dumps every thread's stack.
+            python -m pytest tests/native -v -s -p no:cacheprovider \
+              -o faulthandler_timeout=300 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
           }
