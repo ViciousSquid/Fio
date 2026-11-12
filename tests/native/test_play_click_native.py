@@ -26,7 +26,23 @@ import pytest
 
 pytest.importorskip('PyQt5')
 from PyQt5.QtCore import QEvent, QObject, QPoint, Qt
-from PyQt5.QtGui import QCursor, QGuiApplication
+from PyQt5.QtGui import QCursor, QGuiApplication, QSurfaceFormat
+
+# The editor's OpenGL format, as main.py sets it before the QApplication
+# exists: every context Qt makes (its shared one included) must be 3.3 core.
+# Without it macOS cannot share the 3D view's context with Qt's ("Could not
+# create NSOpenGLContext with shared context") and the first frame stalls.
+# No vsync: a headless runner's display may never come round to the swap.
+from PyQt5.QtWidgets import QApplication
+
+if QApplication.instance() is None:
+    _format = QSurfaceFormat()
+    _format.setVersion(3, 3)
+    _format.setProfile(QSurfaceFormat.CoreProfile)
+    _format.setDepthBufferSize(24)
+    _format.setStencilBufferSize(8)
+    _format.setSwapInterval(0)
+    QSurfaceFormat.setDefaultFormat(_format)
 
 pytestmark = [
     pytest.mark.qt,
