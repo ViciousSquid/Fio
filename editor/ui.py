@@ -1073,14 +1073,6 @@ class Ui_MainWindow(object):
         terrain_btn.clicked.connect(lambda: terrain_menu.popup(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
 
-        MainWindow.decal_btn = make_btn(
-            "assets/decal.png",
-            "Decal Tool\n"
-            "Click a surface in the 3D view to place the image selected in the\n"
-            "Asset Browser (textures/decals); Shift-click to select, drag or nudge",
-            on_click=MainWindow.toggle_decal_tool,
-            checkable=True, checked=False, bottom_color=group_3_color,
-            toggle_strip=True)
 
         MainWindow.visgroups_btn = make_btn(
             "assets/eye.png", "Visgroups & Cordon",

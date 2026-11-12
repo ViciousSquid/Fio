@@ -2,6 +2,8 @@
 
 It works the way terrain stamps do:
 
+* The Asset Browser's **DECAL** button (Textures tab) turns it on and shows
+  ``textures/decals``; clicking it again goes back to the folder you were in.
 * **Left-click** places the image selected in the Asset Browser (any image in
   ``textures/decals``) on the surface under the cursor -- a brush, the
   terrain, a model -- facing it.
@@ -120,13 +122,18 @@ class DecalTool:
             self.view.setCursor(Qt.ArrowCursor)
             if self._panel is not None:
                 self._panel.hide()
-        # The Tools menu item and the toolbar button show the tool's state.
-        for name in ('decal_tool_action', 'decal_btn'):
-            control = getattr(self.editor, name, None)
-            if control is not None and control.isChecked() != active:
-                control.blockSignals(True)
-                control.setChecked(active)
-                control.blockSignals(False)
+        # The Tools menu item shows the tool's state; the Asset Browser's
+        # DECAL button too, and its Textures tab shows textures/decals while
+        # the tool is on (and goes back to its folder after).
+        action = getattr(self.editor, 'decal_tool_action', None)
+        if action is not None and action.isChecked() != active:
+            action.blockSignals(True)
+            action.setChecked(active)
+            action.blockSignals(False)
+        browser = getattr(self.editor, 'asset_browser', None)
+        textures = getattr(browser, 'tab_textures', None)
+        if textures is not None and hasattr(textures, 'show_decal_folder'):
+            textures.show_decal_folder(active)
         self.view.update()
 
     # -- where the cursor is -------------------------------------------------

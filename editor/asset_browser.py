@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QMainWindow, QPushButton, QTreeView,
                              QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem, QMenu, QActionGroup)
-from PyQt5.QtCore import Qt, QDir, QModelIndex, QRect, QPointF, QTimer, QFileSystemWatcher
+from PyQt5.QtCore import Qt, QDir, QModelIndex, QRect, QPointF, QSize, QTimer, QFileSystemWatcher
 from PyQt5.QtGui import (QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon, QImage,
                          QImageReader, QStandardItem, QStandardItemModel)
 from engine.glb_loader import render_glb_thumbnail
@@ -614,6 +614,9 @@ class AssetBrowserTab(QWidget):
         self.add_btn = None
         self.inspector_btn = None
         self.tint_btn = None
+        self.decal_btn = None
+        #: The folder shown before the Decal tool switched to textures/decals.
+        self._folder_before_decals = None
 
         # Create a container widget for buttons to allow stretching.
         # The texture tab keeps INSPECTOR on the left and Tint brush on the
@@ -669,6 +672,21 @@ class AssetBrowserTab(QWidget):
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
             button_layout.addWidget(self.tint_btn)
+
+            # The Decal tool: shows textures/decals while it is on, and goes
+            # back to the folder you were in when it is turned off.
+            self.decal_btn = QPushButton(load_icon("assets/decal_button.png"), "")
+            self.decal_btn.setIconSize(QSize(48, 32))
+            self.decal_btn.setFixedHeight(36)
+            self.decal_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.decal_btn.setCheckable(True)
+            self.decal_btn.setToolTip(
+                "Decal Tool\n"
+                "Shows textures/decals: pick an image, then click a surface in the\n"
+                "3D view to place it. Shift-click a decal to select it, drag or\n"
+                "nudge it. Click again to go back to the folder you were in.")
+            self.decal_btn.clicked.connect(self.on_decal_clicked)
+            button_layout.addWidget(self.decal_btn)
 
         if self.is_model_tab:
             # "Add to Scene" is this tab's primary action and stays centred.
@@ -1055,6 +1073,39 @@ class AssetBrowserTab(QWidget):
     def on_inspector_clicked(self):
         """Open (or close) the Surface Inspector."""
         self.editor.toggle_surface_inspector()
+
+    def on_decal_clicked(self, checked):
+        """The DECAL button: the Decal tool on (and textures/decals shown) or off."""
+        if self.editor is not None and hasattr(self.editor, 'toggle_decal_tool'):
+            self.editor.toggle_decal_tool(bool(checked))
+        else:
+            self.show_decal_folder(bool(checked))
+
+    def decals_path(self):
+        return os.path.join(self.root_path, 'decals')
+
+    def show_decal_folder(self, on):
+        """Show textures/decals (remembering the folder shown before), or go
+        back to that folder. The DECAL button follows."""
+        if self.decal_btn is not None and self.decal_btn.isChecked() != bool(on):
+            self.decal_btn.blockSignals(True)
+            self.decal_btn.setChecked(bool(on))
+            self.decal_btn.blockSignals(False)
+        decals = os.path.abspath(self.decals_path())
+        if on:
+            if os.path.abspath(self.current_asset_folder) != decals:
+                self._folder_before_decals = self.current_asset_folder
+            self._show_folder(decals)
+        elif self._folder_before_decals is not None:
+            previous, self._folder_before_decals = self._folder_before_decals, None
+            if os.path.abspath(self.current_asset_folder) == decals:
+                self._show_folder(previous)
+
+    def _show_folder(self, path):
+        self.load_directory(path)
+        index = self.dir_model.index(path)
+        if index.isValid():
+            self.tree_view.setCurrentIndex(index)
 
     def on_tint_clicked(self):
         """Tint the selected brush."""

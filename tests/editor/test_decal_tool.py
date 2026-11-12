@@ -40,7 +40,7 @@ def decals(main_window):
 
 
 def test_click_places_shift_click_selects_and_escape_clears_then_leaves(main_window, tool):
-    assert tool.active and main_window.decal_btn.isChecked()
+    assert tool.active and main_window.asset_browser.tab_textures.decal_btn.isChecked()
     assert main_window.decal_tool_action.isChecked()
     tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
     tool.settings.update(decal_type='wet', width=300.0, height=200.0)
@@ -61,7 +61,8 @@ def test_click_places_shift_click_selects_and_escape_clears_then_leaves(main_win
     tool.escape()
     assert tool.selected() == [] and tool.active
     tool.escape()
-    assert not tool.active and not main_window.decal_btn.isChecked()
+    assert not tool.active
+    assert not main_window.asset_browser.tab_textures.decal_btn.isChecked()
 
 
 def test_dragging_moves_the_selection_onto_a_wall_as_one_undo_step(main_window, tool):
@@ -130,4 +131,26 @@ def test_the_menu_item_and_button_turn_it_off_and_clear_the_selection(main_windo
     press(tool, 10, 10)
     main_window.toggle_decal_tool(False)
     assert not tool.active and tool.selected() == []
-    assert not main_window.decal_btn.isChecked()
+    assert not main_window.asset_browser.tab_textures.decal_btn.isChecked()
+
+
+def test_the_decal_button_shows_textures_decals_and_goes_back_after(main_window, monkeypatch):
+    import os
+    tab = main_window.asset_browser.tab_textures
+    tool = main_window.view_3d.decal_tool
+    tool.set_active(False)
+    assert not hasattr(main_window, 'decal_btn')            # not on the toolbar any more
+    start = os.path.join(tab.root_path, 'Dev')
+    tab.load_directory(start)
+    tab.decal_btn.click()
+    assert tool.active and tab.decal_btn.isChecked()
+    assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(tab.decals_path())
+    assert 'wet_full.png' in [item.name_text for item in tab.items]
+    tab.decal_btn.click()                                   # again: back where we were
+    assert not tool.active and not tab.decal_btn.isChecked()
+    assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(start)
+    # Escape out of the tool goes back too.
+    tab.decal_btn.click()
+    tool.escape()
+    assert os.path.abspath(tab.current_asset_folder) == os.path.abspath(start)
+    assert not tab.decal_btn.isChecked()
