@@ -513,6 +513,9 @@ class AssetItem(QWidget):
 
 
 class AssetBrowserTab(QWidget):
+    #: The Textures tab's Tint and DECAL buttons: both this size.
+    SIDE_BUTTON_SIZE = QSize(60, 36)
+
     """
     A single tab content for the Asset Browser (e.g., Textures or Models).
     """
@@ -666,8 +669,10 @@ class AssetBrowserTab(QWidget):
 
             button_layout.addStretch()
 
+            # Tint and DECAL are one size, side by side.
             self.tint_btn = QPushButton(load_icon("assets/tint.png"), "")
-            self.tint_btn.setFixedHeight(36)
+            self.tint_btn.setIconSize(QSize(28, 28))
+            self.tint_btn.setFixedSize(self.SIDE_BUTTON_SIZE)
             self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
@@ -677,7 +682,7 @@ class AssetBrowserTab(QWidget):
             # back to the folder you were in when it is turned off.
             self.decal_btn = QPushButton(load_icon("assets/decal_button.png"), "")
             self.decal_btn.setIconSize(QSize(48, 32))
-            self.decal_btn.setFixedHeight(36)
+            self.decal_btn.setFixedSize(self.SIDE_BUTTON_SIZE)
             self.decal_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.decal_btn.setCheckable(True)
             self.decal_btn.setToolTip(

@@ -140,6 +140,7 @@ def test_the_decal_button_shows_textures_decals_and_goes_back_after(main_window,
     tool = main_window.view_3d.decal_tool
     tool.set_active(False)
     assert not hasattr(main_window, 'decal_btn')            # not on the toolbar any more
+    assert tab.decal_btn.size() == tab.tint_btn.size()      # side by side, one size
     start = os.path.join(tab.root_path, 'Dev')
     tab.load_directory(start)
     tab.decal_btn.click()
