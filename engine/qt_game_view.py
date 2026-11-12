@@ -107,6 +107,10 @@ class QtGameView(QOpenGLWidget):
     _logic_tick_fault_signal = pyqtSignal(str)
     #: Weapon slot keys in Play: slot n holds item ITEM_IDS[n - 1].
     _SLOT_KEYS = {Qt.Key_1: 1, Qt.Key_2: 2, Qt.Key_3: 3, Qt.Key_4: 4}
+    #: macOS: frames to wait for the capture re-centre to land before the
+    #: cursor is detached anyway (about half a second).
+    _MAC_CENTRE_MAX_TRIES = 30
+
     def __init__(self, editor):
         super().__init__(editor)
         # The view's delegated responsibilities (engine/view_*.py), made first:
@@ -208,6 +212,9 @@ class QtGameView(QOpenGLWidget):
         #: cursor is detached from the mouse (see _poll_mouse_look_macos).
         self._mac_mouse = None
         self._mac_cursor_detached = False
+        #: macOS: frames spent waiting for the re-centre to land before the
+        #: cursor is detached (see _poll_mouse_look_macos).
+        self._mac_centre_tries = 0
         if sys.platform == 'darwin':
             import macos_app
             self._mac_mouse = macos_app.mouse_movement_filter()
@@ -650,6 +657,7 @@ class QtGameView(QOpenGLWidget):
     def closeEvent(self, event):
         if not self.play_mode:
             self.stop_editor_mouselook()
+        self._release_play_mouse_grab()
         self._attach_mac_cursor()
         self._stop_logic_thread()
         super().closeEvent(event)
@@ -1408,6 +1416,8 @@ class QtGameView(QOpenGLWidget):
             while QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             self.setCursor(Qt.ArrowCursor)
+            self._release_play_mouse_grab()
+            self._attach_mac_cursor()
             if self.logic_thread:
                 self.logic_thread.session_runtime.apply_play_mode(False)
                 self.logic_thread.player_runtime.player = None
@@ -1782,10 +1792,12 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
+        held = self._mouse_look_captured() and self.window().isActiveWindow()
+        self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
             return
-        if not self._mouse_look_captured() or not self.window().isActiveWindow():
+        if not held:
             self._skip_next_look_poll = True   # it may be anywhere on return
             return
         centre = self.mapToGlobal(self.rect().center())
@@ -1800,6 +1812,29 @@ class QtGameView(QOpenGLWidget):
         if dx or dy:
             self.game_state.set_mouse_delta(float(dx), float(dy))
             QCursor.setPos(centre)
+
+    def _sync_play_mouse_grab(self, held):
+        """Play: while the look holds the mouse, every click belongs to this view.
+
+        The look only hides the cursor; it does not confine it. Wherever the
+        real pointer is -- on macOS it is detached from the mouse where it
+        stood, which can be over the Play button just clicked -- a click went
+        to the widget under it, pressing Stop instead of firing. Grabbing the
+        mouse sends every press to this view, as editor look already does
+        (_sync_editor_mouselook). Released as soon as the look lets go
+        (pause menu, console, actor pick, another window) and on leaving Play.
+        """
+        if not self.play_mode or self.mouselook_active:
+            return              # editor look keeps its own grab
+        grabber = self.mouseGrabber()
+        if held and grabber is not self and self.isVisible():
+            self.grabMouse()
+        elif not held and grabber is self:
+            self.releaseMouse()
+
+    def _release_play_mouse_grab(self):
+        if not self.mouselook_active and self.mouseGrabber() is self:
+            self.releaseMouse()
 
     def _attach_mac_cursor(self):
         """macOS: let the mouse move the cursor again, if it was detached."""
@@ -1826,12 +1861,25 @@ class QtGameView(QOpenGLWidget):
             return
         if self._skip_next_look_poll:
             # Capture starts: put the cursor in the middle, detach it once
-            # that move has landed, next frame.
+            # that move has landed.
             self._skip_next_look_poll = False
+            self._mac_centre_tries = 0
             QCursor.setPos(self.mapToGlobal(self.rect().center()))
             mouse.take()
             return
         if not self._mac_cursor_detached:
+            # Qt sends the move as an event, which need not have landed by
+            # the next frame (above all straight after a long load). Detached
+            # before it lands, the cursor stays pinned where it was -- over
+            # the Play button just clicked -- so wait for it, a few frames at
+            # most, asking again in case a mouse movement overtook it.
+            centre = self.mapToGlobal(self.rect().center())
+            if ((QCursor.pos() - centre).manhattanLength() > 2
+                    and self._mac_centre_tries < self._MAC_CENTRE_MAX_TRIES):
+                self._mac_centre_tries += 1
+                QCursor.setPos(centre)
+                mouse.take()
+                return
             import macos_app
             self._mac_cursor_detached = macos_app.set_cursor_follows_mouse(False)
             mouse.take()
