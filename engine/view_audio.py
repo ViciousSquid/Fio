@@ -133,6 +133,13 @@ class ViewAudio:
             self.sound_pool[name] = sound
         return True
 
+    def _load_user_pack_sound(self, names, path):
+        """Load the sound at *path* from an end user's own ``.fiopak`` pack
+        in ``assets/`` (``engine.asset_archives``), when one holds it."""
+        from engine.asset_archives import asset_bytes
+        data = asset_bytes(path)
+        return data is not None and self._load_sound_bytes_to_cache(names, data)
+
     def _get_sound_instance(self, name):
         """Get a pygame Sound by name, preferring the matching .fiopak if present.
 
@@ -164,6 +171,8 @@ class ViewAudio:
             path = resolve_speaker_sound(rel, os.getcwd())
             if path and os.path.isfile(path) and self._load_sound_to_cache(rel, path):
                 return self.sound_pool[rel]
+            if path and self._load_user_pack_sound([rel], path):
+                return self.sound_pool[rel]
             print(f"[Audio] Sound not found: {rel}")
             return None
 
@@ -188,6 +197,8 @@ class ViewAudio:
         if os.path.isfile(path):
             if self._load_sound_to_cache(clean_name, path):
                 return self.sound_pool[clean_name]
+        elif self._load_user_pack_sound([clean_name, f"assets/sounds/{clean_name}"], path):
+            return self.sound_pool[clean_name]
         print(f"[Audio] Sound not found: {clean_name}")
         return None
 

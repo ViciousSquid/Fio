@@ -868,14 +868,27 @@ class AssetBrowserTab(QWidget):
         self._watched_asset_dirs.discard(path)
         self._watch_asset_directory(path)
 
-        if self.is_audio_tab and self.editor is not None:
-            assets_dir = os.path.abspath(os.path.join(self.editor.root_dir, "assets"))
-            if assets_dir == path:
-                self.load_directory(self.root_path)
-                return
+        assets_dir = self._assets_dir()
+        if assets_dir is not None and assets_dir == path:
+            # A .fiopak added, replaced or removed: index the user packs again
+            # (engine.asset_archives), then show what they now hold.
+            from engine.asset_archives import refresh_asset_archives
+            refresh_asset_archives(assets_dir)
+            self.dir_model.refresh()
+            self.load_directory(self.root_path if self.is_audio_tab
+                                else self.current_asset_folder)
+            return
         self.dir_model.refresh()
         if os.path.abspath(self.current_asset_folder) == path:
             self.load_directory(path)
+
+    def _assets_dir(self):
+        """The project's ``assets`` folder, where user ``.fiopak`` packs live."""
+        root = getattr(self.editor, 'root_dir', None)
+        if root:
+            return os.path.abspath(os.path.join(root, 'assets'))
+        parent = os.path.dirname(os.path.abspath(self.root_path))
+        return parent if os.path.basename(parent) == 'assets' else None
 
     def load_directory(self, path):
         archive_path = self._active_audio_archive()
@@ -884,8 +897,10 @@ class AssetBrowserTab(QWidget):
         self.current_asset_folder = path
         self._watch_asset_directory(self.root_path)
         self._watch_asset_directory(path)
-        if self.is_audio_tab and self.editor is not None:
-            self._watch_asset_directory(os.path.join(self.editor.root_dir, "assets"))
+        assets_dir = self._assets_dir()
+        if assets_dir is not None:
+            # New or changed .fiopak packs land here, beside the folders.
+            self._watch_asset_directory(assets_dir)
         # Clear existing items
         for i in reversed(range(self.grid_layout.count())): 
             self.grid_layout.itemAt(i).widget().setParent(None)

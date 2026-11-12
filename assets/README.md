@@ -26,6 +26,20 @@ readers (`engine/audio_archives.py`); repack their category after editing
 loose audio. Archives are not opened in rendering hot paths: a texture or
 model is read once, when it is first loaded.
 
+## Your own packs
+
+Any other `.fiopak` you put in `assets/` is a **user pack**: a ZIP of your
+own textures, models, sounds, music or sprites. Its contents appear in the
+Asset Browser's Textures, Models and Audio tabs beside the loose files, load
+everywhere a loose asset would, and are carried into exported game packages;
+nothing is extracted. Arrange it by category folder -- `textures/...`,
+`models/...`, `sounds/...`, `music/...`, `sprites/...` -- with or without a
+leading `assets/`, or zip one folder that contains them. Anything else in the
+pack (and archiver litter such as `__MACOSX/`) is ignored. Loose files and the
+built-in archives win over a pack with the same path; packs are searched in
+name order. A pack added, replaced or removed while the editor runs is picked
+up when `assets/` changes.
+
 Rebuild all categories from the repository root:
 
 ```bash

@@ -9,7 +9,8 @@ import shlex
 import struct
 import zipfile
 
-from engine.asset_archives import ASSET_CATEGORIES, _entries
+from engine.asset_archives import (ASSET_CATEGORIES, _entries, user_pack_entries,
+                                   user_pack_paths)
 
 ASSET_KEYS = {'texture', 'texture_path', 'sprite_2d', 'custom_idle', 'custom_shoot',
               'custom_dead', 'model_path', 'mesh', 'sound_file', 'sound', 'audio',
@@ -73,12 +74,24 @@ def companion_assets(path, data):
 
 
 class ProjectAssets:
-    """Loose-file overrides plus category archives, without extraction."""
+    """Loose-file overrides plus category archives and user packs, without
+    extraction."""
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.sources = {}
         self._stack = ExitStack()
         try:
+            # Later sources win: user packs, then the built-in category
+            # archives, then loose files (the development override).
+            for path in user_pack_paths(self.root / 'assets'):
+                try:
+                    source = self._stack.enter_context(zipfile.ZipFile(path))
+                    entries, _skipped = user_pack_entries(source)
+                except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                    print(f'[Assets] Cannot read {path.name}: {exc}')
+                    continue
+                for name, info in entries:
+                    self.sources[name] = (source, info)
             for category in ASSET_CATEGORIES:
                 archive = self.root / 'assets' / f'{category}.fiopak'
                 if archive.is_file():

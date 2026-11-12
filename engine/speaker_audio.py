@@ -87,11 +87,25 @@ def list_speaker_audio(root, folder):
             return []
 
     base = os.path.join(root, "assets", folder)
-    found = []
+    found = set()
     for dirpath, _dirnames, filenames in os.walk(base):
         for name in filenames:
             if name.lower().endswith(AUDIO_EXTENSIONS):
                 rel = os.path.relpath(os.path.join(dirpath, name), root).replace("\\", "/")
                 if speaker_sound_path(rel) == rel:
-                    found.append(rel)
+                    found.add(rel)
+    # And the audio in end users' own .fiopak packs (engine.asset_archives).
+    from engine.asset_archives import user_pack_entries, user_pack_paths
+    import zipfile
+    prefix = f"assets/{folder}/"
+    for pack in user_pack_paths(os.path.join(root, "assets")):
+        try:
+            with zipfile.ZipFile(pack) as archive:
+                entries, _skipped = user_pack_entries(archive)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            print(f"[Audio] Cannot list {pack.name}: {exc}")
+            continue
+        found.update(name for name, _info in entries
+                     if name.startswith(prefix) and name.lower().endswith(AUDIO_EXTENSIONS)
+                     and speaker_sound_path(name) == name)
     return sorted(found, key=str.casefold)

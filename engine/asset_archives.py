@@ -72,6 +72,66 @@ def category_member(member: str, category: str) -> bool:
             and (suffix in _DATA_SUFFIXES or not suffix))
 
 
+#: What a user pack may hold.
+USER_CATEGORIES = ('textures', 'models', 'sounds', 'music', 'sprites')
+_BUILTIN_ARCHIVES = frozenset(f'{c}.fiopak' for c in ASSET_CATEGORIES)
+
+
+def user_pack_paths(assets_dir) -> list[Path]:
+    """Every user pack in *assets_dir*: a ``.fiopak`` that is not one of the
+    built-in category archives, sorted by name (the order they are searched)."""
+    try:
+        paths = [p for p in Path(assets_dir).iterdir()
+                 if p.suffix.lower() == '.fiopak'
+                 and p.name.lower() not in _BUILTIN_ARCHIVES and p.is_file()]
+    except OSError:
+        return []
+    return sorted(paths, key=lambda p: p.name.casefold())
+
+
+def user_member_name(member: str):
+    """The project-relative asset path (``assets/textures/x.png``) a user
+    pack's *member* stands for, or None when it is not user asset data."""
+    if junk_member(member):
+        return None
+    parts = member.replace('\\', '/').split('/')
+    if any(p in ('', '.', '..') or ':' in p for p in parts):
+        return None
+    roots = ('assets',) + USER_CATEGORIES
+    if parts[0] not in roots and len(parts) >= 3 and parts[1] in roots:
+        parts = parts[1:]                       # one wrapping folder
+    if parts[0] != 'assets':
+        parts = ['assets'] + parts
+    name = '/'.join(parts)
+    if any(category_member(name, c) for c in USER_CATEGORIES):
+        return name
+    return None
+
+
+def user_pack_entries(archive):
+    """``[(asset path, ZipInfo)]`` of a user pack's usable members (the
+    first of two that name the same asset wins) and how many were skipped.
+    The size and count limits apply as to the built-in archives."""
+    infos = [info for info in archive.infolist()
+             if not info.is_dir() and not junk_member(info.filename)]
+    if len(infos) > MAX_ENTRIES:
+        raise ValueError('too many asset entries')
+    entries, seen, skipped, total = [], set(), 0, 0
+    for info in infos:
+        name = user_member_name(info.filename)
+        if (name is None or name.casefold() in seen
+                or stat.S_ISLNK(info.external_attr >> 16)
+                or info.file_size > MAX_ENTRY_BYTES):
+            skipped += 1
+            continue
+        total += info.file_size
+        if total > MAX_TOTAL_BYTES:
+            raise ValueError('asset archive exceeds total size limit')
+        seen.add(name.casefold())
+        entries.append((name, info))
+    return entries, skipped
+
+
 def _entries(archive, category):
     infos = [info for info in archive.infolist()
              if not info.is_dir() and not junk_member(info.filename)]
@@ -99,12 +159,16 @@ def _entries(archive, category):
 class _Archive:
     """One category archive's index: its members, and their folded names."""
 
-    __slots__ = ('path', 'signature', 'members', 'folded', 'dirs')
+    __slots__ = ('path', 'signature', 'members', 'folded', 'dirs', 'keys')
 
-    def __init__(self, path, signature, infos):
+    def __init__(self, path, signature, entries):
+        """*entries*: ``(asset path, ZipInfo)`` pairs; for a built-in archive
+        the asset path is the member's own name, for a user pack the
+        normalised one (:func:`user_member_name`)."""
         self.path = path
         self.signature = signature
-        self.members = {info.filename: info for info in infos}
+        self.members = dict(entries)
+        self.keys = {info.filename: name for name, info in entries}
         self.folded = {name.casefold(): name for name in self.members}
         dirs = set()
         for name in self.members:
@@ -153,7 +217,34 @@ def prepare_asset_archives(root_dir) -> tuple[str, ...]:
                 del archives[category]
         for category in found:
             _index(archives, category, assets / f'{category}.fiopak')
+        # User packs after the built-in archives, which therefore win.
+        packs = {f'pack:{p.name}': p for p in user_pack_paths(assets)}
+        for key in [k for k in archives if k.startswith('pack:') and k not in packs]:
+            del archives[key]
+        for key, path in packs.items():
+            _index(archives, key, path)
+        # Search order: built-in archives, then packs by name.
+        order = sorted(archives, key=lambda k: (k.startswith('pack:'),
+                                                list(packs).index(k) if k in packs else 0))
+        _state['archives'] = {k: archives[k] for k in order}
     return found
+
+
+def refresh_asset_archives(assets_dir) -> bool:
+    """Re-index after *assets_dir* changed (a pack added, replaced or
+    removed), when it is the indexed project's ``assets`` folder; never
+    switch the index to another project. Returns whether it re-indexed."""
+    root = _state['root']
+    if root is None or Path(assets_dir).resolve() != root / 'assets':
+        return False
+    prepare_asset_archives(root)
+    return True
+
+
+def user_packs() -> tuple[str, ...]:
+    """File names of the user packs currently indexed, in search order."""
+    with _lock:
+        return tuple(k[len('pack:'):] for k in _state['archives'] if k.startswith('pack:'))
 
 
 def _index(archives, category, path):
@@ -165,8 +256,13 @@ def _index(archives, category, path):
         if held is not None and held.signature == signature:
             return held
         with zipfile.ZipFile(path) as archive:
-            infos = _entries(archive, category)
-        archives[category] = held = _Archive(path, signature, infos)
+            if category.startswith('pack:'):
+                entries, skipped = user_pack_entries(archive)
+                print(f'[Assets] User pack {path.name}: {len(entries)} assets'
+                      + (f' ({skipped} other entries ignored)' if skipped else ''))
+            else:
+                entries = [(i.filename, i) for i in _entries(archive, category)]
+        archives[category] = held = _Archive(path, signature, entries)
         return held
     except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as exc:
         archives.pop(category, None)
@@ -231,7 +327,7 @@ def _read(found, info):
     if current is not archive:
         if current is None:
             return None
-        info = current.members.get(info.filename)
+        info = current.members.get(archive.keys.get(info.filename, info.filename))
         if info is None:
             return None
         archive = current

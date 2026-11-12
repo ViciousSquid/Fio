@@ -36,6 +36,11 @@ version 4 and play in both.
 
 ### New
 
+- **Your own `.fiopak` packs.** Any `.fiopak` in `assets/` other than the
+  built-in archives is read in place as a user pack of textures, models,
+  sounds, music or sprites: its contents appear in the Asset Browser, load
+  like loose assets, are offered to Speakers and are carried by package
+  export. See `assets/README.md`.
 - **Python 3.13 is supported again.** Fio runs on CPython 3.13 or newer with
   the GIL (3.0.0 required 3.14); releases are still built with 3.14.
   Free-threaded builds are refused as before.
