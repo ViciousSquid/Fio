@@ -189,3 +189,39 @@ def test_a_wet_mask_painted_as_an_image_still_shows_unselected(fio_session):
                                if type(t).__name__ != 'Decal']
     session.step(1)
     assert _changed(with_mask, session.paint()) > 200
+
+
+def _trigger_level(with_decal):
+    from editor.things import Decal, Light, PlayerStart
+    from engine import brush_geometry as bg
+    from tests.helpers.worlds import box_brush, level_data, make_thing
+    tex = lambda n: {t: n for t in bg.FACE_TAGS}
+    brushes = [box_brush('floor', (0, -16, -400), (1600, 32, 1600), textures=tex('concrete02.png')),
+               box_brush('trig', (0, 80, -700), (200, 160, 100), textures=tex('concrete02.png'),
+                         is_trigger=True)]
+    things = [make_thing(PlayerStart, 'spawn', (0, 50, 0), angle=90.0, primary=True),
+              make_thing(Light, 'lamp', (0, 140, -620), radius=600.0, intensity=2.0,
+                         color=[0, 255, 220])]
+    if with_decal:
+        things.append(make_thing(Decal, 'd', (0, 0, -200), texture='scorch_01.png',
+                                 width=300.0, height=300.0, depth=48.0))
+    return level_data(brushes=brushes, things=things)
+
+
+def test_a_decal_on_screen_leaves_the_brushes_drawn_after_it_alone(fio_session):
+    # The decal pass used to put the blend function back to its own default
+    # rather than the frame's, so a trigger brush (drawn after it) went dark
+    # whenever any decal -- blood included -- was in view.
+    import glm
+    frames = []
+    for with_decal in (True, False):
+        session = fio_session(_trigger_level(with_decal), size=(320, 200))
+        session.view.sysmon.set_active(False)
+        camera = session.logic.camera.get_editor_camera()
+        camera.pos = glm.vec3(0, 100, 0)
+        camera.yaw, camera.pitch = -90.0, -8.0
+        session.publish()
+        frames.append(session.paint())
+        session.close()
+    trigger = (slice(40, 110), slice(110, 210))        # above the decal
+    assert np.abs(frames[0][trigger].astype(int) - frames[1][trigger].astype(int)).max() <= 2

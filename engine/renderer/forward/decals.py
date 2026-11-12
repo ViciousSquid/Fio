@@ -198,8 +198,16 @@ class DecalsMixin:
         # The box's far faces, untested against depth: every pixel the box
         # covers is reached once, the camera inside the box or not. The
         # shader does the real test, against the copy.
+        # Everything this pass changes is put back exactly as it was: the
+        # passes after it (the transparent and trigger brushes, effects)
+        # draw with the blend function, culling and texture unit they set
+        # up before, decals or no decals.
         blend = bool(gl.glIsEnabled(gl.GL_BLEND))
+        blend_func = tuple(int(gl.glGetIntegerv(name)) for name in (
+            gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
+            gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA))
         cull = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        cull_mode = int(gl.glGetIntegerv(gl.GL_CULL_FACE_MODE))
         depth_test = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
         depth_write = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
         gl.glEnable(gl.GL_BLEND)
@@ -224,16 +232,18 @@ class DecalsMixin:
                     gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, count)
                     self.render_stats.draw_calls += 1
         finally:
-            gl.glCullFace(gl.GL_BACK)
+            gl.glCullFace(cull_mode)
             if not cull:
                 gl.glDisable(gl.GL_CULL_FACE)
             if depth_test:
                 gl.glEnable(gl.GL_DEPTH_TEST)
             gl.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl.glBlendFuncSeparate(*blend_func)
             if not blend:
                 gl.glDisable(gl.GL_BLEND)
             gl.glBindVertexArray(0)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
             gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self.render_stats.draw_calls += 1
         self.decals_drawn = count
