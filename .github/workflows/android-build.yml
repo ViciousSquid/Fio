@@ -254,6 +254,34 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader -feature -Vulkan -memory 3072 -cores 2 -camera-back none -camera-front none
           script: python -m player.tools.test_device player/bin/*debug*.apk acceptance-world/_SHOWCASE.fiopak --output fio-device-results
+      - name: Log the device evidence for review
+        # Artifact downloads can be unavailable to reviewers; the log is not.
+        # The Fio process's own log lines, then every screenshot as a small
+        # base64 JPEG on a line of its own (FIO_DEVICE_IMAGE <name> <data>).
+        if: always()
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          import base64, io
+          from pathlib import Path
+          from PIL import Image
+          root = Path('fio-device-results')
+          log = root / 'fio-logcat.txt'
+          if log.exists():
+              lines = log.read_text(encoding='utf-8', errors='replace').splitlines()
+              keep = [l for l in lines if 'python' in l.lower() or 'Fio' in l
+                      or 'Traceback' in l or 'Error' in l]
+              print('::group::Fio log (last 400 relevant lines)')
+              print('\n'.join(keep[-400:]))
+              print('::endgroup::')
+          for path in sorted(root.glob('*.png')):
+              image = Image.open(path).convert('RGB')
+              image.thumbnail((960, 960))
+              buffer = io.BytesIO()
+              image.save(buffer, 'JPEG', quality=70, optimize=True)
+              print('FIO_DEVICE_IMAGE', path.name,
+                    base64.b64encode(buffer.getvalue()).decode(), flush=True)
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
