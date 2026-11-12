@@ -542,6 +542,12 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
             [effect], epoch=1, effect_runtime=True, effect_store=send.effect_store
         )
 
+    # "Just started": well inside the 0.5 s default lifetime -- a restart
+    # that failed would read a second or more. Wall-clock time passes
+    # between the send and the frame, so not a tighter bound (a busy CI
+    # runner measured 0.15 s).
+    just_started = 0.4
+
     explode()
 
     assert effect.properties["effect_type"] == EFFECT_EXPLOSION
@@ -549,7 +555,7 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
     assert table.effect_type[0] == 1
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) < 0.1
+    assert float(table.effect_elapsed[0]) < just_started
 
     table.effect_spawn_time[0] -= 1.0          # a second later
     table.begin_frame([effect], epoch=1, effect_runtime=True)
@@ -561,7 +567,7 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
     assert table.effect_type[0] == 1
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) < 0.1
+    assert float(table.effect_elapsed[0]) < just_started
 
 
 def test_effect_explode_io_plays_once_and_can_be_retriggered():
