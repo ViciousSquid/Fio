@@ -8,6 +8,7 @@ import glm
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
+from engine.spatial import set_authored_flag
 
 # Oil_Drum_Grey bounds: local Y starts at zero, so the entity origin is the
 # point touching the floor and the collision box centre sits half a height up.
@@ -205,6 +206,7 @@ def test_clear_releases_all_body_state():
     assert world.get_body(prop) is None
     assert world._position.shape == (0, 3)
     assert world._was_inactive.shape == (0,)
+    assert world._pending_settle.shape == (0,)
     assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
 
@@ -290,6 +292,48 @@ def test_hidden_and_disabled_sleeping_bodies_cannot_be_pushed():
         prop.properties[flag] = False
         world.step(1.0 / 60.0, _player())
         assert prop.pos[0] > 0.0
+
+
+def test_an_enabled_sunk_body_is_settled_before_a_player_push():
+    world = _world()
+    prop = _prop((0.0, -DRUM_HALF_Y, 0.0), disabled=True)
+    world.rebuild([_drum_brush(prop)])
+
+    # Disabled bodies stay exactly where the map placed them during rebuild.
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+    set_authored_flag(prop, 'disabled', False)
+
+    # Enable does not explicitly wake a body. Player contact is the first
+    # reason it would otherwise move, and must not send it through the floor.
+    world.step(1.0 / 60.0, _player())
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
+    assert prop.pos[0] > 0.0
+
+
+def test_a_sleeping_hidden_body_is_settled_after_a_platform_moves_under_it():
+    platform = _floor((0.0, 360.0, 0.0), (2000.0, 60.0, 2000.0))
+    world = _world(platform)
+    prop = _prop((0.0, 390.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    body = world.get_body(prop)
+    assert body.awake is False
+
+    set_authored_flag(prop, 'hidden', True)
+    world.step(1.0 / 60.0)
+    assert body.awake is False
+    assert prop.pos[1] == pytest.approx(390.0)
+
+    # The dormant body does not move while the platform rises into it.
+    raised_platform = _floor((0.0, 390.0, 0.0), (2000.0, 60.0, 2000.0))
+    world.spatial_grid.populate([raised_platform])
+    world._rebuild_static_cells()
+    set_authored_flag(prop, 'hidden', False)
+    world.wake(prop)  # same wake performed by the Show I/O handler
+    world.step(1.0 / 60.0)
+
+    assert prop.pos[1] == pytest.approx(420.0, abs=1e-4)
 
 
 def test_a_hidden_floating_body_is_not_woken_on_startup():

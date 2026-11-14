@@ -5,7 +5,7 @@ from itertools import chain
 import glm
 import numpy as np
 
-from .change_journal import touch
+from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
 from . import brush_placement as _placement
 from .brush_placement import shared_bulk_boxes, world_bounds, world_box
 from .mover_table import travel_range
@@ -1376,6 +1376,9 @@ class PhysicsWorld:
         self._kinematic = np.empty(0, dtype=np.bool_)
         # Last observed hidden/disabled state, retained across dense repacks.
         self._was_inactive = np.empty(0, dtype=np.bool_)
+        # Bodies initially dormant (or reactivated by a flag change) need the
+        # one-time placement correction before their first active movement.
+        self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._dirty = False
         self._static_cells = {}
@@ -1389,8 +1392,14 @@ class PhysicsWorld:
         self.friction_scale = float(self.DEFAULT_FRICTION_SCALE)
         self.damping_scale = float(self.DEFAULT_DAMPING_SCALE)
         self.sleep_enabled = bool(self.DEFAULT_SLEEP_ENABLED)
+        # Physics consumes authored visibility/enable transitions without
+        # polling every sleeping entity on every simulation tick.
+        JOURNAL.subscribe(self)
 
     def clear(self):
+        # Discard notifications for the world being torn down. The subscriber
+        # itself remains registered for the next rebuild of this world.
+        JOURNAL.drain(self)
         for body in self.bodies.values():
             body.clear()
         self.bodies.clear()
@@ -1410,6 +1419,7 @@ class PhysicsWorld:
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
         self._was_inactive = np.empty(0, dtype=np.bool_)
+        self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._static_cells.clear()
         self._static_query_cache.clear()
@@ -1496,6 +1506,11 @@ class PhysicsWorld:
             for i, entity in enumerate(self._entities)
             if i < len(self._was_inactive)
         }
+        previous_pending_settle = {
+            id(entity): bool(self._pending_settle[i])
+            for i, entity in enumerate(self._entities)
+            if i < len(self._pending_settle)
+        }
 
         self._position = np.empty((n, 3), dtype=np.float32)
         self._offset = np.empty((n, 3), dtype=np.float32)
@@ -1511,6 +1526,7 @@ class PhysicsWorld:
         self._awake = np.zeros(n, dtype=np.bool_)
         self._kinematic = np.zeros(n, dtype=np.bool_)
         self._was_inactive = np.empty(n, dtype=np.bool_)
+        self._pending_settle = np.empty(n, dtype=np.bool_)
         self._rolls = np.zeros(n, dtype=np.bool_)
         self._bounce = np.zeros(n, dtype=np.float32)
         self._orientation = np.zeros((n, 4), dtype=np.float64)
@@ -1522,6 +1538,8 @@ class PhysicsWorld:
                 isinstance(props, dict)
                 and (props.get('disabled', False) or props.get('hidden', False)))
             self._was_inactive[i] = previous_inactive.get(id(entity), current_inactive)
+            self._pending_settle[i] = previous_pending_settle.get(
+                id(entity), current_inactive)
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
@@ -1670,6 +1688,52 @@ class PhysicsWorld:
             return
         active = self._physics_enabled & ~self._kinematic
         self._awake[active] = True
+
+    def _refresh_inactive_history(self):
+        """Apply journalled hidden/disabled transitions to packed body rows.
+
+        Most bodies sleep, so checking their Python property dictionaries every
+        frame would defeat the sparse physics path. Flag writers already
+        journal state changes; consume only those entity identities here. An
+        overflow is rare and deliberately falls back to one complete refresh.
+        """
+        changes = JOURNAL.drain(self)
+        if changes is OVERFLOW:
+            indices = range(len(self._entities))
+        else:
+            indices = (
+                self._indices.get(entity_id)
+                for entity_id, flags in changes.items()
+                if flags & (STATE | VISIBILITY)
+            )
+
+        for index in indices:
+            if index is None:
+                continue
+            props = getattr(self._entities[index], 'properties', None)
+            inactive = bool(
+                isinstance(props, dict)
+                and (props.get('disabled', False) or props.get('hidden', False)))
+            if self._was_inactive[index] and not inactive:
+                self._pending_settle[index] = True
+            self._was_inactive[index] = inactive
+
+    def _settle_pending_bodies(self, eligible):
+        """Correct newly active placements before they can first move.
+
+        The mask is normally empty. It includes initially dormant bodies and
+        entities whose journalled hidden/disabled flag just became active;
+        dormant rows remain pending until they are actually eligible.
+        """
+        candidates = self._pending_settle & eligible
+        if not np.any(candidates):
+            return
+        inactive = self._inactive_mask(candidates, awake_only=False)
+        ready = candidates & ~inactive
+        if not np.any(ready):
+            return
+        self._settle_sunk_bodies(ready)
+        self._pending_settle[ready] = False
 
     def _inactive_mask(self, candidates, awake_only=True):
         """Which candidate bodies are hidden or disabled.
@@ -2284,17 +2348,18 @@ class PhysicsWorld:
             self._wake_floating_pending = False
             self._wake_floating_near_bodies()
 
-        # A hidden/disabled body was deliberately left untouched at rebuild.
-        # Settle it now, on its first inactive -> active transition, before it
-        # can be integrated or queried as an active body. This snapshot is
-        # refreshed every tick and survives _pack() by entity identity.
+        # Flag writers journal their transitions, including Hide on sleeping
+        # bodies. Keep a sparse fallback for direct writes to already-awake
+        # bodies, and retain pending placement work until the body is active.
         active = self._physics_enabled & ~self._kinematic
+        self._refresh_inactive_history()
         inactive = self._inactive_mask(active)
         awake_candidates = active & self._awake
         activated = self._was_inactive & awake_candidates & ~inactive
         if np.any(activated):
-            self._settle_sunk_bodies(activated)
+            self._pending_settle[activated] = True
         self._was_inactive[awake_candidates] = inactive[awake_candidates]
+        self._settle_pending_bodies(active)
 
         base_dt = float(delta) or 1.0 / 60.0
         scale = max(0.0, float(self.time_scale))
