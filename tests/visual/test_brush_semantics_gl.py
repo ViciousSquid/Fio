@@ -297,12 +297,15 @@ def test_natural_and_tiling_apply_to_angled_faces(renderer, context):
 
 
 def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
-    """The two shipped _SHOWCASE brushes whose authored per-tag scale was not
-    on their planes. Loaded as the editor loads a version 3 map, the
-    precedence rule moves the authored value onto the plane and the GPU
-    draws it; an unmigrated legacy dict handed straight to the renderer is
-    read from its planes only -- nothing at run time consults a per-tag
-    copy."""
+    """Exercise the version-3 migration and its actual GL draw path.
+
+    The shipped _SHOWCASE map is now version 5 and already stores its face
+    materials on the planes. Recreate the two former legacy conditions by
+    moving their canonical UV scales back to per-tag dictionaries and
+    leaving the plane scale at 1.0. EditorState must migrate those authored
+    values back onto the planes before rendering; an unmigrated brush sent
+    straight to the renderer must still draw the plane's 1.0 scale.
+    """
     from editor.editor_state import EditorState
     from engine import brush_geometry as bg
     from tests.helpers.paths import REPO_ROOT
@@ -319,6 +322,11 @@ def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
             tag = plane.get('face')
             key = tag or '#%d' % brush['geometry']['planes'].index(plane)
             plane['texture'] = 'probe/showcase%d/%s.png' % (number, key)
+            if tag and plane.get('uv_scale') is not None:
+                # Recreate the old v3 split record: the plane carries the
+                # stale 1.0 copy while the authored per-tag scale is newer.
+                brush.setdefault('uv_scale', {})[tag] = list(plane['uv_scale'])
+                plane['uv_scale'] = [1.0, 1.0]
         bg.invalidate_geometry_cache(brush)
         bg.translate_brush(brush, np.subtract((-150 + 300 * number, 40, 0),
                                               brush['pos']).tolist())
