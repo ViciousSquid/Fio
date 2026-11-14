@@ -30,7 +30,7 @@ def test_fps_uses_completed_frame_intervals_and_remains_separate_from_tps(qt_app
     sysmon = _make_sysmon()
     assert sysmon.get_metrics()["fps"] == 0.0
 
-    # 121 presentations create 120 intervals: exactly one second at 120 Hz.
+    # 121 rendered frames create 120 intervals: exactly one second at 120 Hz.
     for index in range(121):
         sysmon.record_rendered_frame(100.0 + index / 120.0)
 
@@ -44,7 +44,7 @@ def test_fps_uses_completed_frame_intervals_and_remains_separate_from_tps(qt_app
 def test_fps_and_average_use_the_same_rolling_window(qt_app):
     sysmon = _make_sysmon()
 
-    # Fill the 60-interval window with 10 ms presentations.
+    # Fill the 60-interval window with 10 ms rendered-frame intervals.
     for index in range(61):
         sysmon.record_rendered_frame(100.0 + index / 100.0)
     assert sysmon._fps == pytest.approx(100.0)
