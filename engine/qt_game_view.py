@@ -290,10 +290,10 @@ class QtGameView(QOpenGLWidget):
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
 
-        self.fps = 0
-        self.frame_count = 0
-        self.last_time = time.perf_counter()
-        self.last_fps_time = time.perf_counter()
+        self.fps = 0.0
+        # True only after paintGL has drawn a fresh frame and before Qt
+        # acknowledges its composition through frameSwapped.
+        self._paint_completed_since_swap = False
         self.start_time = time.perf_counter()
 
         self._render_config = {
@@ -414,6 +414,7 @@ class QtGameView(QOpenGLWidget):
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
         timer.start()
+        self.frameSwapped.connect(self._frame_swapped)
 
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
@@ -711,15 +712,8 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode and self.editor.state.stream_editor_camera(self.camera.pos):
             self.editor.update_all_ui()
         current_time = time.perf_counter()
-        delta = current_time - self.last_time
-        self.last_time = current_time
-        self.frame_count += 1
-        fps_elapsed = current_time - self.last_fps_time
-        if fps_elapsed > 1.0:
-            self.fps = self.frame_count / fps_elapsed
-            self.frame_count = 0
-            self.last_fps_time = current_time
-        self.sysmon.record_frame_time(delta * 1000.0)
+        # FPS and frame-time samples are recorded only after Qt has composed
+        # a fresh, successfully painted frame; this timer is not a frame clock.
         self.audio._process_sound_queue()
         self._process_console_command_queue()
 
@@ -747,6 +741,13 @@ class QtGameView(QOpenGLWidget):
                     self.editor.update_views()
         else:
             self.repaint()
+
+
+    def _frame_swapped(self):
+        """Count a fresh paint only after Qt has completed its composition."""
+        if self._paint_completed_since_swap:
+            self._paint_completed_since_swap = False
+            self.fps = self.sysmon.record_presented_frame(time.perf_counter())
 
 
     def _process_console_command_queue(self):
@@ -805,9 +806,11 @@ class QtGameView(QOpenGLWidget):
             render_state = self.game_state.get_render_state()
         if render_state is None:
             return
-        self._animate_textures()
+        paint_succeeded = False
         try:
+            self._animate_textures()
             self._paint_frame(render_state)
+            paint_succeeded = True
         finally:
             # The render state is a borrowed snapshot, and publication waits
             # while it is borrowed: release it the moment this synchronous
@@ -817,6 +820,8 @@ class QtGameView(QOpenGLWidget):
             self._collect_terrain_stats()
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
+        if paint_succeeded:
+            self._paint_completed_since_swap = True
         if self._gl_error_checks_left:
             self._gl_error_checks_left -= 1
             self._report_gl_errors()

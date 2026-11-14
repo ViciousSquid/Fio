@@ -81,9 +81,11 @@ class SysMon:
         self._ft_buffer = np.zeros(self.GRAPH_POINTS, dtype=np.float32)
         self._ft_index = 0
         self._ft_count = 0
+        self._ft_sum = 0.0
         self._ft_max = 16.67
         self._ft_max_age = 0
         self._fps = 0.0
+        self._last_presented_time = None
 
         # Font & metrics
         self.font = QFont("Fio UI")
@@ -156,11 +158,22 @@ class SysMon:
 
     def record_frame_time(self, delta_ms):
         """Record a frame time. Uses ring buffer — O(1)."""
-        old_val = self._ft_buffer[self._ft_index]
-        self._ft_buffer[self._ft_index] = delta_ms
-        self._ft_index = (self._ft_index + 1) % self.GRAPH_POINTS
+        old_val = float(self._ft_buffer[self._ft_index])
         if self._ft_count < self.GRAPH_POINTS:
             self._ft_count += 1
+        else:
+            self._ft_sum -= old_val
+        self._ft_buffer[self._ft_index] = delta_ms
+        new_val = float(self._ft_buffer[self._ft_index])
+        self._ft_sum += new_val
+        self._ft_index = (self._ft_index + 1) % self.GRAPH_POINTS
+
+        # FPS is the reciprocal of the mean interval in this same rolling
+        # window. It is derived only from completed rendered-frame intervals.
+        self._fps = (
+            1000.0 * self._ft_count / self._ft_sum
+            if self._ft_sum > 0.0 else 0.0
+        )
 
         # Incremental max tracking
         if delta_ms >= self._ft_max:
@@ -180,21 +193,30 @@ class SysMon:
         self.stats['culled_brushes'] = culled_brushes
         self.stats['total_brushes'] = total_brushes
 
-    def record_fps(self, fps):
-        """Record the FPS value used by the Fio runtime HUD."""
-        try:
-            self._fps = max(0.0, float(fps))
-        except (TypeError, ValueError):
-            self._fps = 0.0
+    def record_presented_frame(self, timestamp=None):
+        """Record a fresh frame after Qt has completed its composition/swap."""
+        timestamp = time.perf_counter() if timestamp is None else float(timestamp)
+        previous = self._last_presented_time
+        if previous is not None:
+            interval = timestamp - previous
+            if interval > 0.0:
+                self.record_frame_time(interval * 1000.0)
+        self._last_presented_time = timestamp
+        return self._fps
 
     def reset_metrics(self):
         """Clear the frame-time history and the per-frame stat counters."""
         self._ft_buffer.fill(0.0)
         self._ft_index = 0
         self._ft_count = 0
+        self._ft_sum = 0.0
         self._ft_max = 16.67
         self._ft_max_age = 0
         self._fps = 0.0
+        self._last_presented_time = None
+        self._fps_cached_val = -1
+        self._ft_cached_val = -1.0
+        self._fps_str = ""
         for key in self.stats:
             self.stats[key] = 0
         self._stats_cache = {}
@@ -212,7 +234,7 @@ class SysMon:
             current_frame_ms = float(
                 self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS]
             )
-            average_frame_ms = float(np.mean(frame_times))
+            average_frame_ms = self._ft_sum / count
             p95_frame_ms = float(np.percentile(frame_times, 95))
         else:
             current_frame_ms = 0.0
@@ -250,9 +272,9 @@ class SysMon:
             visible_surfaces = int(self.stats.get("visible_brushes", 0))
             culled_surfaces = int(self.stats.get("culled_brushes", 0))
 
+        # FPS comes only from completed Qt presentations; never infer it
+        # from a timer interval or from a frame-time fallback.
         fps = float(self._fps)
-        if fps <= 0.0 and average_frame_ms > 0.0:
-            fps = 1000.0 / average_frame_ms
 
         return {
             "fps": fps,
