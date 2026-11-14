@@ -2279,10 +2279,15 @@ class PhysicsWorld:
         if not self._entities:
             return
 
+        if self._wake_floating_pending:
+            self._wake_floating_pending = False
+            self._wake_floating_near_bodies()
+
         # A hidden/disabled body was deliberately left untouched at rebuild.
         # Settle it now, on its first inactive -> active transition, before it
         # can be integrated or queried as an active body. This snapshot is
         # refreshed every tick and survives _pack() by entity identity.
+        active = self._physics_enabled & ~self._kinematic
         inactive = self._inactive_mask(active)
         awake_candidates = active & self._awake
         activated = self._was_inactive & awake_candidates & ~inactive
@@ -2290,15 +2295,10 @@ class PhysicsWorld:
             self._settle_sunk_bodies(activated)
         self._was_inactive[awake_candidates] = inactive[awake_candidates]
 
-        if self._wake_floating_pending:
-            self._wake_floating_pending = False
-            self._wake_floating_near_bodies()
-
         base_dt = float(delta) or 1.0 / 60.0
         scale = max(0.0, float(self.time_scale))
         dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
-        active = self._physics_enabled & ~self._kinematic
-        active &= ~self._inactive_mask(active)
+        active &= ~inactive
 
         # Where the player's push started each body it pushed (NaN for the
         # rest): a push into a wall is undone with the rest of the move.
