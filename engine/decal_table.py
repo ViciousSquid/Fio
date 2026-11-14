@@ -336,6 +336,20 @@ class DecalTable:
         self._stamp = (epoch, id(things), len(things), version, show)
         return changed
 
+    def release_placed(self):
+        """Drop map-entity references; the next place() rebuilds the editor rows.
+
+        The table outlives play sessions, but the placed Decal entities belong
+        to the map that was active when they were reconciled. Keeping those
+        entities here would retain the previous session/map after Stop.
+        """
+        self._entries.clear()
+        self._stamp = None
+        self.placed_model = np.zeros((0, 16), dtype=np.float32)
+        self.placed_inverse = np.zeros((0, 16), dtype=np.float32)
+        self.placed_params = np.zeros((0, 4), dtype=np.float32)
+        self.version += 1
+
     def _say_missing(self, thing, names):
         from engine import decal_textures
         props = thing.properties

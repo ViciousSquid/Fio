@@ -50,3 +50,25 @@ def test_the_ring_overwrites_the_oldest_and_a_frame_is_a_copy():
     assert table.model.any()
     table.clear()
     assert table.frame(6.0, 90.0, 20.0) is None and table.count == 6
+
+
+
+def test_release_placed_drops_map_entity_references_and_rows():
+    """The long-lived blood table must not retain Decals from a finished map."""
+    table = DecalTable()
+    decal = object()
+    table._entries[id(decal)] = [decal, ("old-map",), 0]
+    table._stamp = (1, 2, 1, 3, False)
+    table.placed_model = np.ones((1, 16), dtype=np.float32)
+    table.placed_inverse = np.ones((1, 16), dtype=np.float32)
+    table.placed_params = np.ones((1, 4), dtype=np.float32)
+    version = table.version
+
+    table.release_placed()
+
+    assert table._entries == {}
+    assert table._stamp is None
+    assert table.placed_model.shape == (0, 16)
+    assert table.placed_inverse.shape == (0, 16)
+    assert table.placed_params.shape == (0, 4)
+    assert table.version == version + 1

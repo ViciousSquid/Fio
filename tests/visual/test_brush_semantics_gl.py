@@ -314,19 +314,26 @@ def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
     raw = []
     for number, bid in enumerate(('5b10b49b-9b6c-45d9-91ee-0b6f06970590',
                                   '8c04e483-4d44-4217-a03d-32844a727043')):
-        # In the frame the editor holds it in (Stage 2d), materials as stored.
+        # Start from the current canonical version-5 geometry, then author
+        # one deliberate pre-version-5 UV-scale duplicate. This keeps the GL
+        # migration test independent of whether a shipped map still carries
+        # legacy per-tag material data.
         brush = {k: v for k, v in bs.localised(showcase[bid]).items()
                  if k not in bg.GEO_RUNTIME_KEYS}
         brush['name'] = 'showcase%d' % number
+        legacy_tag, legacy_scale = (
+            ('north', (0.25, 0.25)) if number == 0 else ('east', (10.0, 8.0)))
         for plane in brush['geometry']['planes']:
             tag = plane.get('face')
             key = tag or '#%d' % brush['geometry']['planes'].index(plane)
             plane['texture'] = 'probe/showcase%d/%s.png' % (number, key)
-            if tag and plane.get('uv_scale') is not None:
-                # Recreate the old v3 split record: the plane carries the
-                # stale 1.0 copy while the authored per-tag scale is newer.
-                brush.setdefault('uv_scale', {})[tag] = list(plane['uv_scale'])
-                plane['uv_scale'] = [1.0, 1.0]
+        legacy_plane = next(
+            plane for plane in brush['geometry']['planes']
+            if plane.get('face') == legacy_tag)
+        # Make the plane's stored value unambiguously stale; the legacy
+        # per-tag value is the one the load-time migration must preserve.
+        legacy_plane['uv_scale'] = [1.0, 1.0]
+        brush['uv_scale'] = {legacy_tag: list(legacy_scale)}
         bg.invalidate_geometry_cache(brush)
         bg.translate_brush(brush, np.subtract((-150 + 300 * number, 40, 0),
                                               brush['pos']).tolist())
