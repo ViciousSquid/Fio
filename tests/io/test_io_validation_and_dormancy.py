@@ -391,6 +391,7 @@ def test_generic_show_wakes_only_entities_with_physics_bodies():
     class Entity:
         def __init__(self):
             self.properties = {"hidden": True}
+            self.kinematic = False
 
     body = Entity()
     ordinary = Entity()
@@ -409,8 +410,9 @@ def test_generic_show_wakes_only_entities_with_physics_bodies():
     manager.set_logic_thread(logic)
 
     manager._try_generic_input(body, "show", "")
+    manager._try_generic_input(body, "show", "")
     manager._try_generic_input(ordinary, "show", "")
 
     assert body.properties["hidden"] is False
     assert ordinary.properties["hidden"] is False
-    assert wakes == [body]
+    assert wakes == [body], "Show must only wake on a hidden-to-visible transition"
