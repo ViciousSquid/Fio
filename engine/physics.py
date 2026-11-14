@@ -1654,28 +1654,25 @@ class PhysicsWorld:
         active = self._physics_enabled & ~self._kinematic
         self._awake[active] = True
 
-    def _disabled_mask(self, candidates):
-        """Which candidate bodies their entity currently marks ``disabled``.
+    def _inactive_mask(self, candidates, awake_only=True):
+        """Which candidate bodies are hidden or disabled.
 
-        ``disabled`` is authored state that changes at runtime -- an I/O
-        Disable, or Big World parking a cell, which stashes the authored values
-        and forces the flag on. It is written in a dozen places across
-        io_handlers and the streaming layer, so there is no single setter to
-        hook; it has to be read.
-
-        Reading it is bounded the way the pre-vectorisation simulation bounded
-        it: that loop only ever consulted ``disabled`` for bodies it was
-        actually moving, so this consults only candidates that are also awake.
-        A world with nothing in motion pays nothing, and a parked or disabled
-        prop stops being integrated instead of quietly falling while dormant.
+        ``disabled`` is authored gameplay state; ``hidden`` is the Prop's
+        I/O Hide state. Both make its physical body dormant. Ordinary
+        integration only needs to inspect awake candidates, preserving the
+        sparse hot path. The player-push query also checks its small set of
+        overlapping bodies with ``awake_only=False``, because a sleeping body
+        can still overlap the player and must not be pushed while inactive.
         """
         mask = np.zeros(len(self._entities), dtype=np.bool_)
-        indices = np.flatnonzero(candidates & self._awake)
+        rows = candidates & self._awake if awake_only else candidates
+        indices = np.flatnonzero(rows)
         if indices.size == 0:
             return mask
         for i in indices:
             props = getattr(self._entities[int(i)], 'properties', None)
-            if isinstance(props, dict) and props.get('disabled', False):
+            if (isinstance(props, dict)
+                    and (props.get('disabled', False) or props.get('hidden', False))):
                 mask[i] = True
         return mask
 
@@ -1700,7 +1697,9 @@ class PhysicsWorld:
         for slot, index in enumerate(spinning):
             entity = self._entities[int(index)]
             props = getattr(entity, 'properties', None)
-            if not isinstance(props, dict):
+            if (not isinstance(props, dict)
+                    or props.get('disabled', False)
+                    or props.get('hidden', False)):
                 targets.append(None)
                 continue
             targets.append((entity, props))
@@ -1845,6 +1844,7 @@ class PhysicsWorld:
         near = np.fromiter(
             (tier_of(self._entities[int(i)]) == TIER_NEAR
              and not getattr(self._entities[int(i)], 'properties', {}).get('disabled', False)
+             and not getattr(self._entities[int(i)], 'properties', {}).get('hidden', False)
              for i in rows), dtype=np.bool_, count=rows.size)
         rows = rows[near]
         if rows.size == 0:
@@ -1868,7 +1868,9 @@ class PhysicsWorld:
         on a floor is left alone, even against a low wall it overlaps: in
         motion a floor top above the bottom is a wall, not a floor.
         """
-        rows = np.flatnonzero(self._physics_enabled & self._solid)
+        candidates = self._physics_enabled & self._solid
+        rows = np.flatnonzero(
+            candidates & ~self._inactive_mask(candidates, awake_only=False))
         if rows.size == 0:
             return
         centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
@@ -1960,6 +1962,7 @@ class PhysicsWorld:
         )
         if rows is not None:
             active &= rows
+        active &= ~self._inactive_mask(active)
         indices = np.flatnonzero(active)
         if indices.size == 0:
             return
@@ -2265,7 +2268,7 @@ class PhysicsWorld:
         scale = max(0.0, float(self.time_scale))
         dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
         active = self._physics_enabled & ~self._kinematic
-        active &= ~self._disabled_mask(active)
+        active &= ~self._inactive_mask(active)
 
         # Where the player's push started each body it pushed (NaN for the
         # rest): a push into a wall is undone with the rest of the move.
@@ -2305,6 +2308,9 @@ class PhysicsWorld:
                 (body_min[:, 2] < player_max[2])
             )
             pushable = active & self._solid & ~self._kinematic & overlap
+            # Sleeping bodies are excluded from the normal per-frame state
+            # scan, but an overlapping sleeping body can still be pushed.
+            pushable &= ~self._inactive_mask(pushable, awake_only=False)
             if self._any_heavy:
                 # The player cannot push a heavy body: it pushes the player.
                 heavy = pushable & (self._mass >= self.HEAVY_MASS)

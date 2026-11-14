@@ -255,11 +255,9 @@ def test_shape_accessors_are_safe_once_the_body_is_gone():
 
 
 # ---------------------------------------------------------------------------
-# `disabled` is authored state that changes at runtime: an I/O Disable, or Big
-# World parking a cell (which stashes the authored flags and forces this one
-# on). The pre-vectorisation simulation skipped disabled bodies outright; the
-# move into PhysicsWorld left that check behind in PropSession, so a parked or
-# disabled prop went on falling while it was supposed to be dormant.
+# Hidden and disabled physics bodies stay dormant. Hide sets `hidden` (not
+# `disabled`), and Big World parking sets both flags; neither state may fall,
+# rotate, be settled into the floor, or be pushed by the player.
 # ---------------------------------------------------------------------------
 
 def test_a_disabled_body_is_not_integrated():
@@ -272,6 +270,35 @@ def test_a_disabled_body_is_not_integrated():
     for _ in range(60):
         world.step(1.0 / 60.0)
 
+    assert prop.pos[1] == 400.0
+
+
+def test_hidden_and_disabled_sleeping_bodies_cannot_be_pushed():
+    for flag in ('hidden', 'disabled'):
+        world = _world()
+        prop = _prop(**{flag: True})
+        world.rebuild([_drum_brush(prop)])
+        body = world.get_body(prop)
+        assert body.awake is False
+
+        world.step(1.0 / 60.0, _player())
+        assert prop.pos[0] == 0.0
+        assert body.awake is False
+
+        # The same body becomes pushable when its inactive flag is cleared.
+        prop.properties[flag] = False
+        world.step(1.0 / 60.0, _player())
+        assert prop.pos[0] > 0.0
+
+
+def test_a_hidden_floating_body_is_not_woken_on_startup():
+    world = _world()
+    prop = _prop(pos=(0.0, 400.0, 0.0), hidden=True)
+    world.rebuild([_drum_brush(prop)])
+
+    world.step(1.0 / 60.0)
+
+    assert world.get_body(prop).awake is False
     assert prop.pos[1] == 400.0
 
 
