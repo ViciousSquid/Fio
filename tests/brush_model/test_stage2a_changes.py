@@ -44,6 +44,8 @@ def _changed_bounds():
     out = {}
     for name, brushes in MAPS.items():
         for raw in brushes:
+            if not raw.get(bs.WORLD_PLANES):
+                continue        # Stage 2a characterises legacy world-plane maps
             brush = bs.migrated(raw)
             stored = tuple(map(np.asarray, bs.stored_bound(brush)))
             derived = tuple(map(np.asarray, bs.bound(brush)))
