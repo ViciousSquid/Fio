@@ -118,3 +118,46 @@ def test_paint_gl_marks_only_successful_paints_for_presentation(qt_app):
     with pytest.raises(RuntimeError, match="synthetic render failure"):
         QtGameView.paintGL(failed_view)
     assert not failed_view._paint_completed_since_swap
+
+
+
+def test_numeric_display_smooths_spikes_without_changing_raw_samples(qt_app):
+    sysmon = _make_sysmon()
+
+    for _ in range(sysmon.GRAPH_POINTS):
+        sysmon.record_frame_time(10.0)
+
+    assert sysmon._smoothed_frame_time_ms == pytest.approx(10.0)
+    assert sysmon._smoothed_fps == pytest.approx(100.0)
+
+    # A single long frame remains visible in the raw graph, but the readout
+    # moves gradually instead of jumping straight to the outlier.
+    sysmon.record_frame_time(100.0)
+    raw_last = float(
+        sysmon._ft_buffer[(sysmon._ft_index - 1) % sysmon.GRAPH_POINTS]
+    )
+    assert raw_last == pytest.approx(100.0)
+    assert 10.0 < sysmon._smoothed_frame_time_ms < 100.0
+    assert sysmon._fps < sysmon._smoothed_fps < 100.0
+
+
+def test_numeric_readouts_refresh_at_five_hz(qt_app):
+    sysmon = _make_sysmon()
+    sysmon._smoothed_fps = 120.0
+    sysmon._smoothed_frame_time_ms = 8.33
+
+    assert sysmon._refresh_display_values(now=10.0)
+    assert sysmon._display_fps == pytest.approx(120.0)
+    assert sysmon._display_frame_time_ms == pytest.approx(8.33)
+
+    sysmon._smoothed_fps = 60.0
+    sysmon._smoothed_frame_time_ms = 16.67
+
+    # 100 ms later: keep the previous displayed value.
+    assert not sysmon._refresh_display_values(now=10.1)
+    assert sysmon._display_fps == pytest.approx(120.0)
+
+    # At 200 ms: publish the latest smoothed values.
+    assert sysmon._refresh_display_values(now=10.21)
+    assert sysmon._display_fps == pytest.approx(60.0)
+    assert sysmon._display_frame_time_ms == pytest.approx(16.67)

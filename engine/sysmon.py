@@ -10,6 +10,7 @@ PERFORMANCE-OPTIMIZED:
   - All drawing via QPainter directly (no QPixmap cache, no raw GL)
 """
 
+import math
 import time
 
 from PyQt5.QtCore import Qt, QRect, QPoint
@@ -58,6 +59,8 @@ class SysMon:
     MARGIN = 9
     FONT_POINTS = 9
     CACHE_INTERVAL_SEC = 1.0    # Stats text cache rebuild interval
+    DISPLAY_SMOOTHING_SECONDS = 0.5
+    DISPLAY_REFRESH_INTERVAL_SEC = 0.2  # Five numeric updates per second
 
     def __init__(self, parent_view):
         self.parent = parent_view
@@ -86,6 +89,12 @@ class SysMon:
         self._ft_max_age = 0
         self._fps = 0.0
         self._last_presented_time = None
+        # Smoothed readouts are separate from the raw frame-time ring buffer.
+        self._smoothed_fps = None
+        self._smoothed_frame_time_ms = None
+        self._display_fps = 0.0
+        self._display_frame_time_ms = 0.0
+        self._display_values_time = None
 
         # Font & metrics
         self.font = QFont("Fio UI")
@@ -175,6 +184,23 @@ class SysMon:
             if self._ft_sum > 0.0 else 0.0
         )
 
+        # Time-based exponential smoothing damps short-lived fluctuations.
+        # The raw samples remain untouched in the ring buffer and graph.
+        interval_ms = max(float(delta_ms), 0.0)
+        alpha = 1.0 - math.exp(
+            -interval_ms / (1000.0 * self.DISPLAY_SMOOTHING_SECONDS)
+        )
+        if self._smoothed_frame_time_ms is None:
+            self._smoothed_frame_time_ms = float(delta_ms)
+            self._smoothed_fps = self._fps
+        else:
+            self._smoothed_frame_time_ms += alpha * (
+                float(delta_ms) - self._smoothed_frame_time_ms
+            )
+            self._smoothed_fps += alpha * (
+                self._fps - self._smoothed_fps
+            )
+
         # Incremental max tracking
         if delta_ms >= self._ft_max:
             self._ft_max = delta_ms
@@ -214,6 +240,11 @@ class SysMon:
         self._ft_max_age = 0
         self._fps = 0.0
         self._last_presented_time = None
+        self._smoothed_fps = None
+        self._smoothed_frame_time_ms = None
+        self._display_fps = 0.0
+        self._display_frame_time_ms = 0.0
+        self._display_values_time = None
         self._fps_cached_val = -1
         self._ft_cached_val = -1.0
         self._fps_str = ""
@@ -409,6 +440,23 @@ class SysMon:
             self._fps_str = f"Frame: {ft_tenths:.1f}ms  FPS: {fps_int}"
         return self._fps_str
 
+    def _refresh_display_values(self, now=None):
+        """Latch smoothed metrics for display at a steady five-Hz cadence."""
+        now = time.perf_counter() if now is None else float(now)
+        if (self._display_values_time is not None
+                and now - self._display_values_time < self.DISPLAY_REFRESH_INTERVAL_SEC):
+            return False
+
+        self._display_fps = float(
+            self._smoothed_fps if self._smoothed_fps is not None else self._fps
+        )
+        self._display_frame_time_ms = float(
+            self._smoothed_frame_time_ms
+            if self._smoothed_frame_time_ms is not None else 0.0
+        )
+        self._display_values_time = now
+        return True
+
     def _draw_graph(self, painter, graph_x, graph_y):
         """Draw graph line using pre-allocated QPoint array — zero allocation."""
         if self._ft_count < 2:
@@ -504,10 +552,12 @@ class SysMon:
         self._draw_graph(painter, graph_x, graph_y)
 
         current_ft = self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS] if self._ft_count > 0 else 0
+        now = time.perf_counter()
+        self._refresh_display_values(now)
         if not self.expanded:
-            # Collapsed, the frame time sits at the foot of the graph itself
-            # (shadowed, so it reads over the line).
-            text = f"Frame time: {current_ft:.1f} ms"
+            # Collapsed, show a smoothed value refreshed five times per second.
+            # The graph above continues to show the raw frame-time samples.
+            text = f"Frame time: {self._display_frame_time_ms:.1f} ms"
             tx = graph_x + 6
             ty = graph_y + self.GRAPH_HEIGHT - 4 - self._font_metrics.descent()
             painter.setPen(self._shadow_color)
@@ -517,7 +567,6 @@ class SysMon:
             return
 
         # --- Stats text (cached once/sec) ---
-        now = time.perf_counter()
         if now - self._stats_cache_time >= self.CACHE_INTERVAL_SEC:
             self._rebuild_stats_cache(fps, logic_thread, renderer, editor_state, terrain)
         cache = self._stats_cache
@@ -528,7 +577,10 @@ class SysMon:
 
         # FPS (cached string)
         painter.setPen(self._white)
-        painter.drawText(left_margin, stats_start_y, self._get_fps_str(current_ft, fps))
+        painter.drawText(
+            left_margin, stats_start_y,
+            self._get_fps_str(self._display_frame_time_ms, self._display_fps)
+        )
 
         # Cached stats
         painter.setPen(self._vram_color)
