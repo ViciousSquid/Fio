@@ -315,9 +315,9 @@ def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
 
     # Force a dense repack after activation; the transition must survive it.
     prop.properties['hidden'] = False
-    world.wake(prop)
     other = _prop(pos=(400.0, 400.0, 0.0))
     world.register_body(other, _drum_brush(other))
+    world.wake(prop)  # repack first, then activate the existing body
     world.step(1.0 / 60.0)
 
     assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
