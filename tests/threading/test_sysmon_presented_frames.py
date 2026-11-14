@@ -1,4 +1,4 @@
-"""SysMon counts completed Qt presentations, not update-timer callbacks."""
+"""SysMon counts successful Qt renders, not update-timer callbacks."""
 
 from types import SimpleNamespace
 
@@ -32,7 +32,7 @@ def test_fps_uses_completed_frame_intervals_and_remains_separate_from_tps(qt_app
 
     # 121 presentations create 120 intervals: exactly one second at 120 Hz.
     for index in range(121):
-        sysmon.record_presented_frame(100.0 + index / 120.0)
+        sysmon.record_rendered_frame(100.0 + index / 120.0)
 
     metrics = sysmon.get_metrics()
     assert metrics["fps"] == pytest.approx(120.0)
@@ -46,79 +46,57 @@ def test_fps_and_average_use_the_same_rolling_window(qt_app):
 
     # Fill the 60-interval window with 10 ms presentations.
     for index in range(61):
-        sysmon.record_presented_frame(100.0 + index / 100.0)
+        sysmon.record_rendered_frame(100.0 + index / 100.0)
     assert sysmon._fps == pytest.approx(100.0)
 
     # Replace every interval with 20 ms; the old samples must be evicted.
     for index in range(1, 61):
-        sysmon.record_presented_frame(100.6 + index / 50.0)
+        sysmon.record_rendered_frame(100.6 + index / 50.0)
 
     metrics = sysmon.get_metrics()
     assert metrics["fps"] == pytest.approx(50.0)
     assert metrics["average_frame_time_ms"] == pytest.approx(20.0)
 
 
-def test_frame_swapped_counts_only_a_fresh_successful_paint(qt_app):
+def test_paint_gl_records_only_successful_renders(main_window, monkeypatch):
     from engine.qt_game_view import QtGameView
 
+    target = main_window.view_3d
     recorded = []
 
     class Recorder:
-        def record_presented_frame(self, timestamp):
+        def record_rendered_frame(self, timestamp):
             recorded.append(timestamp)
             return 120.0
 
-    view = SimpleNamespace(
-        _paint_completed_since_swap=False,
-        sysmon=Recorder(),
-        fps=0.0,
-    )
+    class ReadyRenderer:
+        ready = True
+        render_stats = None
 
-    QtGameView._frame_swapped(view)
-    assert recorded == []
+    target.sysmon = Recorder()
+    target.renderer = ReadyRenderer()
+    target.logic_thread = object()
+    target.fps = 0.0
+    state = object()
+    monkeypatch.setattr(target.game_state, "get_render_state", lambda: state)
+    monkeypatch.setattr(target.game_state, "release_render_state", lambda _state: None)
+    monkeypatch.setattr(target, "_animate_textures", lambda: None)
+    monkeypatch.setattr(target, "_paint_frame", lambda _state: None)
+    monkeypatch.setattr(target, "_collect_terrain_stats", lambda: None)
+    target._gl_error_checks_left = 0
+    target._muzzle_flash_counter = 0
 
-    view._paint_completed_since_swap = True
-    QtGameView._frame_swapped(view)
+    QtGameView.paintGL(target)
     assert len(recorded) == 1
-    assert view.fps == pytest.approx(120.0)
-    assert not view._paint_completed_since_swap
-
-    QtGameView._frame_swapped(view)
-    assert len(recorded) == 1
-
-
-def test_paint_gl_marks_only_successful_paints_for_presentation(qt_app):
-    from engine.qt_game_view import QtGameView
-
-    def make_view(paint):
-        state = object()
-        return SimpleNamespace(
-            renderer=SimpleNamespace(ready=True),
-            logic_thread=object(),
-            game_state=SimpleNamespace(
-                get_render_state=lambda: state,
-                release_render_state=lambda _state: None,
-            ),
-            _animate_textures=lambda: None,
-            _paint_frame=paint,
-            _collect_terrain_stats=lambda: None,
-            _gl_error_checks_left=0,
-            _muzzle_flash_counter=0,
-            _paint_completed_since_swap=False,
-        )
-
-    view = make_view(lambda _state: None)
-    QtGameView.paintGL(view)
-    assert view._paint_completed_since_swap
+    assert target.fps == pytest.approx(120.0)
 
     def fail(_state):
         raise RuntimeError("synthetic render failure")
 
-    failed_view = make_view(fail)
+    monkeypatch.setattr(target, "_paint_frame", fail)
     with pytest.raises(RuntimeError, match="synthetic render failure"):
-        QtGameView.paintGL(failed_view)
-    assert not failed_view._paint_completed_since_swap
-
+        QtGameView.paintGL(target)
+    assert len(recorded) == 1
 
 
 def test_numeric_display_smooths_spikes_without_changing_raw_samples(qt_app):
