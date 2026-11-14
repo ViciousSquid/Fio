@@ -291,6 +291,7 @@ class QtGameView(QOpenGLWidget):
         self._last_player_start_angle = 0
 
         self.fps = 0.0
+        self._qt_paint_event_active = False
         self.start_time = time.perf_counter()
 
         self._render_config = {
@@ -786,6 +787,20 @@ class QtGameView(QOpenGLWidget):
         terrain.total_triangles = stats.terrain_triangles
         terrain.drawn_slots = stats.terrain_drawn_slots
 
+    def paintEvent(self, event):
+        """Mark frames Qt actually paints; tests may call paintGL directly.
+
+        FioTestSession.paint() invokes paintGL against the widget's FBO to
+        inspect pixels. Those diagnostic renders are not presented frames
+        and must not advance the live FPS counter.
+        """
+        self._qt_paint_event_active = True
+        try:
+            super().paintEvent(event)
+        finally:
+            self._qt_paint_event_active = False
+
+
     def paintGL(self):
         if not self.renderer or not self.renderer.ready:
             return
@@ -809,8 +824,9 @@ class QtGameView(QOpenGLWidget):
             self._collect_terrain_stats()
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
-        if paint_succeeded:
-            # paintGL is the successful render boundary for QOpenGLWidget.
+        if paint_succeeded and self._qt_paint_event_active:
+            # Count only a successful Qt paint event. Diagnostic/test callers
+            # can invoke paintGL directly without presenting a screen frame.
             self.fps = self.sysmon.record_rendered_frame(time.perf_counter())
         if self._gl_error_checks_left:
             self._gl_error_checks_left -= 1
