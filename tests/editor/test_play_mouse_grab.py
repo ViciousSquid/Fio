@@ -9,7 +9,8 @@ clicked, so clicking to fire pressed Stop.
 import pytest
 
 pytest.importorskip('PyQt5')
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtGui import QFocusEvent
 
 from editor.things import PlayerStart
 from tests.helpers.worlds import level_data, make_thing, room
@@ -51,10 +52,16 @@ def playing(fio_session, monkeypatch):
     return session
 
 
-def test_play_grabs_the_mouse_and_lets_it_go_when_play_stops(playing):
+def test_play_grabs_the_mouse_on_entry_and_restores_it_after_focus_returns(playing):
     view = playing.view
-    view._poll_mouse_look()
     assert view.mouseGrabber() is view
+
+    view.focusOutEvent(QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    assert view.mouseGrabber() is not view
+
+    view.focusInEvent(QFocusEvent(QEvent.FocusIn, Qt.OtherFocusReason))
+    assert view.mouseGrabber() is view
+
     playing.stop_play()
     assert view.mouseGrabber() is not view
 

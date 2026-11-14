@@ -1359,6 +1359,10 @@ class QtGameView(QOpenGLWidget):
             self._last_player_start_angle = player_start_angle
             self._recentre_look_cursor()
             QApplication.setOverrideCursor(Qt.BlankCursor)
+            # Establish mouse capture as part of entering Play, not on the
+            # next 16 ms update-loop poll. The toolbar's activating click has
+            # already been handled; subsequent clicks belong to the game view.
+            self._sync_play_mouse_grab(self.window().isActiveWindow())
 
             # Convert editor angle (0° = east) to game angle (0° = north).
             # Do not add another 180° flip: that would make every PlayerStart
@@ -2045,8 +2049,22 @@ class QtGameView(QOpenGLWidget):
         self._editor_right_mouse_held = False
         self._sync_editor_mouselook()
 
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if self.play_mode:
+            held = (self._mouse_look_captured()
+                    and self.window().isActiveWindow())
+            self._sync_play_mouse_grab(held)
+
     def focusOutEvent(self, event):
-        if not self.play_mode and self.mouselook_active:
+        if self.play_mode:
+            # Release immediately on a focus transition (another window,
+            # console or pause UI); the next focus-in restores capture.
+            self._sync_play_mouse_grab(False)
+            self._attach_mac_cursor()
+            self.game_state.consume_mouse_delta()
+            self._skip_next_look_poll = True
+        elif self.mouselook_active:
             self.stop_editor_mouselook()
             self.editor.keys_pressed.clear()
             self.game_state.set_keys(set())
