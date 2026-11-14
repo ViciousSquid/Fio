@@ -291,9 +291,6 @@ class QtGameView(QOpenGLWidget):
         self._last_player_start_angle = 0
 
         self.fps = 0.0
-        # True only after paintGL has drawn a fresh frame and before Qt
-        # acknowledges its composition through frameSwapped.
-        self._paint_completed_since_swap = False
         self.start_time = time.perf_counter()
 
         self._render_config = {
@@ -414,7 +411,6 @@ class QtGameView(QOpenGLWidget):
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
         timer.start()
-        self.frameSwapped.connect(self._frame_swapped)
 
         self.setFocusPolicy(Qt.ClickFocus)
         self.setMouseTracking(True)
@@ -743,13 +739,6 @@ class QtGameView(QOpenGLWidget):
             self.repaint()
 
 
-    def _frame_swapped(self):
-        """Count a fresh paint only after Qt has completed its composition."""
-        if self._paint_completed_since_swap:
-            self._paint_completed_since_swap = False
-            self.fps = self.sysmon.record_presented_frame(time.perf_counter())
-
-
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
 
@@ -821,7 +810,8 @@ class QtGameView(QOpenGLWidget):
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
         if paint_succeeded:
-            self._paint_completed_since_swap = True
+            # paintGL is the successful render boundary for QOpenGLWidget.
+            self.fps = self.sysmon.record_rendered_frame(time.perf_counter())
         if self._gl_error_checks_left:
             self._gl_error_checks_left -= 1
             self._report_gl_errors()
