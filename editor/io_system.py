@@ -67,10 +67,13 @@ except Exception:  # pragma: no cover - engine-less editor/tooling contexts
     set_authored_flag = _plain_set_authored_flag
 
 def _wake_physics_body(logic, entity):
-    """Wake an entity only when the live PhysicsWorld owns a body for it."""
+    """Wake a visible dynamic body without taking ownership from its runtime."""
     session = getattr(logic, 'session_runtime', None)
     physics_world = getattr(session, 'physics_world', None)
-    if physics_world is not None and physics_world.get_body(entity) is not None:
+    if physics_world is None:
+        return
+    body = physics_world.get_body(entity)
+    if body is not None and not body.kinematic:
         physics_world.wake(entity)
 
 
