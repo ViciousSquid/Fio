@@ -299,12 +299,17 @@ def test_an_enabled_sunk_body_is_settled_before_a_player_push():
     prop = _prop((0.0, -DRUM_HALF_Y, 0.0), disabled=True)
     world.rebuild([_drum_brush(prop)])
 
-    # Disabled bodies stay exactly where the map placed them during rebuild.
+    # Consume the one-time startup wake while the body is still disabled.
+    # It must remain asleep and in its authored, floor-embedded placement.
+    world.step(1.0 / 60.0)
+    body = world.get_body(prop)
+    assert body.awake is False
     assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
-    set_authored_flag(prop, 'disabled', False)
 
-    # Enable does not explicitly wake a body. Player contact is the first
-    # reason it would otherwise move, and must not send it through the floor.
+    set_authored_flag(prop, 'disabled', False)
+    assert body.awake is False  # Enable itself does not wake the body.
+
+    # Player contact is its first wake; settling must precede integration.
     world.step(1.0 / 60.0, _player())
 
     assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
