@@ -204,6 +204,7 @@ def test_clear_releases_all_body_state():
 
     assert world.get_body(prop) is None
     assert world._position.shape == (0, 3)
+    assert world._was_inactive.shape == (0,)
     assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
 
@@ -300,6 +301,23 @@ def test_a_hidden_floating_body_is_not_woken_on_startup():
 
     assert world.get_body(prop).awake is False
     assert prop.pos[1] == 400.0
+
+
+def test_rebuild_does_not_reuse_the_previous_world_inactive_snapshot():
+    world = _world()
+    previous = _prop()
+    world.rebuild([_drum_brush(previous)])
+    world.step(1.0 / 60.0)  # records an active (False) snapshot
+
+    hidden = _prop(pos=(0.0, -DRUM_HALF_Y, 0.0), hidden=True)
+    world.rebuild([_drum_brush(hidden)])
+    world.step(1.0 / 60.0)
+    assert hidden.pos[1] == pytest.approx(-DRUM_HALF_Y)
+
+    hidden.properties['hidden'] = False
+    world.wake(hidden)
+    world.step(1.0 / 60.0)
+    assert hidden.pos[1] == pytest.approx(0.0, abs=1e-4)
 
 
 def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
