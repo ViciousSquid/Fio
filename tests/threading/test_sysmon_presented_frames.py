@@ -86,6 +86,13 @@ def test_paint_gl_records_only_successful_renders(main_window, monkeypatch):
     target._gl_error_checks_left = 0
     target._muzzle_flash_counter = 0
 
+    # A direct FBO render is useful to tests, but is not a presented frame.
+    QtGameView.paintGL(target)
+    assert not recorded
+    assert target.fps == 0.0
+
+    # Qt calls paintGL inside paintEvent; only that path advances FPS.
+    target._qt_paint_event_active = True
     QtGameView.paintGL(target)
     assert len(recorded) == 1
     assert target.fps == pytest.approx(120.0)
@@ -97,6 +104,7 @@ def test_paint_gl_records_only_successful_renders(main_window, monkeypatch):
     with pytest.raises(RuntimeError, match="synthetic render failure"):
         QtGameView.paintGL(target)
     assert len(recorded) == 1
+    target._qt_paint_event_active = False
 
 
 def test_numeric_display_smooths_spikes_without_changing_raw_samples(qt_app):
