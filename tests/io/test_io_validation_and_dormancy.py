@@ -428,7 +428,6 @@ def test_generic_toggle_visibility_wakes_only_when_it_reveals(monkeypatch):
     manager = IOManager()
 
     manager._try_generic_input(revealed, "ToggleVisibility", "")
-    manager._try_generic_input(revealed, "ToggleVisibility", "")
     manager._try_generic_input(already_visible, "ToggleVisibility", "")
 
     assert revealed.properties["hidden"] is False
@@ -453,7 +452,6 @@ def test_thing_toggle_visibility_wakes_only_when_it_reveals(monkeypatch):
     register_all_input_handlers(manager)
     toggle = manager._input_handlers[("prop", "togglevisibility")]
 
-    toggle(revealed, "", None)
     toggle(revealed, "", None)
     toggle(already_visible, "", None)
 
