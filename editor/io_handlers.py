@@ -1099,9 +1099,11 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' hidden")
 
     def thing_show(entity, param, logic):
-        """Show a thing entity and resume its physics body, if any."""
+        """Show a thing entity and wake its body when it becomes visible."""
+        was_hidden = authored_flag(entity, 'hidden')
         set_authored_flag(entity, 'hidden', False)
-        _wake_physics_body(logic, entity)
+        if was_hidden:
+            _wake_physics_body(logic, entity)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Entity '{name}' shown")
 
