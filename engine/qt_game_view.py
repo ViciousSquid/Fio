@@ -1807,7 +1807,8 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
-        held = self._mouse_look_captured() and self.window().isActiveWindow()
+        held = (self._mouse_look_captured() and self.window().isActiveWindow()
+                and self.hasFocus())
         self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
@@ -1885,7 +1886,8 @@ class QtGameView(QOpenGLWidget):
         reports (deltaX/deltaY), summed by the native event filter.
         """
         mouse = self._mac_mouse
-        if not self._mouse_look_captured() or not self.window().isActiveWindow():
+        if (not self._mouse_look_captured() or not self.window().isActiveWindow()
+                or not self.hasFocus()):
             self._attach_mac_cursor()
             mouse.take()                       # movement made with the cursor free
             self._skip_next_look_poll = True
