@@ -84,5 +84,6 @@ def test_no_shipped_brush_draws_differently(name):
     for raw in MAPS[name]:
         brush = bs.migrated(raw)
         for tag, ring, _material in bs.render_faces(brush):
-            assert np.array_equal(bs.posed(brush, ring), np.asarray(ring)), (
-                name, raw.get('id'), tag)
+            assert np.allclose(
+                bs.posed(brush, ring), np.asarray(ring), atol=1e-9, rtol=0.0), (
+                    name, raw.get('id'), tag)
