@@ -1394,7 +1394,7 @@ class PhysicsWorld:
         self.sleep_enabled = bool(self.DEFAULT_SLEEP_ENABLED)
         # Physics consumes authored visibility/enable transitions without
         # polling every sleeping entity on every simulation tick.
-        JOURNAL.subscribe(self)
+        JOURNAL.subscribe(self, flags=STATE | VISIBILITY)
 
     def clear(self):
         # Discard notifications for the world being torn down. The subscriber

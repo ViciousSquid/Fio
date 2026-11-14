@@ -85,12 +85,16 @@ class _Sink:
     next subscribe or drain drops it.
     """
 
-    __slots__ = ('pending', 'pending_positions', 'drained_positions', 'alive', '__weakref__')
+    __slots__ = ('pending', 'pending_positions', 'drained_positions',
+                 'watch_flags', 'alive', '__weakref__')
 
-    def __init__(self):
+    def __init__(self, watch_flags=None):
         self.pending = {}
         self.pending_positions = {}
         self.drained_positions = {}
+        # Optional subscriber-side filter; the common unfiltered path keeps
+        # existing table semantics unchanged.
+        self.watch_flags = watch_flags
         self.alive = True
 
     def _die(self):
@@ -127,19 +131,19 @@ class ChangeJournal:
         if not all(sink.alive for sink in self._live):
             self._live = tuple(sink for sink in self._live if sink.alive)
 
-    def subscribe(self, subscriber) -> None:
+    def subscribe(self, subscriber, flags=None) -> None:
         """Start collecting changes for *subscriber* (idempotent).
 
-        Tables subscribe when they are built, empty: a table with no rows has
-        nothing a change could have made stale, and its first reconcile reads
-        every row it takes on.
+        *flags* optionally limits which change kinds the subscriber stores.
+        Tables subscribe unfiltered; sparse consumers such as physics can
+        ignore position-only notifications without walking them on every tick.
         """
         with self._lock:
             if subscriber not in self._sinks:
-                self._add(subscriber)
+                self._add(subscriber, flags)
 
-    def _add(self, subscriber):
-        sink = _Sink()
+    def _add(self, subscriber, flags=None):
+        sink = _Sink(flags)
         self._sinks[subscriber] = sink
         weakref.finalize(subscriber, sink._die)
         self._prune()
@@ -150,8 +154,13 @@ class ChangeJournal:
         oid = id(obj)
         with self._lock:
             for sink in self._live:
+                if not sink.alive:
+                    continue
+                if (sink.watch_flags is not None
+                        and not (flags & sink.watch_flags)):
+                    continue
                 pending = sink.pending
-                if pending is OVERFLOW or not sink.alive:
+                if pending is OVERFLOW:
                     continue
                 pending[oid] = pending.get(oid, 0) | flags
                 if position is not None and flags & MOVED:
@@ -180,8 +189,13 @@ class ChangeJournal:
                 raise ValueError("positions must align with objs")
         with self._lock:
             for sink in self._live:
+                if not sink.alive:
+                    continue
+                if (sink.watch_flags is not None
+                        and not (flags & sink.watch_flags)):
+                    continue
                 pending = sink.pending
-                if pending is OVERFLOW or not sink.alive:
+                if pending is OVERFLOW:
                     continue
                 get = pending.get
                 for i, oid in enumerate(oids):
