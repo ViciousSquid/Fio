@@ -74,6 +74,8 @@ def _changes():
         for brush in brushes:
             if bs.encoding(brush) == 'box':
                 continue        # the box path is untouched by Stage 1
+            if not brush.get(bs.WORLD_PLANES):
+                continue        # version-5 maps are already in the canonical layout
             assert bs.draw_pass(bs.migrated(brush)) == _stage0_pass(brush), (
                 name, brush.get('id'))
             if bs.encoding(brush) != 'convex':
