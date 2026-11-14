@@ -73,6 +73,14 @@ def test_loading_another_map_during_play_regrabs_after_outer_overlay(
     session = playing
     view, window = session.view, session.window
     overlay = window.loading_overlay
+    restored_after_overlay = []
+    restore_capture = view.restore_play_mouse_capture
+
+    def record_restoration():
+        restored_after_overlay.append(not overlay.active)
+        return restore_capture()
+
+    monkeypatch.setattr(view, 'restore_play_mouse_capture', record_restoration)
 
     # Model the native grab being dropped when the outermost loading panel
     # disappears. A nested _start_play() cannot protect against that teardown.
@@ -100,6 +108,7 @@ def test_loading_another_map_during_play_regrabs_after_outer_overlay(
     # The deferred pass runs only after load_level_file has unwound its
     # outermost busy() context.
     qt_app.processEvents()
+    assert restored_after_overlay == [True]
     assert view.hasFocus()
     assert view.mouseGrabber() is view
 
