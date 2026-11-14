@@ -2733,7 +2733,12 @@ class MainWindow(QMainWindow):
         
         # Update play button color
         self.update_play_button_color()
-        
+
+        # A map transition may have restarted Play inside an outer loading
+        # overlay. Its final hide can invalidate the grab made above; run one
+        # last focus/capture pass after the whole nested operation unwinds.
+        QTimer.singleShot(0, self.view_3d.restore_play_mouse_capture)
+
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
 
 

@@ -297,12 +297,15 @@ def test_natural_and_tiling_apply_to_angled_faces(renderer, context):
 
 
 def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
-    """The two shipped _SHOWCASE brushes whose authored per-tag scale was not
-    on their planes. Loaded as the editor loads a version 3 map, the
-    precedence rule moves the authored value onto the plane and the GPU
-    draws it; an unmigrated legacy dict handed straight to the renderer is
-    read from its planes only -- nothing at run time consults a per-tag
-    copy."""
+    """Exercise the version-3 migration and its actual GL draw path.
+
+    The shipped _SHOWCASE map is now version 5 and already stores its face
+    materials on the planes. Recreate the two former legacy conditions by
+    moving their canonical UV scales back to per-tag dictionaries and
+    leaving the plane scale at 1.0. EditorState must migrate those authored
+    values back onto the planes before rendering; an unmigrated brush sent
+    straight to the renderer must still draw the plane's 1.0 scale.
+    """
     from editor.editor_state import EditorState
     from engine import brush_geometry as bg
     from tests.helpers.paths import REPO_ROOT
@@ -311,14 +314,26 @@ def test_a_legacy_brush_draws_its_migrated_record(renderer, context):
     raw = []
     for number, bid in enumerate(('5b10b49b-9b6c-45d9-91ee-0b6f06970590',
                                   '8c04e483-4d44-4217-a03d-32844a727043')):
-        # In the frame the editor holds it in (Stage 2d), materials as stored.
+        # Start from the current canonical version-5 geometry, then author
+        # one deliberate pre-version-5 UV-scale duplicate. This keeps the GL
+        # migration test independent of whether a shipped map still carries
+        # legacy per-tag material data.
         brush = {k: v for k, v in bs.localised(showcase[bid]).items()
                  if k not in bg.GEO_RUNTIME_KEYS}
         brush['name'] = 'showcase%d' % number
+        legacy_tag, legacy_scale = (
+            ('north', (0.25, 0.25)) if number == 0 else ('east', (10.0, 8.0)))
         for plane in brush['geometry']['planes']:
             tag = plane.get('face')
             key = tag or '#%d' % brush['geometry']['planes'].index(plane)
             plane['texture'] = 'probe/showcase%d/%s.png' % (number, key)
+        legacy_plane = next(
+            plane for plane in brush['geometry']['planes']
+            if plane.get('face') == legacy_tag)
+        # Make the plane's stored value unambiguously stale; the legacy
+        # per-tag value is the one the load-time migration must preserve.
+        legacy_plane['uv_scale'] = [1.0, 1.0]
+        brush['uv_scale'] = {legacy_tag: list(legacy_scale)}
         bg.invalidate_geometry_cache(brush)
         bg.translate_brush(brush, np.subtract((-150 + 300 * number, 40, 0),
                                               brush['pos']).tolist())

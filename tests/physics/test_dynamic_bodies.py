@@ -8,6 +8,7 @@ import glm
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
+from engine.spatial import set_authored_flag
 
 # Oil_Drum_Grey bounds: local Y starts at zero, so the entity origin is the
 # point touching the floor and the collision box centre sits half a height up.
@@ -204,6 +205,8 @@ def test_clear_releases_all_body_state():
 
     assert world.get_body(prop) is None
     assert world._position.shape == (0, 3)
+    assert world._was_inactive.shape == (0,)
+    assert world._pending_settle.shape == (0,)
     assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
 
@@ -255,11 +258,9 @@ def test_shape_accessors_are_safe_once_the_body_is_gone():
 
 
 # ---------------------------------------------------------------------------
-# `disabled` is authored state that changes at runtime: an I/O Disable, or Big
-# World parking a cell (which stashes the authored flags and forces this one
-# on). The pre-vectorisation simulation skipped disabled bodies outright; the
-# move into PhysicsWorld left that check behind in PropSession, so a parked or
-# disabled prop went on falling while it was supposed to be dormant.
+# Hidden and disabled physics bodies stay dormant. Hide sets `hidden` (not
+# `disabled`), and Big World parking sets both flags; neither state may fall,
+# rotate, be settled into the floor, or be pushed by the player.
 # ---------------------------------------------------------------------------
 
 def test_a_disabled_body_is_not_integrated():
@@ -273,6 +274,121 @@ def test_a_disabled_body_is_not_integrated():
         world.step(1.0 / 60.0)
 
     assert prop.pos[1] == 400.0
+
+
+def test_hidden_and_disabled_sleeping_bodies_cannot_be_pushed():
+    for flag in ('hidden', 'disabled'):
+        world = _world()
+        prop = _prop(**{flag: True})
+        world.rebuild([_drum_brush(prop)])
+        body = world.get_body(prop)
+        assert body.awake is False
+
+        world.step(1.0 / 60.0, _player())
+        assert prop.pos[0] == 0.0
+        assert body.awake is False
+
+        # The same body becomes pushable when its inactive flag is cleared.
+        prop.properties[flag] = False
+        world.step(1.0 / 60.0, _player())
+        assert prop.pos[0] > 0.0
+
+
+def test_an_enabled_sunk_body_is_settled_before_a_player_push():
+    world = _world()
+    prop = _prop((0.0, -DRUM_HALF_Y, 0.0), disabled=True)
+    world.rebuild([_drum_brush(prop)])
+
+    # Consume the one-time startup wake while the body is still disabled.
+    # It must remain asleep and in its authored, floor-embedded placement.
+    world.step(1.0 / 60.0)
+    body = world.get_body(prop)
+    assert body.awake is False
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+
+    set_authored_flag(prop, 'disabled', False)
+    assert body.awake is False  # Enable itself does not wake the body.
+
+    # Player contact is its first wake; settling must precede integration.
+    world.step(1.0 / 60.0, _player())
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
+    assert prop.pos[0] > 0.0
+
+
+def test_a_sleeping_hidden_body_is_settled_after_a_platform_moves_under_it():
+    platform = _floor((0.0, 360.0, 0.0), (2000.0, 60.0, 2000.0))
+    world = _world(platform)
+    prop = _prop((0.0, 390.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    body = world.get_body(prop)
+    assert body.awake is False
+
+    set_authored_flag(prop, 'hidden', True)
+    world.step(1.0 / 60.0)
+    assert body.awake is False
+    assert prop.pos[1] == pytest.approx(390.0)
+
+    # The dormant body does not move while the platform rises into it.
+    raised_platform = _floor((0.0, 390.0, 0.0), (2000.0, 60.0, 2000.0))
+    world.spatial_grid.populate([raised_platform])
+    world._rebuild_static_cells()
+    set_authored_flag(prop, 'hidden', False)
+    world.wake(prop)  # same wake performed by the Show I/O handler
+    world.step(1.0 / 60.0)
+
+    assert prop.pos[1] == pytest.approx(420.0, abs=1e-4)
+
+
+def test_a_hidden_floating_body_is_not_woken_on_startup():
+    world = _world()
+    prop = _prop(pos=(0.0, 400.0, 0.0), hidden=True)
+    world.rebuild([_drum_brush(prop)])
+
+    world.step(1.0 / 60.0)
+
+    assert world.get_body(prop).awake is False
+    assert not world._pending_settle[world._indices[id(prop)]]
+    assert prop.pos[1] == 400.0
+
+
+def test_rebuild_does_not_reuse_the_previous_world_inactive_snapshot():
+    world = _world()
+    previous = _prop()
+    world.rebuild([_drum_brush(previous)])
+    world.step(1.0 / 60.0)  # records an active (False) snapshot
+
+    hidden = _prop(pos=(0.0, -DRUM_HALF_Y, 0.0), hidden=True)
+    world.rebuild([_drum_brush(hidden)])
+    world.step(1.0 / 60.0)
+    assert hidden.pos[1] == pytest.approx(-DRUM_HALF_Y)
+
+    hidden.properties['hidden'] = False
+    world.wake(hidden)
+    world.step(1.0 / 60.0)
+    assert hidden.pos[1] == pytest.approx(0.0, abs=1e-4)
+
+
+def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
+    world = _world()
+    # The model origin is at its centre, embedded halfway into the floor.
+    prop = _prop(pos=(0.0, -DRUM_HALF_Y, 0.0), hidden=True)
+    world.rebuild([_drum_brush(prop)])
+
+    # Rebuild and dormant ticks must not move a hidden body.
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+    world.step(1.0 / 60.0)
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+
+    # Force a dense repack after activation; the transition must survive it.
+    prop.properties['hidden'] = False
+    other = _prop(pos=(400.0, 400.0, 0.0))
+    world.register_body(other, _drum_brush(other))
+    world.wake(prop)  # repack first, then activate the existing body
+    world.step(1.0 / 60.0)
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
 
 
 def test_a_parked_body_resumes_when_it_is_re_enabled():

@@ -290,10 +290,8 @@ class QtGameView(QOpenGLWidget):
         self._last_player_start_pos = [0, 0, 0]
         self._last_player_start_angle = 0
 
-        self.fps = 0
-        self.frame_count = 0
-        self.last_time = time.perf_counter()
-        self.last_fps_time = time.perf_counter()
+        self.fps = 0.0
+        self._qt_paint_event_active = False
         self.start_time = time.perf_counter()
 
         self._render_config = {
@@ -711,15 +709,8 @@ class QtGameView(QOpenGLWidget):
         if not self.play_mode and self.editor.state.stream_editor_camera(self.camera.pos):
             self.editor.update_all_ui()
         current_time = time.perf_counter()
-        delta = current_time - self.last_time
-        self.last_time = current_time
-        self.frame_count += 1
-        fps_elapsed = current_time - self.last_fps_time
-        if fps_elapsed > 1.0:
-            self.fps = self.frame_count / fps_elapsed
-            self.frame_count = 0
-            self.last_fps_time = current_time
-        self.sysmon.record_frame_time(delta * 1000.0)
+        # FPS and frame-time samples are recorded only after Qt has composed
+        # a fresh, successfully painted frame; this timer is not a frame clock.
         self.audio._process_sound_queue()
         self._process_console_command_queue()
 
@@ -796,6 +787,20 @@ class QtGameView(QOpenGLWidget):
         terrain.total_triangles = stats.terrain_triangles
         terrain.drawn_slots = stats.terrain_drawn_slots
 
+    def paintEvent(self, event):
+        """Mark frames Qt actually paints; tests may call paintGL directly.
+
+        FioTestSession.paint() invokes paintGL against the widget's FBO to
+        inspect pixels. Those diagnostic renders are not presented frames
+        and must not advance the live FPS counter.
+        """
+        self._qt_paint_event_active = True
+        try:
+            super().paintEvent(event)
+        finally:
+            self._qt_paint_event_active = False
+
+
     def paintGL(self):
         if not self.renderer or not self.renderer.ready:
             return
@@ -805,9 +810,11 @@ class QtGameView(QOpenGLWidget):
             render_state = self.game_state.get_render_state()
         if render_state is None:
             return
-        self._animate_textures()
+        paint_succeeded = False
         try:
+            self._animate_textures()
             self._paint_frame(render_state)
+            paint_succeeded = True
         finally:
             # The render state is a borrowed snapshot, and publication waits
             # while it is borrowed: release it the moment this synchronous
@@ -817,6 +824,10 @@ class QtGameView(QOpenGLWidget):
             self._collect_terrain_stats()
             #: CPU milliseconds the last paint took, for Debug Tables.
             self.paint_ms = (time.perf_counter() - started) * 1000.0
+        if paint_succeeded and self._qt_paint_event_active:
+            # Count only a successful Qt paint event. Diagnostic/test callers
+            # can invoke paintGL directly without presenting a screen frame.
+            self.fps = self.sysmon.record_rendered_frame(time.perf_counter())
         if self._gl_error_checks_left:
             self._gl_error_checks_left -= 1
             self._report_gl_errors()
@@ -1354,6 +1365,10 @@ class QtGameView(QOpenGLWidget):
             self._last_player_start_angle = player_start_angle
             self._recentre_look_cursor()
             QApplication.setOverrideCursor(Qt.BlankCursor)
+            # Establish mouse capture as part of entering Play, not on the
+            # next 16 ms update-loop poll. The toolbar's activating click has
+            # already been handled; subsequent clicks belong to the game view.
+            self._sync_play_mouse_grab(self.window().isActiveWindow())
 
             # Convert editor angle (0° = east) to game angle (0° = north).
             # Do not add another 180° flip: that would make every PlayerStart
@@ -1792,7 +1807,8 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
-        held = self._mouse_look_captured() and self.window().isActiveWindow()
+        held = (self._mouse_look_captured() and self.window().isActiveWindow()
+                and self.hasFocus())
         self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
@@ -1836,6 +1852,22 @@ class QtGameView(QOpenGLWidget):
         if not self.mouselook_active and self.mouseGrabber() is self:
             self.releaseMouse()
 
+    def restore_play_mouse_capture(self):
+        """Reclaim the view after an enclosing UI operation has finished.
+
+        A map transition can restart Play inside the outer map-loading
+        overlay. The first grab then happens underneath that overlay and may
+        be lost when it is finally hidden. This is called after the operation
+        returns to the event loop, when the view can own focus and the mouse.
+        """
+        if (not self.play_mode or not self._mouse_look_captured()
+                or not self.isVisible() or not self.window().isActiveWindow()):
+            return False
+        self.setFocus(Qt.OtherFocusReason)
+        self._recentre_look_cursor()
+        self._sync_play_mouse_grab(True)
+        return self.mouseGrabber() is self
+
     def _attach_mac_cursor(self):
         """macOS: let the mouse move the cursor again, if it was detached."""
         if self._mac_cursor_detached:
@@ -1854,7 +1886,8 @@ class QtGameView(QOpenGLWidget):
         reports (deltaX/deltaY), summed by the native event filter.
         """
         mouse = self._mac_mouse
-        if not self._mouse_look_captured() or not self.window().isActiveWindow():
+        if (not self._mouse_look_captured() or not self.window().isActiveWindow()
+                or not self.hasFocus()):
             self._attach_mac_cursor()
             mouse.take()                       # movement made with the cursor free
             self._skip_next_look_poll = True
@@ -2040,8 +2073,22 @@ class QtGameView(QOpenGLWidget):
         self._editor_right_mouse_held = False
         self._sync_editor_mouselook()
 
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if self.play_mode:
+            held = (self._mouse_look_captured()
+                    and self.window().isActiveWindow())
+            self._sync_play_mouse_grab(held)
+
     def focusOutEvent(self, event):
-        if not self.play_mode and self.mouselook_active:
+        if self.play_mode:
+            # Release immediately on a focus transition (another window,
+            # console or pause UI); the next focus-in restores capture.
+            self._sync_play_mouse_grab(False)
+            self._attach_mac_cursor()
+            self.game_state.consume_mouse_delta()
+            self._skip_next_look_poll = True
+        elif self.mouselook_active:
             self.stop_editor_mouselook()
             self.editor.keys_pressed.clear()
             self.game_state.set_keys(set())

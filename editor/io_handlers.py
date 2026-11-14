@@ -7,7 +7,8 @@ an input is called on an entity.
 Handler signature: (entity, parameter: str, logic_thread) -> None
 """
 
-from .io_system import IOManager, authored_flag, set_authored_flag
+from .io_system import (IOManager, authored_flag, set_authored_flag,
+                        _wake_physics_body)
 from . import state_values as _sv
 from .portal_links import set_group_active, sync_group_to
 import glm
@@ -1098,14 +1099,20 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' hidden")
 
     def thing_show(entity, param, logic):
-        """Show a thing entity."""
+        """Show a thing entity and wake its body when it becomes visible."""
+        was_hidden = authored_flag(entity, 'hidden')
         set_authored_flag(entity, 'hidden', False)
+        if was_hidden:
+            _wake_physics_body(logic, entity)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Entity '{name}' shown")
 
     def thing_toggle_vis(entity, param, logic):
-        """Toggle thing visibility."""
-        set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
+        """Toggle thing visibility and wake a newly visible body."""
+        was_hidden = authored_flag(entity, 'hidden')
+        set_authored_flag(entity, 'hidden', not was_hidden)
+        if was_hidden:
+            _wake_physics_body(logic, entity)
         name = entity.properties.get('name', 'unnamed')
         state = "hidden" if entity.properties.get('hidden') else "visible"
         debug_log('IO', f"Entity '{name}' toggled → {state}")

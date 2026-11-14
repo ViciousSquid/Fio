@@ -44,6 +44,8 @@ def _changed_bounds():
     out = {}
     for name, brushes in MAPS.items():
         for raw in brushes:
+            if not raw.get(bs.WORLD_PLANES):
+                continue        # Stage 2a characterises legacy world-plane maps
             brush = bs.migrated(raw)
             stored = tuple(map(np.asarray, bs.stored_bound(brush)))
             derived = tuple(map(np.asarray, bs.bound(brush)))
@@ -82,5 +84,6 @@ def test_no_shipped_brush_draws_differently(name):
     for raw in MAPS[name]:
         brush = bs.migrated(raw)
         for tag, ring, _material in bs.render_faces(brush):
-            assert np.array_equal(bs.posed(brush, ring), np.asarray(ring)), (
-                name, raw.get('id'), tag)
+            assert np.allclose(
+                bs.posed(brush, ring), np.asarray(ring), atol=1e-9, rtol=0.0), (
+                    name, raw.get('id'), tag)

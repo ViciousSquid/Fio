@@ -445,6 +445,10 @@ class LogicSession:
         logic.mover_runtime._mover_brush_list = []
         logic.mover_runtime._door_brush_list = []
         logic.world_runtime.monster_spawn_health = {}
+        # Placed decals are editor-world entities, not session-owned objects.
+        # Drop the projection's references now; the next render prepare will
+        # reconcile them from the current EditorState.
+        logic.combat_runtime.blood.release_placed()
 
         if logic.io_manager is not None:
             logic.io_manager.reset()

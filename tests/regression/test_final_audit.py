@@ -452,7 +452,14 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
         # which the render projection rightly shows.
         exclude = [state, state.brushes, state.things]
         if not restore:
-            exclude += [game_state, game_state.get_write_state().render_table, game_state.get_write_state().entity_table]
+            # These same objects remain the editor's current map after Stop.
+            # Only the render-projection tables legitimately retain their
+            # rows; keep every other runtime path to a map object auditable.
+            for render_state in (
+                game_state.get_write_state(),
+                game_state.peer_state(),
+            ):
+                exclude += [render_state.render_table, render_state.entity_table]
         leaks = paths_to(roots, session, exclude)
         assert leaks == [], "after Stop:\n  " + "\n  ".join(leaks[:20])
 

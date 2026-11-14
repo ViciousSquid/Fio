@@ -250,6 +250,10 @@ def _run_child(tmp_path, tag, **env_overrides):
     from tests.helpers.paths import REPO_ROOT
 
     env = dict(os.environ)
+    # The two modes run in separate processes. Keep Python's hash-seed stable
+    # as well as random/NumPy seeds so set-backed render collections cannot
+    # produce a different draw order between the parity captures.
+    env["PYTHONHASHSEED"] = "5"
     for key in ("FIO_GL_DEBUG", "PYOPENGL_ERROR_CHECKING"):
         env.pop(key, None)
     env.update(env_overrides)
@@ -280,8 +284,20 @@ def test_fio_gl_debug_checks_every_upload_and_the_app_takes_the_raw_path(tmp_pat
                                    "glUniformMatrix3fv": True,
                                    "glUniform3fv": True}
     assert shipped_pixels.max() > 0
-    assert np.array_equal(debug_pixels, shipped_pixels), (
-        "%d pixels differ" % int(np.any(debug_pixels != shipped_pixels, axis=2).sum()))
+    different = np.any(debug_pixels != shipped_pixels, axis=2)
+    if different.any():
+        coordinates = np.argwhere(different)
+        sample = [
+            (tuple(int(v) for v in xy),
+             debug_pixels[tuple(xy)].tolist(),
+             shipped_pixels[tuple(xy)].tolist())
+            for xy in coordinates[:8]
+        ]
+        maximum = int(np.abs(debug_pixels.astype(np.int16)
+                             - shipped_pixels.astype(np.int16)).max())
+        pytest.fail(
+            "%d pixels differ (maximum channel delta %d); samples %s"
+            % (len(coordinates), maximum, sample))
 
 
 def test_a_showcase_frame_sends_no_row_uniform_through_the_wrappers(

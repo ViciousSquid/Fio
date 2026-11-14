@@ -286,7 +286,10 @@ class PlayerDecals:
         gl.glBindTexture(gl.GL_TEXTURE_2D, target.depth)
         gl.glUniform1i(u['sceneDepth'], 1)
         gl.glActiveTexture(gl.GL_TEXTURE2)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.color_texture)
+        # Dry decals do not allocate the wet-pass colour copy; texture 0 is
+        # valid here because the shader samples sceneColor only in the wet pass.
+        gl.glBindTexture(gl.GL_TEXTURE_2D,
+                         self.color_texture if self.color_texture is not None else 0)
         gl.glUniform1i(u['sceneColor'], 2)
 
         gl.glBindVertexArray(self.vao)

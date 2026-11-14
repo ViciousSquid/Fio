@@ -8,7 +8,7 @@
   },
   "inconsistencies": {
    "bcac8b00-8f0e-4012-9823-26a7f996e01a": {
-    "bound_drift": 4.85e-05
+    "bound_drift": 0.0000485
    }
   }
  },
@@ -143,7 +143,7 @@
   },
   "inconsistencies": {
    "1a817c94-928c-4005-88c9-6619876b168c": {
-    "bound_drift": 128.0
+    "bound_drift": 128
    }
   }
  },
@@ -156,7 +156,7 @@
   },
   "inconsistencies": {
    "1a817c94-928c-4005-88c9-6619876b168c": {
-    "bound_drift": 128.0
+    "bound_drift": 128
    }
   }
  },
@@ -169,38 +169,13 @@
   "inconsistencies": {}
  },
  "_SHOWCASE.json": {
-  "brushes": 85,
-  "digest": "6b40c7e7c94901adf487dba8e12a8ccac1e418130e94f45f20e1a4def455e166",
+  "brushes": 88,
+  "digest": null,
   "encodings": {
-   "box": 68,
-   "convex": 17
+   "box": 70,
+   "convex": 18
   },
-  "inconsistencies": {
-   "5b10b49b-9b6c-45d9-91ee-0b6f06970590": {
-    "resolved_from_tag": [
-     "down.uv_scale",
-     "north.uv_scale",
-     "south.uv_scale",
-     "top.uv_scale",
-     "west.uv_scale"
-    ]
-   },
-   "8c04e483-4d44-4217-a03d-32844a727043": {
-    "resolved_from_tag": [
-     "down.uv_scale",
-     "east.uv_scale",
-     "north.uv_scale",
-     "south.uv_scale",
-     "top.uv_scale",
-     "west.uv_scale"
-    ]
-   },
-   "ef6fd889-8ba1-434f-8c1c-946b6c40403b": {
-    "runtime_keys": [
-     "original_pos"
-    ]
-   }
-  }
+  "inconsistencies": {}
  },
  "button_test.json": {
   "brushes": 11,

@@ -6,10 +6,13 @@ where the cursor is detached in place, that was the Play button just
 clicked, so clicking to fire pressed Stop.
 """
 
+import json
+
 import pytest
 
 pytest.importorskip('PyQt5')
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtGui import QFocusEvent
 
 from editor.things import PlayerStart
 from tests.helpers.worlds import level_data, make_thing, room
@@ -51,12 +54,82 @@ def playing(fio_session, monkeypatch):
     return session
 
 
-def test_play_grabs_the_mouse_and_lets_it_go_when_play_stops(playing):
+def test_play_grabs_the_mouse_on_entry_and_restores_it_after_focus_returns(playing):
     view = playing.view
-    view._poll_mouse_look()
     assert view.mouseGrabber() is view
+
+    view.focusOutEvent(QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    assert view.mouseGrabber() is not view
+
+    view.focusInEvent(QFocusEvent(QEvent.FocusIn, Qt.OtherFocusReason))
+    assert view.mouseGrabber() is view
+
     playing.stop_play()
     assert view.mouseGrabber() is not view
+
+
+def test_poll_does_not_regrab_until_viewport_focus_returns(playing, monkeypatch):
+    view = playing.view
+    focused = [True]
+    monkeypatch.setattr(type(view), "hasFocus", lambda self: focused[0])
+
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is view
+
+    focused[0] = False
+    view.focusOutEvent(QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is not view
+
+    focused[0] = True
+    view.focusInEvent(QFocusEvent(QEvent.FocusIn, Qt.OtherFocusReason))
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is view
+
+
+def test_loading_another_map_during_play_regrabs_after_outer_overlay(
+        playing, qt_app, tmp_path, monkeypatch):
+    session = playing
+    view, window = session.view, session.window
+    overlay = window.loading_overlay
+    restored_after_overlay = []
+    restore_capture = view.restore_play_mouse_capture
+
+    def record_restoration():
+        restored_after_overlay.append(not overlay.active)
+        return restore_capture()
+
+    monkeypatch.setattr(view, 'restore_play_mouse_capture', record_restoration)
+
+    # Model the native grab being dropped when the outermost loading panel
+    # disappears. A nested _start_play() cannot protect against that teardown.
+    original_end = overlay.end
+
+    def end_and_lose_grab():
+        original_end()
+        if not overlay.active and view.play_mode:
+            view.releaseMouse()
+
+    monkeypatch.setattr(overlay, 'end', end_and_lose_grab)
+
+    data = level_data(
+        brushes=room(),
+        things=[make_thing(PlayerStart, 'destination', (16, 8, 16))],
+    )
+    path = tmp_path / 'destination.json'
+    path.write_text(json.dumps(data), encoding='utf-8')
+
+    assert window.load_level_file(str(path), destination_spawn='destination')
+    assert view.play_mode
+    assert not overlay.active
+    assert view.mouseGrabber() is not view
+
+    # The deferred pass runs only after load_level_file has unwound its
+    # outermost busy() context.
+    qt_app.processEvents()
+    assert restored_after_overlay == [True]
+    assert view.hasFocus()
+    assert view.mouseGrabber() is view
 
 
 def test_pause_menu_releases_the_grab_and_closing_it_takes_it_back(playing):

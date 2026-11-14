@@ -85,13 +85,25 @@ WORLD_PLANES = '_shipped_world_planes'
 
 
 def world_convex(brush):
-    """The brush's solid in world space at its authored placement: a file
-    record's planes as stored, a live (version 5) brush's local planes
-    carried by its ``pos`` (``engine.brush_geometry.get_convex``)."""
-    if brush.get(WORLD_PLANES):
-        return bg.ConvexGeometry(brush['geometry']['planes'])
-    return bg.get_convex(brush)
+    """The brush's solid in world space at its authored placement.
 
+    Pre-version-5 map files store world-space planes. Version 5 stores local
+    planes and places their shape with pos; translate that local shape for
+    this world-space semantic oracle.
+    """
+    planes = brush['geometry']['planes']
+    if brush.get(WORLD_PLANES):
+        return bg.ConvexGeometry(planes)
+    convex = bg.get_convex(brush)
+    if convex is None or not convex.is_valid:
+        return convex
+    pos = brush.get('pos') or (0.0, 0.0, 0.0)
+    if not any(pos):
+        return convex
+    world_planes = bg.translate_planes(
+        [dict(plane) for plane in planes],
+        [float(pos[0]), float(pos[1]), float(pos[2])])
+    return bg.ConvexGeometry(world_planes)
 
 def encoding(brush):
     """``'box'``, ``'convex'``, or ``'convex-invalid'`` (planes enclosing no
@@ -530,21 +542,22 @@ def map_snapshot(brushes):
 
 
 def shipped_maps(root):
-    """``{file name: brushes}`` for every map in ``maps/`` that has brushes,
-    each brush a shallow copy of the file's record (every shipped map is a
-    legacy, version 3 map: :func:`migrated` gives it as the editor loads it)."""
+    """Return every shipped map's brushes, marking only legacy world planes.
+
+    Maps before version 5 store convex planes in world space. Version 5 stores
+    planes in a local frame and uses pos as the placement.
+    """
     out = {}
     for path in sorted(glob.glob(os.path.join(root, 'maps', '*.json'))):
         with open(path) as handle:
             data = json.load(handle)
-        brushes = [dict(brush, **{WORLD_PLANES: True}) if bg.brush_has_geometry(brush)
-                   else dict(brush) for brush in data.get('brushes') or []]
+        legacy_world_planes = int(data.get('version', 0) or 0) < 5
+        brushes = [
+            dict(brush, **{WORLD_PLANES: True})
+            if legacy_world_planes and bg.brush_has_geometry(brush)
+            else dict(brush)
+            for brush in data.get('brushes') or []
+        ]
         if brushes:
             out[os.path.basename(path)] = brushes
     return out
-
-
-def snapshot(root):
-    """The semantics snapshot of every shipped map (the fixture's content)."""
-    return {name: map_snapshot(brushes)
-            for name, brushes in shipped_maps(root).items()}

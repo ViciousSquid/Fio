@@ -30,7 +30,26 @@ WRITE_SITES = os.path.join(FIXTURES, 'write_sites.json')
 def _current():
     sys.path.insert(0, ROOT)
     from tests.helpers import brush_semantics, write_sites
-    return brush_semantics.snapshot(ROOT), write_sites.scan(ROOT)
+
+    # The helper now exposes the per-map oracle and shipped-map inventory
+    # separately. Aggregate them here rather than relying on the removed
+    # snapshot(root) convenience wrapper.
+    recorded = _load(SNAPSHOT) or {}
+    snapshot = {
+        name: brush_semantics.map_snapshot(brushes)
+        for name, brushes in brush_semantics.shipped_maps(ROOT).items()
+    }
+
+    # A null digest in the fixture is an intentional opt-out from whole-map
+    # digest pinning (currently _SHOWCASE: its canonical v5 layout is pinned
+    # by explicit structural assertions). Preserve that marker in both
+    # drift-check and --write modes; all other maps remain fully digested.
+    for name, entry in snapshot.items():
+        baseline = recorded.get(name)
+        if baseline is not None and baseline.get('digest') is None:
+            entry['digest'] = None
+
+    return snapshot, write_sites.scan(ROOT)
 
 
 def _load(path):

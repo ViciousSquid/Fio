@@ -382,3 +382,79 @@ def test_the_source_is_unwound_after_dispatch(streamed):
 
     assert streamed.manager.current_source() is None
     assert streamed.manager.current_activator() is None
+
+
+def test_generic_show_requests_a_wake_only_on_hidden_to_visible_transition(monkeypatch):
+    """Generic Show requests physics wake once, when visibility actually changes.
+
+    The physics-world/body contract is covered with a real PhysicsWorld in
+    tests/test_prop_runtime.py; this test pins the generic input's transition
+    gate without substituting a fake LogicThread owner.
+    """
+    class Entity:
+        def __init__(self, hidden=True):
+            self.properties = {"hidden": hidden}
+
+    body = Entity()
+    ordinary = Entity(hidden=False)
+    wakes = []
+
+    def record_wake(logic, entity):
+        wakes.append((logic, entity))
+
+    monkeypatch.setattr(io, "_wake_physics_body", record_wake)
+    manager = IOManager()
+
+    manager._try_generic_input(body, "show", "")
+    manager._try_generic_input(body, "show", "")
+    manager._try_generic_input(ordinary, "show", "")
+
+    assert body.properties["hidden"] is False
+    assert ordinary.properties["hidden"] is False
+    assert wakes == [(None, body)], (
+        "Show must only request a wake on a hidden-to-visible transition")
+
+
+def test_generic_toggle_visibility_wakes_only_when_it_reveals(monkeypatch):
+    class Entity:
+        def __init__(self, hidden):
+            self.properties = {"hidden": hidden}
+
+    revealed = Entity(hidden=True)
+    already_visible = Entity(hidden=False)
+    wakes = []
+    monkeypatch.setattr(io, "_wake_physics_body",
+                        lambda logic, entity: wakes.append((logic, entity)))
+    manager = IOManager()
+
+    manager._try_generic_input(revealed, "ToggleVisibility", "")
+    manager._try_generic_input(already_visible, "ToggleVisibility", "")
+
+    assert revealed.properties["hidden"] is False
+    assert already_visible.properties["hidden"] is True
+    assert wakes == [(None, revealed)]
+
+
+def test_thing_toggle_visibility_wakes_only_when_it_reveals(monkeypatch):
+    from editor import io_handlers
+    from editor.io_handlers import register_all_input_handlers
+
+    class Entity:
+        def __init__(self, hidden):
+            self.properties = {"hidden": hidden, "name": "test"}
+
+    revealed = Entity(hidden=True)
+    already_visible = Entity(hidden=False)
+    wakes = []
+    monkeypatch.setattr(io_handlers, "_wake_physics_body",
+                        lambda logic, entity: wakes.append((logic, entity)))
+    manager = IOManager()
+    register_all_input_handlers(manager)
+    toggle = manager._input_handlers[("prop", "togglevisibility")]
+
+    toggle(revealed, "", None)
+    toggle(already_visible, "", None)
+
+    assert revealed.properties["hidden"] is False
+    assert already_visible.properties["hidden"] is True
+    assert wakes == [(None, revealed)]

@@ -39,6 +39,7 @@ one decal moved remakes that one row.
 from __future__ import annotations
 
 import math
+import weakref
 
 import numpy as np
 
@@ -168,7 +169,7 @@ class DecalTable:
         self.placed_model = np.zeros((0, 16), dtype=np.float32)
         self.placed_inverse = np.zeros((0, 16), dtype=np.float32)
         self.placed_params = np.zeros((0, 4), dtype=np.float32)
-        #: id(decal) -> [decal, key, row or -1 when it is not drawn].
+        #: id(decal) -> [weakref(decal), key, row or -1 when it is not drawn].
         self._entries = {}
         #: What the placed rows were last reconciled against; see place().
         self._stamp = None
@@ -236,7 +237,11 @@ class DecalTable:
             touched = [entry for oid, entry in entries.items() if oid in pending]
         changed = False
         for entry in touched:
-            thing = entry[0]
+            thing = entry[0]()
+            if thing is None:
+                # The entity left the world and its last owner released it.
+                # Reconcile membership before applying this sparse update.
+                return self._reconcile(things, show, epoch)
             key = self._key(thing, show)
             if key == entry[1]:
                 continue
@@ -297,19 +302,19 @@ class DecalTable:
             oid = id(thing)
             key = self._key(thing, show)
             entry = old.get(oid)
-            if entry is not None and entry[0] is thing and entry[1] == key:
+            if entry is not None and entry[0]() is thing and entry[1] == key:
                 if entry[2] >= 0:
-                    entries[oid] = [thing, key, len(sources)]
+                    entries[oid] = [entry[0], key, len(sources)]
                     sources.append(entry[2])
                 else:
                     entries[oid] = entry
                 continue
             row = self._row(thing, key, names)
             if row is None:
-                entries[oid] = [thing, key, -1]
+                entries[oid] = [weakref.ref(thing), key, -1]
                 self._say_missing(thing, names)
                 continue
-            entries[oid] = [thing, key, len(sources)]
+            entries[oid] = [weakref.ref(thing), key, len(sources)]
             sources.append(-1)
             made.append((len(sources) - 1, row))
         sources = np.asarray(sources, dtype=np.intp)
@@ -335,6 +340,20 @@ class DecalTable:
         self._entries = entries
         self._stamp = (epoch, id(things), len(things), version, show)
         return changed
+
+    def release_placed(self):
+        """Drop map-entity references; the next place() rebuilds the editor rows.
+
+        The table outlives play sessions, but the placed Decal entities belong
+        to the map that was active when they were reconciled. Keeping those
+        entities here would retain the previous session/map after Stop.
+        """
+        self._entries.clear()
+        self._stamp = None
+        self.placed_model = np.zeros((0, 16), dtype=np.float32)
+        self.placed_inverse = np.zeros((0, 16), dtype=np.float32)
+        self.placed_params = np.zeros((0, 4), dtype=np.float32)
+        self.version += 1
 
     def _say_missing(self, thing, names):
         from engine import decal_textures

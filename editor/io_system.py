@@ -66,6 +66,17 @@ except Exception:  # pragma: no cover - engine-less editor/tooling contexts
     authored_flag = _plain_authored_flag
     set_authored_flag = _plain_set_authored_flag
 
+def _wake_physics_body(logic, entity):
+    """Wake a visible dynamic body without taking ownership from its runtime."""
+    session = getattr(logic, 'session_runtime', None)
+    physics_world = getattr(session, 'physics_world', None)
+    if physics_world is None:
+        return
+    body = physics_world.get_body(entity)
+    if body is not None and not body.kinematic:
+        physics_world.wake(entity)
+
+
 
 # =============================================================================
 # DEBUG CONFIGURATION
@@ -631,10 +642,16 @@ class IOManager:
             set_authored_flag(entity, 'hidden', True)
 
         elif input_lower == 'show':
+            was_hidden = authored_flag(entity, 'hidden')
             set_authored_flag(entity, 'hidden', False)
+            if was_hidden:
+                _wake_physics_body(self._logic_thread, entity)
 
         elif input_lower == 'togglevisibility':
-            set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
+            was_hidden = authored_flag(entity, 'hidden')
+            set_authored_flag(entity, 'hidden', not was_hidden)
+            if was_hidden:
+                _wake_physics_body(self._logic_thread, entity)
 
         # ---- Generic SetTint / ClearTint ------------------------------------
         elif input_lower == 'settint':

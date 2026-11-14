@@ -130,7 +130,11 @@ def test_far_from_the_origin_an_angled_brush_still_solves():
 def test_every_shipped_map_loads_to_the_solids_its_file_describes(name):
     with open(os.path.join(REPO_ROOT, 'maps', name)) as handle:
         level = json.load(handle)
-    assert EditorState.is_world_plane_layout(level)
+    # Shipped maps can be either legacy (world-space planes) or current
+    # version-5 maps (local-frame planes). The helper marks only the former
+    # for migration; do not require a current map to take the legacy path.
+    expects_world_planes = int(level.get('version') or 0) < bp.MAP_VERSION
+    assert EditorState.is_world_plane_layout(level) is expects_world_planes
     state = _loaded(level)
     for raw, live in zip(MAPS[name], state.brushes):
         if bs.encoding(raw) != 'convex':

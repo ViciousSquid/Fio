@@ -8,6 +8,7 @@ pytest.importorskip("PyQt5", reason="Prop runtime tests exercise the real LogicT
 
 from editor.editor_state import EditorState                    # noqa: E402
 from editor.things import Light                                 # noqa: E402
+from editor.io_system import OutputConnection, add_connection  # noqa: E402
 from engine.logic_thread import LogicThread                     # noqa: E402
 from engine.physics import PhysicsWorld, SpatialGrid            # noqa: E402
 from engine.player import Player                                 # noqa: E402
@@ -374,6 +375,82 @@ def _eye(logic):
                     player.pos.y + float(getattr(player, 'view_height',
                                                  getattr(player, 'camera_height', 40.0))),
                     player.pos.z)
+
+
+def test_repeatable_on_rest_show_keeps_a_sleeping_prop_asleep(real_logic):
+    """An already-visible OnRest target must not be woken by its own Show."""
+    prop = Prop(pos=[0.0, 40.0, 30.0], properties={
+        "name": "resting_prop",
+        "physics_enabled": True,
+        "no_collision": False,
+        "hidden": False,
+    })
+    grid = _floor_grid()
+    physics = PhysicsWorld(grid)
+    physics.rebuild([{
+        "pos": [0.0, 56.0, 30.0],
+        "size": [32.0, 32.0, 32.0],
+        "_physics_body": True,
+        "_physics_entity": prop,
+        "_collision_mode": "aabb",
+    }])
+    logic, session, events = real_logic([prop], grid=grid, physics=physics)
+    add_connection(prop, OutputConnection(
+        output_name="OnRest",
+        target_name="resting_prop",
+        input_name="Show",
+    ))
+    body = physics.get_body(prop)
+
+    # Let the real body fall, land, and fire its repeatable OnRest output.
+    for _ in range(120):
+        physics.step(1 / 60)
+        if "OnRest" in _event_names(events):
+            break
+
+    assert _event_names(events).count("OnRest") == 1
+    assert prop.properties["hidden"] is False
+    assert not body.awake
+
+    # Show sees an already-visible entity, so it must not restart simulation.
+    for _ in range(10):
+        physics.step(1 / 60)
+    assert _event_names(events).count("OnRest") == 1
+    assert not body.awake
+
+
+def test_on_carried_show_preserves_a_kinematic_props_carry(real_logic):
+    """Show must not hand a carried body's transform back to physics."""
+    prop = Prop(pos=[0.0, 40.0, 60.0], properties={
+        "name": "carried_prop",
+        "carry_enabled": True,
+        "physics_enabled": True,
+        "no_collision": False,
+        "hidden": True,
+    })
+    logic, session, _events = _carry_world(real_logic, prop, 32.0)
+    add_connection(prop, OutputConnection(
+        output_name="OnCarried",
+        target_name="carried_prop",
+        input_name="Show",
+    ))
+
+    # Picking up fires OnCarried, which dispatches Show back to this Prop.
+    session.tick(1 / 60, use_pressed=True)
+    body = logic.session_runtime.physics_world.get_body(prop)
+    assert session.held is prop
+    assert prop.properties["hidden"] is False
+    assert body.kinematic
+
+    # PropSession remains the transform owner; physics must not restore the
+    # body's stale pre-carry position on the next step.
+    session.tick(1 / 60, use_pressed=False)
+    carried_position = list(prop.pos)
+    assert carried_position != [0.0, 40.0, 60.0]
+
+    logic.session_runtime.physics_world.step(1 / 60)
+    assert body.kinematic
+    assert prop.pos == pytest.approx(carried_position)
 
 
 @pytest.mark.parametrize('mass', [PhysicsWorld.HEAVY_MASS, 1000.0])
