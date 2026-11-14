@@ -648,7 +648,10 @@ class IOManager:
                 _wake_physics_body(self._logic_thread, entity)
 
         elif input_lower == 'togglevisibility':
-            set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
+            was_hidden = authored_flag(entity, 'hidden')
+            set_authored_flag(entity, 'hidden', not was_hidden)
+            if was_hidden:
+                _wake_physics_body(self._logic_thread, entity)
 
         # ---- Generic SetTint / ClearTint ------------------------------------
         elif input_lower == 'settint':
