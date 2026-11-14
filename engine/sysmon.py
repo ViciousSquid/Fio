@@ -88,7 +88,7 @@ class SysMon:
         self._ft_max = 16.67
         self._ft_max_age = 0
         self._fps = 0.0
-        self._last_presented_time = None
+        self._last_rendered_frame_time = None
         # Smoothed readouts are separate from the raw frame-time ring buffer.
         self._smoothed_fps = None
         self._smoothed_frame_time_ms = None
@@ -219,15 +219,15 @@ class SysMon:
         self.stats['culled_brushes'] = culled_brushes
         self.stats['total_brushes'] = total_brushes
 
-    def record_presented_frame(self, timestamp=None):
-        """Record a fresh frame after Qt has completed its composition/swap."""
+    def record_rendered_frame(self, timestamp=None):
+        """Record an interval after a successful QOpenGLWidget paint."""
         timestamp = time.perf_counter() if timestamp is None else float(timestamp)
-        previous = self._last_presented_time
+        previous = self._last_rendered_frame_time
         if previous is not None:
             interval = timestamp - previous
             if interval > 0.0:
                 self.record_frame_time(interval * 1000.0)
-        self._last_presented_time = timestamp
+        self._last_rendered_frame_time = timestamp
         return self._fps
 
     def reset_metrics(self):
@@ -239,7 +239,7 @@ class SysMon:
         self._ft_max = 16.67
         self._ft_max_age = 0
         self._fps = 0.0
-        self._last_presented_time = None
+        self._last_rendered_frame_time = None
         self._smoothed_fps = None
         self._smoothed_frame_time_ms = None
         self._display_fps = 0.0
@@ -303,7 +303,7 @@ class SysMon:
             visible_surfaces = int(self.stats.get("visible_brushes", 0))
             culled_surfaces = int(self.stats.get("culled_brushes", 0))
 
-        # FPS comes only from completed Qt presentations; never infer it
+        # FPS comes only from successful Qt paintGL renders; never infer it
         # from a timer interval or from a frame-time fallback.
         fps = float(self._fps)
 
