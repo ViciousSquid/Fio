@@ -344,6 +344,7 @@ def test_a_hidden_floating_body_is_not_woken_on_startup():
     world.step(1.0 / 60.0)
 
     assert world.get_body(prop).awake is False
+    assert not world._pending_settle[world._indices[id(prop)]]
     assert prop.pos[1] == 400.0
 
 

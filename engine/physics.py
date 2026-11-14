@@ -1539,7 +1539,7 @@ class PhysicsWorld:
                 and (props.get('disabled', False) or props.get('hidden', False)))
             self._was_inactive[i] = previous_inactive.get(id(entity), current_inactive)
             self._pending_settle[i] = previous_pending_settle.get(
-                id(entity), current_inactive)
+                id(entity), False)
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
@@ -1721,9 +1721,9 @@ class PhysicsWorld:
     def _settle_pending_bodies(self, eligible):
         """Correct newly active placements before they can first move.
 
-        The mask is normally empty. It includes initially dormant bodies and
-        entities whose journalled hidden/disabled flag just became active;
-        dormant rows remain pending until they are actually eligible.
+        The mask is normally empty. It tracks entities whose hidden/disabled
+        state has changed from inactive to active. Dormant rows remain outside
+        the pending set until a flag transition makes correction necessary.
         """
         candidates = self._pending_settle & eligible
         if not np.any(candidates):
