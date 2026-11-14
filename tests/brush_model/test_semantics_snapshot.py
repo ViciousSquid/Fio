@@ -17,6 +17,7 @@ Nothing here is GL: it runs in the headless tier.
 import copy
 import json
 
+import numpy as np
 import pytest
 
 from tests.helpers import brush_semantics as bs
