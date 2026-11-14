@@ -226,13 +226,12 @@ def test_every_loaded_shipped_convex_face_has_one_material_record():
 # ---------------------------------------------------------------------------
 
 def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
-    """Seven shipped convex brushes *store* ``pos``/``size`` that are not
-    their planes' AABB bit for bit: four by float noise, one by 4.85e-5 (its
-    bound is that much *smaller* than the geometry) and two by 128 units
-    (bounds that are larger). Within 1e-4 of a unit every stored bound
-    contains the drawn geometry. Since Stage 2a nothing reads that copy for
-    a bound (``brush_placement`` derives it from the planes) and loading
-    re-derives it; the files themselves are not modified."""
+    """Four legacy convex brushes store pos/size that differ from their
+    planes' AABB: one by solver float noise, one by 4.85e-5 (its bound is
+    that much smaller than the geometry) and two by 128 units. Within 1e-4
+    of a unit every stored bound contains the drawn geometry. Version-5
+    _SHOWCASE stores local planes with derived extents, so it no longer
+    contributes legacy world-space bound drift."""
     drifted = 0
     for name, brushes in MAPS.items():
         for brush in brushes:
@@ -244,7 +243,7 @@ def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
             g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
             assert (g_centre - g_size / 2 >= centre - size / 2 - 1e-4).all(), name
             assert (g_centre + g_size / 2 <= centre + size / 2 + 1e-4).all(), name
-    assert drifted == 7     # 3 above 1e-6 (pinned by the snapshot), 4 noise
+    assert drifted == 4     # 3 above 1e-6 (pinned by the snapshot), 1 noise
 
 
 def test_shipped_convex_bounds_are_derived_from_the_planes():
