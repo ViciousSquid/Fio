@@ -8,6 +8,7 @@ pytest.importorskip("PyQt5", reason="Prop runtime tests exercise the real LogicT
 
 from editor.editor_state import EditorState                    # noqa: E402
 from editor.things import Light                                 # noqa: E402
+from editor.io_system import OutputConnection, add_connection  # noqa: E402
 from engine.logic_thread import LogicThread                     # noqa: E402
 from engine.physics import PhysicsWorld, SpatialGrid            # noqa: E402
 from engine.player import Player                                 # noqa: E402
@@ -374,6 +375,40 @@ def _eye(logic):
                     player.pos.y + float(getattr(player, 'view_height',
                                                  getattr(player, 'camera_height', 40.0))),
                     player.pos.z)
+
+
+def test_on_carried_show_preserves_a_kinematic_props_carry(real_logic):
+    """Show must not hand a carried body's transform back to physics."""
+    prop = Prop(pos=[0.0, 40.0, 60.0], properties={
+        "name": "carried_prop",
+        "carry_enabled": True,
+        "physics_enabled": True,
+        "no_collision": False,
+        "hidden": True,
+    })
+    logic, session, _events = _carry_world(real_logic, prop, 32.0)
+    add_connection(prop, OutputConnection(
+        output_name="OnCarried",
+        target_name="carried_prop",
+        input_name="Show",
+    ))
+
+    # Picking up fires OnCarried, which dispatches Show back to this Prop.
+    session.tick(1 / 60, use_pressed=True)
+    body = logic.session_runtime.physics_world.get_body(prop)
+    assert session.held is prop
+    assert prop.properties["hidden"] is False
+    assert body.kinematic
+
+    # PropSession remains the transform owner; physics must not restore the
+    # body's stale pre-carry position on the next step.
+    session.tick(1 / 60, use_pressed=False)
+    carried_position = list(prop.pos)
+    assert carried_position != [0.0, 40.0, 60.0]
+
+    logic.session_runtime.physics_world.step(1 / 60)
+    assert body.kinematic
+    assert prop.pos == pytest.approx(carried_position)
 
 
 @pytest.mark.parametrize('mass', [PhysicsWorld.HEAVY_MASS, 1000.0])
