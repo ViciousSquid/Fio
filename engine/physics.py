@@ -2283,12 +2283,12 @@ class PhysicsWorld:
         # Settle it now, on its first inactive -> active transition, before it
         # can be integrated or queried as an active body. This snapshot is
         # refreshed every tick and survives _pack() by entity identity.
-        inactive = self._inactive_mask(
-            np.ones(len(self._entities), dtype=np.bool_), awake_only=False)
-        activated = self._was_inactive & ~inactive
+        inactive = self._inactive_mask(active)
+        awake_candidates = active & self._awake
+        activated = self._was_inactive & awake_candidates & ~inactive
         if np.any(activated):
             self._settle_sunk_bodies(activated)
-        self._was_inactive[:] = inactive
+        self._was_inactive[awake_candidates] = inactive[awake_candidates]
 
         if self._wake_floating_pending:
             self._wake_floating_pending = False
