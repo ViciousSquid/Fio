@@ -1108,8 +1108,11 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' shown")
 
     def thing_toggle_vis(entity, param, logic):
-        """Toggle thing visibility."""
-        set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
+        """Toggle thing visibility and wake a newly visible body."""
+        was_hidden = authored_flag(entity, 'hidden')
+        set_authored_flag(entity, 'hidden', not was_hidden)
+        if was_hidden:
+            _wake_physics_body(logic, entity)
         name = entity.properties.get('name', 'unnamed')
         state = "hidden" if entity.properties.get('hidden') else "visible"
         debug_log('IO', f"Entity '{name}' toggled → {state}")
