@@ -1,0 +1,90 @@
+name: Tests (Windows)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Keep CI focused on the latest commit for a branch, as tests.yml does.
+concurrency:
+  group: fio-tests-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+# Windows tiers for the same suites tests.yml runs on Ubuntu. Every release
+# ships a Windows build, but until now only the packaging was exercised on
+# Windows (Native Windows ARM64 Build, FULL BUILD ALL PLATFORMS); no test
+# tier ever ran on the platform. These jobs run the same markers on Windows.
+#
+# Both jobs start report-only (continue-on-error) so Windows-only findings
+# surface on every push without blocking the branch. Once a job has been
+# green across a release cycle, remove its continue-on-error line to promote
+# it to a blocking tier.
+jobs:
+  windows_no_gpu:
+    name: No-GPU fast core on Windows (no Qt, CPython ${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 is the oldest interpreter Fio runs on (python_runtime.py);
+        # 3.14 is what the releases are built with.
+        python: ['3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Verify GIL-enabled CPython baseline
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          import sysconfig
+
+          assert sys.implementation.name == "cpython"
+          assert sys.version_info[:2] >= (3, 13)
+          assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
+          assert sys._is_gil_enabled()
+          print(sys.version)
+          PY
+      - name: Install headless runtime baseline
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0"
+      - name: Run fast core tests that do not need Qt or a GPU
+        shell: bash
+        env:
+          FIO_HEADLESS_TIER: '1'
+        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+
+  windows_qt_no_gpu:
+    name: Qt / no-GPU suite on Windows (offscreen)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -r requirements.txt
+      - name: Run the complete Qt suite without a GPU or a display
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -m "qt and not gl and not benchmark" -q
