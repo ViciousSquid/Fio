@@ -5395,24 +5395,6 @@
             "io_connections": []
         },
         {
-            "type": "logic_command",
-            "pos": [
-                -2544,
-                224,
-                1232
-            ],
-            "properties": {
-                "type": "logic_command",
-                "io_enabled": true,
-                "name": "LogicCommand_3",
-                "id": "a78b9e00-f3f3-4a2f-afbf-c8c38d9969c9",
-                "command": "message \"SHOTGUN!\"",
-                "disabled": false,
-                "hidden": false
-            },
-            "io_connections": []
-        },
-        {
             "type": "effect",
             "pos": [
                 960.0,
@@ -5551,7 +5533,7 @@
                     255,
                     255
                 ],
-                "show_rim": false,
+                "show_rim": true,
                 "glasses": true,
                 "parent_mover": "",
                 "parent_offset": [
@@ -5936,9 +5918,9 @@
         {
             "type": "monster",
             "pos": [
-                -2016.0,
+                -2000.0,
                 32.0,
-                224.0
+                16.0
             ],
             "properties": {
                 "type": "monster",
