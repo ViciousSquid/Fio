@@ -1845,6 +1845,22 @@ class QtGameView(QOpenGLWidget):
         if not self.mouselook_active and self.mouseGrabber() is self:
             self.releaseMouse()
 
+    def restore_play_mouse_capture(self):
+        """Reclaim the view after an enclosing UI operation has finished.
+
+        A map transition can restart Play inside the outer map-loading
+        overlay. The first grab then happens underneath that overlay and may
+        be lost when it is finally hidden. This is called after the operation
+        returns to the event loop, when the view can own focus and the mouse.
+        """
+        if (not self.play_mode or not self._mouse_look_captured()
+                or not self.isVisible() or not self.window().isActiveWindow()):
+            return False
+        self.setFocus(Qt.OtherFocusReason)
+        self._recentre_look_cursor()
+        self._sync_play_mouse_grab(True)
+        return self.mouseGrabber() is self
+
     def _attach_mac_cursor(self):
         """macOS: let the mouse move the cursor again, if it was detached."""
         if self._mac_cursor_detached:
