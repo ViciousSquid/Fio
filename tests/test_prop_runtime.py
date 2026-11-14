@@ -377,6 +377,48 @@ def _eye(logic):
                     player.pos.z)
 
 
+def test_repeatable_on_rest_show_keeps_a_sleeping_prop_asleep(real_logic):
+    """An already-visible OnRest target must not be woken by its own Show."""
+    prop = Prop(pos=[0.0, 40.0, 30.0], properties={
+        "name": "resting_prop",
+        "physics_enabled": True,
+        "no_collision": False,
+        "hidden": False,
+    })
+    grid = _floor_grid()
+    physics = PhysicsWorld(grid)
+    physics.rebuild([{
+        "pos": [0.0, 56.0, 30.0],
+        "size": [32.0, 32.0, 32.0],
+        "_physics_body": True,
+        "_physics_entity": prop,
+        "_collision_mode": "aabb",
+    }])
+    logic, session, events = real_logic([prop], grid=grid, physics=physics)
+    add_connection(prop, OutputConnection(
+        output_name="OnRest",
+        target_name="resting_prop",
+        input_name="Show",
+    ))
+    body = physics.get_body(prop)
+
+    # Let the real body fall, land, and fire its repeatable OnRest output.
+    for _ in range(120):
+        physics.step(1 / 60)
+        if "OnRest" in _event_names(events):
+            break
+
+    assert _event_names(events).count("OnRest") == 1
+    assert prop.properties["hidden"] is False
+    assert not body.awake
+
+    # Show sees an already-visible entity, so it must not restart simulation.
+    for _ in range(10):
+        physics.step(1 / 60)
+    assert _event_names(events).count("OnRest") == 1
+    assert not body.awake
+
+
 def test_on_carried_show_preserves_a_kinematic_props_carry(real_logic):
     """Show must not hand a carried body's transform back to physics."""
     prop = Prop(pos=[0.0, 40.0, 60.0], properties={
