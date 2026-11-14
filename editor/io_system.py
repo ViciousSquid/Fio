@@ -66,6 +66,14 @@ except Exception:  # pragma: no cover - engine-less editor/tooling contexts
     authored_flag = _plain_authored_flag
     set_authored_flag = _plain_set_authored_flag
 
+def _wake_physics_body(logic, entity):
+    """Wake an entity only when the live PhysicsWorld owns a body for it."""
+    session = getattr(logic, 'session_runtime', None)
+    physics_world = getattr(session, 'physics_world', None)
+    if physics_world is not None and physics_world.get_body(entity) is not None:
+        physics_world.wake(entity)
+
+
 
 # =============================================================================
 # DEBUG CONFIGURATION
@@ -632,6 +640,7 @@ class IOManager:
 
         elif input_lower == 'show':
             set_authored_flag(entity, 'hidden', False)
+            _wake_physics_body(self._logic_thread, entity)
 
         elif input_lower == 'togglevisibility':
             set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
