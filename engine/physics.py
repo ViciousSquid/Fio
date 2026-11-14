@@ -1409,6 +1409,7 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
+        self._was_inactive = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._static_cells.clear()
         self._static_query_cache.clear()
