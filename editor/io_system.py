@@ -642,8 +642,10 @@ class IOManager:
             set_authored_flag(entity, 'hidden', True)
 
         elif input_lower == 'show':
+            was_hidden = authored_flag(entity, 'hidden')
             set_authored_flag(entity, 'hidden', False)
-            _wake_physics_body(self._logic_thread, entity)
+            if was_hidden:
+                _wake_physics_body(self._logic_thread, entity)
 
         elif input_lower == 'togglevisibility':
             set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
