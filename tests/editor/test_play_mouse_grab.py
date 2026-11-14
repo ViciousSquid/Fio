@@ -68,6 +68,25 @@ def test_play_grabs_the_mouse_on_entry_and_restores_it_after_focus_returns(playi
     assert view.mouseGrabber() is not view
 
 
+def test_poll_does_not_regrab_until_viewport_focus_returns(playing, monkeypatch):
+    view = playing.view
+    focused = [True]
+    monkeypatch.setattr(type(view), "hasFocus", lambda self: focused[0])
+
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is view
+
+    focused[0] = False
+    view.focusOutEvent(QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is not view
+
+    focused[0] = True
+    view.focusInEvent(QFocusEvent(QEvent.FocusIn, Qt.OtherFocusReason))
+    view._poll_mouse_look()
+    assert view.mouseGrabber() is view
+
+
 def test_loading_another_map_during_play_regrabs_after_outer_overlay(
         playing, qt_app, tmp_path, monkeypatch):
     session = playing
