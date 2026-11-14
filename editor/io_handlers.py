@@ -7,7 +7,8 @@ an input is called on an entity.
 Handler signature: (entity, parameter: str, logic_thread) -> None
 """
 
-from .io_system import IOManager, authored_flag, set_authored_flag
+from .io_system import (IOManager, authored_flag, set_authored_flag,
+                        _wake_physics_body)
 from . import state_values as _sv
 from .portal_links import set_group_active, sync_group_to
 import glm
@@ -1098,8 +1099,9 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' hidden")
 
     def thing_show(entity, param, logic):
-        """Show a thing entity."""
+        """Show a thing entity and resume its physics body, if any."""
         set_authored_flag(entity, 'hidden', False)
+        _wake_physics_body(logic, entity)
         name = entity.properties.get('name', 'unnamed')
         debug_log('IO', f"Entity '{name}' shown")
 
