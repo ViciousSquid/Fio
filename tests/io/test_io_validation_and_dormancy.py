@@ -392,11 +392,11 @@ def test_generic_show_requests_a_wake_only_on_hidden_to_visible_transition(monke
     gate without substituting a fake LogicThread owner.
     """
     class Entity:
-        def __init__(self):
-            self.properties = {"hidden": True}
+        def __init__(self, hidden=True):
+            self.properties = {"hidden": hidden}
 
     body = Entity()
-    ordinary = Entity()
+    ordinary = Entity(hidden=False)
     wakes = []
 
     def record_wake(logic, entity):
