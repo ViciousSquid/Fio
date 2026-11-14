@@ -382,3 +382,35 @@ def test_the_source_is_unwound_after_dispatch(streamed):
 
     assert streamed.manager.current_source() is None
     assert streamed.manager.current_activator() is None
+
+
+def test_generic_show_wakes_only_entities_with_physics_bodies():
+    """The generic Show path resumes a live body, but not an ordinary entity."""
+    from types import SimpleNamespace
+
+    class Entity:
+        def __init__(self):
+            self.properties = {"hidden": True}
+
+    body = Entity()
+    ordinary = Entity()
+    wakes = []
+
+    class PhysicsWorld:
+        def get_body(self, entity):
+            return entity if entity is body else None
+
+        def wake(self, entity):
+            wakes.append(entity)
+
+    logic = SimpleNamespace(
+        session_runtime=SimpleNamespace(physics_world=PhysicsWorld()))
+    manager = IOManager()
+    manager.set_logic_thread(logic)
+
+    manager._try_generic_input(body, "show", "")
+    manager._try_generic_input(ordinary, "show", "")
+
+    assert body.properties["hidden"] is False
+    assert ordinary.properties["hidden"] is False
+    assert wakes == [body]
