@@ -1,17 +1,11 @@
-"""Stage 1 changes exactly the shipped faces it names, and no other.
+"""Stage 1's one-face material layout is now persisted in the version-5
+_showcase map. The old per-tag material migration is still covered by the
+synthetic legacy-face tests below; no shipped version-5 face needs migration.
 
-Stage 1 (one face record, ``docs/brush-model-proposal.md``) draws each face
-from its one material record. On shipped maps that changes what is drawn in
-one place only: two convex brushes in ``_SHOWCASE`` whose authored per-tag
-``uv_scale`` -- the value the Surface Inspector showed -- was never on their
-planes, so the renderer drew 1.0 instead. Their faces now draw the authored
-value. Every other face of every shipped map draws as it did.
-
-The Stage 0 reading is frozen below (it is what
-``tests/helpers/brush_semantics`` said before Stage 1); the Stage 1 reading
-is the helper. Both are compared *as drawn*: a missing scale is the 1.0 it
-draws as, and a Natural face's stored scale is not drawn. The pixel-level
-check of the same claim is ``tools/compare_map_pixels.py``.
+For any remaining legacy world-plane maps, this module compares the frozen
+Stage 0 reading with the Stage 1 reading as drawn: missing scale draws as
+1.0, and Natural replaces any stored scale. The pixel-level check remains
+tools/compare_map_pixels.py.
 """
 
 import pytest
@@ -26,12 +20,7 @@ QUARTER = '5b10b49b-9b6c-45d9-91ee-0b6f06970590'
 TEN_BY_EIGHT = '8c04e483-4d44-4217-a03d-32844a727043'
 
 #: ``(map, brush id, face tag) -> (Stage 0 scale, Stage 1 scale)`` as drawn.
-INTENDED = {
-    **{('_SHOWCASE.json', QUARTER, tag): ((1.0, 1.0), (0.25, 0.25))
-       for tag in ('west', 'down', 'north', 'south')},
-    **{('_SHOWCASE.json', TEN_BY_EIGHT, tag): ((1.0, 1.0), (10.0, 8.0))
-       for tag in ('east', 'west', 'top', 'down', 'north', 'south')},
-}
+INTENDED = {}
 
 
 def _stage0_pass(brush):
