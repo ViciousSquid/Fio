@@ -45,7 +45,8 @@ def _current():
     # by explicit structural assertions). Preserve that marker in both
     # drift-check and --write modes; all other maps remain fully digested.
     for name, entry in snapshot.items():
-        if recorded.get(name, {}).get('digest') is None:
+        baseline = recorded.get(name)
+        if baseline is not None and baseline.get('digest') is None:
             entry['digest'] = None
 
     return snapshot, write_sites.scan(ROOT)
