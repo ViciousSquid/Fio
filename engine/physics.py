@@ -1374,6 +1374,8 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
+        # Last observed hidden/disabled state, retained across dense repacks.
+        self._was_inactive = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._dirty = False
         self._static_cells = {}
@@ -1486,6 +1488,14 @@ class PhysicsWorld:
             self._dirty = False
             return
 
+        # A body may become active immediately before a repack. Preserve its
+        # last observed state by identity so that transition is not swallowed.
+        previous_inactive = {
+            id(entity): bool(self._was_inactive[i])
+            for i, entity in enumerate(self._entities)
+            if i < len(self._was_inactive)
+        }
+
         self._position = np.empty((n, 3), dtype=np.float32)
         self._offset = np.empty((n, 3), dtype=np.float32)
         self._half = np.empty((n, 3), dtype=np.float32)
@@ -1499,12 +1509,18 @@ class PhysicsWorld:
         self._physics_enabled = np.empty(n, dtype=np.bool_)
         self._awake = np.zeros(n, dtype=np.bool_)
         self._kinematic = np.zeros(n, dtype=np.bool_)
+        self._was_inactive = np.empty(n, dtype=np.bool_)
         self._rolls = np.zeros(n, dtype=np.bool_)
         self._bounce = np.zeros(n, dtype=np.float32)
         self._orientation = np.zeros((n, 4), dtype=np.float64)
         self._orientation[:, 0] = 1.0
 
         for i, entity in enumerate(self._entities):
+            props = getattr(entity, 'properties', None)
+            current_inactive = bool(
+                isinstance(props, dict)
+                and (props.get('disabled', False) or props.get('hidden', False)))
+            self._was_inactive[i] = previous_inactive.get(id(entity), current_inactive)
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
@@ -1856,7 +1872,7 @@ class PhysicsWorld:
             return
         self._awake[rows[support < bottom - 1.0]] = True
 
-    def _settle_sunk_bodies(self):
+    def _settle_sunk_bodies(self, eligible=None):
         """Lift each body that starts sunk into a floor up onto its surface.
 
         A body finds its floor by casting down from just above its bottom, so
@@ -1869,6 +1885,8 @@ class PhysicsWorld:
         motion a floor top above the bottom is a wall, not a floor.
         """
         candidates = self._physics_enabled & self._solid
+        if eligible is not None:
+            candidates &= eligible
         rows = np.flatnonzero(
             candidates & ~self._inactive_mask(candidates, awake_only=False))
         if rows.size == 0:
@@ -2260,6 +2278,18 @@ class PhysicsWorld:
         self._pack()
         if not self._entities:
             return
+
+        # A hidden/disabled body was deliberately left untouched at rebuild.
+        # Settle it now, on its first inactive -> active transition, before it
+        # can be integrated or queried as an active body. This snapshot is
+        # refreshed every tick and survives _pack() by entity identity.
+        inactive = self._inactive_mask(
+            np.ones(len(self._entities), dtype=np.bool_), awake_only=False)
+        activated = self._was_inactive & ~inactive
+        if np.any(activated):
+            self._settle_sunk_bodies(activated)
+        self._was_inactive[:] = inactive
+
         if self._wake_floating_pending:
             self._wake_floating_pending = False
             self._wake_floating_near_bodies()
