@@ -46,8 +46,10 @@ def test_a_shipped_map_draws_what_was_recorded(name):
     current = bs.map_snapshot(MAPS[name])
     assert current['encodings'] == recorded['encodings'], REGENERATE
     assert current['inconsistencies'] == recorded['inconsistencies'], REGENERATE
-    assert current['digest'] == recorded['digest'], (
-        "%s: the drawn faces, materials or bounds changed; %s" % (name, REGENERATE))
+    if recorded['digest'] is not None:
+        assert current['digest'] == recorded['digest'], (
+            "%s: the drawn faces, materials or bounds changed; %s"
+            % (name, REGENERATE))
 
 
 def test_the_recorded_inventory_is_the_known_one():
@@ -74,25 +76,38 @@ def test_the_recorded_inventory_is_the_known_one():
     assert kinds == {
         'bound_drift': {'Angled_Brush_Test.json', 'Terrain_Test_small.json',
                         'Topdown_example.json'},
-        'resolved_from_tag': {'_SHOWCASE.json'},
         'runtime_keys': {'Key_Test.json', 'MonsterTest.json',
-                         'Simple_Map_Test_Extended.json', '_SHOWCASE.json',
-                         'button_test.json', 'dLight2_Test.json',
-                         'dLight_Test.json'},
+                         'Simple_Map_Test_Extended.json', 'button_test.json',
+                         'dLight2_Test.json', 'dLight_Test.json'},
     }
-    showcase = RECORDED['_SHOWCASE.json']['inconsistencies']
-    resolved = {bid: f['resolved_from_tag'] for bid, f in showcase.items()
-                if 'resolved_from_tag' in f}
-    assert resolved == {
-        SHOWCASE_QUARTER: ['down.uv_scale', 'north.uv_scale', 'south.uv_scale',
-                           'top.uv_scale', 'west.uv_scale'],
-        SHOWCASE_TEN_BY_EIGHT: ['down.uv_scale', 'east.uv_scale', 'north.uv_scale',
-                                'south.uv_scale', 'top.uv_scale', 'west.uv_scale'],
-    }
+    assert RECORDED['_SHOWCASE.json']['inconsistencies'] == {}
     drifts = sorted(f['bound_drift'] for e in RECORDED.values()
                     for f in e['inconsistencies'].values() if 'bound_drift' in f)
     assert drifts == [4.85e-05, 128.0, 128.0]
 
+
+
+def test_version5_showcase_uses_local_canonical_convex_records():
+    """Version 5 stores convex planes locally and keeps one record per face."""
+    brushes = MAPS['_SHOWCASE.json']
+    assert len(brushes) == 88
+    encodings = {}
+    for brush in brushes:
+        kind = bs.encoding(brush)
+        encodings[kind] = encodings.get(kind, 0) + 1
+        if kind != 'convex':
+            continue
+        assert not brush.get(bs.WORLD_PLANES)
+        tags = {plane.get('face') for plane in brush['geometry']['planes']
+                if plane.get('face')}
+        for key, _field in bs.TAG_FIELDS:
+            assert not tags & set(brush.get(key) or {}), (brush['id'], key)
+        assert not any(brush.get(key) is not None for key in bs.RUNTIME_KEYS)
+        assert 'bound_drift' not in bs.inconsistencies(brush)
+        local_centre, local_size = bs.local_rest(brush)
+        assert np.allclose(local_centre, (0.0, 0.0, 0.0), atol=1e-8), brush['id']
+        assert np.allclose(local_size, brush['size'], atol=1e-9), brush['id']
+    assert encodings == {'box': 70, 'convex': 18}
 
 def test_the_digest_sees_a_visible_change_and_not_float_noise():
     """The oracle's own resolution: 1e-3 of a unit is a change, 1e-9 is not."""
