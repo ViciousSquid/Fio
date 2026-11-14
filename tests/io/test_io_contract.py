@@ -569,3 +569,29 @@ def test_fire_output_propagates_explicit_trigger_activator_through_delay():
     mgr.update(0.25)
 
     assert seen == [activator]
+
+
+def test_prop_show_wakes_only_a_registered_physics_body(logic_thread):
+    """The registered Prop Show handler resumes its body without broad wakeups."""
+    prop = _make_entity("prop")
+    ordinary = _make_entity("prop")
+    assert prop is not None and ordinary is not None
+    prop.properties.update({"hidden": True, "physics_enabled": True})
+    ordinary.properties["hidden"] = True
+    wakes = []
+
+    class PhysicsWorld:
+        def get_body(self, entity):
+            return entity if entity is prop else None
+
+        def wake(self, entity):
+            wakes.append(entity)
+
+    logic_thread.session_runtime.physics_world = PhysicsWorld()
+    handler = logic_thread.io_manager._input_handlers[("prop", "show")]
+    handler(prop, "", logic_thread)
+    handler(ordinary, "", logic_thread)
+
+    assert prop.properties["hidden"] is False
+    assert ordinary.properties["hidden"] is False
+    assert wakes == [prop]
