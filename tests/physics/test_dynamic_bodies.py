@@ -302,6 +302,27 @@ def test_a_hidden_floating_body_is_not_woken_on_startup():
     assert prop.pos[1] == 400.0
 
 
+def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
+    world = _world()
+    # The model origin is at its centre, embedded halfway into the floor.
+    prop = _prop(pos=(0.0, -DRUM_HALF_Y, 0.0), hidden=True)
+    world.rebuild([_drum_brush(prop)])
+
+    # Rebuild and dormant ticks must not move a hidden body.
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+    world.step(1.0 / 60.0)
+    assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
+
+    # Force a dense repack after activation; the transition must survive it.
+    prop.properties['hidden'] = False
+    world.wake(prop)
+    other = _prop(pos=(400.0, 400.0, 0.0))
+    world.register_body(other, _drum_brush(other))
+    world.step(1.0 / 60.0)
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-4)
+
+
 def test_a_parked_body_resumes_when_it_is_re_enabled():
     world = _world()
     prop = _prop(pos=(0.0, 400.0, 0.0))
