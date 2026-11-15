@@ -133,6 +133,15 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
         self._model_matrix = glm.mat4(1.0)
 
+        # Optional 360-degree background. Decode/upload lazily while this
+        # renderer owns the current GL context; release it in cleanup().
+        self._background_image_path = ""
+        self._background_failed_path = None
+        self._background_image_texture = 0
+        self._background_image_program = 0
+        self._background_image_vao = 0
+        self._background_image_uniforms = None
+
         # GPU-instanced model data. One persistent VBO is shared by all model
         # VAOs; each instance carries a model matrix and normal matrix (112 B).
         # Box brush instances: one stream (buffer, VAO, CPU mirror) per pass,
@@ -323,6 +332,126 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._distance_culls[key] = (slots, weakref.ref(table), inputs, culled)
         return culled
 
+    def set_background_image(self, path):
+        """Use *path* as the camera-locked 360-degree panorama.
+
+        Paths may name loose project assets, members of a mounted .fiopak, or
+        absolute files selected outside the project. Upload is deferred until
+        render_scene, while this renderer owns the GL context.
+        """
+        path = str(path or "").strip()
+        if path == self._background_image_path:
+            return
+        self._background_image_path = path
+        self._background_failed_path = None
+        if self._background_image_texture:
+            gl.glDeleteTextures([self._background_image_texture])
+            self._background_image_texture = 0
+
+    def _load_background_image(self):
+        """Decode and upload the selected panorama once for this renderer."""
+        path = self._background_image_path
+        if not path or path == self._background_failed_path:
+            return False
+        from engine.asset_archives import asset_source
+        source = asset_source(path)
+        if source is None:
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), os.pardir,
+                             os.pardir, os.pardir)
+            )
+            source = asset_source(os.path.join(project_root, path))
+        if source is None:
+            print(f"[Renderer] Background panorama not found: {path}")
+            self._background_failed_path = path
+            return False
+
+        texture = 0
+        try:
+            from PIL import Image
+            with Image.open(source) as image:
+                rgba = image.convert("RGBA")
+            texture = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+            try:
+                gl.glTexImage2D(
+                    gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, rgba.width, rgba.height, 0,
+                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, rgba.tobytes())
+            finally:
+                gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+            self._background_image_texture = texture
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            return True
+        except Exception as exc:
+            if texture:
+                gl.glDeleteTextures([texture])
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            print(f"[Renderer] Could not load background panorama '{path}': {exc}")
+            self._background_failed_path = path
+            return False
+
+    def _draw_background_image(self, projection, view):
+        """Draw the panorama at infinite distance, before world geometry."""
+        if not self._background_image_path or self._portal_scene_pass:
+            return
+        if not self._background_image_texture and not self._load_background_image():
+            return
+        if not self._background_image_program:
+            from OpenGL.GL.shaders import compileProgram, compileShader
+            vertex = compileShader(
+                shaders.DEFAULT_SHADERS["void_background.vert"], gl.GL_VERTEX_SHADER)
+            fragment = compileShader(
+                shaders.DEFAULT_SHADERS["void_background.frag"], gl.GL_FRAGMENT_SHADER)
+            self._background_image_program = compileProgram(
+                vertex, fragment, validate=False)
+            self._background_image_vao = int(gl.glGenVertexArrays(1))
+            program = self._background_image_program
+            self._background_image_uniforms = (
+                gl.glGetUniformLocation(program, "u_inverse_projection"),
+                gl.glGetUniformLocation(program, "u_inverse_view"),
+                gl.glGetUniformLocation(program, "u_panorama"),
+            )
+
+        inverse_projection = glm.inverse(projection)
+        inverse_view = glm.inverse(view)
+        inv_projection_loc, inv_view_loc, panorama_loc = self._background_image_uniforms
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glUseProgram(self._background_image_program)
+        gl.glUniformMatrix4fv(
+            inv_projection_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_projection))
+        gl.glUniformMatrix4fv(
+            inv_view_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_view))
+        gl.glUniform1i(panorama_loc, 0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._background_image_texture)
+        gl.glBindVertexArray(self._background_image_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
+        gl.glBindVertexArray(0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl.glUseProgram(0)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+
+    def _cleanup_background_image(self):
+        """Release panorama GL objects with the rest of this renderer."""
+        if self._background_image_texture:
+            gl.glDeleteTextures([self._background_image_texture])
+        if self._background_image_vao:
+            gl.glDeleteVertexArrays(1, [self._background_image_vao])
+        if self._background_image_program:
+            gl.glDeleteProgram(self._background_image_program)
+        self._background_image_texture = 0
+        self._background_image_vao = 0
+        self._background_image_program = 0
+        self._background_image_uniforms = None
+
     def render_scene(self, projection, view, camera_pos,
                      primary_selection, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -349,6 +478,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
             else:
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
+        self._draw_background_image(projection, view)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
         # Every fog calculation this frame measures from here. Cached because
@@ -706,6 +836,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
     def cleanup(self):
         """Release ForwardRenderer's own GL resources, then RendererCore's."""
+        self._cleanup_background_image()
         self._cleanup_occlusion()
         if self._sprite_layers is not None:
             self._sprite_layers.cleanup()

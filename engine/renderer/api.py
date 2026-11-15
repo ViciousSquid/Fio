@@ -231,6 +231,13 @@ class Renderer(Protocol):
         host draws its post-scene operations (below) afterwards.
         """
 
+    def set_background_image(self, path: str) -> None:
+        """Set a camera-locked equirectangular panorama behind the scene.
+
+        *path* is a project asset path or an absolute image path; an empty
+        path disables the panorama and restores the renderer's clear colour.
+        """
+
     def set_grid(self, world_size: int, grid_size: int) -> None:
         """Size the editor grid (drawn when ``grid_visible``); 0 removes it."""
 

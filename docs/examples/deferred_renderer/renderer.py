@@ -28,6 +28,7 @@ and a renderer that replaces this one loads its own.
 import ctypes
 import os
 
+import glm
 import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -93,9 +94,23 @@ uniform vec3 uLightPos[%(max)d];
 uniform vec3 uLightColor[%(max)d];
 uniform vec2 uLightParams[%(max)d];           // intensity, radius
 uniform vec3 uAmbient;
+uniform int uHasPanorama;
+uniform mat4 uInverseProjection;
+uniform mat4 uInverseView;
+uniform sampler2D uPanorama;
+const float PI = 3.14159265358979323846;
 void main() {
     vec4 position = texture(gPosition, vUV);
-    if (position.w == 0.0) discard;           // background: keep the host's clear
+    if (position.w == 0.0) {
+        if (uHasPanorama == 0) discard;       // otherwise keep the host's clear
+        vec4 viewH = uInverseProjection * vec4(vUV * 2.0 - 1.0, 1.0, 1.0);
+        vec3 viewDirection = normalize(viewH.xyz / viewH.w);
+        vec3 worldDirection = normalize(mat3(uInverseView) * viewDirection);
+        float u = atan(worldDirection.x, -worldDirection.z) / (2.0 * PI) + 0.5;
+        float v = 0.5 - asin(clamp(worldDirection.y, -1.0, 1.0)) / PI;
+        FragColor = vec4(texture(uPanorama, vec2(u, v)).rgb, 1.0);
+        return;
+    }
     vec3 normal = texture(gNormal, vUV).xyz;
     vec3 albedo = texture(gAlbedo, vUV).rgb;
     vec3 light = uAmbient;
@@ -164,6 +179,9 @@ class DeferredRenderer:
         self._sprite_textures = {}
         self._gbuffer = None                 # (fbo, [position, normal, albedo], depth)
         self._gbuffer_size = (0, 0)
+        self._background_image_path = ""
+        self._background_failed_path = None
+        self._background_texture = 0
         self._ready = False
         try:
             self._geometry = _program(_GEOMETRY_VS, _GEOMETRY_FS)
@@ -195,6 +213,9 @@ class DeferredRenderer:
     def cleanup(self):
         """Delete every GL name this renderer made. It is not used again."""
         self._delete_gbuffer()
+        if self._background_texture:
+            gl.glDeleteTextures([self._background_texture])
+            self._background_texture = 0
         if self._textures:
             names = [t for t in self._textures.values() if t]
             if names:
@@ -287,10 +308,23 @@ class DeferredRenderer:
             gl.glUniform3fv(uniform('uLightColor'), len(colours), colours)
             gl.glUniform2fv(uniform('uLightParams'), len(params), params)
         gl.glUniform3f(uniform('uAmbient'), *AMBIENT)
+        has_panorama = self._load_background_image()
+        gl.glUniform1i(uniform('uHasPanorama'), int(has_panorama))
+        gl.glUniform1i(uniform('uPanorama'), 3)
+        gl.glUniformMatrix4fv(
+            uniform('uInverseProjection'), 1, gl.GL_FALSE,
+            glm.value_ptr(glm.inverse(projection)))
+        gl.glUniformMatrix4fv(
+            uniform('uInverseView'), 1, gl.GL_FALSE,
+            glm.value_ptr(glm.inverse(view)))
+        gl.glActiveTexture(gl.GL_TEXTURE3)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._background_texture if has_panorama else 0)
         gl.glBindVertexArray(self._fullscreen_vao)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
         stats.draw_calls += 1
         gl.glBindVertexArray(0)
+        gl.glActiveTexture(gl.GL_TEXTURE3)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glUseProgram(0)
@@ -309,6 +343,70 @@ class DeferredRenderer:
         return (np.ascontiguousarray(entities.pos[slots], dtype=np.float32),
                 np.ascontiguousarray(entities.light_color[slots], dtype=np.float32),
                 np.ascontiguousarray(entities.light_params[slots], dtype=np.float32))
+
+    def set_background_image(self, path):
+        """Set the optional camera-locked panorama, uploaded in render_scene."""
+        path = str(path or "").strip()
+        if path == self._background_image_path:
+            return
+        self._background_image_path = path
+        self._background_failed_path = None
+        if self._background_texture:
+            gl.glDeleteTextures([self._background_texture])
+            self._background_texture = 0
+
+    def _load_background_image(self):
+        """Upload the selected project or absolute image path once."""
+        path = self._background_image_path
+        if self._background_texture:
+            return True
+        if not path or path == self._background_failed_path:
+            return False
+        from engine.asset_archives import asset_source
+        source = asset_source(path)
+        if source is None and not os.path.isabs(path):
+            root = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
+            source = asset_source(os.path.join(root, path))
+        if source is None:
+            self._background_failed_path = path
+            print(f"[DeferredRenderer] Background panorama not found: {path}")
+            return False
+        texture = 0
+        active_texture = int(gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE))
+        try:
+            from PIL import Image
+            with Image.open(source) as image:
+                rgba = image.convert("RGBA")
+            # Unit 3 is reserved for the background. Do not disturb the three
+            # G-buffer samplers already bound to units 0, 1 and 2.
+            gl.glActiveTexture(gl.GL_TEXTURE3)
+            texture = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+            try:
+                gl.glTexImage2D(
+                    gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, rgba.width, rgba.height, 0,
+                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, rgba.tobytes())
+            finally:
+                gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+            self._background_texture = texture
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            return True
+        except Exception as exc:
+            if texture:
+                gl.glDeleteTextures([texture])
+            gl.glActiveTexture(gl.GL_TEXTURE3)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            self._background_failed_path = path
+            print(f"[DeferredRenderer] Could not load background panorama '{path}': {exc}")
+            return False
+        finally:
+            gl.glActiveTexture(active_texture)
 
     def set_grid(self, world_size, grid_size):
         pass                                  # this example draws no editor grid
