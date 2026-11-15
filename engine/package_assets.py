@@ -15,7 +15,7 @@ from engine.asset_archives import (ASSET_CATEGORIES, _entries, user_pack_entries
 ASSET_KEYS = {'texture', 'texture_path', 'sprite_2d', 'custom_idle', 'custom_shoot',
               'custom_dead', 'model_path', 'mesh', 'sound_file', 'sound', 'audio',
               'sprite_path', 'collect_custom_sprite', 'world_sprite', 'hud_sprite',
-              'muzzle_flash', 'fire_texture', 'orb_texture', 'custom_gif'}
+              'muzzle_flash', 'fire_texture', 'orb_texture', 'custom_gif', 'sky_image'}
 
 
 def map_assets(node):
@@ -114,7 +114,7 @@ class ProjectAssets:
             return None
         name = posixpath.normpath(name)
         candidates = [name, 'assets/' + name]
-        for folder in ('textures', 'models', 'sounds', 'music', 'sprites', 'fonts', 'materials'):
+        for folder in ('textures', 'models', 'sounds', 'music', 'sprites', 'fonts', 'materials', 'backgrounds'):
             candidates.append(f'assets/{folder}/{name}')
         for candidate in candidates:
             if candidate in self.sources:

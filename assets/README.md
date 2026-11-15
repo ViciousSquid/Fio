@@ -26,6 +26,17 @@ readers (`engine/audio_archives.py`); repack their category after editing
 loose audio. Archives are not opened in rendering hot paths: a texture or
 model is read once, when it is first loaded.
 
+## Map-authored panorama assets
+
+A map's Primary PlayerStart may carry a `sky_image` property naming a
+360-degree equirectangular panorama. Choose an image from that PlayerStart's
+properties; files selected outside the project are copied into
+`assets/backgrounds/`, and that map-relative path is saved with the map.
+JPG/JPEG and the other common image formats are supported. Game-package export
+discovers the property and includes the referenced image, so the panorama
+travels with the map rather than relying on an editor preference or an
+absolute path on the authoring machine.
+
 ## Your own packs
 
 Any other `.fiopak` you put in `assets/` is a **user pack**: a ZIP of your

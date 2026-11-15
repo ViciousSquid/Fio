@@ -1573,6 +1573,7 @@ class MainWindow(QMainWindow):
         # pasted or cloned is held to the primary invariant inside that
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
+        self.sync_sky_image_from_map()
         self.property_editor.set_object(self.primary_selection())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
@@ -2788,42 +2789,61 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
 
-    def set_view_background_image(self, path):
-        """Set the editor-only panorama preview without touching map state."""
-        self.view_3d.editor_background_image = str(path or "").strip()
-        self.view_3d.update()
+    def sync_sky_image_from_map(self):
+        """Publish the current Primary PlayerStart panorama to the 3D renderer.
 
-    def choose_view_background_image(self):
-        """Choose a custom 360-degree panorama for the editor 3D view."""
-        current = str(self.view_3d.editor_background_image or "")
-        if current and os.path.isabs(current):
-            start = current
-        elif current:
-            start = os.path.join(self.root_dir, current)
-        else:
-            start = os.path.join(self.root_dir, "assets", "editor", "backgrounds")
-        if not os.path.isdir(start):
-            start = os.path.dirname(start)
-        if not os.path.isdir(start):
-            start = self.root_dir
+        The image path is ordinary map data on exactly one PlayerStart. When
+        Primary changes, ownership follows it; older maps with duplicate
+        values are canonicalised to the current Primary.
+        """
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        path = ""
+        changed = []
 
-        filepath, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select View Background Panorama",
-            start,
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp)",
-        )
-        if not filepath:
-            return
+        if primary is not None:
+            candidate = primary.properties.get("sky_image", "")
+            if not isinstance(candidate, str) or not candidate.strip():
+                # The previous owner may no longer be Primary. Recover its
+                # value before removing non-primary copies of the property.
+                position = start_rules.earliest_created(
+                    [start.properties for start in starts])
+                ordered = [starts[position]] if position is not None else []
+                ordered.extend(
+                    start for start in starts
+                    if start is not primary
+                    and (position is None or start is not starts[position])
+                )
+                candidate = ""
+                for start in ordered:
+                    value = start.properties.get("sky_image", "")
+                    if isinstance(value, str) and value.strip():
+                        candidate = value.strip()
+                        break
+            else:
+                candidate = candidate.strip()
 
-        filepath = os.path.abspath(filepath)
-        try:
-            relative = os.path.relpath(filepath, self.root_dir)
-            if relative != os.pardir and not relative.startswith(os.pardir + os.sep):
-                filepath = relative.replace(os.sep, "/")
-        except ValueError:
-            pass
-        self.set_view_background_image(filepath)
+            if candidate:
+                if primary.properties.get("sky_image") != candidate:
+                    primary.properties["sky_image"] = candidate
+                    changed.append(primary)
+                path = candidate
+            elif "sky_image" in primary.properties:
+                primary.properties.pop("sky_image", None)
+                changed.append(primary)
+
+        # A map has one sky setting: only its current Primary may own it.
+        for start in starts:
+            if start is not primary and "sky_image" in start.properties:
+                start.properties.pop("sky_image", None)
+                changed.append(start)
+
+        view = getattr(self, "view_3d", None)
+        if view is not None:
+            view.sky_image_path = path
+        if changed:
+            self.state.mark_world_changed(changed)
+        return path
 
     def set_show_whole_world(self, shown):
         """Load every editor cell of a Big World map, or only those near the camera."""
@@ -4107,6 +4127,14 @@ class MainWindow(QMainWindow):
             return
         if self.primary_selection() and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.save_state()
+            primary_start = self.state.resolve_player_start()
+            sky_image = (
+                str(primary_start.properties.get("sky_image", "") or "")
+                if primary_start is not None else ""
+            )
+            primary_is_deleted = any(
+                obj is primary_start for obj in self.state.selected_objects
+            )
             for obj in list(self.state.selected_objects):
                 if isinstance(obj, dict):
                     if obj in self.state.brushes:
@@ -4114,6 +4142,13 @@ class MainWindow(QMainWindow):
                 else:
                     if obj in self.state.things:
                         self.state.things.remove(obj)
+            if primary_is_deleted:
+                # The old owner is gone before update_all_ui can synchronise.
+                self.state.settle_player_starts()
+                promoted = self.state.resolve_player_start()
+                if promoted is not None and sky_image:
+                    promoted.properties["sky_image"] = sky_image
+                    self.state.mark_world_changed([promoted])
             self.set_selected_objects([])
             return
 

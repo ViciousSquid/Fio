@@ -231,8 +231,8 @@ class QtGameView(QOpenGLWidget):
         self.hud_pixmaps = {}              # sprite path -> QPixmap (None if missing)
         self.show_spatial_grid = False
         self.renderer = None
-        #: Editor-only panorama selected in View > Background image.
-        self.editor_background_image = ""
+        #: Panorama authored on the current map's Primary PlayerStart.
+        self.sky_image_path = ""
         #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
         self._renderer_mode = DEFAULT_RENDERER
 
@@ -1003,10 +1003,8 @@ class QtGameView(QOpenGLWidget):
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
         _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
-        # This is an editor viewport preference, not a map property. Clear it
-        # on entering Play; game pre-scene hooks can then install their own sky.
-        self.renderer.set_background_image(
-            "" if self.play_mode else self.editor_background_image)
+        # The map's Primary PlayerStart owns the panorama in both editor and Play.
+        self.renderer.set_background_image(self.sky_image_path)
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,

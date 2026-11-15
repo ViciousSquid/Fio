@@ -648,43 +648,6 @@ class Ui_MainWindow(object):
         
         view_menu.addAction(self.action_asset_browser)
 
-        # A camera-locked panorama for the editor's 3D viewport. This is a
-        # view preference only; it never changes the map or its dirty state.
-        background_menu = view_menu.addMenu('Background image')
-        background_group = QActionGroup(background_menu)
-        background_group.setExclusive(True)
-        MainWindow.view_background_image_actions = {}
-        for key, label, path in (
-                ('none', 'None', ''),
-                ('space', 'Space', 'assets/editor/backgrounds/void-panorama.webp'),
-                ('cloudy_sky', 'Cloudy sky', 'assets/editor/backgrounds/cloudy-sky-panorama.webp')):
-            action = QAction(label, MainWindow, checkable=True)
-            action.triggered.connect(
-                lambda _checked, image_path=path:
-                MainWindow.set_view_background_image(image_path))
-            background_group.addAction(action)
-            background_menu.addAction(action)
-            MainWindow.view_background_image_actions[key] = action
-
-        background_menu.addSeparator()
-        choose_background_action = QAction('Choose image…', MainWindow)
-        choose_background_action.triggered.connect(
-            MainWindow.choose_view_background_image)
-        background_menu.addAction(choose_background_action)
-        MainWindow.view_background_image_menu = background_menu
-
-        def sync_background_menu():
-            current = MainWindow.view_3d.editor_background_image
-            paths = {
-                'none': '',
-                'space': 'assets/editor/backgrounds/void-panorama.webp',
-                'cloudy_sky': 'assets/editor/backgrounds/cloudy-sky-panorama.webp',
-            }
-            for key, action in MainWindow.view_background_image_actions.items():
-                action.setChecked(current == paths[key])
-        background_menu.aboutToShow.connect(sync_background_menu)
-        sync_background_menu()
-
         # The same choices as right-clicking blank space in the Asset Browser.
         thumbnail_menu = view_menu.addMenu('Thumbnail Size')
         thumbnail_group = QActionGroup(thumbnail_menu)
