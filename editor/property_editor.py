@@ -3356,7 +3356,7 @@ class PropertyEditor(QWidget):
         presets = (
             ("None", ""),
             ("Cloudy sky", "assets/backgrounds/cloudy-sky-panorama.webp"),
-            ("Space", "assets/backgrounds/void-panorama.webp"),
+            ("Space", "assets/backgrounds/void-panorama-q80.webp"),
         )
         preset_paths = {path for _label, path in presets}
         value = str(thing.properties.get("sky_image", "") or "").strip()

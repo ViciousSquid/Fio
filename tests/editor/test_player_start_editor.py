@@ -369,43 +369,43 @@ def test_sky_image_property_is_only_shown_on_the_current_primary_start(window):
 
 def test_sky_image_is_saved_with_primary_player_start_and_published_to_view(window):
     first = _create(window, "A")
-    first.properties["sky_image"] = "assets/backgrounds/void-panorama.webp"
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
     window.update_all_ui()
 
-    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama.webp"
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
     data = json.loads(json.dumps(window.state.get_level_data()))
     saved = next(
         record for record in data["things"]
         if record.get("type") == "playerstart"
         and record.get("properties", {}).get("name") == "A"
     )
-    assert saved["properties"]["sky_image"] == "assets/backgrounds/void-panorama.webp"
+    assert saved["properties"]["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
 
     reloaded = EditorState()
     reloaded.load_from_data(data)
     restored = reloaded.resolve_player_start()
-    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama.webp"
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
 
 
 def test_deleting_primary_moves_sky_image_to_promoted_start(window):
     first = _create(window, "A")
     second = _create(window, "B", (100, 40, 0))
     third = _create(window, "C", (200, 40, 0))
-    first.properties["sky_image"] = "assets/backgrounds/void-panorama.webp"
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
     window.update_all_ui()
 
     _delete(window, first)
 
     assert _primaries(window) == ["B"]
-    assert second.properties["sky_image"] == "assets/backgrounds/void-panorama.webp"
+    assert second.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
     assert "sky_image" not in third.properties
-    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama.webp"
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
 
     # Undo restores the previous single owner and its panorama.
     window.undo()
     assert _primaries(window) == ["A"]
     restored = window.state.resolve_player_start()
-    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama.webp"
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
     remaining = [start for start in window.state.player_starts() if start is not restored]
     assert all("sky_image" not in start.properties for start in remaining)
 
@@ -413,14 +413,14 @@ def test_deleting_primary_moves_sky_image_to_promoted_start(window):
 def test_only_primary_retains_sky_image_when_map_has_duplicate_values(window):
     first = _create(window, "A")
     second = _create(window, "B", (100, 40, 0))
-    first.properties["sky_image"] = "assets/backgrounds/void-panorama.webp"
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
     second.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
 
     window.update_all_ui()
 
-    assert first.properties["sky_image"] == "assets/backgrounds/void-panorama.webp"
+    assert first.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
     assert "sky_image" not in second.properties
-    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama.webp"
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
 
 def test_sky_image_dropdown_options_are_in_requested_order(window):
     _create(window, "A")
@@ -431,7 +431,7 @@ def test_sky_image_dropdown_options_are_in_requested_order(window):
     assert [combo.itemData(i) for i in range(combo.count())] == [
         "",
         "assets/backgrounds/cloudy-sky-panorama.webp",
-        "assets/backgrounds/void-panorama.webp",
+        "assets/backgrounds/void-panorama-q80.webp",
     ]
 
 
@@ -449,11 +449,11 @@ def test_sky_image_dropdown_can_select_either_builtin_preset(window):
     assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
 
     combo.setCurrentIndex(combo.findData(
-        "assets/backgrounds/void-panorama.webp"))
+        "assets/backgrounds/void-panorama-q80.webp"))
     assert start.properties["sky_image"] == (
-        "assets/backgrounds/void-panorama.webp")
+        "assets/backgrounds/void-panorama-q80.webp")
     assert window.view_3d.sky_image_path == (
-        "assets/backgrounds/void-panorama.webp")
+        "assets/backgrounds/void-panorama-q80.webp")
 
 
 def test_sky_image_custom_entry_can_be_cleared_to_none(window):
