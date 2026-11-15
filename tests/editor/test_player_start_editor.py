@@ -349,7 +349,7 @@ def test_sky_image_property_is_only_shown_on_the_current_primary_start(window):
     first = _create(window, "A")
     panel = window.property_editor
     assert "player_start_sky_image" in panel._widgets
-    assert panel._widgets["player_start_sky_image"].text() == ""
+    assert panel._widgets["player_start_sky_image"].currentData() == ""
 
     second = _create(window, "B", (100, 40, 0))
     assert "player_start_sky_image" not in panel._widgets
@@ -362,7 +362,7 @@ def test_sky_image_property_is_only_shown_on_the_current_primary_start(window):
     window.set_selected_objects([second])
 
     assert "player_start_sky_image" in panel._widgets
-    assert panel._widgets["player_start_sky_image"].text() == (
+    assert panel._widgets["player_start_sky_image"].currentData() == (
         "assets/backgrounds/cloudy-sky-panorama.webp")
     assert "sky_image" not in first.properties
 
@@ -421,3 +421,55 @@ def test_only_primary_retains_sky_image_when_map_has_duplicate_values(window):
     assert first.properties["sky_image"] == "assets/backgrounds/void-panorama.webp"
     assert "sky_image" not in second.properties
     assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama.webp"
+
+def test_sky_image_dropdown_options_are_in_requested_order(window):
+    _create(window, "A")
+    combo = window.property_editor._widgets["player_start_sky_image"]
+
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "None", "Cloudy sky", "Space"]
+    assert [combo.itemData(i) for i in range(combo.count())] == [
+        "",
+        "assets/backgrounds/cloudy-sky-panorama.webp",
+        "assets/backgrounds/void-panorama.webp",
+    ]
+
+
+def test_sky_image_dropdown_can_select_either_builtin_preset(window):
+    start = _create(window, "A")
+    panel = window.property_editor
+    combo = panel._widgets["player_start_sky_image"]
+
+    combo.setCurrentIndex(combo.findData(
+        "assets/backgrounds/cloudy-sky-panorama.webp"))
+    assert start.properties["sky_image"] == (
+        "assets/backgrounds/cloudy-sky-panorama.webp")
+    assert window.view_3d.sky_image_path == (
+        "assets/backgrounds/cloudy-sky-panorama.webp")
+    assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
+
+    combo.setCurrentIndex(combo.findData(
+        "assets/backgrounds/void-panorama.webp"))
+    assert start.properties["sky_image"] == (
+        "assets/backgrounds/void-panorama.webp")
+    assert window.view_3d.sky_image_path == (
+        "assets/backgrounds/void-panorama.webp")
+
+
+def test_sky_image_custom_entry_can_be_cleared_to_none(window):
+    start = _create(window, "A")
+    panel = window.property_editor
+    combo = panel._widgets["player_start_sky_image"]
+    combo.addItem("Custom: nebula.jpg", "assets/backgrounds/nebula.jpg")
+    combo.setCurrentIndex(combo.count() - 1)
+    assert start.properties["sky_image"] == "assets/backgrounds/nebula.jpg"
+
+    panel._widgets["player_start_sky_image_clear"].click()
+
+    assert start.properties["sky_image"] == ""
+    assert combo.currentText() == "None"
+    assert combo.currentData() == ""
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "None", "Cloudy sky", "Space"]
+    assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
+    assert window.view_3d.sky_image_path == ""
