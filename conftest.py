@@ -34,9 +34,11 @@ if _ROOT not in sys.path:
 # an OpenGL context — the visual tier needs the real one (under Xvfb in CI).
 if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    # PyOpenGL defaults to GLX, but the editor Qt tier intentionally runs without X11.
-    # Use EGL for context-free imports in that tier; the actual GL tier runs under Xvfb.
-    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+    # The headless Linux Qt tier has no X11/GLX display. Use EGL for
+    # context-free PyOpenGL imports there; Windows and macOS must keep their
+    # native PyOpenGL platform backends.
+    if sys.platform.startswith("linux"):
+        os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 # Seal the render table's transform columns (engine/render_table.py): a write
 # that bypasses the change log raises. A test-time check; play does not pay it.
 os.environ.setdefault("FIO_SEAL_COLUMNS", "1")
