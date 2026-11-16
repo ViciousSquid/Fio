@@ -1042,3 +1042,17 @@ def test_the_light_stream_follows_the_player_like_big_world():
     now[0] += ls.REFRESH_SECONDS
     lit = stream.select(table, every, (15000.0 - 400.0, 0.0, 0.0))
     assert lit.tolist()[0] == 0                        # the nearest now
+
+
+def test_a_monsters_fight_frames_are_interned_with_it_once_per_kind():
+    """Shooting (plain and from each facing) and dead are interned while the
+    monster is alive, so the renderer loads them, and puts them in its sprite
+    array, with the rest -- not at the first shot. A second monster of the
+    same kind adds nothing."""
+    table = _synced([make_thing(Monster, 'm')])
+    keys = [recipe[0][0] for recipe in table.sprite_recipes()]
+    for frame in ['_shoot_'] + ['_shoot__rotation_%d' % r for r in range(1, 9)] + ['_dead_']:
+        assert any(key.startswith('msprite_') and key.endswith(frame) for key in keys), frame
+    count = len(keys)
+    pair = _synced([make_thing(Monster, 'm'), make_thing(Monster, 'n', (64.0, 0.0, 0.0))])
+    assert len(pair.sprite_recipes()) == count

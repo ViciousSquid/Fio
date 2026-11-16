@@ -182,6 +182,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         #: Entity sprite images as layers of one texture array; created on
         #: first use, on the thread that owns the context.
         self._sprite_layers = None
+        #: id(recipe list) -> (list, length) last warmed (_warm_sprite_layers).
+        self._sprite_warm_seen = {}
         # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
         # billboard texture path, with one draw per animated texture frame.
         self._effect_instance_vbo = None
@@ -714,6 +716,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
+        self._warm_sprite_layers(etable, thing_slots, config.get('play_mode', False),
+                                 config.get('show_sprites_in_play_mode', False))
         # Frustum, against this view's own camera. The logic thread publishes
         # every entity row, because lights, portals and effects need them all;
         # the sprite and model passes only need what this camera can see, and

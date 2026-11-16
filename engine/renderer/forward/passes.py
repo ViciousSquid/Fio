@@ -1359,6 +1359,49 @@ class PassesMixin:
     # --------------------------------------------------------------------------
     # Sprites, billboards and glasses
     # --------------------------------------------------------------------------
+    def _warm_sprite_layers(self, table, slots, play_mode, show_sprites):
+        """Put every image the sprite pass may draw for *slots* into the layer
+        array (engine.sprite_layers) in one import: each sprite, each of a
+        monster's eight facings and the frames a fight switches it to
+        (EntityTable._intern_fight_frames), near or far, hidden or not. Done when the
+        table's sprite recipes change -- the map loads, Play starts, something
+        new appears -- not per frame. Imported one at a time as each sprite
+        first came into view, the array grew while it filled and every growth
+        re-uploaded every layer: 46 and 130 ms frames into _SHOWCASE's Play."""
+        if table is None or not len(slots) or 'sprite_layered' not in self.shaders:
+            return
+        recipes = table.sprite_recipes()
+        seen = self._sprite_warm_seen
+        entry = seen.get(id(recipes))
+        if entry is not None and entry[0] is recipes and entry[1] == len(recipes):
+            return
+        if len(seen) >= 4:              # the render buffers' tables, and a spare
+            seen.clear()
+        seen[id(recipes)] = (recipes, len(recipes))
+        from engine.entity_table import classify_slots
+        _models, sprites = classify_slots(
+            table, slots, np.zeros(len(table.class_bits), dtype=bool),
+            play_mode, show_sprites)
+        if not len(sprites):
+            return
+        fight = [sid for sid, recipe in enumerate(recipes)
+                 if recipe and str(recipe[0][0]).startswith('msprite_')]
+        keys = np.concatenate((table.sprite_key_id[sprites],
+                               table.sprite_direction_ids[sprites].ravel(),
+                               np.asarray(fight, dtype=table.sprite_key_id.dtype)))
+        keys = keys[keys >= 0]
+        gl_ids = self._sprite_gl_ids(table)
+        if not len(keys) or not len(gl_ids):
+            return
+        textures = np.unique(gl_ids[keys])
+        textures = textures[textures > 0]
+        layers = self._sprite_layer_array()
+        # Never more than the array can hold: an import that does not fit
+        # turns the array off for good (SpriteLayers.layers_for), whereas
+        # sprites imported as they are seen may never all be on screen.
+        if len(textures) and layers.count + len(textures) <= layers._layer_limit():
+            layers.layers_for(textures)
+
     @timed_pass('sprites')
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):

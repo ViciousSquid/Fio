@@ -762,6 +762,22 @@ class EntityTable:
             self._sprite_recipes.append(candidates)
         return sid
 
+    def _intern_fight_frames(self, props):
+        """Intern the frames a fight switches an alive monster to -- shooting,
+        plain and from each of its eight facings, and dead -- so the renderer
+        loads them, and puts them in its sprite array, with everything else
+        (PassesMixin._warm_sprite_layers) instead of at the first shot. Once
+        per kind of monster."""
+        shooting = dict(props, dead=False, is_shooting=True)
+        last = _monster_sprite_candidates(shooting, 8)
+        dead = _monster_sprite_candidates(dict(props, dead=True))
+        if last in self._sprite_ids and dead in self._sprite_ids:
+            return
+        self.intern_sprite(_monster_sprite_candidates(shooting))
+        for rotation in range(1, 9):
+            self.intern_sprite(_monster_sprite_candidates(shooting, rotation))
+        self.intern_sprite(dead)
+
     def sprite_recipes(self) -> list:
         """Interned candidate lists, indexed by id."""
         return self._sprite_recipes
@@ -1354,6 +1370,7 @@ class EntityTable:
             self.sprite_direction_ids[slot] = [
                 self.intern_sprite(_monster_sprite_candidates(props, rotation))
                 for rotation in range(1, 9)]
+            self._intern_fight_frames(props)
 
         if self.class_bits[slot] & ENT_EFFECT:
             self._effect_published = None
