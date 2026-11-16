@@ -2860,6 +2860,40 @@ def _terrain_indexed_sources():
 # The optional 360-degree panorama is kept in the central shader registry so
 # desktop and GLES portability checks compile it with every other shader.
 DEFAULT_SHADERS['void_background.vert'] = """#version 330 core
+// The sky: a full-screen triangle at the far plane. The view ray is linear
+// across the screen, so each vertex works out its world direction and the
+// rasteriser interpolates it exactly; a pixel only reads the cube map.
+uniform mat4 u_inverse_projection;
+uniform mat4 u_inverse_view;
+out vec3 v_direction;
+void main() {
+    vec2 p;
+    if (gl_VertexID == 0) {
+        p = vec2(-1.0, -1.0);
+    } else if (gl_VertexID == 1) {
+        p = vec2(3.0, -1.0);
+    } else {
+        p = vec2(-1.0, 3.0);
+    }
+    vec4 view_h = u_inverse_projection * vec4(p, 1.0, 1.0);
+    v_direction = mat3(u_inverse_view) * (view_h.xyz / view_h.w);
+    gl_Position = vec4(p, 1.0, 1.0);
+}
+"""
+DEFAULT_SHADERS['void_background.frag'] = """#version 330 core
+in vec3 v_direction;
+out vec4 frag_colour;
+// The panorama as a cube map (sky_cube.frag made it once, at load): one
+// read a pixel, no trigonometry.
+uniform samplerCube u_sky;
+void main() {
+    frag_colour = vec4(texture(u_sky, v_direction).rgb, 1.0);
+}
+"""
+# Made once when a panorama loads: each face of the sky's cube map drawn
+# from the equirectangular image, by the mapping the water reflects it with
+# (panoramaUV), so the sky and its reflection agree.
+DEFAULT_SHADERS['sky_cube.vert'] = """#version 330 core
 out vec2 v_uv;
 void main() {
     vec2 p;
@@ -2871,21 +2905,26 @@ void main() {
         p = vec2(-1.0, 3.0);
     }
     v_uv = p * 0.5 + 0.5;
-    gl_Position = vec4(p, 1.0, 1.0);
+    gl_Position = vec4(p, 0.0, 1.0);
 }
 """
-DEFAULT_SHADERS['void_background.frag'] = """#version 330 core
+DEFAULT_SHADERS['sky_cube.frag'] = """#version 330 core
 in vec2 v_uv;
 out vec4 frag_colour;
-uniform mat4 u_inverse_projection;
-uniform mat4 u_inverse_view;
 uniform sampler2D u_panorama;
+uniform int u_face;       // GL_TEXTURE_CUBE_MAP_POSITIVE_X + u_face
 """ + PANORAMA_GLSL + """
 void main() {
-    vec4 view_h = u_inverse_projection * vec4(v_uv * 2.0 - 1.0, 1.0, 1.0);
-    vec3 view_direction = normalize(view_h.xyz / view_h.w);
-    vec3 world_direction = normalize(mat3(u_inverse_view) * view_direction);
-    frag_colour = vec4(texture(u_panorama, panoramaUV(world_direction)).rgb, 1.0);
+    // The face's texel to its direction (the GL cube map convention).
+    vec2 st = v_uv * 2.0 - 1.0;
+    vec3 d;
+    if (u_face == 0)      d = vec3( 1.0, -st.y, -st.x);
+    else if (u_face == 1) d = vec3(-1.0, -st.y,  st.x);
+    else if (u_face == 2) d = vec3( st.x,  1.0,  st.y);
+    else if (u_face == 3) d = vec3( st.x, -1.0, -st.y);
+    else if (u_face == 4) d = vec3( st.x, -st.y,  1.0);
+    else                  d = vec3(-st.x, -st.y, -1.0);
+    frag_colour = vec4(textureLod(u_panorama, panoramaUV(normalize(d)), 0.0).rgb, 1.0);
 }
 """
 

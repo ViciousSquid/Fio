@@ -140,7 +140,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # renderer owns the current GL context; release it in cleanup().
         self._background_image_path = ""
         self._background_failed_path = None
-        self._background_image_texture = 0
+        self._background_image_texture = 0      # equirectangular: the water reads it
+        self._background_cube_texture = 0       # the same sky as a cube map: the sky pass
+        self._sky_cube_program = 0              # draws the cube from the panorama, at load
         self._background_image_program = 0
         self._background_image_vao = 0
         self._background_image_uniforms = None
@@ -350,6 +352,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if self._background_image_texture:
             gl.glDeleteTextures([self._background_image_texture])
             self._background_image_texture = 0
+        if self._background_cube_texture:
+            gl.glDeleteTextures([self._background_cube_texture])
+            self._background_cube_texture = 0
 
     def _load_background_image(self):
         """Decode and upload the selected panorama once for this renderer."""
@@ -387,8 +392,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                     gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, rgba.tobytes())
             finally:
                 gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-            self._background_image_texture = texture
             gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            self._background_cube_texture = self._build_sky_cube(texture, rgba.width)
+            self._background_image_texture = texture
             return True
         except Exception as exc:
             if texture:
@@ -397,6 +403,75 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             print(f"[Renderer] Could not load background panorama '{path}': {exc}")
             self._background_failed_path = path
             return False
+
+    def _build_sky_cube(self, panorama, width):
+        """The equirectangular *panorama* (GL texture, *width* texels round)
+        drawn into a cube map once, for the sky pass to read with no
+        trigonometry. Six full-screen draws into an offscreen framebuffer;
+        the framebuffer, viewport and the state they touch are put back, and
+        nothing is left allocated if it fails."""
+        from OpenGL.GL.shaders import compileProgram, compileShader
+        # Faces at half the panorama's width: twice its texel density, so
+        # drawing it a second time does not soften small detail (stars).
+        size = max(64, min(width // 2, 1024))
+        if not self._sky_cube_program:
+            self._sky_cube_program = compileProgram(
+                compileShader(shaders.DEFAULT_SHADERS['sky_cube.vert'], gl.GL_VERTEX_SHADER),
+                compileShader(shaders.DEFAULT_SHADERS['sky_cube.frag'], gl.GL_FRAGMENT_SHADER),
+                validate=False)
+        program = self._sky_cube_program
+        previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+        previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
+        enabled = {cap: bool(gl.glIsEnabled(cap)) for cap in (
+            gl.GL_DEPTH_TEST, gl.GL_BLEND, gl.GL_CULL_FACE, gl.GL_SCISSOR_TEST,
+            gl.GL_STENCIL_TEST)}
+        cube = int(gl.glGenTextures(1))
+        fbo = int(gl.glGenFramebuffers(1))
+        vao = int(gl.glGenVertexArrays(1))
+        try:
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, name, value)
+            for face in range(6):
+                gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA8,
+                                size, size, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
+            gl.glViewport(0, 0, size, size)
+            for cap in enabled:
+                gl.glDisable(cap)
+            gl.glUseProgram(program)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, panorama)
+            gl.glUniform1i(gl.glGetUniformLocation(program, 'u_panorama'), 0)
+            face_loc = gl.glGetUniformLocation(program, 'u_face')
+            gl.glBindVertexArray(vao)
+            for face in range(6):
+                gl.glFramebufferTexture2D(
+                    gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
+                    gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cube, 0)
+                gl.glUniform1i(face_loc, face)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
+        except Exception:
+            gl.glDeleteTextures([cube])
+            raise
+        finally:
+            gl.glBindVertexArray(0)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl.glUseProgram(0)
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
+            gl.glViewport(*previous_viewport)
+            for cap, on in enabled.items():
+                if on:
+                    gl.glEnable(cap)
+            gl.glDeleteFramebuffers(1, [fbo])
+            gl.glDeleteVertexArrays(1, [vao])
+        return cube
 
     def _background_panorama_texture(self):
         """The sky panorama's GL texture, loaded on first use; 0 without one."""
@@ -425,12 +500,12 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._background_image_uniforms = (
                 gl.glGetUniformLocation(program, "u_inverse_projection"),
                 gl.glGetUniformLocation(program, "u_inverse_view"),
-                gl.glGetUniformLocation(program, "u_panorama"),
+                gl.glGetUniformLocation(program, "u_sky"),
             )
 
         inverse_projection = glm.inverse(projection)
         inverse_view = glm.inverse(view)
-        inv_projection_loc, inv_view_loc, panorama_loc = self._background_image_uniforms
+        inv_projection_loc, inv_view_loc, sky_loc = self._background_image_uniforms
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_FALSE)
         gl.glDisable(gl.GL_BLEND)
@@ -439,12 +514,17 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             inv_projection_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_projection))
         gl.glUniformMatrix4fv(
             inv_view_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_view))
-        gl.glUniform1i(panorama_loc, 0)
+        gl.glUniform1i(sky_loc, 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._background_image_texture)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._background_cube_texture)
         gl.glBindVertexArray(self._background_image_vao)
+        # Filtered across the cube's face edges for this draw only: it is
+        # global state, and the shadow cube maps are left as they were.
+        gl.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
+        gl.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
         gl.glBindVertexArray(0)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
         gl.glUseProgram(0)
         gl.glDepthMask(gl.GL_TRUE)
@@ -454,13 +534,19 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         """Release panorama GL objects with the rest of this renderer."""
         if self._background_image_texture:
             gl.glDeleteTextures([self._background_image_texture])
+        if self._background_cube_texture:
+            gl.glDeleteTextures([self._background_cube_texture])
         if self._background_image_vao:
             gl.glDeleteVertexArrays(1, [self._background_image_vao])
         if self._background_image_program:
             gl.glDeleteProgram(self._background_image_program)
+        if self._sky_cube_program:
+            gl.glDeleteProgram(self._sky_cube_program)
         self._background_image_texture = 0
+        self._background_cube_texture = 0
         self._background_image_vao = 0
         self._background_image_program = 0
+        self._sky_cube_program = 0
         self._background_image_uniforms = None
 
     def render_scene(self, projection, view, camera_pos,
