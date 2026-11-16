@@ -121,3 +121,103 @@ def test_the_shipped_settings_ask_for_384():
     config.read(repo_path('settings.ini'))
     assert config.getint('Renderer', 'sky_cubemap_size') == 384
     assert config.getint('Renderer', 'shadow_map_size') == 384
+
+
+def _watch_sky(renderer):
+    """Record each sky draw: whether it was drawn *behind* the world, and the
+    pixels it shaded (``GL_SAMPLES_PASSED``)."""
+    import OpenGL.GL as gl
+
+    draws = []
+    real = renderer._draw_background_image
+
+    def watched(projection, view, behind=False):
+        query = int(np.asarray(gl.glGenQueries(1)).reshape(-1)[0])
+        gl.glBeginQuery(gl.GL_SAMPLES_PASSED, query)
+        real(projection, view, behind)
+        gl.glEndQuery(gl.GL_SAMPLES_PASSED)
+        draws.append((behind, int(gl.glGetQueryObjectuiv(query, gl.GL_QUERY_RESULT))))
+        gl.glDeleteQueries(1, [query])
+
+    renderer._draw_background_image = watched
+    return draws
+
+
+def test_the_sky_shades_no_pixel_the_world_covers():
+    """Drawn behind the opaque world, the sky pass shades only what is left
+    of the sky: none of it behind a wall that fills the view."""
+    import glm
+    from tests.helpers.worlds import box_brush
+
+    wall = box_brush('wall', (0.0, 0.0, -600.0), (100000.0, 100000.0, 64.0))
+    glh.reset_texture_cache()
+    with glh.GLTestContext(SIZE, SIZE) as context:
+        renderer = glh.make_renderer()
+        try:
+            renderer.set_background_image("assets/backgrounds/cloudy-sky-panorama.webp")
+            assert renderer._background_panorama_texture()  # its cube, made now
+            draws = _watch_sky(renderer)
+            projection = glm.perspective(glm.radians(90.0), 1.0, 1.0, 8000.0)
+            config = glh.render_config(all_brushes=[wall], all_things=[], play_mode=True)
+            eye = glm.vec3(0.0)
+            for target in ((0.0, 0.0, -1.0), (0.0, 0.0, 1.0)):     # the wall; away
+                view = glm.lookAt(eye, glm.vec3(*target), glm.vec3(0, 1, 0))
+                context.bind()
+                renderer.render_scene(projection, view, eye, None, config,
+                                      brush_slots=config["all_brush_slots"])
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+    assert draws == [(True, 0), (True, SIZE * SIZE)], draws
+
+
+def test_the_sky_is_drawn_first_only_where_portal_views_need_it():
+    """Behind the world in the editor and in Play; first, over everything, in
+    a Play frame that may draw portal views (their empty parts show the sky
+    already on screen), in the line and point render modes, and in the
+    Points and Wireframe looks (the sky shows where nothing was hit)."""
+    import json
+    import glm
+    from editor.editor_state import EditorState
+    from engine import constants as C
+    from tests.helpers.paths import repo_path
+
+    with open(repo_path('maps', 'Portal_Test.json')) as handle:
+        data = json.load(handle)
+    state = EditorState()
+    state.load_from_data(data, stream_editor=False, save_undo=False)
+    start = next(t for t in state.things if type(t).__name__ == 'PlayerStart')
+    eye = glm.vec3(*[float(v) for v in start.pos]) + glm.vec3(0.0, 48.0, 0.0)
+    projection = glm.perspective(glm.radians(90.0), 1.0, 1.0, 40000.0)
+    view = glm.lookAt(eye, eye + glm.vec3(1.0, 0.0, 0.0), glm.vec3(0, 1, 0))
+    glh.reset_texture_cache()
+    with glh.GLTestContext(SIZE, SIZE) as context:
+        renderer = glh.make_renderer()
+        try:
+            renderer.set_background_image("assets/backgrounds/cloudy-sky-panorama.webp")
+            draws = _watch_sky(renderer)
+            seen = {}
+            for name, mode, play, look in (
+                    ('editor', C.RENDER_MODE_LIT, False, 'Textured'),
+                    ('editor unlit', C.RENDER_MODE_UNLIT, False, 'Textured'),
+                    ('play', C.RENDER_MODE_LIT, True, 'Textured'),
+                    ('line mode', C.RENDER_MODE_WIREFRAME, False, 'Textured'),
+                    ('point mode', C.RENDER_MODE_VERTEX, False, 'Textured'),
+                    ('wireframe look', C.RENDER_MODE_LIT, False, 'Wireframe'),
+                    ('points look', C.RENDER_MODE_LIT, False, 'Points')):
+                config = glh.render_config(all_brushes=state.brushes, all_things=state.things,
+                                           play_mode=play, render_mode=mode,
+                                           brush_display_mode=look)
+                assert len(config['entity_table'].portal_slots)
+                del draws[:]
+                context.bind()
+                renderer.render_scene(projection, view, eye, None, config,
+                                      brush_slots=config["all_brush_slots"])
+                seen[name] = [behind for behind, _pixels in draws]
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+    assert renderer._portal_gl_ready is not None
+    assert seen == {'editor': [True], 'editor unlit': [True], 'play': [False],
+                    'line mode': [False], 'point mode': [False],
+                    'wireframe look': [False], 'points look': [False]}, seen

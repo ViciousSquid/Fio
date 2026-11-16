@@ -493,8 +493,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._load_background_image()
         return self._background_image_texture
 
-    def _draw_background_image(self, projection, view):
-        """Draw the panorama at infinite distance, before world geometry."""
+    def _draw_background_image(self, projection, view, behind=False):
+        """Draw the panorama at infinite distance: over the whole frame, or,
+        *behind*, only where nothing has been drawn yet (depth still 1.0)."""
         if not self._background_image_path or self._portal_scene_pass:
             return
         if not self._background_image_texture and not self._load_background_image():
@@ -518,7 +519,12 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         inverse_projection = glm.inverse(projection)
         inverse_view = glm.inverse(view)
         inv_projection_loc, inv_view_loc, sky_loc = self._background_image_uniforms
-        gl.glDisable(gl.GL_DEPTH_TEST)
+        if behind:
+            # The triangle is at the far plane: depth 1.0, as cleared.
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glDepthFunc(gl.GL_LEQUAL)
+        else:
+            gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_FALSE)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(self._background_image_program)
@@ -541,6 +547,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         gl.glUseProgram(0)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
 
     def _cleanup_background_image(self):
         """Release panorama GL objects with the rest of this renderer."""
@@ -587,7 +594,21 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
             else:
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
-        self._draw_background_image(projection, view)
+        # The sky is drawn behind the opaque world, once the brushes and the
+        # terrain have hidden most of it (below, before the models), so a
+        # pixel they cover never shades it. It is drawn first, as it always
+        # was, in a frame that may draw portal views (their empty parts show
+        # the sky already on screen), in the line and point render modes (the
+        # frame's polygon mode is theirs by then) and in the Points and
+        # Wireframe looks (draw_distance_pass leaves the sky where nothing
+        # was hit).
+        portal_table = config.get('entity_table')
+        sky_behind = not (
+            look or current_mode not in (RENDER_MODE_LIT, RENDER_MODE_UNLIT)
+            or (config.get('play_mode', False) and self._portal_gl_ready
+                and len(getattr(portal_table, 'portal_slots', ()))))
+        if not sky_behind:
+            self._draw_background_image(projection, view)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
         # Every fog calculation this frame measures from here. Cached because
@@ -823,6 +844,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._opaque_cull_pass = False
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl)
+        if sky_behind:
+            # Before the models: their clear materials blend over it without
+            # writing depth (_model_material).
+            self._draw_background_image(projection, view, behind=True)
         fading_model_slots = np.empty(0, dtype=np.int32)
         if len(numeric_model_slots):
             if not (self.shaders.get('lit_instanced')
