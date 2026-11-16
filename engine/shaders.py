@@ -346,10 +346,16 @@ highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
 }
 
 // Screen-space reflection: march the reflected ray through the copied depth
-// buffer and return the scene colour it hits (rgb) and a confidence (a).
-// 10 linear steps with a growing stride, then a short binary refinement.
-vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
-                           highp float firstStride) {
+// buffer for the surface it hits. True with the hit's uv in the frame copy,
+// how far along the ray it lies (view units) and a confidence; false for a
+// miss. 10 linear steps with a growing stride, then a short binary
+// refinement.
+bool marchReflection(highp vec3 originView, highp vec3 dirView,
+                     highp float firstStride, out highp vec2 hitUV,
+                     out highp float hitS, out float hitFade) {
+    hitUV = vec2(0.0);
+    hitS = 0.0;
+    hitFade = 0.0;
     // The ray's clip-space position is affine in the distance travelled
     // along it, so a step is a multiply-add, not a matrix multiply: the same
     // points as stepping the view-space position and projecting each.
@@ -390,14 +396,28 @@ vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
             highp vec4 hc = clipOrigin + clipDir * hi;
             highp vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
             highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
-            if (hz - (originView.z + dirView.z * hi) > thickness) return vec4(0.0);
+            if (hz - (originView.z + dirView.z * hi) > thickness) return false;
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
                       * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
-            float fade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
-            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
+            hitUV = huv;
+            hitS = hi;
+            hitFade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
+            return true;
         }
     }
-    return vec4(0.0);
+    return false;
+}
+
+// The scene colour the reflected ray hits (rgb), sharp, and a confidence
+// (a); 0 for a miss.
+vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
+                           highp float firstStride) {
+    highp vec2 uv;
+    highp float s;
+    float fade;
+    if (!marchReflection(originView, dirView, firstStride, uv, s, fade))
+        return vec4(0.0);
+    return vec4(textureLod(sceneColor, uv, 0.0).rgb, fade);
 }
 
 // The water's march: its first stride grows with distance. A decal that
@@ -2621,6 +2641,25 @@ uniform highp mat4 view;
 uniform highp mat4 projection;
 uniform highp mat4 invProjection;
 """ + SSR_GLSL + """
+// A wet surface's reflection of the hit at *uv*, *travelled* view units up
+// the ray from *originView*: glossy, not a mirror. A cone of half-angle
+// atan(coneTan) widens along the ray, so the reflection is sharp where the
+// reflected thing meets the surface and softer the further away it is --
+// read from the frame copy's mip chain at the cone's width on screen -- and
+// smeared upright, as light on a wet floor is.
+vec3 glossyReflection(highp vec2 uv, highp float travelled,
+                      highp vec3 originView, highp vec3 dirView, float coneTan) {
+    highp vec3 hit = originView + dirView * travelled;
+    highp float height = float(textureSize(sceneColor, 0).y);
+    highp float radiusPx = travelled * coneTan * projection[1][1] * 0.5 * height
+                         / max(-hit.z, 1.0);
+    float lod = clamp(log2(max(radiusPx, 1.0)), 0.0, 7.0);
+    highp vec2 smear = vec2(0.0, radiusPx * 1.2 / height);
+    return (textureLod(sceneColor, uv, lod).rgb * 2.0
+            + textureLod(sceneColor, clamp(uv + smear, 0.0, 1.0), lod).rgb
+            + textureLod(sceneColor, clamp(uv - smear, 0.0, 1.0), lod).rgb) * 0.25;
+}
+
 const float BLOOD_STRENGTH = 2.6;
 const float IMAGE_STRENGTH = 2.0;   // modulate 2x: mid grey leaves it as it is
 
@@ -2678,8 +2717,9 @@ void main() {
     if (amount <= 0.004) discard;
 
     if (wetRow) {
-        // Wet: where the mask is strongest, standing water -- flat, a sharp
-        // mirror; towards its edges, damp -- a dull, broken-up reflection.
+        // Wet: where the mask is strongest, standing water -- flat, a glossy
+        // reflection, sharp at contact and softening with distance; towards
+        // its edges, damp -- a duller, broken-up, blurrier one.
         // Either way the surface darkens, which is most of looking wet. The
         // reflection fades out with distance and past that is not traced.
         float puddle = smoothstep(0.45, 0.9, texel.a);
@@ -2700,9 +2740,18 @@ void main() {
             float strength = mix(0.3, 0.95, puddle) * mix(0.6, 1.0, fresnel);
             // A longer first stride than the water's: a puddle reflects the
             // crate standing a few hundred units off, not just its own rim.
-            vec4 ssr = traceReflectionStride(surfaceView, reflect(toSurface, nView),
-                                             max(6.0, -surfaceView.z * 0.06));
-            colour = mix(colour, ssr.rgb, ssr.a * strength * fade);
+            highp vec3 dirView = reflect(toSurface, nView);
+            highp vec2 hitUV;
+            highp float hitS;
+            float hitFade;
+            if (marchReflection(surfaceView, dirView, max(6.0, -surfaceView.z * 0.06),
+                                hitUV, hitS, hitFade)) {
+                vec3 glossy = glossyReflection(hitUV, hitS, surfaceView, dirView,
+                                               mix(0.30, 0.12, puddle));
+                // Far things reflect fainter, as they do on a wet floor.
+                float reach = 1.0 - 0.6 * smoothstep(0.0, 900.0, hitS);
+                colour = mix(colour, glossy, hitFade * strength * fade * reach);
+            }
         }
         if (picked) colour = mix(colour, PICKED, 0.35);
         FragColor = vec4(colour, amount);               // over what is there

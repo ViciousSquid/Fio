@@ -293,16 +293,29 @@ class DecalsMixin:
                 # Wet patches: over a copy of the frame so far (blood and
                 # images included), drawn plainly over what is there.
                 if self._capture_glass_scene() is not None:
-                    gl.glActiveTexture(gl.GL_TEXTURE0)
-                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
-                    gl.glBindVertexArray(self._decal_vao)
-                    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
-                    gl.glUseProgram(program)
-                    gl.glUniform1i(u['wetPass'], 1)
-                    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-                    self._decal_point(plain_count)
-                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
-                    self.render_stats.draw_calls += 1
+                    # Glossy reflections read a blurred copy: its mip chain,
+                    # made now (the capture left the copy bound on its unit),
+                    # and plain filtering again after the draw, so the glass
+                    # and the water still read level 0 alone.
+                    gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
+                                       gl.GL_LINEAR_MIPMAP_LINEAR)
+                    try:
+                        gl.glActiveTexture(gl.GL_TEXTURE0)
+                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                        gl.glBindVertexArray(self._decal_vao)
+                        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
+                        gl.glUseProgram(program)
+                        gl.glUniform1i(u['wetPass'], 1)
+                        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                        self._decal_point(plain_count)
+                        gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
+                        self.render_stats.draw_calls += 1
+                    finally:
+                        gl.glActiveTexture(gl.GL_TEXTURE0 + self._glass_scene_texture_unit)
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+                        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
+                                           gl.GL_LINEAR)
         finally:
             gl.glCullFace(cull_mode)
             if not cull:
