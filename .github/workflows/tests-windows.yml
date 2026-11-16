@@ -68,10 +68,14 @@ jobs:
         run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
 
   windows_qt_no_gpu:
-    name: Qt / no-GPU suite on Windows x64 (offscreen)
+    name: Qt / no-GPU suite on Windows x64 (offscreen, shard ${{ matrix.shard }})
     runs-on: windows-latest
     timeout-minutes: 60
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -88,7 +92,7 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -m "qt and not gl and not benchmark" -q
+        run: python tools/run_qt_suite_shard.py --shard-count 4 --shard-index ${{ matrix.shard }}
 
   windows_arm64_no_gpu:
     name: No-GPU fast core on Windows ARM64 (native, CPython 3.14)
@@ -166,10 +170,14 @@ jobs:
   # installs dependencies exactly as an ARM64 user would, then runs the Qt
   # suite against the wheel.
   windows_arm64_qt_no_gpu:
-    name: Qt / no-GPU suite on Windows ARM64 (offscreen, PyQt5-WinARM64 wheel)
+    name: Qt / no-GPU suite on Windows ARM64 (offscreen, PyQt5-WinARM64 wheel, shard ${{ matrix.shard }})
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 75
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -249,4 +257,4 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -m "qt and not gl and not benchmark" -q
+        run: python tools/run_qt_suite_shard.py --shard-count 4 --shard-index ${{ matrix.shard }}
