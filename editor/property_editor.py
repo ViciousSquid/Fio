@@ -729,8 +729,16 @@ class PropertyEditor(QWidget):
             if page is not None:
                 page.deleteLater()
             return
-        self._page_cache = [e for e in self._page_cache
-                            if e[0] is not self.current_object]
+        # A page already parked for this object was built for an older
+        # signature and is superseded; destroy it rather than just forgetting
+        # it, or it stays parented to _parking for the rest of the session.
+        kept = []
+        for entry in self._page_cache:
+            if entry[0] is self.current_object:
+                entry[2].deleteLater()
+            else:
+                kept.append(entry)
+        self._page_cache = kept
         self._page_cache.append((self.current_object, self._signature, page,
                                  self._capture_page_state()))
         while len(self._page_cache) > self.PAGE_CACHE_SIZE:
