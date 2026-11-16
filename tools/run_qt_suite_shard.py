@@ -18,7 +18,9 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-DEFAULT_MARKER = "qt and not gl and not benchmark"
+# Opt-in tiers (benchmark, soak) are deselected rather than collected and
+# skipped: each selected module costs this runner a whole interpreter start.
+DEFAULT_MARKER = "qt and not gl and not benchmark and not soak"
 
 
 class _CollectedModules:
