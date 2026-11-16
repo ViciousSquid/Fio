@@ -22,6 +22,29 @@ import xml.etree.ElementTree as ET
 # skipped: each selected module costs this runner a whole interpreter start.
 DEFAULT_MARKER = "qt and not gl and not benchmark and not soak"
 
+#: Wall-clock limit for one module's pytest process. The slowest module on
+#: the Windows ARM64 runners takes ~23 min; a hung test otherwise holds the
+#: whole shard until the job timeout and every later module goes unreported.
+MODULE_TIMEOUT_SECONDS = 30 * 60
+
+#: A single test running this long gets every thread's stack dumped (pytest's
+#: faulthandler_timeout; it does not stop the test), so a hang names its
+#: cause. The slowest single tests take well under a minute.
+TEST_STACK_DUMP_SECONDS = 5 * 60
+
+
+def run_module(command, cwd, timeout=MODULE_TIMEOUT_SECONDS):
+    """Run one module's pytest process; ``(returncode, timed_out)``.
+
+    On timeout the process is killed and the module counts as failed.
+    """
+    try:
+        completed = subprocess.run(command, cwd=cwd, env=os.environ.copy(),
+                                   check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, True
+    return completed.returncode, False
+
 
 class _CollectedModules:
     def __init__(self, root: Path) -> None:
@@ -124,6 +147,8 @@ def main() -> int:
                 "-q",
                 "-m",
                 args.marker,
+                "-o",
+                f"faulthandler_timeout={TEST_STACK_DUMP_SECONDS}",
                 "--junitxml",
                 str(report),
                 module,
@@ -133,7 +158,14 @@ def main() -> int:
                 f"({expected_count} tests)",
                 flush=True,
             )
-            completed = subprocess.run(command, cwd=root, env=os.environ.copy(), check=False)
+            returncode, timed_out = run_module(command, root)
+            if timed_out:
+                print(
+                    f"ERROR: {module} was still running after "
+                    f"{MODULE_TIMEOUT_SECONDS // 60} min and was stopped; the "
+                    f"stack dump above shows where it was.",
+                    flush=True,
+                )
 
             observed_count = 0
             if report.is_file():
@@ -152,9 +184,12 @@ def main() -> int:
                     flush=True,
                 )
                 failed_modules.append(module)
-            if completed.returncode != 0:
+            if timed_out:
+                if module not in failed_modules:
+                    failed_modules.append(module)
+            elif returncode != 0:
                 print(
-                    f"ERROR: pytest process exited with code {completed.returncode}.",
+                    f"ERROR: pytest process exited with code {returncode}.",
                     flush=True,
                 )
                 if module not in failed_modules:
