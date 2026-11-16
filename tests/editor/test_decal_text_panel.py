@@ -38,6 +38,18 @@ def _show(main_window, decal):
     return editor
 
 
+def test_a_new_decal_has_no_words_and_never_takes_a_signs_layer_as_its_image():
+    from engine import decal_textures
+    decal_textures.use_texts([decal_text.entry({'text': 'A', 'texture': ''})])
+    try:
+        props = Decal(pos=[0.0, 0.0, 0.0]).properties
+    finally:
+        decal_textures.use_texts(())
+    assert not decal_text.is_entry(props['texture'])
+    assert (props['text'], props['font'], props['text_colour']) == ('', 'Fio UI', 'Black')
+    assert (props['text_scale'], props['text_offset_x'], props['text_offset_y']) == (1.0, 0.0, 0.0)
+
+
 def test_the_panel_has_a_text_box_and_a_font_dropdown_starting_at_fio_ui(main_window):
     decal = Decal(pos=[0.0, 0.0, 0.0], properties={'texture': 'grime_01.png'})
     editor = _show(main_window, decal)

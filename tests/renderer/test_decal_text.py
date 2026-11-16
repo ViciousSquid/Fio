@@ -5,6 +5,7 @@ words drawn on, in its ``font`` (Fio UI unless it names another). These
 check the layer's name (what makes two signs share one), the fonts the
 property editor lists, how the words are drawn, where text layers go in
 the decal list, and that an exported map carries the fonts its signs use.
+(The Decal entity's own defaults need Qt: tests/editor/test_decal_text_panel.py.)
 """
 
 import io
@@ -70,8 +71,6 @@ def test_words_are_black_unless_white_is_chosen():
     white = decal_text.layer_pixels(decal_text.entry(_sign(text_colour='White')), 256)
     inked = white[..., 3] > 128
     assert inked.sum() > 200 and white[inked][:, :3].min() >= 247
-    from editor.things import Decal
-    assert Decal(pos=[0, 0, 0]).properties['text_colour'] == 'Black'
 
 
 def test_text_size_shrinks_the_words_to_fit_inside_the_decal():
@@ -80,8 +79,6 @@ def test_text_size_shrinks_the_words_to_fit_inside_the_decal():
     assert decal_text.text_scale(0.0) == 0.1 and decal_text.text_scale(5) == 1.0
     assert decal_text.text_scale('big') == 1.0
     assert decal_text.entry(_sign(text_scale=0.5)) != decal_text.entry(_sign())
-    from editor.things import Decal
-    assert Decal(pos=[0, 0, 0]).properties['text_scale'] == 1.0
 
     def extent(scale):
         layer = decal_text.layer_pixels(decal_text.entry(_sign(text_scale=scale)), 256)
@@ -99,9 +96,6 @@ def test_text_offset_moves_the_words_right_and_up_inside_the_decal():
     assert decal_text.text_offset(-0.126) == -0.13
     assert decal_text.text_offset(3) == 0.5 and decal_text.text_offset('x') == 0.0
     assert decal_text.entry(_sign(text_offset_y=0.1)) != decal_text.entry(_sign())
-    from editor.things import Decal
-    props = Decal(pos=[0, 0, 0]).properties
-    assert props['text_offset_x'] == 0.0 and props['text_offset_y'] == 0.0
 
     def centre(**offset):
         layer = decal_text.layer_pixels(
@@ -216,14 +210,6 @@ def test_new_words_take_the_layer_their_old_words_left_and_nothing_else_moves(cl
     decal_textures.use_texts(many)
     names = decal_textures.use_texts(many[:3])[1]
     assert names[files:] == tuple(sorted(many[:3])) and decal_textures.layout() != layout
-
-
-def test_a_new_decal_never_takes_a_signs_text_layer_as_its_image(clean_texts):
-    from editor.things import Decal
-    decal_textures.use_texts([decal_text.entry(_sign(text='A'))])
-    decal = Decal(pos=[0, 0, 0])
-    assert not decal_text.is_entry(decal.properties['texture'])
-    assert decal.properties['text'] == '' and decal.properties['font'] == 'Fio UI'
 
 
 def test_blood_never_picks_a_signs_layer():
