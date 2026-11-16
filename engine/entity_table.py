@@ -90,11 +90,12 @@ from .entity_models import model_path, model_rotation, model_scale
 try:
     from editor.things import (Thing, PathNode, Portal, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
-                               Light, LogicSpawner, LogicCamera, Effect)
+                               Light, LogicSpawner, LogicCamera, Effect,
+                               ReflectionProbe)
 except ImportError:                                   # pragma: no cover
     Thing = PathNode = Portal = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
-    LogicSpawner = LogicCamera = None
+    LogicSpawner = LogicCamera = ReflectionProbe = None
 
 
 # --------------------------------------------------------------------------
@@ -142,6 +143,9 @@ ENT_PORTAL          = 1 << 11
 ENT_PATH_NODE       = 1 << 12
 #: Procedural Effect primitive; FIRE and EXPLOSION share one render path.
 ENT_EFFECT          = 1 << 13
+#: A ReflectionProbe: its radius is :attr:`EntityTable.probe_radius`; water
+#: inside it reflects the renderer's snapshot from it (ForwardRenderer).
+ENT_PROBE           = 1 << 14
 
 #: Never dropped by the broad-phase distance cull, whatever its distance --
 #: ``Renderer_F._cull_keep_thing``'s predicate, as bits.  Lighting and portal
@@ -163,7 +167,7 @@ BIT_NAMES = (
     (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
-    (ENT_PATH_NODE, 'PATH_NODE'),
+    (ENT_PATH_NODE, 'PATH_NODE'), (ENT_PROBE, 'PROBE'),
 )
 
 
@@ -382,6 +386,8 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_PROP
     if Light is not None and isinstance(thing, Light):
         bits |= ENT_LIGHT
+    if ReflectionProbe is not None and isinstance(thing, ReflectionProbe):
+        bits |= ENT_PROBE
     if Effect is not None and isinstance(thing, Effect):
         bits |= ENT_EFFECT
     return bits
@@ -641,6 +647,8 @@ _COLUMNS = (
     ('effect_elapsed', (), np.float32, 0.0),
     ('effect_active', (), bool, False),
     ('effect_alive', (), bool, False),
+    #: A ReflectionProbe's radius (0 for every other row).
+    ('probe_radius', (), np.float32, 0.0),
     #: The billboard's world size.
     ('sprite_size', (2,), np.float32, 0.0),
     #: Runtime opacity (a respawning Prop fades in).
@@ -1548,6 +1556,9 @@ class EntityTable:
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
+
+        self.probe_radius[slot] = (thing.get_radius()
+                                   if self.class_bits[slot] & ENT_PROBE else 0.0)
 
         if self.class_bits[slot] & ENT_PORTAL:
             self.portal_active[slot] = _bool_property(

@@ -67,6 +67,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
     #: Default per-face resolution of the sky's cube map ([Renderer]
     #: sky_cubemap_size), as SHADOW_MAP_SIZE is the shadow cube maps'.
     SKY_CUBEMAP_SIZE = 384
+    #: Per-face resolution of a reflection probe's snapshot. Water ripples
+    #: it, so it needs far less than the sky does.
+    PROBE_FACE_SIZE = 128
 
     def __init__(self, config=None, *, texture_loader=None):
         super().__init__(texture_loader)
@@ -157,6 +160,14 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._background_image_texture = 0      # equirectangular: the water reads it
         self._background_cube_texture = 0       # the same sky as a cube map: the sky pass
         self._sky_cube_program = 0              # draws the cube from the panorama, at load
+        #: Reflection probes (editor.things.ReflectionProbe): snapshot per
+        #: (position, radius), the probes this frame's water may use, and
+        #: whether the frame being drawn is a snapshot's.
+        self._probe_textures = {}
+        self._probe_frame = None
+        self._probe_capture_pass = False
+        self._probe_slot_cache = (None, -1, -1, None)
+        self._probe_equirect_program = 0
         self._background_image_program = 0
         self._background_image_vao = 0
         self._background_image_uniforms = None
@@ -487,6 +498,188 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             gl.glDeleteVertexArrays(1, [vao])
         return cube
 
+    # -- reflection probes ----------------------------------------------
+
+    def invalidate_reflection_probes(self):
+        """Retake every probe's snapshot on the next frame (the map loaded,
+        Play started: what is around the probes may have changed)."""
+        for texture in self._probe_textures.values():
+            if texture:
+                gl.glDeleteTextures([texture])
+        self._probe_textures = {}
+        self._probe_frame = None
+
+    def _probe_slots(self, table):
+        """The table's ReflectionProbe rows, found once per table generation."""
+        from engine.entity_table import ENT_PROBE
+        cached_table, generation, count, slots = self._probe_slot_cache
+        if (cached_table is not table or generation != table.generation
+                or count != table.count):
+            slots = np.flatnonzero(
+                table.class_bits[:table.count] & ENT_PROBE).astype(np.int32)
+            self._probe_slot_cache = (table, table.generation, table.count, slots)
+        return slots
+
+    def _update_reflection_probes(self, config):
+        """Before the frame: a snapshot for every probe in the map, taken
+        the first time it is seen and again only when it moves or its radius
+        changes. ``_probe_frame`` is what this frame's water may use."""
+        table = config.get('entity_table')
+        slots = self._probe_slots(table) if table is not None else ()
+        if not len(slots):
+            self._probe_frame = None
+            if self._probe_textures:
+                self.invalidate_reflection_probes()
+            return
+        positions = np.array(table.pos[slots], dtype=np.float64)
+        radii = np.array(table.probe_radius[slots], dtype=np.float64)
+        keys = [(tuple(np.round(p, 2).tolist()), round(float(r), 2))
+                for p, r in zip(positions, radii)]
+        wanted = set(keys)
+        for key in [k for k in self._probe_textures if k not in wanted]:
+            texture = self._probe_textures.pop(key)
+            if texture:
+                gl.glDeleteTextures([texture])
+        self._probe_frame = None
+        for key, position in zip(keys, positions):
+            if key not in self._probe_textures:
+                self._probe_textures[key] = self._capture_reflection_probe(
+                    position, config)
+        textures = np.array([self._probe_textures[key] for key in keys],
+                            dtype=np.int64)
+        self._probe_frame = (positions, radii, textures)
+
+    def _capture_reflection_probe(self, position, config):
+        """The 360-degree snapshot from *position*: six 90-degree views of
+        the map into a cube map, drawn out as an equirectangular texture
+        (``probe_equirect.frag``) that water reads like the sky panorama.
+
+        Drawn as Play draws it -- no grid, no editor icons -- without what
+        moves (monsters, effects) or portal views: it is not retaken every
+        frame. Returns the texture, or 0 if it could not be made."""
+        from OpenGL.GL.shaders import compileProgram, compileShader
+        from engine.entity_table import ENT_EFFECT, ENT_MONSTER, ENT_PROBE
+        size = self.PROBE_FACE_SIZE
+        table = config['entity_table']
+        things = np.asarray(config['visible_thing_slots'], dtype=np.int32)
+        still = (table.class_bits[things] & (ENT_MONSTER | ENT_EFFECT | ENT_PROBE)) == 0
+        capture = dict(config, play_mode=True, grid_visible=False,
+                       show_sprites_in_play_mode=False,
+                       visible_thing_slots=things[still])
+        eye = glm.vec3(*[float(v) for v in position])
+        far = float(getattr(self.view_distance, 'far_plane', 8000.0))
+        projection = glm.perspective(glm.radians(90.0), 1.0, 1.0, far)
+        faces = ((glm.vec3(1, 0, 0), glm.vec3(0, -1, 0)),
+                 (glm.vec3(-1, 0, 0), glm.vec3(0, -1, 0)),
+                 (glm.vec3(0, 1, 0), glm.vec3(0, 0, 1)),
+                 (glm.vec3(0, -1, 0), glm.vec3(0, 0, -1)),
+                 (glm.vec3(0, 0, 1), glm.vec3(0, -1, 0)),
+                 (glm.vec3(0, 0, -1), glm.vec3(0, -1, 0)))
+        previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+        previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
+        saved = (self._instance_view, self.occlusion_culling, self._portal_gl_ready)
+        cube = int(gl.glGenTextures(1))
+        depth = int(gl.glGenRenderbuffers(1))
+        fbo = int(gl.glGenFramebuffers(1))
+        equirect = 0
+        try:
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, name, value)
+            for face in range(6):
+                gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA8,
+                                size, size, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, depth)
+            gl.glRenderbufferStorage(gl.GL_RENDERBUFFER, gl.GL_DEPTH24_STENCIL8, size, size)
+            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
+            gl.glFramebufferRenderbuffer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_STENCIL_ATTACHMENT,
+                                         gl.GL_RENDERBUFFER, depth)
+            # Its own instance streams, no occlusion probes and no portal
+            # views: the main view's state is left as it was.
+            self._probe_capture_pass = True
+            self._instance_view = ('reflection probe',)
+            self.occlusion_culling = False
+            self._portal_gl_ready = False
+            for face, (forward, up) in enumerate(faces):
+                gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
+                                          gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cube, 0)
+                gl.glViewport(0, 0, size, size)
+                view = glm.lookAt(eye, eye + forward, up)
+                self.render_scene(projection, view, eye, None, capture,
+                                  brush_slots=capture.get('all_brush_slots'))
+            equirect = self._probe_cube_to_equirect(cube, size, fbo,
+                                                     compileProgram, compileShader)
+        except Exception as exc:
+            print(f"[Renderer] Reflection probe snapshot failed: {exc}")
+            if equirect:
+                gl.glDeleteTextures([equirect])
+            equirect = 0
+        finally:
+            self._probe_capture_pass = False
+            self._instance_view, self.occlusion_culling, self._portal_gl_ready = saved
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
+            gl.glViewport(*previous_viewport)
+            gl.glDeleteFramebuffers(1, [fbo])
+            gl.glDeleteRenderbuffers(1, [depth])
+            gl.glDeleteTextures([cube])
+        return equirect
+
+    def _probe_cube_to_equirect(self, cube, size, fbo, compileProgram, compileShader):
+        """*cube* (the bound *fbo* free to reuse) drawn out as a 4*size by
+        2*size equirectangular texture, wrapped like the sky panorama."""
+        if not self._probe_equirect_program:
+            self._probe_equirect_program = compileProgram(
+                compileShader(shaders.DEFAULT_SHADERS['sky_cube.vert'], gl.GL_VERTEX_SHADER),
+                compileShader(shaders.DEFAULT_SHADERS['probe_equirect.frag'], gl.GL_FRAGMENT_SHADER),
+                validate=False)
+        width, height = 4 * size, 2 * size
+        texture = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+        for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                            (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                            (gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT),
+                            (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, name, value)
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
+                        gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        enabled = {cap: bool(gl.glIsEnabled(cap)) for cap in (
+            gl.GL_DEPTH_TEST, gl.GL_BLEND, gl.GL_CULL_FACE, gl.GL_SCISSOR_TEST,
+            gl.GL_STENCIL_TEST)}
+        vao = int(gl.glGenVertexArrays(1))
+        try:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
+            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
+                                      gl.GL_TEXTURE_2D, texture, 0)
+            gl.glFramebufferRenderbuffer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_STENCIL_ATTACHMENT,
+                                         gl.GL_RENDERBUFFER, 0)
+            gl.glViewport(0, 0, width, height)
+            for cap in enabled:
+                gl.glDisable(cap)
+            gl.glUseProgram(self._probe_equirect_program)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            gl.glUniform1i(gl.glGetUniformLocation(self._probe_equirect_program, 'u_cube'), 0)
+            gl.glBindVertexArray(vao)
+            gl.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
+            gl.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+        finally:
+            gl.glBindVertexArray(0)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl.glUseProgram(0)
+            for cap, on in enabled.items():
+                if on:
+                    gl.glEnable(cap)
+            gl.glDeleteVertexArrays(1, [vao])
+        return texture
+
     def _background_panorama_texture(self):
         """The sky panorama's GL texture, loaded on first use; 0 without one."""
         if not self._background_image_path:
@@ -563,11 +756,15 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             gl.glDeleteProgram(self._background_image_program)
         if self._sky_cube_program:
             gl.glDeleteProgram(self._sky_cube_program)
+        if self._probe_equirect_program:
+            gl.glDeleteProgram(self._probe_equirect_program)
+        self.invalidate_reflection_probes()
         self._background_image_texture = 0
         self._background_cube_texture = 0
         self._background_image_vao = 0
         self._background_image_program = 0
         self._sky_cube_program = 0
+        self._probe_equirect_program = 0
         self._background_image_uniforms = None
 
     def render_scene(self, projection, view, camera_pos,
@@ -582,6 +779,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         their virtual frustum narrows all_brush_slots numerically before
         the normal numeric brush/entity passes run.
         """
+        if not self._probe_capture_pass and not self._portal_scene_pass:
+            self._update_reflection_probes(config)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         # 'Points' or 'Wireframe': geometry drawn for depth, then coloured by
         # distance in one pass over the frame (draw_distance_pass).

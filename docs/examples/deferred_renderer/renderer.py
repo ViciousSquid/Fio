@@ -344,6 +344,9 @@ class DeferredRenderer:
                 np.ascontiguousarray(entities.light_color[slots], dtype=np.float32),
                 np.ascontiguousarray(entities.light_params[slots], dtype=np.float32))
 
+    def invalidate_reflection_probes(self):
+        """This renderer draws no reflection-probe reflections: nothing to do."""
+
     def set_background_image(self, path):
         """Set the optional camera-locked panorama, uploaded in render_scene."""
         path = str(path or "").strip()

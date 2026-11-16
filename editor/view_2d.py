@@ -6,7 +6,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster, Decal,
+from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster, Decal,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -2340,8 +2340,10 @@ class View2D(QWidget):
             # --- SPRITE RENDERING ---
             else:
                 # 1. Draw Radius
-                if (isinstance(thing, Light) or isinstance(thing, Speaker)) and thing.properties.get('show_radius', False):
-                    default_col = [255, 255, 0] if isinstance(thing, Speaker) else [255, 255, 255]
+                if isinstance(thing, (Light, Speaker, ReflectionProbe)) and thing.properties.get('show_radius', False):
+                    default_col = ([255, 255, 0] if isinstance(thing, Speaker) else
+                                   [120, 200, 255] if isinstance(thing, ReflectionProbe) else
+                                   [255, 255, 255])
                     col = thing.properties.get('colour', default_col)
 
                     # Normalise to 0-255 integers
@@ -3818,6 +3820,7 @@ class View2D(QWidget):
         add_prop_action = menu.addAction("Prop")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
+        add_probe_action = menu.addAction("Reflection Probe")
         add_logic_spawner_action = menu.addAction("Spawner")
         add_levelchanger_action = menu.addAction("LevelChanger")
         
@@ -3921,6 +3924,8 @@ class View2D(QWidget):
             new_thing = Prop(pos=pos_3d)
         elif action == add_speaker_action: 
             new_thing = Speaker(pos=pos_3d)
+        elif action == add_probe_action:
+            new_thing = ReflectionProbe(pos=pos_3d)
         elif action == add_levelchanger_action:
             new_thing = LevelChanger(pos=pos_3d)
             new_thing.properties['target_map'] = ""

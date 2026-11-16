@@ -2908,6 +2908,25 @@ void main() {
     gl_Position = vec4(p, 0.0, 1.0);
 }
 """
+# A reflection probe's snapshot (ForwardRenderer._capture_reflection_probe):
+# its cube map drawn out as an equirectangular image, the inverse of
+# panoramaUV, so water reads it exactly as it reads the sky panorama.
+DEFAULT_SHADERS['probe_equirect.frag'] = """#version 330 core
+in vec2 v_uv;
+out vec4 frag_colour;
+uniform samplerCube u_cube;
+void main() {
+    // Texel row 0 is straight up, as in an uploaded panorama (panoramaUV).
+    float yaw = (v_uv.x - 0.5) * 6.28318531;
+    float pitch = (0.5 - v_uv.y) * 3.14159265;
+    float across = cos(pitch);
+    // Mirrored about the horizon: the water reads this, and a reflection
+    // looks up -- one a wave tips below the horizon finds the walls just
+    // above it, not the floor and the pool itself.
+    vec3 d = vec3(across * sin(yaw), abs(sin(pitch)), -across * cos(yaw));
+    frag_colour = vec4(texture(u_cube, d).rgb, 1.0);
+}
+"""
 DEFAULT_SHADERS['sky_cube.frag'] = """#version 330 core
 in vec2 v_uv;
 out vec4 frag_colour;

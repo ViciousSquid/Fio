@@ -674,6 +674,9 @@ class QtGameView(QOpenGLWidget):
             return
         with self.gl_context():
             self._preload_level_textures()
+            # What is around the map's reflection probes may have changed:
+            # their snapshots are retaken on the next frame.
+            self.renderer.invalidate_reflection_probes()
 
     def _preload_level_textures(self):
         texture_set = set()

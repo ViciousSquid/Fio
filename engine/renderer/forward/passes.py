@@ -1359,6 +1359,23 @@ class PassesMixin:
     # --------------------------------------------------------------------------
     # Sprites, billboards and glasses
     # --------------------------------------------------------------------------
+    def _water_probe_textures(self, table, brushes):
+        """Per water brush, the snapshot of the nearest reflection probe whose
+        radius holds the brush's centre (0: none, the sky as usual), or None
+        when no water is near a probe -- the common case, which changes
+        nothing about the pass."""
+        frame = self._probe_frame
+        if frame is None or self._probe_capture_pass or not len(brushes):
+            return None
+        positions, radii, textures = frame
+        centres = np.asarray(table.bounds[brushes, 0:3], dtype=np.float64)
+        d2 = ((centres[:, None, :] - positions[None, :, :]) ** 2).sum(axis=2)
+        inside = (d2 <= (radii * radii)[None, :]) & (textures > 0)[None, :]
+        if not inside.any():
+            return None
+        nearest = np.where(inside, d2, np.inf).argmin(axis=1)
+        return np.where(inside.any(axis=1), textures[nearest], 0)
+
     def _warm_sprite_layers(self, table, slots, play_mode, show_sprites):
         """Put every image the sprite pass may draw for *slots* into the layer
         array (engine.sprite_layers) in one import: each sprite, each of a
@@ -2195,14 +2212,20 @@ class PassesMixin:
         # The map's sky panorama, when it has one, is what all its water
         # reflects (water.frag skyColor, high quality and cheap alike) -- the
         # texture the sky pass already holds, on a unit of its own. No sky:
-        # the procedural sky, exactly as before.
+        # the procedural sky, exactly as before. Water inside a reflection
+        # probe's radius reads the probe's snapshot there instead: the same
+        # kind of texture, read the same way.
         panorama = self._background_panorama_texture()
+        probe_skies = self._water_probe_textures(table, brushes)
+        unit = self._panorama_texture_unit
+        if panorama or probe_skies is not None:
+            gl.glUniform1i(uniforms['skyPanorama'], unit)
         if panorama:
-            unit = self._panorama_texture_unit
             gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
             gl.glBindTexture(gl.GL_TEXTURE_2D, panorama)
-            gl.glUniform1i(uniforms['skyPanorama'], unit)
-        gl.glUniform1i(uniforms['reflectSky'], 1 if panorama else 0)
+        sky_loc = uniforms['reflectSky']
+        gl.glUniform1i(sky_loc, 1 if panorama else 0)
+        bound_sky = panorama
         # High-quality box water: side-wall fragments behind the (opaque) top
         # surface are not shaded (water.frag main). The test runs in the
         # box's unit space, so the camera is taken into it per brush.
@@ -2249,6 +2272,14 @@ class PassesMixin:
             upload_model(model_loc, i)
             if normal_mat_loc >= 0:
                 upload_normal(normal_mat_loc, i)
+            if probe_skies is not None:
+                sky = int(probe_skies[i]) or panorama
+                if sky != bound_sky:
+                    gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, sky)
+                    if bool(sky) != bool(bound_sky):
+                        gl.glUniform1i(sky_loc, 1 if sky else 0)
+                    bound_sky = sky
 
             opacity = float(params[i, 0])
             fresnel = float(params[i, 1])

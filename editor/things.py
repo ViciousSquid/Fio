@@ -597,6 +597,35 @@ class Speaker(Thing):
         return float(self.properties.get('radius', 512.0))
 
 
+class ReflectionProbe(Thing):
+    """Local reflections for water: Source's ``env_cubemap``, done Fio's way.
+
+    Water reflects the map's sky, plus whatever is on screen (high quality's
+    screen-space reflections). Under a roof the sky is the wrong thing to see
+    where those miss. Water whose centre is inside a probe's radius reflects
+    a 360-degree snapshot taken from the probe instead -- the room around it.
+
+    The snapshot is taken by the renderer, not baked into the map: when the
+    map loads, when Play starts, and when the probe is moved or its radius
+    changed. Nothing is redrawn per frame, and reading it costs the water
+    what reading the sky does. A map without probes renders as before.
+    """
+    pixmap_path = "assets/sprites/reflection_probe.png"
+    EDITOR_PRIMARY_PROPERTIES = ('radius', 'show_radius')
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'reflection_probe')
+        self.properties.setdefault('radius', 512.0)
+        self.properties.setdefault('show_radius', True)
+
+    def get_radius(self):
+        try:
+            return max(16.0, float(self.properties.get('radius', 512.0)))
+        except (TypeError, ValueError):
+            return 512.0
+
+
 class Decal(Thing):
     """A decal: an image painted onto whatever surfaces its box meets.
 
@@ -2118,6 +2147,7 @@ ENTITY_TYPES = {
     'PlayerStart': PlayerStart,
     'Light': Light,
     'Speaker': Speaker,
+    'ReflectionProbe': ReflectionProbe,
     'Decal': Decal,
     'Monster': Monster,
     'LogicRelay': LogicRelay,
@@ -2144,7 +2174,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'Portal', 'Decal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

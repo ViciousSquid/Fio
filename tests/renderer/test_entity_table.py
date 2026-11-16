@@ -1056,3 +1056,23 @@ def test_a_monsters_fight_frames_are_interned_with_it_once_per_kind():
     count = len(keys)
     pair = _synced([make_thing(Monster, 'm'), make_thing(Monster, 'n', (64.0, 0.0, 0.0))])
     assert len(pair.sprite_recipes()) == count
+
+
+def test_a_reflection_probe_is_a_probe_row_carrying_its_radius():
+    """The renderer finds probes from the table alone: a class bit and a
+    radius column, no Thing walked on the render path."""
+    from editor.things import ENTITY_CATEGORIES, ENTITY_TYPES, ReflectionProbe, Thing
+
+    probe = make_thing(ReflectionProbe, 'probe', (1.0, 2.0, 3.0), radius=300.0)
+    table = _synced([probe, make_thing(Light, 'lamp')])
+    assert table.class_bits[0] & et.ENT_PROBE and not table.class_bits[1] & et.ENT_PROBE
+    assert table.probe_radius[:2].tolist() == [300.0, 0.0]
+    for authored, used in (('junk', 512.0), (1.0, 16.0)):
+        probe.properties['radius'] = authored
+        assert probe.get_radius() == used
+
+    probe.properties['radius'] = 300.0
+    loaded = Thing.from_dict(probe.to_dict())
+    assert type(loaded) is ReflectionProbe and loaded.get_radius() == 300.0
+    assert ENTITY_TYPES['ReflectionProbe'] is ReflectionProbe
+    assert 'ReflectionProbe' in ENTITY_CATEGORIES['Environment']
