@@ -2708,7 +2708,10 @@ void main() {
     // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted).
     bool mirrored = mod(Params.w, 2.0) > 0.5;
     bool picked = Params.w > 1.5;
-    float across = mirrored ? -at.x : at.x;
+    // The box's x runs to the left of someone looking along the throw (its
+    // up is up, its z into the surface), so the image is read along -x: its
+    // left is on the viewer's left, and text reads the right way round.
+    float across = mirrored ? at.x : -at.x;
     vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
     const vec3 PICKED = vec3(1.0, 0.55, 0.1);
     // Fade at the box's near and far ends rather than cut.
