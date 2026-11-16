@@ -62,10 +62,14 @@ DEFAULT_COLOUR = 'Black'
 #: How big the words are drawn, as a fraction of the most the box allows
 #: (the property editor's Text Size slider: 10 to 100 %).
 MIN_TEXT_SCALE, DEFAULT_TEXT_SCALE = 0.1, 1.0
+#: How far the words may be moved from the box's centre, as a fraction of
+#: its width (x, to the right) and height (y, up): to sit them inside the
+#: panel of a plate rather than across its trim.
+MAX_TEXT_OFFSET = 0.5
 
 #: A text layer's name in ``engine.decal_textures``: this, then the JSON of
-#: ``[image, text, font, colour, scale, aspect]``. No image file can be named
-#: so (they are ``.png`` files, and these end in ``]``).
+#: ``[image, text, font, colour, scale, x, y, aspect]``. No image file can
+#: be named so (they are image files, and these end in ``]``).
 PREFIX = 'text:'
 #: A text layer no sign's words use now (engine.decal_textures keeps it for
 #: the next new words): blank.
@@ -114,8 +118,17 @@ def entry(props):
     aspect = round(min(max(aspect, 1.0 / 16.0), 16.0), 2)
     return PREFIX + json.dumps([texture, text, font_name(props.get('font')),
                                 text_colour(props.get('text_colour')),
-                                text_scale(props.get('text_scale')), aspect],
+                                text_scale(props.get('text_scale')),
+                                text_offset(props.get('text_offset_x')),
+                                text_offset(props.get('text_offset_y')), aspect],
                                ensure_ascii=False, separators=(',', ':'))
+
+
+def text_offset(value):
+    """*value* as a Text Offset: -0.5 to 0.5 of the box, in hundredths;
+    centred when it is not a number."""
+    offset = _number(value, 0.0)
+    return round(min(max(offset, -MAX_TEXT_OFFSET), MAX_TEXT_OFFSET), 2)
 
 
 def text_scale(value):
@@ -287,7 +300,8 @@ def layer_pixels(name, size):
     from PIL import Image, ImageDraw
     if name == FREE:
         return np.zeros((size, size, 4), dtype=np.uint8)
-    texture, text, font, colour, scale, aspect = json.loads(name[len(PREFIX):])
+    texture, text, font, colour, scale, across_by, up_by, aspect = json.loads(
+        name[len(PREFIX):])
     ink_colour = TEXT_COLOURS.get(colour, TEXT_COLOURS[DEFAULT_COLOUR])
     aspect = float(aspect)
     side = size * SUPERSAMPLE
@@ -321,8 +335,9 @@ def layer_pixels(name, size):
         while px > 4 and (box[2] - box[0] > across or box[3] - box[1] > up):
             px -= max(1, px // 20)
             face, stroke, box = measure(px)
-        x = (width - (box[2] - box[0])) / 2.0 - box[0]
-        y = (height - (box[3] - box[1])) / 2.0 - box[1]
+        # Centred, then moved by the Text Offset (right, and up).
+        x = (width - (box[2] - box[0])) / 2.0 - box[0] + across_by * width
+        y = (height - (box[3] - box[1])) / 2.0 - box[1] - up_by * height
         draw.multiline_text((x, y), words, font=face, fill=ink_colour, align='center',
                             spacing=round(px * 0.2), stroke_width=stroke,
                             stroke_fill=ink_colour)

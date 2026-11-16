@@ -34,7 +34,7 @@ def decal_source(package=None):
     ``textures/decals`` folder, which wins a name both have -- and the
     package's fonts, which a sign's text is drawn in (engine.decal_text;
     the exporter packs the ones its decals name)."""
-    from engine.decal_textures import DecalSource
+    from engine.decal_textures import IMAGE_SUFFIXES, DecalSource
     images, fonts = {}, {}
     folder = BUNDLED_DECALS if BUNDLED_DECALS.is_dir() else PROJECT_DECALS
     if folder.is_dir():
@@ -43,7 +43,7 @@ def decal_source(package=None):
     if package is not None:
         for name in package.namelist():
             head, _, base = name.rpartition('/')
-            if base.lower().endswith('.png') and (head == 'textures/decals'
+            if base.lower().endswith(IMAGE_SUFFIXES) and (head == 'textures/decals'
                                                    or head.endswith('/textures/decals')):
                 images[base] = (lambda member=name: package.read_asset(member))
             elif base.lower().endswith(('.ttf', '.otf')):

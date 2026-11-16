@@ -692,6 +692,9 @@ class Decal(Thing):
                 brightness (white on a mid-tone wall).
     text_scale  Text Size: 1.0 (the default) fills as much of the box as the
                 words can; down to 0.1, smaller, to fit inside an image.
+    text_offset_x, text_offset_y
+                Text Offset: the words moved from the centre, right and up,
+                by up to half the box (-0.5 to 0.5) -- into a plate's panel.
     """
     #: No icon and no box: what the decal paints is how the editor shows it
     #: (placed, selected, dragged and nudged with the Decal tool).
@@ -701,7 +704,7 @@ class Decal(Thing):
     EDITOR_PRIMARY_PROPERTIES = (
         'texture', 'width', 'height', 'depth',
         'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'text', 'font', 'text_colour',
-        'text_scale',
+        'text_scale', 'text_offset_x', 'text_offset_y',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -723,6 +726,8 @@ class Decal(Thing):
         self.properties.setdefault('font', 'Fio UI')
         self.properties.setdefault('text_colour', 'Black')
         self.properties.setdefault('text_scale', 1.0)
+        self.properties.setdefault('text_offset_x', 0.0)
+        self.properties.setdefault('text_offset_y', 0.0)
 
     @staticmethod
     def default_texture():

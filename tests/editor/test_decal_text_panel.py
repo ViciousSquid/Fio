@@ -86,6 +86,18 @@ def test_a_text_size_slider_shrinks_the_words(main_window):
     assert editor._widgets['decal_text_scale'].value() == 40
 
 
+def test_text_offset_sliders_move_the_words(main_window):
+    decal = Decal(pos=[0.0, 0.0, 0.0], properties={'texture': 'grime_01.png', 'text': 'EXIT'})
+    editor = _show(main_window, decal)
+    across, up = (editor._widgets['decal_text_offset_x'], editor._widgets['decal_text_offset_y'])
+    assert (across.minimum(), across.maximum(), across.value()) == (-50, 50, 0)
+    assert (up.minimum(), up.maximum(), up.value()) == (-50, 50, 0)
+    up.setValue(12)
+    across.setValue(-14)
+    assert decal.properties['text_offset_y'] == pytest.approx(0.12)
+    assert decal.properties['text_offset_x'] == pytest.approx(-0.14)
+
+
 def test_the_decal_tool_shows_its_selected_decal_in_the_property_editor(main_window):
     main_window.state.clear_scene()
     decal = Decal(pos=[0.0, 0.0, 0.0], properties={'texture': 'grime_01.png', 'text': 'B-2'})

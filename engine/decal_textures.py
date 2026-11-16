@@ -1,7 +1,7 @@
 """The decal images: one sorted list both sides of a frame agree on.
 
-Every ``.png`` in ``assets/textures/decals`` -- loose, archived or in an end
-user's ``.fiopak`` pack -- is a layer of the renderer's decal texture array,
+Every image (``.png``, ``.jpg``, ``.jpeg``) in ``assets/textures/decals`` --
+loose, archived or in an end user's ``.fiopak`` pack -- is a layer of the renderer's decal texture array,
 in this order. The logic side names a placed decal's image by its layer
 (:func:`layer_of`); blood picks a variant within the wall or floor range
 (:func:`blood_ranges`). The list is read once and kept; a placed decal that
@@ -20,6 +20,9 @@ import os
 import threading
 
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
+#: The image files a decal can paint. A JPEG has no transparency: it paints
+#: its whole rectangle (a sign's plate, say).
+IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg')
 
 _lock = threading.Lock()
 _state = {'version': 0, 'names': None, 'where': None, 'texts': (), 'all': None,
@@ -40,7 +43,7 @@ class DecalSource:
         self.fonts = dict(fonts or {})
 
     def names(self):
-        return tuple(sorted((n for n in self.images if n.lower().endswith('.png')),
+        return tuple(sorted((n for n in self.images if n.lower().endswith(IMAGE_SUFFIXES)),
                             key=str.casefold))
 
     def read(self, name):
@@ -104,7 +107,7 @@ def _read():
         return source.names()
     from engine.asset_archives import asset_listdir
     return tuple(sorted((n for n in asset_listdir(DECAL_FOLDER)
-                         if n.lower().endswith('.png')), key=str.casefold))
+                         if n.lower().endswith(IMAGE_SUFFIXES)), key=str.casefold))
 
 
 def images():

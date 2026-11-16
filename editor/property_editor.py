@@ -3778,6 +3778,20 @@ class PropertyEditor(QWidget):
                 form.addRow("Text Size:", _hbox(slider, label, stretch=False))
                 continue
 
+            if isinstance(thing, Decal) and key in ('text_offset_x', 'text_offset_y'):
+                from engine import decal_text
+                across = key == 'text_offset_x'
+                slider, label = _make_slider(
+                    self, decal_text.text_offset(value), -50, 50, fmt="{:+.0%}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=("Move the words right (+) or left (-)" if across else
+                             "Move the words up (+) or down (-)")
+                            + ", by up to half the decal")
+                self._widgets['decal_' + key] = slider
+                form.addRow("Text Offset X:" if across else "Text Offset Y:",
+                            _hbox(slider, label, stretch=False))
+                continue
+
             if isinstance(thing, Decal) and key == 'text_colour':
                 from engine import decal_text
                 combo = _make_combo(

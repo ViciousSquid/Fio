@@ -60,7 +60,7 @@ WALL, FLOOR, IMAGE, WET = 0, 1, 2, 3
 #: The ``Decal`` entity properties a placed row is made from.
 PLACED_KEYS = ('texture', 'width', 'height', 'depth', 'yaw',
                'pitch', 'roll', 'mirrored', 'opacity', 'hidden', 'text', 'font',
-               'text_colour', 'text_scale')
+               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y')
 
 
 def placed_row(pos, props, layer):

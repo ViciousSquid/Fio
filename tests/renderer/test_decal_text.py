@@ -94,6 +94,35 @@ def test_text_size_shrinks_the_words_to_fit_inside_the_decal():
     assert half[2:] == pytest.approx(full[2:], abs=3)               # still centred
 
 
+def test_text_offset_moves_the_words_right_and_up_inside_the_decal():
+    assert decal_text.text_offset(None) == 0.0
+    assert decal_text.text_offset(-0.126) == -0.13
+    assert decal_text.text_offset(3) == 0.5 and decal_text.text_offset('x') == 0.0
+    assert decal_text.entry(_sign(text_offset_y=0.1)) != decal_text.entry(_sign())
+    from editor.things import Decal
+    props = Decal(pos=[0, 0, 0]).properties
+    assert props['text_offset_x'] == 0.0 and props['text_offset_y'] == 0.0
+
+    def centre(**offset):
+        layer = decal_text.layer_pixels(
+            decal_text.entry(_sign(text='LEVEL B', text_scale=0.5, **offset)), 256)
+        rows, cols = np.nonzero(layer[..., 3] > 128)
+        return (rows.min() + rows.max()) / 2, (cols.min() + cols.max()) / 2
+    row, col = centre()
+    assert (row, col) == pytest.approx((127.5, 127.5), abs=3)        # centred
+    assert centre(text_offset_y=0.2) == pytest.approx((row - 0.2 * 256, col), abs=2)
+    assert centre(text_offset_x=-0.15) == pytest.approx((row, col - 0.15 * 256), abs=2)
+
+
+def test_jpeg_images_are_decal_images_too():
+    names = decal_textures.refresh()[1]
+    assert 'DecalLong01.jpg' in names and 'Decal02.jpg' in names
+    assert decal_textures.layer_of('assets/textures/decals/DecalLong01.jpg', names) >= 0
+    source = decal_textures.DecalSource({'a.png': bytes, 'b.JPG': bytes, 'c.jpeg': bytes,
+                                         'notes.txt': bytes})
+    assert source.names() == ('a.png', 'b.JPG', 'c.jpeg')
+
+
 def test_every_listed_font_draws_the_words():
     for name in decal_text.font_names():
         layer = decal_text.layer_pixels(decal_text.entry(_sign(font=name)), 128)
