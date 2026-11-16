@@ -226,11 +226,13 @@ def test_every_loaded_shipped_convex_face_has_one_material_record():
 # ---------------------------------------------------------------------------
 
 def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
-    """Three legacy convex brushes have meaningful drift from their planes'
+    """Two legacy convex brushes have meaningful drift from their planes'
     AABB: one by 4.85e-5 (its bound is that much smaller than the geometry)
-    and two by 128 units. Smaller differences are platform-dependent solver
-    round-off (at or below DRIFT_NOISE), not geometry drift. Within 1e-4 of
-    a unit every stored bound contains the drawn geometry."""
+    and one by 128 units in Topdown_example. Terrain_Test_small is now a
+    canonical version-5 record and has no stale bounds copy. Smaller
+    differences are platform-dependent solver round-off (at or below
+    DRIFT_NOISE), not geometry drift. Within 1e-4 of a unit every stored
+    bound contains the drawn geometry."""
     drifted = 0
     for name, brushes in MAPS.items():
         for brush in brushes:
@@ -242,13 +244,13 @@ def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
             g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
             assert (g_centre - g_size / 2 >= centre - size / 2 - 1e-4).all(), name
             assert (g_centre + g_size / 2 <= centre + size / 2 + 1e-4).all(), name
-    assert drifted == 3     # 4.85e-5 and two 128-unit bounds, pinned by snapshot
+    assert drifted == 2     # 4.85e-5 and one 128-unit bound, pinned by snapshot
 
 
 def test_shipped_convex_bounds_are_derived_from_the_planes():
     """Stage 2a: every shipped convex brush's derived bounds -- what culling,
     collision rows, the physics grid, Big World and picking read -- are its
-    drawn geometry's AABB, the 128-unit brushes included. Since Stage 2d the
+    drawn geometry's AABB, including the remaining 128-unit brush. Since Stage 2d the
     load re-expresses the file's world planes about their own centre, which
     becomes ``pos``, and re-derives the ``size`` copy: nothing it holds
     drifts from the planes."""
