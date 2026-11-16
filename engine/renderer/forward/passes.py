@@ -2149,6 +2149,26 @@ class PassesMixin:
             float(scene_height),
         )
 
+        # The map's sky panorama, when it has one, is what all its water
+        # reflects (water.frag skyColor, high quality and cheap alike) -- the
+        # texture the sky pass already holds, on a unit of its own. No sky:
+        # the procedural sky, exactly as before.
+        panorama = self._background_panorama_texture()
+        if panorama:
+            unit = self._panorama_texture_unit
+            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, panorama)
+            gl.glUniform1i(uniforms['skyPanorama'], unit)
+        gl.glUniform1i(uniforms['reflectSky'], 1 if panorama else 0)
+        # High-quality box water: side-wall fragments behind the (opaque) top
+        # surface are not shaded (water.frag main). The test runs in the
+        # box's unit space, so the camera is taken into it per brush.
+        skip_loc = uniforms['skipCoveredSides']
+        local_eye_loc = uniforms['localEye']
+        margin_loc = uniforms['sideSkipMargin']
+        gl.glUniform1i(skip_loc, 0)
+        eye = np.array((*self._camera_xyz(camera_pos), 1.0))
+
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
         fresnel_loc = uniforms['fresnelIntensity']
@@ -2249,8 +2269,21 @@ class PassesMixin:
                 continue
 
             if not bool(planes[i]):
+                # The walls are drawn before the top surface; with depth and
+                # high quality that surface is opaque where it covers them.
+                skip = has_depth and bool(high_quality[i])
+                if skip:
+                    local = np.linalg.solve(
+                        models[i].reshape(4, 4).T.astype(np.float64), eye)
+                    gl.glUniform3f(local_eye_loc, float(local[0]),
+                                   float(local[1]), float(local[2]))
+                    gl.glUniform1f(margin_loc,
+                                   amp / max(float(sizes[i, 1]), 1.0e-6))
+                    gl.glUniform1i(skip_loc, 1)
                 gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                if skip:
+                    gl.glUniform1i(skip_loc, 0)
             if surface_vao:
                 gl.glBindVertexArray(surface_vao)
                 gl.glDrawElements(

@@ -89,6 +89,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._water_depth_texture = 0
         self._water_depth_size = (0, 0)
         self._water_depth_texture_unit = 3
+        #: The sky panorama, which the water reflects. GL 3.3 and GLES 3.0
+        #: both guarantee 16 fragment texture units.
+        self._panorama_texture_unit = 15
 
         # Performance flags.  `lowpower_mode` picks the cheaper lighting shaders, and
         # it defaults from the hardware rather than being pinned on: it used to
@@ -394,6 +397,14 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             print(f"[Renderer] Could not load background panorama '{path}': {exc}")
             self._background_failed_path = path
             return False
+
+    def _background_panorama_texture(self):
+        """The sky panorama's GL texture, loaded on first use; 0 without one."""
+        if not self._background_image_path:
+            return 0
+        if not self._background_image_texture:
+            self._load_background_image()
+        return self._background_image_texture
 
     def _draw_background_image(self, projection, view):
         """Draw the panorama at infinite distance, before world geometry."""
