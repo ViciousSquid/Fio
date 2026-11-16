@@ -19,7 +19,7 @@ A water brush is a brush the player swims in, drawn with moving waves, a tinted 
 
 | Key | Type | Default | Editor | Meaning |
 | :--- | :--- | :--- | :--- | :--- |
-| `water_high_quality` | bool | `true` | *High quality* checkbox | See *High quality and cheap*. This brush only |
+| `water_high_quality` | bool | `true` | *High quality* checkbox | See *High quality and cheap*. This brush only. Switching it **on** also places a [Reflection Probe](https://github.com/ViciousSquid/Fio/wiki/Reflection-Probe) above the water; switching it **off** deletes that probe (see below) |
 | `water_plane` | bool | `false` | *Draw top surface only* checkbox | Draw the top surface alone, for water whose sides are buried in the floor and walls. Off, the four sides are drawn too |
 | `water_tint` | RGB 0–1 | `[0.0, 0.4, 0.6]` | *Water Tint* colour button | Colour of the body of water |
 | `water_opacity` | float 0–1 | `0.5` | *Opacity* slider | How much the water's own colour covers the view through it |
@@ -44,6 +44,12 @@ A water brush is a brush the player swims in, drawn with moving waves, a tinted 
 | Fires and other effects above the water reflected | ✓ | |
 
 High quality copies the frame's depth once per frame (when any high-quality water is drawn) and traces a reflection ray per pixel of the top surface; cheap water does neither. Quality is chosen per brush, so a map can mix both — a decorative fountain cheap, the main pool high quality.
+
+### The probe that comes with High quality
+
+Ticking *High quality* on a water brush that did not have it places a [Reflection Probe](https://github.com/ViciousSquid/Fio/wiki/Reflection-Probe) over the water: centred above the brush, 64 units (a standing player's height, `WATER_PROBE_HEIGHT`) above its top surface, its radius covering the brush (at least 512). The probe's `water_brush` property is the brush's `id`. Unticking it deletes that probe — only that one: a probe you placed yourself has no `water_brush` and is never touched. The flag and the probe are one undo step, and ticking it again never makes a second probe. The probe is an ordinary entity afterwards: move it or change its radius as you like.
+
+Water whose *High quality* was already on (the default for new water) gets no probe until the box is switched off and on again; place one by hand where it is wanted (2D view right-click → **Reflection Probe**).
 
 Two [console commands](https://github.com/ViciousSquid/Fio/wiki/Console-commands) override it for the session:
 

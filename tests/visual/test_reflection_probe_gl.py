@@ -169,3 +169,32 @@ def test_the_snapshot_is_the_room_the_right_way_up(renderer, context):
     assert (overhead[..., 0] - overhead[..., 2]).mean() > 60      # red
     assert abs(level[..., 0] - level[..., 2]).mean() < 20         # grey
     assert np.abs(snap - snap[::-1]).max() <= 2    # the lower half mirrors the upper
+
+
+@pytest.mark.parametrize("play_mode", [False, True])
+def test_the_probes_icon_is_drawn_while_editing_and_never_in_play(renderer, context,
+                                                                  play_mode):
+    """In the 3D view a probe is an icon, like a Light; in Play it is nothing
+    (and with no water near it, it changes nothing else either)."""
+    import glm
+
+    brushes, things = glh.lit_cube_scene(shadows=False)
+    probe = _probe('probe', (0.0, 220.0, 120.0), 300.0)    # above the cube, in view
+    projection, view, eye = glh.camera_matrices(aspect=W / H, eye=(0.0, 220.0, 320.0),
+                                                target=(0.0, 220.0, 0.0))
+
+    def frame(scene_things):
+        config = glh.render_config(all_brushes=brushes, all_things=scene_things,
+                                   all_lights=things, play_mode=play_mode,
+                                   grid_visible=False)
+        context.bind()
+        renderer.render_scene(projection, view, eye, None, config,
+                              brush_slots=config["all_brush_slots"])
+        return context.read_pixels().astype(np.int32)
+
+    without, with_probe = frame(things), frame(things + [probe])
+    changed = int((np.abs(with_probe - without).max(axis=2) > 0).sum())
+    if play_mode:
+        assert changed == 0, changed
+    else:
+        assert changed > 50, changed            # the icon, where the probe stands

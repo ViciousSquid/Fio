@@ -1076,3 +1076,15 @@ def test_a_reflection_probe_is_a_probe_row_carrying_its_radius():
     assert type(loaded) is ReflectionProbe and loaded.get_radius() == 300.0
     assert ENTITY_TYPES['ReflectionProbe'] is ReflectionProbe
     assert 'ReflectionProbe' in ENTITY_CATEGORIES['Environment']
+
+
+def test_a_reflection_probe_shows_its_icon_while_editing_and_never_in_play():
+    from editor.things import ReflectionProbe
+
+    table = _synced([make_thing(ReflectionProbe, 'probe')])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert ('ReflectionProbe', 'reflection_probe.png', 'sprites', True) in recipe
+    hidden = np.zeros(table.count, dtype=bool)
+    _models, editing = et.classify_slots(table, table.all_slots, hidden, False, False)
+    _models, playing = et.classify_slots(table, table.all_slots, hidden, True, False)
+    assert editing.tolist() == [0] and playing.tolist() == []

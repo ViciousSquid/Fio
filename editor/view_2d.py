@@ -3820,9 +3820,9 @@ class View2D(QWidget):
         add_prop_action = menu.addAction("Prop")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
-        add_probe_action = menu.addAction("Reflection Probe")
         add_logic_spawner_action = menu.addAction("Spawner")
         add_levelchanger_action = menu.addAction("LevelChanger")
+        add_probe_action = menu.addAction("Reflection Probe")
         
         menu.addSeparator()
         

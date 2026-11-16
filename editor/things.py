@@ -611,6 +611,8 @@ class ReflectionProbe(Thing):
     what reading the sky does. A map without probes renders as before.
     """
     pixmap_path = "assets/sprites/reflection_probe.png"
+    #: Its icon in the 3D view, while editing (never in Play).
+    editor_sprite_path = pixmap_path
     EDITOR_PRIMARY_PROPERTIES = ('radius', 'show_radius')
 
     def __init__(self, pos=None, properties=None):
@@ -624,6 +626,39 @@ class ReflectionProbe(Thing):
             return max(16.0, float(self.properties.get('radius', 512.0)))
         except (TypeError, ValueError):
             return 512.0
+
+
+#: How far above a water brush's top surface the probe its High quality
+#: checkbox creates stands: a standing player's height, about where a viewer
+#: sees the water from.
+WATER_PROBE_HEIGHT = float(PLAYER_HULL_SIZE[1])
+
+
+def water_probe_of(brush, things):
+    """The ReflectionProbe the *brush*'s High quality checkbox created
+    (its ``water_brush`` property is the brush's id), or None. A probe the
+    author placed has no ``water_brush`` and is never this."""
+    brush_id = brush.get('id') if isinstance(brush, dict) else None
+    if not brush_id:
+        return None
+    return next((t for t in things if isinstance(t, ReflectionProbe)
+                 and t.properties.get('water_brush') == brush_id), None)
+
+
+def make_water_probe(brush):
+    """A new ReflectionProbe for a water *brush*: centred over it,
+    WATER_PROBE_HEIGHT above its top surface, its radius reaching the brush's
+    centre (which is what decides which water a probe serves) and at least the
+    brush's half-width. The brush is given an id if it has none."""
+    brush_id = brush.setdefault('id', str(uuid.uuid4()))
+    pos = [float(v) for v in brush.get('pos', (0.0, 0.0, 0.0))]
+    size = [abs(float(v)) for v in brush.get('size', (64.0, 64.0, 64.0))]
+    top = pos[1] + size[1] / 2.0
+    radius = max(512.0, 0.5 * math.hypot(size[0], size[2]),
+                 size[1] / 2.0 + WATER_PROBE_HEIGHT + 16.0)
+    return ReflectionProbe(pos=[pos[0], top + WATER_PROBE_HEIGHT, pos[2]],
+                           properties={'radius': round(radius, 1),
+                                       'water_brush': brush_id})
 
 
 class Decal(Thing):

@@ -18,8 +18,8 @@ Unlike Source's `env_cubemap` there is no build step: the renderer takes the sna
 | Snapshot | `engine/renderer/forward/renderer.py`: `_update_reflection_probes`, `_capture_reflection_probe`, `_probe_cube_to_equirect`; shader `probe_equirect.frag` in `engine/shaders.py` |
 | Water lookup | `engine/renderer/forward/passes.py: _water_probe_textures`, inside `draw_water_brushes` |
 | Retaken on load / Play | `Renderer.invalidate_reflection_probes()` (`engine/renderer/api.py`), called by `QtGameView.preload_level_textures` |
-| Editor icon | `assets/sprites/reflection_probe.png` |
-| Place it | 2D view right-click → **Reflection Probe** |
+| Editor icon | `assets/sprites/reflection_probe.png` — in the 2D views, and in the 3D view while editing (`editor_sprite_path`); never in Play |
+| Place it | 2D view right-click → **Reflection Probe** (under LevelChanger), or tick a water brush's *High quality* (see *Made by High quality*) |
 
 ## Properties
 
@@ -27,6 +27,7 @@ Unlike Source's `env_cubemap` there is no build step: the renderer takes the sna
 | :--- | :--- | :--- | :--- | :--- |
 | `radius` | float, world units | `512.0` | *Radius* spin box | Water brushes whose **centre** lies within this distance of the probe reflect its snapshot. Below 16 is read as 16; a value that is not a number, as 512 |
 | `show_radius` | bool | `true` | *Show Radius* checkbox | Draw the radius circle (light blue) in the 2D views. Editor only |
+| `water_brush` | string | absent | not shown | The `id` of the water brush whose *High quality* checkbox created this probe. Absent on a probe placed by hand |
 | `name`, `id`, `io_enabled` | | | | Common to all Things |
 
 The probe has no inputs or outputs of its own and is not drawn in Play.
@@ -37,6 +38,10 @@ The probe has no inputs or outputs of its own and is not drawn in Play.
 - Make the radius reach the **centre** of each water brush it should serve. A water brush is assigned as a whole, by its centre, not pixel by pixel.
 - Where several probes reach one water brush, the nearest wins.
 - One probe per room is enough. Water outside every probe keeps reflecting the sky.
+
+## Made by High quality
+
+Ticking a water brush's *High quality* checkbox (when it was off) places a probe over that water — centred above the brush, `WATER_PROBE_HEIGHT` (64 units, a standing player's height) above its top surface, its radius covering the brush and at least 512 — and records the brush's `id` in the probe's `water_brush`. Unticking it deletes that probe and no other. Both are one undo step with the checkbox change (`editor/property_editor.py: _set_water_high_quality`; helpers `make_water_probe`, `water_probe_of` in `editor/things.py`).
 
 ## How it works
 
@@ -82,7 +87,7 @@ The capture leaves the main view exactly as it found it: it draws into its own f
 
 ## Tests
 
-`tests/visual/test_reflection_probe_gl.py` — water in a probe's radius shows the room, not the sky (high quality and cheap); water outside every probe is unchanged; a snapshot is taken once and retaken only when needed; the snapshot is the right way up and mirrored below the horizon. `tests/renderer/test_entity_table.py` (`test_a_reflection_probe_is_a_probe_row_carrying_its_radius`) — the class bit, the radius column, the save/load round trip, the registry.
+`tests/visual/test_reflection_probe_gl.py` — water in a probe's radius shows the room, not the sky (high quality and cheap); water outside every probe is unchanged; a snapshot is taken once and retaken only when needed; the snapshot is the right way up and mirrored below the horizon; the icon is drawn in the 3D view while editing and never in Play. `tests/editor/test_water_quality_checkbox.py` — *High quality* on places the probe over the water, off deletes only that one, one undo step, never a second probe. `tests/renderer/test_entity_table.py` (`test_a_reflection_probe_is_a_probe_row_carrying_its_radius`) — the class bit, the radius column, the save/load round trip, the registry.
 
 ## See also
 

@@ -1765,7 +1765,7 @@ class PropertyEditor(QWidget):
         quality_cb = _make_checkbox(
             "High quality",
             water_high_quality(brush),
-            lambda c: self.update_object_prop('water_high_quality', c),
+            self._set_water_high_quality,
             _Style.CHECKBOX)
         quality_cb.setToolTip(
             "This water brush only.\n"
@@ -5489,6 +5489,38 @@ class PropertyEditor(QWidget):
             size = list(size)
         size[index] = float(value)
         self.update_object_prop('sprite_size', size)
+
+    def _set_water_high_quality(self, checked):
+        """The water's High quality checkbox. Switching it on also places a
+        reflection probe above the water's surface; switching it off deletes
+        that probe -- only the one it made, never one the author placed. The
+        flag and the probe are one undo step."""
+        from editor.things import make_water_probe, water_probe_of
+        brush = self.current_object
+        checked = bool(checked)
+        if not isinstance(brush, dict) or checked == water_high_quality(brush):
+            self.update_object_prop('water_high_quality', checked)
+            return
+        self.editor.save_state()
+        self.update_object_prop('water_high_quality', checked)
+        things = self.editor.state.things
+        probe = water_probe_of(brush, things)
+        if checked and probe is None:
+            things.append(make_water_probe(brush))
+        elif not checked and probe is not None:
+            things.remove(probe)
+            selected = list(self.editor.state.selected_objects)
+            if any(obj is probe for obj in selected):
+                self.editor.set_selected_objects(
+                    [obj for obj in selected if obj is not probe])
+        else:
+            return
+        if hasattr(self.editor, 'scene_hierarchy'):
+            self.editor.scene_hierarchy.refresh_list()
+        self.editor.view_3d.update()
+        for name in ('view_top', 'view_front', 'view_side'):
+            if hasattr(self.editor, name):
+                getattr(self.editor, name).update()
 
     def update_object_prop(self, key, value):
         if self.current_object is None:
