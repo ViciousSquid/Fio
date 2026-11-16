@@ -68,23 +68,21 @@ BLUR_FACTOR = 3
 
 
 def blurred(pixmap, factor: int = BLUR_FACTOR):
-    """*pixmap* softened: shrunk in two smooth steps, to ``1/factor`` of its
-    size. :meth:`LoadingOverlay.paintEvent` draws it back over the whole
-    window with smooth filtering -- the cheap, even blur the pause menu uses
+    """*pixmap* softened: shrunk to ``1/factor`` of its size by averaging
+    each *factor* x *factor* block (``engine.asset_qt.shrink_image``).
+    :meth:`LoadingOverlay.paintEvent` draws it back over the whole window
+    with smooth filtering -- the cheap, even blur the pause menu uses
     (``engine/view_pause.py``), which also only shrinks.
 
-    It used to scale the picture back to full size here as well. That extra
-    full-window smooth scale is where a Windows ARM64 test run hung, inside
-    Qt, while loading a map; the paint-time stretch looks the same, costs
-    less and holds a ninth of the pixels.
+    Not with Qt's smooth scaling: a whole window's picture is large enough
+    for Qt to split that across its global thread pool and wait, and on
+    Windows ARM64 the wait sometimes never ended -- the CI runs that hung
+    here raising this overlay for Play and for ``map``.
     """
     if pixmap is None or pixmap.isNull():
         return None
-    w, h = pixmap.width(), pixmap.height()
-    half = pixmap.scaled(max(1, w // 2), max(1, h // 2),
-                         Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-    return half.scaled(max(1, w // factor), max(1, h // factor),
-                       Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    from engine.asset_qt import shrink_image
+    return QPixmap.fromImage(shrink_image(pixmap, factor))
 
 
 def throbber_span(seconds: float, width: float):
