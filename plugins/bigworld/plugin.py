@@ -221,7 +221,7 @@ class BigWorldPlugin(FioPlugin):
         host = self._host
         logic = host.logic
         session = self._sessions.get(logic)
-        if session is None or not getattr(session, "_show_debug", True):
+        if session is None or not getattr(session, "_show_debug", False):
             return
         painter = ev.get("painter")
         if painter is None:
