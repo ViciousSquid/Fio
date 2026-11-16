@@ -3138,7 +3138,7 @@
             "trigger_poll_interval": 0.5,
             "trigger_action": "teleport",
             "target_node": "end",
-            "hidden": true
+            "hidden": false
         },
         {
             "pos": [
@@ -3769,41 +3769,6 @@
         },
         {
             "pos": [
-                1272.0,
-                720.0,
-                -176.0
-            ],
-            "size": [
-                2064.0,
-                96.0,
-                1344.0
-            ],
-            "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
-            },
-            "id": "c67812ab-673d-4bdc-add6-b46e3b40b2d7",
-            "shader": "Glow",
-            "is_fog": false,
-            "glow_intensity": 10.0,
-            "is_trigger": false,
-            "glow_color": [
-                0.023529411764705882,
-                0.6980392156862745,
-                0.6980392156862745
-            ],
-            "colour": [
-                0.03137254901960784,
-                0.8,
-                0.7725490196078432
-            ]
-        },
-        {
-            "pos": [
                 16.0,
                 134.0,
                 -640.0
@@ -4315,7 +4280,8 @@
                 "hidden": false,
                 "disabled": false,
                 "primary": true,
-                "creation_index": 0
+                "creation_index": 0,
+                "sky_image": "assets/backgrounds/cloudy-sky-panorama.webp"
             },
             "io_connections": [
                 {
