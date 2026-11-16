@@ -226,24 +226,23 @@ def test_every_loaded_shipped_convex_face_has_one_material_record():
 # ---------------------------------------------------------------------------
 
 def test_shipped_convex_bounds_drift_but_contain_what_is_drawn():
-    """Four legacy convex brushes store pos/size that differ from their
-    planes' AABB: one by solver float noise, one by 4.85e-5 (its bound is
-    that much smaller than the geometry) and two by 128 units. Within 1e-4
-    of a unit every stored bound contains the drawn geometry. Version-5
-    _SHOWCASE stores local planes with derived extents, so it no longer
-    contributes legacy world-space bound drift."""
+    """Three legacy convex brushes have meaningful drift from their planes'
+    AABB: one by 4.85e-5 (its bound is that much smaller than the geometry)
+    and two by 128 units. Smaller differences are platform-dependent solver
+    round-off (at or below DRIFT_NOISE), not geometry drift. Within 1e-4 of
+    a unit every stored bound contains the drawn geometry."""
     drifted = 0
     for name, brushes in MAPS.items():
         for brush in brushes:
             found = bs.inconsistencies(brush)
-            if 'bound_drift' not in found:
+            if found.get('bound_drift', 0.0) <= bs.DRIFT_NOISE:
                 continue
             drifted += 1
             centre, size = (np.asarray(v) for v in bs.stored_bound(brush))
             g_centre, g_size = (np.asarray(v) for v in bs.geometry_bound(brush))
             assert (g_centre - g_size / 2 >= centre - size / 2 - 1e-4).all(), name
             assert (g_centre + g_size / 2 <= centre + size / 2 + 1e-4).all(), name
-    assert drifted == 4     # 3 above 1e-6 (pinned by the snapshot), 1 noise
+    assert drifted == 3     # 4.85e-5 and two 128-unit bounds, pinned by snapshot
 
 
 def test_shipped_convex_bounds_are_derived_from_the_planes():
@@ -264,7 +263,7 @@ def test_shipped_convex_bounds_are_derived_from_the_planes():
             hi = np.asarray(brush_placement.world_bounds(brush)[3:])
             assert np.allclose(lo, g_centre - g_size / 2, atol=1e-9), (name, brush['id'])
             assert np.allclose(hi, g_centre + g_size / 2, atol=1e-9), (name, brush['id'])
-            assert 'bound_drift' not in bs.inconsistencies(brush), (name, brush['id'])
+            assert bs.inconsistencies(brush).get('bound_drift', 0.0) <= bs.DRIFT_NOISE, (name, brush['id'])
             checked += 1
     assert checked >= 7
 

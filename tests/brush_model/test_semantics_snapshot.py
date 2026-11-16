@@ -104,7 +104,7 @@ def test_version5_showcase_uses_local_canonical_convex_records():
         for key, _field in bs.TAG_FIELDS:
             assert not tags & set(brush.get(key) or {}), (brush['id'], key)
         assert not any(brush.get(key) is not None for key in bs.RUNTIME_KEYS)
-        assert 'bound_drift' not in bs.inconsistencies(brush)
+        assert bs.inconsistencies(brush).get('bound_drift', 0.0) <= bs.DRIFT_NOISE
         local_centre, local_size = bs.local_rest(brush)
         assert np.allclose(local_centre, (0.0, 0.0, 0.0), atol=1e-8), brush['id']
         assert np.allclose(local_size, brush['size'], atol=1e-9), brush['id']
