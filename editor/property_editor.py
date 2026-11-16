@@ -15,7 +15,7 @@ from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState, PlayerStart, LevelChanger)
+                           LogicState, PlayerStart, LevelChanger, Decal)
 from engine import player_starts as start_rules
 from editor import state_values as _sv
 from editor.sky_assets import store_sky_image_in_project
@@ -3743,6 +3743,48 @@ class PropertyEditor(QWidget):
                 self.add_sound_file_widget(
                     form, thing, 'sound_file', str(value or '')
                 )
+                continue
+
+            # A decal's words, and the font they are drawn in (by name).
+            if isinstance(thing, Decal) and key == 'text':
+                edit = QLineEdit(str(value or ''))
+                edit.setPlaceholderText(r"Words to paint on  (\n: new line)")
+                edit.setToolTip(
+                    "Painted over the decal's image, centred; with no image, alone.\n"
+                    "Type \\n for a new line. IO: SetText, ClearText, SetFont, SetTextColor.")
+                edit.editingFinished.connect(
+                    lambda e=edit: e.text() != str(thing.properties.get('text') or '')
+                    and self.update_object_prop('text', e.text()))
+                form.addRow(QLabel("Text:"), edit)
+                continue
+
+            if isinstance(thing, Decal) and key == 'font':
+                from engine import decal_text
+                combo = _make_combo(
+                    decal_text.font_names(), decal_text.font_name(value),
+                    lambda text: self.update_object_prop('font', text),
+                    tooltip="The font the decal's text is drawn in")
+                form.addRow(QLabel("Font:"), combo)
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_scale':
+                from engine import decal_text
+                slider, label = _make_slider(
+                    self, decal_text.text_scale(value), 10, 100, fmt="{:.0%}",
+                    callback=lambda v: self.update_object_prop('text_scale', v),
+                    tooltip="How big the words are: 100% fills as much of the decal "
+                            "as they can; smaller, to fit inside its image")
+                self._widgets['decal_text_scale'] = slider
+                form.addRow("Text Size:", _hbox(slider, label, stretch=False))
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_colour':
+                from engine import decal_text
+                combo = _make_combo(
+                    list(decal_text.TEXT_COLOURS), decal_text.text_colour(value),
+                    lambda text: self.update_object_prop('text_colour', text),
+                    tooltip="Black lettering, or white (which brightens the surface)")
+                form.addRow(QLabel("Text Colour:"), combo)
                 continue
 
             # Logic gate type.

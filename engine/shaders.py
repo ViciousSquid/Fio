@@ -2705,9 +2705,11 @@ void main() {
         vec2 range = Params.z > 0.5 ? decalRanges.zw : decalRanges.xy;
         layer = range.x + mod(Params.x, max(range.y, 1.0));
     }
-    // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted).
+    // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted),
+    // 4 a sign's white words (they lighten past the framebuffer's 1; below).
     bool mirrored = mod(Params.w, 2.0) > 0.5;
-    bool picked = Params.w > 1.5;
+    bool picked = mod(floor(Params.w * 0.5), 2.0) > 0.5;
+    bool lighten = Params.w > 3.5;
     // The box's x runs to the left of someone looking along the throw (its
     // up is up, its z into the surface), so the image is read along -x: its
     // left is on the viewer's left, and text reads the right way round.
@@ -2767,7 +2769,16 @@ void main() {
     // the surface alone, darker parts darken it, lighter parts lighten it.
     float strength = Params.z > 1.5 ? IMAGE_STRENGTH : BLOOD_STRENGTH;
     vec3 stain = picked ? mix(texel.rgb, PICKED, 0.5) : texel.rgb;
-    FragColor = vec4(stain * (amount * strength), amount);
+    vec3 colour = stain * (amount * strength);
+    float over = max(colour.r, max(colour.g, colour.b)) - 1.0;
+    if (lighten && !picked && over > 0.0) {
+        // A sign's white words: the framebuffer stops src.rgb at 1, so the
+        // part past 1 goes in alpha -- dst * (rgb + 1 - a) is unchanged, up
+        // to twice the surface's own brightness, its light still kept.
+        FragColor = vec4(max(colour - over, 0.0), amount - over);
+        return;
+    }
+    FragColor = vec4(colour, amount);
 }"""
 
 

@@ -31,9 +31,11 @@ PROJECT_DECALS = Path(__file__).resolve().parents[1] / 'assets' / 'textures' / '
 def decal_source(package=None):
     """The decal images a world plays with (engine.decal_textures): the
     bundled blood images, and every image in the package's
-    ``textures/decals`` folder, which wins a name both have."""
+    ``textures/decals`` folder, which wins a name both have -- and the
+    package's fonts, which a sign's text is drawn in (engine.decal_text;
+    the exporter packs the ones its decals name)."""
     from engine.decal_textures import DecalSource
-    images = {}
+    images, fonts = {}, {}
     folder = BUNDLED_DECALS if BUNDLED_DECALS.is_dir() else PROJECT_DECALS
     if folder.is_dir():
         for path in folder.glob('blood_*.png'):
@@ -44,7 +46,11 @@ def decal_source(package=None):
             if base.lower().endswith('.png') and (head == 'textures/decals'
                                                    or head.endswith('/textures/decals')):
                 images[base] = (lambda member=name: package.read_asset(member))
-    return DecalSource(images)
+            elif base.lower().endswith(('.ttf', '.otf')):
+                folder, found, path = name.partition('fonts/')
+                if found and (not folder or folder.endswith('/')):
+                    fonts[path] = (lambda member=name: package.read_asset(member))
+    return DecalSource(images, fonts)
 
 
 class WorldState(SimpleNamespace):

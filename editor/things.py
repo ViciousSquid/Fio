@@ -681,6 +681,17 @@ class Decal(Thing):
     roll        The image's rotation about the throw, degrees.
     mirrored    Flip the image left to right.
     opacity     How strongly it paints (for 'wet', how wet).
+    text        Words painted on, centred over the image (engine.decal_text);
+                empty for none. ``\\n`` starts a new line. With no image
+                (``texture`` empty) the words are painted alone. IO: SetText,
+                ClearText, SetFont, SetTextColor.
+    font        The font the text is drawn in, by name (the property
+                editor's dropdown): Fio UI unless another is chosen.
+    text_colour Black (the default) or White. Like the image, the words
+                tint the surface: black is black, white doubles its
+                brightness (white on a mid-tone wall).
+    text_scale  Text Size: 1.0 (the default) fills as much of the box as the
+                words can; down to 0.1, smaller, to fit inside an image.
     """
     #: No icon and no box: what the decal paints is how the editor shows it
     #: (placed, selected, dragged and nudged with the Decal tool).
@@ -689,7 +700,8 @@ class Decal(Thing):
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
         'texture', 'width', 'height', 'depth',
-        'yaw', 'pitch', 'roll', 'mirrored', 'opacity',
+        'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'text', 'font', 'text_colour',
+        'text_scale',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -707,6 +719,10 @@ class Decal(Thing):
         self.properties.setdefault('roll', 0.0)
         self.properties.setdefault('mirrored', False)
         self.properties.setdefault('opacity', 1.0)
+        self.properties.setdefault('text', '')
+        self.properties.setdefault('font', 'Fio UI')
+        self.properties.setdefault('text_colour', 'Black')
+        self.properties.setdefault('text_scale', 1.0)
 
     @staticmethod
     def default_texture():
@@ -717,9 +733,11 @@ class Decal(Thing):
             names = images()[1]
         except Exception:
             return ''
-        plain = [n for n in names
+        from engine.decal_text import is_entry
+        files = [n for n in names if not is_entry(n)]      # not a sign's text
+        plain = [n for n in files
                  if not n.lower().startswith('blood_') and not is_wet_image(n)]
-        return (plain or list(names) or [''])[0]
+        return (plain or files or [''])[0]
 
     def throw_direction(self):
         """The unit direction the decal is thrown in (into the surface)."""
