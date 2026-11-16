@@ -485,7 +485,14 @@ class MainWindow(QMainWindow):
         return True
 
     def mark_as_modified(self):
-        """Mark the project as having unsaved changes."""
+        """Mark the project as having unsaved changes.
+
+        Legacy maps may store sky_image on a non-primary PlayerStart or on
+        several starts. Preserve that data on load and during UI refreshes;
+        the first actual edit is the boundary at which it is canonicalised.
+        """
+        if getattr(self, "state", None) is not None:
+            self.canonicalize_sky_image_ownership()
         if not self.unsaved_changes:
             self.unsaved_changes = True
             self.update_title()
@@ -2789,60 +2796,73 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
 
-    def sync_sky_image_from_map(self):
-        """Publish the current Primary PlayerStart panorama to the 3D renderer.
+    def sky_image_path_from_map(self):
+        """Resolve the effective panorama without changing authored map data.
 
-        The image path is ordinary map data on exactly one PlayerStart. When
-        Primary changes, ownership follows it; older maps with duplicate
-        values are canonicalised to the current Primary.
+        A legacy map may have stored the value on a non-primary PlayerStart.
+        Prefer the current Primary, then recover the earliest-created stored
+        value so old maps still render correctly until the author edits them.
         """
         starts = self.state.player_starts()
         primary = self.state.resolve_player_start()
-        path = ""
+        if primary is not None:
+            candidate = primary.properties.get("sky_image", "")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+
+        position = start_rules.earliest_created(
+            [start.properties for start in starts])
+        ordered = [starts[position]] if position is not None else []
+        ordered.extend(
+            start for start in starts
+            if start is not primary
+            and (position is None or start is not starts[position])
+        )
+        for start in ordered:
+            value = start.properties.get("sky_image", "")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def canonicalize_sky_image_ownership(self, path=None):
+        """Store one panorama on the current Primary PlayerStart.
+
+        Called at explicit edit boundaries, never as part of a UI refresh.
+        Passing an empty path is an explicit request to clear the map setting;
+        omitting it recovers the current effective value from legacy data.
+        """
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        if path is None:
+            path = self.sky_image_path_from_map()
+        path = path.strip() if isinstance(path, str) else ""
         changed = []
 
         if primary is not None:
-            candidate = primary.properties.get("sky_image", "")
-            if not isinstance(candidate, str) or not candidate.strip():
-                # The previous owner may no longer be Primary. Recover its
-                # value before removing non-primary copies of the property.
-                position = start_rules.earliest_created(
-                    [start.properties for start in starts])
-                ordered = [starts[position]] if position is not None else []
-                ordered.extend(
-                    start for start in starts
-                    if start is not primary
-                    and (position is None or start is not starts[position])
-                )
-                candidate = ""
-                for start in ordered:
-                    value = start.properties.get("sky_image", "")
-                    if isinstance(value, str) and value.strip():
-                        candidate = value.strip()
-                        break
-            else:
-                candidate = candidate.strip()
-
-            if candidate:
-                if primary.properties.get("sky_image") != candidate:
-                    primary.properties["sky_image"] = candidate
+            if path:
+                if primary.properties.get("sky_image") != path:
+                    primary.properties["sky_image"] = path
                     changed.append(primary)
-                path = candidate
             elif "sky_image" in primary.properties:
                 primary.properties.pop("sky_image", None)
                 changed.append(primary)
 
-        # A map has one sky setting: only its current Primary may own it.
         for start in starts:
             if start is not primary and "sky_image" in start.properties:
                 start.properties.pop("sky_image", None)
                 changed.append(start)
 
+        if changed:
+            self.state.mark_world_changed(changed)
+        self.sync_sky_image_from_map()
+        return path
+
+    def sync_sky_image_from_map(self):
+        """Publish the effective map panorama to the 3D renderer, read-only."""
+        path = self.sky_image_path_from_map()
         view = getattr(self, "view_3d", None)
         if view is not None:
             view.sky_image_path = path
-        if changed:
-            self.state.mark_world_changed(changed)
         return path
 
     def set_show_whole_world(self, shown):
@@ -4128,10 +4148,7 @@ class MainWindow(QMainWindow):
         if self.primary_selection() and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.save_state()
             primary_start = self.state.resolve_player_start()
-            sky_image = (
-                str(primary_start.properties.get("sky_image", "") or "")
-                if primary_start is not None else ""
-            )
+            sky_image = self.sky_image_path_from_map()
             primary_is_deleted = any(
                 obj is primary_start for obj in self.state.selected_objects
             )
@@ -4143,12 +4160,10 @@ class MainWindow(QMainWindow):
                     if obj in self.state.things:
                         self.state.things.remove(obj)
             if primary_is_deleted:
-                # The old owner is gone before update_all_ui can synchronise.
+                # Preserve the map setting while the deleted Primary is
+                # replaced. Canonicalisation is part of this explicit edit.
                 self.state.settle_player_starts()
-                promoted = self.state.resolve_player_start()
-                if promoted is not None and sky_image:
-                    promoted.properties["sky_image"] = sky_image
-                    self.state.mark_world_changed([promoted])
+                self.canonicalize_sky_image_ownership(sky_image)
             self.set_selected_objects([])
             return
 

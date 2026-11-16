@@ -224,12 +224,26 @@ jobs:
           $pyqtDir = python -c "import os, PyQt5; print(os.path.dirname(PyQt5.__file__))"
           $dll = Join-Path $pyqtDir 'Qt5\bin\Qt5Core.dll'
           if (-not (Test-Path -LiteralPath $dll)) { $dll = Join-Path $pyqtDir 'Qt\bin\Qt5Core.dll' }
-          if (Test-Path -LiteralPath $dll) {
-            $bytes = [System.IO.File]::ReadAllBytes($dll)[0..4095]
-            $machine = [BitConverter]::ToUInt16($bytes, 0x3C + 4)
-            Write-Host ("Qt5Core.dll PE machine: 0x{0:X4} (0xAA64 = ARM64)" -f $machine)
-          } else {
-            Write-Host "Qt5Core.dll not found under the PyQt5 package; skipping PE machine check."
+          if (-not (Test-Path -LiteralPath $dll)) {
+            throw "Qt5Core.dll not found under the installed PyQt5 package."
+          }
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "Qt5Core.dll does not have a valid DOS/PE header."
+          }
+          $peOffset = [BitConverter]::ToUInt32($bytes, 0x3C)
+          if ([uint64]$peOffset -gt [uint64]($bytes.Length - 6)) {
+            throw "Qt5Core.dll PE header offset is outside the file."
+          }
+          $peOffset = [int]$peOffset
+          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45 -or
+              $bytes[$peOffset + 2] -ne 0 -or $bytes[$peOffset + 3] -ne 0) {
+            throw "Qt5Core.dll has an invalid PE signature."
+          }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          Write-Host ("Qt5Core.dll PE machine: 0x{0:X4} (0xAA64 = ARM64)" -f $machine)
+          if ($machine -ne 0xAA64) {
+            throw ("Qt5Core.dll is not ARM64: expected 0xAA64, found 0x{0:X4}." -f $machine)
           }
       - name: Run the complete Qt suite without a GPU or a display
         shell: bash

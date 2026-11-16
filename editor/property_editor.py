@@ -3359,7 +3359,7 @@ class PropertyEditor(QWidget):
             ("Space", "assets/backgrounds/void-panorama-q80.webp"),
         )
         preset_paths = {path for _label, path in presets}
-        value = str(thing.properties.get("sky_image", "") or "").strip()
+        value = str(self.editor.sky_image_path_from_map() or "").strip()
 
         widget = QWidget()
         row = QHBoxLayout(widget)
@@ -3452,8 +3452,10 @@ class PropertyEditor(QWidget):
     def _make_primary_start(self, thing):
         if self._populating or thing.primary:
             return
+        sky_image = self.editor.sky_image_path_from_map()
         self.editor.save_state()
         self.editor.state.set_primary_player_start(thing)
+        self.editor.canonicalize_sky_image_ownership(sky_image)
         self.editor.mark_as_modified()
         self.editor.update_all_ui()
 
@@ -5500,7 +5502,9 @@ class PropertyEditor(QWidget):
         # editor's world epoch, so journal this exact object immediately.
         self.editor.state.mark_world_changed([self.current_object])
         if isinstance(self.current_object, PlayerStart) and key == 'sky_image':
-            self.editor.sync_sky_image_from_map()
+            # This is an explicit authoring action, so the selected value
+            # (including an empty value) replaces any legacy copies.
+            self.editor.canonicalize_sky_image_ownership(value)
 
         if key == 'name' and _io_system is not None:
             # A name is read by every *other* entity's panel — the "Targeted by"
