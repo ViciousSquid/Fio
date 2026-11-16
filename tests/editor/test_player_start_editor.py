@@ -440,6 +440,26 @@ def test_first_explicit_edit_canonicalises_legacy_sky_ownership(window):
     assert window.unsaved_changes
 
 
+def test_first_edit_undo_checkpoint_keeps_sky_ownership_canonical(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    second.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
+
+    window.save_state()
+    first.properties["name"] = "A edited"
+    window.state.mark_world_changed([first])
+    window.mark_as_modified()
+
+    window.undo()
+
+    restored = window.state.resolve_player_start()
+    assert restored.properties["name"] == "A"
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    assert all("sky_image" not in start.properties
+               for start in window.state.player_starts() if start is not restored)
+
+
 def test_legacy_non_primary_sky_is_visible_and_can_be_cleared_explicitly(window):
     first = _create(window, "A")
     second = _create(window, "B", (100, 40, 0))

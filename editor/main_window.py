@@ -3056,6 +3056,9 @@ class MainWindow(QMainWindow):
                 spin.blockSignals(False)
 
     def save_state(self):
+        # Put legacy sky ownership repair inside this operation's undo
+        # checkpoint; undo must restore the canonical pre-edit state.
+        self.canonicalize_sky_image_ownership()
         self.state.save_state()
         # Every scene mutation funnels through here, so this is the cheap,
         # once-per-operation place to tell the component overlay its cached
