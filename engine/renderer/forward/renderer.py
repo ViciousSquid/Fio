@@ -64,6 +64,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
     #: diffuse, 2 glass scene, 3 water depth, 4..11 shadow cube-maps, 12..13
     #: terrain height and paint (terrain program only).
     GEO_TRANSFORM_UNIT = 14
+    #: Default per-face resolution of the sky's cube map ([Renderer]
+    #: sky_cubemap_size), as SHADOW_MAP_SIZE is the shadow cube maps'.
+    SKY_CUBEMAP_SIZE = 384
 
     def __init__(self, config=None, *, texture_loader=None):
         super().__init__(texture_loader)
@@ -127,6 +130,17 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                     if settings is not None else 'elements')
         batching = str(batching or '').strip().lower()
         self.geo_batching = batching if batching in self.GEO_BATCHING else 'elements'
+        # Per-face resolution of the sky's cube map (_build_sky_cube), like
+        # shadow_map_size for the shadow cube maps. Fixed whatever the
+        # panorama's size: 384 is half the widest shipped sky's width, so
+        # small detail such as stars survives being resampled.
+        try:
+            sky_size = (settings.getint('Renderer', 'sky_cubemap_size',
+                                        fallback=self.SKY_CUBEMAP_SIZE)
+                        if settings is not None else self.SKY_CUBEMAP_SIZE)
+        except (TypeError, ValueError):
+            sky_size = self.SKY_CUBEMAP_SIZE
+        self.sky_cubemap_size = max(64, min(2048, int(sky_size)))
 
         self.fog_quality = 'low'      # 'low' = 16 steps, 'high' = 32 steps
         # OpenGL diagnostics are deliberately opt-in. Keep GL state probing out
@@ -393,7 +407,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             finally:
                 gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
             gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            self._background_cube_texture = self._build_sky_cube(texture, rgba.width)
+            self._background_cube_texture = self._build_sky_cube(texture)
             self._background_image_texture = texture
             return True
         except Exception as exc:
@@ -404,16 +418,14 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._background_failed_path = path
             return False
 
-    def _build_sky_cube(self, panorama, width):
-        """The equirectangular *panorama* (GL texture, *width* texels round)
-        drawn into a cube map once, for the sky pass to read with no
-        trigonometry. Six full-screen draws into an offscreen framebuffer;
-        the framebuffer, viewport and the state they touch are put back, and
-        nothing is left allocated if it fails."""
+    def _build_sky_cube(self, panorama):
+        """The equirectangular *panorama* (GL texture) drawn into a cube map
+        of ``sky_cubemap_size`` texels a face, once, for the sky pass to read
+        with no trigonometry. Six full-screen draws into an offscreen
+        framebuffer; the framebuffer, viewport and the state they touch are
+        put back, and nothing is left allocated if it fails."""
         from OpenGL.GL.shaders import compileProgram, compileShader
-        # Faces at half the panorama's width: twice its texel density, so
-        # drawing it a second time does not soften small detail (stars).
-        size = max(64, min(width // 2, 1024))
+        size = self.sky_cubemap_size
         if not self._sky_cube_program:
             self._sky_cube_program = compileProgram(
                 compileShader(shaders.DEFAULT_SHADERS['sky_cube.vert'], gl.GL_VERTEX_SHADER),

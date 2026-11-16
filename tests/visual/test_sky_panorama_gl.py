@@ -82,3 +82,42 @@ def test_every_part_of_the_sky_faces_the_way_it_should(tmp_path):
         finally:
             renderer.cleanup()
     glh.reset_texture_cache()
+
+
+@pytest.mark.parametrize("setting, size", [(None, 384), ("512", 512), ("16", 64),
+                                           ("huge", 384)])
+def test_the_sky_cube_map_is_the_size_settings_ini_asks_for(setting, size):
+    """``[Renderer] sky_cubemap_size``, like ``shadow_map_size`` for the
+    shadow cube maps: 384 by default, clamped, and a bad value is the default."""
+    import configparser
+    import OpenGL.GL as gl
+
+    config = configparser.ConfigParser()
+    config.add_section('Renderer')
+    if setting is not None:
+        config.set('Renderer', 'sky_cubemap_size', setting)
+    glh.reset_texture_cache()
+    with glh.GLTestContext(16, 16):
+        renderer = glh.make_renderer(config)
+        try:
+            renderer.set_background_image("assets/backgrounds/cloudy-sky-panorama.webp")
+            assert renderer._background_panorama_texture()
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, renderer._background_cube_texture)
+            for face in range(6):
+                target = gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face
+                assert gl.glGetTexLevelParameteriv(target, 0, gl.GL_TEXTURE_WIDTH) == size
+                assert gl.glGetTexLevelParameteriv(target, 0, gl.GL_TEXTURE_HEIGHT) == size
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+
+
+def test_the_shipped_settings_ask_for_384():
+    import configparser
+    from tests.helpers.paths import repo_path
+
+    config = configparser.ConfigParser()
+    config.read(repo_path('settings.ini'))
+    assert config.getint('Renderer', 'sky_cubemap_size') == 384
+    assert config.getint('Renderer', 'shadow_map_size') == 384
