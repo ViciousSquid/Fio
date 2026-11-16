@@ -48,12 +48,86 @@ def load_pixmap(path):
     return pixmap
 
 
+#: Sizes ``tools/render_ui_icons.py`` pre-renders each control SVG at.
+RASTER_SIZES = (16, 32, 64)
+
+_svg_supported = None
+
+
+def svg_supported():
+    """Whether this Qt can draw SVG images and icons.
+
+    QtSvg provides both the ``svg`` image format and the ``svg`` icon engine;
+    builds without it (the PyQt5-WinARM64 wheel) load every SVG as a null
+    icon and draw nothing for an SVG stylesheet image.
+    """
+    global _svg_supported
+    if _svg_supported is None:
+        from PyQt5.QtGui import QImageReader
+        formats = {bytes(f).lower() for f in QImageReader.supportedImageFormats()}
+        _svg_supported = b"svg" in formats
+    return _svg_supported
+
+
+def raster_fallbacks(path):
+    """``[(size, path)]`` of the PNGs pre-rendered for the SVG at *path*.
+
+    ``assets/ui/controls/close.svg`` has ``assets/ui/controls/raster/close-16.png``
+    and so on (see ``tools/render_ui_icons.py``). Only those that exist,
+    loose or in an archive, are listed.
+    """
+    text = os.fspath(path)
+    if not text.lower().endswith(".svg"):
+        return []
+    folder, name = os.path.split(text)
+    stem = name[:-4]
+    found = []
+    for size in RASTER_SIZES:
+        candidate = os.path.join(folder, "raster", "%s-%d.png" % (stem, size))
+        if os.path.isfile(candidate) or asset_bytes(candidate) is not None:
+            found.append((size, candidate))
+    return found
+
+
+def portable_stylesheet(stylesheet):
+    """*stylesheet* with each SVG ``url(...)`` swapped for its PNG fallback
+    when this Qt cannot draw SVG; unchanged otherwise.
+
+    Every SVG image in Fio's stylesheets sets its own width and height, and a
+    stylesheet image is drawn as an icon, so the 32 px raster scales down to
+    the 10-16 px boxes and stays sharp at a 2x device ratio.
+    """
+    if svg_supported():
+        return stylesheet
+    import re
+
+    def swap(match):
+        rasters = dict(raster_fallbacks(match.group(2)))
+        replacement = rasters.get(32) or (next(iter(rasters.values())) if rasters else None)
+        if replacement is None:
+            return match.group(0)
+        return "url(%s%s%s)" % (match.group(1), replacement.replace(os.sep, "/"), match.group(1))
+
+    return re.sub(r"""url\((["']?)([^"')]+?\.svg)\1\)""", swap, stylesheet)
+
+
 def load_icon(path):
     """A ``QIcon`` of the asset at *path* (null when there is none); any
-    other argument -- a QPixmap, another icon -- is handed to ``QIcon``."""
+    other argument -- a QPixmap, another icon -- is handed to ``QIcon``.
+
+    An SVG on a Qt that cannot draw SVG loads from its pre-rendered PNGs
+    (:func:`raster_fallbacks`) instead of loading as a null icon.
+    """
     from PyQt5.QtGui import QIcon
     if not isinstance(path, (str, os.PathLike, type(None))):
         return QIcon(path)
+    if path is not None and not svg_supported():
+        rasters = raster_fallbacks(path)
+        if rasters:
+            icon = QIcon()
+            for _size, raster in rasters:
+                icon.addPixmap(load_pixmap(raster))
+            return icon
     data = _data(path)
     if data is None:
         return QIcon(os.fspath(path)) if path is not None else QIcon()
