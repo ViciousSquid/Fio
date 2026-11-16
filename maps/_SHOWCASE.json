@@ -5963,6 +5963,30 @@
                 ]
             },
             "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                128.2149110885105,
+                344.20156122920713,
+                68.93071132087697
+            ],
+            "properties": {
+                "texture": "Signage.png",
+                "width": 256.0,
+                "height": 256.0,
+                "depth": 32.0,
+                "yaw": -176.0967439328799,
+                "pitch": 1.9251632398661598,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "type": "decal",
+                "io_enabled": true,
+                "name": "Decal_2",
+                "id": "e49d39eb-8c0f-437b-858f-cef304459451",
+                "mirrored": false
+            },
+            "io_connections": []
         }
     ],
     "created": "2026-09-27T09:24:54"
