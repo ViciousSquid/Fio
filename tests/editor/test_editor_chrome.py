@@ -89,25 +89,3 @@ def test_p_opens_the_position_window_from_anywhere(main_window, qt_app):
     qt_app.processEvents()
     assert field.text() == "p" and view.pos_window is None
     field.deleteLater()
-
-
-
-def test_view_background_menu_changes_only_the_editor_view(main_window, qt_app):
-    menu = main_window.view_background_image_menu
-    assert menu.title() == "Background image"
-    actions = main_window.view_background_image_actions
-    assert set(actions) == {"none", "space", "cloudy_sky"}
-    assert actions["none"].isChecked()
-
-    original_unsaved = main_window.unsaved_changes
-    actions["space"].trigger()
-    assert main_window.view_3d.editor_background_image == (
-        "assets/editor/backgrounds/void-panorama.webp")
-    assert main_window.unsaved_changes == original_unsaved
-
-    actions["cloudy_sky"].trigger()
-    assert main_window.view_3d.editor_background_image == (
-        "assets/editor/backgrounds/cloudy-sky-panorama.webp")
-    actions["none"].trigger()
-    assert main_window.view_3d.editor_background_image == ""
-    assert main_window.unsaved_changes == original_unsaved

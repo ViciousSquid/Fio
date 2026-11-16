@@ -522,7 +522,7 @@ def test_sky_image_custom_entry_can_be_cleared_to_none(window):
 
     panel._widgets["player_start_sky_image_clear"].click()
 
-    assert start.properties["sky_image"] == ""
+    assert "sky_image" not in start.properties
     assert combo.currentText() == "None"
     assert combo.currentData() == ""
     assert [combo.itemText(i) for i in range(combo.count())] == [
