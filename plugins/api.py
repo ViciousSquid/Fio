@@ -19,9 +19,10 @@ Object / helper             Purpose
 :class:`FioPlugin`          Base class you subclass; expose an instance as ``PLUGIN``.
 :class:`EditorAPI`          Load-time: register entities, I/O, schemas, UI, renderers.
 :class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast,
-                            the live physics and the player.
+                            the physics engine (Soma) and the player.
 :class:`PlayerState`        The player: position, motion, view, health and armour.
-:class:`Physics`            The physics contract (:class:`Body`: one simulated body).
+:class:`Physics`            The physics contract Soma answers to (:class:`Body`:
+                            one simulated body).
 :class:`TickContext`        Per-tick: read input, drive the HUD.
 :class:`PropertySpec`       Declare a typed, self-documenting entity property.
 :class:`GlobalStore`        Cross-level key/value storage (shared with map KV stores).
@@ -62,8 +63,7 @@ from typing import Any, Callable, List, Optional, Tuple
 # The physics contract (API 2.0). ``engine.physics`` is the boundary package:
 # stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
 from engine.physics import (  # noqa: F401 -- re-exported for plugins
-    CRUSH_DAMAGE, HEAVY_MASS, SV_GRAVITY, Body, Physics, available_physics,
-    selected_physics, world_gravity)
+    CRUSH_DAMAGE, HEAVY_MASS, SV_GRAVITY, Body, Physics, world_gravity)
 
 
 #: Version of the plugin API surface this module implements. Compare against
@@ -95,26 +95,29 @@ from engine.physics import (  # noqa: F401 -- re-exported for plugins
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-#: * 2.0.0 — **physics and the player are part of the API.** Fio's core is
-#:   modular: the renderer and the physics are each an engine module behind a
-#:   contract, and either can be replaced without the rest of the engine
-#:   knowing. Physics is engine core, not a plugin -- the built-in one is Soma
-#:   (``engine.physics.soma``) -- and this surface is how anything outside
-#:   the engine reaches it:
+#: * 2.0.0 — **1.9 extended to expose Soma and the player.** Nothing in 1.9
+#:   is changed or removed: every plugin written for 1.x loads and behaves as
+#:   it did (``tests/plugins/test_api_2_0.py`` pins the whole 1.9 surface).
+#:   Soma is Fio's physics engine -- a subsystem of the engine, as the
+#:   Forward renderer is, not a plugin -- and what is added is how a plugin
+#:   communicates with it, and with the player:
 #:
-#:   - :attr:`RuntimeAPI.physics` (the live :class:`Physics`),
-#:     :meth:`RuntimeAPI.body`, :attr:`RuntimeAPI.spatial_grid`;
+#:   - :attr:`RuntimeAPI.physics` -- the physics engine of the play session,
+#:     live (its controls, waking and moving bodies, taking one over and
+#:     handing it back); :attr:`RuntimeAPI.soma` when that engine is Soma;
+#:     :meth:`RuntimeAPI.body`; :attr:`RuntimeAPI.spatial_grid`;
 #:   - :attr:`RuntimeAPI.player`, a :class:`PlayerState`: where the player
 #:     is, how it moves, its health and armour -- read and written;
-#:   - the contract itself, importable from here: :class:`Physics`,
-#:     :class:`Body`, :data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`,
-#:     :data:`SV_GRAVITY`, :func:`world_gravity`;
-#:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`
-#:     to supply and choose another implementation.
+#:   - the physics contract, importable from here: :class:`Physics`,
+#:     :class:`Body`, and the game's rules a physics honours
+#:     (:data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`, :data:`SV_GRAVITY`,
+#:     :func:`world_gravity`);
+#:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`:
+#:     the physics engine can be swapped out the way the renderer can
+#:     (:meth:`EditorAPI.register_renderer`).
 #:
 #:   ``SpatialGrid`` lives in ``engine.spatial_grid`` (still importable from
-#:   ``engine.physics``, as ``PhysicsWorld`` is). Every existing plugin loads
-#:   and behaves unchanged.
+#:   ``engine.physics``, as ``PhysicsWorld`` is).
 API_VERSION = "2.0.0"
 API_VERSION_INFO = (2, 0, 0)
 
@@ -685,13 +688,14 @@ class EditorAPI:
         return register_renderer(name, cls)
 
     def register_physics(self, name: str, cls) -> bool:
-        """Register a physics under *name* in Fio's physics registry (API 2.0).
+        """Register a physics engine under *name* in Fio's physics registry
+        (API 2.0), so it can be swapped in the way a renderer can
+        (:meth:`register_renderer`).
 
-        Physics is an engine module, not a plugin: the built-in one, Soma,
-        lives in ``engine.physics.soma`` and is what every map runs on. It
-        sits behind a contract so that it can be worked on -- or replaced --
-        without touching the rest of the engine, and this is the door for a
-        replacement that ships outside the engine.
+        Soma is the physics engine Fio ships: a subsystem of the engine, as
+        the Forward renderer is, and what every map runs on unless another
+        is selected. Both sit behind a contract so that either can be
+        replaced without the rest of the engine knowing.
 
         *cls* is a factory called as ``cls(spatial_grid)`` once per play
         session -- usually the physics class itself. What it returns must
@@ -700,8 +704,8 @@ class EditorAPI:
         collision runtime's body brushes, ``clear``), the tick (``step``) and
         the per-body operations the engine's Prop, trigger and cutscene code
         call. How it simulates is entirely its own. It may start from Soma
-        (``from engine.physics.soma import Soma``, its full tier, and subclass it) or share
-        nothing with it.
+        (``from engine.physics.soma import Soma``, its full tier, and
+        subclass it) or share nothing with it.
 
         Two rules come with the contract. The world is the ``SpatialGrid``
         the factory is given, asked live -- a physics keeps no copy of it.
@@ -716,9 +720,10 @@ class EditorAPI:
         return register_physics(name, cls)
 
     def select_physics(self, name: str) -> bool:
-        """Make the physics registered as *name* the one the next play
-        session is created with (API 2.0). A running session keeps its own.
-        Returns False for a name nothing is registered under."""
+        """Make the physics engine registered as *name* the one the next play
+        session is created with (API 2.0); ``"Soma"`` is the built-in one. A
+        running session keeps its own. Returns False for a name nothing is
+        registered under."""
         from engine.physics import select_physics
         try:
             select_physics(name)
@@ -996,8 +1001,8 @@ class RuntimeAPI:
       :meth:`raycast_from_crosshair`
     * the player — :attr:`player` (a :class:`PlayerState`), and the older
       :meth:`player_eye`, :meth:`player_forward`
-    * physics — :attr:`physics` (the live :class:`Physics`), :meth:`body`,
-      :attr:`spatial_grid`
+    * the physics engine — :attr:`physics` (:attr:`soma`, when it is Soma),
+      :meth:`body`, :attr:`spatial_grid`
     * runtime spawn/despawn — :meth:`spawn`, :meth:`despawn`
     * cross-level storage — :meth:`global_get` / :meth:`global_set`
     """
@@ -1066,20 +1071,34 @@ class RuntimeAPI:
         """The player's state, live: see :class:`PlayerState`."""
         return PlayerState(self.logic)
 
-    # -- physics (API 2.0) ----------------------------------------------------
+    # -- the physics engine (API 2.0) -----------------------------------------
     @property
     def physics(self) -> Optional[Physics]:
-        """The play session's physics -- whichever implementation is active,
-        Soma unless another was selected -- or None outside play.
+        """The physics engine of this play session -- Soma, unless another
+        was registered and selected -- or None outside play.
 
-        Everything in the :class:`Physics` contract is yours to call: read or
-        set the world controls (``gravity``, ``time_scale``, ...), ``wake`` a
-        body at a velocity, hand one to your own code with ``set_kinematic``
-        and back, tell it you moved one with ``sync_entity_position``. Fetch
-        it when you use it rather than keeping it: each play session has its
-        own.
+        This is how a plugin communicates with it. Read or set the world
+        controls (``gravity``, ``time_scale``, ``friction_scale``,
+        ``damping_scale``, ``sleep_enabled``); ``wake`` a body at a velocity;
+        take one out of the simulation with ``set_kinematic`` and hand it
+        back; tell it you moved one with ``sync_entity_position``; ask to be
+        told when one comes to rest. Its members are the :class:`Physics`
+        contract, whichever engine it is.
+
+        Fetch it when you use it rather than keeping it: each play session
+        has its own.
         """
         return getattr(self.logic.session_runtime, 'physics_world', None)
+
+    @property
+    def soma(self) -> Optional[Physics]:
+        """:attr:`physics` when the session's physics engine is Soma, else
+        None: for what is Soma's own rather than the contract's -- ``tier``
+        (``'full'`` or ``'crude'``), how much Soma is doing."""
+        physics = self.physics
+        if physics is not None and type(physics).__module__.startswith('engine.physics.soma'):
+            return physics
+        return None
 
     def body(self, entity) -> Optional[Body]:
         """The simulated :class:`Body` of *entity* (a physics Prop), or None

@@ -1,10 +1,11 @@
-"""Plugin API 2.0: physics and the player are part of the API.
+"""Plugin API 2.0: 1.9, extended to expose Soma and the player.
 
-Fio's core is modular -- the physics is an engine module behind a contract,
-not a plugin -- and 2.0 is the surface anything outside the engine reaches it
-and the player through: ``RuntimeAPI.physics``, ``RuntimeAPI.body``,
-``RuntimeAPI.spatial_grid`` and ``RuntimeAPI.player``.
+Nothing in 1.9 is changed or removed. Soma is Fio's physics engine -- a
+subsystem of the engine, as the Forward renderer is, not a plugin -- and what
+2.0 adds is how a plugin communicates with it and with the player, and the
+means to swap the physics engine out as the renderer can be.
 """
+import json
 import pathlib
 import re
 
@@ -26,7 +27,7 @@ def test_the_physics_contract_is_importable_from_the_api():
     import engine.physics as boundary
 
     for name in ('Physics', 'Body', 'HEAVY_MASS', 'CRUSH_DAMAGE', 'SV_GRAVITY',
-                 'world_gravity', 'available_physics', 'selected_physics'):
+                 'world_gravity'):
         assert getattr(api, name) is getattr(boundary, name)
     assert api.world_gravity() == -api.SV_GRAVITY
 
@@ -37,14 +38,56 @@ def test_the_shipped_plugins_are_built_against_2_0(plugin):
     assert re.search(r'^\s+api_version = "2\.0\.0"', source, re.M)
 
 
-def test_physics_is_not_a_plugin():
-    """Soma is engine core: it lives in the engine, and no plugin package
-    holds a physics the engine depends on."""
+def test_nothing_in_api_1_9_is_missing_from_2_0():
+    """The whole public surface of 1.9 -- every module-level name, every
+    public member of every class -- recorded from the 1.9 source, is still
+    here. 2.0 only adds."""
+    surface = json.loads(
+        (ROOT / 'tests/plugins/fixtures/api_1_9_surface.json').read_text())
+    missing = [name for name in surface['module'] if not hasattr(api, name)]
+    for cls, members in surface['classes'].items():
+        current = getattr(api, cls, None)
+        declared = getattr(current, '__annotations__', {})
+        missing += [f'{cls}.{member}' for member in members
+                    if current is None
+                    or not (hasattr(current, member) or member in declared)]
+    assert not missing, missing
+
+
+def test_soma_is_a_subsystem_of_the_engine_not_a_plugin():
+    """Soma lives in the engine, and no plugin package holds a physics."""
     from engine.physics import DEFAULT_PHYSICS, physics_factory
 
     soma = physics_factory(DEFAULT_PHYSICS)
+    assert DEFAULT_PHYSICS == "Soma"
     assert soma.__module__ == 'engine.physics.soma'
     assert (ROOT / 'engine' / 'physics' / 'soma' / 'full.py').is_file()
+    assert not list((ROOT / 'plugins').rglob('*physics*.py'))
+
+
+def test_the_physics_engine_can_be_swapped_out_as_the_renderer_can():
+    """``register_physics`` beside ``register_renderer``: another engine is
+    registered through the API and selected for the next play session."""
+    from engine.physics import create_physics, registry, selected_physics
+    from engine.spatial_grid import SpatialGrid
+    from plugins.api import EditorAPI
+    from tests.helpers.physics import StubPhysics
+
+    saved = dict(registry._factories), registry._selected
+    editor_api = EditorAPI(None, None)
+    try:
+        assert editor_api.register_physics("Stub", StubPhysics) is True
+        assert editor_api.select_physics("NoSuchPhysics") is False
+        assert selected_physics() == "Soma"
+        assert editor_api.select_physics("Stub") is True
+        assert isinstance(create_physics(SpatialGrid()), StubPhysics)
+        assert editor_api.select_physics("Soma") is True
+        assert type(create_physics(SpatialGrid())).__module__.startswith(
+            'engine.physics.soma')
+    finally:
+        registry._factories.clear()
+        registry._factories.update(saved[0])
+        registry._selected = saved[1]
 
 
 # -- a play session -----------------------------------------------------------
@@ -80,12 +123,15 @@ def session():
 
 
 @pytest.mark.qt
-def test_the_runtime_api_reaches_the_live_physics(session):
+def test_a_plugin_communicates_with_soma_through_the_runtime_api(session):
     runtime, logic, _prop = session
 
     physics = runtime.physics
     assert physics is logic.session_runtime.physics_world
     assert isinstance(physics, Physics)
+    # It is Soma, so it is also reachable as Soma, with what is Soma's own.
+    assert runtime.soma is physics
+    assert runtime.soma.tier in ('full', 'crude')
     assert runtime.spatial_grid is logic.session_runtime.spatial_grid
 
     physics.gravity = -100.0

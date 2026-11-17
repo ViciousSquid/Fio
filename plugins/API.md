@@ -122,26 +122,26 @@ History:
   A renderer written for 1.6-1.8 that draws the terrain or implements those
   three members must be updated and declare `api_version = "1.9.0"`; there
   is no shim. Every other plugin loads and behaves unchanged.
-- **2.0.0** — **physics and the player are part of the API.** Fio's core is
-  modular: the renderer and the physics are each an engine module behind a
-  contract, and either can be replaced without the rest of the engine knowing.
-  Physics is engine core, not a plugin — the built-in one is **Soma**
-  (`engine.physics.soma`; *soma* is Greek for "body", and Soma simulates
-  bodies) — and 2.0 is how anything outside the engine reaches it:
-  - [`RuntimeAPI.physics`](#physics-api-200), `RuntimeAPI.body(entity)` and
-    `RuntimeAPI.spatial_grid`: the live physics, one simulated body, and the
-    grid that says where the world is;
+- **2.0.0** — **1.9 extended to expose Soma and the player.** Nothing in 1.9
+  is changed or removed: every plugin written for 1.x loads and behaves as it
+  did. Soma is Fio's physics engine (*soma* is Greek for "body": Soma
+  simulates bodies) — a subsystem of the engine, as the Forward renderer is,
+  not a plugin — and what 2.0 adds is how a plugin communicates with it, and
+  with the player:
+  - [`RuntimeAPI.physics`](#soma-api-200) (the session's physics engine;
+    `RuntimeAPI.soma` when it is Soma), `RuntimeAPI.body(entity)` and
+    `RuntimeAPI.spatial_grid`;
   - [`RuntimeAPI.player`](#player-state-api-200): a `PlayerState` — position,
     velocity, view, health and armour, read and written;
-  - the contract itself, importable from `plugins.api`: `Physics`, `Body`,
-    `HEAVY_MASS`, `CRUSH_DAMAGE`, `SV_GRAVITY`, `world_gravity`;
-  - `EditorAPI.register_physics` / `select_physics`, to supply and choose
-    another implementation.
+  - the physics contract, importable from `plugins.api`: `Physics`, `Body`,
+    and the game's rules a physics honours: `HEAVY_MASS`, `CRUSH_DAMAGE`,
+    `SV_GRAVITY`, `world_gravity`;
+  - [`register_physics`](#register_physics-api-200) / `select_physics`: the
+    physics engine can be swapped out the way the renderer can.
 
   `SpatialGrid` — engine core — moved to `engine.spatial_grid`;
-  `from engine.physics import SpatialGrid, PhysicsWorld` still works. Every
-  existing plugin loads and behaves unchanged; the shipped plugins declare
-  `api_version = "2.0.0"`.
+  `from engine.physics import SpatialGrid, PhysicsWorld` still works. The
+  shipped plugins declare `api_version = "2.0.0"`.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -400,18 +400,19 @@ only while the plugin is enabled.
 def register_physics(self, name: str, cls) -> bool
 def select_physics(self, name: str) -> bool
 ```
-Supply another physics, and choose it (API 2.0). Physics is an engine module,
-not a plugin: Soma, the built-in one, lives in `engine/physics/soma/` and is
-what every map runs on. It sits behind a contract so it can be improved — or
-replaced — without touching the rest of the engine; these two calls are the
-door for a replacement that ships outside the engine. See
-[Physics](#physics-api-200) for the contract.
+Swap out the physics engine, the way `register_renderer` swaps the renderer
+(API 2.0). Soma is the physics engine Fio ships — a subsystem of the engine,
+as Forward is the renderer it ships — and both sit behind a contract so that
+either can be replaced without the rest of the engine knowing.
 
 `register_physics` registers *cls* under *name* (`"Soma"` is the built-in
-one); *cls* is a factory called as `cls(spatial_grid)` once per play session.
-`select_physics` makes a registered physics the one the next play session is
-created with (the console's `phys_engine <name>` does the same); a running
-session keeps its own.
+one); *cls* is a factory called as `cls(spatial_grid)` once per play session,
+and what it returns must satisfy the `Physics` protocol
+(`engine/physics/api.py`). `select_physics` makes a registered engine the one
+the next play session is created with (the console's `phys_engine <name>`
+does the same); a running session keeps its own. `tests/helpers/physics.py`
+has the smallest conforming implementation. See
+[the physics engine](#soma-api-200) for the contract's members and rules.
 
 ```python
 def register_renderer(self, name: str, cls) -> bool
@@ -770,24 +771,29 @@ def on_tick(self, logic, ctx):
         player.teleport(self.checkpoint)
 ```
 
-<a id="physics-api-200"></a>
-### Physics (API 2.0.0)
+<a id="soma-api-200"></a>
+### The physics engine: Soma (API 2.0.0)
 
 ```python
 @property
 def physics(self) -> Optional[Physics]
+@property
+def soma(self) -> Optional[Physics]
 def body(self, entity) -> Optional[Body]
 @property
 def spatial_grid(self)
 ```
-`physics` is the play session's physics — whichever implementation is active;
-**Soma** unless another was selected — or `None` outside play. Fetch it when
-you use it: each play session has its own. `body(entity)` is the simulated
-body of a physics Prop, a live handle. `spatial_grid` is the session's
-`engine.spatial_grid.SpatialGrid`: where the world is (solid brushes, movers
-and doors where they are now, water) — the same grid the physics asks.
-
-Everything in the `Physics` contract is yours to call:
+Soma is Fio's physics engine: it simulates bodies — the Props whose
+`physics_enabled` is set. It is a subsystem of the engine, not a plugin; this
+is how a plugin communicates with it. `physics` is the play session's physics
+engine — Soma, unless another was [registered](#register_physics-api-200) and
+selected — or `None` outside play; fetch it when you use it, since each play
+session has its own. `soma` is the same object when the engine is Soma, for
+what is Soma's own (`tier`). `body(entity)` is the simulated body of a
+physics Prop, a live handle. `spatial_grid` is the session's
+`engine.spatial_grid.SpatialGrid`: where the world is (solid brushes and
+their true surfaces, the terrain, movers and doors where they are now, water)
+— the same grid the physics engine asks.
 
 | Member | |
 |--------|---|
@@ -797,7 +803,7 @@ Everything in the `Physics` contract is yours to call:
 | `set_kinematic(entity, value)` | take a body out of the simulation (you move it) or hand it back |
 | `sync_entity_position(entity, wake=False)` | you moved an entity: take its `pos` as the body's |
 | `set_rest_callback(entity, callback)` | be told when a body comes to rest |
-| `rebuild`, `clear`, `step`, `entities_that_changed_cell`, `player_crushed` | the engine's side of the contract |
+| `tier` (Soma) | how much Soma is doing: `'full'` or `'crude'` |
 
 ```python
 def on_explosion(self, centre, strength):
@@ -808,22 +814,6 @@ def on_explosion(self, centre, strength):
             physics.wake(prop, [strength * a / 300.0 for a in away])
 ```
 
-**The modular core.** Fio's renderer and physics are each an engine module
-behind a contract; the engine drives whichever is registered and selected
-through that contract and nothing else, so either can be changed or replaced
-without the rest of the engine knowing. The physics contract is
-`engine/physics/api.py` (stdlib-only): the `Physics` and `Body` protocols,
-what crosses them (`BODY_BRUSH`, `BODY_PROPERTIES`, `WORLD_QUERIES`) and the
-game's rules a physics honours (`SV_GRAVITY`, `HEAVY_MASS`, `CRUSH_DAMAGE`).
-Two rules come with it:
-
-- **The world is the grid's.** The `SpatialGrid` a physics is created with is
-  the single source of truth for where the world is. A physics keeps no copy.
-- **Bodies are the engine's entities.** A moved body is handed back by
-  *assigning* `entity.pos`; a changed rotation is written to
-  `properties['rotation']` and journalled with `touch`. Authored properties
-  are read, never rewritten.
-
 **Soma's tiers.** How much Soma does for a body is its tier, chosen for a
 play session:
 
@@ -832,19 +822,20 @@ play session:
 | `full` (default) | everything: true surfaces (slopes, the terrain), bodies meeting bodies, swept contact |
 | `crude` | Fio's physics exactly as it was before Soma, kept unchanged: boxes against boxes |
 
-Set it in `settings.ini` (`[Physics] tier = crude`), with the
-`FIO_PHYSICS_TIER` environment variable, with `phys_tier <name>` in the
-console, or from code with `engine.physics.soma.select_tier(name)`. It takes
-effect with the next play session; `RuntimeAPI.physics.tier` says which one a
-session is running.
+It is set in `settings.ini` (`[Physics] tier = crude`), with the
+`FIO_PHYSICS_TIER` environment variable, or with `phys_tier <name>` in the
+console, and takes effect with the next play session.
 
-Physics is not a plugin: Soma is engine core. To work on it, work in
-`engine/physics/soma/` — nothing outside `engine/physics/` names it
-(`tests/physics/test_physics_contract.py` holds that line). To try a
-different one without touching the engine, subclass it or write another
-against the contract, register it with
-[`register_physics`](#register_physics-api-200) and select it;
-`tests/helpers/physics.py` has the smallest conforming implementation.
+**Where Soma sits.** Fio's core is modular: the renderer and the physics
+engine are each a subsystem behind a contract, and the rest of the engine
+drives them through it and nothing else, so either can be worked on -- or
+swapped out -- without the rest of the engine knowing. Soma's contract is `engine/physics/api.py`
+(stdlib-only): the `Physics` and `Body` protocols, what crosses them, and the
+game's rules Soma honours (`SV_GRAVITY`, `HEAVY_MASS`, `CRUSH_DAMAGE`). Two
+rules come with it: the world is the `SpatialGrid`'s — Soma keeps no copy —
+and a moved body is handed back by *assigning* `entity.pos`. To improve
+Soma, work in `engine/physics/soma/`; nothing outside `engine/physics/`
+names it (`tests/physics/test_physics_contract.py` holds that line).
 
 ### Runtime spawn / despawn
 
