@@ -90,6 +90,10 @@ BODY_PROPERTIES = {
     'rotation': '([0, 0, 0]) Euler degrees; written back when it changes',
     'hidden': '(False) live: dormant while set',
     'disabled': '(False) live: dormant while set',
+    '_sim_tier': '(absent: NEAR) live: the simulation tier a streaming layer '
+                 'stamps (engine.spatial.tier_of). DISTANT or beyond is past '
+                 'live simulation: the body is held as it is, and carries on '
+                 'when its cell is near again',
 }
 
 #: What a physics may ask of the :class:`engine.spatial_grid.SpatialGrid` it

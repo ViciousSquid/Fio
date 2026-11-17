@@ -15,7 +15,7 @@ import glm
 
 from ..change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
 from ..brush_placement import world_box
-from ..spatial import TIER_NEAR, cells_of_points, tier_of
+from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points, tier_of
 from ..spatial_grid import SpatialGrid
 from . import api
 from .api import SV_GRAVITY
@@ -738,7 +738,7 @@ class Soma:
         self._settle_sunk_bodies(ready)
         self._pending_settle[ready] = False
 
-    def _inactive_mask(self, candidates, awake_only=True):
+    def _inactive_mask(self, candidates, awake_only=True, distant=None):
         """Which candidate bodies are hidden or disabled.
 
         ``disabled`` is authored gameplay state; ``hidden`` is the Prop's
@@ -747,6 +747,10 @@ class Soma:
         sparse hot path. The player-push query also checks its small set of
         overlapping bodies with ``awake_only=False``, because a sleeping body
         can still overlap the player and must not be pushed while inactive.
+
+        *distant*, a mask the size of the world, is filled where a candidate
+        is beyond live simulation (:meth:`step`): the same look at the same
+        property dict, so knowing costs nothing more.
         """
         mask = np.zeros(len(self._entities), dtype=np.bool_)
         rows = candidates & self._awake if awake_only else candidates
@@ -756,9 +760,14 @@ class Soma:
         entities = self._entities
         for i in indices.tolist():
             props = getattr(entities[i], 'properties', None)
-            if (isinstance(props, dict)
-                    and (props.get('disabled') or props.get('hidden'))):
+            if not isinstance(props, dict):
+                continue
+            if props.get('disabled') or props.get('hidden'):
                 mask[i] = True
+            elif distant is not None:
+                tier = props.get(SIM_TIER_KEY)
+                if tier is not None and tier >= TIER_DISTANT:
+                    distant[i] = True
         return mask
 
     def _integrate_rotation(self, angular, dt):
@@ -1598,7 +1607,12 @@ class Soma:
         # bodies, and retain pending placement work until the body is active.
         active = self._physics_enabled & ~self._kinematic
         self._refresh_inactive_history()
-        inactive = self._inactive_mask(active)
+        # Simulation tiers (engine.spatial): a body in a cell that is DISTANT
+        # or beyond is past live simulation. It keeps its state -- awake,
+        # moving -- and carries on from it when the cell is near again. An
+        # unclassified world is all NEAR: nothing is ever held.
+        distant = np.zeros(len(self._entities), dtype=np.bool_)
+        inactive = self._inactive_mask(active, distant=distant)
         awake_candidates = active & self._awake
         activated = self._was_inactive & awake_candidates & ~inactive
         if np.any(activated):
@@ -1610,6 +1624,7 @@ class Soma:
         scale = max(0.0, float(self.time_scale))
         dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
         active &= ~inactive
+        active &= ~distant
 
         # Where the player's push started each body it pushed (NaN for the
         # rest): a push into a wall is undone with the rest of the move.

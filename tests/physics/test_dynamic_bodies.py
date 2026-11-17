@@ -212,6 +212,48 @@ def test_clear_releases_all_body_state():
 
 
 # ---------------------------------------------------------------------------
+# Simulation tiers: a body beyond live simulation is held, not lost.
+# ---------------------------------------------------------------------------
+
+def _stamp(prop, tier):
+    from engine.spatial import SIM_TIER_KEY
+    prop.properties[SIM_TIER_KEY] = tier
+
+
+def test_a_body_in_a_distant_cell_is_held_and_carries_on_when_it_is_near():
+    from engine.spatial import TIER_ACTIVE, TIER_DISTANT, TIER_NEAR
+
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop, [60.0, 0.0, 0.0])
+    _run(world, 5)
+    held_at = list(prop.pos)
+    held_speed = world.get_body(prop).velocity
+
+    _stamp(prop, TIER_DISTANT)
+    _run(world, 120)
+    assert list(prop.pos) == held_at                    # not simulated
+    assert world.get_body(prop).velocity == held_speed  # nor forgotten
+    assert world.get_body(prop).awake is True
+
+    for near in (TIER_ACTIVE, TIER_NEAR):
+        _stamp(prop, near)
+        before = prop.pos[1]
+        _run(world, 2)
+        assert prop.pos[1] < before                     # falling again
+
+
+def test_an_unclassified_world_simulates_everything():
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    _run(world, 300)
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
 # Contact: a body stops at the wall it meets, and rests only on something.
 # ---------------------------------------------------------------------------
 
