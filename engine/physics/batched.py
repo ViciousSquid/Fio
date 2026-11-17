@@ -255,6 +255,11 @@ class PhysicsWorld:
     #: The same crossover in query points: a body asks about five.
     FLOOR_BATCH_MIN_POINTS = 5 * FLOOR_BATCH_MIN_BODIES
     MAX_STEP = np.float32(0.05)
+    #: How far short of a wall's face a body that meets it is put: Quake's
+    #: DIST_EPSILON. Positions are float32, so a body placed exactly on a
+    #: face may round into it; a body this far off cannot, out to a couple
+    #: of hundred thousand units from the origin.
+    CONTACT_SKIN = 0.03125
     REST_SPEED = np.float32(1.0)
 
     #: The share of its ``friction`` a body that ``rolls`` loses to the ground:
@@ -934,10 +939,17 @@ class PhysicsWorld:
         where they are now (:meth:`SpatialGrid.box_pairs`); nothing of it is
         kept here.
 
-        A body that ends up in a wall goes back to *old_position* on this axis
-        and stops, or bounces off by its bounciness. *rows* limits the test to
-        some bodies: the vertical axis is tested only for bodies on their way
-        up, so nothing rises into a ceiling.
+        The test is swept: each body is asked about the whole of this axis's
+        move, from *old_position* to where it is now, so a fast body cannot
+        step over a thin wall, and one that meets a wall stops *at* it --
+        :data:`CONTACT_SKIN` short of the face it first reaches -- not back
+        where the step began, which left a gap the size of the step. It then
+        stops on this axis, or bounces off by its bounciness. A body that is
+        inside a wall both before and after the move (it started there) has
+        no face to stop at: it goes back to *old_position*, as it always did.
+
+        *rows* limits the test to some bodies: the vertical axis is tested
+        only for bodies on their way up, so nothing rises into a ceiling.
 
         *pushed_from* is where the player's push this step started each body
         from (NaN where it did not push it): a push into a wall is undone with
@@ -957,32 +969,79 @@ class PhysicsWorld:
         if indices.size == 0:
             return
 
-        centre = (self._position[indices] + self._offset[indices]).astype(np.float64)
+        offset = self._offset[indices].astype(np.float64)
         half = self._half[indices].astype(np.float64)
+        centre = self._position[indices].astype(np.float64) + offset
         bmin = centre - half
         bmax = centre + half
+        # This axis only: where the body's two faces were before the move.
+        was = old_position[indices, axis].astype(np.float64) + offset[:, axis]
+        old_min = was - half[:, axis]
+        old_max = was + half[:, axis]
+        swept_min = bmin.copy()
+        swept_max = bmax.copy()
+        swept_min[:, axis] = np.minimum(bmin[:, axis], old_min)
+        swept_max[:, axis] = np.maximum(bmax[:, axis], old_max)
+        # Across the move the box is the skin smaller: what a body rests on
+        # or stands against (a float32 rounding into it, at most) is not in
+        # its way.
+        skin = self.CONTACT_SKIN
+        for across in range(3):
+            if across != axis:
+                swept_min[:, across] += skin
+                swept_max[:, across] -= skin
+
         grid = self.spatial_grid
-        query, row, boxes = grid.box_pairs(bmin, bmax)
+        query, row, boxes = grid.box_pairs(swept_min, swept_max)
         if not len(query):
             return
-        overlap = np.all((bmax[query] > boxes.lo[row])
-                         & (bmin[query] < boxes.hi[row]), axis=1)
-        collision = np.zeros(indices.size, dtype=np.bool_)
-        collision[query[overlap]] = True
+        lo = boxes.lo[row]
+        hi = boxes.hi[row]
+        touching = np.all((swept_max[query] > lo) & (swept_min[query] < hi), axis=1)
+        if not touching.any():
+            return
+        query, lo, hi = query[touching], lo[touching, axis], hi[touching, axis]
+
+        # A wall ahead is one whose near face the body's leading face had not
+        # passed before the move and has passed now. The nearest decides.
+        forward = centre[query, axis] > was[query]
+        backward = centre[query, axis] < was[query]
+        ahead = forward & (lo >= old_max[query])
+        behind = backward & (hi <= old_min[query])
+        stop = np.full(indices.size, np.inf)
+        np.minimum.at(stop, query[ahead], lo[ahead])
+        back_stop = np.full(indices.size, -np.inf)
+        np.maximum.at(back_stop, query[behind], hi[behind])
+        # Anything else it touches now, it was already in: no face to stop at.
+        inside = ~(ahead | behind) & (bmax[query, axis] > lo) & (bmin[query, axis] < hi)
+        embedded = np.zeros(indices.size, dtype=np.bool_)
+        embedded[query[inside]] = True
+
+        met_ahead = np.isfinite(stop)
+        met_behind = np.isfinite(back_stop)
+        collision = met_ahead | met_behind | embedded
         if not collision.any():
             return
 
-        hit_indices = indices[collision]
-        target = old_position[hit_indices, axis]
+        # Never past where the move began: a body closer to the wall than
+        # the skin stays where it is.
+        target = np.where(
+            met_ahead, np.maximum(stop - skin - half[:, axis], was),
+            np.where(met_behind, np.minimum(back_stop + skin + half[:, axis], was),
+                     was))
+        target = np.where(embedded, was, target) - offset[:, axis]
+
+        hit = np.flatnonzero(collision)
+        hit_indices = indices[hit]
+        target = target[hit].astype(np.float32)
         if pushed_from is not None:
             # Pushed bodies that were clear of every wall before the push go
             # back to where the push found them.
             start = pushed_from[hit_indices]
             was_pushed = np.flatnonzero(~np.isnan(start[:, 0]))
             if was_pushed.size:
-                pcentre = (start[was_pushed]
-                           + self._offset[hit_indices[was_pushed]]).astype(np.float64)
-                phalf = half[collision][was_pushed]
+                pcentre = start[was_pushed].astype(np.float64) + offset[hit[was_pushed]]
+                phalf = half[hit[was_pushed]]
                 pmin = pcentre - phalf
                 pmax = pcentre + phalf
                 q, r, boxes = grid.box_pairs(pmin, pmax)
@@ -1343,9 +1402,14 @@ class PhysicsWorld:
                 & moving
                 & (speed < self.REST_SPEED)
             )
-            if self._any_bounce:
-                # A bounce is momentarily still at the top of its arc.
-                sleeping &= landed
+            if np.any(sleeping):
+                # At rest means on something. A body that gravity pulls is
+                # also momentarily still at the top of an arc -- a throw, a
+                # bounce -- and one put to sleep there hung in the air.
+                weightless = self._gravity == 0.0
+                if self.gravity == 0.0:
+                    weightless = np.ones_like(weightless)
+                sleeping &= landed | weightless
             if np.any(sleeping):
                 self._velocity[sleeping] = 0.0
                 rest_indices = np.flatnonzero(sleeping)

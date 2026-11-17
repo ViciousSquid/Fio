@@ -4,6 +4,7 @@ Runs against the real SpatialGrid so the static-cell cache, the batched
 floor query and the push response are exercised exactly as in play mode.
 """
 import glm
+import pytest
 
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
@@ -208,6 +209,106 @@ def test_clear_releases_all_body_state():
     assert world._was_inactive.shape == (0,)
     assert world._pending_settle.shape == (0,)
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
+
+
+# ---------------------------------------------------------------------------
+# Contact: a body stops at the wall it meets, and rests only on something.
+# ---------------------------------------------------------------------------
+
+def _slider(world, speed, **props):
+    """A frictionless drum at the origin, woken at *speed* along +x."""
+    prop = _prop(friction=0.0, linear_damping=0.0, **props)
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    world.wake(prop, [speed, 0.0, 0.0])
+    return prop
+
+
+def _wall(face_x, thickness=100.0):
+    return _floor((face_x + thickness * 0.5, 200.0, 0.0), (thickness, 400.0, 400.0))
+
+
+@pytest.mark.parametrize('speed', [90.0, 700.0, 1500.0, 3000.0])
+def test_a_body_stops_at_the_wall_not_a_step_short_of_it(speed):
+    """Going back to where the step began left a gap as wide as the step:
+    25 units at 1500 units a second. The body now stops at the face."""
+    world = _world(_floor(), _wall(500.0))
+    prop = _slider(world, speed)
+    _run(world, 600)
+
+    gap = 500.0 - (prop.pos[0] + DRUM_SIZE[0] * 0.5)
+    assert 0.0 < gap <= 2.0 * PhysicsWorld.CONTACT_SKIN
+    assert world.get_body(prop).velocity[0] == 0.0
+
+
+def test_a_fast_body_does_not_step_over_a_thin_wall():
+    """100 units a step, against a drum 45 wide and a wall 16 thick: tested
+    only where it ends up, the body was past the wall before it was seen."""
+    world = _world(_floor(), _wall(500.0, thickness=16.0))
+    prop = _slider(world, 6000.0)
+    _run(world, 120)
+
+    assert prop.pos[0] + DRUM_SIZE[0] * 0.5 < 500.0
+
+
+def test_a_body_against_a_wall_leaves_it_and_slides_along_it():
+    world = _world(_floor(), _wall(500.0))
+    prop = _slider(world, 1500.0)
+    _run(world, 60)
+    stopped = prop.pos[0]
+
+    world.wake(prop, [0.0, 0.0, 120.0])        # along the wall
+    _run(world, 30)
+    assert prop.pos[2] == pytest.approx(60.0, abs=1.0)
+    assert prop.pos[0] == pytest.approx(stopped)
+
+    world.wake(prop, [-120.0, 0.0, 0.0])       # away from it
+    _run(world, 30)
+    assert prop.pos[0] == pytest.approx(stopped - 60.0, abs=1.0)
+
+
+@pytest.mark.parametrize('top', [0.1, 33.333, -7.77, 1234.567])
+def test_a_floor_at_an_awkward_height_is_not_a_wall(top):
+    """What a body rests on is not in its way, whatever float32 makes of
+    the sum of its height, its offset and the floor's."""
+    world = _world(_floor((0.0, top - 50.0, 0.0)))
+    prop = _prop((0.0, top + 40.0, 0.0), friction=0.0, linear_damping=0.0)
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    _run(world, 120)
+    assert prop.pos[1] == pytest.approx(top, abs=1e-3)
+
+    world.wake(prop, [120.0, 0.0, -60.0])
+    _run(world, 60)
+    assert prop.pos[0] == pytest.approx(120.0, abs=2.0)
+    assert prop.pos[2] == pytest.approx(-60.0, abs=1.0)
+
+
+@pytest.mark.parametrize('speed', [200.0 + 7.3 * k for k in range(55)])
+def test_a_thrown_body_does_not_fall_asleep_at_the_top_of_its_arc(speed):
+    """Still for one tick is not at rest: at the top of a throw a body's
+    speed passes through zero, and one tick in seven it was slow enough to
+    be put to sleep there, hanging in the air."""
+    world = _world()
+    prop = _prop()
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    world.wake(prop, [0.0, speed, 0.0])
+    _run(world, 600)
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-3)
+    assert world.get_body(prop).awake is False
+
+
+def test_a_weightless_body_comes_to_rest_in_the_air():
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0), gravity=False, linear_damping=4.0)
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop, [0.0, 50.0, 0.0])
+    _run(world, 600)
+
+    assert world.get_body(prop).awake is False
+    assert prop.pos[1] > 300.0
 
 
 # ---------------------------------------------------------------------------
