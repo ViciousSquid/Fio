@@ -323,6 +323,20 @@ class IOManager:
         # LogicGate signal state belongs to the event dispatcher: it is
         # transient, session-local I/O state, not world-owner state.
         self.gate_inputs = {}
+
+        # Zero-delay re-entrancy guard.  An input handler that fires an output
+        # delivers its zero-delay connections in place, so a relay wired
+        # A -> B -> A (or a state whose OnValueChanged writes itself) nests one
+        # delivery inside another without end.  ``_chain_depth`` counts the
+        # nested deliveries of the chain being dispatched; past
+        # MAX_CHAIN_DEPTH the whole chain is abandoned (``_chain_aborted``
+        # makes every frame still on the stack stop delivering, so a loop with
+        # fan-out cannot keep branching while it unwinds) and one console
+        # error names the entities involved.  Delayed connections are queued,
+        # not nested, so a timer loop never comes near the limit.
+        self._chain_depth = 0
+        self._chain_aborted = False
+        self._chain_trail = []
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -395,6 +409,30 @@ class IOManager:
         self._source_id = ""
         self._activator_entity = None
         self._activator_id = ""
+        self._chain_depth = 0
+        self._chain_aborted = False
+        self._chain_trail = []
+
+    #: How many zero-delay deliveries may nest inside one another before the
+    #: chain is treated as a loop and abandoned.  Far deeper than any authored
+    #: chain, and shallow enough that the dispatcher's own frames stay well
+    #: inside Python's recursion limit.
+    MAX_CHAIN_DEPTH = 64
+
+    def _abort_chain(self, target_name: str, input_name: str):
+        """Abandon the zero-delay chain being dispatched, reporting it once."""
+        self._chain_aborted = True
+        # The tail of the trail is the loop itself; its distinct members, in
+        # the order they repeat, are what the designer has to look at.
+        seen = []
+        for hop in self._chain_trail[-16:] + ["%s.%s" % (target_name, input_name)]:
+            if hop not in seen:
+                seen.append(hop)
+        debug_log("Error",
+                  "I/O: zero-delay loop — a chain of connections nested more "
+                  "than %d deliveries deep and was stopped. Involved: %s. "
+                  "Give one connection in the loop a delay, or break the cycle."
+                  % (self.MAX_CHAIN_DEPTH, " -> ".join(seen)))
     
     def fire_output(
         self,
@@ -449,6 +487,10 @@ class IOManager:
         for conn in connections:
             if conn.output_name.lower() != output_name.lower():
                 continue
+            if self._chain_aborted:
+                # The chain this output belongs to was stopped as a loop:
+                # nothing further is delivered or queued on its behalf.
+                return
             
             matching_count += 1
             
@@ -543,6 +585,16 @@ class IOManager:
         if not io_enabled(target):
             return
         
+        if self._chain_aborted:
+            if self._chain_depth:
+                return
+            # A new top-level delivery: the aborted chain has fully unwound.
+            self._chain_aborted = False
+        if self._chain_depth >= self.MAX_CHAIN_DEPTH:
+            self._abort_chain(target_name or self._get_entity_name(target),
+                              input_name)
+            return
+
         entity_type = self._get_entity_type(target)
         
         handler_key = (entity_type.lower(), input_name.lower())
@@ -572,6 +624,9 @@ class IOManager:
             # brought to now first, so the input acts on where it has got
             # to and takes effect from now (brush_placement.asleep).
             settle_parked(target)
+        self._chain_depth += 1
+        self._chain_trail.append(
+            "%s.%s" % (target_name or self._get_entity_name(target), input_name))
         try:
             if handler:
                 try:
@@ -593,6 +648,10 @@ class IOManager:
                     self._logic_thread.collision_runtime.mark_dirty()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
+            self._chain_trail.pop()
+            self._chain_depth -= 1
+            if not self._chain_depth:
+                self._chain_aborted = False
     
     #: Inputs every entity accepts, whatever its type, because
     #: :meth:`_try_generic_input` implements them for anything with properties.

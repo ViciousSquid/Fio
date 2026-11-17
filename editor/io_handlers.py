@@ -1513,6 +1513,18 @@ def register_all_input_handlers(io_manager: IOManager):
 
     _state_report = report_state_write
 
+    def _state_unstorable(value, value_type):
+        """Whether a write of *value* must be refused as an unholdable number.
+
+        ``SetValue x=1e999`` is infinity and ``x=<fifty digits>`` is beyond the
+        integer range: neither can be saved, so neither goes in, and the write
+        is reported like any other refused one (``OnStoreFull``).  A value the
+        parameter explicitly types as a string is text, whatever it looks like.
+        """
+        if value_type == 'string':
+            return False
+        return _sv.out_of_range(value)
+
     def _state_branch(entity, logic, result, payload):
         """Fire the true/false pair a query implies, legacy names included."""
         mgr = logic.io_manager if logic is not None else None
@@ -1531,6 +1543,9 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         key, value = _state_pair(param)
         key, value_type = _sv.split_typed_key(key)
+        if _state_unstorable(value, value_type):
+            _state_report(entity, logic, key, False, False, None)
+            return
         ok, changed, stored = entity.apply_value(key, value, value_type)
         _state_report(entity, logic, key, ok, changed, stored)
 
@@ -1691,6 +1706,10 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         key, value = _state_pair(param)
         key, value_type = _sv.split_typed_key(key)
+        if _state_unstorable(value, value_type):
+            _state_report(entity, logic, entity.object_key(source_id, key),
+                          False, False, None)
+            return
         ok, changed, stored = entity.set_object_value(
             source_id, key, value, value_type)
         _state_report(entity, logic, entity.object_key(source_id, key),

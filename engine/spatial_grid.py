@@ -39,7 +39,7 @@ from . import brush_placement as _placement
 from .brush_placement import collision_shape, shared_bulk_boxes, world_bounds
 from .mover_table import travel_range
 from .constants import is_water_brush, brush_aabb_bounds
-from .spatial import CELL_SIZE, CellIndex, authored_hidden
+from .spatial import CELL_SIZE, CellIndex, authored_hidden, cell_range
 
 _chain = chain.from_iterable
 
@@ -298,6 +298,21 @@ class _CellRows:
 
 
 _EMPTY_CELL_ROWS = _CellRows({})
+
+
+#: The most cells one mover's or door's travel is filed under.  A travel is
+#: filed in every cell it can reach so that a query finds the brush with one
+#: bucket lookup; that is a few cells for any real door or lift, about 2,000
+#: for a travel of a million units along an axis, and without a limit it is
+#: every cell a typo'd ``distance`` spans.  Past this the brush is filed where
+#: it stands and handled as off range (see :meth:`SpatialGrid.populate`).
+MAX_TRAVEL_CELLS = 1 << 16
+
+
+def _travel_cells(box, cell_size):
+    """How many cells the XZ footprint of *box* overlaps."""
+    cx0, cz0, cx1, cz1 = cell_range(box[0], box[2], box[3], box[5], cell_size)
+    return (cx1 - cx0 + 1) * (cz1 - cz0 + 1)
 
 
 def _off_range_filed():
@@ -712,6 +727,31 @@ class SpatialGrid:
                 box = (min(lo_x, lo[0] - reach[0]), min(lo_y, lo[1] - reach[1]),
                        min(lo_z, lo[2] - reach[2]), max(hi_x, hi[0] + reach[0]),
                        max(hi_y, hi[1] + reach[1]), max(hi_z, hi[2] + reach[2]))
+                if _travel_cells(box, self.cell_size) > MAX_TRAVEL_CELLS:
+                    # A travel too long to file cell by cell (a `distance`
+                    # of 1e9 is millions of buckets, and exhausted memory at
+                    # Play start): filed where it stands instead, and the
+                    # range recorded is that one, so the brush is off range
+                    # (brush_placement.off_range, MoverTable.check_range)
+                    # and every query adds it wherever it looks -- the
+                    # route a path follower already takes.
+                    centre = _placement.authored_box(brush)[:3]
+                    margin = 1.0 + 1e-6 * max(abs(float(v)) for v in centre)
+                    lo = tuple(float(v) - margin for v in centre)
+                    hi = tuple(float(v) + margin for v in centre)
+                    box = (min(lo_x, lo[0] - reach[0]), min(lo_y, lo[1] - reach[1]),
+                           min(lo_z, lo[2] - reach[2]), max(hi_x, hi[0] + reach[0]),
+                           max(hi_y, hi[1] + reach[1]), max(hi_z, hi[2] + reach[2]))
+                    if _travel_cells(box, self.cell_size) > MAX_TRAVEL_CELLS:
+                        # Displaced that far already: where it is now, only.
+                        box = (lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)
+                    # Marked here as well: a mover that starts on has its
+                    # state -- and its range check -- before the grid exists
+                    # to be checked against. The mover table forgets the mark
+                    # when play stops, as it does its own.
+                    if id(brush) not in _placement.off_range:
+                        _placement.off_range[id(brush)] = brush
+                        _placement.note_off_range()
                 brush['_travel_filed'] = (lo, hi, turns, box)
                 self._index.insert(brush, box[0], box[2], box[3], box[5])
             elif ('geometry' in brush or '_mesh_bounds' in brush

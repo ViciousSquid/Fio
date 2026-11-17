@@ -347,6 +347,7 @@ class PropertySpec:
         t = (self.type or "string").lower()
         try:
             if t == "int":
+                # int(inf) raises OverflowError (caught below with the rest).
                 v = int(float(value))
                 if self.min is not None:
                     v = max(int(self.min), v)
@@ -369,7 +370,7 @@ class PropertySpec:
                 if self.choices and s not in [str(c) for c in self.choices]:
                     return self.default if self.default is not None else self.choices[0]
                 return s
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             if self.default is not None:
                 return self.default
             return {"int": 0, "float": 0.0, "bool": False}.get(t, "")
@@ -388,6 +389,17 @@ def prop(name: str, type: str = "string", label: str = "", default: Any = None,
 
 # ---------------------------------------------------------------------------
 # LogicState: typed values, and the events a write makes (API 2.0)
+def _unstorable(value) -> bool:
+    """Whether *value* is a number a LogicState store refuses to hold."""
+    try:
+        from editor.state_values import out_of_range
+    except Exception:  # pragma: no cover - a host without the editor package
+        if isinstance(value, float):
+            return not math.isfinite(value)
+        return False
+    return out_of_range(value)
+
+
 # ---------------------------------------------------------------------------
 class StateStore:
     """One LogicState store, by name, as the map sees it (API 2.0).
@@ -462,10 +474,22 @@ class StateStore:
 
         Text is typed as an I/O parameter would be (``"5"`` is an integer)
         unless *value_type* names the type; any other Python value is stored
-        as it is. Refused when the key is blank, the store is full, or the
-        text is not of *value_type*.
+        as it is. Refused when the key is blank, the store is full, the
+        text is not of *value_type*, or the value is a number no store can
+        hold: ``inf``, ``nan`` (which is never equal to itself, so it would
+        report a change on every write) or an integer beyond 64 bits. Such a
+        number cannot be saved with the level, so it never goes in.
         """
         entity = self._entity()
+        if str(value_type or "").strip().lower() != "string" and _unstorable(value):
+            if entity is not None:
+                try:
+                    from editor.io_handlers import report_state_write
+                    report_state_write(entity, self._logic, str(key).strip(),
+                                       False, False, None)
+                except Exception:
+                    pass
+            return False, False
         if entity is None:
             key = str(key).strip()
             if not key:
@@ -1290,16 +1314,82 @@ class RuntimeAPI:
         (so a plugin enabled later — e.g. a disabled-by-default one auto-enabled
         when its level loads — has working inputs immediately) while a disabled
         plugin's inputs stay inert without needing to re-attach.
+
+        Registering an input the engine (or another plugin) already handles
+        overrides it only while this plugin is enabled: while it is disabled
+        the input is delivered to the handler it replaced (or, for one of the
+        generic inputs on a type the plugin does not own, to the generic
+        handling), exactly as if the plugin were not installed. Two plugins claiming the same input is
+        logged once; the one registered last wins while it is enabled.
         """
         if self.io_manager is None:
             return
         plugin = self._plugin
+        io_manager = self.io_manager
+        key = (str(entity_type).lower(), str(input_name).lower())
+
+        # The registry holds one handler per (type, input), so registering
+        # replaces whatever was there: a core handler, another plugin's, or
+        # nothing (the generic inputs).  That replacement must only be felt
+        # while this plugin is on, so the wrapper keeps what it displaced and
+        # hands the input back to it while the plugin is disabled.
+        previous = getattr(io_manager, "_input_handlers", {}).get(key)
+        # The same plugin registering the key again replaces its own handler
+        # rather than stacking on it: "the last registration wins".
+        while (previous is not None
+               and getattr(previous, "_fio_plugin", None) is plugin):
+            previous = getattr(previous, "_fio_previous", None)
+        other = getattr(previous, "_fio_plugin", None)
+        if other is not None:
+            collisions = getattr(self._manager, "_input_collisions", None)
+            if collisions is None:
+                collisions = set()
+                try:
+                    self._manager._input_collisions = collisions
+                except Exception:
+                    pass
+            # Named by plugin, not by object, so a logic thread rebuilt for a
+            # new session does not report the same collision again.
+            mark = (key, getattr(other, "name", ""), getattr(plugin, "name", ""))
+            if mark not in collisions:
+                collisions.add(mark)
+                try:
+                    self._manager._log(
+                        "Plugins '%s' and '%s' both handle the input %s.%s; "
+                        "'%s' registered last and wins while it is enabled."
+                        % (getattr(other, "name", "?"),
+                           getattr(plugin, "name", "?"),
+                           entity_type, input_name,
+                           getattr(plugin, "name", "?")))
+                except Exception:
+                    pass
+
+        manager = self._manager
+
+        def owns_type():
+            try:
+                owner = manager._entity_owner.get(
+                    manager._normalise_type(entity_type))
+            except Exception:
+                return True
+            return owner is plugin
 
         def gated(entity, parameter, logic):
             if getattr(plugin, "enabled", True):
                 return handler(entity, parameter, logic)
+            if previous is not None:
+                return previous(entity, parameter, logic)
+            # Nothing was displaced. On the plugin's own entity types its
+            # inputs stay inert, as documented. On anyone else's type, an
+            # input every entity accepts (Enable, Hide, ...) is the engine's
+            # and must keep working.
+            if (key[1] in getattr(io_manager, "GENERIC_INPUTS", ())
+                    and not owns_type()):
+                return io_manager._try_generic_input(entity, input_name, parameter)
 
-        self.io_manager.register_input_handler(entity_type, input_name, gated)
+        gated._fio_plugin = plugin
+        gated._fio_previous = previous
+        io_manager.register_input_handler(entity_type, input_name, gated)
 
     def fire_output(self, entity, output_name: str, value: Optional[str] = None):
         """Fire an output from *entity* through the I/O system (if available)."""
@@ -1683,6 +1773,31 @@ class TickContext:
 # Plugin base class
 # ---------------------------------------------------------------------------
 
+class _OwnList:
+    """Class-attribute default of ``[]`` that is never one shared list.
+
+    ``requires: List[str] = []`` on the base class was a single list object
+    every plugin inherited, so ``self.requires.append("x")`` in one plugin
+    silently gave *every* plugin that requirement. Read through this
+    descriptor, each plugin instance gets (and keeps) its own empty list, and
+    the class itself reads as a fresh ``[]``. A plugin that declares
+    ``requires = [...]`` on its class or instance overrides it as before.
+    """
+
+    def __set_name__(self, owner, name):
+        self._name = name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return []
+        own = []
+        try:
+            instance.__dict__[self._name] = own
+        except Exception:
+            pass
+        return own
+
+
 class FioPlugin:
     """Base class for all Fio plugins.
 
@@ -1732,7 +1847,7 @@ class FioPlugin:
     api_version: str = "1.0.0"
     #: Names (or package names) of other plugins this one depends on. If a
     #: requirement isn't loaded, the manager disables this plugin and logs why.
-    requires: List[str] = []
+    requires: List[str] = _OwnList()
 
     # -- load-time (editor + engine) ---------------------------------------
     def register(self, api: EditorAPI) -> None:
