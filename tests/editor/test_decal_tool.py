@@ -194,7 +194,7 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     monkeypatch.setattr(QMenu, 'exec_', lambda self, *a: shown.append(self))
     tab._side_button_menu(tab.decal_btn.geometry().center())
     assert shown == []
-    empty = QPoint(tab.inspector_btn.geometry().right() + 20, tab.inspector_btn.geometry().center().y())
+    empty = QPoint(tab.inspector_btn.geometry().left() - 20, tab.inspector_btn.geometry().center().y())
     tab._side_button_menu(empty)
     assert len(shown) == 1
     tab.set_side_button_size('small')

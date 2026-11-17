@@ -1190,8 +1190,8 @@ class AssetBrowserTab(QWidget):
         self._folder_before_decals = None
 
         # Create a container widget for buttons to allow stretching.
-        # The texture tab keeps INSPECTOR on the left and Tint brush on the
-        # far right; the stretch between them follows the browser width.
+        # The texture tab keeps INSPECT, Tint and Decal together on the right;
+        # the stretch before them follows the browser width.
         button_container = QWidget()
         button_layout = QHBoxLayout(button_container)
         button_layout.setContentsMargins(0, 0, 0, 0)
@@ -1224,7 +1224,9 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            self.inspector_btn = QPushButton("INSPECTOR")
+            button_layout.addStretch()
+
+            self.inspector_btn = QPushButton("INSPECT")
             self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
             self.inspector_btn.setFixedHeight(32)
             self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -1234,8 +1236,6 @@ class AssetBrowserTab(QWidget):
                 "for one face or every face of the selection")
             self.inspector_btn.clicked.connect(self.on_inspector_clicked)
             button_layout.addWidget(self.inspector_btn)
-
-            button_layout.addStretch()
 
             # Tint and DECAL are one size, side by side (apply_side_button_size).
             self.tint_btn = QPushButton(load_icon("assets/tint.png"), "")
@@ -1274,9 +1274,9 @@ class AssetBrowserTab(QWidget):
             banner_layout.addWidget(button_container, stretch=1)
             banner_layout.addStretch()
         else:
-            # The Inspector button sits next to the folder toggle at its natural
-            # width; the container's own trailing stretch fills the rest of the
-            # bar, so nothing centres it and nothing stretches it.
+            # The container's own leading stretch fills the bar, so INSPECT,
+            # Tint and Decal sit together at the right at their natural
+            # widths: nothing centres them and nothing stretches them.
             banner_layout.addWidget(button_container, stretch=1)
 
         main_layout.addWidget(self.action_bar)
