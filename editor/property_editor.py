@@ -16,6 +16,7 @@ from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState, PlayerStart, LevelChanger, Decal)
+from editor.terrain_selection import TerrainHandle
 from engine import player_starts as start_rules
 from editor import state_values as _sv
 from editor.sky_assets import store_sky_image_in_project
@@ -621,6 +622,9 @@ class PropertyEditor(QWidget):
         """
         if obj is None:
             return ('none',)
+        if isinstance(obj, TerrainHandle):
+            return ('terrain', self.editor.terrain_locked(),
+                    self.editor.scene_hierarchy._get_terrain_display_name())
 
         revision = _io_system.io_revision() if _io_system is not None else 0
         if isinstance(obj, dict):
@@ -879,6 +883,9 @@ class PropertyEditor(QWidget):
             elif obj is None:
                 self.main_layout.addWidget(QLabel("Nothing selected."))
                 self._strip_tooltips()
+            elif isinstance(obj, TerrainHandle):
+                self.populate_for_terrain()
+                self._strip_tooltips()
             elif isinstance(obj, dict):
                 self.populate_for_brush(obj)
                 self._strip_tooltips()
@@ -907,6 +914,46 @@ class PropertyEditor(QWidget):
                 0, lambda w=page, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
 
         self._populating = False
+
+    # ────────────────────────────
+    # Terrain
+    # ────────────────────────────
+    def populate_for_terrain(self):
+        """The selected terrain: its name, its lock, and the way into its
+        editor. Everything else about a terrain is edited there."""
+        from editor.surface_inspector import ACCENT_BUTTON_STYLE
+        editor = self.editor
+        content = QWidget(self)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        title = QLabel("Terrain: %s" % editor.scene_hierarchy._get_terrain_display_name())
+        title.setStyleSheet("font-weight: bold; color: #8FBC8F;")
+        layout.addWidget(title)
+
+        locked = editor.terrain_locked()
+        lock_cb = _make_checkbox("Prevent selection/editing", locked,
+                                 lambda c: editor.set_terrain_locked(bool(c)),
+                                 _Style.CHECKBOX)
+        lock_cb.setToolTip(
+            "Locked, the terrain is not picked by Shift+click in the 3D view and\n"
+            "its editor does not open -- the same lock a brush has.\n"
+            "Select it from the Scene Hierarchy to unlock it.")
+        layout.addWidget(lock_cb)
+        self._widgets['terrain_lock_cb'] = lock_cb
+
+        edit_btn = QPushButton("EDIT")
+        edit_btn.setStyleSheet(ACCENT_BUTTON_STYLE)
+        edit_btn.setToolTip("Open the Terrain Editor")
+        edit_btn.setEnabled(not locked)
+        edit_btn.clicked.connect(editor.open_terrain_editor)
+        layout.addWidget(edit_btn)
+        self._widgets['terrain_edit_btn'] = edit_btn
+
+        layout.addStretch()
+        self.main_layout.addWidget(content)
+        self._page = None
 
     # ────────────────────────────
     # Brush population

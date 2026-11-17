@@ -3115,6 +3115,10 @@ class Terrain:
 
 
     
+    #: The editor's lock: a locked terrain is not picked in the 3D view and
+    #: its editor does not open, as a locked brush's does not. Saved with it.
+    locked = False
+
     def to_dict(self) -> dict:
         # While the editor is previewing a Big World fill the live bounds are
         # widened to the whole world; persist the *authored* bounds instead so a
@@ -3155,6 +3159,11 @@ class Terrain:
             'appearance': self.appearance.to_dict(),
             'custom_biome': self.biome.to_dict()
         }
+        if self.locked:
+            # The editor's lock ("Prevent selection/editing"), as a brush's.
+            # Written only when set, so an unlocked terrain's record is
+            # exactly what it was.
+            data['lock'] = True
         # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
         if self.sculpt_offsets:
             # Rebuilt only when the sculpt changes (same key as _dense_sculpt).
@@ -3220,6 +3229,7 @@ class Terrain:
 
     def from_dict(self, data: dict):
         self.enabled = data.get('enabled', True)
+        self.locked = bool(data.get('lock', False))
         self.solid = data.get('solid', True)
         self.seed = data.get('seed', 42)
         self.noise = PerlinNoise(self.seed)

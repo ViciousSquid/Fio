@@ -1757,7 +1757,15 @@ class QtGameView(QOpenGLWidget):
             # the ray passes through, so buried geometry stays reachable.
             cycle = bool(QApplication.keyboardModifiers() & Qt.AltModifier)
             obj = self.picking.get_object_at_3d(event.x(), event.y(), cycle=cycle)
-            if obj:
+            # The terrain is picked like anything else: when it is what the
+            # ray meets first (or all it meets). Cycling walks objects only.
+            ground = self.picking.terrain_pick_distance(event.x(), event.y())
+            nearest = self.picking.last_pick_distance
+            if ground is not None and (obj is None or (
+                    not cycle and nearest is not None and ground < nearest)):
+                self.editor.select_terrain()
+                self.update()
+            elif obj:
                 self.editor.save_state()
                 self.editor.set_selected_objects([obj])
                 self.update()

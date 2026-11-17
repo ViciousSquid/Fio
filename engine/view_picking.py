@@ -108,6 +108,7 @@ class ViewPicking:
         """
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_obj, best_t = None, float('inf')
+        self.last_pick_distance = None
         hits = []
         filters = self.view.editor.state.view_filters
         for brush in self.view.editor.state.brushes:
@@ -157,7 +158,23 @@ class ViewPicking:
             candidates = [obj for _, obj in hits]
             return component_edit.cycle_pick(candidates,
                                              self.view.editor.primary_selection())
+        if best_obj is not None:
+            #: How far along the ray the picked object is, in world units.
+            self.last_pick_distance = float(best_t) * float(glm.length(ray_d))
         return best_obj
+
+    def terrain_pick_distance(self, mx, my):
+        """How far along the cursor's ray the terrain is, in world units, or
+        None: no terrain there, or one that is locked or hidden -- a locked
+        terrain is skipped as a locked brush is."""
+        editor = self.view.editor
+        if editor.state.terrain_data is None or editor.terrain_locked():
+            return None
+        hit = self.view.terrain_edit.raycast_terrain(mx, my)
+        if hit is None:
+            return None
+        ray_o, _ = self.get_ray_from_mouse(mx, my)
+        return float(glm.length(glm.vec3(*hit) - ray_o))
 
     def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
         perp = glm.cross(ray_d, axis_vec)

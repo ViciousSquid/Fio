@@ -582,6 +582,10 @@ class SceneHierarchy(QWidget):
             terrain_item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
+            if self.main_window.terrain_locked():
+                terrain_item.setIcon(0, self.lock_icon)
+            if getattr(self.main_window, 'terrain_selected', False):
+                terrain_item.setSelected(True)
 
         # =====================================================================
         # BRUSHES SECTION
@@ -810,7 +814,10 @@ class SceneHierarchy(QWidget):
         # Terrain context menu
         # -----------------------------------------------------------------
         if terrain_items and not brush_items and not thing_items:
+            locked = self.main_window.terrain_locked()
             edit_action = menu.addAction("Edit Terrain...")
+            edit_action.setEnabled(not locked)
+            lock_action = menu.addAction("Unlock" if locked else "Lock")
             menu.addSeparator()
             delete_action = menu.addAction("Delete Terrain")
 
@@ -818,6 +825,8 @@ class SceneHierarchy(QWidget):
 
             if action == edit_action:
                 self.main_window.open_terrain_editor()
+            elif action == lock_action:
+                self.main_window.set_terrain_locked(not locked)
             elif action == delete_action:
                 self.main_window.save_state()
                 self.main_window.state.terrain_data = None
@@ -1076,7 +1085,9 @@ class SceneHierarchy(QWidget):
                     terrain_selected = True
         
         if terrain_selected and not selected_objects:
-            self.main_window.set_selected_objects([])
+            # The terrain's row: selected as such, locked or not (the row is
+            # how a locked terrain is reached to unlock it).
+            self.main_window.select_terrain()
             return
 
         self.main_window.set_selected_objects(selected_objects)

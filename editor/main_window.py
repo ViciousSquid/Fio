@@ -286,6 +286,9 @@ class MainWindow(QMainWindow):
         
         self.terrain = None
         self.terrain_editor_window = None
+        #: The terrain is selected (Shift+click on it, or its row in the Scene
+        #: Hierarchy) in place of any objects: see editor/terrain_selection.py.
+        self.terrain_selected = False
         self.surface_inspector = None  # lazily created Face-mode Surface Inspector
         self._entity_inspectors = {}   # id(entity) -> open EntityInspector (API 1.5.0)
         self.shortcuts_window = None   # lazily created Help > Keys window
@@ -1253,6 +1256,11 @@ class MainWindow(QMainWindow):
     def open_terrain_editor(self):
         """Open the terrain editor floating window."""
         from PyQt5.QtCore import Qt
+
+        if self.terrain_locked():
+            self.show_toast("The terrain is locked. Unlock it to edit it.",
+                            is_error=True)
+            return
         
        # Create terrain if it doesn't exist
         if self.terrain is None:
@@ -1608,6 +1616,7 @@ class MainWindow(QMainWindow):
         # overlay stale, since the brushes it was drawing handles for changed.
         self.components.clear()
         self.components.invalidate()
+        self.terrain_selected = False       # objects are selected, or nothing is
         # Callers pass [None] for "nothing" (a click on empty space); None is
         # never a member, or a later Shift+click made a two-object "group"
         # with nothing in it (and its bounding box raised).
@@ -1622,13 +1631,62 @@ class MainWindow(QMainWindow):
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
         self.sync_sky_image_from_map()
-        self.property_editor.set_object(self.primary_selection())
+        self.property_editor.set_object(self._property_target())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
         window = getattr(self, 'visgroups_window', None)
         if window is not None and window.isVisible():
             window.refresh()
         self.update_views()
+
+    # -- the terrain, selected and locked as a brush is ----------------------
+
+    def _property_target(self):
+        """What the property editor shows: the terrain when it is selected
+        (and there still is one), else the primary selection."""
+        if self.terrain_selected:
+            if self.state.terrain_data is not None:
+                from editor.terrain_selection import TERRAIN
+                return TERRAIN
+            self.terrain_selected = False
+        return self.primary_selection()
+
+    def select_terrain(self):
+        """Select the map's terrain in place of any objects. False when the
+        map has none."""
+        if self.state.terrain_data is None:
+            return False
+        self.components.clear()
+        self.components.invalidate()
+        self.state.selected_objects = []
+        self.terrain_selected = True
+        self.update_all_ui()
+        self.selection_changed.emit()
+        return True
+
+    def terrain_locked(self):
+        """Whether the terrain is locked ("Prevent selection/editing")."""
+        data = self.state.terrain_data
+        return bool(isinstance(data, dict) and data.get('lock', False))
+
+    def set_terrain_locked(self, locked):
+        """Lock or unlock the terrain, as a brush's lock: locked, it is not
+        picked in the 3D view and its editor does not open."""
+        data = self.state.terrain_data
+        if not isinstance(data, dict) or bool(data.get('lock', False)) == bool(locked):
+            return
+        if locked:
+            data['lock'] = True
+            if self.terrain_editor_window is not None:
+                # An editor open on a terrain that may not be edited.
+                self._close_current_overlay()
+                self.terrain_editor_window = None
+        else:
+            data.pop('lock', None)
+        if self.terrain is not None:
+            self.terrain.locked = bool(locked)
+        self.mark_as_modified()
+        self.update_all_ui()
 
     def update_views(self):
         self.sync_bigworld_terrain(allow_create=True)
