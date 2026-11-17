@@ -233,13 +233,16 @@ class FioPackage:
         return self._with_terrain_stamps(data, _normalize(archive_path))
 
     def _with_terrain_stamps(self, level: Dict, map_member: str) -> Dict:
-        """The map's placed terrain stamps are packaged beside it
-        (``<map name>.terrainstamps``) and laid over it here, as a delta. A
-        missing or unreadable stamp file leaves the map as packaged: its
-        baked paint is all there."""
+        """The map's terrain paint and placed stamps are packaged beside it
+        (``<map name>.paint``) and laid over it here, as a delta. A missing
+        or unreadable paint file leaves the map as packaged: unpainted."""
         from . import terrain_stamp
         member = terrain_stamp.stamp_member(map_member)
         if member not in self._names:
+            terrain = level.get(terrain_stamp.TERRAIN_KEY)
+            if isinstance(terrain, dict) and terrain.get(terrain_stamp.MARKER_KEY):
+                print("[Package] " + terrain_stamp.missing_paint_message(
+                    _basename(member)))
             return level
         try:
             raw = self._read_raw(member)

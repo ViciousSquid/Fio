@@ -1106,7 +1106,7 @@ class TerrainEditorPanel(QWidget):
         tabs.currentChanged.connect(self._on_terrain_tab_changed)
 
         # Stamp file menu, shown beside the Sculpt/Stamp tab while it is
-        # active: saves the authored sculpt/paint layers to <map>.terrainstamps so
+        # active: saves the authored sculpt/paint layers to <map>.paint so
         # they can be merged back after the base map changes.
         self.stamp_file_button = QPushButton("\U0001F4BE", tabs.tabBar())
         self.stamp_file_button.setToolTip("Import / export stamp file")
@@ -2137,7 +2137,7 @@ class TerrainEditorPanel(QWidget):
         return terrain_stamp.default_stamp_path(map_path, fallback)
 
     def export_stamp(self):
-        """Save the terrain's placed stamps to a .terrainstamps file."""
+        """Save the terrain's paint and placed stamps to a .paint file."""
         if not self.terrain.paint_stamps:
             QMessageBox.information(
                 self, "Export Stamp",
@@ -2145,7 +2145,7 @@ class TerrainEditorPanel(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Stamp", self._default_stamp_path(),
-            "Terrain Stamps (*.terrainstamps);;All Files (*)")
+            "Terrain Paint (*.paint);;All Files (*)")
         if not path:
             return
         if not os.path.splitext(path)[1]:
@@ -2159,12 +2159,12 @@ class TerrainEditorPanel(QWidget):
             self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}")
 
     def import_stamp(self):
-        """Merge a .terrainstamps file's stamps into the current terrain."""
+        """Merge a .paint file's stamps into the current terrain."""
         default = self._default_stamp_path()
         start = default if os.path.exists(default) else os.path.dirname(default)
         path, _ = QFileDialog.getOpenFileName(
             self, "Import Stamp", start,
-            "Terrain Stamps (*.terrainstamps *.stamp);;All Files (*)")
+            "Terrain Paint (*.paint *.terrainstamps *.stamp);;All Files (*)")
         if not path:
             return
         try:

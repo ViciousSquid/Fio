@@ -75,11 +75,15 @@ class PackageSession:
 
 def load_map(session, member):
     """A packaged map, with the terrain stamps packaged beside it
-    (``<map name>.terrainstamps``) laid over it as a delta."""
+    (``<map name>.paint``) laid over it as a delta."""
     from engine import terrain_stamp
     level = session.load_json(member)
     stamps = terrain_stamp.stamp_member(member)
     if stamps not in session.names:
+        terrain = level.get(terrain_stamp.TERRAIN_KEY) if isinstance(level, dict) else None
+        if isinstance(terrain, dict) and terrain.get(terrain_stamp.MARKER_KEY):
+            print("[Package] " + terrain_stamp.missing_paint_message(
+                stamps.rsplit('/', 1)[-1]))
         return level
     try:
         return terrain_stamp.apply_stamp_delta(level, session.load_json(stamps))

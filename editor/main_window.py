@@ -5134,8 +5134,8 @@ class MainWindow(QMainWindow):
 
     def _write_map(self, path):
         """Write the map to *path* -- indented, or minified when the map is
-        kept that way -- and its placed terrain stamps beside it in
-        ``<map name>.terrainstamps`` (they are not kept in the map's JSON)."""
+        kept that way -- and its terrain paint and placed stamps beside it
+        in ``<map name>.paint`` (they are not kept in the map's JSON)."""
         from engine import terrain_stamp
         level, stamps = terrain_stamp.split_level(self.state.get_level_data())
         if getattr(self, 'map_minified', False):
@@ -5299,6 +5299,7 @@ class MainWindow(QMainWindow):
                 minified = self._is_minified_json(text)
                 # Placed terrain stamps are kept beside the map.
                 from engine import terrain_stamp
+                missing_paint = terrain_stamp.missing_paint_file(level_data, filePath)
                 level_data = terrain_stamp.join_level(level_data, filePath)
             except Exception as e:
                 print(f"ERROR loading level {filePath}: {e}")
@@ -5307,6 +5308,11 @@ class MainWindow(QMainWindow):
             loaded = self._load_level(level_data, filePath, destination_spawn, from_game)
             if loaded:
                 self.map_minified = minified
+                if missing_paint:
+                    # The map was saved with paint, and its file is gone.
+                    message = terrain_stamp.missing_paint_message(missing_paint)
+                    print(f"[MainWindow] WARNING: {message}")
+                    self.show_toast(message, is_error=True)
             if loaded and not self.view_3d.play_mode:
                 # The first frame of a new map uploads it to the GPU, which
                 # is a long paint of its own: draw it under the loading bar.

@@ -443,12 +443,14 @@ def test_a_package_keeps_the_stamp_file_and_the_engine_lays_it_over_the_map(
     assert ok, errors
 
     with zipfile.ZipFile(out) as zf:
-        assert "maps/start.terrainstamps" in zf.namelist()
+        assert "maps/start.paint" in zf.namelist()
         packaged = json.loads(zf.read("maps/start.json"))
-        stamp_text = zf.read("maps/start.terrainstamps").decode("utf-8")
+        stamp_text = zf.read("maps/start.paint").decode("utf-8")
     # The stamps are in their own file, minified, not in the packaged map.
-    assert "paint_stamps" not in packaged["terrain_data"]
+    for key in ("paint_stamps", "texture_paint", "texture_paint_base"):
+        assert key not in packaged["terrain_data"], key
     assert "\n" not in stamp_text and ": " not in stamp_text
+    assert json.loads(stamp_text)["paint"]["texture_paint"]
     assert [s["id"] for s in json.loads(stamp_text)["stamps"]] == [
         s["id"] for s in terrain.paint_stamps]
 
@@ -486,7 +488,7 @@ def test_a_map_with_no_stamp_file_is_packaged_without_one(project, tmp_path):
     out = tmp_path / "game.fiopak"
     assert _export(project, current, out)[0]
     with zipfile.ZipFile(out) as zf:
-        assert not [n for n in zf.namelist() if n.endswith(".terrainstamps")]
+        assert not [n for n in zf.namelist() if n.endswith(".paint")]
     with FioPackage.open(str(out)) as package:
         assert package.load_start_map()["brushes"]
 
@@ -494,12 +496,43 @@ def test_a_map_with_no_stamp_file_is_packaged_without_one(project, tmp_path):
 @pytest.mark.qt
 def test_a_damaged_packaged_stamp_file_leaves_the_map_playable(project, tmp_path):
     current, terrain = _stamped_map(project, "start.json", 5)
-    (project / "maps" / "start.terrainstamps").write_text(
+    (project / "maps" / "start.paint").write_text(
         json.dumps({"format": "terrain_stamp", "version": 1, "stamps": "nonsense"}))
     out = tmp_path / "game.fiopak"
     _export(project, current, out)
     if out.exists():
         with FioPackage.open(str(out)) as package:
             loaded = package.load_start_map()
-        assert loaded["terrain_data"]["texture_paint"]
+        assert loaded["brushes"], "the map itself still loads"
         assert not loaded["terrain_data"].get("paint_stamps")
+
+
+@pytest.mark.qt
+def test_a_map_that_still_carries_its_paint_is_packaged_with_it_taken_out(
+        project, tmp_path):
+    """An unsaved copy, or a map from an earlier build: paint inside the JSON."""
+    from PyQt5.QtGui import QColor, QImage
+    from engine.terrain import Terrain
+
+    texture = project / "assets" / "textures" / "path.png"
+    image = QImage(16, 16, QImage.Format_RGBA8888)
+    image.fill(QColor(120, 110, 90, 255))
+    assert image.save(str(texture))
+    terrain = Terrain(seed=5)
+    terrain.add_paint_stamp(100.0, 40.0, 64.0, str(texture))
+    level = _saved_v5_level()[1]
+    level["terrain_data"] = terrain.to_dict()
+    current = _write_json(project / "maps" / "start.json", level)
+    out = tmp_path / "game.fiopak"
+    ok, errors = _export(project, current, out)
+    assert ok, errors
+
+    with zipfile.ZipFile(out) as zf:
+        packaged = json.loads(zf.read("maps/start.json"))
+        assert "maps/start.paint" in zf.namelist()
+    assert "texture_paint" not in packaged["terrain_data"]
+    assert "paint_stamps" not in packaged["terrain_data"]
+    with FioPackage.open(str(out)) as package:
+        loaded = package.load_start_map()
+    assert loaded["terrain_data"]["texture_paint"] == terrain.to_dict()["texture_paint"]
+    assert len(loaded["terrain_data"]["paint_stamps"]) == 1

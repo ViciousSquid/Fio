@@ -115,7 +115,7 @@ def test_a_minified_map_keeps_its_terrain_stamps_beside_it(
     _save_as(window, monkeypatch, path, True)
 
     assert "paint_stamps" not in json.loads(path.read_text())["terrain_data"]
-    assert (tmp_path / "small.terrainstamps").exists()
+    assert (tmp_path / "small.paint").exists()
     assert window.load_level_file(str(path))
     assert len(window.terrain.paint_stamps) == 1 and window.map_minified
     window.unsaved_changes = False
