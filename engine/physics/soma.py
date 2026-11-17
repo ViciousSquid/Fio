@@ -92,6 +92,44 @@ def _rolled(q, velocity, radius, dt):
     return out
 
 
+class _Pairs:
+    """A step's one broad phase: each awake body with everything near its move.
+
+    Body ``query[k]`` (a position among the step's rows) is paired with a box
+    ``lo[k]..hi[k]`` -- float64, in the world. Which kind of thing the box
+    belongs to decides how it is tested:
+
+    * a brush of the spatial grid (``row[k]`` its row in ``rows``, the grid's
+      rows object). ``shaped[k]`` says its box is only what it is filed by --
+      an angled brush, a turning one -- and its true surfaces are the grid's
+      to give (:meth:`SpatialGrid.columns`);
+    * another body (``other[k]`` its row; -1 for a brush).
+
+    ``offset`` and ``half`` are the bodies' own boxes, per body, which every
+    test of the pairs needs.
+    """
+
+    __slots__ = ('query', 'lo', 'hi', 'offset', 'half', 'other', 'row',
+                 'shaped', 'rows', 'any_shaped')
+
+    def __init__(self, query, lo, hi, offset, half, other, row, shaped, rows):
+        self.query, self.lo, self.hi = query, lo, hi
+        self.offset, self.half = offset, half
+        self.other, self.row, self.shaped, self.rows = other, row, shaped, rows
+        self.any_shaped = bool(shaped.any())
+
+    def of(self, chosen, count):
+        """These pairs for the bodies in *chosen* only (positions among
+        *count*), renumbered to index them."""
+        renumber = np.full(count, -1, dtype=np.int64)
+        renumber[chosen] = np.arange(len(chosen))
+        to = renumber[self.query]
+        keep = to >= 0
+        return _Pairs(to[keep], self.lo[keep], self.hi[keep],
+                      self.offset[chosen], self.half[chosen], self.other[keep],
+                      self.row[keep], self.shaped[keep], self.rows)
+
+
 class PhysicsBody:
     """Lightweight handle for one row in the engine's batched physics state."""
 
@@ -262,6 +300,10 @@ class Soma:
     #: The same crossover in query points: a body asks about five.
     FLOOR_BATCH_MIN_POINTS = 5 * FLOOR_BATCH_MIN_BODIES
     MAX_STEP = np.float32(0.05)
+    #: The steepest ground a body moves up: rise over run. 1 is 45 degrees,
+    #: Quake's walkable limit near enough (a floor normal of 0.7). Steeper
+    #: ground is in the way, as a wall is.
+    WALKABLE_SLOPE = 1.0
     #: How far short of a wall's face a body that meets it is put: Quake's
     #: DIST_EPSILON. Positions are float32, so a body placed exactly on a
     #: face may round into it; a body this far off cannot, out to a couple
@@ -385,6 +427,8 @@ class Soma:
         :meth:`_index_bodies`), and what each rests on."""
         #: Row of the body each body rests on, or -1 (the world, or nothing).
         self._support = np.empty(0, dtype=np.int64)
+        #: Whether each body was on the ground when it was last stepped.
+        self._grounded = np.empty(0, dtype=np.bool_)
         #: Whether any body has ever rested on another: until one does, no
         #: wake has anything to pass on.
         self._any_support = False
@@ -508,6 +552,7 @@ class Soma:
         self._orientation = np.zeros((n, 4), dtype=np.float64)
         self._orientation[:, 0] = 1.0
         self._support = np.full(n, -1, dtype=np.int64)
+        self._grounded = np.zeros(n, dtype=np.bool_)
         self._any_support = False
         self._bodies_dirty = True
 
@@ -622,6 +667,7 @@ class Soma:
             dtype=np.float32,
         )
         self._bodies_dirty = True
+        self._grounded[index] = False
         self._wake_dependents(index)
         if wake:
             self._awake[index] = True
@@ -931,26 +977,25 @@ class Soma:
             return
         centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
         bottom = centre[:, 1] - self._half[rows, 1].astype(np.float64)
+        if self._can_group_floor_queries():
+            # What the step itself would stand it on: brushes by their true
+            # surfaces, the terrain, other bodies. Standing on another body
+            # is not floating -- it is what holds it up, and what wakes it
+            # if it goes.
+            where = self._position[rows]
+            pairs = self._world_pairs(rows, where, where)
+            floors, held, _slope = self._floors_and_support(
+                rows, bottom.astype(np.float32), pairs)
+            resting = floors >= bottom - 1.0
+            self._support[rows[resting]] = held[resting]
+            self._grounded[rows[resting]] = True
+            if (held[resting] >= 0).any():
+                self._any_support = True
+            self._awake[rows[~resting]] = True
+            return
         support = self._floor_tops_at(centre[:, 0], centre[:, 2], bottom + 1.0)
         if support is None:
             return
-        if self._index_bodies():
-            # Standing on another body is not floating: it is what holds it
-            # up, and what wakes it if it goes.
-            half = self._half[rows].astype(np.float64)
-            pairs = self._body_pairs(rows, centre - half, centre + half)
-            if pairs is not None:
-                query, lo, hi, other = pairs
-                under = ((lo[:, 0] <= centre[query, 0]) & (centre[query, 0] <= hi[:, 0])
-                         & (lo[:, 2] <= centre[query, 2]) & (centre[query, 2] <= hi[:, 2])
-                         & (hi[:, 1] <= bottom[query] + 1.0)
-                         & (hi[:, 1] >= bottom[query] - 1.0))
-                if under.any():
-                    query, top, other = query[under], hi[under, 1], other[under]
-                    held = top > support[query]
-                    self._support[rows[query[held]]] = other[held]
-                    self._any_support = True
-                    np.maximum.at(support, query, top)
         self._awake[rows[support < bottom - 1.0]] = True
 
     def _settle_sunk_bodies(self, eligible=None):
@@ -1228,13 +1273,10 @@ class Soma:
         return knocked, closing
 
     def _world_pairs(self, indices, old, ahead, pushed_from=None):
-        """This step's one broad phase: ``(query, lo, hi, offset, half,
-        other)``. Body ``query[k]`` of *indices* is paired with a box
-        ``lo[k]..hi[k]`` (float64, in the world): every brush filed in a cell
-        the body's move touches, from *old* to *ahead* (where it would be with
-        nothing in its way), and every other body near it -- ``other[k]`` is
-        that body's row, -1 for a brush. ``offset`` and ``half`` are the
-        bodies' own boxes, which every test of the pairs needs.
+        """This step's one broad phase (:class:`_Pairs`): each body row of
+        *indices* with every brush filed in a cell its move touches, from
+        *old* to *ahead* (where it would be with nothing in its way), and
+        every other body near it.
 
         The grid's cells are columns, so one footprint answers for all three
         axes' walls and for the floor under the body wherever in that move it
@@ -1255,29 +1297,31 @@ class Soma:
                 hi[pushed] = np.maximum(hi[pushed], start[pushed] + half[pushed])
         query, row, boxes = self.spatial_grid.box_pairs(lo, hi)
         pair_lo, pair_hi = boxes.lo[row], boxes.hi[row]
+        shaped = boxes.shaped[row]
         # Which body each pair is with: none, for the world's brushes.
         other = np.full(len(query), -1, dtype=np.int64)
         if self._index_bodies():
             bodies = self._body_pairs(indices, lo, hi)
             if bodies is not None:
+                count = len(bodies[0])
                 query = np.concatenate((query, bodies[0]))
                 pair_lo = np.concatenate((pair_lo, bodies[1]))
                 pair_hi = np.concatenate((pair_hi, bodies[2]))
                 other = np.concatenate((other, bodies[3]))
-        # With the bodies' own boxes (float64 offset and half-extents), which
-        # every test of these pairs needs.
-        return query, pair_lo, pair_hi, offset, half, other
+                row = np.concatenate((row, np.full(count, -1, dtype=np.int64)))
+                shaped = np.concatenate((shaped, np.zeros(count, dtype=np.bool_)))
+        return _Pairs(query, pair_lo, pair_hi, offset, half, other, row, shaped, boxes)
 
-    @staticmethod
-    def _pairs_of(pairs, chosen, count):
-        """*pairs* for the bodies in *chosen* only (positions among *count*),
-        renumbered to index them."""
-        query, lo, hi, offset, half, other = pairs
-        renumber = np.full(count, -1, dtype=np.int64)
-        renumber[chosen] = np.arange(len(chosen))
-        to = renumber[query]
-        keep = to >= 0
-        return to[keep], lo[keep], hi[keep], offset[chosen], half[chosen], other[keep]
+    def _support_points(self, centre, half):
+        """The five points a body stands on -- its centre and four inside its
+        footprint -- as ``(x, z)``, each ``(n, 5)``. One definition, for the
+        floor under a body and for what is in its way."""
+        zeros = np.zeros(len(centre))
+        hx = half[:, 0] * 0.75
+        hz = half[:, 2] * 0.75
+        x = centre[:, 0:1] + np.stack([zeros, -hx, hx, zeros, zeros], axis=1)
+        z = centre[:, 2:3] + np.stack([zeros, zeros, zeros, -hz, hz], axis=1)
+        return x, z
 
     def _collide_axis(self, axis, indices, position, velocity, old, pairs,
                       start=None):
@@ -1313,8 +1357,11 @@ class Soma:
             return
         if start is None:
             start = old
-        query, lo, hi, offset, half, other = pairs
-        if not len(query) or not (position[:, axis] != start[:, axis]).any():
+        query, lo, hi, offset, half, other = (
+            pairs.query, pairs.lo, pairs.hi, pairs.offset, pairs.half, pairs.other)
+        terrain = self.spatial_grid.terrain if axis != 1 else None
+        if ((not len(query) and terrain is None)
+                or not (position[:, axis] != start[:, axis]).any()):
             # Nothing near, or nothing moved on this axis: a body that has
             # not moved has met nothing new, and one inside a wall stays put.
             return
@@ -1341,7 +1388,13 @@ class Soma:
                 swept_max[:, across] -= skin
 
         touching = np.all((swept_max[query] > lo) & (swept_min[query] < hi), axis=1)
-        if not touching.any():
+        # What is not its box -- an angled brush, the terrain -- is in the
+        # way only where its true surface is: asked of the grid, below.
+        steep = self._blocked_by_surfaces(
+            axis, position, old, centre, half, bmin, bmax, pairs, touching, terrain)
+        if pairs.any_shaped:
+            touching &= ~pairs.shaped
+        if not touching.any() and steep is None:
             return
         query, lo, hi = query[touching], lo[touching, axis], hi[touching, axis]
         other = other[touching]
@@ -1364,6 +1417,10 @@ class Soma:
                   & (bmax[query, axis] > lo) & (bmin[query, axis] < hi))
         embedded = np.zeros(indices.size, dtype=np.bool_)
         embedded[query[inside]] = True
+        if steep is not None:
+            # A surface too steep to climb has no face to stop at either: the
+            # body stays where this axis's move began.
+            embedded |= steep
 
         met_ahead = np.isfinite(stop)
         met_behind = np.isfinite(back_stop)
@@ -1413,6 +1470,44 @@ class Soma:
             # keeps its speed (and its distance). The rest met a wall.
             walled = ~knocked & (closing > 0.0)
             velocity[mine[walled], axis] = answered[walled]
+
+    def _blocked_by_surfaces(self, axis, position, old, centre, half, bmin, bmax,
+                             pairs, touching, terrain):
+        """Which bodies this axis's move has carried into ground too steep to
+        climb -- an angled brush's true surface, or the terrain -- or None
+        when there is neither near.
+
+        A slope is not a wall and not a floor until it is asked which. Under
+        each of the body's support points the grid gives the height of the
+        solid there; ground that has risen no more than a walkable slope
+        would over the distance moved (:data:`WALKABLE_SLOPE`) is climbed --
+        the floor pass lifts the body onto it -- and ground higher than that
+        is in the way. An angled brush overhead, whose solid begins above the
+        body, is neither.
+        """
+        shaped = touching & pairs.shaped if pairs.any_shaped else None
+        if shaped is not None and not shaped.any():
+            shaped = None
+        if shaped is None and terrain is None:
+            return None
+        # How far ground may have risen and still be climbed: a walkable
+        # slope's rise over what has been moved across it so far this step.
+        moved = (np.abs(position[:, 0] - old[:, 0])
+                 + np.abs(position[:, 2] - old[:, 2])).astype(np.float64)
+        limit = bmin[:, 1] + 1.0 + self.WALKABLE_SLOPE * moved
+        x, z = self._support_points(centre, half)
+        blocked = np.zeros(len(centre), dtype=np.bool_)
+        grid = self.spatial_grid
+        if shaped is not None:
+            query = pairs.query[shaped]
+            bottom, top = grid.columns(pairs.rows, pairs.row[shaped], x[query], z[query])
+            in_way = ((top > limit[query, None])
+                      & (bottom < bmax[query, 1:2] - self.CONTACT_SKIN)).any(axis=1)
+            blocked[query[in_way]] = True
+        if terrain is not None:
+            heights = grid.terrain_heights(x, z)
+            blocked |= (heights > limit[:, None]).any(axis=1)
+        return blocked if blocked.any() else None
 
     def _floors_under(self, indices, previous_bottom):
         """The floor beneath each body row in *indices*: float32, -inf where
@@ -1492,35 +1587,108 @@ class Soma:
         The same brushes, boxes and comparisons; the same answers."""
         return self._floors_and_support(indices, previous_bottom, pairs)[0]
 
-    def _floors_and_support(self, indices, previous_bottom, pairs):
-        """The floors (:meth:`_floors_from_pairs`), and for each body the row
-        of the body whose top that floor is -- -1 where it is the world's, or
-        there is none. Another body's top is a floor like any other."""
-        floors = np.full(indices.size, -np.inf, dtype=np.float32)
-        support = np.full(indices.size, -1, dtype=np.int64)
-        query, lo, hi, other = pairs[0], pairs[1], pairs[2], pairs[5]
-        if not len(query):
-            return floors, support
+    def _floors_and_support(self, indices, previous_bottom, pairs, follow=None):
+        """What each body stands on: ``(floors, support, slope)``.
+
+        *floors* is the highest ground under its support points, float32,
+        -inf where there is none. *support* is the row of the body whose top
+        that is -- -1 where it is the world's, or there is none: another
+        body's top is a floor like any other. *slope* is the ground's
+        gradient there, ``(n, 2)``: how much it rises along x and along z.
+
+        A box's top is a floor where it is at or below the body's bottom. An
+        angled brush's surface and the terrain are asked of the grid, point
+        by point, and are floors up to *follow* higher than that: the rise a
+        walkable slope makes over the distance the body has moved, so a body
+        moving uphill is lifted with the ground rather than stopped by it.
+        """
+        count = indices.size
+        floors = np.full(count, -np.inf, dtype=np.float32)
+        support = np.full(count, -1, dtype=np.int64)
+        slope = np.zeros((count, 2))
+        grid = self.spatial_grid
+        terrain = grid.terrain
+        query, lo, hi, other = pairs.query, pairs.lo, pairs.hi, pairs.other
+        if not len(query) and terrain is None:
+            return floors, support, slope
         px, pz, bottom = self._support_offsets(indices)
         ray_y = np.maximum(bottom, previous_bottom.astype(np.float64)) + 1.0
-        below = hi[:, 1] <= ray_y[query]
-        query, lo, hi, other = query[below], lo[below], hi[below], other[below]
-        x = px[query]
-        z = pz[query]
-        under = ((lo[:, 0:1] <= x) & (x <= hi[:, 0:1])
-                 & (lo[:, 2:3] <= z) & (z <= hi[:, 2:3])).any(axis=1)
-        if under.any():
-            query, top, other = query[under], hi[under, 1], other[under]
-            best = np.full(indices.size, -np.inf)
-            np.maximum.at(best, query, top)
-            floors[:] = best
-            highest = top == best[query]
-            on_body = highest & (other >= 0)
-            if on_body.any():
-                support[query[on_body]] = other[on_body]
-                # Level with the world's floor, it is the world it stands on.
-                support[query[highest & (other < 0)]] = -1
-        return floors, support
+        uneven = pairs.any_shaped or terrain is not None
+        # The ground under each support point, where anything uneven is near;
+        # for boxes alone the highest top is all there is to know.
+        under_point = np.full(px.shape, -np.inf) if uneven else None
+        best = np.full(count, -np.inf)
+
+        boxes = hi[:, 1] <= ray_y[query]
+        if pairs.any_shaped:
+            boxes &= ~pairs.shaped
+        if boxes.any():
+            q, box_lo, box_hi, box_other = query[boxes], lo[boxes], hi[boxes], other[boxes]
+            x = px[q]
+            z = pz[q]
+            inside = ((box_lo[:, 0:1] <= x) & (x <= box_hi[:, 0:1])
+                      & (box_lo[:, 2:3] <= z) & (z <= box_hi[:, 2:3]))
+            under = inside.any(axis=1)
+            if under.any():
+                q, top, box_other = q[under], box_hi[under, 1], box_other[under]
+                np.maximum.at(best, q, top)
+                if uneven:
+                    tops = np.where(inside[under], top[:, None], -np.inf)
+                    np.maximum.at(under_point.reshape(-1),
+                                  (q[:, None] * px.shape[1] + np.arange(px.shape[1])).reshape(-1),
+                                  tops.reshape(-1))
+                highest = top == best[q]
+                on_body = highest & (box_other >= 0)
+                if on_body.any():
+                    support[q[on_body]] = box_other[on_body]
+                    # Level with the world's floor, it is the world it stands on.
+                    support[q[highest & (box_other < 0)]] = -1
+
+        if uneven:
+            reach = ray_y if follow is None else ray_y + follow
+            if pairs.any_shaped:
+                shaped = pairs.shaped
+                q = query[shaped]
+                _base, top = grid.columns(pairs.rows, pairs.row[shaped], px[q], pz[q])
+                top = np.where(top <= reach[q, None], top, -np.inf)     # NaN: a miss
+                np.maximum.at(under_point.reshape(-1),
+                              (q[:, None] * px.shape[1] + np.arange(px.shape[1])).reshape(-1),
+                              top.reshape(-1))
+            if terrain is not None:
+                heights = grid.terrain_heights(px, pz)
+                heights = np.where(heights <= reach[:, None], heights, -np.inf)
+                np.maximum(under_point, heights, out=under_point)
+            ground = under_point.max(axis=1)
+            # Uneven ground higher than a body's top is the world's.
+            support[ground > best] = -1
+            best = np.maximum(best, ground)
+            slope = self._slope_under(under_point, pairs.half)
+        floors[:] = best
+        return floors, support, slope
+
+    @staticmethod
+    def _slope_under(under_point, half):
+        """The ground's gradient under each body, from the heights under its
+        support points: rise along x, rise along z.
+
+        Only where the ground is one surface: the two points either side of
+        the centre and the centre itself in a line. A body overhanging a
+        ledge has ground under one side and a drop under the other, which is
+        an edge, not a slope, and gives it no push.
+        """
+        centre = under_point[:, 0]
+        slope = np.zeros((len(under_point), 2))
+        for column, (low, high, extent) in enumerate(((1, 2, 0), (3, 4, 2))):
+            a = under_point[:, low]
+            b = under_point[:, high]
+            rise = b - a
+            with np.errstate(invalid='ignore'):
+                even = (np.isfinite(a) & np.isfinite(b) & np.isfinite(centre)
+                        & (np.abs(a + b - 2.0 * centre)
+                           <= np.maximum(1.0, 0.5 * np.abs(rise))))
+            run = 1.5 * half[:, extent]
+            slope[even, column] = rise[even] / np.maximum(run[even], 1e-6)
+        return slope
 
     def _floor_tops(self, flat_x, flat_z, flat_y):
         """The highest brush top at or below each point (x, z, y), or -inf:
@@ -1753,7 +1921,7 @@ class Soma:
                 up_pos, up_vel = position[up], velocity[up]
                 among = up if everything else np.searchsorted(hard, up)
                 self._collide_axis(1, rows[up], up_pos, up_vel, old[up],
-                                   self._pairs_of(pairs, among, hard_rows.size))
+                                   pairs.of(among, hard_rows.size))
                 position[up] = up_pos
                 velocity[up] = up_vel
 
@@ -1763,20 +1931,36 @@ class Soma:
                 previous_hard = previous_bottom[hard]
             else:
                 previous_hard = previous_bottom
+            # How far the ground may have risen or fallen away under a body
+            # and still be the ground it is on: a walkable slope's rise over
+            # the distance it has moved.
+            follow = self.WALKABLE_SLOPE * (
+                np.abs(position[:, 0] - old[:, 0])
+                + np.abs(position[:, 2] - old[:, 2])).astype(np.float64)
             if self._can_group_floor_queries():
-                under, held = self._floors_and_support(hard_rows, previous_hard, pairs)
+                under, held, lean = self._floors_and_support(
+                    hard_rows, previous_hard, pairs,
+                    follow if everything else follow[hard])
             else:
                 under = self._floors_scalar(hard_rows, previous_hard)
                 held = np.full(hard_rows.size, -1, dtype=np.int64)
+                lean = np.zeros((hard_rows.size, 2))
             if everything:
-                floors, support = under, held
+                floors, support, slope = under, held, lean
             else:
                 floors = np.full(rows.size, -np.inf, dtype=np.float32)
                 floors[hard] = under
                 support = np.full(rows.size, -1, dtype=np.int64)
                 support[hard] = held
+                slope = np.zeros((rows.size, 2))
+                slope[hard] = lean
             new_bottom = position[:, 1] + self._offset[rows, 1] - self._half[rows, 1]
-            landed = np.isfinite(floors) & (new_bottom <= floors + 1.0)
+            # A body that was on the ground and is not on its way up stays on
+            # ground that falls away no faster than it can be walked down:
+            # going downhill is not a series of small falls.
+            stick = np.where(self._grounded[rows] & (velocity[:, 1] <= 0.0), follow, 0.0)
+            landed = np.isfinite(floors) & (new_bottom <= floors + 1.0 + stick)
+            self._grounded[rows] = landed
             if landed.any():
                 on = np.flatnonzero(landed)
                 on_rows = rows[on]
@@ -1802,6 +1986,18 @@ class Soma:
                         self._rolls[on_rows],
                         np.float32(self.ROLLING_FRICTION_SCALE),
                         np.float32(1.0))
+                lean = slope[on]
+                if lean.any():
+                    # On a slope, gravity pulls along it and the ground
+                    # presses less: downhill by g sin cos, friction by cos^2
+                    # -- so a body slides where the slope is steeper than its
+                    # friction (tan > mu), and a rolling one rolls almost
+                    # anywhere.
+                    flatness = 1.0 / (1.0 + lean[:, 0] ** 2 + lean[:, 1] ** 2)
+                    pull = (abs(float(self.gravity)) * weight[on] * flatness * dt)
+                    velocity[on, 0] -= (pull * lean[:, 0]).astype(np.float32)
+                    velocity[on, 2] -= (pull * lean[:, 1]).astype(np.float32)
+                    friction_accel = friction_accel * flatness.astype(np.float32)
                 ground_speed = np.hypot(velocity[on, 0], velocity[on, 2])
                 friction_delta = friction_accel * dt
                 scale = np.maximum(

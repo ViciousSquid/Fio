@@ -103,6 +103,15 @@ WORLD_QUERIES = {
     'box_pairs(lo, hi)': '(query, row, rows): every filed brush sharing a cell '
                          'with each box; rows.lo / rows.hi are their float64 '
                          'world boxes, movers and doors where they are now',
+    'box_pairs(...) rows.shaped': 'per row: the brush may not be its box (an '
+                                  'angled brush, a turning mover)',
+    'columns(rows, row, x, z)': '(bottom, top): the solid column of each brush '
+                                'over each point -- its true surfaces, where it '
+                                'is now; NaN where the point misses it. What a '
+                                'body stands on, on a slope',
+    'terrain_heights(x, z)': 'the terrain\'s built surface at each point (NaN '
+                             'outside it), or None where the map has no solid '
+                             'terrain',
     'raycast_down(x, z, start_y)': 'the highest solid top at or below a point, '
                                    'or None',
     'raycast_down_batch(x, z, start_y)': 'the same for many points; NaN where '

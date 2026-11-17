@@ -661,6 +661,45 @@ class Terrain:
         if world_z < min_world_z or world_z > max_world_z: return None
         return self.get_height_at(world_x, world_z)
     
+    def get_heights_at_safe(self, world_x, world_z) -> np.ndarray:
+        """:meth:`get_height_at_safe` for many points at once: float64, NaN
+        where it is ``None`` (terrain off, or the point outside it).
+
+        Where a chunk is built this is the built surface, to the last bit
+        what the scalar query answers (:meth:`TerrainTable.heights_at`), so
+        whatever asks in bulk -- physics bodies, five points each -- stands on
+        what the player stands on. Elsewhere it is the height function,
+        evaluated in bulk.
+        """
+        world_x = np.asarray(world_x, dtype=np.float64)
+        world_z = np.asarray(world_z, dtype=np.float64)
+        out = np.full(world_x.shape, np.nan)
+        if not self.enabled or not out.size:
+            return out
+        min_world_x = self.min_chunk_x * self.chunk_size + self.offset_x
+        max_world_x = (self.max_chunk_x + 1) * self.chunk_size + self.offset_x
+        min_world_z = self.min_chunk_z * self.chunk_size + self.offset_z
+        max_world_z = (self.max_chunk_z + 1) * self.chunk_size + self.offset_z
+        inside = ~((world_x < min_world_x) | (world_x > max_world_x)
+                   | (world_z < min_world_z) | (world_z > max_world_z))
+        if not inside.any():
+            return out
+        x = world_x[inside]
+        z = world_z[inside]
+        if self.appearance.terrace_mode == 'blocks':
+            # As the scalar query: a block is flat at its centre's height.
+            x, z = terrain_style.block_cell_centres(
+                x, z, self._block_world_size(), self.offset_x, self.offset_z)
+        chunk_x = np.floor((x - self.offset_x) / self.chunk_size).astype(np.int64)
+        chunk_z = np.floor((z - self.offset_z) / self.chunk_size).astype(np.int64)
+        heights = self.table.heights_at(chunk_x, chunk_z, x, z)
+        unbuilt = np.isnan(heights)
+        if unbuilt.any():
+            heights[unbuilt] = self._get_heights_batch(
+                x[unbuilt].astype(np.float32), z[unbuilt].astype(np.float32))
+        out[inside] = heights
+        return out
+
     def get_terrain_bounds(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         min_x = self.min_chunk_x * self.chunk_size + self.offset_x
         max_x = (self.max_chunk_x + 1) * self.chunk_size + self.offset_x

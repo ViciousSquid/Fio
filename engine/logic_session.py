@@ -206,6 +206,10 @@ class LogicSession:
             self.spatial_grid.populate(
                 logic.editor_state.brushes + logic.collision_runtime._model_collision_brushes
             )
+            # The terrain is the world's too, and the editor can replace it
+            # while the session runs: the grid asks for the current one.
+            world_runtime = logic.world_runtime
+            self.spatial_grid.set_terrain(lambda: world_runtime.terrain)
             # Whichever physics is selected (engine.physics.registry): the
             # engine drives it through the contract and nothing else.
             self.physics_world = create_physics(self.spatial_grid)

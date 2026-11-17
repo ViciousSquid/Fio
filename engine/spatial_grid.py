@@ -14,6 +14,11 @@ What it holds:
   they are *now*: their boxes are re-derived when a placement stamp says
   something may have moved (:mod:`engine.brush_placement`), the parked and
   the off-range ones included;
+* **true shapes**: an angled brush or a spinning one is filed by its box
+  but is not a box, and :meth:`SpatialGrid.columns` answers for the solid it
+  really is -- the surface a body stands on, the face it meets;
+* **the terrain** (:meth:`SpatialGrid.set_terrain`), where the map has one
+  and it is solid: its height at a point (:meth:`SpatialGrid.terrain_heights`);
 * **water volumes** (:attr:`SpatialGrid.water_brushes`): not solid, kept
   apart, for whatever swims or floats;
 * **line of sight's rows**, a view of the same buckets the AI thread can read
@@ -31,7 +36,7 @@ import glm
 import numpy as np
 
 from . import brush_placement as _placement
-from .brush_placement import shared_bulk_boxes, world_bounds
+from .brush_placement import collision_shape, shared_bulk_boxes, world_bounds
 from .mover_table import travel_range
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden
@@ -97,7 +102,7 @@ class _CellRows:
 
     __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes',
                  '_unpacked_cells', '_mover_rows', '_seen', '_lock', '_mover_boxes',
-                 '_mover_at', '_asleep')
+                 '_mover_at', '_asleep', 'shaped')
 
     def __init__(self, cells):
         # Packing is unique only inside the documented coordinate range.  A
@@ -141,6 +146,12 @@ class _CellRows:
         self.hi = centre + half
         #: row -> the brush, for the per-brush predicates a caller still asks.
         self.brushes = brushes
+        #: row -> whether the brush may be something other than its box: an
+        #: angled (convex) brush, or a mover or door, which may be turning.
+        #: What it is now is asked of it (SpatialGrid.columns).
+        self.shaped = np.fromiter(
+            ('geometry' in b or bool(b.get('is_mover') or b.get('is_door'))
+             for b in brushes), dtype=np.bool_, count=count)
         self.movers = []
         for row, brush in enumerate(brushes):
             if ('geometry' in brush or '_mesh_bounds' in brush
@@ -347,6 +358,68 @@ class _BoxRows:
 _EMPTY_BOX_ROWS = _BoxRows({}, _EMPTY_CELL_ROWS, None)
 
 
+#: A plane this close to vertical bounds a column's sides, not its ends.
+_UPRIGHT = 1e-6
+
+
+def _world_planes(brush):
+    """*brush*'s true shape as world-space planes ``(n, 4)`` float64 -- unit
+    normal and offset, inside where ``n . p <= d`` -- where it is now, or None
+    when its box is its shape (a still box, a mesh proxy).
+
+    Cached on the brush against the collision shape it was derived from,
+    which is itself rebuilt only when the brush moves or its geometry is
+    edited (:func:`engine.brush_placement.collision_shape`).
+    """
+    shape = collision_shape(brush)
+    if shape is None:
+        return None
+    planes, _triangles, _bounds, frame = shape
+    if not planes:
+        return None
+    cached = brush.get('_world_planes')
+    if cached is not None and cached[0] is shape:
+        return cached[1]
+    local = np.asarray(planes, dtype=np.float64).reshape(-1, 4)
+    normal = local[:, :3]
+    offset = local[:, 3]
+    if frame is not None:
+        # s = A + R^T (w - P): a plane n . s <= d is (R n) . w <= d - n . A + (R n) . P
+        offset = offset - normal @ np.array((frame.ax, frame.ay, frame.az))
+        if frame.r is not None:
+            turn = np.asarray(frame.r, dtype=np.float64).reshape(3, 3)
+            normal = normal @ turn.T
+        offset = offset + normal @ np.array((frame.px, frame.py, frame.pz))
+    world = np.column_stack((normal, offset))
+    brush['_world_planes'] = (shape, world)
+    return world
+
+
+def _column(planes, x, z):
+    """The solid column of a convex shape (world *planes*) over each point:
+    ``(bottom, top)``, NaN where the vertical line at the point misses it."""
+    nx = planes[:, 0][:, None, None]
+    ny = planes[:, 1][:, None, None]
+    nz = planes[:, 2][:, None, None]
+    d = planes[:, 3][:, None, None]
+    across = d - nx * x[None] - nz * z[None]            # (planes, points...)
+    up = planes[:, 1] > _UPRIGHT
+    down = planes[:, 1] < -_UPRIGHT
+    side = ~(up | down)
+    top = np.full(x.shape, np.inf)
+    bottom = np.full(x.shape, -np.inf)
+    if up.any():
+        top = (across[up] / ny[up]).min(axis=0)
+    if down.any():
+        bottom = (across[down] / ny[down]).max(axis=0)
+    miss = top < bottom
+    if side.any():
+        miss |= (across[side] < 0.0).any(axis=0)
+    top = np.where(miss, np.nan, top)
+    bottom = np.where(miss, np.nan, bottom)
+    return bottom, top
+
+
 class SpatialGrid:
     """
     A 2D spatial partitioning grid to optimize collision detection.
@@ -420,6 +493,77 @@ class SpatialGrid:
         self._cell_stamp = None
         # What the per-query wall and floor tests read (see _BoxRows).
         self._box_rows = _EMPTY_BOX_ROWS
+        # The map's terrain, or a callable giving it (see set_terrain).
+        self._terrain = None
+
+    def set_terrain(self, terrain):
+        """The map's terrain, for :meth:`terrain_heights`: the terrain, a
+        zero-argument callable returning it (a session's can be replaced
+        while it runs), or None."""
+        self._terrain = terrain
+
+    @property
+    def terrain(self):
+        """The terrain bodies can stand on now: the one set, if it is enabled
+        and solid; None otherwise."""
+        terrain = self._terrain
+        if callable(terrain):
+            terrain = terrain()
+        if terrain is None or not terrain.is_solid():
+            return None
+        return terrain
+
+    def terrain_heights(self, x, z):
+        """The terrain's height at each point ``(x[i], z[i])``: the built
+        surface the renderer draws, as the player stands on it
+        (``Terrain.get_heights_at_safe``). NaN outside the terrain; None when
+        the map has no solid terrain, so a world without one pays one
+        attribute read."""
+        terrain = self.terrain
+        if terrain is None:
+            return None
+        return terrain.get_heights_at_safe(x, z)
+
+    def columns(self, rows, row, x, z):
+        """``(bottom, top)``: the solid column of brush ``row[k]`` over each
+        point ``(x[k, j], z[k, j])`` -- the heights its solid starts and ends
+        at there, NaN where the column misses it.
+
+        A box is its box. An angled brush, or one a mover is turning, is the
+        solid its planes enclose (:func:`engine.brush_placement.collision_shape`,
+        where it is now): the surface something stands on is ``top``, lower
+        than the top of the box it is filed by wherever it slopes. *rows* is
+        the rows object a broad phase returned (:meth:`box_pairs`).
+
+        The work is one pass per distinct brush asked about, over all its
+        points at once.
+        """
+        row = np.asarray(row, dtype=np.int64)
+        x = np.asarray(x, dtype=np.float64)
+        z = np.asarray(z, dtype=np.float64)
+        bottom = np.full(x.shape, np.nan)
+        top = np.full(x.shape, np.nan)
+        if not len(row):
+            return bottom, top
+        lo = rows.lo[row]
+        hi = rows.hi[row]
+        inside = ((lo[:, 0:1] <= x) & (x <= hi[:, 0:1])
+                  & (lo[:, 2:3] <= z) & (z <= hi[:, 2:3]))
+        bottom[inside] = np.broadcast_to(lo[:, 1:2], x.shape)[inside]
+        top[inside] = np.broadcast_to(hi[:, 1:2], x.shape)[inside]
+        shaped = rows.shaped[row]
+        if not shaped.any():
+            return bottom, top
+        brushes = rows.brushes
+        for brush_row in np.unique(row[shaped]).tolist():
+            planes = _world_planes(brushes[brush_row])
+            if planes is None:
+                continue                    # its box is its shape
+            at = np.flatnonzero(row == brush_row)
+            b, t = _column(planes, x[at], z[at])
+            bottom[at] = b
+            top[at] = t
+        return bottom, top
 
     def clear(self):
         self.cells.clear()

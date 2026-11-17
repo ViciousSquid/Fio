@@ -529,6 +529,65 @@ class TerrainTable:
             return None
         return result
 
+    def heights_at(self, cx, cz, world_x, world_z):
+        """:meth:`height_at` for many points at once: float64, NaN where it
+        is ``None``.
+
+        The same two triangles per quad and the same arithmetic, so a point
+        asked here and there gets the same height to the last bit; the Python
+        work is one pass per distinct chunk asked about, not per point. Safe
+        from any thread, by the same sequence numbers.
+        """
+        world_x = np.asarray(world_x, dtype=np.float64)
+        world_z = np.asarray(world_z, dtype=np.float64)
+        out = np.full(world_x.shape, np.nan)
+        if not out.size:
+            return out
+        cx = np.asarray(cx, dtype=np.int64)
+        cz = np.asarray(cz, dtype=np.int64)
+        coords, inverse = np.unique(np.stack((cx.ravel(), cz.ravel()), axis=1),
+                                    axis=0, return_inverse=True)
+        inverse = inverse.reshape(-1)
+        flat_x = world_x.ravel()
+        flat_z = world_z.ravel()
+        flat = out.reshape(-1)
+        slot_of = self.slot_of_coord.get
+        for at, (chunk_x, chunk_z) in enumerate(coords.tolist()):
+            slot = slot_of((chunk_x, chunk_z))
+            if slot is None:
+                continue
+            generation = self.generation
+            s1 = int(self.seq[slot])
+            if s1 & 1 or not self.built[slot]:
+                continue
+            n = int(self.grid_res[slot])
+            wx0 = float(self.world[slot, 0])
+            wz0 = float(self.world[slot, 1])
+            step = float(self.size[slot]) / n
+            points = np.flatnonzero(inverse == at) if len(coords) > 1 else slice(None)
+            lx = (flat_x[points] - wx0) / step
+            lz = (flat_z[points] - wz0) / step
+            inside = (0.0 <= lx) & (lx <= n) & (0.0 <= lz) & (lz <= n)
+            i = np.minimum(np.where(inside, lx, 0.0).astype(np.int64), n - 1)
+            k = np.minimum(np.where(inside, lz, 0.0).astype(np.int64), n - 1)
+            fx = lx - i
+            fz = lz - k
+            h = self.heights[slot, GRID_BORDER:, GRID_BORDER:]
+            h10 = h[i + 1, k].astype(np.float64)
+            h01 = h[i, k + 1].astype(np.float64)
+            h00 = h[i, k].astype(np.float64)
+            h11 = h[i + 1, k + 1].astype(np.float64)
+            result = np.where(
+                fx + fz <= 1.0,
+                h00 + fx * (h10 - h00) + fz * (h01 - h00),
+                h11 + (1.0 - fx) * (h01 - h11) + (1.0 - fz) * (h10 - h11))
+            if int(self.seq[slot]) != s1 or self.generation != generation:
+                continue
+            if int(self.coord[slot, 0]) != chunk_x or int(self.coord[slot, 1]) != chunk_z:
+                continue
+            flat[points] = np.where(inside, result, np.nan)
+        return out
+
     # -- stats ----------------------------------------------------------------
 
     def triangle_count(self) -> int:

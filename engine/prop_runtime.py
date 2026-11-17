@@ -656,6 +656,8 @@ class PropSession:
         )
         if raycast_down is None and physics is not None:
             raycast_down = getattr(physics, "raycast_down", None)
+        terrain_heights = getattr(
+            self.logic.session_runtime.spatial_grid, "terrain_heights", None)
 
         # Dropped props fall by the live physics' gravity, as bodies do.
         drop_gravity = -world_gravity(physics)
@@ -693,6 +695,13 @@ class PropSession:
                         float(prop.pos[0]),
                         float(prop.pos[2]),
                     )
+
+            if terrain_heights is not None:
+                # The terrain is ground too, where the map has one.
+                ground = terrain_heights([float(prop.pos[0])], [float(prop.pos[2])])
+                if ground is not None and ground[0] == ground[0] and (
+                        floor_y is None or ground[0] > floor_y):
+                    floor_y = float(ground[0])
 
             if floor_y is not None and new_y <= float(floor_y) + half_height:
                 prop.pos = [prop.pos[0], float(floor_y) + half_height, prop.pos[2]]
