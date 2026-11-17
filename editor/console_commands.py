@@ -2622,6 +2622,9 @@ entity to drive them from the I/O system.</i><br>
                 return None
             with open(fp, 'r', encoding='utf-8') as f:
                 raw_level = json.load(f)
+            # The map's placed terrain stamps are kept beside it.
+            from engine import terrain_stamp
+            raw_level = terrain_stamp.join_level(raw_level, fp)
         except Exception as exc:
             debug_log("Warning", f"save: could not read base map for delta: {exc}")
             return None

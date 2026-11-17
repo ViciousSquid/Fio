@@ -150,6 +150,10 @@ class PackageExporter:
                     zf.writestr('metadata.json', json.dumps(manifest, indent=2))
                     for map_file, archive_path in map_archive_paths.items():
                         player_copy = self._player_layout(map_file)
+                        if player_copy is None and self._has_stamp_file(map_file):
+                            # A package holds no stamp files: the map goes in
+                            # with its stamps back inside it.
+                            player_copy = self._read_map(map_file)
                         if player_copy is None:
                             zf.write(map_file, archive_path)
                         else:
@@ -213,7 +217,15 @@ class PackageExporter:
         if not isinstance(data, dict):
             self.errors.append(f"Not a map document: {map_file}")
             return None
-        return data
+        # A saved map keeps its placed terrain stamps beside it
+        # (<map name>.terrainstamps); a packaged map carries them itself.
+        from engine import terrain_stamp
+        return terrain_stamp.join_level(data, map_file)
+
+    @staticmethod
+    def _has_stamp_file(map_file) -> bool:
+        from engine import terrain_stamp
+        return os.path.exists(terrain_stamp.default_stamp_path(map_file))
 
     def _asset_references(self, data: dict) -> Set[str]:
         """Every asset name a map's brushes and things refer to."""

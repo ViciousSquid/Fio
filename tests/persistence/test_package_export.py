@@ -404,3 +404,55 @@ def test_an_older_map_is_packaged_byte_for_byte(project, tmp_path):
     assert ok, errors
     with zipfile.ZipFile(out) as zf:
         assert zf.read("maps/start.json") == current.read_bytes()
+
+
+# -- placed terrain stamps travel inside the packaged map ---------------------
+
+def _stamped_map(project, name, version):
+    """A map saved the way the editor saves one: its stamps beside it."""
+    pytest.importorskip("PyQt5", reason="stamp textures are loaded with QImage")
+    from PyQt5.QtGui import QColor, QImage
+    from engine import terrain_stamp
+    from engine.terrain import Terrain
+
+    texture = project / "assets" / "textures" / "path.png"
+    image = QImage(16, 16, QImage.Format_RGBA8888)
+    image.fill(QColor(120, 110, 90, 255))
+    assert image.save(str(texture))
+    terrain = Terrain(seed=5)
+    terrain.add_paint_stamp(100.0, 40.0, 64.0, str(texture))
+    terrain.add_paint_stamp(-80.0, 10.0, 32.0, str(texture))
+    level = _saved_v5_level()[1] if version >= 5 else _level()
+    level["terrain_data"] = terrain.to_dict()
+    for_map, stamps = terrain_stamp.split_level(level)
+    path = _write_json(project / "maps" / name, for_map)
+    assert terrain_stamp.write_map_stamps(str(path), stamps)
+    assert "paint_stamps" not in json.loads(path.read_text())["terrain_data"]
+    return path, terrain
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize("version", [5, 3])
+def test_a_packaged_map_carries_its_terrain_stamps(project, tmp_path, version):
+    from engine.terrain import Terrain
+
+    current, terrain = _stamped_map(project, "start.json", version)
+    out = tmp_path / "game.fiopak"
+    ok, errors = _export(project, current, out)
+    assert ok, errors
+
+    with zipfile.ZipFile(out) as zf:
+        assert not [n for n in zf.namelist() if n.endswith(".terrainstamps")]
+        packaged = json.loads(zf.read("maps/start.json"))
+    saved = terrain.to_dict()
+    assert [s["id"] for s in packaged["terrain_data"]["paint_stamps"]] == [
+        s["id"] for s in terrain.paint_stamps]
+    assert packaged["terrain_data"]["texture_paint"] == saved["texture_paint"]
+
+    # What the player builds from the packaged map is the terrain as saved.
+    played = Terrain(seed=5)
+    played.from_dict(packaged["terrain_data"])
+    assert len(played.paint_stamps) == 2
+    assert set(played.texture_paint_maps) == set(terrain.texture_paint_maps)
+    for key, paint in terrain.texture_paint_maps.items():
+        assert (played.texture_paint_maps[key] == paint).all()
