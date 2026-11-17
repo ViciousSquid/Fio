@@ -657,7 +657,7 @@ class MainWindow(QMainWindow):
                 
             save_path = os.path.join(autosave_dir, save_name)
             
-            write_json_atomic(save_path, self.state.get_level_data(), indent=4)
+            self._write_map(save_path)
 
             print(f"[Autosave] Saved to {save_path}")
             return save_path
@@ -5044,6 +5044,14 @@ class MainWindow(QMainWindow):
             self.stop_mover_preview()
             self.save_level()
 
+    def _write_map(self, path):
+        """Write the map to *path*, and its placed terrain stamps beside it
+        in ``<map name>.terrainstamps`` (they are not kept in the map's JSON)."""
+        from engine import terrain_stamp
+        level, stamps = terrain_stamp.split_level(self.state.get_level_data())
+        write_json_atomic(path, level, indent=4)
+        terrain_stamp.write_map_stamps(path, stamps)
+
     def save_level(self):
         if self._refuse_file_command_in_play("save the map"):
             return
@@ -5054,7 +5062,7 @@ class MainWindow(QMainWindow):
         self.stop_mover_preview()
 
         try:
-            write_json_atomic(self.file_path, self.state.get_level_data(), indent=4)
+            self._write_map(self.file_path)
             print(f"Level saved to {self.file_path}")
             self.unsaved_changes = False
             self.update_title()
@@ -5193,6 +5201,9 @@ class MainWindow(QMainWindow):
                 # byte-order mark is still a map (packages read theirs so).
                 with open(filePath, 'r', encoding='utf-8-sig') as f:
                     level_data = json.load(f)
+                # Placed terrain stamps are kept beside the map.
+                from engine import terrain_stamp
+                level_data = terrain_stamp.join_level(level_data, filePath)
             except Exception as e:
                 print(f"ERROR loading level {filePath}: {e}")
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
