@@ -2480,10 +2480,25 @@ class PropertyEditor(QWidget):
         topples_cb = _make_checkbox(
             "Falls over like a barrel",
             bool(thing.properties.get('topples', False)),
-            lambda checked: self.update_object_prop('topples', bool(checked)),
+            None,
             _Style.CHECKBOX,
         )
+
+        def on_topples_toggled(checked):
+            self.update_object_prop('topples', bool(checked))
+            # Only a simulated, solid body can fall over: ticking this says
+            # that is what the prop is (unticking leaves both as they are).
+            if checked:
+                if not physics_cb.isChecked():
+                    set_checkbox(physics_cb, True)
+                    self.update_object_prop('physics_enabled', True)
+                if not solid_cb.isChecked():
+                    set_checkbox(solid_cb, True)
+                    self.update_object_prop('no_collision', False)
+
+        topples_cb.toggled.connect(on_topples_toggled)
         topples_cb.setToolTip(
+            "Needs Physics Enabled and Solid; ticking this ticks both. "
             "Knocked hard enough -- run into, hit by another prop, dropped, "
             "or stood on a steep slope -- it goes over and lies on its side, "
             "rolling across its length. Picking it up stands it up again. "

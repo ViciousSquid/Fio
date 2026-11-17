@@ -4868,8 +4868,8 @@
                     0,
                     0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
@@ -4940,8 +4940,8 @@
                     0,
                     0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
@@ -5012,8 +5012,8 @@
                     0,
                     0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
