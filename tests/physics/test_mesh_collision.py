@@ -198,18 +198,14 @@ def test_a_body_run_into_a_mesh_body_s_side_knocks_it_on():
 
 # -- world brushes are never a Prop's business --------------------------------
 
-@pytest.mark.parametrize("shape", ["aabb", "mesh"])
-def test_a_ramp_brush_is_a_ramp_whatever_the_prop_s_collision_shape(shape):
-    """Collision Shape is about the Prop's own model. A world brush collides
-    as the shape it is: a Prop set to AABB stands on a ramp brush's slope,
-    never on the box the ramp is filed by."""
-    from tests.physics.test_slopes_and_terrain import _ramp, _surface
+def _body_on_ramp(shape, rise, at, **props):
+    """A physics Prop of the given Collision Shape above a ramp brush."""
+    from tests.physics.test_slopes_and_terrain import _ramp
 
-    rise = 0.25                                     # gentle: it stays where it lands
     grid = SpatialGrid(cell_size=512.0)
     grid.populate([_floor((0, -50, 0), (4000, 100, 4000)), _ramp(rise)])
     world = PhysicsWorld(grid)
-    prop = _prop((-100.0, 300.0, 0.0), friction=1.0)
+    prop = _prop(at, **props)
     body = _drum_brush(prop)
     body['_collision_mode'] = shape
     if shape == 'mesh':
@@ -223,9 +219,40 @@ def test_a_ramp_brush_is_a_ramp_whatever_the_prop_s_collision_shape(shape):
         body['_mesh_triangles'] = [(face, (0.0, 1.0, 0.0)) for face in faces]
         body['_mesh_bounds'] = ([x - hx, y, z - hz], [x + hx, y + DRUM_SIZE[1], z + hz])
         body.update(pos=list(prop.pos), size=[1, 1, 1])
-
     world.rebuild([body])
     world.wake(prop)
+    return world, prop
+
+
+@pytest.mark.parametrize("shape", ["aabb", "mesh"])
+@pytest.mark.parametrize("rolls", [False, True], ids=["slides", "rolls"])
+def test_a_prop_of_either_shape_goes_down_a_slope(shape, rolls):
+    """A slope steeper than a body's friction sends it downhill -- sliding,
+    or rolling if it is set to roll -- whichever Collision Shape it has."""
+    from tests.physics.test_slopes_and_terrain import _surface
+
+    rise = 1.0                                      # 45 degrees: steeper than friction 0.55
+    world, prop = _body_on_ramp(shape, rise, (100.0, _surface(100.0, rise) + 60.0, 0.0),
+                                rolls=rolls)
+    _run(world, 30)
+    landed = prop.pos[0]
+
+    _run(world, 400)
+
+    assert prop.pos[0] < landed - 100.0, (
+        "the %s prop stayed on the slope: x %.1f -> %.1f" % (shape, landed, prop.pos[0]))
+    assert prop.pos[1] < 30.0, ("it should have reached the bottom", prop.pos)
+
+
+@pytest.mark.parametrize("shape", ["aabb", "mesh"])
+def test_a_ramp_brush_is_a_ramp_whatever_the_prop_s_collision_shape(shape):
+    """Collision Shape is about the Prop's own model. A world brush collides
+    as the shape it is: a Prop set to AABB stands on a ramp brush's slope,
+    never on the box the ramp is filed by."""
+    from tests.physics.test_slopes_and_terrain import _surface
+
+    rise = 0.25                                     # gentle: it stays where it lands
+    world, prop = _body_on_ramp(shape, rise, (-100.0, 300.0, 0.0), friction=1.0)
     _run(world, 400)
 
     ramp_box_top = 400.0 * rise
