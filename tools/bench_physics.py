@@ -1,6 +1,6 @@
 """What dynamic bodies (physics Props) cost a tick.
 
-    python tools/bench_physics.py [TREE] [--json OUT.json]
+    python tools/bench_physics.py [TREE] [--json OUT.json] [--tier full|crude]
 
 A floor with 1500 pillars scattered over it and N physics bodies sliding
 among them, never allowed to sleep, so every one pays the whole step: the
@@ -41,8 +41,15 @@ def level(rng):
     return brushes
 
 
+TIER = None
+
+
 def build(count, rng, statics):
     from engine.physics import PhysicsWorld, SpatialGrid
+    if TIER is not None:
+        # One of Soma's tiers (trees that have them).
+        from engine.physics.soma import tier_class
+        PhysicsWorld = tier_class(TIER)
     from engine.prop_entity import Prop
 
     grid = SpatialGrid(cell_size=512.0)
@@ -126,8 +133,11 @@ def main():
     parser.add_argument('tree', nargs='?', default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), os.pardir))
     parser.add_argument('--json')
+    parser.add_argument('--tier', help="one of Soma's tiers: full (the default), crude")
     args = parser.parse_args()
     sys.path.insert(0, os.path.abspath(args.tree))
+    global TIER
+    TIER = args.tier
 
     rows = run()
     print('%-14s %7s %7s %12s %10s' % ('scenario', 'bodies', 'awake',

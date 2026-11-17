@@ -1,24 +1,20 @@
-"""Soma (Greek: "body") simulates bodies.
+"""Soma's full tier: everything Soma does.
 
-That is the whole of what it does. The world is not Soma's: walls and
-floors are asked of the :class:`engine.spatial_grid.SpatialGrid` it is
-created with, and it keeps no copy. The game's rules are not Soma's either:
-what is heavy and what crushing costs are the contract's. Soma holds the
-bodies -- their state as NumPy rows -- and moves the awake ones.
-
-Fio's built-in physics, registered as ``"Soma"``
-(:mod:`engine.physics.registry`) and reached by the engine only through the
-contract (:class:`engine.physics.Physics`).
+Bodies meet the world by its true surfaces -- walls they stop at, slopes
+they climb and slide on, the terrain -- and meet each other: they stack,
+block and knock one another on. The solid world is asked of the
+:class:`engine.spatial_grid.SpatialGrid` the tier is created with; nothing
+of it is kept here. See :mod:`engine.physics.soma` for the tiers.
 """
 import numpy as np
 import glm
 
-from ..change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
-from ..brush_placement import world_box
-from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points, tier_of
-from ..spatial_grid import SpatialGrid
-from . import api
-from .api import SV_GRAVITY
+from ...change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
+from ...brush_placement import world_box
+from ...spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points, tier_of
+from ...spatial_grid import SpatialGrid
+from .. import api
+from ..api import SV_GRAVITY
 
 
 def _quat_multiply(a, b):
@@ -272,7 +268,7 @@ class PhysicsBody:
 
 
 class Soma:
-    """Soma simulates bodies: batched, over NumPy rows.
+    """Soma simulates bodies: batched, over NumPy rows. The full tier.
 
     Body state is stored as structure-of-arrays NumPy buffers. The per-tick
     integration, damping, gravity, push response, sleep test and position
@@ -285,6 +281,9 @@ class Soma:
     #: The one gravity in the game. The live world's ``gravity`` (the console's
     #: ``phys_gravity`` changes it) is what bodies, the player, monsters and
     #: dropped props all fall by; see :func:`world_gravity`.
+    #: Which of Soma's tiers this is (:mod:`engine.physics.soma`).
+    tier = 'full'
+
     GRAVITY = np.float32(-SV_GRAVITY)
     #: Active-body count from which one batched floor query
     #: (:meth:`SpatialGrid.raycast_down_batch`) is cheaper than a

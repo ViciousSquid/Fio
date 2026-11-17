@@ -117,7 +117,7 @@ def test_soma_satisfies_the_contract():
 def test_soma_reads_only_contract_properties():
     """Every authored property the built-in physics reads is in the contract,
     so another implementation knows the whole of what a body is."""
-    source = (ROOT / 'engine' / 'physics' / 'soma.py').read_text()
+    source = (ROOT / 'engine' / 'physics' / 'soma' / 'full.py').read_text()
     read = set()
     for node in ast.walk(ast.parse(source)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -156,7 +156,10 @@ def _imports(path):
 
 
 #: What the engine may not name: an implementation, or its classes.
-_PRIVATE = {'Soma', 'PhysicsWorld', 'PhysicsBody'}
+_PRIVATE = {'Soma', 'SomaCrude', 'PhysicsWorld', 'PhysicsBody'}
+#: What it may ask of Soma by name: which tier to be, and nothing else.
+_TIER_API = {'select_tier', 'selected_tier', 'available_tiers', 'configure_tier',
+             'DEFAULT_TIER'}
 
 
 @pytest.mark.parametrize('folder', ['engine', 'editor'])
@@ -166,18 +169,24 @@ def test_the_engine_reaches_physics_only_through_the_boundary(folder):
         if (ROOT / 'engine' / 'physics') in path.parents:
             continue
         for module, names in _imports(path):
-            if module.startswith('engine.physics.') and module != 'engine.physics.api':
-                offenders.append(f"{path.relative_to(ROOT)}: imports {module}")
+            where = path.relative_to(ROOT)
+            if module == 'engine.physics.soma':
+                if set(names) - _TIER_API:
+                    offenders.append(f"{where}: imports {sorted(set(names) - _TIER_API)} "
+                                     f"from engine.physics.soma")
+            elif module.startswith('engine.physics.') and module != 'engine.physics.api':
+                offenders.append(f"{where}: imports {module}")
             if module == 'engine.physics' and _PRIVATE & set(names):
-                offenders.append(f"{path.relative_to(ROOT)}: imports "
+                offenders.append(f"{where}: imports "
                                  f"{sorted(_PRIVATE & set(names))} from engine.physics")
     assert not offenders, "\n".join(offenders)
 
 
 def test_the_built_in_physics_keeps_no_copy_of_the_world():
-    """The spatial grid is the single source of truth: the built-in physics
-    names no brush list, cell bucket or mover table of its own."""
-    path = ROOT / 'engine' / 'physics' / 'soma.py'
+    """The spatial grid is the single source of truth: Soma's full tier names
+    no brush list, cell bucket or mover table of its own. (The crude tier is
+    Fio's physics as it was, which did: the one exception, kept as it was.)"""
+    path = ROOT / 'engine' / 'physics' / 'soma' / 'full.py'
     modules = {module for module, _names in _imports(path)}
     assert 'engine.mover_table' not in modules
     assert 'engine.constants' not in modules

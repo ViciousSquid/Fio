@@ -58,7 +58,8 @@ def test_the_only_modules_staging_adds_are_the_desktops_own_relocated(staged):
 
 def test_android_runs_soma_through_the_same_registry(staged):
     destination, _receipt = staged
-    for name in ('__init__.py', 'api.py', 'registry.py', 'soma.py'):
+    for name in ('__init__.py', 'api.py', 'registry.py', 'soma/__init__.py',
+                 'soma/full.py', 'soma/crude.py'):
         assert (destination / 'engine' / 'physics' / name).is_file()
     assert (destination / 'engine' / 'spatial_grid.py').is_file()
 

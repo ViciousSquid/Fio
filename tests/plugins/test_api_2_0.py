@@ -44,7 +44,7 @@ def test_physics_is_not_a_plugin():
 
     soma = physics_factory(DEFAULT_PHYSICS)
     assert soma.__module__ == 'engine.physics.soma'
-    assert (ROOT / 'engine' / 'physics' / 'soma.py').is_file()
+    assert (ROOT / 'engine' / 'physics' / 'soma' / 'full.py').is_file()
 
 
 # -- a play session -----------------------------------------------------------

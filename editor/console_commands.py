@@ -92,6 +92,7 @@ class ConsoleCommandHandler:
             'phys_info': self.cmd_phys_info,
             'phys_reset': self.cmd_phys_reset,
             'phys_engine': self.cmd_phys_engine,
+            'phys_tier': self.cmd_phys_tier,
             'phys': self.cmd_phys_info,
             'setpos': self.cmd_setpos,
             'pos': self.cmd_pos,
@@ -207,7 +208,7 @@ class ConsoleCommandHandler:
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
     #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
     #: without asking, so a map could throw away the user's unsaved work.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'phys_engine', 'vsync', 'r_vsync', 'quit', 'botdebug',
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'phys_engine', 'phys_tier', 'vsync', 'r_vsync', 'quit', 'botdebug',
                                     'monsterdebug'})
 
     def cmd_botdebug(self, args):
@@ -1058,6 +1059,7 @@ entity to drive them from the I/O system.</i><br>
 <b style="color:orange;">phys_info</b> — Show global physics controls<br>
 <b style="color:orange;">phys_reset</b> — Restore physics defaults<br>
 <b style="color:orange;">phys_engine</b> [name] — List the registered physics, or choose the one the next Play uses<br>
+<b style="color:orange;">phys_tier</b> [full|crude] — Soma's tier for the next Play: full, or crude (Fio's physics as it was)<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
 <b style="color:orange;">cam</b>{sep}<b style="color:orange;">camera</b> [overhead|fp] [seconds] — Tween between overhead &amp; first person (e.g. 'cam 2')<br>
 <b style="color:cyan;">=== Portals ===</b><br>
@@ -2413,6 +2415,34 @@ entity to drive them from the I/O system.</i><br>
             return
         select_physics(match)
         debug_log("Info", f"Physics: {match} (from the next Play)")
+
+    def cmd_phys_tier(self, args):
+        """Soma's tier, or choose it: ``phys_tier [full|crude]``.
+
+        ``full`` is everything Soma does; ``crude`` is Fio's physics as it
+        was before Soma. The choice is the next play session's -- a running
+        one keeps its tier -- and is kept in settings.ini.
+        """
+        from engine.physics import soma
+        wanted = args.split()[0].lower() if args.split() else ""
+        if not wanted:
+            listing = ", ".join(
+                f"<b>{name}</b> (selected)" if name == soma.selected_tier() else name
+                for name in soma.available_tiers())
+            debug_log("Info", f"Soma tiers: {listing}")
+            return
+        if wanted not in soma.available_tiers():
+            debug_log("Warning", f"No tier '{wanted}'. Soma's tiers: "
+                                 f"{', '.join(soma.available_tiers())}")
+            return
+        soma.select_tier(wanted)
+        config = getattr(self.main_window, 'config', None)
+        if config is not None:
+            if not config.has_section('Physics'):
+                config.add_section('Physics')
+            config.set('Physics', 'tier', wanted)
+            self.main_window.save_config()
+        debug_log("Info", f"Soma tier: {wanted} (from the next Play)")
 
     def cmd_pos(self, args):
         """pos — Open the live camera-position floating window."""

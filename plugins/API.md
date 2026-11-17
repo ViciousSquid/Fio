@@ -401,7 +401,7 @@ def register_physics(self, name: str, cls) -> bool
 def select_physics(self, name: str) -> bool
 ```
 Supply another physics, and choose it (API 2.0). Physics is an engine module,
-not a plugin: Soma, the built-in one, lives in `engine/physics/soma.py` and is
+not a plugin: Soma, the built-in one, lives in `engine/physics/soma/` and is
 what every map runs on. It sits behind a contract so it can be improved — or
 replaced — without touching the rest of the engine; these two calls are the
 door for a replacement that ships outside the engine. See
@@ -824,8 +824,22 @@ Two rules come with it:
   `properties['rotation']` and journalled with `touch`. Authored properties
   are read, never rewritten.
 
+**Soma's tiers.** How much Soma does for a body is its tier, chosen for a
+play session:
+
+| Tier | |
+|------|---|
+| `full` (default) | everything: true surfaces (slopes, the terrain), bodies meeting bodies, swept contact |
+| `crude` | Fio's physics exactly as it was before Soma, kept unchanged: boxes against boxes |
+
+Set it in `settings.ini` (`[Physics] tier = crude`), with the
+`FIO_PHYSICS_TIER` environment variable, with `phys_tier <name>` in the
+console, or from code with `engine.physics.soma.select_tier(name)`. It takes
+effect with the next play session; `RuntimeAPI.physics.tier` says which one a
+session is running.
+
 Physics is not a plugin: Soma is engine core. To work on it, work in
-`engine/physics/soma.py` — nothing outside `engine/physics/` names it
+`engine/physics/soma/` — nothing outside `engine/physics/` names it
 (`tests/physics/test_physics_contract.py` holds that line). To try a
 different one without touching the engine, subclass it or write another
 against the contract, register it with

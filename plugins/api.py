@@ -700,7 +700,7 @@ class EditorAPI:
         collision runtime's body brushes, ``clear``), the tick (``step``) and
         the per-body operations the engine's Prop, trigger and cutscene code
         call. How it simulates is entirely its own. It may start from Soma
-        (``from engine.physics.soma import Soma`` and subclass it) or share
+        (``from engine.physics.soma import Soma``, its full tier, and subclass it) or share
         nothing with it.
 
         Two rules come with the contract. The world is the ``SpatialGrid``
