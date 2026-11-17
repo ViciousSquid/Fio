@@ -798,8 +798,19 @@ class EditorState:
 
         Structural only, and cheap, so a caller can reject a document before
         it clears the current scene (see :mod:`engine.level_validation`).
+
+        A map written by a newer Fio is refused too. Loading it anyway read
+        a layout this build does not know as the current one, and the next
+        save stamped it with this build's version -- so the newer build
+        would then migrate data that had already been mangled.
         """
         validate_level(level_data)
+        version = level_data.get('version') if isinstance(level_data, dict) else None
+        if (isinstance(version, int) and not isinstance(version, bool)
+                and version > MAP_VERSION):
+            raise ValueError(
+                f"this map was saved by a newer version of Fio (map format "
+                f"{version}; this build reads up to {MAP_VERSION})")
 
     def load_from_data(self, level_data, *, yield_hook=None, save_undo=True,
                        validated=False, stream_editor=False):

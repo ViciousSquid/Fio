@@ -3246,9 +3246,21 @@ class View2D(QWidget):
                 QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()),
                 QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y())]
 
+    def _middle_click_pan_enabled(self):
+        """Settings > "Middle Click to Drag in 2D Views".
+
+        The Settings window saves ``middle_click_drag``; this view read
+        ``MiddleClickDrag``, and option names are case-sensitive, so the
+        checkbox did nothing. The old name is still honoured when it is the
+        only one present.
+        """
+        config = self.main_window.config
+        legacy = config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        return config.getboolean('Controls', 'middle_click_drag', fallback=legacy)
+
     def mousePressEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
-        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        middle_click_pan_enabled = self._middle_click_pan_enabled()
 
         if event.button() == Qt.RightButton:
             self.is_panning = False 
@@ -3488,7 +3500,7 @@ class View2D(QWidget):
 
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
-        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        middle_click_pan_enabled = self._middle_click_pan_enabled()
 
         # Component drag in progress: it owns the mouse until the button is up.
         if self._components().drag is not None:

@@ -380,11 +380,10 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         logic.mover_runtime._movers().settle_parked()
     except Exception:
         pass
-    level = {}
-    try:
-        level = logic.editor_state.get_level_data()
-    except Exception:
-        level = {}
+    # Not swallowed: a level that cannot be serialised must fail the save.
+    # Carrying on with an empty level wrote a save with no world in it over
+    # the player's slot and reported success.
+    level = logic.editor_state.get_level_data()
 
     monster_states: Dict[str, Any] = {}
     try:

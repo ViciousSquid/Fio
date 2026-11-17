@@ -1716,7 +1716,11 @@ class CutsceneWizard(QtWidgets.QDialog):
             if result != QtWidgets.QMessageBox.Yes:
                 return False
         try:
-            path.write_text(
+            # Written aside and swapped in: a full disk or a crash mid-write
+            # must not leave the existing cutscene truncated.
+            from engine.fileio import write_text_atomic
+            write_text_atomic(
+                str(path),
                 json.dumps(self._build_cutscene_data(), indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )

@@ -192,7 +192,8 @@ class MainWindow(QMainWindow):
         self.debug_console = None
         self.key_bindings = {}
 
-        self.config = configparser.ConfigParser()
+        from editor.settings_file import SettingsParser
+        self.config = SettingsParser()
         self.config.optionxform = str          # preserve case of option names
         # The working directory's settings.ini (main.py runs from the install
         # folder), or the per-user copy when that folder is read-only.
@@ -299,6 +300,12 @@ class MainWindow(QMainWindow):
 
         # --- Play-mode console overlay (Quake-style drop-down input) ---
         self._create_play_console_overlay()
+
+        # Settings that could not be read are said once, where a level
+        # designer will see them, instead of stopping the start.
+        from editor import settings_file
+        for problem in settings_file.problems:
+            debug_log("Warning", f"Settings: {problem}")
 
         # If configured, switch to the Debug Console tab on startup
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
@@ -542,7 +549,10 @@ class MainWindow(QMainWindow):
     def save_recent_files(self):
         if not self.config.has_section('History'):
             self.config.add_section('History')
-        self.config.set('History', 'recent_files', json.dumps(self.recent_files))
+        # "%" is interpolation syntax to the parser: a map in "100% done/"
+        # made a save or a load that had worked report failure.
+        self.config.set('History', 'recent_files',
+                        json.dumps(self.recent_files).replace('%', '%%'))
         self.save_config()
 
     def add_recent_file(self, file_path):
@@ -651,6 +661,9 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             print(f"Autosave failed: {e}")
+            # Said where it is seen: a windowed build has no console, and an
+            # autosave that quietly stopped working is found out too late.
+            debug_log("Warning", f"Autosave failed: {e}")
             return None
 
     def show_procedural_map_generator(self):
@@ -2195,7 +2208,8 @@ class MainWindow(QMainWindow):
             self.update_views()
 
     def load_config(self):
-        self.config.read(self.config_path)
+        from editor.settings_file import read_settings
+        read_settings(self.config, self.config_path)
         self.apply_window_colours()
 
     def save_config(self):
@@ -2746,6 +2760,15 @@ class MainWindow(QMainWindow):
         """Enter play mode with the player at *player_start* (a PlayerStart)."""
         if not player_start:
             QMessageBox.warning(self, "No Player Start", "Add a Player Start object to the scene before entering play mode.")
+            return
+        if self.view_3d.logic_thread is None:
+            # The game's logic starts with the renderer. Without an OpenGL
+            # context there is neither, and Play "started" into a world that
+            # never ran, with nothing said.
+            message = ("Play cannot start: the 3D view has no OpenGL 3.3 "
+                       "context. Check the graphics driver.")
+            debug_log("Error", message)
+            self.show_toast(message, is_error=True)
             return
 
         # Only once Play is certain to start: a refused Play must leave the
@@ -4820,6 +4843,10 @@ class MainWindow(QMainWindow):
             return
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
         if filePath:
+            if not os.path.splitext(filePath)[1]:
+                # A bare name: without the extension the Open dialog's
+                # "*.json" filter hides the map that was just saved.
+                filePath += '.json'
             self.file_path = filePath
             self.stop_mover_preview()
             self.save_level()
@@ -4969,7 +4996,9 @@ class MainWindow(QMainWindow):
         name = os.path.splitext(os.path.basename(str(filePath)))[0]
         with _loading_overlay(self).busy(f"Loading {name}", "Reading the map", 5):
             try:
-                with open(filePath, 'r', encoding='utf-8') as f:
+                # utf-8-sig: a map saved by an editor that writes a
+                # byte-order mark is still a map (packages read theirs so).
+                with open(filePath, 'r', encoding='utf-8-sig') as f:
                     level_data = json.load(f)
             except Exception as e:
                 print(f"ERROR loading level {filePath}: {e}")

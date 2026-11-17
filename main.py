@@ -174,6 +174,12 @@ if __name__ == "__main__":
         root_directory = os.path.dirname(os.path.abspath(__file__))
 
     os.chdir(root_directory)
+    # Before anything that can fail: a windowed build has no console, so an
+    # exception during startup otherwise leaves no trace at all.
+    from editor import crash_log
+    from editor.user_paths import settings_path, writable_dir
+    crash_log.install(os.path.dirname(settings_path(root_directory))
+                      or writable_dir(root_directory))
     # Index the asset archives before Qt asks for the splash or icons.
     from engine.asset_archives import asset_exists, prepare_asset_archives
     from engine.asset_qt import load_icon, load_pixmap, portable_stylesheet
@@ -212,10 +218,11 @@ if __name__ == "__main__":
     fmt.setDepthBufferSize(24)
     fmt.setStencilBufferSize(8)
 
-    import configparser
-    config = configparser.ConfigParser()
-    from editor.user_paths import settings_path
-    config.read(settings_path(root_directory))
+    # A damaged settings.ini falls back to the defaults (and is set aside);
+    # it must never be the reason Fio does not start.
+    from editor.settings_file import SettingsParser, read_settings
+    config = SettingsParser()
+    read_settings(config, settings_path(root_directory))
     vsync = config.getboolean('Display', 'vsync', fallback=True)
     fmt.setSwapInterval(1 if vsync else 0)
 
@@ -286,6 +293,7 @@ if __name__ == "__main__":
     # callback, losing the open map.
     from editor.debug_console import install_excepthook
     install_excepthook()
+    crash_log.wrap_current()
     # Qt builds without QtSvg (Windows on ARM) draw the sheet's check marks
     # and arrows from their pre-rendered PNGs instead.
     app.setStyleSheet(portable_stylesheet(dark_stylesheet))

@@ -13,7 +13,9 @@ permissions:
 # Keep CI focused on the latest commit for a branch. Rapid hardening/release
 # work should not leave a queue of obsolete test runs behind it.
 concurrency:
-  group: fio-tests-${{ github.ref }}
+  # The event is part of the key: a release calls this workflow, and a push
+  # to the same branch must not cancel the tests the release is waiting on.
+  group: fio-tests-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Each tier is independent so a graphical failure cannot hide a core failure.
@@ -21,7 +23,9 @@ jobs:
   no_gpu:
     name: No-GPU fast core (no Qt, CPython ${{ matrix.python }})
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # The tests alone take about 75 s on a hosted runner; at 2 minutes a slow
+    # runner cancelled the job, and with it the release that waits on it.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
