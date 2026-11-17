@@ -77,6 +77,23 @@ def test_each_group_is_tinted_and_boxed_in_its_own_colour(scene):
     assert rows['wall'].background(0).style() == Qt.NoBrush
 
 
+def test_grouped_rows_keep_their_hidden_lock_and_tag_indicators(scene):
+    window, brushes = scene
+    brushes['door']['hidden'] = True
+    brushes['glass']['color'] = 'red'
+    brushes['lift']['lock'] = True
+    brushes['rail'].update(lock=True, color='blue')
+    window.update_all_ui()
+
+    rows = {row.text(0): row for row in _rows(window)}
+    for name in ('door', 'glass', 'lift', 'rail'):
+        assert not rows[name].icon(0).isNull(), "%s lost its indicator" % name
+        assert rows[name].data(0, GROUP_COLOUR_ROLE), "%s lost its group box" % name
+    # A hidden row keeps its amber name as well.
+    assert rows['door'].foreground(0).color().name().lower() == '#ffac1c'
+    assert rows['wall'].icon(0).isNull()
+
+
 def test_a_search_keeps_the_group_tint_on_rows_it_does_not_match(scene):
     window, _ = scene
     hierarchy = window.scene_hierarchy

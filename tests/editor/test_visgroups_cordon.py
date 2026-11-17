@@ -121,7 +121,7 @@ def test_the_eye_on_the_toolbar_opens_and_closes_the_window(main_window):
     window = main_window.visgroups_window
     assert window.isVisible() and button.isChecked()           # lit while open
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == \
-        ["User", "Auto", "Cordon"]
+        ["User", "Groups", "Auto", "Cordon"]
     button.click()
     assert not window.isVisible() and not button.isChecked()
     main_window.toggle_visgroups_window()
