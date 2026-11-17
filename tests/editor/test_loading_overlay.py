@@ -72,6 +72,9 @@ def test_the_editor_behind_it_is_shown_blurred_not_hidden(qt_app):
     overlay = LoadingOverlay(host)
     with overlay.busy('Loading village', 'Reading map'):
         assert overlay.backdrop is not None
+        # Kept shrunk and stretched at paint time: no full-window smooth
+        # upscale (where a Windows ARM64 run hung inside Qt).
+        assert overlay.backdrop.width() < host.width()
         assert overlay.geometry() == host.rect()
         soft, soft_mean = edges(overlay.grab().toImage())
     assert overlay.backdrop is None                  # dropped when it lowers

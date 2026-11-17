@@ -711,3 +711,26 @@ def test_an_underscored_entity_class_is_found_by_its_map_type(monkeypatch):
     for spelling in ("Crate_Stack", "crate_stack", "CrateStack"):
         assert manager.entity_class_for_type(spelling) is Crate_Stack, spelling
         assert manager.plugin_for_type(spelling) is owner, spelling
+
+
+def test_a_plugin_met_mid_import_is_retried_not_dropped():
+    """Importing ``engine.prop_entity`` before ``editor`` starts plugin
+    discovery while ``prop_entity`` is half-built; a plugin that imports
+    ``Prop`` then fails with a circular-import error. That is import order,
+    not a broken plugin: it used to be dropped for the life of the process
+    (and every test after it in the run errored); it is now picked up by the
+    next ``load_plugins()``."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = ("import engine.prop_entity\n"
+            "from plugins import get_manager, load_plugins\n"
+            "load_plugins()\n"
+            "print(sorted(p.name for p in get_manager().plugins))\n")
+    root = Path(__file__).resolve().parents[2]
+    out = subprocess.run([sys.executable, '-c', code], cwd=root, capture_output=True,
+                         text=True, env={**__import__('os').environ,
+                                         'QT_QPA_PLATFORM': 'offscreen'})
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip().splitlines()[-1] == "['bigworld', 'deathmatch', 'tidy']"

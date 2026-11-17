@@ -88,6 +88,10 @@ class LogicPlayer:
         if KEY_D in keys:
             move_dir.x -= 1
 
+        analog = getattr(logic.game_state, 'get_movement_axes', lambda: None)()
+        if analog is not None:
+            move_dir.x, move_dir.z = analog
+
         jump = KEY_SPACE in keys
         crouch = KEY_C in keys
         sprint = KEY_SHIFT in keys

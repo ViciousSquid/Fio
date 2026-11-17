@@ -11,6 +11,8 @@ import queue
 
 import numpy as np
 
+from .spatial import clear_live_flag, set_live_flag
+
 try:
     from editor.things import ENTITY_TYPES, Monster as MonsterThing
 except ImportError:
@@ -256,7 +258,7 @@ class CutsceneRuntime:
                 "disabled": actor.properties.get("disabled", False),
             }
             actor.properties["_cutscene_runtime"] = True
-            actor.properties["disabled"] = True
+            set_live_flag(actor, "disabled", True)
             actors[aid] = actor
 
         if spawned:
@@ -364,9 +366,9 @@ class CutsceneRuntime:
                 if actor not in self.logic.editor_state.things:
                     continue
                 if snapshot.get("had_disabled"):
-                    actor.properties["disabled"] = snapshot["disabled"]
+                    set_live_flag(actor, "disabled", snapshot["disabled"])
                 else:
-                    actor.properties.pop("disabled", None)
+                    clear_live_flag(actor, "disabled")
                 if snapshot.get("had_awake"):
                     actor.properties["awake"] = snapshot["awake"]
                 else:
@@ -421,7 +423,7 @@ class CutsceneRuntime:
                         "target_name": props.get("target_name"),
                     }
                     snapshots.append((actor, snapshot))
-                    props["disabled"] = False
+                    set_live_flag(actor, "disabled", False)
                     props["awake"] = True
                     props["_aggro_target"] = id(target)
                     props.pop("target_name", None)
@@ -431,9 +433,9 @@ class CutsceneRuntime:
                 for actor, snapshot in active:
                     props = actor.properties
                     if snapshot.get("had_disabled"):
-                        props["disabled"] = snapshot["disabled"]
+                        set_live_flag(actor, "disabled", snapshot["disabled"])
                     else:
-                        props.pop("disabled", None)
+                        clear_live_flag(actor, "disabled")
                     if snapshot.get("had_awake"):
                         props["awake"] = snapshot["awake"]
                     else:
@@ -460,9 +462,9 @@ class CutsceneRuntime:
                     actor, snapshot.get("yaw", self._cutscene_yaw(actor))
                 )
             if snapshot.get("had_disabled"):
-                actor.properties["disabled"] = snapshot["disabled"]
+                set_live_flag(actor, "disabled", snapshot["disabled"])
             else:
-                actor.properties.pop("disabled", None)
+                clear_live_flag(actor, "disabled")
             actor.properties.pop("_cutscene_runtime", None)
         spawned = list(cs.get("spawned_actors") or [])
         for actor in spawned:

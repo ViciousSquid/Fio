@@ -56,10 +56,10 @@ def test_a_shipped_map_draws_what_was_recorded(name):
 def test_the_recorded_inventory_is_the_known_one():
     """The inventory in words, so a reader need not decode the fixture.
 
-    * Bounds: three convex brushes whose ``pos``/``size`` are not their
-      planes' AABB by more than float noise -- 4.85e-5 in
-      ``Angled_Brush_Test`` and 128 units in ``Terrain_Test_small`` and
-      ``Topdown_example`` (four more are within 1e-6 and not pinned).
+    * Bounds: two legacy convex brushes whose ``pos``/``size`` copies
+      differ from their planes' AABB by more than float noise -- 4.85e-5
+      in ``Angled_Brush_Test`` and 128 units in ``Topdown_example``.
+      ``Terrain_Test_small`` is now version 5 and has canonical bounds.
     * Material (Stage 1): two convex brushes in ``_SHOWCASE`` whose authored
       per-tag ``uv_scale`` -- what the Surface Inspector showed -- is not on
       their planes. By the precedence rule it is their one record and is now
@@ -75,8 +75,7 @@ def test_the_recorded_inventory_is_the_known_one():
             for kind in found:
                 kinds.setdefault(kind, set()).add(name)
     assert kinds == {
-        'bound_drift': {'Angled_Brush_Test.json', 'Terrain_Test_small.json',
-                        'Topdown_example.json'},
+        'bound_drift': {'Angled_Brush_Test.json', 'Topdown_example.json'},
         'runtime_keys': {'Key_Test.json', 'MonsterTest.json',
                          'Simple_Map_Test_Extended.json', 'button_test.json',
                          'dLight2_Test.json', 'dLight_Test.json'},
@@ -84,14 +83,14 @@ def test_the_recorded_inventory_is_the_known_one():
     assert RECORDED['_SHOWCASE.json']['inconsistencies'] == {}
     drifts = sorted(f['bound_drift'] for e in RECORDED.values()
                     for f in e['inconsistencies'].values() if 'bound_drift' in f)
-    assert drifts == [4.85e-05, 128.0, 128.0]
+    assert drifts == [4.85e-05, 128.0]
 
 
 
 def test_version5_showcase_uses_local_canonical_convex_records():
     """Version 5 stores convex planes locally and keeps one record per face."""
     brushes = MAPS['_SHOWCASE.json']
-    assert len(brushes) == 88
+    assert len(brushes) == 87
     encodings = {}
     for brush in brushes:
         kind = bs.encoding(brush)
@@ -104,11 +103,11 @@ def test_version5_showcase_uses_local_canonical_convex_records():
         for key, _field in bs.TAG_FIELDS:
             assert not tags & set(brush.get(key) or {}), (brush['id'], key)
         assert not any(brush.get(key) is not None for key in bs.RUNTIME_KEYS)
-        assert 'bound_drift' not in bs.inconsistencies(brush)
+        assert bs.inconsistencies(brush).get('bound_drift', 0.0) <= bs.DRIFT_NOISE
         local_centre, local_size = bs.local_rest(brush)
         assert np.allclose(local_centre, (0.0, 0.0, 0.0), atol=1e-8), brush['id']
         assert np.allclose(local_size, brush['size'], atol=1e-9), brush['id']
-    assert encodings == {'box': 70, 'convex': 18}
+    assert encodings == {'box': 69, 'convex': 18}
 
 def test_the_digest_sees_a_visible_change_and_not_float_noise():
     """The oracle's own resolution: 1e-3 of a unit is a change, 1e-9 is not."""

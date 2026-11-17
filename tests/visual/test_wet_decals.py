@@ -259,3 +259,49 @@ def test_decals_are_batched_one_draw_whatever_their_count():
         assert renderer.decals_culled == 300
         renderer.cleanup()
     glh.reset_texture_cache()
+
+
+def _detail(image, mask):
+    """Mean absolute Laplacian of the luminance inside *mask*: fine detail."""
+    g = image.astype(float).mean(axis=2)
+    lap = np.abs(4.0 * g[1:-1, 1:-1] - g[:-2, 1:-1] - g[2:, 1:-1]
+                 - g[1:-1, :-2] - g[1:-1, 2:])
+    return float(lap[mask[1:-1, 1:-1]].mean())
+
+
+def test_a_wet_floor_reflects_glossily_not_like_a_mirror(fio_session, monkeypatch):
+    """Sharp where the box meets the floor, softer further off: the
+    reflection is read through a widening cone, not as a mirror."""
+    from engine import shaders
+
+    session = _session(fio_session, [_wet('near', -250.0)])
+    glossy = session.paint()
+    # The same frame with the cone shut: what the wet floor used to be.
+    source = shaders.DEFAULT_SHADERS['decal.frag']
+    mirror_source = source.replace('mix(0.30, 0.12, puddle)', '0.0')
+    assert mirror_source != source
+    monkeypatch.setitem(shaders.DEFAULT_SHADERS, 'decal.frag', mirror_source)
+    session.view.renderer.shaders.pop('decal', None)
+    mirror = session.paint()
+    softened = np.abs(glossy.astype(int) - mirror.astype(int)).max(axis=2) > 6
+    assert softened.sum() > 50, "the reflection is as sharp as a mirror"
+    assert _detail(glossy, softened) < _detail(mirror, softened)
+
+
+def test_the_wet_pass_leaves_the_frame_copy_as_the_water_reads_it(fio_session):
+    """The glossy read needs the frame copy's mip chain; the glass and the
+    water read the same copy at level 0, so its filtering goes back."""
+    import OpenGL.GL as gl
+
+    session = _session(fio_session, [_wet('near', -250.0)])
+    session.paint()
+    renderer = session.view.renderer
+    assert renderer._glass_scene_texture, "the wet pass made no frame copy"
+    session.view.makeCurrent()
+    try:
+        gl.glActiveTexture(gl.GL_TEXTURE0 + renderer._glass_scene_texture_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, renderer._glass_scene_texture)
+        min_filter = gl.glGetTexParameteriv(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER)
+        assert int(np.asarray(min_filter).ravel()[0]) == gl.GL_LINEAR
+    finally:
+        session.view.doneCurrent()

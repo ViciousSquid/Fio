@@ -303,3 +303,47 @@ def test_rows_from_an_old_chunk_size_or_offset_are_released():
 
     released = t.prune_stale_geometry(2048.0, 100.0, 0.0)
     assert len(released) == 25 and t.count == 0
+
+
+# -- heights in bulk ----------------------------------------------------------
+# What asks about many points at once (physics bodies, five points each) asks
+# get_heights_at_safe. It must stand them on what the player stands on.
+
+def test_bulk_heights_are_the_scalar_heights_exactly_on_a_built_chunk(terrain):
+    terrain.enabled = True
+    cx, cz = 0, -2
+    t = terrain.table
+    slot = t.ensure(cx, cz, terrain.chunk_size, terrain.offset_x, terrain.offset_z)
+    t.store(slot, 48, RES.index(48), terrain._chunk_heights(slot, 48))
+    wx, wz, size = float(t.world[slot, 0]), float(t.world[slot, 1]), float(t.size[slot])
+
+    rng = np.random.default_rng(1)
+    x = wx + rng.uniform(0, size - 1e-3, 500)
+    z = wz + rng.uniform(0, size - 1e-3, 500)
+    bulk = terrain.get_heights_at_safe(x.reshape(100, 5), z.reshape(100, 5))
+    assert bulk.shape == (100, 5)
+    scalar = [terrain.get_height_at_safe(float(a), float(b)) for a, b in zip(x, z)]
+    assert np.array_equal(bulk.ravel(), np.array(scalar))      # to the last bit
+
+
+def test_bulk_heights_fall_back_to_the_height_function_and_stop_at_the_edge(terrain):
+    terrain.enabled = True
+    t = terrain.table
+    slot = t.ensure(terrain.max_chunk_x, terrain.max_chunk_z, terrain.chunk_size,
+                    terrain.offset_x, terrain.offset_z)        # inside, not built
+    assert not t.built[slot]
+    size = float(t.size[slot])
+    x = float(t.world[slot, 0]) + size * np.array([0.07, 0.5, 0.93])
+    z = float(t.world[slot, 1]) + size * np.array([0.31, 0.02, 0.88])
+    bulk = terrain.get_heights_at_safe(x, z)
+    scalar = [terrain.get_height_at_safe(float(a), float(b)) for a, b in zip(x, z)]
+    assert None not in scalar
+    assert bulk == pytest.approx(scalar, abs=1e-2)             # float32 in bulk
+
+    (min_x, max_x), (min_z, _max_z) = terrain.get_terrain_bounds()
+    outside = terrain.get_heights_at_safe([min_x - 1.0, max_x + 1.0, min_x + 1.0],
+                                          [min_z + 1.0, min_z + 1.0, min_z - 1.0])
+    assert np.isnan(outside).all()
+
+    terrain.enabled = False
+    assert np.isnan(terrain.get_heights_at_safe(x, z)).all()

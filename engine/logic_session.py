@@ -40,6 +40,10 @@ class LogicSession:
         self.play_mode = False
         self._world_pause_owners = frozenset()
         self.physics_world = None
+        #: The global physics switch (Settings > Play Modes > Enable physics):
+        #: off, a session has no physics engine at all -- none is created,
+        #: and Soma is not loaded -- and a physics Prop is ordinary scenery.
+        self.physics_enabled = True
         self.spatial_grid = None
         self._world_pause_lock = threading.Lock()
         self.monster_lock = threading.RLock()
@@ -199,14 +203,26 @@ class LogicSession:
             # Build entity caches before constructing session-local physics.
             logic.world_runtime.build_entity_caches()
 
-            from .physics import PhysicsWorld, SpatialGrid
+            from .physics import create_physics, unload_physics
+            from .spatial_grid import SpatialGrid
 
             self.spatial_grid = SpatialGrid(cell_size=512.0)
             self.spatial_grid.populate(
                 logic.editor_state.brushes + logic.collision_runtime._model_collision_brushes
             )
-            self.physics_world = PhysicsWorld(self.spatial_grid)
-            self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
+            # The terrain is the world's too, and the editor can replace it
+            # while the session runs: the grid asks for the current one.
+            world_runtime = logic.world_runtime
+            self.spatial_grid.set_terrain(lambda: world_runtime.terrain)
+            if self.physics_enabled:
+                # Whichever physics is selected (engine.physics.registry):
+                # the engine drives it through the contract and nothing else.
+                self.physics_world = create_physics(self.spatial_grid)
+                self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
+            else:
+                # Switched off: no engine, and nothing of one kept loaded.
+                self.physics_world = None
+                unload_physics()
             logic.monster_ai.set_spatial_grid(self.spatial_grid)
 
             # Reset cinematic state.
@@ -461,6 +477,8 @@ class LogicSession:
     def start_monster_ai(self):
         logic = self.logic
         self.stop_monster_ai()
+        if not getattr(logic, "threaded_ai", True):
+            return
         self.monster_ai_thread = MonsterAIThread(
             logic,
             logic.monster_ai,

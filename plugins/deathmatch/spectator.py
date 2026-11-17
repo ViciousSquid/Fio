@@ -19,9 +19,6 @@ class Spectators:
                             (s.logic.trigger_runtime, '_handle_triggers')):
             s._hook(owner, name, self.player_action)
         s._hook(s.logic.prop_runtime, '_collect', self.collect)
-        physics = s.logic.session_runtime.physics_world
-        if physics is not None:
-            s._hook(physics, 'step', self.physics_step)
         s._hook(s.logic.render_runtime, 'prepare_render_state', self.render)
 
     def player_action(self, original, *args, **kwargs):
@@ -33,9 +30,6 @@ class Spectators:
         if self.local.spectator and kwargs.get('grant') is None:
             return False
         return original(prop, **kwargs)
-
-    def physics_step(self, original, delta, player=None):
-        return original(delta, None if self.local.spectator else player)
 
     def choose(self, enabled=True, target=None):
         s = self.session

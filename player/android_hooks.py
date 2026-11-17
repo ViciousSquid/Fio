@@ -1,4 +1,4 @@
-"""p4a hook: apply Android adapters only inside its private application copy."""
+"""p4a hook: stage the desktop engine, unmodified, in the app's private copy."""
 import importlib.util
 from pathlib import Path
 

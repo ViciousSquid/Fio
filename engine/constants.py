@@ -29,7 +29,7 @@ RENDER_MODE_VERTEX = 3     # Points
 
 # --- Physics Constants ---
 #
-# Gravity is not here: engine.physics.PhysicsWorld is the one authority for
+# Gravity is not here: the live physics (engine.physics) is the one authority for
 # it (Quake 2's sv_gravity, 800), and the player, monsters and dropped props
 # all read it from the live world.
 #
@@ -117,7 +117,12 @@ def water_high_quality(brush):
     cheap look (waves, refraction, sky reflection). Authored per brush, so
     hand-edited maps may hold strings like ``"false"`` or ``"0"``.
     """
-    value = brush.get('water_high_quality', True)
+    return _flag(brush.get('water_high_quality', True))
+
+
+def _flag(value):
+    """An authored on/off value: hand-edited maps may hold strings like
+    ``"false"`` or ``"0"``."""
     if isinstance(value, str):
         return value.strip().lower() not in ('0', 'false', 'no', 'off', '')
     return bool(value)

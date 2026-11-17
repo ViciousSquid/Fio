@@ -528,8 +528,18 @@ def test_client_learns_of_a_disconnect_when_its_event_queue_was_full(arena):
     # The client is busy loading the map (or sits in a dialog) and drains
     # nothing while the host keeps sending snapshots.
     for index in range(400):
-        peer.sendall(frame(dict(type="snapshot", clock=index)))
-    wait_until(lambda: connection.channel is not None and connection.channel.closed.is_set())
+        try:
+            peer.sendall(frame(dict(type="snapshot", clock=index)))
+        except OSError:
+            # Queue overflow closes the client channel. On Windows the peer
+            # can observe the resulting reset before this burst is complete.
+            break
+    # Wait for what drain() reports from: Channel.close() sets ``closed``
+    # first and calls the disconnected callback (``lost.set``) only after the
+    # socket shutdown, so on a slow runner a drain between the two had not
+    # yet learnt of the disconnect.
+    wait_until(lambda: connection.lost.is_set())
+    assert connection.channel.closed.is_set()
     events = list(connection.drain())
     assert len(events) > 100
     assert events[-1] == {"type": "disconnected"}

@@ -231,6 +231,8 @@ class QtGameView(QOpenGLWidget):
         self.hud_pixmaps = {}              # sprite path -> QPixmap (None if missing)
         self.show_spatial_grid = False
         self.renderer = None
+        #: Panorama authored on the current map's Primary PlayerStart.
+        self.sky_image_path = ""
         #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
         self._renderer_mode = DEFAULT_RENDERER
 
@@ -672,6 +674,9 @@ class QtGameView(QOpenGLWidget):
             return
         with self.gl_context():
             self._preload_level_textures()
+            # What is around the map's reflection probes may have changed:
+            # their snapshots are retaken on the next frame.
+            self.renderer.invalidate_reflection_probes()
 
     def _preload_level_textures(self):
         texture_set = set()
@@ -1001,6 +1006,8 @@ class QtGameView(QOpenGLWidget):
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
         _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
+        # The map's Primary PlayerStart owns the panorama in both editor and Play.
+        self.renderer.set_background_image(self.sky_image_path)
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
@@ -1394,6 +1401,8 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.player_runtime.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
+                # Enable physics, off: no physics engine for this session.
+                self.logic_thread.session_runtime.physics_enabled = bool(physics_enabled)
                 self.logic_thread.session_runtime.apply_play_mode(
                     True, spawn_start=player_start)
 

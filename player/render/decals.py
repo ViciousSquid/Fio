@@ -27,7 +27,7 @@ import io
 
 import numpy as np
 
-from engine import decal_textures
+from engine import decal_text, decal_textures
 from engine.decal_table import box_inverse
 from engine.shaders import DEFAULT_SHADERS
 from player.gles_shaders import translate, for_desktop
@@ -93,6 +93,11 @@ class PlayerDecals:
         self.textures = None
         self.layers = 0
         self.images_version = None
+        #: Each layer's pixels by name, kept between rebuilds: new words on a
+        #: sign draw that one layer, not every image again. Image files are
+        #: read afresh whenever the list of files changes.
+        self.layer_pixels = {}
+        self.layer_files = None
         self.ranges = (0.0, 1.0, 0.0, 1.0)
         self.color_texture = None
         self.copy_size = None
@@ -160,16 +165,28 @@ class PlayerDecals:
         size = DECAL_TEXTURE_SIZE
         blank = np.zeros((size, size, 4), dtype=np.uint8)
         layers = []
+        files = tuple(n for n in names if not decal_text.is_entry(n))
+        kept = self.layer_pixels if files == self.layer_files else {}
+        pixels = {}
         for name in names:
-            raw = decal_textures.read_image(name)
-            try:
-                with Image.open(io.BytesIO(raw)) as image:
-                    layers.append(np.asarray(image.convert('RGBA').resize(
-                        (size, size), Image.LANCZOS), dtype=np.uint8))
-            except Exception as exc:
-                # A blank layer keeps every later image on its layer.
-                print(f'[Decals] image {name} not loaded: {exc}', flush=True)
-                layers.append(blank)
+            layer = kept.get(name)
+            if layer is None:
+                try:
+                    if decal_text.is_entry(name):
+                        # A sign: drawn as the desktop draws it (shared code).
+                        layer = decal_text.layer_pixels(name, size)
+                    else:
+                        raw = decal_textures.read_image(name)
+                        with Image.open(io.BytesIO(raw)) as image:
+                            layer = np.asarray(image.convert('RGBA').resize(
+                                (size, size), Image.LANCZOS), dtype=np.uint8)
+                except Exception as exc:
+                    # A blank layer keeps every later image on its layer.
+                    print(f'[Decals] image {name} not loaded: {exc}', flush=True)
+                    layer = blank
+            pixels[name] = layer
+            layers.append(layer)
+        self.layer_pixels, self.layer_files = pixels, files
         self.layers = len(layers)
         if not layers:
             return 0
@@ -347,6 +364,7 @@ class PlayerDecals:
         self.textures = self.color_texture = None
         self.capacity = self.layers = 0
         self.images_version = self.copy_size = None
+        self.layer_pixels, self.layer_files = {}, None
         self.failed = False
 
     def close(self):

@@ -343,11 +343,14 @@ class LogicCollision:
         model_collision_enabled = self.model_collision_enabled
         brushes = []
 
+        physics_on = bool(getattr(logic.session_runtime, 'physics_enabled', True))
         for thing in logic.editor_state.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
-            physics_enabled = bool(props.get('physics_enabled', False))
+            # With physics switched off for the session nothing is a body: a
+            # physics Prop collides as the scenery it otherwise is.
+            physics_enabled = physics_on and bool(props.get('physics_enabled', False))
             if not model_collision_enabled and not physics_enabled:
                 continue
             if props.get('no_collision', False) and not physics_enabled:
@@ -529,7 +532,8 @@ class LogicCollision:
         full_path = os.path.join('assets', 'models', model_path)
         if not asset_exists(full_path):
             full_path = model_path
-        if not asset_exists(full_path):
+        package = getattr(logic, 'package', None)
+        if not package and not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
@@ -542,7 +546,10 @@ class LogicCollision:
 
             loader = GLBLoader()
             loader._filepath_hint = full_path
-            if not loader.load(full_path):
+            from .model_source import load_model
+            if package:
+                loader = load_model(model_path, package)
+            if loader is None or (not package and not loader.load(full_path)):
                 debug_log("Collision", f"GLBLoader failed to load {model_path}")
                 return None
 
@@ -623,7 +630,8 @@ class LogicCollision:
         full_path = os.path.join('assets', 'models', model_path)
         if not asset_exists(full_path):
             full_path = model_path
-        if not asset_exists(full_path):
+        package = getattr(logic, 'package', None)
+        if not package and not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
@@ -632,7 +640,10 @@ class LogicCollision:
                 from .glb_loader import GLBLoader
                 loader = GLBLoader()
                 loader._filepath_hint = full_path
-                if loader.load(full_path):
+                from .model_source import load_model
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is not None and (package or loader.load(full_path)):
                     verts = loader.get_flattened_vertices()
                 else:
                     verts = None
@@ -641,7 +652,10 @@ class LogicCollision:
                 # OpenGL-backed OBJ model on the logic thread.
                 from .obj_loader import OBJLoader
                 loader = OBJLoader()
-                if loader.load(full_path):
+                from .model_source import load_model
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is not None and (package or loader.load(full_path)):
                     source_vertices = np.asarray(loader.vertices, dtype=np.float32)
                     if source_vertices.size == 0:
                         verts = None
@@ -703,6 +717,43 @@ class LogicCollision:
 
         return self.model_collision_enabled
 
+
+    def sync_bodies(self):
+        """Entities came or went while the session runs (a plugin spawned or
+        despawned one): rebuild the model collision brushes, and give the
+        physics engine the bodies that are new and take away those that are
+        gone -- the rest carry on exactly as they are.
+
+        Solid scenery among them is in the spatial grid, which is repopulated
+        only if that changed; a physics Prop is a body, not a grid brush.
+        """
+        logic = self.logic
+        session = logic.session_runtime
+        if not session.play_mode:
+            return
+        before_bodies = {id(b.get('_physics_entity')): b for b in self._physics_body_brushes}
+        before_scenery = {id(b.get('_physics_entity'))
+                          for b in self._model_collision_brushes
+                          if not b.get('_physics_body')}
+        self._model_collision_brushes = (
+            self.build_model_collision_brushes() if self.model_collision_enabled else [])
+        self._physics_body_brushes = [
+            b for b in self._model_collision_brushes if b.get('_physics_body')]
+        scenery = {id(b.get('_physics_entity')) for b in self._model_collision_brushes
+                   if not b.get('_physics_body')}
+        if scenery != before_scenery and session.spatial_grid is not None:
+            session.spatial_grid.populate(
+                logic.editor_state.brushes + self._model_collision_brushes)
+        physics = session.physics_world
+        if physics is not None:
+            now = {id(b.get('_physics_entity')): b for b in self._physics_body_brushes}
+            for key, brush in before_bodies.items():
+                if key not in now:
+                    physics.remove_body(brush.get('_physics_entity'))
+            for key, brush in now.items():
+                if key not in before_bodies:
+                    physics.add_body(brush)
+        self.refresh_collision_brushes_cache()
 
     def refresh_collision_brushes_cache(self):
         """Recompute the combined static+model collision brush list.

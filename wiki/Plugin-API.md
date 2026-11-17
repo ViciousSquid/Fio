@@ -1,0 +1,1466 @@
+# Fio Plugin API Reference
+
+> **Security / trust boundary:** the plugin API is an in-process Python extension API, **not a sandbox**. Code loaded from `plugins/<name>` runs with the same OS/process privileges as Fio and must therefore be treated as trusted software. Do not place untrusted Python packages in `plugins/`. `.fiopak` archives do not install plugin code; they can only declare dependencies on plugins already installed by the host.\n\n
+This is the complete reference for everything a Fio plugin can call. It documents
+the public surface exported from [`plugins/api.py`](api.py) and
+[`plugins/host.py`](host.py) — the classes, methods, helpers and lifecycle a
+plugin builds against.
+
+For a narrative introduction ("what is a plugin, how do I write one"), start with
+[`plugins/README.md`](README.md). This document is the flat reference you keep
+open while writing code.
+
+- [At a glance](#at-a-glance)
+- [API versioning](#api-versioning)
+- [`FioPlugin` — the base class](#fioplugin--the-base-class)
+- [The plugin lifecycle](#the-plugin-lifecycle)
+- [`EditorAPI` — load-time registration](#editorapi--load-time-registration)
+- [`RuntimeAPI` — per-session services](#runtimeapi--per-session-services)
+- [`TickContext` — the per-tick object](#tickcontext--the-per-tick-object)
+- [`PluginHost` — the open-ended engine seam](#pluginhost--the-open-ended-engine-seam)
+- [`EventBus` and `Event`](#eventbus-and-event)
+- [`PropertySpec` and `prop()`](#propertyspec-and-prop)
+- [`GlobalStore` — cross-level storage](#globalstore--cross-level-storage)
+- [Helpers: `io_def`, `key_code`, `prop`](#helpers-io_def-key_code-prop)
+- [The manager entry points](#the-manager-entry-points)
+- [Play-session save / load (native)](#play-session-save--load-native)
+- [Threading and safety contract](#threading-and-safety-contract)
+
+---
+
+## At a glance
+
+A plugin is a Python sub-package of `plugins/` that exposes a module-level
+`PLUGIN` instance (a `FioPlugin` subclass). Everything else flows from four
+objects the manager hands you at defined moments:
+
+| Object | Handed to | When | Use it for |
+|--------|-----------|------|------------|
+| [`EditorAPI`](#editorapi--load-time-registration) | `register(api)` | once, at load (editor **and** engine) | declare entity types, I/O, property schemas, editor-UI extensions, renderers |
+| [`RuntimeAPI`](#runtimeapi--per-session-services) | `register_runtime(api)` | once per play session | register I/O input handlers; query the scene; spawn/despawn; raycast; the live physics and the player |
+| [`PluginHost`](#pluginhost--the-open-ended-engine-seam) | `connect(host)` | once per play session | subscribe to engine events; reach any subsystem; publish/consume services |
+| [`TickContext`](#tickcontext--the-per-tick-object) | `on_tick(logic, ctx)` | every play-mode tick | read input; drive the HUD |
+
+Import everything from `plugins.api` (and `plugins.host` for the host types):
+
+```python
+from plugins.api import (
+    FioPlugin, EditorAPI, RuntimeAPI, TickContext,
+    PropertySpec, GlobalStore, io_def, prop, key_code,
+    PlayerState, StateStore, Physics, Body,         # API 2.0
+    set_flag, clear_flag, PHYSICS_EVENTS,
+    HEAVY_MASS, CRUSH_DAMAGE, SV_GRAVITY, world_gravity,
+    API_VERSION, version_tuple,
+)
+from plugins.host import PluginHost, EventBus, Event
+```
+
+---
+
+## API versioning
+
+`plugins.api.API_VERSION` is the version string of the API surface the host
+implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
+
+| Value | Introduced |
+|-------|------------|
+| `API_VERSION` | `"2.0.0"` |
+| `API_VERSION_INFO` | `(2, 0, 0)` |
+
+History:
+
+- **1.2.0** — the open-ended extension surface: [`PluginHost`](#pluginhost--the-open-ended-engine-seam),
+  the engine [event bus](#eventbus-and-event), and the `connect(host)` hook.
+- **1.3.0** — render hooks (`render.*` events), swappable-renderer registration
+  (`register_renderer`), editor-UI extensions (extra property fields on any
+  entity, custom property tabs), and the `FIO_NO_PLUGINS` kill-switch.
+- **1.4.0** — optional editor Tools actions and console-command registration for developer plugins.
+- **1.5.0** — [editor content extensions](#editor-content-extensions-api-150): collapsible
+  property sections, LogicState preset keys and entity inspectors; [world pause and
+  actor pick](#world-pause-and-actor-pick-api-150-play-mode). Additive: every 1.4.0
+  plugin loads and behaves unchanged.
+- **1.6.0** — **Fio 3.0. A major architectural shift from 1.5:** the renderer is
+  a plugin boundary. Renderer registration takes the `engine.renderer.Renderer`
+  protocol (see [`register_renderer`](#editor-ui-extensions-api-130)): a renderer
+  factory is called as `factory(config)`, and the active renderer can be replaced
+  live. What that means for existing plugins:
+  - **Plugins written for 1.3–1.5 that do not use the renderer contract load and
+    behave unchanged** — entities, I/O, runtime hooks, events, editor extensions.
+  - **Renderer implementations written for 1.3–1.5 are not compatible.** The old
+    factory (`cls(texture_loader, grid_size, world_size, config)`) and the old
+    forward-renderer interface (`renderer_core` / `Renderer_F` internals) are gone,
+    and there is no compatibility shim: port the renderer to the protocol and
+    declare `api_version = "1.6.0"`.
+- **1.7.0** — the [pause menu](#pause-menu-api-170-play-mode):
+  `register_pause_menu_item`, the `pause_menu_opened` / `pause_menu_closed`
+  events, and `main_window.open_pause_menu()` / `close_pause_menu()`. Additive.
+- **1.8.0** — [`placement(brush)`](#placement--where-a-brush-is-api-180): where a
+  brush is, authored and live, its spin and its derived bounds. **One
+  behaviour change for plugins that read movers:** a mover's or door's `pos` is
+  its *authored* placement and no longer changes in play, and the play-time
+  keys `original_pos`, `_rot_angle` and `rotation_yaw` are no longer written
+  into brushes (or saved in maps). A plugin that read a moving brush's live
+  position from `brush['pos']`, its rest from `original_pos` or its spin from
+  `_rot_angle`/`rotation_yaw` reads `placement(brush).centre`, `.authored` and
+  `.spin` instead. Every other plugin loads and behaves unchanged.
+- **1.9.0** — **the renderer contract takes published tables only** ("tables
+  all the way to GL"). Only renderer implementations are affected:
+  - the frame input's `terrain` is an immutable
+    `engine.terrain_frame.TerrainFrame` -- the dense `TerrainTable`, per-slot
+    grass and block-mesh arrays, the paint maps, the appearance as numbers --
+    never the `Terrain` object. A renderer owns every GL resource it builds
+    from it (`engine.renderer.core.terrain_gl.TerrainGL` is the built-in
+    implementation, reusable as it stands);
+  - three post-scene members take vertex arrays instead of authored objects:
+    `draw_face_highlight(projection, view, triangles)`,
+    `draw_connection_lines(projection, view, segments, colours)`,
+    `draw_collision_visualization(projection, view, vertices, runs)`;
+  - `RenderStats` gains `terrain_visible_chunks`, `terrain_culled_chunks`,
+    `terrain_triangles`, `terrain_drawn_slots`;
+  - `render_refs` / `entity_refs` (the brush dictionaries and Things behind
+    the tables' rows) are no longer in the frame input.
+
+  A renderer written for 1.6-1.8 that draws the terrain or implements those
+  three members must be updated and declare `api_version = "1.9.0"`; there
+  is no shim. Every other plugin loads and behaves unchanged.
+- **2.0.0** — **1.9 extended to expose Soma, the player and LogicState.**
+  Nothing in 1.9 is changed or removed: every plugin written for 1.x loads and
+  behaves as it did, and the surface is **locked** at this version (a test
+  pins the whole of 1.9 and the whole of 2.0). Soma is Fio's physics engine
+  (*soma* is Greek for "body": Soma simulates bodies) — a subsystem of the
+  engine, as the Forward renderer is, not a plugin — and what 2.0 adds is how
+  a plugin communicates with it, with the player and with map state:
+  - **the physics engine** — [`RuntimeAPI.physics`](#soma-api-200)
+    (`RuntimeAPI.soma` when it is Soma), `body`, `impulse`, `explode`,
+    `bodies_near`, `bodies_in_box`, `raycast_bodies`, `spatial_grid`; the
+    events `physics.rest`, `physics.landed`, `physics.contact` and
+    `physics.toppled`; a physics Prop spawned in play gets a body;
+  - **the player** — [`RuntimeAPI.player`](#player-state-api-200) and
+    `RuntimeAPI.player2`, each a `PlayerState`;
+  - **LogicState** — [`RuntimeAPI.state(store)`](#logicstate-api-200), a
+    typed `StateStore` whose writes fire the map's outputs; `state_stores()`;
+    the `state_changed` event;
+  - **flags** — [`set_flag` / `clear_flag`](#flags-api-200): the only way to
+    change an entity's `hidden` or `disabled`;
+  - **the physics contract**, importable from `plugins.api`: `Physics`,
+    `Body`, `PHYSICS_EVENTS`, `HEAVY_MASS`, `CRUSH_DAMAGE`, `SV_GRAVITY`,
+    `world_gravity`;
+  - [`register_physics`](#register_physics-api-200) / `select_physics`: the
+    physics engine can be swapped out the way the renderer can.
+
+  **One thing to check in an existing plugin.** A plugin that writes
+  `entity.properties['hidden']` or `['disabled']` directly still loads, but
+  physics no longer notices such a write on its own (it used to look at every
+  awake body every tick in case). Use `set_flag` / `clear_flag`; the physics
+  engine prints a warning naming an entity changed any other way.
+
+  `SpatialGrid` — engine core — moved to `engine.spatial_grid`;
+  `from engine.physics import SpatialGrid, PhysicsWorld` still works. The
+  shipped plugins declare `api_version = "2.0.0"`.
+
+A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
+**newer** than the host's `API_VERSION`, the manager refuses to load the plugin
+with a clear message instead of letting it fail deep inside a hook. Plugins that
+don't set `api_version` default to `"1.0.0"` and always load.
+
+```python
+def version_tuple(value: str) -> tuple
+```
+
+Parse a dotted version string into a comparable int tuple. Non-numeric
+components degrade to `0`, so a malformed version never raises
+(`version_tuple("1.3.x") == (1, 3, 0)`).
+
+---
+
+## `FioPlugin` — the base class
+
+Subclass `FioPlugin`, set the metadata attributes, override the lifecycle
+methods you need, and expose an instance as your package's module-level
+`PLUGIN`.
+
+### Metadata attributes
+
+| Attribute | Type | Default | Meaning |
+|-----------|------|---------|---------|
+| `name` | `str` | `"unnamed"` | Short unique id, shown in logs and the menu. |
+| `version` | `str` | `"0.0.0"` | Human-readable version string. |
+| `description` | `str` | `""` | One-line description shown in tooling / the *About* entry. |
+| `category` | `str` | `"Plugins"` | Default editor category / menu grouping for this plugin's entities. |
+| `enabled` | `bool` | `True` | Whether the plugin is active. Set `False` to ship disabled-by-default (auto-enabled when a level using its entities loads). |
+| `api_version` | `str` | `"1.0.0"` | Minimum API version this plugin needs (see [API versioning](#api-versioning)). |
+| `requires` | `List[str]` | `[]` | Names (or package names) of other plugins this one depends on. A missing requirement disables this plugin with a logged reason. |
+
+### Lifecycle methods (override what you need)
+
+```python
+def register(self, api: EditorAPI) -> None
+```
+Register entities, I/O definitions and palette entries. Runs **once, UI-free**,
+in every process that loads plugins (editor and engine). Do **not** touch
+Qt/OpenGL here. → see [`EditorAPI`](#editorapi--load-time-registration).
+
+```python
+def describe_properties(self) -> dict
+```
+Optional property schemas, as `{entity_type: [PropertySpec, ...]}`. Collected by
+the manager right after `register`. An alternative to calling
+`EditorAPI.register_properties` per type. Default: `{}`.
+
+```python
+def register_runtime(self, api: RuntimeAPI) -> None
+```
+Register I/O input handlers against a play session's `IOManager`, and use the
+runtime services. Called once per play session. → see [`RuntimeAPI`](#runtimeapi--per-session-services).
+
+```python
+def connect(self, host) -> None
+```
+Connect to the live engine through the [`PluginHost`](#pluginhost--the-open-ended-engine-seam).
+Called once, alongside `register_runtime`, for **every** loaded plugin (so a
+plugin enabled later is already wired in; its event hooks self-gate on
+`enabled`). Subscribe to events, publish services, reach any subsystem here.
+
+```python
+def map_uses_plugin(self, map_data: dict) -> bool
+```
+Optional. Return True when *map_data* needs this plugin active, for a plugin
+whose behaviour attaches to core entities rather than an entity type of its
+own (a plugin is already detected by its registered entity types). The manager
+asks it when a level loads (`auto_enable_for_map`) and switches a
+disabled-by-default plugin on; an exception is logged and treated as False.
+
+```python
+def on_play_start(self, logic) -> None
+def on_play_stop(self, logic) -> None
+def on_tick(self, logic, ctx: TickContext) -> None
+```
+The play lifecycle. `on_play_start` initialises per-session state; `on_tick`
+runs every tick after core gameplay handling; `on_play_stop` restores any edited
+entity state so the map is left unchanged. → `on_tick` receives a
+[`TickContext`](#tickcontext--the-per-tick-object).
+
+```python
+def on_enabled_changed(self, enabled: bool) -> None
+```
+Called when the plugin is toggled on/off (menu or level auto-enable). Override
+to acquire/release resources or reset state. **Not** called for the initial
+state — only on a change.
+
+```python
+def menu_entries(self) -> List[Tuple[str, type]]
+```
+Extra `(label, ThingClass)` placement entries. Most plugins rely on
+`EditorAPI.register_entity` instead; override only for bespoke menu layouts.
+Default: `[]`.
+
+### Minimal plugin
+
+```python
+# plugins/coins/plugin.py
+from plugins.api import FioPlugin, io_def
+from editor.things import Thing
+
+class Coin(Thing):
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'coin'           # the I/O + serialization key
+        self.properties.setdefault('value', 1)
+
+class CoinsPlugin(FioPlugin):
+    name = "coins"
+    version = "1.0.0"
+    category = "Coins"
+
+    def register(self, api):
+        api.register_entity(Coin, menu_label="Coin")
+        api.register_io('coin',
+            inputs=[io_def('Collect', "Force-collect this coin")],
+            outputs=[io_def('OnCollected', "Fired when collected")])
+
+    def register_runtime(self, api):
+        def collect(entity, param, logic):
+            entity.properties['collected'] = True
+        api.register_input_handler('coin', 'collect', collect)
+```
+
+```python
+# plugins/coins/__init__.py
+from .plugin import CoinsPlugin
+PLUGIN = CoinsPlugin()
+```
+
+---
+
+## The plugin lifecycle
+
+```
+ load_plugins()                          (editor + engine, once at startup)
+       │
+       ▼
+ register(EditorAPI)      ── entity types, I/O defs, schemas, menu entries
+ describe_properties()    ── (optional) extra schemas collected here
+       │
+ play mode / play session starts
+       │
+       ├─ register_runtime(RuntimeAPI)   ── I/O input handlers + services
+       ├─ connect(PluginHost)            ── event subscriptions, services
+       │
+       ├─ on_play_start(logic)
+       │
+       ├─ on_tick(logic, TickContext)    ── every tick, after core interactions
+       │        …
+       │
+       └─ on_play_stop(logic)            ── restore anything you mutated
+```
+
+Every call into plugin code is wrapped by the manager: a plugin that raises logs
+an error to the debug console instead of crashing the editor or the play
+session. `register_runtime` / `connect` run for **all** loaded plugins so a
+plugin enabled mid-session already has working inputs and event hooks — those
+hooks self-gate on the plugin's live `enabled` flag.
+
+---
+
+## `EditorAPI` — load-time registration
+
+Handed to `FioPlugin.register` exactly once when the plugin loads. Runs in
+**both** the editor and any engine process, so it must be UI-free.
+
+### Entity registration
+
+```python
+def register_entity(self, cls, category=None, menu_label=None, placeable=True) -> type
+```
+Register a `Thing` subclass as a placeable editor entity. It:
+
+- adds `cls` to `editor.things.ENTITY_TYPES` (keyed by class name) so the
+  property editor, spawner and serializer find it;
+- adds it to `ENTITY_CATEGORIES` under *category* (default: the plugin's
+  `category`);
+- if *placeable*, records a right-click menu entry under **Plugins ▸ &lt;plugin&gt;**;
+- auto-detects a class-level `PROPERTY_SCHEMA` and records it as the type's
+  property schema.
+
+Returns `cls` unchanged, so it works as a decorator. In the PyQt-free player the
+editor-palette step is skipped quietly, but ownership is always recorded so the
+package exporter and player host can map a map's entity `type` back to its
+owning plugin.
+
+### I/O registration
+
+```python
+def register_io(self, entity_type: str, inputs: List, outputs: List) -> None
+```
+Register input/output definitions for *entity_type* — which **must equal** the
+entity's `properties['type']` string. *inputs*/*outputs* are lists of
+[`io_def`](#helpers-io_def-key_code-prop) results; `None` entries (produced when
+the I/O system is unavailable) are filtered out.
+
+```python
+def extend_io(self, entity_type: str, inputs=(), outputs=()) -> None
+```
+Add I/O definitions to an entity type the plugin does not own. Existing
+ports are preserved and matching names are not duplicated. Unlike `register_io`,
+this is an additive merge and is recorded so the extension can be replayed if
+the editor's I/O registry is rebuilt.
+
+### Property schema
+
+```python
+def register_properties(self, entity_type: str, specs: List[PropertySpec]) -> None
+```
+Declare the editable-property schema for *entity_type*. The editor renders typed
+widgets — enum dropdowns, ranged spin boxes, checkboxes — with labels and
+tooltips instead of guessing from the stored value's Python type. Optional and
+additive: properties without a spec still render generically. → see
+[`PropertySpec`](#propertyspec-and-prop).
+
+### Editor-UI extensions (API 1.3.0)
+
+```python
+def register_extra_fields(self, entity_type: str, specs) -> None
+```
+Append extra editable fields to *entity_type*'s property panel — works for any
+entity, **including built-in ones**. Fields are added after the stock rows,
+never replacing them.
+
+```python
+def register_property_tab(self, label: str, factory, entity_type=None) -> None
+```
+Add a custom tab to the property panel. `factory(thing)` builds and returns the
+tab's widget. With *entity_type* the tab appears only for that type; otherwise
+for every entity.
+
+```python
+def register_singleton_entity(self, entity_type: str) -> None
+```
+Mark *entity_type* as a per-map singleton. Placement paths refuse to add a
+second instance and select the existing one.
+
+```python
+def register_entity_wizard(self, entity_type: str, factory) -> None
+```
+Register a creation wizard. `factory(parent) -> dict | None` runs when the entity
+is placed and returns its initial properties, or `None` to cancel.
+
+```python
+def register_menu_action(self, label: str, callback, tooltip: str = "") -> None
+```
+Add an action to the top of the plugin's editor menu. The callback is dispatched
+only while the plugin is enabled.
+
+<a id="register_physics-api-200"></a>
+```python
+def register_physics(self, name: str, cls) -> bool
+def select_physics(self, name: str) -> bool
+```
+Swap out the physics engine, the way `register_renderer` swaps the renderer
+(API 2.0). Soma is the physics engine Fio ships — a subsystem of the engine,
+as Forward is the renderer it ships — and both sit behind a contract so that
+either can be replaced without the rest of the engine knowing.
+
+`register_physics` registers *cls* under *name* (`"Soma"` is the built-in
+one); *cls* is a factory called as `cls(spatial_grid)` once per play session,
+and what it returns must satisfy the `Physics` protocol
+(`engine/physics/api.py`). `select_physics` makes a registered engine the one
+the next play session is created with (the console's `phys_engine <name>`
+does the same); a running session keeps its own. `tests/helpers/physics.py`
+has the smallest conforming implementation. See
+[the physics engine](#soma-api-200) for the contract's members and rules.
+
+```python
+def register_renderer(self, name: str, cls) -> bool
+```
+Register a renderer under *name* in Fio's renderer registry (`"Forward"` is
+the built-in one). This contract is API 1.6.0: a plugin that registers a
+renderer declares `api_version = "1.6.0"`. *cls* is a factory called as `cls(config)` with the
+viewport's GL context current — usually the renderer class itself — and what
+it returns must satisfy the `engine.renderer.Renderer` protocol:
+
+- **lifecycle:** `ready`, `cleanup()`
+- **the frame:** `render_scene(projection, view, camera_pos, primary_selection,
+  config, clear=True, brush_slots=None)`. `config` is the frame input
+  documented in `engine.renderer.FRAME_INPUT` (the dense `RenderTable` /
+  `EntityTable`, their slots, the published terrain and the view settings);
+  `primary_selection` is an `engine.renderer.SelectionOverlay` or `None`.
+- **settings:** `view_distance`, `shadows_enabled`, `water_quality`,
+  `set_grid(world_size, grid_size)`
+- **resources:** `load_texture`, `set_sprite_textures`, `get_loaded_model`
+- **diagnostics:** `render_stats` (an `engine.renderer.RenderStats`)
+- **optional:** `animate_textures(clock)` -- animated (GIF) textures. The host
+  calls it before each frame with the seconds of unpaused Play (0 outside
+  Play); show each animated texture's frame for that time, keeping its GL
+  name. `RendererCore` implements it; a renderer without it shows GIFs still.
+- **post-scene drawing the viewport asks for:** `draw_billboards`,
+  `draw_player_glasses`, `draw_bullet_marks`, `draw_component_overlay`, and
+  three that take arrays the host builds with `engine.overlay_geometry`
+  (API 1.9.0):
+  - `draw_face_highlight(projection, view, triangles)` -- world-space
+    triangles, float32 `(n, 3)`, or `None`;
+  - `draw_connection_lines(projection, view, segments, colours)` -- float32
+    `(n, 2, 3)` and `(n, 3)`;
+  - `draw_collision_visualization(projection, view, vertices, runs)` --
+    `GL_LINES` vertices float32 `(n, 3)` and runs of
+    `(first, count, (r, g, b))`, drawn in order.
+
+**The frame is tables (API 1.9.0).** Nothing a renderer is handed is an
+authored object, and a renderer writes nothing on what it is handed:
+
+- `render_table` / `entity_table` and their slot arrays, as before. Keep
+  per-table state of your own under the table's identity and `generation`;
+  `RenderTable.row_changes_since(serial)` reports the rows refreshed since
+  the `row_change_serial` you last saw (or `None`: rebuild).
+- `terrain`: a `TerrainFrame` or `None`. `frame.table` is the
+  `TerrainTable` (one row per resident chunk: the bordered height grid,
+  `grid_res`, world origin and size, height range, `version`, `order`);
+  `frame.products.grass[slot]` / `.blocks[slot]` are
+  `(version, slot_order, float32 array)`; `frame.paint_maps`,
+  `frame.paint_display` and `frame.paint_versions` are read-only views by
+  chunk coordinate; the rest are numbers and flags (`appearance` -- the
+  uniform values by name -- `gradient`, `flat_mode`, `blocks`, the grass
+  settings). Upload a row when the `version` you hold differs; drop what you
+  built for a slot when `table.order[slot]` changes or the row stops being
+  `live`; keep your state under `frame.key` and free it when the key changes.
+  Streaming, LOD and chunk building are done before the frame
+  (`Terrain.advance`, by the host): a renderer computes no height.
+- `decals`: projected decals (blood and placed), or `None`:
+  `(models, params, inverses)`, float32 `(n, 16)`, `(n, 4)` and `(n, 16)`,
+  from the logic thread's `DecalTable` (`engine/decal_table.py`). Each is a
+  box -- the unit cube's column-major model matrix -- with
+  `(texture layer/variant, opacity, kind, flags)` and the box's inverse;
+  `kind` is 0 for blood on a wall, 1 on a floor, 2 a placed image, 3 a placed
+  wet patch. A placed decal's `tint`, less one, is in the inverse's bottom
+  row (elements 3, 7, 11 -- zero, so white, for an untinted decal and for
+  blood): multiply the image by `1 + that`. Draw the box and paint its
+  texture onto whatever the frame has drawn inside it (the built-in pass
+  reconstructs the surface from depth: `engine/renderer/forward/decals.py`,
+  `decal.frag`). A renderer that ignores the key simply shows no blood.
+
+The renderer owns its technique — shaders, passes, lighting model, shadowing,
+G-buffer — and consumes the dense tables rather than authored
+`Brush`/`Thing`/`Light` objects. **You do not need to understand or inherit the
+`ForwardRenderer` to implement another renderer**;
+`engine.renderer.core.RendererCore` is optional reusable infrastructure
+(texture/model resources, table lookups, culling, editor overlays). Returns
+`True` if registered, `False` in a headless/player context with no viewport.
+This is how a whole new renderer ships as a plugin.
+
+**Choosing it, live.** `r_renderer` lists the registered renderers and
+`r_renderer <name>` swaps to one (`QtGameView.switch_renderer`), in the editor or
+in Play. The host creates the new renderer first; if its factory raises or it is
+not `ready`, the current one keeps running. Session settings (`shadows_enabled`,
+`water_quality`, the shared `view_distance`) carry over. Map logic cannot run
+`r_renderer`.
+
+**Resource lifetime is part of the contract.** *No GL resource ID survives the
+lifetime of the renderer that owns it.*
+
+- The renderer instance owns its GL resources: programs, buffers, vertex arrays,
+  framebuffers, and every texture and model it loads — including the names it
+  returns from `load_texture`.
+- The host discards renderer-produced GL handles before calling `cleanup()` (its
+  sprite table), and `cleanup()` must delete everything the renderer made,
+  lazily created objects included -- what it built for the terrain among
+  them: since API 1.9.0 the terrain holds no GL name at all.
+- A replacement renderer receives fresh resource tables: the host reloads its
+  sprites through the new renderer's `load_texture` and hands them over with
+  `set_sprite_textures`. Never assume a GL name from another renderer, or from an
+  earlier instance of your own, is still valid.
+
+**Display modes.** The frame input's `brush_display_mode` is the editor's
+Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`, `Points`,
+`Overlay` (Textured with the wireframe drawn over it); `r_wireframe` selects
+Wireframe. The host publishes it every frame and the renderer decides how each
+looks. In Play the host publishes `Textured` unless Wireframe, Points or Overlay
+is selected.
+
+**Diagnostics.** [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables)
+(**Debug → Debug Tables**) works unchanged with any renderer: it labels the
+active one (**FORWARD**, **DEFERRED**, …), shows the dense tables and visible
+slots it is given, follows a selected object to its rows, and reports
+`render_stats` — `draw_calls` (scene draws), `shadow_draw_calls`, `batched_draws`,
+`visible_tris`, pass timings — plus any lines the renderer publishes in
+`render_stats.details` (`name -> text`, or a zero-argument callable).
+
+The contract step by step, GL state rules and a complete working
+`DeferredRenderer` are in the wiki's
+[Renderer Development Guide](https://github.com/ViciousSquid/Fio/wiki/Renderer-Development-Guide);
+the example itself is [`docs/examples/deferred_renderer/`](../docs/examples/deferred_renderer/)
+(copy it into `plugins/` and run `r_renderer Deferred`).
+
+### Developer/editor tools (API 1.4.0)
+
+```python
+def register_tools_action(self, label: str, callback, tooltip: str = "") -> None
+def register_console_command(self, name: str, callback, help_text: str = "") -> None
+```
+`register_tools_action` adds an action to Fio's **Tools** menu. Its callback
+receives `main_window`. `register_console_command` adds a plugin-owned debug
+console command; its callback receives `(args, main_window, logic, play_mode)`.
+Both are gated by the plugin's enabled state and are available from API 1.4.0.
+`register_menu_action` above is the plugin-specific menu counterpart for actions
+that belong with the plugin rather than in Tools.
+
+### Editor content extensions (API 1.5.0)
+
+Fio provides the mechanism; the plugin provides the content. All three are
+recorded with the registering plugin and drop out while it is disabled. A plugin
+that calls them should declare `api_version = "1.5.0"`, so an older host refuses
+it with a clear message rather than failing at `register()`.
+
+```python
+def register_property_section(self, label: str, factory, entity_type=None,
+                              expanded: bool = False) -> None
+```
+Add a collapsible section at the end of the entity's **Properties** tab. Same
+`factory(thing) -> widget` contract as `register_property_tab`; use a section for
+a small editor that belongs with the entity's other properties, a tab for one
+that needs the room. *expanded* is the initial state, and a collapsed section's
+factory does not run until it is first opened. With *entity_type* the section
+appears only for that type.
+
+```python
+def register_kv_suggestions(self, provider) -> None
+```
+Offer preset keys in the LogicState editor. `provider(store)` receives the
+LogicState being edited and returns rows of `(label, key, default_value)` or
+`(label, key, default_value, tooltip)`; the panel lists them in a **Preset key**
+picker, and **Insert** adds the key with its default as a designer default (or
+selects it if already present). Return `[]` for stores the plugin does not use;
+`store.properties["store_name"]` tells stores apart. When two providers offer the
+same key the first registered wins; malformed rows are skipped.
+
+```python
+def register_entity_inspector(self, provider, entity_type=None) -> None
+```
+Supply the contents of the **Entity Inspector**, a live, read-only panel opened
+from the Scene Hierarchy's **Inspect** action or by calling
+`main_window.show_entity_inspector(entity)` (for example from a console
+command). `provider(entity, logic) -> dict | None`, where *logic* is the running
+logic thread or `None` outside Play Mode, returns an inspection document:
+
+```python
+{"title":    "Gate Keeper",
+ "subtitle": "patrolling · awake",
+ "sections": [("Vitals", [("Health", 80), ("Speed", 1.5)]),
+              ("Goals",  [("Patrol", "", 0.9), ("Rest", "", 0.2)])]}
+```
+A row is `(label, value)`, or `(label, value, fraction)` to draw a 0..1 bar. The
+first provider returning a non-empty document is shown; with none the panel lists
+the entity's public properties. The panel refreshes about four times a second
+while visible. With *entity_type* the provider is only asked about that type.
+
+### World pause and actor pick (API 1.5.0, Play Mode)
+
+Called on the engine objects a plugin already receives (the logic thread in
+`on_tick`/console commands, the main window in Tools actions and console
+commands). Part of API 1.5.0: a plugin that uses them declares
+`api_version = "1.5.0"`.
+
+```python
+logic.session_runtime.set_world_paused(owner, paused=True)  # hold/release a pause for *owner*
+logic.session_runtime.world_paused                          # True while any owner holds one
+logic.session_runtime.world_pause_owners()                  # frozenset of the owners holding one
+main_window.begin_actor_pick(on_pick=None)   # arm click-to-pick of an actor
+main_window.view_3d.actor_pick_active        # True while a pick is armed
+```
+While any owner holds a world pause, a play tick advances nothing in the world
+(player, movers, doors, I/O timers, triggers, props, physics, projectiles, the
+monster AI thread) but plugins still tick, so a game's menus keep working. They
+tick exactly when an unpaused tick would reach them -- not during a cinematic, a
+death or the level-complete screen. Each owner releases only its own request;
+entering or leaving Play Mode drops them all. `begin_actor_pick` pauses the
+world, frees the cursor and calls `on_pick(entity)` for the next actor clicked
+(default: open the Entity Inspector); Esc or a right-click cancels. Solid
+brushes in front of an actor block the click (as drawn, rotation included);
+terrain does not.
+
+### Pause menu (API 1.7.0, Play Mode)
+
+Esc in Play Mode opens the pause menu (with the player dead, Esc still leaves
+Play). It holds the world pause owner `"pause_menu"` while it is open, so the
+world stops and plugins keep ticking, and it frees the cursor. Its first page
+is:
+
+| Item | What it does |
+|------|--------------|
+| Resume | Close the menu and play on (Esc does the same). |
+| Save Game | Three slots, `saves/slot1.fiosave` to `slot3.fiosave`, each labelled with when it was saved. |
+| Load Game | The same slots (an empty one cannot be chosen); loading closes the menu. |
+| Options | **Sound Volume** and **Music Volume** (0-100; music is whatever plays from `assets/music`, sound is everything else) and **Video** (Fullscreen, Borderless, Windowed). These are the settings of Settings > Play Modes (Audio, and Display Mode), so the two always agree. |
+| *plugin items* | Each enabled plugin's items, in registration order. |
+| Exit to Editor | Leave Play. In a played package it reads **Quit** and asks before quitting the game. |
+
+The menu is a floating window like SysMon's, titled with the current page: drag
+it by its title bar (it opens where it was left), and its [X] resumes. Behind
+it the frame the menu opened over is blurred; it fades in over a second, and out
+again over the resumed game (play resumes at once). Up/Down
+(or W/S) choose, Enter, Space or E activates, Left/Right (or A/D) move a slider,
+and Esc goes back a page. The cursor is free while it is open, and the mouse
+works too.
+
+```python
+api.register_pause_menu_item(label, callback, close_menu=True)  # in register(api)
+main_window.open_pause_menu()        # what Esc does; False outside Play
+main_window.close_pause_menu()       # resume; False when it was not open
+main_window.view_3d.pause_menu_active
+logic.session_runtime.pause_menu_open
+```
+`callback(main_window, logic)` runs on the UI thread, with the world paused,
+when the item is chosen; an exception in it is logged and play continues. With
+`close_menu=True` the menu then closes; pass `False` for an item that opens a
+screen of its own, then call `main_window.close_pause_menu()` when that is done.
+
+The logic thread emits `pause_menu_opened` and `pause_menu_closed` on the
+[event bus](#events) when the menu opens and closes:
+
+```python
+def connect(self, host):
+    host.on("pause_menu_opened", lambda ev: self.mute_radio())
+    host.on("pause_menu_closed", lambda ev: self.unmute_radio())
+```
+
+### Global store & logging
+
+```python
+@property
+def globals(self) -> GlobalStore
+def global_get(self, key, default=None, store="plugins")
+def global_set(self, key, value, store="plugins")
+def log(self, message: str) -> None
+```
+`globals` is the cross-level [`GlobalStore`](#globalstore--cross-level-storage).
+`log` is informational — silent unless `FIO_PLUGIN_DEBUG` is set — so plugins
+don't spam the console on a normal launch.
+
+---
+
+## `RuntimeAPI` — per-session services
+
+Handed to `FioPlugin.register_runtime` when a logic thread starts. Beyond
+registering I/O input handlers, it exposes a small **services** layer over the
+play session's `logic` object so plugins don't each re-implement ray-casting,
+entity queries and vector math.
+
+Attributes: `api.logic` (the play session's logic object) and `api.io_manager`
+(its `IOManager`, or `None`).
+
+### I/O
+
+```python
+def register_input_handler(self, entity_type: str, input_name: str, handler) -> None
+```
+Register `handler(entity, parameter, logic)` for an entity input. Registered
+once (when the logic thread attaches) but **gated on the plugin's live
+`enabled`** — it runs only while the plugin is on. That lets the manager attach
+every loaded plugin up front (so one enabled later has working inputs
+immediately) while a disabled plugin's inputs stay inert without a re-attach.
+
+```python
+def fire_output(self, entity, output_name: str, value=None) -> None
+```
+Fire an output from *entity* through the I/O system (no-op if unavailable).
+
+### Scene queries
+
+```python
+def entities_of_type(self, type_name: str) -> List
+```
+All scene entities whose normalised `type` matches *type_name*.
+
+```python
+def things_near(self, pos, radius: float, type_name=None) -> List
+```
+Entities within *radius* of *pos* (an `(x, y, z)`), optionally filtered by type.
+
+```python
+def raycast_from_crosshair(self, reach=160.0, aim_dot=0.86,
+                           type_name=None, predicate=None)
+```
+The nearest entity under the crosshair, or `None`. Considers entities within
+*reach* whose direction from the eye is within *aim_dot* of the look vector
+(`1.0` = dead-centre, lower = wider cone). Optionally filter by *type_name*
+and/or an arbitrary `predicate(entity)`. This is the "what am I looking at"
+query most interaction plugins need.
+
+### Player geometry
+
+```python
+def player_eye(self)      # -> (x, y, z) eye position (origin + camera_height)
+def player_forward(self)  # -> (x, y, z) full look direction, includes pitch
+```
+
+<a id="player-state-api-200"></a>
+### Player state (API 2.0.0)
+
+```python
+@property
+def player(self) -> PlayerState
+```
+The player, live: every member reads the engine's state now and every
+assignment changes it, on the logic thread. Vectors are plain `(x, y, z)`
+tuples — no PyGLM — whatever the host stores them as.
+
+| Member | | |
+|--------|---|---|
+| `position` | read / write | centre of the player's hull, world units |
+| `velocity` | read / write | units per second |
+| `teleport(position, velocity=(0, 0, 0))` | | move the player; at rest by default |
+| `on_ground`, `ground` | read | standing on something, and the brush it is |
+| `ducked`, `in_water`, `swimming` | read | |
+| `size` | read | the hull's `(width, height, depth)` now (a ducked player is shorter) |
+| `yaw`, `pitch` | read / write | radians |
+| `eye`, `forward` | read | camera position and look direction |
+| `health`, `armor` | read / write | clamped to their maxima |
+| `max_health` | read / write | |
+| `max_armor`, `dead` | read | |
+| `god_mode`, `notarget` | read / write | cannot be hurt; ignored by monsters |
+| `damage(amount, source=None)` | | hurt the player as the world does: armour first, god mode stops it |
+| `give_armor(amount)` | | |
+| `speed` | read / write | walking speed, units per second |
+| `noclip` | read / write | the player's own physics off: it flies, passes through the world, and touches no physics body |
+| `holding`, `drop()` | read | the Prop being carried, and putting it down |
+| `keys`, `has_key(name)`, `give_key(name)`, `take_key(name)` | | collected keys |
+| `weapons` | read | the weapons held, by item id |
+| `index` | read | 0 for the first player, 1 for the second |
+| `exists`, `object` | read | whether there is a player yet, and the engine's own `Player` for anything not here |
+
+`RuntimeAPI.player2` is the second, split-screen player: the same members
+where the engine keeps them per player (position, motion, view, health); its
+`exists` is False when nobody is playing split-screen.
+
+```python
+def on_tick(self, logic, ctx):
+    player = self.api.player              # the RuntimeAPI kept from register_runtime
+    if player.in_water and not player.swimming:
+        player.velocity = (0.0, 300.0, 0.0)       # a geyser
+    if player.position[1] < -2000.0:
+        player.damage(25)
+        player.teleport(self.checkpoint)
+```
+
+<a id="soma-api-200"></a>
+### The physics engine: Soma (API 2.0.0)
+
+```python
+@property
+def physics(self) -> Physics               # never None
+@property
+def physics_enabled(self) -> bool
+@property
+def soma(self) -> Physics
+def body(self, entity) -> Optional[Body]
+@property
+def spatial_grid(self)
+```
+Soma is Fio's physics engine: it simulates bodies — the Props whose
+`physics_enabled` is set. It is a subsystem of the engine, not a plugin; this
+is how a plugin communicates with it. `physics` is the play session's physics
+engine — Soma, unless another was [registered](#register_physics-api-200) and
+selected; fetch it when you use it, since each play session has its own.
+`soma` is the same object when the engine is Soma, for what is Soma's own
+rather than the contract's.
+
+**With physics switched off, nothing fails.** When there is no physics engine
+— *Enable physics* is off in the settings, or play is not running —
+`physics` is not `None` but a stand-in (`NO_PHYSICS`) on which every member
+does nothing, quietly: a query finds no bodies, a push pushes nothing, a
+control is accepted and forgotten. A plugin need not ask first. It is falsy,
+so `if api.physics:` works, and `api.physics_enabled` says the same. `body(entity)` is the simulated body of a
+physics Prop, a live handle. `spatial_grid` is the session's
+`engine.spatial_grid.SpatialGrid`: where the world is (solid brushes and
+their true surfaces, the terrain, movers and doors where they are now, water)
+— the same grid the physics engine asks.
+
+| Member | |
+|--------|---|
+| `gravity`, `time_scale`, `friction_scale`, `damping_scale`, `sleep_enabled` | the world controls (the console's `phys_*`); `reset_controls()` restores them |
+| `get_body(entity)` → `Body` | `velocity` (read / write), `mass`, `half_extents`, `awake`, `kinematic` |
+| `wake(entity, velocity=None)`, `wake_all()` | simulate a body again, optionally at a velocity |
+| `set_kinematic(entity, value)` | take a body out of the simulation (you move it) or hand it back |
+| `sync_entity_position(entity, wake=False)` | you moved an entity: take its `pos` as the body's |
+| `impulse(entity, vector)` | push a body: its velocity changes by `impulse / mass` |
+| `impulse_radial(centre, radius, strength)` | push everything near away from a point: an explosion |
+| `on_rest(entity, callback)`, `off_rest(entity, callback)` | be told when a body comes to rest; any number may listen |
+| `bodies_in_box(lo, hi)`, `bodies_near(point, radius)`, `raycast(origin, direction, reach)` | find bodies through the engine's own index |
+| `get_body(entity)` → also | `position`, `grounded`, `resting_on`; `mass`, `friction` assignable |
+
+`RuntimeAPI` has the common ones directly (with physics off they answer
+`False`, `[]` or `None`): `impulse(entity, vector)`,
+`explode(centre, radius, strength)`, `bodies_near(point, radius)`,
+`bodies_in_box(lo, hi)`, `raycast_bodies(origin, direction, reach)`.
+`set_rest_callback` is the engine's own slot (a Prop's `OnRest`); a plugin
+listens with `on_rest` or the `physics.rest` event, and replaces nothing.
+
+**Events.** Subscribe with `host.on(...)`; the physics engine records them
+only while something is subscribed to one, so they cost nothing unused.
+
+| Event | Payload |
+|-------|---------|
+| `physics.rest` | `entity`: a body came to rest |
+| `physics.landed` | `entity`, `speed`: it came down onto the ground |
+| `physics.contact` | `entity`, `other` (the entity it met, or `None` for the world), `axis`, `speed` |
+| `physics.toppled` | `entity`, `axis`, `sign`: a barrel went over |
+
+**Bodies come and go.** A physics Prop created with `spawn` during play gets
+a body, and loses it when despawned; the bodies already moving carry on.
+
+**Soma's own.** `api.soma` is the same object when the engine is Soma, with
+`topple(entity, direction)` and `stand(entity)` for Props that fall over
+(barrels), and `Body.toppled`. See the wiki's *Soma* page.
+
+```python
+def connect(self, host):
+    host.on("physics.contact", self.on_contact)
+
+def on_contact(self, event):
+    if event.data["speed"] > 400.0:               # something hit hard
+        self.api.explode(event.data["entity"].pos, 300.0, 600.0)
+```
+
+**Where Soma sits.** Fio's core is modular: the renderer and the physics
+engine are each a subsystem behind a contract, and the rest of the engine
+drives them through it and nothing else, so either can be worked on -- or
+swapped out -- without the rest of the engine knowing. Soma's contract is `engine/physics/api.py`
+(stdlib-only): the `Physics` and `Body` protocols, what crosses them, and the
+game's rules Soma honours (`SV_GRAVITY`, `HEAVY_MASS`, `CRUSH_DAMAGE`). Two
+rules come with it: the world is the `SpatialGrid`'s — Soma keeps no copy —
+and a moved body is handed back by *assigning* `entity.pos`. To improve
+Soma, work in `engine/physics/soma.py`; nothing outside `engine/physics/`
+names it (`tests/physics/test_physics_contract.py` holds that line).
+
+**What the calls cost.** Measured on the development container with 500
+bodies (and, in brackets, 4,096) -- `rt` is a `RuntimeAPI`; the machine moves
+the numbers, the proportions much less:
+
+| Call | Microseconds |
+| :--- | ---: |
+| `rt.physics`, `rt.player`, `rt.physics_enabled`, `rt.state(name)` | 0.03 – 0.1 |
+| `rt.body(entity)`, and reading any one thing from a `Body` or the player | 0.1 – 0.3 |
+| `StateStore.get` | 0.25 |
+| `StateStore.set` (the map's `LogicState` reacts) | 3 – 6 |
+| `set_flag` / `clear_flag` | 1 |
+| `rt.impulse` | 2.5 |
+| `rt.bodies_in_box` (a 400-unit cube) | 12 (13) |
+| `rt.bodies_near` (radius 200) | 18 (20) |
+| `rt.bodies_near` (radius 2,000) | 31 (86) |
+| `rt.raycast_bodies` (reach 2,000) | 38 (40) |
+| `rt.explode` (radius 300) | 36 (44) |
+| `rt.things_near` / `rt.entities_of_type`, for scale: they read every entity | 53 / 61 (more with more entities) |
+
+A body query costs what is near it, not how many bodies there are; prefer one
+to `things_near` when it is physics Props you are after. The `physics.*`
+events cost nothing while no plugin subscribes.
+
+<a id="logicstate-api-200"></a>
+### LogicState (API 2.0.0)
+
+```python
+def state(self, store: str) -> StateStore
+def state_stores(self) -> list
+```
+`state(name)` is one LogicState store as the map sees it. `GlobalStore`
+(below) reaches the same registry but speaks strings and writes silently;
+a `StateStore` is the store itself:
+
+| Member | |
+|--------|---|
+| `get(key, default=None)` | the **typed** value: an integer counter is an `int`, a flag a `bool` |
+| `set(key, value, value_type=None)` → `(accepted, changed)` | a write the map hears: it goes through the level's `LogicState` entity for the store, firing `OnValueSet` / `OnValueChanged` exactly as an I/O connection would. Text is typed as an I/O parameter is (`"5"` is an integer) unless *value_type* names the type |
+| `delete(key)`, `keys()`, `items()`, `key in store` | |
+
+Every change to any store, whoever makes it — a plugin, an I/O connection —
+is also the event `state_changed` (`store`, `key`, `value`, `entity`).
+
+```python
+def on_tick(self, logic, ctx):
+    score = self.api.state("match")
+    if score.get("kills", 0) >= 10:
+        score.set("won", True)                    # the map's OnValueChanged fires
+```
+
+<a id="flags-api-200"></a>
+### Flags: `hidden` and `disabled` (API 2.0.0)
+
+```python
+from plugins.api import set_flag, clear_flag
+
+set_flag(entity, "disabled", True)
+clear_flag(entity, "disabled")        # the journalled properties.pop(...)
+```
+**This is how a plugin changes those two flags.** Physics and the render
+projection keep their own tables of which entities are hidden or disabled,
+and hear of a change through the engine's change journal and nowhere else —
+so that neither has to look at every entity every tick. A value written
+straight into `entity.properties` is not heard: the entity goes on being
+simulated and drawn as it was, and the physics engine prints a warning
+naming it.
+
+### Runtime spawn / despawn
+
+```python
+def spawn(self, cls, pos=None, properties=None)
+```
+Instantiate *cls*, append it to `logic.editor_state.things`, emit an `entity_spawned` event,
+and return the entity (or `None` if construction fails).
+
+```python
+def despawn(self, entity) -> bool
+```
+Remove *entity* from the live scene. Returns `True` if it was present.
+
+### Global store & logging
+
+```python
+@property
+def globals(self) -> GlobalStore
+def global_get(self, key, default=None, store="plugins")
+def global_set(self, key, value, store="plugins")
+def log(self, message: str) -> None
+```
+
+---
+
+## `TickContext` — the per-tick object
+
+Passed to `FioPlugin.on_tick` once per play-mode tick.
+
+### Fields
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `delta` | `float` | Seconds since the previous tick. |
+| `use_pressed` | `bool` | The edge-triggered "use/interact" key for this tick (already consumed by the logic thread). Treat `True` as a single press. |
+| `keys` | `frozenset` | The raw held-key set (Qt key codes on the engine host). Prefer `key_down`. |
+| `interaction_consumed` | `bool` | `True` if the core already set a HUD prompt / consumed the use press this tick (door, collectible Prop, level-changer). Avoid clobbering unless you own a crosshair target. |
+| `logic` | `Any` | The play session's logic object (set by the manager). |
+
+### Input
+
+```python
+def key_down(self, name) -> bool
+```
+`True` if *name* is held. *name* is a key name (`'w'`, `'space'`, `'shift'`,
+`'up'` …) or a raw int code. → see [`key_code`](#helpers-io_def-key_code-prop).
+
+### HUD
+
+```python
+def set_prompt(self, text: str, priority: int = 0) -> bool
+```
+Show a contextual HUD line this tick, respecting priority. Returns `False`
+(does nothing) if the core already claimed the line (`interaction_consumed`)
+and *priority* isn't above it, or if another plugin already set a
+higher-priority prompt this tick. This replaces the manual "don't clobber the
+HUD" dance and poking the engine-owned HUD storage directly.
+
+```python
+def toast(self, text: str, seconds: float = 2.0) -> None
+```
+Show *text* for *seconds* as long as no prompt claims the line. The message
+persists across ticks until it expires, so fire it once (e.g. on an event)
+instead of re-setting it every frame.
+
+---
+
+## `PluginHost` — the open-ended engine seam
+
+While `EditorAPI`/`RuntimeAPI` are a *curated*, deliberately small surface, the
+`PluginHost` (from `plugins.host`) is the *open-ended* one. It exists so the
+engine can be extended in ways the API never anticipated **without changing the
+engine**. Handed to `FioPlugin.connect`, one per plugin per session.
+
+`host.kind` is `"engine"` (editor play mode) or `"player"` (standalone player).
+
+### Reaching the live objects
+
+Named accessors — each returns `None` (or `[]` for `scene`) when the subsystem
+isn't present on this host, rather than raising:
+
+| Accessor | Returns |
+|----------|---------|
+| `host.logic` / `host.engine` | the play session's logic object |
+| `host.scene` | the live `editor_state.things` list (the *actual* list — mutating it affects the scene) |
+| `host.logic.player_runtime.player` | the live player actor |
+| `host.io` | the `IOManager` |
+| `host.globals` | the [`GlobalStore`](#globalstore--cross-level-storage) |
+| `host.game_state` | the game-state object |
+| `host.monster_ai` | the monster AI subsystem |
+| `host.logic.world_runtime.terrain` | the live world terrain object (heights, sculpting, paint, serialisation; no GL -- `terrain.publish()` is what a renderer draws) |
+| `host.editor` | the editor main window if running in the editor, else `None` |
+
+For anything without a named accessor — including subsystems added later:
+
+```python
+def get(self, path: str, default=None)
+```
+Dotted lookup from the host target: `host.get('game_state')`,
+`host.get('editor_state.things')`. Returns *default* if any step is missing.
+Unknown attributes also fall through: `host.<whatever>` reads straight off the
+target — the "touch any part of the engine" escape hatch.
+
+### Events
+
+```python
+@property
+def events(self) -> EventBus                # the raw bus (advanced)
+def on(self, event: str, handler, priority=0) -> Callable
+def off(self, event: str, handler) -> None
+def emit(self, event: str, **data)
+```
+`on` subscribes to an engine (or plugin) event; the handler is **gated on this
+plugin's live `enabled` flag**, so a disabled plugin's hooks go quiet without
+unsubscribing. `emit` fires a custom event other plugins can observe. → see
+[`EventBus`](#eventbus-and-event).
+
+### Cross-plugin services & extension
+
+```python
+def provide(self, name: str, value) -> None     # publish a named service
+def service(self, name: str, default=None)      # look one up
+def wrap(self, obj, method_name: str, wrapper) -> bool
+def register_renderer(self, name: str, cls) -> bool
+def log(self, message: str) -> None
+```
+`wrap` is a guarded monkey-patch helper for the rare extension that must
+intercept an existing engine call rather than react to an event: it replaces
+`obj.method_name` with `wrapper(original, *args, **kwargs)`, and if the wrapper
+raises, the original is called so behaviour degrades to stock. Returns `True` if
+installed.
+
+Example `connect`:
+
+```python
+def connect(self, host):
+    self._host = host
+    host.on("player_damage", self._on_damage)     # react to an engine event
+    host.on("render.overlay", self._draw_overlay) # draw a HUD overlay
+    host.provide("my_service", self)              # share with other plugins
+```
+
+---
+
+## `EventBus` and `Event`
+
+The engine emits named events at every meaningful moment; a plugin subscribes to
+any of them — including events that don't exist yet (a subscription to an unknown
+event is simply dormant until something emits it). Adding a new engine signal
+later is a single `emit()` call: no API change.
+
+### `Event`
+
+Handlers receive one `Event`. Payload fields are reachable three ways, so
+handlers stay terse:
+
+```python
+ev.data['player']     # dict access
+ev.get('player')      # .get with default
+ev.player             # attribute access (falls through to the payload)
+```
+
+`ev.name` is the event name; `ev.logic` is always present (the play session's
+logic/host object). Call `ev.stop()` to halt propagation to lower-priority
+handlers.
+
+### `EventBus`
+
+A tiny, fail-safe publish/subscribe bus. Handlers are called highest-priority
+first; ties keep subscription order. A handler that raises is logged and
+skipped. `emit` early-outs when an event has no subscribers, so instrumenting
+the engine with unlistened emit points costs almost nothing.
+
+```python
+def on(self, event: str, handler, priority=0) -> Callable   # returns handler (decorator-friendly)
+def off(self, event: str, handler) -> None
+def has(self, event: str) -> bool
+def emit(self, event: str, **data) -> Optional[Event]       # None if nobody listening
+def clear(self) -> None
+```
+
+`bus.gen` is bumped whenever the subscription set changes, so a hot-path caller
+(the engine's per-frame tick gate) can detect "did anything change?" with a
+single int compare.
+
+Common event names include `play_start`, `tick`, `player_damage`,
+`portal_transit`, `prop_collected`, `entity_spawned`, `pause_menu_opened` /
+`pause_menu_closed`, `state_changed`, the physics events `physics.rest` /
+`physics.landed` / `physics.contact` / `physics.toppled`, and the render hooks
+`render.overlay` / `render.*`. Prefer subscribing through `host.on(...)` (which
+gates on `enabled`) over the raw bus.
+
+---
+
+## `PropertySpec` and `prop()`
+
+Declares one editable property of a plugin entity so the editor renders a
+fitting widget and can coerce/validate values. The untyped `properties` dict
+stays the storage format; the schema is metadata layered over it.
+
+### Fields
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `name` | `str` | The `properties` key this describes. |
+| `type` | `str` | One of `int`, `float`, `bool`, `string`, `enum`, `vec3`, `asset`. |
+| `label` | `str` | Human-readable label in the panel. |
+| `default` | `Any` | Default value (applied if the key is missing). |
+| `min` / `max` | `float?` | Range clamp for numeric types. |
+| `choices` | `List?` | Allowed values for `enum`. |
+| `help` | `str` | Tooltip text. |
+
+### Methods
+
+```python
+def apply_default(self, properties: dict) -> None
+```
+Set this property's default on *properties* if it is missing.
+
+```python
+def coerce(self, value)
+```
+Best-effort cast of *value* to this spec's type, clamped to `min`/`max`. **Never
+raises** — an uncastable value falls back to the default (or a type-appropriate
+zero/empty), so a bad hand-edited map can't crash the editor.
+
+### `prop()`
+
+```python
+def prop(name, type="string", label="", default=None,
+         min=None, max=None, choices=None, help="") -> PropertySpec
+```
+Terse, keyword-friendly constructor for a `PropertySpec`. Example:
+
+```python
+api.register_properties("bigworldsettings", [
+    prop("enabled", "bool", "Streaming enabled", default=True,
+         help="Turn cell streaming on for this map."),
+    prop("activation_radius", "float", "Activation radius", default=2048.0,
+         min=256.0, max=65536.0,
+         help="Cells within this distance of the player become active."),
+])
+```
+
+---
+
+## `GlobalStore` — cross-level storage
+
+Process-wide, cross-level key/value storage for plugins. When the editor package
+is present it binds to the **same** persistent registry that map `LogicState`
+entities use, so a plugin's globals live alongside — and can share stores with — map
+state, persisting across level loads within a session. In the dependency-light
+player it falls back to a plain process-local dict-of-dicts with the same API.
+
+Values are read back as **strings**, as they always have been. Since 2.4 a map
+store holds values with their types (an integer counter really is an `int`), so
+this API converts on the way out: a plugin sees `"5"` and `"true"` whatever the
+map wrote. There is still exactly one registry — nothing is copied or mirrored.
+
+Keys are grouped by *store* name (default `"plugins"`). Pass a store name a map's
+`LogicState` uses to read/write the exact same values.
+
+```python
+def get(self, key, default=None, store="plugins")
+def set(self, key, value, store="plugins") -> None      # value stored as str(value)
+def delete(self, key, store="plugins") -> bool
+def all(self, store="plugins") -> dict
+def keys(self, store="plugins") -> list
+```
+
+Reach it via `api.globals` / `host.globals`, or the `global_get` / `global_set`
+shortcuts on `EditorAPI` and `RuntimeAPI`.
+
+---
+
+## `placement` — where a brush is (API 1.8.0)
+
+```python
+from plugins.api import placement
+
+p = placement(brush)
+p.authored   # (x, y, z): a box's pos, an angled brush's planes' centre
+p.centre     # (x, y, z): where it is now (a mover's runtime transform applied)
+p.spin       # (axis_x, axis_y, axis_z, angle_degrees) while it spins, else None
+p.half       # the shape's unturned half-extents
+p.bounds     # (lo_x, lo_y, lo_z, hi_x, hi_y, hi_z): its derived world AABB
+```
+
+The engine keeps one placement per brush: `pos` is where the mapper put it,
+and a mover's or door's runtime transform (its travel and spin) is owned by
+the engine's mover table, never written into the brush. `placement` reads both
+through the same resolver culling, collision and picking use, so a plugin sees
+a moving brush exactly where it is drawn and collides. Before 1.8.0 movers
+overwrote `pos` every tick and kept `original_pos`, `_rot_angle` and
+`rotation_yaw` in the brush (and in saved maps); those keys are gone.
+
+---
+
+## Helpers: `io_def`, `key_code`, `prop`
+
+```python
+def io_def(name: str, description: str = "", param_type: str = "")
+```
+Build an `editor.io_system.IODef` without importing `io_system` yourself.
+Returns `None` if the I/O system is unavailable (headless), which the manager
+tolerates and filters out. `param_type` (e.g. `"int"`, `"string"`) types an I/O
+port's parameter.
+
+```python
+def key_code(name) -> Optional[int]
+```
+Resolve a key *name* (or raw int code) to a Qt key code, or `None`. A single
+character maps to its uppercase ASCII code (`'w'` → `0x57`); named special keys
+(`'space'`, `'shift'`, `'ctrl'`, `'alt'`, `'tab'`, `'return'`, `'enter'`,
+`'escape'`/`'esc'`, `'up'`/`'down'`/`'left'`/`'right'`, `'backspace'`) use the
+built-in table; an `int` passes through unchanged. `TickContext.key_down` calls
+this for you.
+
+`prop` is documented under [`PropertySpec`](#propertyspec-and-prop).
+
+---
+
+## The manager entry points
+
+Most plugins never touch the manager directly, but these are the seams the host
+uses and that tools/tests call:
+
+```python
+from plugins.manager import get_manager, load_plugins
+```
+
+```python
+def load_plugins() -> None      # discover + load every plugin sub-package (call once)
+def get_manager() -> PluginManager
+```
+
+Useful `PluginManager` methods (see [`manager.py`](manager.py) for the full set):
+
+| Method | Purpose |
+|--------|---------|
+| `discover_and_load()` | discover and load all plugin packages |
+| `menu_entries()` | `(plugin, label, cls)` placement entries for the editor menus |
+| `find_plugin(name)` / `is_enabled(plugin)` | lookup / state |
+| `set_enabled(plugin_or_name, enabled, auto=False)` | toggle a plugin |
+| `plugin_for_type(type)` / `entity_class_for_type(type)` | map an entity `type` back to its plugin/class |
+| `auto_enable_for_map(map_data)` | enable disabled-by-default plugins a map needs |
+| `disable_auto_enabled()` | revert level-driven auto-enables (e.g. File ▸ New) |
+| `attach_runtime(logic)` | wire every plugin's runtime into a logic thread |
+| `bind_host(target, kind)` | build the `PluginHost` and call each `connect` |
+| `emit(event, **data)` / `has_listeners(event)` | drive the event bus |
+| `dispatch_play_start/stop(logic)`, `dispatch_tick(logic, ctx)` | lifecycle dispatch |
+
+The engine wires `attach_runtime`, the play-start/stop dispatch and the cached
+per-tick dispatch **natively** from `engine.logic_thread.LogicThread`; the editor
+hooks are installed as small guarded monkey-patches in
+[`integration.py`](integration.py). See [`README.md`](README.md#integration-points-in-the-core).
+
+---
+
+## Play-session save / load (native)
+
+Saving and loading a **play session** is an engine-native capability, not part
+of the plugin API surface — adding it did **not** bump `API_VERSION` (still
+`1.4.0`). It is documented here because it builds directly on the same
+serialization a plugin already relies on, and because a plugin can drive it
+through the [`PluginHost`](#pluginhost--the-open-ended-engine-seam).
+
+The editor already serializes a *level* (`EditorState.get_level_data` — brushes,
+things with their live properties, terrain). [`engine/savegame.py`](../engine/savegame.py)
+builds a *saved game* on top of that: the serialized level **plus** a `runtime`
+block for the state the level format never stores — the player transform and
+stats, the cheat flags (`god` / `buddha` / `notarget`), the collected-key set,
+and the door / mover / monster animation state. Save files are JSON with a
+`.fiosave` extension, written under a `saves/` directory.
+
+Restore is applied as an **overlay** onto a live, already-playing session:
+entities are matched back by the stable UUID every brush and thing carries, so
+the scene is never rebuilt mid-flight (object identities, caches and the spatial
+grid all stay valid). Cached, underscore-prefixed runtime fields (e.g. a mover's
+`_direction_np`) are never persisted — the engine recomputes them on the next
+tick.
+
+**Save modes (`save_version` 2, still no `API_VERSION` bump).** A `save_mode`
+metadata key selects one of three strategies, set by the *Play-session Save
+Mode* editor setting (`[Settings] save_mode`, default `full`):
+
+- **`full`** — the self-contained snapshot above. Needs no base map.
+- **`delta`** — only the entities/brushes that differ from the base map,
+  matched by UUID, plus player/runtime state and a `base_map` identity block.
+  Smallest, but the base map must be present to load; it restores by overlaying
+  just the changed records through the very same UUID overlay.
+- **`both`** — the compact delta *and* a full fallback snapshot in one file.
+
+Loading is automatic — `restore_auto` reads `save_mode` (a legacy v1 file with
+no `save_mode` loads as `full`) and, for delta/both, grades the current map
+against the stored identity (exact → apply; related → apply by UUID skipping
+missing entities; incompatible → a `both` save uses its full fallback, a
+delta-only save reports it can't). Only a delta-only save on a clearly
+incompatible map ever prompts. `save_version` remains independent of the app
+and plugin versions; a save newer than the build understands is rejected by
+`read`.
+
+### The native surface
+
+`engine.logic_session.LogicSession` exposes the play-session save/load methods
+through `logic.session_runtime`. Each returns `(ok: bool, message: str)` and
+requires an active play session:
+
+```python
+# capture the live session → path (save_mode: "full" | "delta" | "both";
+# delta/both also want base_level, the normalized original map to diff against)
+logic.session_runtime.save_session(
+    path, map_name="", save_mode="full", base_level=None
+)
+# auto-detect the save's mode and overlay it onto the running session
+logic.session_runtime.load_session(path, map_name="")
+```
+
+Lower level, in [`engine/savegame.py`](../engine/savegame.py):
+
+```python
+build_snapshot(logic, map_name="", save_mode="full", base_level=None) -> dict
+compute_delta_level(base_level, live_level) -> dict   # changed-only partial level
+normalize_base_level(raw_level) -> dict               # re-serialize an on-disk map
+restore_snapshot(logic, data) -> None                 # apply a full snapshot
+restore_delta(logic, data) -> None                    # overlay a delta onto a fresh base
+classify_base_map(data, current_level, name="") -> str  # exact | related | incompatible
+restore_auto(logic, data, current_map_name="") -> dict  # pick the path automatically
+write(path, snapshot) -> None                # JSON dump (.fiosave), NumPy/glm-safe
+read(path) -> dict                           # read + validate a Fio save
+```
+
+### Console commands
+
+Driven from the editor's debug console (see
+[`editor/console_commands.py`](../editor/console_commands.py)):
+
+| Command | Effect |
+|---------|--------|
+| `save [name]` | Save the current session to `saves/<name>.fiosave` (Play Mode only). |
+| `quicksave` / `qs` | Save to the quicksave slot. |
+| `load [name]` | Load a save. In Play Mode it overlays the running session; from the editor it loads the save's map, enters Play Mode, then applies. |
+| `quickload` / `ql` | Load the quicksave slot. |
+| `saves` | List available save files. |
+
+The pause menu's Save Game and Load Game use the same saves, under the names
+`slot1` to `slot3` (`load slot2` from the console loads the menu's Slot 2).
+
+### Reaching it from a plugin
+
+The `PluginHost` exposes the live logic object, so a plugin can save or load
+without any new API:
+
+```python
+def connect(self, host):
+    self._host = host
+
+def on_tick(self, logic, ctx):
+    if ctx.key_down("f"):
+        ok, msg = self._host.logic.session_runtime.save_session("saves/plugin_quick.fiosave")
+        ctx.toast(msg)
+```
+
+---
+
+## Threading and safety contract
+
+- **`register` is UI-free and host-agnostic.** It runs in the editor, the
+  engine, headless tools and the player. No Qt, no OpenGL, no assumptions about
+  a display.
+- **Everything is fail-safe.** The manager wraps every call into plugin code; a
+  raise is logged (to the debug console) and swallowed, never crashing the host
+  or another plugin. The event bus, `host.wrap`, and the debug overlay path are
+  all individually guarded.
+- **Do per-frame work in `on_tick` / event handlers, and keep it cheap.** The
+  per-tick dispatch is cached and gated so a map whose active plugins don't tick
+  pays almost nothing.
+- **Restore what you mutate.** If you move, hide or disable entities during play,
+  put them back in `on_play_stop` so the edited map is unchanged (see
+  `TidySession.stop` and `BigWorldSession.stop`).
+- **Say what you change.** The engine keeps tables — the renderer's, the
+  physics engine's — and a table hears of a change through the change journal,
+  never by re-reading entities. Move an entity by *assigning* `entity.pos`
+  (never in place); change `hidden` or `disabled` with `set_flag` /
+  `clear_flag`; after changing anything else a table is resolved from, call
+  `engine.change_journal.touch(entity)`.
+- **Never make an OpenGL call off the render thread.** If a change needs GL work,
+  defer it to a render frame. (The terrain needs none: it is GL-free, and a
+  change to it reaches the renderer through what it publishes.)
+- **The player runtime is dependency-free.** No PyGLM, no PyQt in the runtime
+  path — plugin entities fall back to `plugins/entitybase.py` when the editor
+  package is absent, so the same plugin loads in the editor, the desktop player
+  and the Android APK.
+
+---
+
+## See also
+
+- [`plugins/README.md`](README.md) — the plugin-system overview and walkthrough.
+- [`plugins/api.py`](api.py) — the annotated source these docs mirror.
+- [`plugins/host.py`](host.py) — the `PluginHost` / `EventBus` source.
+- [`plugins/tidy/`](tidy/) — a complete worked gameplay plugin.
+- [`docs/examples/deferred_renderer/`](../docs/examples/deferred_renderer/) — a complete
+  worked renderer plugin, and the wiki's
+  [Renderer Development Guide](https://github.com/ViciousSquid/Fio/wiki/Renderer-Development-Guide).
+- [`plugins/bigworld/README.md`](bigworld/README.md) — a runtime-scalability
+  plugin that uses the event bus, services and host wrapping.

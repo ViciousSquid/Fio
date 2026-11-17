@@ -1042,3 +1042,49 @@ def test_the_light_stream_follows_the_player_like_big_world():
     now[0] += ls.REFRESH_SECONDS
     lit = stream.select(table, every, (15000.0 - 400.0, 0.0, 0.0))
     assert lit.tolist()[0] == 0                        # the nearest now
+
+
+def test_a_monsters_fight_frames_are_interned_with_it_once_per_kind():
+    """Shooting (plain and from each facing) and dead are interned while the
+    monster is alive, so the renderer loads them, and puts them in its sprite
+    array, with the rest -- not at the first shot. A second monster of the
+    same kind adds nothing."""
+    table = _synced([make_thing(Monster, 'm')])
+    keys = [recipe[0][0] for recipe in table.sprite_recipes()]
+    for frame in ['_shoot_'] + ['_shoot__rotation_%d' % r for r in range(1, 9)] + ['_dead_']:
+        assert any(key.startswith('msprite_') and key.endswith(frame) for key in keys), frame
+    count = len(keys)
+    pair = _synced([make_thing(Monster, 'm'), make_thing(Monster, 'n', (64.0, 0.0, 0.0))])
+    assert len(pair.sprite_recipes()) == count
+
+
+def test_a_reflection_probe_is_a_probe_row_carrying_its_radius():
+    """The renderer finds probes from the table alone: a class bit and a
+    radius column, no Thing walked on the render path."""
+    from editor.things import ENTITY_CATEGORIES, ENTITY_TYPES, ReflectionProbe, Thing
+
+    probe = make_thing(ReflectionProbe, 'probe', (1.0, 2.0, 3.0), radius=300.0)
+    table = _synced([probe, make_thing(Light, 'lamp')])
+    assert table.class_bits[0] & et.ENT_PROBE and not table.class_bits[1] & et.ENT_PROBE
+    assert table.probe_radius[:2].tolist() == [300.0, 0.0]
+    for authored, used in (('junk', 512.0), (1.0, 16.0)):
+        probe.properties['radius'] = authored
+        assert probe.get_radius() == used
+
+    probe.properties['radius'] = 300.0
+    loaded = Thing.from_dict(probe.to_dict())
+    assert type(loaded) is ReflectionProbe and loaded.get_radius() == 300.0
+    assert ENTITY_TYPES['ReflectionProbe'] is ReflectionProbe
+    assert 'ReflectionProbe' in ENTITY_CATEGORIES['Environment']
+
+
+def test_a_reflection_probe_shows_its_icon_while_editing_and_never_in_play():
+    from editor.things import ReflectionProbe
+
+    table = _synced([make_thing(ReflectionProbe, 'probe')])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert ('ReflectionProbe', 'reflection_probe.png', 'sprites', True) in recipe
+    hidden = np.zeros(table.count, dtype=bool)
+    _models, editing = et.classify_slots(table, table.all_slots, hidden, False, False)
+    _models, playing = et.classify_slots(table, table.all_slots, hidden, True, False)
+    assert editing.tolist() == [0] and playing.tolist() == []

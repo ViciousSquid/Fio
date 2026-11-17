@@ -478,13 +478,20 @@ def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
                 if str(b.get('id')).startswith(CLIPPED_TERRAIN))
     brush = brushes[slot]
     raw = raws[slot]
-    stored_lo_x = raw['pos'][0] - raw['size'][0] / 2      # the file's copy
+    stored_lo_x = raw['pos'][0] - raw['size'][0] / 2
+    legacy_world_planes = bool(raw.get(bs.WORLD_PLANES))
     planes = bg.get_convex(brush)
     lo, hi = planes.bounds
-    assert lo[0] - stored_lo_x == pytest.approx(128.0)
+    if legacy_world_planes:
+        # The legacy file's bounds copy is 128 units wider than its planes.
+        assert lo[0] - stored_lo_x == pytest.approx(128.0)
+    else:
+        # Version 5 uses pos as placement and stores the planes' local extent.
+        assert lo[0] - stored_lo_x == pytest.approx(0.0)
+        assert np.allclose(raw['size'], brush['size'], atol=1e-9)
     assert np.allclose(lo, bs.world_convex(raw).bounds[0], atol=1e-9)
-    # Since Stage 2d the load places the planes about their own centre, so
-    # what the editor holds no longer drifts from them.
+    assert np.allclose(hi, bs.world_convex(raw).bounds[1], atol=1e-9)
+    # Loading either representation leaves the brush's world bound on its planes.
     assert brush['pos'][0] - brush['size'][0] / 2 == pytest.approx(lo[0], abs=1e-9)
 
     # Drawn exactly where its planes are.
@@ -497,7 +504,7 @@ def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
     drawn = (model[:3, :3] @ local.astype(np.float64).T).T + model[:3, 3]
     assert np.allclose(drawn, planes.verts, atol=1e-3)
 
-    # Every consumer's bound is the planes'.
+    # Every consumer's bound is the planes' world-space AABB.
     want = np.concatenate((lo, hi))
     assert np.allclose(bp.world_bounds(brush), want, atol=1e-9)
     assert np.allclose(table.bounds[slot, :3] - table.bounds[slot, 3:], lo, atol=1e-9)
@@ -507,15 +514,15 @@ def test_the_clipped_terrain_is_drawn_and_bounded_by_its_planes(name):
     assert np.allclose(brush_aabb_bounds(brush), want, rtol=1e-6)
     assert set(brush_cells(brush, 512.0)) == _expected_cells(want, 512.0)
 
-    # The phantom strip the copy claimed collides with nothing; the solid
-    # beside it still does.
+    # The legacy copy's phantom strip is not filed as solid. Version 5 has
+    # no phantom strip, so check just outside its actual lower bound instead.
     alone = SpatialGrid()
     alone.populate([brush])
     y, z = (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0
-    assert not alone.overlaps_wall((stored_lo_x + lo[0]) / 2.0, y, z, 1.0)
+    outside_x = ((stored_lo_x + lo[0]) / 2.0 if legacy_world_planes
+                 else lo[0] - 8.0)
+    assert not alone.overlaps_wall(outside_x, y, z, 1.0)
     assert alone.overlaps_wall(lo[0] + 8.0, y, z, 1.0)
-
-
 def test_a_turned_box_is_the_same_from_the_turn_memo():
     """``turned_half`` keeps ``|R|`` per (axis, angle) so a spinner's trig
     runs once per angle; the memo must change no bit, and stays bounded.

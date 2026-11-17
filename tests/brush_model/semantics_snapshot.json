@@ -141,11 +141,7 @@
    "box": 5,
    "convex": 1
   },
-  "inconsistencies": {
-   "1a817c94-928c-4005-88c9-6619876b168c": {
-    "bound_drift": 128
-   }
-  }
+  "inconsistencies": {}
  },
  "Topdown_example.json": {
   "brushes": 6,
@@ -169,10 +165,10 @@
   "inconsistencies": {}
  },
  "_SHOWCASE.json": {
-  "brushes": 88,
+  "brushes": 87,
   "digest": null,
   "encodings": {
-   "box": 70,
+   "box": 69,
    "convex": 18
   },
   "inconsistencies": {}

@@ -233,6 +233,33 @@ def test_a_displayed_property_change_does_rebuild(panel):
     assert editor._widgets['name_input'].text() == 'renamed'
 
 
+def test_rebuilding_one_objects_page_does_not_strand_the_old_pages(panel, qt_app):
+    """Each displayed change to the selected object parks the outgoing page
+    and builds a new one. The page parked for the object's *previous*
+    signature is superseded and must be destroyed, not merely dropped from
+    the cache list -- it was left parented to the hidden parking widget, one
+    whole page (~40 widgets, ~300 KiB) per edit for the rest of the session."""
+    from PyQt5.QtCore import Qt
+
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+
+    def parked_pages():
+        qt_app.processEvents()
+        qt_app.sendPostedEvents(None, QEvent.DeferredDelete)
+        return len(editor._parking.findChildren(QWidget, options=Qt.FindDirectChildrenOnly))
+
+    for n in range(12):
+        brush['name'] = 'renamed_%d' % n
+        editor.set_object(brush)
+        assert editor._widgets['name_input'].text() == 'renamed_%d' % n
+
+    assert len(editor._page_cache) == 1
+    assert parked_pages() == len(editor._page_cache)
+
+
 def test_property_edit_marks_the_dense_render_row_dirty(panel):
     """Cold RenderTable material columns must see live Surface Inspector edits."""
     host, editor = panel

@@ -287,6 +287,7 @@ class ThreadedGameState:
         # Input state
         self._keys_lock = threading.Lock()
         self._keys = set()
+        self._movement_axes = None
         self._mouse_lock = threading.Lock()
         self._mouse_delta = (0.0, 0.0)
         
@@ -466,6 +467,14 @@ class ThreadedGameState:
         with self._keys_lock:
             return self._keys.copy()
             
+    def set_movement_axes(self, x, z):
+        with self._keys_lock:
+            self._movement_axes = (max(-1., min(1., x)), max(-1., min(1., z)))
+
+    def get_movement_axes(self):
+        with self._keys_lock:
+            return self._movement_axes
+
     def set_mouse_delta(self, dx, dy):
         with self._mouse_lock:
             self._mouse_delta = (self._mouse_delta[0] + dx, self._mouse_delta[1] + dy)

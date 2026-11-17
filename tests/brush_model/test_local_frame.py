@@ -154,16 +154,36 @@ def test_every_shipped_map_loads_to_the_solids_its_file_describes(name):
             assert np.array_equal(bg.get_convex(second).verts, bg.get_convex(first).verts)
 
 
+def _clipped_terrain(name):
+    return next(b for b in MAPS[name] if str(b.get('id')).startswith('1a817c94'))
+
+
 def test_loading_localises_a_shipped_brush_however_stale_its_copy():
-    """The two clipped terrain brushes store a pos/size 128 units off their
-    planes; the load places them by their planes' centre, so nothing the
-    editor holds drifts."""
-    for name in ("Terrain_Test_small.json", "Topdown_example.json"):
-        raw = next(b for b in MAPS[name] if str(b.get('id')).startswith('1a817c94'))
-        assert bs.inconsistencies(raw)['bound_drift'] == pytest.approx(128.0)
-        live = bs.loaded(raw)
-        assert 'bound_drift' not in bs.inconsistencies(live)
-        assert _same_solid(bg.get_convex(live), bs.world_convex(raw))
+    """``Topdown_example`` still carries the clipped terrain brush as a legacy
+    world-plane record whose pos/size copy is 128 units off its planes; the
+    load places it by its planes' centre, so nothing the editor holds
+    drifts."""
+    raw = _clipped_terrain("Topdown_example.json")
+    assert raw.get(bs.WORLD_PLANES)
+    assert bs.inconsistencies(raw)['bound_drift'] == pytest.approx(128.0)
+    live = bs.loaded(raw)
+    assert 'bound_drift' not in bs.inconsistencies(live)
+    assert _same_solid(bg.get_convex(live), bs.world_convex(raw))
+
+
+def test_a_version5_copy_of_the_clipped_brush_loads_unchanged():
+    """``Terrain_Test_small`` now stores the same clipped brush as a canonical
+    version-5 record: local planes, ``pos`` at their centre and ``size`` their
+    extent. It has no stale copy to repair, and the load keeps its placement
+    and solid exactly."""
+    raw = _clipped_terrain("Terrain_Test_small.json")
+    assert not raw.get(bs.WORLD_PLANES)
+    assert 'bound_drift' not in bs.inconsistencies(raw)
+    live = bs.loaded(raw)
+    assert 'bound_drift' not in bs.inconsistencies(live)
+    assert np.allclose(live['pos'], raw['pos'], atol=1e-9)
+    assert np.allclose(live['size'], raw['size'], atol=1e-9)
+    assert _same_solid(bg.get_convex(live), bs.world_convex(raw))
 
 
 # ---------------------------------------------------------------------------

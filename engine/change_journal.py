@@ -1,4 +1,15 @@
-"""Runtime change notification for the dense render projections.
+"""Runtime change notification for every table that copies the scene.
+
+The rule, for anything that holds entity state in rows of its own -- the
+render projections below, and the physics engine's bodies: **a table hears of
+a change through this journal and nowhere else.** It never re-reads an
+entity to find out whether something changed. So whoever changes a value a
+table is resolved from says so, here; a value written without saying so is
+not seen by any of them. For ``hidden`` and ``disabled`` the one way to write
+is :func:`engine.spatial.set_live_flag` (or ``set_authored_flag``), which
+does both, and ``tests/regression/test_flags_are_journalled.py`` holds the
+engine, the editor and the shipped plugins to it.
+
 
 The render tables (:class:`engine.render_table.RenderTable`,
 :class:`engine.entity_table.EntityTable`) are a numeric copy of the scene.
@@ -14,8 +25,10 @@ So the objects say when they change. There are two kinds of change:
   plugins that move entities by assigning ``pos`` need do nothing more.
 * :data:`STATE` -- anything else a row is resolved from: a property the
   renderer reads (``hidden``, ``dead``, a light's ``state``, a brush's tint),
-  or runtime render state (a carried prop's yaw, a respawn fade, an effect
-  being triggered). Whoever writes such a value calls :func:`touch`.
+  runtime render state (a carried prop's yaw, a respawn fade, an effect
+  being triggered), or gameplay state another table keeps -- ``disabled``
+  and the simulation tier, which the physics engine's rows are resolved
+  from. Whoever writes such a value calls :func:`touch`.
 * :data:`VISIBILITY` -- only the live ``hidden`` flag, written by a streaming
   layer that parks the object; ``touch(obj, VISIBILITY)``.
 

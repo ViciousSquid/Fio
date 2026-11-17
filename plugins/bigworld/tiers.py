@@ -90,6 +90,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from engine.change_journal import touch
 from engine.spatial import (PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY,
                             SIM_TIER_KEY, TIER_ACTIVE, TIER_DISTANT,
                             TIER_DORMANT, TIER_NAMES, TIER_NEAR,
@@ -350,6 +351,9 @@ class TierClassifier:
         if prev == tier:
             return
         props[SIM_TIER_KEY] = tier
+        # Whatever keeps its own account of an entity's tier (physics) hears
+        # of it through the change journal.
+        touch(obj)
         delta.changes.append((obj, prev, tier))
 
     # ------------------------------------------------------------------
@@ -366,6 +370,7 @@ class TierClassifier:
         props = _props(obj)
         if props is not None:
             props[SIM_TIER_KEY] = TIER_DORMANT
+            touch(obj)
 
     def unpark(self, obj) -> None:
         """Drop the stamp from an entity the streamer has just brought back.
@@ -378,6 +383,7 @@ class TierClassifier:
         props = _props(obj)
         if props is not None:
             props.pop(SIM_TIER_KEY, None)
+            touch(obj)
 
     def pin(self, objects: Iterable) -> None:
         """Stamp ``NEAR`` on entities that must never be demoted by distance.
@@ -391,13 +397,14 @@ class TierClassifier:
             props = _props(obj)
             if props is not None:
                 props[SIM_TIER_KEY] = TIER_NEAR
+                touch(obj)
 
     def clear(self, objects: Iterable) -> None:
         """Remove every tier stamp this classifier wrote (play-stop)."""
         for obj in objects:
             props = _props(obj)
-            if props is not None:
-                props.pop(SIM_TIER_KEY, None)
+            if props is not None and props.pop(SIM_TIER_KEY, None) is not None:
+                touch(obj)
         self._cell_tier.clear()
         self.authoritative = False
 

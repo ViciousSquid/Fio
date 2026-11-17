@@ -2,7 +2,7 @@
 :class:`BigWorldManager` — the cell manager at the heart of Big World.
 
 It builds a UUID-addressed index of the world's brushes, entities and lights,
-groups them into 512-unit cells (the same grid :class:`engine.physics.SpatialGrid`
+groups them into 512-unit cells (the same grid :class:`engine.spatial_grid.SpatialGrid`
 uses), and answers the only question the runtime asks each time the player
 moves: *which cells are active, and what just entered or left the active set?*
 
@@ -10,7 +10,7 @@ Design constraints honoured here
 --------------------------------
 * **Reuse, don't replace.** Cell coordinates, the multi-cell spanning rule and
   the radius query are the engine's, imported from :mod:`engine.spatial` — the
-  same module :class:`engine.physics.SpatialGrid` buckets collision brushes
+  same module :class:`engine.spatial_grid.SpatialGrid` buckets collision brushes
   with. There is no second grid here: the cell buckets below *are* an engine
   :class:`~engine.spatial.CellIndex`, and this class adds only the streaming
   lifecycle (state, activation, reference counting) on top of it. No BVH /

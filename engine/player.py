@@ -2,7 +2,7 @@
 
 Collision is Fio's own -- the spatial grid's colliders, per-axis box
 resolution with the stair lip, capsule depenetration against angled brushes,
-terrain, and Fio's water. Gravity comes from the live PhysicsWorld, the one
+terrain, and Fio's water. Gravity comes from the live physics, the one
 authority (``engine.physics.world_gravity``; Quake 2's 800 by default).
 
 On top of that, movement follows Quake 2 (qcommon/pmove.c, cl_input.c):
@@ -187,7 +187,7 @@ def _blocks_player(brush):
     back), and because the no-grid fallback path hands over the raw brush list.
     """
     if brush.get('_physics_body'):
-        # Simulated by PhysicsWorld as a dynamic body, not a static wall.
+        # Simulated by the active physics as a dynamic body, not a static wall.
         return False
     if brush.get('disabled'):
         return False
@@ -615,7 +615,7 @@ class Player:
         """
         Update player physics.
 
-        *gravity* is the live PhysicsWorld's (``engine.physics.world_gravity``);
+        *gravity* is the live physics' (``engine.physics.world_gravity``);
         None means that world's default.
 
         PERF: If spatial_grid is provided, static brush colliders are fetched

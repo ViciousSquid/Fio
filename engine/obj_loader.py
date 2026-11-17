@@ -130,7 +130,11 @@ class OBJLoader:
         if text is None:
             print(f"[OBJLoader] Failed to load: {filepath}")
             return False
-        
+        return self.load_text(text, filepath)
+
+    def load_text(self, text: str, filepath="", read_text=None) -> bool:
+        """Parse archive-backed OBJ/MTL text without materializing files."""
+        self._text_reader = read_text
         lines = text.splitlines()
         current_material = None
         mtl_lib_name = None
@@ -206,7 +210,8 @@ class OBJLoader:
         mtl_path = os.path.normpath(os.path.join(obj_dir, normalized_name))
         mtl_dir = os.path.dirname(mtl_path)
         
-        mtl_text = _read_text(mtl_path)
+        reader = getattr(self, "_text_reader", None)
+        mtl_text = reader(mtl_path) if reader else _read_text(mtl_path)
         if mtl_text is None:
             print(f"[OBJLoader] MTL not found: {mtl_path}")
             self._discover_base_color_texture(obj_path)

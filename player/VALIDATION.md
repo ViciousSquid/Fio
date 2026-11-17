@@ -125,6 +125,14 @@ dependencies in that copy and supplies compatibility aliases. A receipt records
 the originals remain unchanged.
 These adapters are never applied to the desktop checkout.
 
+> **Superseded.** The overlay patch is gone. Its adaptations -- analog movement
+> axes, package-backed model loading, logic-thread AI, the level-change
+> request, Qt-free entity import and the point-blank combat correction below --
+> are now part of the engine itself, and Android stages `engine/**` byte for
+> byte from the checkout. The desktop and the Android app run the same engine;
+> the notes in this document that describe a private adapter record how it was
+> before.
+
 The exporter now preserves map hierarchy, scans current asset references,
 reads loose/category-archive assets and follows OBJ/MTL/glTF companions.
 Implicit stock sprites, effects and audio are included in the exported world.

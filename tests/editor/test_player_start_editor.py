@@ -342,3 +342,190 @@ def test_retargeting_the_map_refreshes_the_destination_choices(window, dungeon_m
     assert panel._widgets["destination_spawn"].count() == 1
     panel.update_object_prop("target_map", dungeon_map)
     assert panel._widgets["destination_spawn"].count() == 4
+
+# -- map-owned sky image ---------------------------------------------------------
+
+def test_sky_image_property_is_only_shown_on_the_current_primary_start(window):
+    first = _create(window, "A")
+    panel = window.property_editor
+    assert "player_start_sky_image" in panel._widgets
+    assert panel._widgets["player_start_sky_image"].currentData() == ""
+
+    second = _create(window, "B", (100, 40, 0))
+    assert "player_start_sky_image" not in panel._widgets
+
+    # The map setting follows Primary when the author changes the spawn.
+    first.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
+    window.set_selected_objects([second])
+    panel._widgets["player_start_primary"].setChecked(True)
+
+    assert "player_start_sky_image" in panel._widgets
+    assert panel._widgets["player_start_sky_image"].currentData() == (
+        "assets/backgrounds/cloudy-sky-panorama.webp")
+    assert "sky_image" not in first.properties
+
+
+def test_sky_image_is_saved_with_primary_player_start_and_published_to_view(window):
+    first = _create(window, "A")
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    window.update_all_ui()
+
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
+    data = json.loads(json.dumps(window.state.get_level_data()))
+    saved = next(
+        record for record in data["things"]
+        if record.get("type") == "playerstart"
+        and record.get("properties", {}).get("name") == "A"
+    )
+    assert saved["properties"]["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+
+    reloaded = EditorState()
+    reloaded.load_from_data(data)
+    restored = reloaded.resolve_player_start()
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+
+
+def test_deleting_primary_moves_sky_image_to_promoted_start(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    third = _create(window, "C", (200, 40, 0))
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    window.update_all_ui()
+
+    _delete(window, first)
+
+    assert _primaries(window) == ["B"]
+    assert second.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    assert "sky_image" not in third.properties
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
+
+    # Undo restores the previous single owner and its panorama.
+    window.undo()
+    assert _primaries(window) == ["A"]
+    restored = window.state.resolve_player_start()
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    remaining = [start for start in window.state.player_starts() if start is not restored]
+    assert all("sky_image" not in start.properties for start in remaining)
+
+
+def test_ui_refresh_preserves_legacy_duplicate_sky_values_without_dirtying_map(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    second.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
+    window.unsaved_changes = False
+    window.update_title()
+
+    window.update_all_ui()
+
+    assert first.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    assert second.properties["sky_image"] == "assets/backgrounds/cloudy-sky-panorama.webp"
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
+    assert not window.unsaved_changes
+
+
+def test_first_explicit_edit_canonicalises_legacy_sky_ownership(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    second.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
+    window.unsaved_changes = False
+    window.update_title()
+
+    window.save_state()
+
+    assert first.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    assert "sky_image" not in second.properties
+    assert window.view_3d.sky_image_path == "assets/backgrounds/void-panorama-q80.webp"
+    assert window.unsaved_changes
+
+
+def test_first_edit_undo_checkpoint_keeps_sky_ownership_canonical(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    first.properties["sky_image"] = "assets/backgrounds/void-panorama-q80.webp"
+    second.properties["sky_image"] = "assets/backgrounds/cloudy-sky-panorama.webp"
+
+    window.save_state()
+    first.properties["name"] = "A edited"
+    window.state.mark_world_changed([first])
+    window.mark_as_modified()
+
+    window.undo()
+
+    restored = window.state.resolve_player_start()
+    assert restored.properties["name"] == "A"
+    assert restored.properties["sky_image"] == "assets/backgrounds/void-panorama-q80.webp"
+    assert all("sky_image" not in start.properties
+               for start in window.state.player_starts() if start is not restored)
+
+
+def test_legacy_non_primary_sky_is_visible_and_can_be_cleared_explicitly(window):
+    first = _create(window, "A")
+    second = _create(window, "B", (100, 40, 0))
+    second.properties["sky_image"] = "assets/backgrounds/nebula.jpg"
+    window.update_all_ui()
+    window.set_selected_objects([first])
+
+    panel = window.property_editor
+    combo = panel._widgets["player_start_sky_image"]
+    assert combo.currentData() == "assets/backgrounds/nebula.jpg"
+    assert panel._widgets["player_start_sky_image_clear"].isEnabled()
+
+    panel._widgets["player_start_sky_image_clear"].click()
+
+    assert "sky_image" not in first.properties
+    assert "sky_image" not in second.properties
+    assert window.view_3d.sky_image_path == ""
+
+def test_sky_image_dropdown_options_are_in_requested_order(window):
+    _create(window, "A")
+    combo = window.property_editor._widgets["player_start_sky_image"]
+
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "None", "Cloudy sky", "Space"]
+    assert [combo.itemData(i) for i in range(combo.count())] == [
+        "",
+        "assets/backgrounds/cloudy-sky-panorama.webp",
+        "assets/backgrounds/void-panorama-q80.webp",
+    ]
+
+
+def test_sky_image_dropdown_can_select_either_builtin_preset(window):
+    start = _create(window, "A")
+    panel = window.property_editor
+    combo = panel._widgets["player_start_sky_image"]
+
+    combo.setCurrentIndex(combo.findData(
+        "assets/backgrounds/cloudy-sky-panorama.webp"))
+    assert start.properties["sky_image"] == (
+        "assets/backgrounds/cloudy-sky-panorama.webp")
+    assert window.view_3d.sky_image_path == (
+        "assets/backgrounds/cloudy-sky-panorama.webp")
+    assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
+
+    combo.setCurrentIndex(combo.findData(
+        "assets/backgrounds/void-panorama-q80.webp"))
+    assert start.properties["sky_image"] == (
+        "assets/backgrounds/void-panorama-q80.webp")
+    assert window.view_3d.sky_image_path == (
+        "assets/backgrounds/void-panorama-q80.webp")
+
+
+def test_sky_image_custom_entry_can_be_cleared_to_none(window):
+    start = _create(window, "A")
+    panel = window.property_editor
+    combo = panel._widgets["player_start_sky_image"]
+    combo.addItem("Custom: nebula.jpg", "assets/backgrounds/nebula.jpg")
+    combo.setCurrentIndex(combo.count() - 1)
+    assert start.properties["sky_image"] == "assets/backgrounds/nebula.jpg"
+
+    panel._widgets["player_start_sky_image_clear"].click()
+
+    assert "sky_image" not in start.properties
+    assert combo.currentText() == "None"
+    assert combo.currentData() == ""
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "None", "Cloudy sky", "Space"]
+    assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
+    assert window.view_3d.sky_image_path == ""

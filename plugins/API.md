@@ -37,7 +37,7 @@ objects the manager hands you at defined moments:
 | Object | Handed to | When | Use it for |
 |--------|-----------|------|------------|
 | [`EditorAPI`](#editorapi--load-time-registration) | `register(api)` | once, at load (editor **and** engine) | declare entity types, I/O, property schemas, editor-UI extensions, renderers |
-| [`RuntimeAPI`](#runtimeapi--per-session-services) | `register_runtime(api)` | once per play session | register I/O input handlers; query the scene; spawn/despawn; raycast |
+| [`RuntimeAPI`](#runtimeapi--per-session-services) | `register_runtime(api)` | once per play session | register I/O input handlers; query the scene; spawn/despawn; raycast; the live physics and the player |
 | [`PluginHost`](#pluginhost--the-open-ended-engine-seam) | `connect(host)` | once per play session | subscribe to engine events; reach any subsystem; publish/consume services |
 | [`TickContext`](#tickcontext--the-per-tick-object) | `on_tick(logic, ctx)` | every play-mode tick | read input; drive the HUD |
 
@@ -47,6 +47,9 @@ Import everything from `plugins.api` (and `plugins.host` for the host types):
 from plugins.api import (
     FioPlugin, EditorAPI, RuntimeAPI, TickContext,
     PropertySpec, GlobalStore, io_def, prop, key_code,
+    PlayerState, StateStore, Physics, Body,         # API 2.0
+    set_flag, clear_flag, PHYSICS_EVENTS,
+    HEAVY_MASS, CRUSH_DAMAGE, SV_GRAVITY, world_gravity,
     API_VERSION, version_tuple,
 )
 from plugins.host import PluginHost, EventBus, Event
@@ -61,8 +64,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.9.0"` |
-| `API_VERSION_INFO` | `(1, 9, 0)` |
+| `API_VERSION` | `"2.0.0"` |
+| `API_VERSION_INFO` | `(2, 0, 0)` |
 
 History:
 
@@ -120,6 +123,40 @@ History:
   A renderer written for 1.6-1.8 that draws the terrain or implements those
   three members must be updated and declare `api_version = "1.9.0"`; there
   is no shim. Every other plugin loads and behaves unchanged.
+- **2.0.0** — **1.9 extended to expose Soma, the player and LogicState.**
+  Nothing in 1.9 is changed or removed: every plugin written for 1.x loads and
+  behaves as it did, and the surface is **locked** at this version (a test
+  pins the whole of 1.9 and the whole of 2.0). Soma is Fio's physics engine
+  (*soma* is Greek for "body": Soma simulates bodies) — a subsystem of the
+  engine, as the Forward renderer is, not a plugin — and what 2.0 adds is how
+  a plugin communicates with it, with the player and with map state:
+  - **the physics engine** — [`RuntimeAPI.physics`](#soma-api-200)
+    (`RuntimeAPI.soma` when it is Soma), `body`, `impulse`, `explode`,
+    `bodies_near`, `bodies_in_box`, `raycast_bodies`, `spatial_grid`; the
+    events `physics.rest`, `physics.landed`, `physics.contact` and
+    `physics.toppled`; a physics Prop spawned in play gets a body;
+  - **the player** — [`RuntimeAPI.player`](#player-state-api-200) and
+    `RuntimeAPI.player2`, each a `PlayerState`;
+  - **LogicState** — [`RuntimeAPI.state(store)`](#logicstate-api-200), a
+    typed `StateStore` whose writes fire the map's outputs; `state_stores()`;
+    the `state_changed` event;
+  - **flags** — [`set_flag` / `clear_flag`](#flags-api-200): the only way to
+    change an entity's `hidden` or `disabled`;
+  - **the physics contract**, importable from `plugins.api`: `Physics`,
+    `Body`, `PHYSICS_EVENTS`, `HEAVY_MASS`, `CRUSH_DAMAGE`, `SV_GRAVITY`,
+    `world_gravity`;
+  - [`register_physics`](#register_physics-api-200) / `select_physics`: the
+    physics engine can be swapped out the way the renderer can.
+
+  **One thing to check in an existing plugin.** A plugin that writes
+  `entity.properties['hidden']` or `['disabled']` directly still loads, but
+  physics no longer notices such a write on its own (it used to look at every
+  awake body every tick in case). Use `set_flag` / `clear_flag`; the physics
+  engine prints a warning naming an entity changed any other way.
+
+  `SpatialGrid` — engine core — moved to `engine.spatial_grid`;
+  `from engine.physics import SpatialGrid, PhysicsWorld` still works. The
+  shipped plugins declare `api_version = "2.0.0"`.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -373,6 +410,25 @@ def register_menu_action(self, label: str, callback, tooltip: str = "") -> None
 Add an action to the top of the plugin's editor menu. The callback is dispatched
 only while the plugin is enabled.
 
+<a id="register_physics-api-200"></a>
+```python
+def register_physics(self, name: str, cls) -> bool
+def select_physics(self, name: str) -> bool
+```
+Swap out the physics engine, the way `register_renderer` swaps the renderer
+(API 2.0). Soma is the physics engine Fio ships — a subsystem of the engine,
+as Forward is the renderer it ships — and both sit behind a contract so that
+either can be replaced without the rest of the engine knowing.
+
+`register_physics` registers *cls* under *name* (`"Soma"` is the built-in
+one); *cls* is a factory called as `cls(spatial_grid)` once per play session,
+and what it returns must satisfy the `Physics` protocol
+(`engine/physics/api.py`). `select_physics` makes a registered engine the one
+the next play session is created with (the console's `phys_engine <name>`
+does the same); a running session keeps its own. `tests/helpers/physics.py`
+has the smallest conforming implementation. See
+[the physics engine](#soma-api-200) for the contract's members and rules.
+
 ```python
 def register_renderer(self, name: str, cls) -> bool
 ```
@@ -428,11 +484,15 @@ authored object, and a renderer writes nothing on what it is handed:
   `live`; keep your state under `frame.key` and free it when the key changes.
   Streaming, LOD and chunk building are done before the frame
   (`Terrain.advance`, by the host): a renderer computes no height.
-- `decals`: projected decals (blood), or `None`: `(models, params)`, float32
-  `(n, 16)` and `(n, 4)`, from the logic thread's `DecalTable`
-  (`engine/decal_table.py`). Each is a box -- the unit cube's column-major
-  model matrix -- with `(texture variant, opacity, kind, mirrored)`; `kind`
-  is 0 for what landed on a wall, 1 on a floor. Draw the box and paint its
+- `decals`: projected decals (blood and placed), or `None`:
+  `(models, params, inverses)`, float32 `(n, 16)`, `(n, 4)` and `(n, 16)`,
+  from the logic thread's `DecalTable` (`engine/decal_table.py`). Each is a
+  box -- the unit cube's column-major model matrix -- with
+  `(texture layer/variant, opacity, kind, flags)` and the box's inverse;
+  `kind` is 0 for blood on a wall, 1 on a floor, 2 a placed image, 3 a placed
+  wet patch. A placed decal's `tint`, less one, is in the inverse's bottom
+  row (elements 3, 7, 11 -- zero, so white, for an untinted decal and for
+  blood): multiply the image by `1 + that`. Draw the box and paint its
   texture onto whatever the frame has drawn inside it (the built-in pass
   reconstructs the surface from depth: `engine/renderer/forward/decals.py`,
   `decal.frag`). A renderer that ignores the key simply shows no blood.
@@ -691,6 +751,212 @@ def player_eye(self)      # -> (x, y, z) eye position (origin + camera_height)
 def player_forward(self)  # -> (x, y, z) full look direction, includes pitch
 ```
 
+<a id="player-state-api-200"></a>
+### Player state (API 2.0.0)
+
+```python
+@property
+def player(self) -> PlayerState
+```
+The player, live: every member reads the engine's state now and every
+assignment changes it, on the logic thread. Vectors are plain `(x, y, z)`
+tuples — no PyGLM — whatever the host stores them as.
+
+| Member | | |
+|--------|---|---|
+| `position` | read / write | centre of the player's hull, world units |
+| `velocity` | read / write | units per second |
+| `teleport(position, velocity=(0, 0, 0))` | | move the player; at rest by default |
+| `on_ground`, `ground` | read | standing on something, and the brush it is |
+| `ducked`, `in_water`, `swimming` | read | |
+| `size` | read | the hull's `(width, height, depth)` now (a ducked player is shorter) |
+| `yaw`, `pitch` | read / write | radians |
+| `eye`, `forward` | read | camera position and look direction |
+| `health`, `armor` | read / write | clamped to their maxima |
+| `max_health` | read / write | |
+| `max_armor`, `dead` | read | |
+| `god_mode`, `notarget` | read / write | cannot be hurt; ignored by monsters |
+| `damage(amount, source=None)` | | hurt the player as the world does: armour first, god mode stops it |
+| `give_armor(amount)` | | |
+| `speed` | read / write | walking speed, units per second |
+| `noclip` | read / write | the player's own physics off: it flies, passes through the world, and touches no physics body |
+| `holding`, `drop()` | read | the Prop being carried, and putting it down |
+| `keys`, `has_key(name)`, `give_key(name)`, `take_key(name)` | | collected keys |
+| `weapons` | read | the weapons held, by item id |
+| `index` | read | 0 for the first player, 1 for the second |
+| `exists`, `object` | read | whether there is a player yet, and the engine's own `Player` for anything not here |
+
+`RuntimeAPI.player2` is the second, split-screen player: the same members
+where the engine keeps them per player (position, motion, view, health); its
+`exists` is False when nobody is playing split-screen.
+
+```python
+def on_tick(self, logic, ctx):
+    player = self.api.player              # the RuntimeAPI kept from register_runtime
+    if player.in_water and not player.swimming:
+        player.velocity = (0.0, 300.0, 0.0)       # a geyser
+    if player.position[1] < -2000.0:
+        player.damage(25)
+        player.teleport(self.checkpoint)
+```
+
+<a id="soma-api-200"></a>
+### The physics engine: Soma (API 2.0.0)
+
+```python
+@property
+def physics(self) -> Physics               # never None
+@property
+def physics_enabled(self) -> bool
+@property
+def soma(self) -> Physics
+def body(self, entity) -> Optional[Body]
+@property
+def spatial_grid(self)
+```
+Soma is Fio's physics engine: it simulates bodies — the Props whose
+`physics_enabled` is set. It is a subsystem of the engine, not a plugin; this
+is how a plugin communicates with it. `physics` is the play session's physics
+engine — Soma, unless another was [registered](#register_physics-api-200) and
+selected; fetch it when you use it, since each play session has its own.
+`soma` is the same object when the engine is Soma, for what is Soma's own
+rather than the contract's.
+
+**With physics switched off, nothing fails.** When there is no physics engine
+— *Enable physics* is off in the settings, or play is not running —
+`physics` is not `None` but a stand-in (`NO_PHYSICS`) on which every member
+does nothing, quietly: a query finds no bodies, a push pushes nothing, a
+control is accepted and forgotten. A plugin need not ask first. It is falsy,
+so `if api.physics:` works, and `api.physics_enabled` says the same. `body(entity)` is the simulated body of a
+physics Prop, a live handle. `spatial_grid` is the session's
+`engine.spatial_grid.SpatialGrid`: where the world is (solid brushes and
+their true surfaces, the terrain, movers and doors where they are now, water)
+— the same grid the physics engine asks.
+
+| Member | |
+|--------|---|
+| `gravity`, `time_scale`, `friction_scale`, `damping_scale`, `sleep_enabled` | the world controls (the console's `phys_*`); `reset_controls()` restores them |
+| `get_body(entity)` → `Body` | `velocity` (read / write), `mass`, `half_extents`, `awake`, `kinematic` |
+| `wake(entity, velocity=None)`, `wake_all()` | simulate a body again, optionally at a velocity |
+| `set_kinematic(entity, value)` | take a body out of the simulation (you move it) or hand it back |
+| `sync_entity_position(entity, wake=False)` | you moved an entity: take its `pos` as the body's |
+| `impulse(entity, vector)` | push a body: its velocity changes by `impulse / mass` |
+| `impulse_radial(centre, radius, strength)` | push everything near away from a point: an explosion |
+| `on_rest(entity, callback)`, `off_rest(entity, callback)` | be told when a body comes to rest; any number may listen |
+| `bodies_in_box(lo, hi)`, `bodies_near(point, radius)`, `raycast(origin, direction, reach)` | find bodies through the engine's own index |
+| `get_body(entity)` → also | `position`, `grounded`, `resting_on`; `mass`, `friction` assignable |
+
+`RuntimeAPI` has the common ones directly (with physics off they answer
+`False`, `[]` or `None`): `impulse(entity, vector)`,
+`explode(centre, radius, strength)`, `bodies_near(point, radius)`,
+`bodies_in_box(lo, hi)`, `raycast_bodies(origin, direction, reach)`.
+`set_rest_callback` is the engine's own slot (a Prop's `OnRest`); a plugin
+listens with `on_rest` or the `physics.rest` event, and replaces nothing.
+
+**Events.** Subscribe with `host.on(...)`; the physics engine records them
+only while something is subscribed to one, so they cost nothing unused.
+
+| Event | Payload |
+|-------|---------|
+| `physics.rest` | `entity`: a body came to rest |
+| `physics.landed` | `entity`, `speed`: it came down onto the ground |
+| `physics.contact` | `entity`, `other` (the entity it met, or `None` for the world), `axis`, `speed` |
+| `physics.toppled` | `entity`, `axis`, `sign`: a barrel went over |
+
+**Bodies come and go.** A physics Prop created with `spawn` during play gets
+a body, and loses it when despawned; the bodies already moving carry on.
+
+**Soma's own.** `api.soma` is the same object when the engine is Soma, with
+`topple(entity, direction)` and `stand(entity)` for Props that fall over
+(barrels), and `Body.toppled`. See the wiki's *Soma* page.
+
+```python
+def connect(self, host):
+    host.on("physics.contact", self.on_contact)
+
+def on_contact(self, event):
+    if event.data["speed"] > 400.0:               # something hit hard
+        self.api.explode(event.data["entity"].pos, 300.0, 600.0)
+```
+
+**Where Soma sits.** Fio's core is modular: the renderer and the physics
+engine are each a subsystem behind a contract, and the rest of the engine
+drives them through it and nothing else, so either can be worked on -- or
+swapped out -- without the rest of the engine knowing. Soma's contract is `engine/physics/api.py`
+(stdlib-only): the `Physics` and `Body` protocols, what crosses them, and the
+game's rules Soma honours (`SV_GRAVITY`, `HEAVY_MASS`, `CRUSH_DAMAGE`). Two
+rules come with it: the world is the `SpatialGrid`'s — Soma keeps no copy —
+and a moved body is handed back by *assigning* `entity.pos`. To improve
+Soma, work in `engine/physics/soma.py`; nothing outside `engine/physics/`
+names it (`tests/physics/test_physics_contract.py` holds that line).
+
+**What the calls cost.** Measured on the development container with 500
+bodies (and, in brackets, 4,096) -- `rt` is a `RuntimeAPI`; the machine moves
+the numbers, the proportions much less:
+
+| Call | Microseconds |
+| :--- | ---: |
+| `rt.physics`, `rt.player`, `rt.physics_enabled`, `rt.state(name)` | 0.03 – 0.1 |
+| `rt.body(entity)`, and reading any one thing from a `Body` or the player | 0.1 – 0.3 |
+| `StateStore.get` | 0.25 |
+| `StateStore.set` (the map's `LogicState` reacts) | 3 – 6 |
+| `set_flag` / `clear_flag` | 1 |
+| `rt.impulse` | 2.5 |
+| `rt.bodies_in_box` (a 400-unit cube) | 12 (13) |
+| `rt.bodies_near` (radius 200) | 18 (20) |
+| `rt.bodies_near` (radius 2,000) | 31 (86) |
+| `rt.raycast_bodies` (reach 2,000) | 38 (40) |
+| `rt.explode` (radius 300) | 36 (44) |
+| `rt.things_near` / `rt.entities_of_type`, for scale: they read every entity | 53 / 61 (more with more entities) |
+
+A body query costs what is near it, not how many bodies there are; prefer one
+to `things_near` when it is physics Props you are after. The `physics.*`
+events cost nothing while no plugin subscribes.
+
+<a id="logicstate-api-200"></a>
+### LogicState (API 2.0.0)
+
+```python
+def state(self, store: str) -> StateStore
+def state_stores(self) -> list
+```
+`state(name)` is one LogicState store as the map sees it. `GlobalStore`
+(below) reaches the same registry but speaks strings and writes silently;
+a `StateStore` is the store itself:
+
+| Member | |
+|--------|---|
+| `get(key, default=None)` | the **typed** value: an integer counter is an `int`, a flag a `bool` |
+| `set(key, value, value_type=None)` → `(accepted, changed)` | a write the map hears: it goes through the level's `LogicState` entity for the store, firing `OnValueSet` / `OnValueChanged` exactly as an I/O connection would. Text is typed as an I/O parameter is (`"5"` is an integer) unless *value_type* names the type |
+| `delete(key)`, `keys()`, `items()`, `key in store` | |
+
+Every change to any store, whoever makes it — a plugin, an I/O connection —
+is also the event `state_changed` (`store`, `key`, `value`, `entity`).
+
+```python
+def on_tick(self, logic, ctx):
+    score = self.api.state("match")
+    if score.get("kills", 0) >= 10:
+        score.set("won", True)                    # the map's OnValueChanged fires
+```
+
+<a id="flags-api-200"></a>
+### Flags: `hidden` and `disabled` (API 2.0.0)
+
+```python
+from plugins.api import set_flag, clear_flag
+
+set_flag(entity, "disabled", True)
+clear_flag(entity, "disabled")        # the journalled properties.pop(...)
+```
+**This is how a plugin changes those two flags.** Physics and the render
+projection keep their own tables of which entities are hidden or disabled,
+and hear of a change through the engine's change journal and nowhere else —
+so that neither has to look at every entity every tick. A value written
+straight into `entity.properties` is not heard: the entity goes on being
+simulated and drawn as it was, and the physics engine prints a warning
+naming it.
+
 ### Runtime spawn / despawn
 
 ```python
@@ -878,7 +1144,8 @@ single int compare.
 
 Common event names include `play_start`, `tick`, `player_damage`,
 `portal_transit`, `prop_collected`, `entity_spawned`, `pause_menu_opened` /
-`pause_menu_closed`, and the render hooks
+`pause_menu_closed`, `state_changed`, the physics events `physics.rest` /
+`physics.landed` / `physics.contact` / `physics.toppled`, and the render hooks
 `render.overlay` / `render.*`. Prefer subscribing through `host.on(...)` (which
 gates on `enabled`) over the raw bus.
 
@@ -1170,6 +1437,12 @@ def on_tick(self, logic, ctx):
 - **Restore what you mutate.** If you move, hide or disable entities during play,
   put them back in `on_play_stop` so the edited map is unchanged (see
   `TidySession.stop` and `BigWorldSession.stop`).
+- **Say what you change.** The engine keeps tables — the renderer's, the
+  physics engine's — and a table hears of a change through the change journal,
+  never by re-reading entities. Move an entity by *assigning* `entity.pos`
+  (never in place); change `hidden` or `disabled` with `set_flag` /
+  `clear_flag`; after changing anything else a table is resolved from, call
+  `engine.change_journal.touch(entity)`.
 - **Never make an OpenGL call off the render thread.** If a change needs GL work,
   defer it to a render frame. (The terrain needs none: it is GL-free, and a
   change to it reaches the renderer through what it publishes.)

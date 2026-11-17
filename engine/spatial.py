@@ -2,14 +2,14 @@
 
 Fio has always bucketed the world into integer ``(cell_x, cell_z)`` columns of
 :data:`CELL_SIZE` units using ``floor(coord / cell_size)`` — that is what
-:class:`engine.physics.SpatialGrid` does for collision queries and what Big
+:class:`engine.spatial_grid.SpatialGrid` does for collision queries and what Big
 World's streaming lifecycle sits on top of.  The maths used to be written out
 twice, once in each place, which is how two systems that are *supposed* to agree
 about which cell a brush is in end up disagreeing.  It lives here now, and both
 read it from here.
 
-Deliberately stdlib-only — no NumPy, no PyGLM, no Qt.  ``engine.physics`` needs
-PyGLM and the standalone player does not, so putting the shared convention in
+Deliberately stdlib-only — no NumPy, no PyGLM, no Qt.  ``engine.spatial_grid`` needs
+NumPy and PyGLM and the standalone player does not, so putting the shared convention in
 its own module is what lets the player, a plugin and a head-less test all use it
 without dragging the renderer in.
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 
-from .change_journal import touch
+from .change_journal import STATE, VISIBILITY, touch
 
 #: Cell edge length in world units.  512 is the size the collision grid has
 #: always used; Big World streams the same columns.
@@ -162,6 +162,41 @@ def set_authored_flag(obj, flag, value):
     else:
         props[flag] = bool(value)
     touch(obj)
+    return True
+
+
+def set_live_flag(obj, flag, value):
+    """Write ``hidden`` or ``disabled`` as it is in effect *now*, and say so.
+
+    The one way to change a live flag. Everything that keeps its own account
+    of which entities are hidden or disabled -- physics, the render
+    projection -- hears of a change through the change journal and nowhere
+    else, so that none of them has to look at every entity every tick to
+    find out. A value written straight into the property dict is therefore
+    not heard: the entity goes on being simulated, or drawn, as it was.
+
+    Use :func:`set_authored_flag` instead for what the map *means* (an I/O
+    Hide, a restored save): it lands on the authored value even while a
+    streaming layer has the object parked. This writes the flag itself.
+
+    Returns True if it wrote anything (i.e. ``obj`` has a property dict).
+    """
+    props = _props_of(obj)
+    if props is None:
+        return False
+    props[flag] = bool(value)
+    touch(obj, STATE | VISIBILITY)
+    return True
+
+
+def clear_live_flag(obj, flag):
+    """Remove a live flag (it reads as its default again), and say so: the
+    journalled ``properties.pop(flag)``. See :func:`set_live_flag`."""
+    props = _props_of(obj)
+    if props is None:
+        return False
+    props.pop(flag, None)
+    touch(obj, STATE | VISIBILITY)
     return True
 
 

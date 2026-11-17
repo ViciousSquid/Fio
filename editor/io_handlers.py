@@ -50,6 +50,31 @@ def _finite(param) -> float:
     return value
 
 
+def report_state_write(entity, logic, key, ok, changed, stored):
+    """Fire the outputs one write implies.
+
+    Refused writes fire ``OnStoreFull``: the only ways a write is refused
+    are a full store and a value that does not fit the type the parameter
+    asked for, and both mean "this value did not go in", which is what a
+    map wired to that output is reacting to.
+    """
+    mgr = logic.io_manager if logic is not None else None
+    if mgr is None:
+        return
+    if not ok:
+        mgr.fire_output(entity, 'OnStoreFull', value=key)
+        return
+    payload = "%s=%s" % (key, _sv.format_value(stored))
+    mgr.fire_output(entity, 'OnValueSet', value=payload)
+    if changed:
+        mgr.fire_output(entity, 'OnValueChanged', value=payload)
+        # And for plugins: one event for every change, whatever made it.
+        emit = getattr(logic, '_plugin_emit', None)
+        if emit is not None:
+            emit('state_changed', store=getattr(entity, 'store_name', ''),
+                 key=key, value=stored, entity=entity)
+
+
 def register_all_input_handlers(io_manager: IOManager):
     """Register all input handlers with the I/O manager."""
     
@@ -1128,6 +1153,12 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
     
     def levelchanger_changelevel(entity, param, logic):
+        callback = getattr(logic, "request_level_change", None)
+        if callback is not None:
+            target, spawn = entity.destination(param)
+            if target:
+                callback(target, spawn)
+            return
         # We route to change_level() because it is more robust
         if hasattr(entity, 'change_level'):
             entity.change_level(param)
@@ -1480,24 +1511,7 @@ def register_all_input_handlers(io_manager: IOManager):
             return key.strip(), amount.strip()
         return param.strip(), default
 
-    def _state_report(entity, logic, key, ok, changed, stored):
-        """Fire the outputs one write implies.
-
-        Refused writes fire ``OnStoreFull``: the only ways a write is refused
-        are a full store and a value that does not fit the type the parameter
-        asked for, and both mean "this value did not go in", which is what a
-        map wired to that output is reacting to.
-        """
-        mgr = logic.io_manager if logic is not None else None
-        if mgr is None:
-            return
-        if not ok:
-            mgr.fire_output(entity, 'OnStoreFull', value=key)
-            return
-        payload = "%s=%s" % (key, _sv.format_value(stored))
-        mgr.fire_output(entity, 'OnValueSet', value=payload)
-        if changed:
-            mgr.fire_output(entity, 'OnValueChanged', value=payload)
+    _state_report = report_state_write
 
     def _state_branch(entity, logic, result, payload):
         """Fire the true/false pair a query implies, legacy names included."""
@@ -1814,6 +1828,46 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('portal', 'hiderim',   portal_hide_rim)
     io_manager.register_input_handler('portal', 'setwidth',  portal_set_width)
     io_manager.register_input_handler('portal', 'setheight', portal_set_height)
+
+    # ==========================================================================
+    # DECAL HANDLERS
+    # ==========================================================================
+    # A decal's words are a property like any other: change it and the decal
+    # table draws the new words into a layer of their own (engine.decal_text)
+    # -- the executor touches the decal after the handler, so its row is
+    # remade next tick. Stop puts back the authored text with the rest of
+    # the world.
+
+    def decal_set_text(entity, param, logic):
+        """Paint *param* on the decal (``\\n`` starts a new line)."""
+        entity.properties['text'] = '' if param is None else str(param)
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Decal '{name}' text set to '{entity.properties['text']}'")
+
+    def decal_clear_text(entity, param, logic):
+        entity.properties['text'] = ''
+
+    def decal_set_font(entity, param, logic):
+        """Draw the decal's words in font *param* (a name, any case)."""
+        from engine.decal_text import font_name
+        entity.properties['font'] = font_name(param)
+
+    def decal_set_text_colour(entity, param, logic):
+        """Black or White lettering (any case; anything else is black)."""
+        from engine.decal_text import text_colour
+        entity.properties['text_colour'] = text_colour(param)
+
+    def decal_set_tint(entity, param, logic):
+        """Tint the decal: ``r g b`` (0-255 or 0-1) or ``#rrggbb``; nothing,
+        or anything else, is white -- no tint."""
+        from engine.decal_table import tint_of
+        entity.properties['tint'] = list(tint_of(param))
+
+    io_manager.register_input_handler('decal', 'settint', decal_set_tint)
+    io_manager.register_input_handler('decal', 'settext', decal_set_text)
+    io_manager.register_input_handler('decal', 'cleartext', decal_clear_text)
+    io_manager.register_input_handler('decal', 'setfont', decal_set_font)
+    io_manager.register_input_handler('decal', 'settextcolor', decal_set_text_colour)
 
     # ==========================================================================
     # LOG SUMMARY

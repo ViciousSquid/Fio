@@ -80,7 +80,9 @@ FRAME_INPUT = {
               'inverses (n, 16)) float32 from the logic thread\'s DecalTable -- '
               'each a box (the unit cube\'s model matrix, column-major), '
               '(texture layer/variant, opacity, kind, flags) and the box\'s '
-              'inverse; drawn onto whatever lies inside the box',
+              'inverse, whose bottom row (elements 3, 7, 11) holds a placed '
+              'decal\'s tint less one (zero: white); drawn onto whatever '
+              'lies inside the box',
     # Selection (same object as render_scene's primary_selection argument)
     'primary_selection': 'SelectionOverlay or None',
     # View settings
@@ -230,6 +232,19 @@ class Renderer(Protocol):
         (split-screen) and has cleared it itself. Called once per view; the
         host draws its post-scene operations (below) afterwards.
         """
+
+    def set_background_image(self, path: str) -> None:
+        """Set a camera-locked equirectangular panorama behind the scene.
+
+        *path* is a project asset path or an absolute image path; an empty
+        path disables the panorama and restores the renderer's clear colour.
+        """
+
+    def invalidate_reflection_probes(self) -> None:
+        """Retake the snapshots of the map's reflection probes (EntityTable
+        rows with ``ENT_PROBE``) on the next frame. The host calls it when a
+        map has loaded and when Play starts. A renderer that does not draw
+        probe reflections does nothing."""
 
     def set_grid(self, world_size: int, grid_size: int) -> None:
         """Size the editor grid (drawn when ``grid_visible``); 0 removes it."""

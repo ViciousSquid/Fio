@@ -1,6 +1,6 @@
 """Runtime interaction domain for the unified Prop primitive.
 
-Physics simulation lives in engine.physics. PropSession owns all Prop
+Physics simulation lives behind engine.physics (the contract). PropSession owns all Prop
 interaction state: carrying, collecting, dropping, collection respawns,
 and the Prop spatial index.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .physics import PhysicsWorld, world_gravity
+from .physics import HEAVY_MASS, world_gravity
 from .change_journal import touch
 from .spatial import CellIndex, cell_of_point
 
@@ -313,24 +313,26 @@ class PropSession:
                 best._carry_sprite_yaw = float(self.logic.player_runtime.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
+            self._falling.pop(id(best), None)
+            if self.physics is not None:
+                # Before its turn is remembered: taking a body over may turn
+                # it (a barrel on its side is stood up in the hands).
+                self.physics.set_kinematic(best, True)
             # A model turns with the player instead, so the side facing the
             # player stays facing them: without it the player's view swung
             # round a model that kept its world facing.
             if self._is_model(best):
                 best._carry_turn = (best._carry_sprite_yaw,
                                     list(best.properties.get('rotation') or (0.0, 0.0, 0.0)))
-            self._falling.pop(id(best), None)
-            if self.physics is not None:
-                self.physics.set_kinematic(best, True)
             self._fire(best, "OnCarried")
 
     @staticmethod
     def _too_heavy(properties):
         """A Prop at the heaviest mass is never picked up, whatever its Carry
         setting says: it is the mass at which the player cannot push it
-        either (PhysicsWorld.HEAVY_MASS)."""
+        either (engine.physics.HEAVY_MASS)."""
         try:
-            return float(properties.get("mass", 1.0)) >= PhysicsWorld.HEAVY_MASS
+            return float(properties.get("mass", 1.0)) >= HEAVY_MASS
         except (TypeError, ValueError):
             return False
 
@@ -656,8 +658,10 @@ class PropSession:
         )
         if raycast_down is None and physics is not None:
             raycast_down = getattr(physics, "raycast_down", None)
+        terrain_heights = getattr(
+            self.logic.session_runtime.spatial_grid, "terrain_heights", None)
 
-        # Dropped props fall by the live PhysicsWorld's gravity, as bodies do.
+        # Dropped props fall by the live physics' gravity, as bodies do.
         drop_gravity = -world_gravity(physics)
         finished = []
         for pid, state in tuple(self._falling.items()):
@@ -693,6 +697,13 @@ class PropSession:
                         float(prop.pos[0]),
                         float(prop.pos[2]),
                     )
+
+            if terrain_heights is not None:
+                # The terrain is ground too, where the map has one.
+                ground = terrain_heights([float(prop.pos[0])], [float(prop.pos[2])])
+                if ground is not None and ground[0] == ground[0] and (
+                        floor_y is None or ground[0] > floor_y):
+                    floor_y = float(ground[0])
 
             if floor_y is not None and new_y <= float(floor_y) + half_height:
                 prop.pos = [prop.pos[0], float(floor_y) + half_height, prop.pos[2]]

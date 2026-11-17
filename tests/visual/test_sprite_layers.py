@@ -340,3 +340,32 @@ def test_building_the_array_leaves_the_pixel_store_as_qt_expects(renderer, conte
     assert gl.glGetIntegerv(gl.GL_UNPACK_ALIGNMENT) == 4
     assert gl.glGetIntegerv(gl.GL_UNPACK_ROW_LENGTH) == 0
     assert gl.glGetIntegerv(gl.GL_PACK_ALIGNMENT) == 4
+
+
+def test_every_sprite_is_in_the_array_before_it_comes_into_view(renderer, context,
+                                                                monkeypatch):
+    """Every sprite the map can show is imported in the first frame, in one go,
+    seen or not: the array is not grown -- which re-uploads every layer -- as
+    each one first comes into view (130 ms frames into _SHOWCASE's Play)."""
+    from engine import sprite_layers
+
+    imports = []
+    real = sprite_layers.SpriteLayers._import
+
+    def counted(self, new_ids):
+        imports.append(len(new_ids))
+        return real(self, new_ids)
+
+    monkeypatch.setattr(sprite_layers.SpriteLayers, '_import', counted)
+    ahead = _billboard(renderer, "ahead", (0.0, 60.0, 0.0), _solid((255, 0, 0)))
+    behind = [_billboard(renderer, "behind%02d" % i, (40.0 * i, 60.0, 4000.0),
+                         _solid((0, 255, 0), size=16 << (i % 3)))
+              for i in range(10)]
+    things = [ahead] + behind
+    eye = (0.0, 60.0, 600.0)
+    _render(renderer, context, things, eye=eye, target=(0.0, 60.0, 0.0))
+    assert imports == [11]
+    image = _render(renderer, context, things, eye=eye, target=(0.0, 60.0, 4000.0))
+    assert imports == [11]                     # turning round imported nothing
+    assert renderer._sprite_layers.count == 11
+    assert image[..., 1].max() > 40 > image[..., 0].max()   # the green ones, drawn

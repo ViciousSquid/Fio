@@ -18,7 +18,11 @@ Object / helper             Purpose
 ==========================  ========================================================
 :class:`FioPlugin`          Base class you subclass; expose an instance as ``PLUGIN``.
 :class:`EditorAPI`          Load-time: register entities, I/O, schemas, UI, renderers.
-:class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast.
+:class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast,
+                            the physics engine (Soma) and the player.
+:class:`PlayerState`        The player: position, motion, view, health and armour.
+:class:`Physics`            The physics contract Soma answers to (:class:`Body`:
+                            one simulated body).
 :class:`TickContext`        Per-tick: read input, drive the HUD.
 :class:`PropertySpec`       Declare a typed, self-documenting entity property.
 :class:`GlobalStore`        Cross-level key/value storage (shared with map KV stores).
@@ -56,6 +60,14 @@ import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
+# The physics contract (API 2.0). ``engine.physics`` is the boundary package:
+# stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
+from engine.physics import (  # noqa: F401 -- re-exported for plugins
+    CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS, PHYSICS_EVENTS, SV_GRAVITY, Body,
+    Physics, world_gravity)
+from engine.spatial import clear_live_flag as _clear_live_flag
+from engine.spatial import set_live_flag as _set_live_flag
+
 
 #: Version of the plugin API surface this module implements. Compare against
 #: :attr:`FioPlugin.api_version` (see :func:`version_tuple`).
@@ -86,8 +98,39 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-API_VERSION = "1.9.0"
-API_VERSION_INFO = (1, 9, 0)
+#: * 2.0.0 — **1.9 extended to expose Soma, the player and LogicState.**
+#:   Nothing in 1.9 is changed or removed: every plugin written for 1.x loads
+#:   and behaves as it did. The surface is locked at this version
+#:   (``tests/plugins/test_api_2_0.py`` pins both the whole of 1.9 and the
+#:   whole of 2.0). Soma is Fio's physics engine -- a subsystem of the
+#:   engine, as the Forward renderer is, not a plugin -- and what is added is
+#:   how a plugin communicates with it, with the player and with map state:
+#:
+#:   - the physics engine: :attr:`RuntimeAPI.physics` (:attr:`RuntimeAPI.soma`
+#:     when it is Soma), :meth:`RuntimeAPI.body`, :meth:`RuntimeAPI.impulse`,
+#:     :meth:`RuntimeAPI.explode`, :meth:`RuntimeAPI.bodies_near`,
+#:     :meth:`RuntimeAPI.bodies_in_box`, :meth:`RuntimeAPI.raycast_bodies`,
+#:     :attr:`RuntimeAPI.spatial_grid`; the events in :data:`PHYSICS_EVENTS`
+#:     on the bus; a physics Prop spawned in play gets a body. With physics
+#:     switched off none of it fails: ``physics`` is :data:`NO_PHYSICS`, on
+#:     which everything does nothing (:attr:`RuntimeAPI.physics_enabled`);
+#:   - the player: :attr:`RuntimeAPI.player` and :attr:`RuntimeAPI.player2`,
+#:     each a :class:`PlayerState`;
+#:   - LogicState: :meth:`RuntimeAPI.state` (a typed :class:`StateStore`
+#:     whose writes fire the map's outputs), :meth:`RuntimeAPI.state_stores`,
+#:     and the ``state_changed`` event;
+#:   - flags: :func:`set_flag` / :func:`clear_flag`, the only way to change
+#:     an entity's ``hidden`` or ``disabled`` (they are journalled);
+#:   - the physics contract, importable from here: :class:`Physics`,
+#:     :class:`Body`, :data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`,
+#:     :data:`SV_GRAVITY`, :func:`world_gravity`;
+#:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`:
+#:     the physics engine can be swapped out the way the renderer can.
+#:
+#:   ``SpatialGrid`` lives in ``engine.spatial_grid`` (still importable from
+#:   ``engine.physics``, as ``PhysicsWorld`` is).
+API_VERSION = "2.0.0"
+API_VERSION_INFO = (2, 0, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -128,6 +171,29 @@ def placement(brush):
     """
     from engine.brush_placement import placement as _placement
     return _placement(brush)
+
+
+def set_flag(entity, flag: str, value) -> bool:
+    """Set an entity's ``hidden`` or ``disabled`` flag (API 2.0).
+
+    **This is how a plugin changes those two flags.** Physics and the render
+    projection keep their own account of which entities are hidden or
+    disabled, and hear of a change through the engine's change journal and
+    nowhere else -- so that neither has to look at every entity every tick.
+    Writing ``entity.properties['disabled'] = True`` directly is not heard:
+    the entity goes on being simulated and drawn as it was, and the physics
+    engine prints a warning naming it.
+
+    Returns True if the entity has properties to write.
+    """
+    return _set_live_flag(entity, flag, value)
+
+
+def clear_flag(entity, flag: str) -> bool:
+    """Remove an entity's ``hidden`` or ``disabled`` flag, so it reads as
+    its default again (API 2.0): the journalled ``properties.pop(flag)``.
+    See :func:`set_flag`."""
+    return _clear_live_flag(entity, flag)
 
 
 def io_def(name: str, description: str = "", param_type: str = ""):
@@ -318,6 +384,130 @@ def prop(name: str, type: str = "string", label: str = "", default: Any = None,
     return PropertySpec(name=name, type=type, label=label, default=default,
                         min=min, max=max, choices=choices, help=help,
                         group=group)
+
+
+# ---------------------------------------------------------------------------
+# LogicState: typed values, and the events a write makes (API 2.0)
+# ---------------------------------------------------------------------------
+class StateStore:
+    """One LogicState store, by name, as the map sees it (API 2.0).
+
+    :class:`GlobalStore` reaches the same registry but speaks strings and
+    writes silently. This is the store itself: values are **typed** (an
+    integer counter is an ``int``, a flag a ``bool``), and a write goes
+    through the map's own ``LogicState`` entity for the store when there is
+    one -- so it fires ``OnValueSet`` / ``OnValueChanged`` and the map's logic
+    reacts, exactly as if an I/O connection had written it. With no such
+    entity in the level the value is written to the registry directly.
+
+    Every change to any store, whoever makes it, is also the engine event
+    ``state_changed`` (``store``, ``key``, ``value``, ``entity``) on the bus.
+    Reached as :meth:`RuntimeAPI.state`.
+    """
+
+    __slots__ = ('_logic', 'name', '_found', '_found_in', '_found_at')
+
+    def __init__(self, logic, name):
+        self._logic = logic
+        self.name = str(name)
+        self._found = None          # the store's entity, as last found
+        self._found_in = None       # ... in this things list
+        self._found_at = -1         # ... at this index (or its length, if none)
+
+    @staticmethod
+    def _registry() -> dict:
+        try:
+            from editor.things import LogicState
+            return LogicState._persistent_registry
+        except Exception:
+            return GlobalStore._fallback
+
+    def _entity(self):
+        """The level's LogicState entity for this store, or None.
+
+        Found once and remembered: a read or a write must not cost a walk
+        over every thing in the level. What was found is checked each time
+        -- the entity is still at its place in the same list and still
+        names this store; or, where there was none, the list is the same
+        list at the same length -- and looked for again when it is not.
+        """
+        things = getattr(getattr(self._logic, 'editor_state', None), 'things', None)
+        if things is self._found_in and things is not None:
+            found, at = self._found, self._found_at
+            if found is None:
+                if len(things) == at:
+                    return None
+            elif (at < len(things) and things[at] is found
+                    and found.store_name == self.name):
+                return found
+        self._found, self._found_in, self._found_at = None, things, len(things or ())
+        for at, thing in enumerate(things or ()):
+            if getattr(thing, 'store_name', None) == self.name and hasattr(thing, 'apply_value'):
+                self._found, self._found_at = thing, at
+                return thing
+        return None
+
+    def _data(self) -> dict:
+        entity = self._entity()
+        if entity is not None:
+            return getattr(entity, '_runtime_data', {})
+        return self._registry().get(self.name, {})
+
+    def get(self, key, default=None):
+        """The typed value under *key*, or *default*."""
+        return self._data().get(str(key), default)
+
+    def set(self, key, value, value_type=None) -> Tuple[bool, bool]:
+        """Store *value* under *key*: ``(accepted, changed)``.
+
+        Text is typed as an I/O parameter would be (``"5"`` is an integer)
+        unless *value_type* names the type; any other Python value is stored
+        as it is. Refused when the key is blank, the store is full, or the
+        text is not of *value_type*.
+        """
+        entity = self._entity()
+        if entity is None:
+            key = str(key).strip()
+            if not key:
+                return False, False
+            data = self._registry().setdefault(self.name, {})
+            changed = key not in data or data[key] != value or type(data[key]) is not type(value)
+            data[key] = value
+            if changed:
+                emit = getattr(self._logic, '_plugin_emit', None)
+                if emit is not None:
+                    emit('state_changed', store=self.name, key=key, value=value, entity=None)
+            return True, changed
+        ok, changed, stored = entity.apply_value(key, value, value_type)
+        try:
+            from editor.io_handlers import report_state_write
+            report_state_write(entity, self._logic, str(key).strip(), ok, changed, stored)
+        except Exception:
+            pass
+        return ok, changed
+
+    def delete(self, key) -> bool:
+        """Remove *key*. True if it was there."""
+        entity = self._entity()
+        if entity is not None:
+            return bool(entity.clear_key(key))
+        data = self._registry().get(self.name)
+        if data and str(key) in data:
+            del data[str(key)]
+            return True
+        return False
+
+    def keys(self) -> list:
+        return list(self._data().keys())
+
+    def items(self) -> list:
+        return list(self._data().items())
+
+    def __contains__(self, key) -> bool:
+        return str(key) in self._data()
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"<StateStore {self.name!r} {dict(self._data())!r}>"
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +845,50 @@ class EditorAPI:
         from engine.renderer import register_renderer
         return register_renderer(name, cls)
 
+    def register_physics(self, name: str, cls) -> bool:
+        """Register a physics engine under *name* in Fio's physics registry
+        (API 2.0), so it can be swapped in the way a renderer can
+        (:meth:`register_renderer`).
+
+        Soma is the physics engine Fio ships: a subsystem of the engine, as
+        the Forward renderer is, and what every map runs on unless another
+        is selected. Both sit behind a contract so that either can be
+        replaced without the rest of the engine knowing.
+
+        *cls* is a factory called as ``cls(spatial_grid)`` once per play
+        session -- usually the physics class itself. What it returns must
+        satisfy :class:`Physics` (``engine/physics/api.py`` is the whole
+        contract): the world controls, the lifecycle (``rebuild`` over the
+        collision runtime's body brushes, ``clear``), the tick (``step``) and
+        the per-body operations the engine's Prop, trigger and cutscene code
+        call. How it simulates is entirely its own. It may start from Soma
+        (``from engine.physics.soma import Soma``, its full tier, and
+        subclass it) or share nothing with it.
+
+        Two rules come with the contract. The world is the ``SpatialGrid``
+        the factory is given, asked live -- a physics keeps no copy of it.
+        And a moved body is handed back by assigning ``entity.pos``, which is
+        what the renderer and every index hear.
+
+        Registering makes it available; :meth:`select_physics` (the console's
+        ``phys_engine``) makes it the one the next play session uses. Works
+        in the editor and the standalone player alike. Returns True.
+        """
+        from engine.physics import register_physics
+        return register_physics(name, cls)
+
+    def select_physics(self, name: str) -> bool:
+        """Make the physics engine registered as *name* the one the next play
+        session is created with (API 2.0); ``"Soma"`` is the built-in one. A
+        running session keeps its own. Returns False for a name nothing is
+        registered under."""
+        from engine.physics import select_physics
+        try:
+            select_physics(name)
+        except KeyError:
+            return False
+        return True
+
     def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
         """Register a Tools-menu action for an editor/developer plugin."""
         self._manager._record_tools_action(self._plugin, label, callback, tooltip)
@@ -703,6 +937,320 @@ class EditorAPI:
 # Runtime API (passed to FioPlugin.register_runtime)
 # ---------------------------------------------------------------------------
 
+def _like(old, xyz):
+    """*xyz* as whatever type *old* is, so a write keeps the host's vector
+    type (``glm.vec3`` on the desktop, a list where there is no PyGLM)."""
+    x, y, z = float(xyz[0]), float(xyz[1]), float(xyz[2])
+    kind = type(old)
+    if kind in (list, tuple) or old is None:
+        return [x, y, z]
+    try:
+        return kind(x, y, z)
+    except TypeError:
+        return kind((x, y, z))
+
+
+class PlayerState:
+    """The player, as a plugin reads and changes it (API 2.0).
+
+    A live view, not a snapshot: every member reads the engine's state now
+    and every assignment changes it, on the logic thread. Positions,
+    velocities and directions are plain ``(x, y, z)`` tuples -- no PyGLM --
+    whatever the host stores them as. Reached as :attr:`RuntimeAPI.player`.
+
+    * where and how it moves -- :attr:`position`, :attr:`velocity`,
+      :attr:`on_ground`, :attr:`ground`, :attr:`ducked`, :attr:`in_water`,
+      :attr:`swimming`, :attr:`size`, :meth:`teleport`
+    * where it looks -- :attr:`yaw`, :attr:`pitch`, :attr:`eye`, :attr:`forward`
+    * how it is -- :attr:`health`, :attr:`max_health`, :attr:`armor`,
+      :attr:`max_armor`, :attr:`dead`, :attr:`god_mode`, :attr:`notarget`,
+      :meth:`damage`, :meth:`give_armor`
+    * how it moves -- :attr:`speed`, :attr:`noclip`
+    * what it carries -- :attr:`holding`, :meth:`drop`, :attr:`keys`,
+      :meth:`has_key`, :meth:`give_key`, :meth:`take_key`, :attr:`weapons`
+
+    The second, split-screen player is :attr:`RuntimeAPI.player2`: the same
+    members, where the engine keeps them per player (position, motion, view,
+    health); armour, keys, weapons and what is carried are the first
+    player's.
+
+    :attr:`object` is the engine's own ``Player`` for anything not here; what
+    is here keeps its meaning when the engine's internals change.
+    """
+
+    __slots__ = ('_logic', '_second')
+
+    def __init__(self, logic, second=False):
+        self._logic = logic
+        #: The second, split-screen player rather than the first.
+        self._second = bool(second)
+
+    @property
+    def _runtime(self):
+        return self._logic.player_runtime
+
+    @property
+    def object(self):
+        """The engine's ``Player`` object, or None before play starts (or,
+        for the second player, when nobody is playing split-screen)."""
+        runtime = self._runtime
+        return runtime.player2 if self._second else runtime.player
+
+    @property
+    def index(self) -> int:
+        """0 for the first player, 1 for the second."""
+        return 1 if self._second else 0
+
+    @property
+    def exists(self) -> bool:
+        return self.object is not None
+
+    # -- where it is and how it moves ---------------------------------------
+    @property
+    def position(self) -> Tuple[float, float, float]:
+        """The centre of the player's hull, in world units."""
+        player = self.object
+        return _xyz(player.pos) if player is not None else (0.0, 0.0, 0.0)
+
+    @position.setter
+    def position(self, value):
+        player = self.object
+        if player is not None:
+            player.pos = _like(player.pos, value)
+
+    @property
+    def velocity(self) -> Tuple[float, float, float]:
+        """Units per second."""
+        player = self.object
+        return _xyz(player.velocity) if player is not None else (0.0, 0.0, 0.0)
+
+    @velocity.setter
+    def velocity(self, value):
+        player = self.object
+        if player is not None:
+            player.velocity = _like(player.velocity, value)
+
+    def teleport(self, position, velocity=(0.0, 0.0, 0.0)) -> None:
+        """Put the player at *position*, moving at *velocity* (at rest by
+        default), standing on nothing until the next tick finds the floor."""
+        player = self.object
+        if player is None:
+            return
+        self.position = position
+        self.velocity = velocity
+        player.on_ground = False
+        player.ground_object = None
+
+    @property
+    def on_ground(self) -> bool:
+        return bool(getattr(self.object, 'on_ground', False))
+
+    @property
+    def ground(self):
+        """The brush the player stands on, or None."""
+        return getattr(self.object, 'ground_object', None)
+
+    @property
+    def ducked(self) -> bool:
+        return bool(getattr(self.object, 'ducked', False))
+
+    @property
+    def in_water(self) -> bool:
+        """Wading or deeper."""
+        return bool(getattr(self.object, 'in_water', False))
+
+    @property
+    def swimming(self) -> bool:
+        """Deep enough that swimming has taken over from walking."""
+        return bool(getattr(self.object, 'swimming', False))
+
+    @property
+    def size(self) -> Tuple[float, float, float]:
+        """The hull's full ``(width, height, depth)``, as it is now (a ducked
+        player is shorter)."""
+        player = self.object
+        if player is None:
+            return (0.0, 0.0, 0.0)
+        return (float(player.width), float(player.height), float(player.depth))
+
+    # -- where it looks -----------------------------------------------------
+    @property
+    def yaw(self) -> float:
+        """Heading in radians; :attr:`forward` is ``(sin yaw, ., cos yaw)``."""
+        return float(getattr(self.object, 'angle', 0.0))
+
+    @yaw.setter
+    def yaw(self, value):
+        if self.object is not None:
+            self.object.angle = float(value)
+
+    @property
+    def pitch(self) -> float:
+        """Radians above the horizon."""
+        return float(getattr(self.object, 'pitch', 0.0))
+
+    @pitch.setter
+    def pitch(self, value):
+        if self.object is not None:
+            self.object.pitch = float(value)
+
+    @property
+    def eye(self) -> Tuple[float, float, float]:
+        """Where the camera is: the position raised by the eye height."""
+        return _player_eye(self.object)
+
+    @property
+    def forward(self) -> Tuple[float, float, float]:
+        """The look direction, pitch included."""
+        return _player_forward(self.object)
+
+    # -- how it moves ---------------------------------------------------------
+    @property
+    def speed(self) -> float:
+        """Walking speed, in units per second."""
+        return float(getattr(self.object, 'speed', 0.0))
+
+    @speed.setter
+    def speed(self, value):
+        if self.object is not None:
+            self.object.speed = max(0.0, float(value))
+
+    @property
+    def noclip(self) -> bool:
+        """Whether the player's own physics is off: it flies, passes through
+        the world, and neither pushes nor is pushed by physics bodies."""
+        player = self.object
+        return player is not None and not getattr(player, 'physics_enabled', True)
+
+    @noclip.setter
+    def noclip(self, value):
+        player = self.object
+        if player is not None:
+            player.physics_enabled = not bool(value)
+            if value:
+                player.on_ground = False
+                player.ground_object = None
+
+    # -- what it carries ------------------------------------------------------
+    @property
+    def holding(self):
+        """The Prop the first player is carrying, or None."""
+        if self._second:
+            return None
+        return getattr(self._logic.prop_runtime, 'held', None)
+
+    def drop(self) -> bool:
+        """Make the player put down what it is carrying, on the next tick.
+        True if it was carrying something."""
+        held = self.holding
+        if held is None:
+            return False
+        held.properties['_drop_requested'] = True
+        return True
+
+    @property
+    def keys(self) -> frozenset:
+        """The names of the keys the player has collected."""
+        return frozenset(self._runtime.collected_keys)
+
+    def has_key(self, name) -> bool:
+        return str(name) in self._runtime.collected_keys
+
+    def give_key(self, name) -> None:
+        self._runtime.collected_keys.add(str(name))
+
+    def take_key(self, name) -> bool:
+        """Take a key away. True if the player had it."""
+        keys = self._runtime.collected_keys
+        if str(name) in keys:
+            keys.discard(str(name))
+            return True
+        return False
+
+    @property
+    def weapons(self) -> frozenset:
+        """The weapons the player holds, by item id."""
+        return frozenset(getattr(self._logic.combat_runtime, 'weapons', ()))
+
+    @property
+    def notarget(self) -> bool:
+        """Whether monsters ignore the player."""
+        return bool(self._runtime.notarget)
+
+    @notarget.setter
+    def notarget(self, value):
+        self._runtime.notarget = bool(value)
+
+    # -- how it is ------------------------------------------------------------
+    @property
+    def health(self) -> int:
+        runtime = self._runtime
+        return runtime.player2_health if self._second else runtime.player_health
+
+    @health.setter
+    def health(self, value):
+        runtime = self._runtime
+        if self._second:
+            runtime.player2_health = max(0, min(int(value), int(runtime.player2_max_health)))
+        else:
+            runtime.player_health = max(0, min(int(value), int(runtime.player_max_health)))
+
+    @property
+    def max_health(self) -> int:
+        runtime = self._runtime
+        return runtime.player2_max_health if self._second else runtime.player_max_health
+
+    @max_health.setter
+    def max_health(self, value):
+        if self._second:
+            self._runtime.player2_max_health = max(1, int(value))
+        else:
+            self._runtime.player_max_health = max(1, int(value))
+
+    @property
+    def armor(self) -> int:
+        return self._runtime.player_armor
+
+    @armor.setter
+    def armor(self, value):
+        runtime = self._runtime
+        runtime.player_armor = max(0, min(int(value), int(runtime.player_max_armor)))
+
+    @property
+    def max_armor(self) -> int:
+        return self._runtime.player_max_armor
+
+    @property
+    def dead(self) -> bool:
+        runtime = self._runtime
+        return bool(runtime.player2_dead if self._second else runtime.player_dead)
+
+    @property
+    def god_mode(self) -> bool:
+        return bool(self._runtime.god_mode)
+
+    @god_mode.setter
+    def god_mode(self, value):
+        self._runtime.god_mode = bool(value)
+
+    def damage(self, amount, source=None) -> None:
+        """Hurt the player by *amount*, exactly as the world does: armour
+        takes it first, god mode stops it, and dying is the engine's to
+        handle. *source* is an optional ``(x, y, z)`` the hit came from, for
+        the damage indicator."""
+        runtime = self._runtime
+        if source is not None:
+            runtime.damage_source = _xyz(source)
+        self._logic.trigger_runtime._apply_player_damage(amount)
+
+    def give_armor(self, amount) -> None:
+        self._runtime.give_armor(amount)
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (f"<PlayerState pos={self.position} health={self.health} "
+                f"armor={self.armor}>")
+
+
 class RuntimeAPI:
     """Handed to :meth:`FioPlugin.register_runtime` when a logic thread starts.
 
@@ -712,7 +1260,13 @@ class RuntimeAPI:
 
     * scene queries — :meth:`entities_of_type`, :meth:`things_near`,
       :meth:`raycast_from_crosshair`
-    * player geometry — :meth:`player_eye`, :meth:`player_forward`
+    * the player — :attr:`player` and :attr:`player2` (a :class:`PlayerState`
+      each), and the older :meth:`player_eye`, :meth:`player_forward`
+    * LogicState — :meth:`state` (a typed :class:`StateStore`),
+      :meth:`state_stores`
+    * the physics engine — :attr:`physics` (:attr:`soma`, when it is Soma;
+      never None: see :attr:`physics_enabled`), :meth:`body`, :meth:`impulse`, :meth:`explode`, :meth:`bodies_near`,
+      :meth:`bodies_in_box`, :meth:`raycast_bodies`, :attr:`spatial_grid`
     * runtime spawn/despawn — :meth:`spawn`, :meth:`despawn`
     * cross-level storage — :meth:`global_get` / :meth:`global_set`
     """
@@ -722,6 +1276,9 @@ class RuntimeAPI:
         self._plugin = plugin
         self.logic = logic
         self.io_manager = logic.io_manager
+        # Views, made once: they read the engine live.
+        self._player = PlayerState(logic)
+        self._player2 = PlayerState(logic, second=True)
 
     # -- I/O ----------------------------------------------------------------
     def register_input_handler(self, entity_type: str, input_name: str, handler: Callable):
@@ -774,6 +1331,113 @@ class RuntimeAPI:
             if dx * dx + dy * dy + dz * dz <= r2:
                 out.append(t)
         return out
+
+    # -- the player (API 2.0) -------------------------------------------------
+    @property
+    def player(self) -> PlayerState:
+        """The player's state, live: see :class:`PlayerState`."""
+        return self._player
+
+    @property
+    def player2(self) -> PlayerState:
+        """The second, split-screen player's state; its ``exists`` is False
+        when nobody is playing split-screen."""
+        return self._player2
+
+    # -- LogicState (API 2.0) -------------------------------------------------
+    def state(self, store: str) -> "StateStore":
+        """The LogicState store named *store*: typed values, and writes the
+        map's logic hears. See :class:`StateStore`."""
+        return StateStore(self.logic, store)
+
+    def state_stores(self) -> list:
+        """The names of every LogicState store that holds anything."""
+        return sorted(StateStore._registry().keys())
+
+    # -- the physics engine (API 2.0) -----------------------------------------
+    @property
+    def physics(self) -> Physics:
+        """The physics engine of this play session -- Soma, unless another
+        was registered and selected.
+
+        This is how a plugin communicates with it. Read or set the world
+        controls (``gravity``, ``time_scale``, ``friction_scale``,
+        ``damping_scale``, ``sleep_enabled``); ``wake`` a body at a velocity;
+        take one out of the simulation with ``set_kinematic`` and hand it
+        back; tell it you moved one with ``sync_entity_position``; ask to be
+        told when one comes to rest. Its members are the :class:`Physics`
+        contract, whichever engine it is.
+
+        **It is never None.** With physics switched off (Settings > Enable
+        physics), or outside play, this is :data:`NO_PHYSICS`: every member
+        is there and does nothing, quietly -- a query finds no bodies, a push
+        pushes nothing, a control is accepted and forgotten -- so a plugin
+        need not ask first, and cannot fail for want of asking. It is falsy
+        (``if api.physics:``), and :attr:`physics_enabled` says the same.
+
+        Fetch it when you use it rather than keeping it: each play session
+        has its own.
+        """
+        physics = getattr(self.logic.session_runtime, 'physics_world', None)
+        return physics if physics is not None else NO_PHYSICS
+
+    @property
+    def physics_enabled(self) -> bool:
+        """Whether a physics engine is running: False with physics switched
+        off, and outside play."""
+        return getattr(self.logic.session_runtime, 'physics_world', None) is not None
+
+    @property
+    def soma(self) -> Physics:
+        """:attr:`physics` when the session's physics engine is Soma, for
+        what is Soma's own rather than the contract's (``topple``,
+        ``stand``); otherwise :data:`NO_PHYSICS`, on which those too do
+        nothing."""
+        physics = self.physics
+        if physics and type(physics).__module__.startswith('engine.physics.soma'):
+            return physics
+        return NO_PHYSICS
+
+    def impulse(self, entity, impulse) -> bool:
+        """Push a physics Prop: its velocity changes by ``impulse / mass``,
+        so the same push moves a heavy one less, and it wakes. False if it
+        has no body, is being carried, or play is not running."""
+        return bool(self.physics.impulse(entity, impulse))
+
+    def explode(self, centre, radius: float, strength: float) -> list:
+        """Push every physics Prop within *radius* of *centre* away from it,
+        by an impulse of *strength* at the centre falling to nothing at the
+        radius. Returns the entities pushed."""
+        return list(self.physics.impulse_radial(centre, radius, strength))
+
+    def bodies_near(self, point, radius: float) -> list:
+        """The physics Props whose body is within *radius* of *point*, found
+        through the physics engine's own index rather than by scanning every
+        entity."""
+        return list(self.physics.bodies_near(point, radius))
+
+    def bodies_in_box(self, lo, hi) -> list:
+        """The physics Props whose body overlaps the box ``lo..hi``."""
+        return list(self.physics.bodies_in_box(lo, hi))
+
+    def raycast_bodies(self, origin, direction, reach: float = 4096.0):
+        """The first physics Prop a ray meets within *reach*:
+        ``(entity, distance)``, or None. Bodies only -- for the world, ask
+        :attr:`spatial_grid`."""
+        return self.physics.raycast(origin, direction, reach)
+
+    def body(self, entity) -> Optional[Body]:
+        """The simulated :class:`Body` of *entity* (a physics Prop), or None
+        if it has none or play is not running. A live handle: ``velocity``,
+        ``mass``, ``half_extents``, ``awake``, ``kinematic``."""
+        return self.physics.get_body(entity)
+
+    @property
+    def spatial_grid(self):
+        """The session's :class:`engine.spatial_grid.SpatialGrid`: where the
+        world is -- solid brushes, movers and doors where they are now,
+        water -- or None outside play. The same grid the physics asks."""
+        return getattr(self.logic.session_runtime, 'spatial_grid', None)
 
     def player_eye(self):
         """The player's eye position as an ``(x, y, z)`` tuple."""
@@ -866,11 +1530,20 @@ class RuntimeAPI:
         if runtime is None or not logic.session_runtime.play_mode:
             return
         lock = logic._tick_lock
-        if lock is None:
+
+        def rebuild():
             runtime.build_entity_caches()
+            # A physics Prop that was spawned gets its body, and one that was
+            # despawned loses it; the bodies already there carry on.
+            sync = getattr(logic.collision_runtime, 'sync_bodies', None)
+            if sync is not None:
+                sync()
+
+        if lock is None:
+            rebuild()
         else:
             with lock:
-                runtime.build_entity_caches()
+                rebuild()
 
     # -- global store -------------------------------------------------------
     @property

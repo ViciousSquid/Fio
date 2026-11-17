@@ -38,6 +38,7 @@ from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_faces, brush_geometry, brush_placement
 from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
+from engine.spatial import set_live_flag
 from engine.fileio import write_json_atomic, write_text_atomic
 from editor.view_2d import View2D, singleton_instance
 from editor.editor_state import EditorState
@@ -485,7 +486,14 @@ class MainWindow(QMainWindow):
         return True
 
     def mark_as_modified(self):
-        """Mark the project as having unsaved changes."""
+        """Mark the project as having unsaved changes.
+
+        Legacy maps may store sky_image on a non-primary PlayerStart or on
+        several starts. Preserve that data on load and during UI refreshes;
+        the first actual edit is the boundary at which it is canonicalised.
+        """
+        if getattr(self, "state", None) is not None:
+            self.canonicalize_sky_image_ownership()
         if not self.unsaved_changes:
             self.unsaved_changes = True
             self.update_title()
@@ -1573,6 +1581,7 @@ class MainWindow(QMainWindow):
         # pasted or cloned is held to the primary invariant inside that
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
+        self.sync_sky_image_from_map()
         self.property_editor.set_object(self.primary_selection())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
@@ -2788,6 +2797,75 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_all_ui()
 
+    def sky_image_path_from_map(self):
+        """Resolve the effective panorama without changing authored map data.
+
+        A legacy map may have stored the value on a non-primary PlayerStart.
+        Prefer the current Primary, then recover the earliest-created stored
+        value so old maps still render correctly until the author edits them.
+        """
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        if primary is not None:
+            candidate = primary.properties.get("sky_image", "")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+
+        position = start_rules.earliest_created(
+            [start.properties for start in starts])
+        ordered = [starts[position]] if position is not None else []
+        ordered.extend(
+            start for start in starts
+            if start is not primary
+            and (position is None or start is not starts[position])
+        )
+        for start in ordered:
+            value = start.properties.get("sky_image", "")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def canonicalize_sky_image_ownership(self, path=None):
+        """Store one panorama on the current Primary PlayerStart.
+
+        Called at explicit edit boundaries, never as part of a UI refresh.
+        Passing an empty path is an explicit request to clear the map setting;
+        omitting it recovers the current effective value from legacy data.
+        """
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        if path is None:
+            path = self.sky_image_path_from_map()
+        path = path.strip() if isinstance(path, str) else ""
+        changed = []
+
+        if primary is not None:
+            if path:
+                if primary.properties.get("sky_image") != path:
+                    primary.properties["sky_image"] = path
+                    changed.append(primary)
+            elif "sky_image" in primary.properties:
+                primary.properties.pop("sky_image", None)
+                changed.append(primary)
+
+        for start in starts:
+            if start is not primary and "sky_image" in start.properties:
+                start.properties.pop("sky_image", None)
+                changed.append(start)
+
+        if changed:
+            self.state.mark_world_changed(changed)
+        self.sync_sky_image_from_map()
+        return path
+
+    def sync_sky_image_from_map(self):
+        """Publish the effective map panorama to the 3D renderer, read-only."""
+        path = self.sky_image_path_from_map()
+        view = getattr(self, "view_3d", None)
+        if view is not None:
+            view.sky_image_path = path
+        return path
+
     def set_show_whole_world(self, shown):
         """Load every editor cell of a Big World map, or only those near the camera."""
         if not self.config.has_section('Display'):
@@ -2979,6 +3057,9 @@ class MainWindow(QMainWindow):
                 spin.blockSignals(False)
 
     def save_state(self):
+        # Put legacy sky ownership repair inside this operation's undo
+        # checkpoint; undo must restore the canonical pre-edit state.
+        self.canonicalize_sky_image_ownership()
         self.state.save_state()
         # Every scene mutation funnels through here, so this is the cheap,
         # once-per-operation place to tell the component overlay its cached
@@ -4070,6 +4151,11 @@ class MainWindow(QMainWindow):
             return
         if self.primary_selection() and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.save_state()
+            primary_start = self.state.resolve_player_start()
+            sky_image = self.sky_image_path_from_map()
+            primary_is_deleted = any(
+                obj is primary_start for obj in self.state.selected_objects
+            )
             for obj in list(self.state.selected_objects):
                 if isinstance(obj, dict):
                     if obj in self.state.brushes:
@@ -4077,6 +4163,11 @@ class MainWindow(QMainWindow):
                 else:
                     if obj in self.state.things:
                         self.state.things.remove(obj)
+            if primary_is_deleted:
+                # Preserve the map setting while the deleted Primary is
+                # replaced. Canonicalisation is part of this explicit edit.
+                self.state.settle_player_starts()
+                self.canonicalize_sky_image_ownership(sky_image)
             self.set_selected_objects([])
             return
 
@@ -4145,8 +4236,7 @@ class MainWindow(QMainWindow):
                 obj['hidden'] = True
                 touch(obj)
             else:
-                obj.properties['hidden'] = True
-                touch(obj)
+                set_live_flag(obj, 'hidden', True)
         # What is hidden cannot be seen selected.
         self.set_selected_objects([])
         self.update_all_ui()
@@ -4162,8 +4252,7 @@ class MainWindow(QMainWindow):
             brush['hidden'] = False
             touch(brush)
         for thing in hidden_things:
-            thing.properties['hidden'] = False
-            touch(thing)
+            set_live_flag(thing, 'hidden', False)
         self.update_all_ui()
 
     def keyReleaseEvent(self, event):

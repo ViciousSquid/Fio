@@ -106,6 +106,22 @@ class DecalTool:
         decals = self.selected()
         if self._panel is not None and len(decals) == 1:
             self._panel.show_values(decals[0].properties)
+        self._show_in_property_editor(decals)
+
+    def _show_in_property_editor(self, decals):
+        """One selected decal's properties -- its Text and Font among them --
+        in the Property editor (a decal has no icon to click there); with
+        none or several, the editor's own selection again."""
+        editor = getattr(self.editor, 'property_editor', None)
+        if editor is None:
+            return
+        if len(decals) == 1:
+            target = decals[0]
+        else:
+            primary = getattr(self.editor, 'primary_selection', None)
+            target = primary() if callable(primary) else None
+        if getattr(editor, 'current_object', None) is not target:
+            editor.set_object(target)
 
     def clear_selection(self):
         if not self.selected_ids:

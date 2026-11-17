@@ -15,9 +15,10 @@ from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState, PlayerStart, LevelChanger)
+                           LogicState, PlayerStart, LevelChanger, Decal)
 from engine import player_starts as start_rules
 from editor import state_values as _sv
+from editor.sky_assets import store_sky_image_in_project
 from editor.portal_links import sync_group_to
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
@@ -728,8 +729,16 @@ class PropertyEditor(QWidget):
             if page is not None:
                 page.deleteLater()
             return
-        self._page_cache = [e for e in self._page_cache
-                            if e[0] is not self.current_object]
+        # A page already parked for this object was built for an older
+        # signature and is superseded; destroy it rather than just forgetting
+        # it, or it stays parented to _parking for the rest of the session.
+        kept = []
+        for entry in self._page_cache:
+            if entry[0] is self.current_object:
+                entry[2].deleteLater()
+            else:
+                kept.append(entry)
+        self._page_cache = kept
         self._page_cache.append((self.current_object, self._signature, page,
                                  self._capture_page_state()))
         while len(self._page_cache) > self.PAGE_CACHE_SIZE:
@@ -1756,7 +1765,7 @@ class PropertyEditor(QWidget):
         quality_cb = _make_checkbox(
             "High quality",
             water_high_quality(brush),
-            lambda c: self.update_object_prop('water_high_quality', c),
+            self._set_water_high_quality,
             _Style.CHECKBOX)
         quality_cb.setToolTip(
             "This water brush only.\n"
@@ -2230,6 +2239,7 @@ class PropertyEditor(QWidget):
 
         if isinstance(thing, PlayerStart):
             self._build_player_start_primary(form, thing)
+            self._build_player_start_sky_image(form, thing)
 
         if isinstance(thing, LevelChanger):
             self._build_destination_spawn(form, thing)
@@ -2466,6 +2476,36 @@ class PropertyEditor(QWidget):
         )
         physics_form.addRow("", rolls_cb)
         self._widgets['prop_rolls_cb'] = rolls_cb
+
+        topples_cb = _make_checkbox(
+            "Falls over like a barrel",
+            bool(thing.properties.get('topples', False)),
+            None,
+            _Style.CHECKBOX,
+        )
+
+        def on_topples_toggled(checked):
+            self.update_object_prop('topples', bool(checked))
+            # Only a simulated, solid body can fall over: ticking this says
+            # that is what the prop is (unticking leaves both as they are).
+            if checked:
+                if not physics_cb.isChecked():
+                    set_checkbox(physics_cb, True)
+                    self.update_object_prop('physics_enabled', True)
+                if not solid_cb.isChecked():
+                    set_checkbox(solid_cb, True)
+                    self.update_object_prop('no_collision', False)
+
+        topples_cb.toggled.connect(on_topples_toggled)
+        topples_cb.setToolTip(
+            "Needs Physics Enabled and Solid; ticking this ticks both. "
+            "Knocked hard enough -- run into, hit by another prop, dropped, "
+            "or stood on a steep slope -- it goes over and lies on its side, "
+            "rolling across its length. Picking it up stands it up again. "
+            "A prop that rolls like a ball does not."
+        )
+        physics_form.addRow("", topples_cb)
+        self._widgets['prop_topples_cb'] = topples_cb
 
         bounciness = min(1.0, max(0.0, float(thing.properties.get('bounciness', 0.0) or 0.0)))
         bounciness_spin = QDoubleSpinBox()
@@ -3346,11 +3386,114 @@ class PropertyEditor(QWidget):
         form.addRow("Start:", primary_cb)
         self._widgets['player_start_primary'] = primary_cb
 
+    def _build_player_start_sky_image(self, form, thing):
+        """Choose a built-in or project-owned panorama for the Primary start."""
+        if self.editor.state.resolve_player_start() is not thing:
+            return
+
+        presets = (
+            ("None", ""),
+            ("Cloudy sky", "assets/backgrounds/cloudy-sky-panorama.webp"),
+            ("Space", "assets/backgrounds/void-panorama-q80.webp"),
+        )
+        preset_paths = {path for _label, path in presets}
+        value = str(self.editor.sky_image_path_from_map() or "").strip()
+
+        widget = QWidget()
+        row = QHBoxLayout(widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        sky_combo = QComboBox()
+        sky_combo.setToolTip(
+            "Background panorama used in the editor and Play mode. Choose "
+            "Cloudy sky or Space, or Browse for a custom 360-degree image."
+        )
+        for label, path in presets:
+            sky_combo.addItem(label, path)
+        if value and value not in preset_paths:
+            sky_combo.addItem(f"Custom: {os.path.basename(value)}", value)
+
+        sky_combo.setCurrentIndex(max(0, sky_combo.findData(value)))
+        browse_button = QPushButton("Browse...")
+        browse_button.setToolTip(
+            "Import a custom panorama into assets/backgrounds/")
+        clear_button = QPushButton("Clear")
+        clear_button.setToolTip("Clear the selected custom panorama")
+        clear_button.setEnabled(bool(value and value not in preset_paths))
+
+        def show_sky_path(path):
+            """Select *path*, adding/removing the custom entry as needed."""
+            path = str(path or "").strip()
+            sky_combo.blockSignals(True)
+            if path and path not in preset_paths:
+                index = sky_combo.findData(path)
+                if index < 0:
+                    sky_combo.addItem(f"Custom: {os.path.basename(path)}", path)
+            else:
+                for index in range(sky_combo.count() - 1, len(presets) - 1, -1):
+                    sky_combo.removeItem(index)
+            sky_combo.setCurrentIndex(max(0, sky_combo.findData(path)))
+            clear_button.setEnabled(bool(path and path not in preset_paths))
+            sky_combo.blockSignals(False)
+
+        def on_sky_choice_changed(_index):
+            path = sky_combo.currentData() or ""
+            self.update_object_prop("sky_image", path)
+            if path in preset_paths:
+                show_sky_path(path)
+            clear_button.setEnabled(bool(path and path not in preset_paths))
+
+        def choose_sky_image():
+            current = str(thing.properties.get("sky_image", "") or "")
+            start_path = (
+                current if os.path.isabs(current)
+                else os.path.join(_project_root(), current) if current
+                else os.path.join(_project_root(), "assets", "backgrounds")
+            )
+            if not os.path.isdir(start_path):
+                start_path = os.path.dirname(start_path)
+            if not os.path.isdir(start_path):
+                start_path = _project_root()
+            filepath, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Sky Image",
+                start_path,
+                "Image Files (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp)",
+            )
+            if not filepath:
+                return
+            try:
+                relative = store_sky_image_in_project(filepath, _project_root())
+            except OSError as exc:
+                QMessageBox.warning(
+                    self, "Sky Image", f"Could not import sky image:\n{exc}")
+                return
+            self.update_object_prop("sky_image", relative)
+            show_sky_path(relative)
+
+        def clear_sky_image():
+            if not clear_button.isEnabled():
+                return
+            self.update_object_prop("sky_image", "")
+            show_sky_path("")
+
+        sky_combo.currentIndexChanged.connect(on_sky_choice_changed)
+        browse_button.clicked.connect(choose_sky_image)
+        clear_button.clicked.connect(clear_sky_image)
+        row.addWidget(sky_combo, 1)
+        row.addWidget(browse_button)
+        row.addWidget(clear_button)
+        form.addRow(QLabel("Sky image:"), widget)
+        self._widgets["player_start_sky_image"] = sky_combo
+        self._widgets["player_start_sky_image_browse"] = browse_button
+        self._widgets["player_start_sky_image_clear"] = clear_button
+
     def _make_primary_start(self, thing):
         if self._populating or thing.primary:
             return
+        sky_image = self.editor.sky_image_path_from_map()
         self.editor.save_state()
         self.editor.state.set_primary_player_start(thing)
+        self.editor.canonicalize_sky_image_ownership(sky_image)
         self.editor.mark_as_modified()
         self.editor.update_all_ui()
 
@@ -3630,6 +3773,68 @@ class PropertyEditor(QWidget):
                 self.add_sound_file_widget(
                     form, thing, 'sound_file', str(value or '')
                 )
+                continue
+
+            # A decal's words, and the font they are drawn in (by name).
+            if isinstance(thing, Decal) and key == 'text':
+                edit = QLineEdit(str(value or ''))
+                edit.setPlaceholderText(r"Words to paint on  (\n: new line)")
+                edit.setToolTip(
+                    "Painted over the decal's image, centred; with no image, alone.\n"
+                    "Type \\n for a new line. IO: SetText, ClearText, SetFont, SetTextColor.")
+                edit.editingFinished.connect(
+                    lambda e=edit: e.text() != str(thing.properties.get('text') or '')
+                    and self.update_object_prop('text', e.text()))
+                form.addRow(QLabel("Text:"), edit)
+                continue
+
+            if isinstance(thing, Decal) and key == 'font':
+                from engine import decal_text
+                combo = _make_combo(
+                    decal_text.font_names(), decal_text.font_name(value),
+                    lambda text: self.update_object_prop('font', text),
+                    tooltip="The font the decal's text is drawn in")
+                form.addRow(QLabel("Font:"), combo)
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_scale':
+                from engine import decal_text
+                slider, label = _make_slider(
+                    self, decal_text.text_scale(value), 10, 100, fmt="{:.0%}",
+                    callback=lambda v: self.update_object_prop('text_scale', v),
+                    tooltip="How big the words are: 100% fills as much of the decal "
+                            "as they can; smaller, to fit inside its image")
+                self._widgets['decal_text_scale'] = slider
+                form.addRow("Text Size:", _hbox(slider, label, stretch=False))
+                continue
+
+            if isinstance(thing, Decal) and key in ('text_offset_x', 'text_offset_y'):
+                from engine import decal_text
+                across = key == 'text_offset_x'
+                slider, label = _make_slider(
+                    self, decal_text.text_offset(value), -50, 50, fmt="{:+.0%}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=("Move the words right (+) or left (-)" if across else
+                             "Move the words up (+) or down (-)")
+                            + ", by up to half the decal")
+                self._widgets['decal_' + key] = slider
+                form.addRow("Text Offset X:" if across else "Text Offset Y:",
+                            _hbox(slider, label, stretch=False))
+                continue
+
+            if isinstance(thing, Decal) and key == 'tint':
+                self._add_tint_widget(
+                    form, thing, key='decal_tint_button',
+                    tooltip="Multiplies the decal's colour. White leaves it as it is.")
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_colour':
+                from engine import decal_text
+                combo = _make_combo(
+                    list(decal_text.TEXT_COLOURS), decal_text.text_colour(value),
+                    lambda text: self.update_object_prop('text_colour', text),
+                    tooltip="Black lettering, or white (which brightens the surface)")
+                form.addRow(QLabel("Text Colour:"), combo)
                 continue
 
             # Logic gate type.
@@ -5328,10 +5533,12 @@ class PropertyEditor(QWidget):
         h.addWidget(swatch)
         form_layout.addRow(label, widget)
 
-    def _add_tint_widget(self, form_layout, thing):
-        """A model's Tint: a swatch that multiplies the model's colour.
+    def _add_tint_widget(self, form_layout, thing, key='prop_tint_button',
+                         tooltip="Multiplies the model's colour. White leaves it as it is."):
+        """A Tint: a swatch that multiplies a model's -- or a decal's --
+        colour.
 
-        Stored as 0..1 floats; white (the default) leaves the model as it is.
+        Stored as 0..1 floats; white (the default) leaves it as it is.
         """
         widget = QWidget()
         h = QHBoxLayout(widget)
@@ -5358,7 +5565,7 @@ class PropertyEditor(QWidget):
                 set_tint([color.redF(), color.greenF(), color.blueF()])
 
         swatch = self._color_button(current(), pick, size=(140, 28))
-        swatch.setToolTip("Multiplies the model's colour. White leaves it as it is.")
+        swatch.setToolTip(tooltip)
         reset = QPushButton("Reset")
         reset.setToolTip("No tint (white)")
         reset.clicked.connect(lambda: set_tint([1.0, 1.0, 1.0]))
@@ -5366,7 +5573,7 @@ class PropertyEditor(QWidget):
         h.addWidget(reset)
         h.addStretch()
         form_layout.addRow("Tint:", widget)
-        self._widgets['prop_tint_button'] = swatch
+        self._widgets[key] = swatch
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])
@@ -5376,6 +5583,38 @@ class PropertyEditor(QWidget):
             size = list(size)
         size[index] = float(value)
         self.update_object_prop('sprite_size', size)
+
+    def _set_water_high_quality(self, checked):
+        """The water's High quality checkbox. Switching it on also places a
+        reflection probe above the water's surface; switching it off deletes
+        that probe -- only the one it made, never one the author placed. The
+        flag and the probe are one undo step."""
+        from editor.things import make_water_probe, water_probe_of
+        brush = self.current_object
+        checked = bool(checked)
+        if not isinstance(brush, dict) or checked == water_high_quality(brush):
+            self.update_object_prop('water_high_quality', checked)
+            return
+        self.editor.save_state()
+        self.update_object_prop('water_high_quality', checked)
+        things = self.editor.state.things
+        probe = water_probe_of(brush, things)
+        if checked and probe is None:
+            things.append(make_water_probe(brush))
+        elif not checked and probe is not None:
+            things.remove(probe)
+            selected = list(self.editor.state.selected_objects)
+            if any(obj is probe for obj in selected):
+                self.editor.set_selected_objects(
+                    [obj for obj in selected if obj is not probe])
+        else:
+            return
+        if hasattr(self.editor, 'scene_hierarchy'):
+            self.editor.scene_hierarchy.refresh_list()
+        self.editor.view_3d.update()
+        for name in ('view_top', 'view_front', 'view_side'):
+            if hasattr(self.editor, name):
+                getattr(self.editor, name).update()
 
     def update_object_prop(self, key, value):
         if self.current_object is None:
@@ -5396,6 +5635,10 @@ class PropertyEditor(QWidget):
         # dense render/entity projections cache their cold columns behind the
         # editor's world epoch, so journal this exact object immediately.
         self.editor.state.mark_world_changed([self.current_object])
+        if isinstance(self.current_object, PlayerStart) and key == 'sky_image':
+            # This is an explicit authoring action, so the selected value
+            # (including an empty value) replaces any legacy copies.
+            self.editor.canonicalize_sky_image_ownership(value)
 
         if key == 'name' and _io_system is not None:
             # A name is read by every *other* entity's panel — the "Targeted by"

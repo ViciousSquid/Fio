@@ -351,7 +351,7 @@ def test_no_engine_code_moves_an_entity_in_place():
         for path in (ROOT / folder).rglob("*.py"):
             if "tests" in path.parts:
                 continue
-            tree = ast.parse(path.read_text(), str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
             offenders += ["%s:%d" % (path.relative_to(ROOT), line)
                           for line in _in_place_position_writes(tree)]
     assert not offenders, (

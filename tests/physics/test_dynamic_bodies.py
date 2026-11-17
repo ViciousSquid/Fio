@@ -4,11 +4,12 @@ Runs against the real SpatialGrid so the static-cell cache, the batched
 floor query and the push response are exercised exactly as in play mode.
 """
 import glm
+import pytest
 
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
-from engine.spatial import set_authored_flag
+from engine.spatial import set_authored_flag, set_live_flag
 
 # Oil_Drum_Grey bounds: local Y starts at zero, so the entity origin is the
 # point touching the floor and the collision box centre sits half a height up.
@@ -205,10 +206,154 @@ def test_clear_releases_all_body_state():
 
     assert world.get_body(prop) is None
     assert world._position.shape == (0, 3)
-    assert world._was_inactive.shape == (0,)
+    assert world._inactive.shape == (0,)
     assert world._pending_settle.shape == (0,)
-    assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
+
+
+# ---------------------------------------------------------------------------
+# Simulation tiers: a body beyond live simulation is held, not lost.
+# ---------------------------------------------------------------------------
+
+def _stamp(prop, tier):
+    """Stamp a simulation tier as a classifier does: written, and journalled."""
+    from engine.change_journal import touch
+    from engine.spatial import SIM_TIER_KEY
+    prop.properties[SIM_TIER_KEY] = tier
+    touch(prop)
+
+
+def test_a_body_in_a_distant_cell_is_held_and_carries_on_when_it_is_near():
+    from engine.spatial import TIER_ACTIVE, TIER_DISTANT, TIER_NEAR
+
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop, [60.0, 0.0, 0.0])
+    _run(world, 5)
+    held_at = list(prop.pos)
+    held_speed = world.get_body(prop).velocity
+
+    _stamp(prop, TIER_DISTANT)
+    _run(world, 120)
+    assert list(prop.pos) == held_at                    # not simulated
+    assert world.get_body(prop).velocity == held_speed  # nor forgotten
+    assert world.get_body(prop).awake is True
+
+    for near in (TIER_ACTIVE, TIER_NEAR):
+        _stamp(prop, near)
+        before = prop.pos[1]
+        _run(world, 2)
+        assert prop.pos[1] < before                     # falling again
+
+
+def test_an_unclassified_world_simulates_everything():
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    _run(world, 300)
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Contact: a body stops at the wall it meets, and rests only on something.
+# ---------------------------------------------------------------------------
+
+def _slider(world, speed, **props):
+    """A frictionless drum at the origin, woken at *speed* along +x."""
+    prop = _prop(friction=0.0, linear_damping=0.0, **props)
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    world.wake(prop, [speed, 0.0, 0.0])
+    return prop
+
+
+def _wall(face_x, thickness=100.0):
+    return _floor((face_x + thickness * 0.5, 200.0, 0.0), (thickness, 400.0, 400.0))
+
+
+@pytest.mark.parametrize('speed', [90.0, 700.0, 1500.0, 3000.0])
+def test_a_body_stops_at_the_wall_not_a_step_short_of_it(speed):
+    """Going back to where the step began left a gap as wide as the step:
+    25 units at 1500 units a second. The body now stops at the face."""
+    world = _world(_floor(), _wall(500.0))
+    prop = _slider(world, speed)
+    _run(world, 600)
+
+    gap = 500.0 - (prop.pos[0] + DRUM_SIZE[0] * 0.5)
+    assert 0.0 < gap <= 2.0 * PhysicsWorld.CONTACT_SKIN
+    assert world.get_body(prop).velocity[0] == 0.0
+
+
+def test_a_fast_body_does_not_step_over_a_thin_wall():
+    """100 units a step, against a drum 45 wide and a wall 16 thick: tested
+    only where it ends up, the body was past the wall before it was seen."""
+    world = _world(_floor(), _wall(500.0, thickness=16.0))
+    prop = _slider(world, 6000.0)
+    _run(world, 120)
+
+    assert prop.pos[0] + DRUM_SIZE[0] * 0.5 < 500.0
+
+
+def test_a_body_against_a_wall_leaves_it_and_slides_along_it():
+    world = _world(_floor(), _wall(500.0))
+    prop = _slider(world, 1500.0)
+    _run(world, 60)
+    stopped = prop.pos[0]
+
+    world.wake(prop, [0.0, 0.0, 120.0])        # along the wall
+    _run(world, 30)
+    assert prop.pos[2] == pytest.approx(60.0, abs=1.0)
+    assert prop.pos[0] == pytest.approx(stopped)
+
+    world.wake(prop, [-120.0, 0.0, 0.0])       # away from it
+    _run(world, 30)
+    assert prop.pos[0] == pytest.approx(stopped - 60.0, abs=1.0)
+
+
+@pytest.mark.parametrize('top', [0.1, 33.333, -7.77, 1234.567])
+def test_a_floor_at_an_awkward_height_is_not_a_wall(top):
+    """What a body rests on is not in its way, whatever float32 makes of
+    the sum of its height, its offset and the floor's."""
+    world = _world(_floor((0.0, top - 50.0, 0.0)))
+    prop = _prop((0.0, top + 40.0, 0.0), friction=0.0, linear_damping=0.0)
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    _run(world, 120)
+    assert prop.pos[1] == pytest.approx(top, abs=1e-3)
+
+    world.wake(prop, [120.0, 0.0, -60.0])
+    _run(world, 60)
+    assert prop.pos[0] == pytest.approx(120.0, abs=2.0)
+    assert prop.pos[2] == pytest.approx(-60.0, abs=1.0)
+
+
+@pytest.mark.parametrize('speed', [200.0 + 7.3 * k for k in range(55)])
+def test_a_thrown_body_does_not_fall_asleep_at_the_top_of_its_arc(speed):
+    """Still for one tick is not at rest: at the top of a throw a body's
+    speed passes through zero, and one tick in seven it was slow enough to
+    be put to sleep there, hanging in the air."""
+    world = _world()
+    prop = _prop()
+    world.rebuild([_drum_brush(prop)])
+    world.step(1.0 / 60.0)
+    world.wake(prop, [0.0, speed, 0.0])
+    _run(world, 600)
+
+    assert prop.pos[1] == pytest.approx(0.0, abs=1e-3)
+    assert world.get_body(prop).awake is False
+
+
+def test_a_weightless_body_comes_to_rest_in_the_air():
+    world = _world()
+    prop = _prop((0.0, 300.0, 0.0), gravity=False, linear_damping=4.0)
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop, [0.0, 50.0, 0.0])
+    _run(world, 600)
+
+    assert world.get_body(prop).awake is False
+    assert prop.pos[1] > 300.0
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +413,7 @@ def test_a_disabled_body_is_not_integrated():
     prop = _prop(pos=(0.0, 400.0, 0.0))
     world.rebuild([_drum_brush(prop)])
     world.wake(prop)
-    prop.properties['disabled'] = True
+    set_live_flag(prop, 'disabled', True)
 
     for _ in range(60):
         world.step(1.0 / 60.0)
@@ -289,7 +434,7 @@ def test_hidden_and_disabled_sleeping_bodies_cannot_be_pushed():
         assert body.awake is False
 
         # The same body becomes pushable when its inactive flag is cleared.
-        prop.properties[flag] = False
+        set_live_flag(prop, flag, False)
         world.step(1.0 / 60.0, _player())
         assert prop.pos[0] > 0.0
 
@@ -333,7 +478,6 @@ def test_a_sleeping_hidden_body_is_settled_after_a_platform_moves_under_it():
     # The dormant body does not move while the platform rises into it.
     raised_platform = _floor((0.0, 390.0, 0.0), (2000.0, 60.0, 2000.0))
     world.spatial_grid.populate([raised_platform])
-    world._rebuild_static_cells()
     set_authored_flag(prop, 'hidden', False)
     world.wake(prop)  # same wake performed by the Show I/O handler
     world.step(1.0 / 60.0)
@@ -364,7 +508,7 @@ def test_rebuild_does_not_reuse_the_previous_world_inactive_snapshot():
     world.step(1.0 / 60.0)
     assert hidden.pos[1] == pytest.approx(-DRUM_HALF_Y)
 
-    hidden.properties['hidden'] = False
+    set_live_flag(hidden, 'hidden', False)
     world.wake(hidden)
     world.step(1.0 / 60.0)
     assert hidden.pos[1] == pytest.approx(0.0, abs=1e-4)
@@ -382,7 +526,7 @@ def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
     assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
 
     # Force a dense repack after activation; the transition must survive it.
-    prop.properties['hidden'] = False
+    set_live_flag(prop, 'hidden', False)
     other = _prop(pos=(400.0, 400.0, 0.0))
     world.register_body(other, _drum_brush(other))
     world.wake(prop)  # repack first, then activate the existing body
@@ -397,12 +541,12 @@ def test_a_parked_body_resumes_when_it_is_re_enabled():
     world.rebuild([_drum_brush(prop)])
     world.wake(prop)
 
-    prop.properties['disabled'] = True
+    set_live_flag(prop, 'disabled', True)
     for _ in range(60):
         world.step(1.0 / 60.0)
     assert prop.pos[1] == 400.0
 
-    prop.properties['disabled'] = False
+    set_live_flag(prop, 'disabled', False)
     for _ in range(60):
         world.step(1.0 / 60.0)
     assert prop.pos[1] < 400.0
@@ -476,13 +620,39 @@ def test_grouped_and_scalar_floor_queries_agree_exactly(n_bodies, seed):
     assert np.array_equal(grouped, scalar)
 
 
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+@pytest.mark.parametrize("n_bodies", [1, 7, 40, 130])
+def test_the_steps_floors_are_the_grids_floors_exactly(n_bodies, seed):
+    """A step asks the grid once, about each body's whole move, and reads the
+    floors out of that answer. They are the floors a raycast per support
+    point finds, bit for bit -- wherever in the move the body is."""
+    world = _scattered_world(n_bodies, seed)
+    for _ in range(3):
+        world.step(1.0 / 60.0)
+    rows = np.flatnonzero(world._awake)
+    old = world._position[rows].copy()
+    ahead = old + np.float32(40.0)                  # a move across cells
+    previous = (old + world._offset[rows])[:, 1] - world._half[rows, 1]
+    world._index_bodies = lambda: False             # the world's floors only
+    pairs = world._world_pairs(rows, old, ahead)
+
+    for at in (old, (old + ahead) * np.float32(0.5), ahead):
+        world._position[rows, 0] = at[:, 0]
+        world._position[rows, 2] = at[:, 2]
+        assert np.array_equal(world._floors_from_pairs(rows, previous, pairs),
+                              world._floors_scalar(rows, previous))
+
+
 def test_grouped_floor_query_reads_mover_heights_live():
     """A platform that moves without the grid being repopulated.
 
     populate() runs on play-start, not per frame, so a mover's cell membership
-    is a snapshot while its height is not. Caching the cell AABBs would make a
-    prop ride a platform that is no longer there.
+    is a snapshot while its height is not: the grid re-derives a mover's box
+    when its runtime transform changes, and physics asks the grid, so a prop
+    never rides a platform that is no longer there.
     """
+    from tests.helpers.runtime import drive, release
+
     platform = {'pos': [0.0, 0.0, 0.0], 'size': [400.0, 20.0, 400.0],
                 'is_mover': True}
     world = _world(platform)
@@ -493,10 +663,39 @@ def test_grouped_floor_query_reads_mover_heights_live():
 
     assert world._batch_floor_grouped()[0] == pytest.approx(10.0)
 
-    platform['pos'][1] = 100.0          # rises; grid NOT repopulated
-    assert world._batch_floor_grouped()[0] == pytest.approx(110.0)
-    assert np.array_equal(world._batch_floor_grouped(),
-                          world._batch_floor_scalar())
+    try:
+        drive(platform, offset=(0.0, 100.0, 0.0))   # rises; grid NOT repopulated
+        assert world._batch_floor_grouped()[0] == pytest.approx(110.0)
+        assert np.array_equal(world._batch_floor_grouped(),
+                              world._batch_floor_scalar())
+    finally:
+        release(platform)
+
+
+def test_a_door_that_opens_stops_being_a_wall():
+    """Walls are the grid's, live: a door is a wall where it is now, not
+    where it stood when play began."""
+    from tests.helpers.runtime import drive, release
+
+    door = {'pos': [200.0, 100.0, 0.0], 'size': [20.0, 400.0, 400.0],
+            'is_door': True}
+
+    def slide(opened):
+        world = _world(_floor(), door)
+        prop = _prop(friction=0.0, linear_damping=0.0)
+        world.rebuild([_drum_brush(prop)])
+        world.step(1.0 / 60.0)
+        if opened:
+            drive(door, offset=(0.0, 1000.0, 0.0))
+        world.wake(prop, [600.0, 0.0, 0.0])
+        _run(world, 60)
+        return prop.pos[0]
+
+    try:
+        assert slide(opened=False) < 200.0
+        assert slide(opened=True) > 500.0
+    finally:
+        release(door)
 
 
 def test_a_custom_grid_keeps_the_scalar_path():

@@ -253,6 +253,22 @@ def pump_until(app, predicate, timeout):
     return predicate()
 
 
+#: How long a click may take to reach the application. A hosted macOS runner
+#: draws _SHOWCASE in software, seconds a frame (7 s between the armed report
+#: and the click's on the runner): the click lands in the window system's
+#: queue while a frame is drawn and is handed over by a later turn of the
+#: event loop -- after a fixed 0.3 s pump had already given up on it.
+CLICK_DELIVERY_TIMEOUT = 30.0
+
+
+def wait_for_press(session, app):
+    """Run the event loop until the click has reached the application (or
+    CLICK_DELIVERY_TIMEOUT passes), then a little longer for what it causes.
+    Nothing is judged before the click has arrived."""
+    pump_until(app, lambda: session.presses.presses > 0, CLICK_DELIVERY_TIMEOUT)
+    pump(app, 0.3)
+
+
 def shots_queued(game_state):
     with game_state._shot_lock:
         return len(game_state._shot_queue)
@@ -388,7 +404,7 @@ def armed(fio_session, qt_app):
 def assert_click_fired_the_shotgun(session, qt_app, label):
     """After a real click: it reached the app, Play goes on, and the shotgun
     fires on the next logic tick -- its ammunition goes down."""
-    pump(qt_app, 0.3)
+    wait_for_press(session, qt_app)
     report(label, session)
     print(f'[{label}] presses={session.presses.presses} at={session.presses.where}', flush=True)
     assert session.presses.presses, (
@@ -432,7 +448,7 @@ def test_left_click_fires_even_with_the_hidden_pointer_over_the_play_button(arme
     # frame re-centres it in between: the OS queues the press over the button.
     move_pointer(button, button.rect().center())
     os_click()
-    pump(qt_app, 0.3)
+    wait_for_press(session, qt_app)     # judged once the click has arrived
     assert not stops, 'the click pressed the Play/Stop button'
     assert_click_fired_the_shotgun(session, qt_app, 'click over the Play button')
 
@@ -452,7 +468,7 @@ def test_control_without_plays_mouse_grab_the_click_presses_stop(armed, qt_app, 
     button.clicked.connect(lambda *_: stops.append(True))
     move_pointer(button, button.rect().center())
     os_click()
-    pump(qt_app, 0.3)
+    wait_for_press(session, qt_app)
     report('control: click over the Play button, no grab', session)
     assert session.presses.presses, 'no left press reached the application'
     assert stops and not view.play_mode, (

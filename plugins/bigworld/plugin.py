@@ -55,7 +55,7 @@ class BigWorldPlugin(FioPlugin):
     version = "1.0.0"
     description = "Cell streaming: keep only the area around the player active in huge maps."
     category = "Big World"
-    api_version = "1.2.0"   # needs the PluginHost / event bus (connect) surface
+    api_version = "2.0.0"   # built against Fio's API 2.0
     # Disabled by default: only maps that place a BigWorldSettings entity use it.
     # The manager auto-enables the plugin when such a map loads (auto_enable_for_map),
     # so streaming maps just work while ordinary maps never pay for it.
@@ -221,7 +221,7 @@ class BigWorldPlugin(FioPlugin):
         host = self._host
         logic = host.logic
         session = self._sessions.get(logic)
-        if session is None or not getattr(session, "_show_debug", True):
+        if session is None or not getattr(session, "_show_debug", False):
             return
         painter = ev.get("painter")
         if painter is None:

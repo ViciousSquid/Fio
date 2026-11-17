@@ -160,11 +160,14 @@ LEGACY_MODEL_DEFAULTS = {
 #:
 #: The Oil Barrel is the default model. It takes back what a Ball sets that
 #: only makes sense for a ball, and leaves physics, solidity and carrying as
-#: the author has them.
+#: the author has them. As a physics Prop it falls over when knocked hard
+#: enough and rolls on its side (``topples``), and stands up again in the
+#: player's hands.
 OIL_BARREL_SETTINGS = {
     'model_path': DEFAULT_MODEL_PATH,
     'collision_shape': 'auto',
     'rolls': False,
+    'topples': True,
     'bounciness': 0.0,
     'scale': [1.0, 1.0, 1.0],
     'carry_distance': PROP_DEFAULTS['carry_distance'],
@@ -179,6 +182,7 @@ BALL_SETTINGS = {
     'collision_shape': 'aabb',
     'carry_enabled': True,
     'rolls': True,
+    'topples': False,
     'bounciness': 0.5,
     'scale': [1.0, 1.0, 1.0],
     'carry_distance': PROP_DEFAULTS['carry_distance'],
@@ -196,6 +200,16 @@ MODEL_PRESETS = {
 }
 _MODEL_SETTINGS = {settings['model_path']: settings for settings in (
     OIL_BARREL_SETTINGS, BALL_SETTINGS, BALL_NUMBERS_SETTINGS)}
+
+#: The models that fall over unless a Prop says otherwise: the oil barrels.
+#: A map saved before barrels could fall over has no ``topples`` in it; its
+#: barrels take this.
+TOPPLING_MODELS = frozenset({DEFAULT_MODEL_PATH, 'assets/models/Oil_Drum_Grey.obj'})
+
+
+def topples_by_default(model_path):
+    """Whether a Prop showing *model_path* falls over when nothing says."""
+    return _model_key(model_path) in TOPPLING_MODELS
 
 
 def _model_key(model_path):
@@ -290,6 +304,12 @@ class Prop(_ThingBase):
             and not self.properties.get('model_path')
         ):
             self.properties['model_path'] = self.DEFAULT_MODEL_PATH
+
+        # A barrel falls over; anything else does not, unless it is told to.
+        if 'topples' not in self.properties:
+            self.properties['topples'] = (
+                self.properties.get('render_mode') == 'model'
+                and topples_by_default(self.properties.get('model_path')))
 
         # Ammo boxes have a stock amount just like the stock health/weapon/key
         # pickups have a stock appearance. An explicitly authored amount wins.

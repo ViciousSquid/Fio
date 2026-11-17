@@ -324,7 +324,7 @@ python -m player.tools.stage_runtime /tmp/fio-android-runtime
 ```
 
 Choose a fresh staging directory for each revision. Run tests in that private
-tree so Android's adapters are exercised without changing desktop sources:
+tree, which is the layout the app runs (the engine itself is the checkout's):
 
 ```sh
 cd /tmp/fio-android-runtime
@@ -355,13 +355,19 @@ occlusion, local/radial/density fog, effect illumination, animation and context
 recreation. The showcase exporter automation uses the real desktop editor,
 loader and export dialog; it automates the destination chooser.
 
-Android imports the current engine, entities, I/O and plugins into Buildozer's
-private tree. `android_hooks.py` applies `overlays/android-runtime.patch` there
-and copies runtime entity modules without Qt startup dependencies.
-`runtime-build.json` records 17 unchanged source/resource input hashes; staging
-fails if the patch no longer matches. The repository's engine, desktop entry
-point, plugins and desktop CI remain unchanged. The authorized editor change
-is `editor/package_exporter.py` and its package regression coverage. The legacy
+**Android runs the same Fio engine the desktop does.** `android_hooks.py`
+stages every `engine/**/*.py` into Buildozer's private tree byte for byte, and
+nothing is patched: what Android needs of the engine (analog movement axes,
+models read from a package, AI stepped on the logic thread, a level-change
+request) the engine provides to any host, and `player/world.py` sets the few
+attributes that select it. Staging verifies each staged engine file against
+the checkout and records its hash in `runtime-build.json` (`same_engine`), so
+an APK whose engine differs from the checkout it claims is rejected.
+
+The one arrangement staging makes is an address: entities and their I/O
+(`things`, `io_system`, `io_handlers`, `state_values`, `portal_links`) still
+live in `editor/` on the desktop, and the player ships no editor, so each is
+copied -- unmodified -- into `engine/` and `editor.<name>` aliases it. The legacy
 desktop reader `player/fiopak.py` is unchanged; Android uses
 `player/runtime/fiopak.py`.
 

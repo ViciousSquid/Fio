@@ -3,11 +3,12 @@
 Stage 2a (derived bounds, ``docs/brush-model-stage2.md``) makes every
 bound-reader -- culling, collision rows, the physics grid, Big World,
 picking -- take a convex brush's bound from its planes instead of the
-``pos``/``size`` copy the map stores. On shipped maps that copy is right
-everywhere except one brush, shared by two maps: ``Terrain_Test_small`` and
-``Topdown_example`` both carry brush ``1a817c94``, clipped along -X without
-its copy being re-synced, so the copy is 128 units wider than the solid.
-Its bound now shrinks to the solid. One more bound moves by less than a
+``pos``/``size`` copy the map stores. The clipped brush
+``1a817c94`` in ``Topdown_example`` remains a legacy world-plane record:
+its stale copy is 128 units wider than the solid, so its derived bound
+shrinks to the planes. ``Terrain_Test_small`` has since been converted to
+version 5, where ``pos`` is placement and ``size`` is canonical; it no
+longer carries that stale copy. One more bound moves by less than a
 ten-thousandth of a unit: ``Angled_Brush_Test``'s ``bcac8b00`` stored a
 copy rounded to three decimals (163.923 for 163.92304845...), 4.85e-5
 *smaller* than its solid, so its bound grows by that much and is now
@@ -33,8 +34,6 @@ ROUNDED_COPY = 'bcac8b00'
 
 #: ``(map, brush id prefix) -> (stored centre, size) -> (derived centre, size)``.
 INTENDED = {
-    ('Terrain_Test_small.json', CLIPPED_TERRAIN): (((280.0, 0.0), (464.0,)),
-                                                   ((344.0, 0.0), (336.0,))),
     ('Topdown_example.json', CLIPPED_TERRAIN): (((536.0, 0.0), (464.0,)),
                                                 ((600.0, 0.0), (336.0,))),
 }

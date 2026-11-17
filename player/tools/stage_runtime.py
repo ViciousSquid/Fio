@@ -1,7 +1,17 @@
-"""Prepare an Android-private copy of the current Fio engine.
+"""Stage the Fio engine for the Android player: the same engine, unmodified.
 
-Desktop engine/editor/plugin sources are inputs only. Small Android adapters
-are applied in a separate build directory, never in the project checkout.
+The Android app runs the engine the desktop does. Every ``engine/**/*.py`` is
+copied byte for byte from the checkout, verified, and recorded in the build
+receipt; nothing is patched. What Android needs of the engine -- analog
+movement axes, models read from a package, AI stepped on the logic thread, a
+level-change request -- the engine provides to any host (see ``player/world.py``
+for the handful of attributes it sets).
+
+The one thing staging arranges is where five runtime modules live. Entities
+and their I/O are still in ``editor/`` on the desktop; the player ships no
+editor, so each is copied -- also byte for byte -- into ``engine/`` under the
+name in :data:`RUNTIME_MODULES`, and ``editor.<name>`` becomes an alias for
+it. The code is the desktop's; only its address differs.
 """
 from __future__ import annotations
 
@@ -10,23 +20,26 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 
 RUNTIME_MODULES = {
     'things': 'entities', 'io_system': 'io_system',
     'io_handlers': 'io_handlers', 'state_values': 'state_values',
     'portal_links': 'portal_links',
 }
-ENGINE_ADAPTERS = (
-    'logic_combat', 'logic_thread', 'logic_session', 'logic_player', 'threaded_game_state',
-    'glb_loader', 'obj_loader', 'logic_collision',
-)
+
+
+def engine_sources(project):
+    """Every engine source the player runs, relative to the checkout."""
+    project = Path(project).resolve()
+    return sorted(path.relative_to(project).as_posix()
+                  for path in (project / 'engine').rglob('*.py')
+                  if '__pycache__' not in path.parts)
 
 
 def player_source_hashes(project):
     """Build receipt for player code, excluding tests and host/build tools."""
     project = Path(project).resolve()
-    return {str(path.relative_to(project)): hashlib.sha256(path.read_bytes()).hexdigest()
+    return {path.relative_to(project).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((project / 'player').rglob('*.py'))
             if path.relative_to(project / 'player').parts[0]
             not in ('tests', 'tools', 'p4a-recipes', '.buildozer', 'bin')}
@@ -57,20 +70,19 @@ def prepare_runtime(private, project=None):
     # Keep this fixture separate from the installable app on every build.
     (private / 'player/_SHOWCASE.fiopak').unlink(missing_ok=True)
 
-    # Start from the checked-out engine on every build, including repeated hooks.
-    for name in ENGINE_ADAPTERS:
-        copy_source(f'engine/{name}.py', f'engine/{name}.py')
+    # The checkout's engine, whole and unmodified, on every build -- including
+    # a repeated hook over a private tree an earlier build left behind.
+    for source in engine_sources(project):
+        copy_source(source, source)
     for old, new in RUNTIME_MODULES.items():
         copy_source(f'editor/{old}.py', f'engine/{new}.py')
-
-    patch = project / 'player/overlays/android-runtime.patch'
-    result = subprocess.run(
-        ['patch', '--batch', '--forward', '--fuzz=0', '-p1', '-i', str(patch)],
-        cwd=private, capture_output=True, text=True,
-    )
-    if result.returncode:
-        raise RuntimeError('The Android adapter does not match this engine checkout:\n' +
-                           (result.stdout + result.stderr)[-6000:])
+    # Nothing that would have to be patched to run: a module only the staged
+    # tree has is one of the relocated five.
+    relocated = {f'engine/{new}.py' for new in RUNTIME_MODULES.values()}
+    for path in sorted((private / 'engine').rglob('*.py')):
+        name = path.relative_to(private).as_posix()
+        if name not in sources and name not in relocated:
+            raise RuntimeError(f'Staged engine has a module the checkout does not: {name}')
 
     editor = private / 'editor'
     editor.mkdir(exist_ok=True)
@@ -102,7 +114,16 @@ def prepare_runtime(private, project=None):
         staged = private / source
         if not staged.is_file() or hashlib.sha256(staged.read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Private player source does not match the checkout: {source}')
-    receipt = {'desktop_sources_unchanged': True, 'source_sha256': sources,
+    # The claim the receipt makes: what is staged is what the desktop runs.
+    for source, digest in sources.items():
+        target = (f'engine/{RUNTIME_MODULES[Path(source).stem]}.py'
+                  if source.startswith('editor/') else source)
+        staged = private / target
+        if (source.startswith(('engine/', 'editor/'))
+                and hashlib.sha256(staged.read_bytes()).hexdigest() != digest):
+            raise RuntimeError(f"Android's engine differs from the desktop's: {target}")
+    receipt = {'desktop_sources_unchanged': True, 'same_engine': True,
+               'source_sha256': sources,
                'player_source_sha256': player_sources}
     (private / 'player').mkdir(exist_ok=True)
     (private / 'player/runtime-build.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -129,7 +150,8 @@ def main(argv=None):
     parser.add_argument('destination')
     args = parser.parse_args(argv)
     receipt = stage_tree(args.destination)
-    print(f'Staged Android engine; {len(receipt["source_sha256"])} desktop source hashes unchanged.')
+    print(f'Staged the desktop engine for Android, unmodified; '
+          f'{len(receipt["source_sha256"])} source hashes recorded.')
 
 
 if __name__ == '__main__':
