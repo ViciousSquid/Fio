@@ -64,6 +64,8 @@ from typing import Any, Callable, List, Optional, Tuple
 # stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
 from engine.physics import (  # noqa: F401 -- re-exported for plugins
     CRUSH_DAMAGE, HEAVY_MASS, SV_GRAVITY, Body, Physics, world_gravity)
+from engine.spatial import clear_live_flag as _clear_live_flag
+from engine.spatial import set_live_flag as _set_live_flag
 
 
 #: Version of the plugin API surface this module implements. Compare against
@@ -160,6 +162,29 @@ def placement(brush):
     """
     from engine.brush_placement import placement as _placement
     return _placement(brush)
+
+
+def set_flag(entity, flag: str, value) -> bool:
+    """Set an entity's ``hidden`` or ``disabled`` flag (API 2.0).
+
+    **This is how a plugin changes those two flags.** Physics and the render
+    projection keep their own account of which entities are hidden or
+    disabled, and hear of a change through the engine's change journal and
+    nowhere else -- so that neither has to look at every entity every tick.
+    Writing ``entity.properties['disabled'] = True`` directly is not heard:
+    the entity goes on being simulated and drawn as it was, and the physics
+    engine prints a warning naming it.
+
+    Returns True if the entity has properties to write.
+    """
+    return _set_live_flag(entity, flag, value)
+
+
+def clear_flag(entity, flag: str) -> bool:
+    """Remove an entity's ``hidden`` or ``disabled`` flag, so it reads as
+    its default again (API 2.0): the journalled ``properties.pop(flag)``.
+    See :func:`set_flag`."""
+    return _clear_live_flag(entity, flag)
 
 
 def io_def(name: str, description: str = "", param_type: str = ""):

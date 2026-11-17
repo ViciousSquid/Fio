@@ -351,10 +351,12 @@ def test_a_floating_ball_falls_as_play_starts():
 
 
 def test_only_the_near_tier_wakes_as_play_starts():
+    from engine.change_journal import touch
     from engine.spatial import SIM_TIER_KEY, TIER_ACTIVE
     world, ball = _ball_world(pos=(0.0, 200.0, 0.0))
     # Classified after the world is built, as Big World's play_start does.
     ball.properties[SIM_TIER_KEY] = TIER_ACTIVE
+    touch(ball)                         # a classifier journals what it stamps
     _run(world, 60)
     assert ball.pos[1] == pytest.approx(200.0)
 

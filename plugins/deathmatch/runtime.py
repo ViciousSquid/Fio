@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import math
 import random
 
+from plugins.api import set_flag
+
 from .entities import DeathmatchBot, DeathmatchNode, DeathmatchSettings, DeathmatchSpawn
 from .navigation import Navigation, MoverTraversal, distance
 from .moving_navigation import NavigationWorld, live_centre
@@ -148,7 +150,7 @@ class DeathmatchSession:
                                          strafe=self.rng.choice((-1.0, 1.0)))
             self.game.assign(self.fighters[key], entity.properties.get("team", "auto"))
             # Reserved while the mode runs: stock AI must not drive these bots.
-            entity.properties["disabled"] = True
+            set_flag(entity, "disabled", True)
         if not self.spawns:
             self.spawns = [(self.feet(f), f.actor.angle) for f in self.fighters.values()]
         self._install_hooks()

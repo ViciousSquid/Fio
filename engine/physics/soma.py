@@ -16,7 +16,7 @@ import glm
 
 from ..change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
 from ..brush_placement import world_box
-from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points, tier_of
+from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points
 from ..spatial_grid import SpatialGrid
 from . import api
 from .api import SV_GRAVITY
@@ -319,6 +319,11 @@ class Soma:
     #: its length, where it rolls. Along its length it slides, by all of it.
     LYING_ROLL_FRICTION = 0.12
 
+    #: Steps between looks at the awake bodies for a ``hidden``/``disabled``
+    #: or tier change the change journal never heard of
+    #: (:meth:`_audit_flags`): about every two seconds. 0 never looks.
+    AUDIT_FLAGS_EVERY = 120
+
     #: The steepest ground a body moves up: rise over run. 1 is 45 degrees,
     #: Quake's walkable limit near enough (a floor normal of 0.7). Steeper
     #: ground is in the way, as a wall is.
@@ -391,8 +396,13 @@ class Soma:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
-        # Last observed hidden/disabled state, retained across dense repacks.
-        self._was_inactive = np.empty(0, dtype=np.bool_)
+        # Hidden or disabled, and the simulation tier: each entity's flags as
+        # the change journal last reported them (see _refresh_flags). Soma
+        # never reads them from an entity while it steps.
+        self._inactive = np.empty(0, dtype=np.bool_)
+        self._tier = np.empty(0, dtype=np.int8)
+        self._audit_in = self.AUDIT_FLAGS_EVERY
+        self._audit_reported = set()
         # Bodies initially dormant (or reactivated by a flag change) need the
         # one-time placement correction before their first active movement.
         self._pending_settle = np.empty(0, dtype=np.bool_)
@@ -434,7 +444,9 @@ class Soma:
         self._physics_enabled = np.empty(0, dtype=np.bool_)
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
-        self._was_inactive = np.empty(0, dtype=np.bool_)
+        self._inactive = np.empty(0, dtype=np.bool_)
+        self._tier = np.empty(0, dtype=np.int8)
+        self._audit_reported = set()
         self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._clear_body_index()
@@ -555,9 +567,9 @@ class Soma:
         # A body may become active immediately before a repack. Preserve its
         # last observed state by identity so that transition is not swallowed.
         previous_inactive = {
-            id(entity): bool(self._was_inactive[i])
+            id(entity): bool(self._inactive[i])
             for i, entity in enumerate(self._entities)
-            if i < len(self._was_inactive)
+            if i < len(self._inactive)
         }
         previous_pending_settle = {
             id(entity): bool(self._pending_settle[i])
@@ -578,7 +590,8 @@ class Soma:
         self._physics_enabled = np.empty(n, dtype=np.bool_)
         self._awake = np.zeros(n, dtype=np.bool_)
         self._kinematic = np.zeros(n, dtype=np.bool_)
-        self._was_inactive = np.empty(n, dtype=np.bool_)
+        self._inactive = np.empty(n, dtype=np.bool_)
+        self._tier = np.zeros(n, dtype=np.int8)
         self._pending_settle = np.empty(n, dtype=np.bool_)
         self._rolls = np.zeros(n, dtype=np.bool_)
         self._bounce = np.zeros(n, dtype=np.float32)
@@ -601,9 +614,15 @@ class Soma:
             current_inactive = bool(
                 isinstance(props, dict)
                 and (props.get('disabled', False) or props.get('hidden', False)))
-            self._was_inactive[i] = previous_inactive.get(id(entity), current_inactive)
+            self._inactive[i] = current_inactive
+            # Made active again across a repack: its placement is corrected
+            # before it first moves, as for any other reactivation.
             self._pending_settle[i] = previous_pending_settle.get(
-                id(entity), False)
+                id(entity), False) or (
+                    previous_inactive.get(id(entity), current_inactive)
+                    and not current_inactive)
+            if isinstance(props, dict):
+                self._tier[i] = props.get(SIM_TIER_KEY) or TIER_NEAR
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
@@ -785,15 +804,22 @@ class Soma:
         active = self._physics_enabled & ~self._kinematic
         self._awake[active] = True
 
-    def _refresh_inactive_history(self):
-        """Apply journalled hidden/disabled transitions to packed body rows.
+    def _refresh_flags(self):
+        """Take the hidden/disabled flags and simulation tiers the change
+        journal says have changed.
 
-        Most bodies sleep, so checking their Python property dictionaries every
-        frame would defeat the sparse physics path. Flag writers already
-        journal state changes; consume only those entity identities here. An
-        overflow is rare and deliberately falls back to one complete refresh.
+        The journal is the only way Soma hears of them. Whatever changes an
+        entity's ``hidden``, ``disabled`` or simulation tier records it
+        (:func:`engine.spatial.set_live_flag`, ``set_authored_flag``, a
+        streaming layer's ``touch``), and only the entities it names are
+        looked at here -- none, on almost every step. A write that goes
+        straight to the property dict is not heard: that is a bug in the
+        writer, and :meth:`_audit_flags` says so. An overflowing journal is
+        rare and falls back to one complete refresh.
         """
         changes = JOURNAL.drain(self)
+        if not changes:
+            return
         if changes is OVERFLOW:
             indices = range(len(self._entities))
         else:
@@ -807,15 +833,41 @@ class Soma:
             if index is None:
                 continue
             props = getattr(self._entities[index], 'properties', None)
-            inactive = bool(
-                isinstance(props, dict)
-                and (props.get('disabled', False) or props.get('hidden', False)))
-            if self._was_inactive[index] and not inactive:
+            if not isinstance(props, dict):
+                continue
+            inactive = bool(props.get('disabled') or props.get('hidden'))
+            if self._inactive[index] and not inactive:
                 self._pending_settle[index] = True
-            elif inactive and not self._was_inactive[index]:
+            elif inactive and not self._inactive[index]:
                 # Hidden or disabled: gone from under whatever rested on it.
                 self._wake_dependents(index)
-            self._was_inactive[index] = inactive
+            self._inactive[index] = inactive
+            self._tier[index] = props.get(SIM_TIER_KEY) or TIER_NEAR
+
+    def _audit_flags(self, rows):
+        """Report awake bodies whose flags were changed behind the journal's
+        back: every :data:`AUDIT_FLAGS_EVERY` steps, a look at what is awake.
+
+        It reports; it does not repair. The body goes on being simulated as
+        the journal last described it, so the mistake is seen where it was
+        made rather than papered over at a cost every body pays every step.
+        """
+        entities = self._entities
+        for i in rows.tolist():
+            entity = entities[i]
+            props = getattr(entity, 'properties', None)
+            if not isinstance(props, dict) or id(entity) in self._audit_reported:
+                continue
+            inactive = bool(props.get('disabled') or props.get('hidden'))
+            tier = props.get(SIM_TIER_KEY) or TIER_NEAR
+            if inactive != bool(self._inactive[i]) or tier != int(self._tier[i]):
+                self._audit_reported.add(id(entity))
+                print("[Soma] %r: 'hidden', 'disabled' or its simulation tier was "
+                      "changed without the change journal, so physics has not "
+                      "heard of it. Write them with engine.spatial.set_live_flag "
+                      "(plugins: api.set_flag), or call "
+                      "engine.change_journal.touch(entity) after writing."
+                      % (getattr(entity, 'name', None) or type(entity).__name__))
 
     def _settle_pending_bodies(self, eligible):
         """Correct newly active placements before they can first move.
@@ -827,44 +879,11 @@ class Soma:
         candidates = self._pending_settle & eligible
         if not np.any(candidates):
             return
-        inactive = self._inactive_mask(candidates, awake_only=False)
-        ready = candidates & ~inactive
+        ready = candidates & ~self._inactive
         if not np.any(ready):
             return
         self._settle_sunk_bodies(ready)
         self._pending_settle[ready] = False
-
-    def _inactive_mask(self, candidates, awake_only=True, distant=None):
-        """Which candidate bodies are hidden or disabled.
-
-        ``disabled`` is authored gameplay state; ``hidden`` is the Prop's
-        I/O Hide state. Both make its physical body dormant. Ordinary
-        integration only needs to inspect awake candidates, preserving the
-        sparse hot path. The player-push query also checks its small set of
-        overlapping bodies with ``awake_only=False``, because a sleeping body
-        can still overlap the player and must not be pushed while inactive.
-
-        *distant*, a mask the size of the world, is filled where a candidate
-        is beyond live simulation (:meth:`step`): the same look at the same
-        property dict, so knowing costs nothing more.
-        """
-        mask = np.zeros(len(self._entities), dtype=np.bool_)
-        rows = candidates & self._awake if awake_only else candidates
-        indices = np.flatnonzero(rows)
-        if indices.size == 0:
-            return mask
-        entities = self._entities
-        for i in indices.tolist():
-            props = getattr(entities[i], 'properties', None)
-            if not isinstance(props, dict):
-                continue
-            if props.get('disabled') or props.get('hidden'):
-                mask[i] = True
-            elif distant is not None:
-                tier = props.get(SIM_TIER_KEY)
-                if tier is not None and tier >= TIER_DISTANT:
-                    distant[i] = True
-        return mask
 
     def _integrate_rotation(self, angular, dt):
         """Advance the rotation of every spinning body.
@@ -887,9 +906,7 @@ class Soma:
         for slot, index in enumerate(spinning):
             entity = self._entities[int(index)]
             props = getattr(entity, 'properties', None)
-            if (not isinstance(props, dict)
-                    or props.get('disabled', False)
-                    or props.get('hidden', False)):
+            if not isinstance(props, dict) or self._inactive[index]:
                 targets.append(None)
                 continue
             targets.append((entity, props))
@@ -1017,12 +1034,7 @@ class Soma:
         rows = np.flatnonzero(candidates)
         if rows.size == 0:
             return
-        near = np.fromiter(
-            (tier_of(self._entities[int(i)]) == TIER_NEAR
-             and not getattr(self._entities[int(i)], 'properties', {}).get('disabled', False)
-             and not getattr(self._entities[int(i)], 'properties', {}).get('hidden', False)
-             for i in rows), dtype=np.bool_, count=rows.size)
-        rows = rows[near]
+        rows = rows[(self._tier[rows] == TIER_NEAR) & ~self._inactive[rows]]
         if rows.size == 0:
             return
         centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
@@ -1063,8 +1075,7 @@ class Soma:
         candidates = self._physics_enabled & self._solid
         if eligible is not None:
             candidates &= eligible
-        rows = np.flatnonzero(
-            candidates & ~self._inactive_mask(candidates, awake_only=False))
+        rows = np.flatnonzero(candidates & ~self._inactive)
         if rows.size == 0:
             return
         centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
@@ -1401,10 +1412,8 @@ class Soma:
             return None
         query, other = query[keep], other[keep]
         other_lo, other_hi = other_lo[keep], other_hi[keep]
-        # A dormant body is in nobody's way. Asked of the few bodies that are
-        # near something awake, asleep or not: their flags are not journalled
-        # by every writer.
-        dormant = self._dormant(other)
+        # A dormant body is in nobody's way.
+        dormant = self._inactive[other]
         if dormant.any():
             keep = ~dormant
             if not keep.any():
@@ -1412,26 +1421,6 @@ class Soma:
             query, other = query[keep], other[keep]
             other_lo, other_hi = other_lo[keep], other_hi[keep]
         return query, other_lo, other_hi, other
-
-    def _dormant(self, rows):
-        """Which of the body rows *rows* are hidden or disabled.
-
-        An awake body's flags were read when this step began, and a dormant
-        one is not awake; so only the sleeping rows are asked, each once,
-        from their entities -- not every writer of those flags journals.
-        """
-        out = np.zeros(len(rows), dtype=np.bool_)
-        asleep = np.flatnonzero(~self._awake[rows])
-        if asleep.size:
-            unique, where = np.unique(rows[asleep], return_inverse=True)
-            entities = self._entities
-            flags = np.zeros(unique.size, dtype=np.bool_)
-            for k, i in enumerate(unique.tolist()):
-                props = getattr(entities[i], 'properties', None)
-                if isinstance(props, dict) and (props.get('disabled') or props.get('hidden')):
-                    flags[k] = True
-            out[asleep] = flags[where]
-        return out
 
     def _bodies_at(self, lo, hi):
         """The obstacle rows whose box overlaps the box ``lo..hi`` (float32
@@ -1989,33 +1978,25 @@ class Soma:
         if not self._entities:
             return
 
+        # Hidden, disabled and the simulation tier come from the change
+        # journal and nowhere else: usually nothing to do. A body in a cell
+        # that is DISTANT or beyond is past live simulation -- it keeps its
+        # state, awake and moving, and carries on when the cell is near
+        # again; an unclassified world is all NEAR.
+        self._refresh_flags()
+
         if self._wake_floating_pending:
             self._wake_floating_pending = False
             self._wake_floating_near_bodies()
 
-        # Flag writers journal their transitions, including Hide on sleeping
-        # bodies. Keep a sparse fallback for direct writes to already-awake
-        # bodies, and retain pending placement work until the body is active.
         active = self._physics_enabled & ~self._kinematic
-        self._refresh_inactive_history()
-        # Simulation tiers (engine.spatial): a body in a cell that is DISTANT
-        # or beyond is past live simulation. It keeps its state -- awake,
-        # moving -- and carries on from it when the cell is near again. An
-        # unclassified world is all NEAR: nothing is ever held.
-        distant = np.zeros(len(self._entities), dtype=np.bool_)
-        inactive = self._inactive_mask(active, distant=distant)
-        awake_candidates = active & self._awake
-        activated = self._was_inactive & awake_candidates & ~inactive
-        if np.any(activated):
-            self._pending_settle[activated] = True
-        self._was_inactive[awake_candidates] = inactive[awake_candidates]
         self._settle_pending_bodies(active)
+        active &= ~self._inactive
+        active &= self._tier < TIER_DISTANT
 
         base_dt = float(delta) or 1.0 / 60.0
         scale = max(0.0, float(self.time_scale))
         dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
-        active &= ~inactive
-        active &= ~distant
 
         # Where the player's push started each body it pushed (NaN for the
         # rest): a push into a wall is undone with the rest of the move.
@@ -2045,7 +2026,7 @@ class Soma:
             # touched; a sleeping one still is, and can be pushed awake.
             touched = self._bodies_at(ppos - player_half, ppos + player_half)
             if touched.size:
-                touched = touched[~self._dormant(touched)]
+                touched = touched[~self._inactive[touched]]
             if touched.size and self._any_heavy:
                 # The player cannot push a heavy body: it pushes the player.
                 heavy = self._mass[touched] >= self.HEAVY_MASS
@@ -2088,6 +2069,11 @@ class Soma:
         # the awake rows' state is gathered once, worked on, and put back.
         rows = np.flatnonzero(active & self._awake)
         if rows.size:
+            if self.AUDIT_FLAGS_EVERY:
+                self._audit_in -= 1
+                if self._audit_in <= 0:
+                    self._audit_in = self.AUDIT_FLAGS_EVERY
+                    self._audit_flags(rows)
             velocity = self._velocity[rows]
             position = self._position[rows]
             weight = self._gravity[rows]

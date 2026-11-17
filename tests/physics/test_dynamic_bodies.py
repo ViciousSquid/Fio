@@ -9,7 +9,7 @@ import pytest
 from engine.physics import PhysicsWorld, SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
-from engine.spatial import set_authored_flag
+from engine.spatial import set_authored_flag, set_live_flag
 
 # Oil_Drum_Grey bounds: local Y starts at zero, so the entity origin is the
 # point touching the floor and the collision box centre sits half a height up.
@@ -206,7 +206,7 @@ def test_clear_releases_all_body_state():
 
     assert world.get_body(prop) is None
     assert world._position.shape == (0, 3)
-    assert world._was_inactive.shape == (0,)
+    assert world._inactive.shape == (0,)
     assert world._pending_settle.shape == (0,)
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
 
@@ -216,8 +216,11 @@ def test_clear_releases_all_body_state():
 # ---------------------------------------------------------------------------
 
 def _stamp(prop, tier):
+    """Stamp a simulation tier as a classifier does: written, and journalled."""
+    from engine.change_journal import touch
     from engine.spatial import SIM_TIER_KEY
     prop.properties[SIM_TIER_KEY] = tier
+    touch(prop)
 
 
 def test_a_body_in_a_distant_cell_is_held_and_carries_on_when_it_is_near():
@@ -410,7 +413,7 @@ def test_a_disabled_body_is_not_integrated():
     prop = _prop(pos=(0.0, 400.0, 0.0))
     world.rebuild([_drum_brush(prop)])
     world.wake(prop)
-    prop.properties['disabled'] = True
+    set_live_flag(prop, 'disabled', True)
 
     for _ in range(60):
         world.step(1.0 / 60.0)
@@ -431,7 +434,7 @@ def test_hidden_and_disabled_sleeping_bodies_cannot_be_pushed():
         assert body.awake is False
 
         # The same body becomes pushable when its inactive flag is cleared.
-        prop.properties[flag] = False
+        set_live_flag(prop, flag, False)
         world.step(1.0 / 60.0, _player())
         assert prop.pos[0] > 0.0
 
@@ -505,7 +508,7 @@ def test_rebuild_does_not_reuse_the_previous_world_inactive_snapshot():
     world.step(1.0 / 60.0)
     assert hidden.pos[1] == pytest.approx(-DRUM_HALF_Y)
 
-    hidden.properties['hidden'] = False
+    set_live_flag(hidden, 'hidden', False)
     world.wake(hidden)
     world.step(1.0 / 60.0)
     assert hidden.pos[1] == pytest.approx(0.0, abs=1e-4)
@@ -523,7 +526,7 @@ def test_a_hidden_sunk_body_is_corrected_on_activation_even_across_repack():
     assert prop.pos[1] == pytest.approx(-DRUM_HALF_Y)
 
     # Force a dense repack after activation; the transition must survive it.
-    prop.properties['hidden'] = False
+    set_live_flag(prop, 'hidden', False)
     other = _prop(pos=(400.0, 400.0, 0.0))
     world.register_body(other, _drum_brush(other))
     world.wake(prop)  # repack first, then activate the existing body
@@ -538,12 +541,12 @@ def test_a_parked_body_resumes_when_it_is_re_enabled():
     world.rebuild([_drum_brush(prop)])
     world.wake(prop)
 
-    prop.properties['disabled'] = True
+    set_live_flag(prop, 'disabled', True)
     for _ in range(60):
         world.step(1.0 / 60.0)
     assert prop.pos[1] == 400.0
 
-    prop.properties['disabled'] = False
+    set_live_flag(prop, 'disabled', False)
     for _ in range(60):
         world.step(1.0 / 60.0)
     assert prop.pos[1] < 400.0

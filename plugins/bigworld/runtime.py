@@ -861,11 +861,17 @@ class BigWorldSession:
         props = getattr(thing, "properties", None)
         if not isinstance(props, dict):
             return
+        parked = _HID_MARK in props or _DIS_MARK in props
         if _HID_MARK in props:
             props["hidden"] = props.pop(_HID_MARK)
         if _DIS_MARK in props:
             props["disabled"] = props.pop(_DIS_MARK)
         props["bw_active"] = True
+        if parked:
+            # Every caller's restore is heard, not only the residency edge's:
+            # physics and the projections learn of these flags from the
+            # change journal alone.
+            touch(thing, VISIBILITY)
 
     # ------------------------------------------------------------------
     # Persistent cell delta registry

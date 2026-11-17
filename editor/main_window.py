@@ -38,6 +38,7 @@ from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_faces, brush_geometry, brush_placement
 from engine import player_starts as start_rules
 from engine.change_journal import moved, touch
+from engine.spatial import set_live_flag
 from engine.fileio import write_json_atomic, write_text_atomic
 from editor.view_2d import View2D, singleton_instance
 from editor.editor_state import EditorState
@@ -4235,8 +4236,7 @@ class MainWindow(QMainWindow):
                 obj['hidden'] = True
                 touch(obj)
             else:
-                obj.properties['hidden'] = True
-                touch(obj)
+                set_live_flag(obj, 'hidden', True)
         # What is hidden cannot be seen selected.
         self.set_selected_objects([])
         self.update_all_ui()
@@ -4252,8 +4252,7 @@ class MainWindow(QMainWindow):
             brush['hidden'] = False
             touch(brush)
         for thing in hidden_things:
-            thing.properties['hidden'] = False
-            touch(thing)
+            set_live_flag(thing, 'hidden', False)
         self.update_all_ui()
 
     def keyReleaseEvent(self, event):

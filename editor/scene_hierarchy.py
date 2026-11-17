@@ -9,6 +9,7 @@ import re
 from PyQt5.QtCore import Qt, QTimer, QEvent
 
 from engine.change_journal import touch
+from engine.spatial import set_live_flag
 from editor.selection import SelectionLookup
 
 
@@ -916,14 +917,12 @@ class SceneHierarchy(QWidget):
             elif action == hide_action:
                 self.main_window.save_state()
                 for _, idx in thing_items:
-                    self.main_window.state.things[idx].properties['hidden'] = True
-                    touch(self.main_window.state.things[idx])
+                    set_live_flag(self.main_window.state.things[idx], 'hidden', True)
                 self.main_window.update_all_ui()
             elif action == show_action:
                 self.main_window.save_state()
                 for _, idx in thing_items:
-                    self.main_window.state.things[idx].properties['hidden'] = False
-                    touch(self.main_window.state.things[idx])
+                    set_live_flag(self.main_window.state.things[idx], 'hidden', False)
                 self.main_window.update_all_ui()
             return
 
@@ -1039,8 +1038,7 @@ class SceneHierarchy(QWidget):
                 self.main_window.update_all_ui()
             elif action == hide_action:
                 self.main_window.save_state()
-                thing_obj.properties['hidden'] = not is_hidden
-                touch(thing_obj)
+                set_live_flag(thing_obj, 'hidden', not is_hidden)
                 self.main_window.update_all_ui()
             elif action == properties_action:
                 self.show_properties_for(thing_obj)

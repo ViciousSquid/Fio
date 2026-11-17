@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import weakref
 
-from plugins.api import FioPlugin, TickContext, io_def, prop
+from plugins.api import FioPlugin, TickContext, io_def, prop, set_flag
 
 from .entities import TidyGoal, TidyReceptacle
 from .runtime import TidySession
@@ -244,16 +244,16 @@ class TidyPlugin(FioPlugin):
                 session.reset_receptacle(entity)
 
         def recept_enable(entity, param, logic):
-            entity.properties["disabled"] = False
+            set_flag(entity, "disabled", False)
 
         def recept_disable(entity, param, logic):
-            entity.properties["disabled"] = True
+            set_flag(entity, "disabled", True)
 
         def goal_enable(entity, param, logic):
-            entity.properties["disabled"] = False
+            set_flag(entity, "disabled", False)
 
         def goal_disable(entity, param, logic):
-            entity.properties["disabled"] = True
+            set_flag(entity, "disabled", True)
 
         api.register_input_handler("prop", "reset", prop_reset)
         api.register_input_handler("tidyreceptacle", "reset", recept_reset)
