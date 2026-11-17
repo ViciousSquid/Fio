@@ -1,6 +1,6 @@
 """A physics for tests of the physics contract and its host.
 
-It shares nothing with the built-in ``PhysicsWorld`` -- no NumPy rows, no
+It shares nothing with Soma, the built-in physics, -- no NumPy rows, no
 solver -- and implements the ``engine.physics.Physics`` protocol directly,
 which is the point: a replacement physics needs nothing from Fio's own.
 """

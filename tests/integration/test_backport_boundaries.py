@@ -22,7 +22,7 @@ GENERIC_MODULES = [
     "engine/physics/__init__.py",
     "engine/physics/api.py",
     "engine/physics/registry.py",
-    "engine/physics/batched.py",
+    "engine/physics/soma.py",
     "engine/player.py",
     "engine/renderer/__init__.py",
     "engine/renderer/api.py",

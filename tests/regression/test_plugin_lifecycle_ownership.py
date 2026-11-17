@@ -38,7 +38,7 @@ _GENERIC_SOURCES = ("engine/logic_thread.py", "engine/savegame.py",
                     "engine/view_terrain_edit.py", "engine/spatial.py",
                     "engine/spatial_grid.py", "engine/physics/__init__.py",
                     "engine/physics/api.py", "engine/physics/registry.py",
-                    "engine/physics/batched.py")
+                    "engine/physics/soma.py")
 
 #: The lifecycle hooks ``PluginManager`` owns the dispatch of.  ``register`` and
 #: ``connect`` are deliberately not listed: both are ordinary English that Qt

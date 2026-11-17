@@ -11,13 +11,13 @@ package exports:
 * the registry: :func:`register_physics`, :func:`create_physics`,
   :func:`select_physics`, :func:`available_physics`, :data:`DEFAULT_PHYSICS`
 
-Implementations are reached through the registry: ``batched`` is Fio's
-built-in physics. The solid world is not physics' to hold: it is
+Implementations are reached through the registry: ``soma`` is Fio's
+built-in physics: Soma. The solid world is not physics' to hold: it is
 :class:`engine.spatial_grid.SpatialGrid`, engine core, which a physics is
 created with and asks. Importing this package needs neither NumPy nor PyGLM.
 
-``SpatialGrid``, ``PhysicsWorld`` and ``PhysicsBody`` used to live in a module
-of this name; they are still importable from here (resolved on first use) so
+``SpatialGrid``, ``PhysicsWorld`` (now ``Soma``) and ``PhysicsBody`` used to
+live in a module of this name; they are still importable from here (resolved on first use) so
 existing imports keep working. New code names their real homes.
 """
 
@@ -40,10 +40,11 @@ __all__ = [
 #: Names that moved out of the old ``engine.physics`` module, and where to.
 _MOVED = {
     'SpatialGrid': 'engine.spatial_grid',
-    'PhysicsWorld': 'engine.physics.batched',
-    'PhysicsBody': 'engine.physics.batched',
-    'quat_from_rotation': 'engine.physics.batched',
-    'rotation_from_quat': 'engine.physics.batched',
+    'Soma': 'engine.physics.soma',
+    'PhysicsWorld': 'engine.physics.soma',
+    'PhysicsBody': 'engine.physics.soma',
+    'quat_from_rotation': 'engine.physics.soma',
+    'rotation_from_quat': 'engine.physics.soma',
 }
 
 

@@ -1,6 +1,6 @@
 """The physics registry: name -> factory.
 
-``"Batched"`` is Fio's built-in physics. A plugin or developer adds another
+``"Soma"`` is Fio's built-in physics. A plugin or developer adds another
 with :func:`register_physics`; a play session creates the selected one with
 :func:`create_physics`. A factory is any callable ``factory(spatial_grid)``
 that returns an object satisfying :class:`engine.physics.api.Physics` --
@@ -13,10 +13,10 @@ importing the registry (or the contract) needs neither NumPy nor PyGLM.
 import importlib
 
 #: The physics a session starts with unless another is selected.
-DEFAULT_PHYSICS = "Batched"
+DEFAULT_PHYSICS = "Soma"
 
 _factories = {
-    "Batched": "engine.physics.batched:PhysicsWorld",
+    "Soma": "engine.physics.soma:Soma",
 }
 
 _selected = DEFAULT_PHYSICS

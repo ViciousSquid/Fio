@@ -53,10 +53,10 @@ def _prop(**props):
     return Prop(pos=[0.0, 0.0, 0.0], properties=properties)
 
 
-def test_batched_is_the_built_in_default():
-    assert DEFAULT_PHYSICS == "Batched"
-    assert "Batched" in available_physics()
-    assert selected_physics() == "Batched"
+def test_soma_is_the_built_in_default():
+    assert DEFAULT_PHYSICS == "Soma"
+    assert "Soma" in available_physics()
+    assert selected_physics() == "Soma"
 
 
 def test_a_physics_with_nothing_from_fio_plugs_in(clean_registry):
@@ -96,11 +96,11 @@ def test_an_unknown_physics_name_is_an_error():
         create_physics(_grid(), "NoSuchPhysics")
 
 
-def test_the_batched_physics_satisfies_the_contract():
-    from engine.physics.batched import PhysicsWorld
+def test_soma_satisfies_the_contract():
+    from engine.physics.soma import Soma
 
-    physics = create_physics(_grid(), "Batched")
-    assert isinstance(physics, PhysicsWorld)
+    physics = create_physics(_grid(), "Soma")
+    assert isinstance(physics, Soma)
     assert isinstance(physics, Physics)
 
     prop = _prop()
@@ -114,10 +114,10 @@ def test_the_batched_physics_satisfies_the_contract():
     assert physics.sleep_enabled is True
 
 
-def test_the_batched_physics_reads_only_contract_properties():
+def test_soma_reads_only_contract_properties():
     """Every authored property the built-in physics reads is in the contract,
     so another implementation knows the whole of what a body is."""
-    source = (ROOT / 'engine' / 'physics' / 'batched.py').read_text()
+    source = (ROOT / 'engine' / 'physics' / 'soma.py').read_text()
     read = set()
     for node in ast.walk(ast.parse(source)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -156,7 +156,7 @@ def _imports(path):
 
 
 #: What the engine may not name: an implementation, or its classes.
-_PRIVATE = {'PhysicsWorld', 'PhysicsBody'}
+_PRIVATE = {'Soma', 'PhysicsWorld', 'PhysicsBody'}
 
 
 @pytest.mark.parametrize('folder', ['engine', 'editor'])
@@ -177,7 +177,7 @@ def test_the_engine_reaches_physics_only_through_the_boundary(folder):
 def test_the_built_in_physics_keeps_no_copy_of_the_world():
     """The spatial grid is the single source of truth: the built-in physics
     names no brush list, cell bucket or mover table of its own."""
-    path = ROOT / 'engine' / 'physics' / 'batched.py'
+    path = ROOT / 'engine' / 'physics' / 'soma.py'
     modules = {module for module, _names in _imports(path)}
     assert 'engine.mover_table' not in modules
     assert 'engine.constants' not in modules

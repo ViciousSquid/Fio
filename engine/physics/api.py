@@ -3,8 +3,8 @@
 Fio simulates dynamic bodies -- Props whose ``physics_enabled`` is set --
 through whichever physics is active. A physics is any object that satisfies
 :class:`Physics`; it does not inherit from anything in Fio. The built-in
-implementation is :class:`engine.physics.batched.PhysicsWorld` (registered as
-``"Batched"``).
+implementation is :class:`engine.physics.soma.Soma` (registered as
+``"Soma"``).
 
 What crosses the boundary, and in which direction::
 

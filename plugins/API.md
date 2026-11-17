@@ -385,8 +385,8 @@ only while the plugin is enabled.
 ```python
 def register_physics(self, name: str, cls) -> bool
 ```
-Register a physics under *name* in Fio's physics registry (`"Batched"` is the
-built-in one). API 1.10.0. *cls* is a factory called as `cls(spatial_grid)`
+Register a physics under *name* in Fio's physics registry (`"Soma"` -- Greek for *body* -- is
+the built-in one). API 1.10.0. *cls* is a factory called as `cls(spatial_grid)`
 once per play session — usually the physics class itself — and what it returns
 must satisfy the `engine.physics.Physics` protocol (`engine/physics/api.py` is
 the whole contract, stdlib-only):

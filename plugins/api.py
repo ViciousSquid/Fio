@@ -86,7 +86,7 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-#: * 1.10.0 — physics is a plugin boundary: :meth:`EditorAPI.register_physics`
+#: * 1.10.0 — physics is a plugin boundary (the built-in one is Soma): :meth:`EditorAPI.register_physics`
 #:   registers an implementation of ``engine.physics.Physics``. ``SpatialGrid``
 #:   lives in ``engine.spatial_grid`` (still importable from ``engine.physics``).
 #:   Every existing plugin loads unchanged.

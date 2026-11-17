@@ -1,6 +1,7 @@
-"""Fio's built-in physics: batched dynamic bodies over NumPy rows.
+"""Soma (Greek: "body"): Fio's built-in physics. Batched dynamic bodies
+over NumPy rows.
 
-Registered as ``"Batched"`` (:mod:`engine.physics.registry`) and reached by
+Registered as ``"Soma"`` (:mod:`engine.physics.registry`) and reached by
 the engine only through the contract (:class:`engine.physics.Physics`). It
 keeps no copy of the world: walls and floors are asked of the
 :class:`engine.spatial_grid.SpatialGrid` it is created with.
@@ -226,8 +227,8 @@ class PhysicsBody:
         self.rest_callback = None
 
 
-class PhysicsWorld:
-    """Engine-owned batched dynamic-body simulation.
+class Soma:
+    """Fio's batched dynamic-body simulation.
 
     Body state is stored as structure-of-arrays NumPy buffers. The per-tick
     integration, damping, gravity, push response, sleep test and position
@@ -590,7 +591,7 @@ class PhysicsWorld:
     def entities_that_changed_cell(self):
         """Bodies that crossed a cell boundary since the last call.
 
-        PhysicsWorld owns an entity's position while it is in motion, so a
+        Soma owns an entity's position while it is in motion, so a
         spatial index built on those entities has to be told when to re-file
         one. This is how, and it answers the narrowest useful question: not
         "which bodies are awake" and not even "which moved", but "which are no
@@ -1433,3 +1434,7 @@ def _float(value, default):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+#: The name this class had before it was Soma; existing code imports it.
+PhysicsWorld = Soma
