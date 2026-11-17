@@ -1914,6 +1914,24 @@ class LogicState(Thing):
         if store_name:
             LogicState._persistent_registry[store_name] = dict(self._runtime_data)
 
+    @classmethod
+    def reset_stores(cls, things=()):
+        """Forget every store, and put the stores in *things* back to their
+        authored ``initial_data``.
+
+        The registry carries values from level to level while a game runs.
+        That is a play session's memory, so whoever starts or ends a session
+        calls this: without it a playtest's values were still there on the
+        next Play, were written into the map by the next save, and replaced
+        the ``initial_data`` of any map opened later that used the same store
+        name. The registry is cleared in place: plugins hold a reference to it.
+        """
+        cls._persistent_registry.clear()
+        for thing in things:
+            if isinstance(thing, cls):
+                thing._sync_from_persistent()
+                thing._sync_to_persistent()
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------

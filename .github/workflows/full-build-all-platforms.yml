@@ -63,6 +63,7 @@ jobs:
             --include-package=editor `
             --include-package=PIL `
             --include-data-dir=assets=assets `
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin `
             --include-package=plugins `
             --include-package-data=plugins `
             --include-data-dir=tools=tools `
@@ -88,6 +89,9 @@ jobs:
           if (-not $packaged.EndsWith($env:VERSION_SUFFIX)) {
             throw "Packaged editor/version.txt does not end with$($env:VERSION_SUFFIX): '$packaged'"
           }
+          $fog = "build/main.dist/assets/noise_3d.bin"
+          if (-not (Test-Path $fog)) { throw "Packaged volumetric fog texture not found: $fog" }
+          if ((Get-Item $fog).Length -ne 32768) { throw "Packaged volumetric fog texture has the wrong size." }
           Write-Host "Packaged version: $packaged"
 
       - uses: actions/upload-artifact@v7
@@ -420,6 +424,7 @@ jobs:
             --include-package=editor \
             --include-package=PIL \
             --include-data-dir=assets=assets \
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin \
             --include-data-dir=cutscenes=cutscenes \
             --include-data-dir=tools=tools \
             --include-data-dir=maps=maps \
@@ -444,6 +449,11 @@ jobs:
           packaged=$(cat "$version")
           [[ $packaged == *"$VERSION_SUFFIX" ]] || { echo "Packaged version does not end with$VERSION_SUFFIX: '$packaged'"; exit 1; }
           grep -qx 'high_dpi_scaling = False' "$settings" || { echo "Packaged settings.ini keeps high-DPI scaling on"; exit 1; }
+          # Nuitka's --include-data-dir leaves .bin files out; the fog's noise
+          # texture is named on its own above and checked here.
+          fog=$(find build/main.app -path '*/assets/noise_3d.bin' | head -1)
+          [ -n "$fog" ] || { echo "Packaged volumetric fog texture not found"; exit 1; }
+          [ "$(wc -c < "$fog")" -eq 32768 ] || { echo "Packaged volumetric fog texture has the wrong size"; exit 1; }
           echo "Packaged version: $packaged; $settings has high_dpi_scaling = False"
 
       - name: Inject Info.plist with proper icon configuration
@@ -626,6 +636,7 @@ jobs:
             --include-package=editor \
             --include-package=PIL \
             --include-data-dir=assets=assets \
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin \
             --include-data-dir=cutscenes=cutscenes \
             --include-data-dir=tools=tools \
             --include-data-dir=maps=maps \
@@ -671,6 +682,11 @@ jobs:
             exit 1
           fi
           packaged=$(cat build/main.dist/editor/version.txt)
+          # Nuitka's --include-data-dir leaves .bin files out; the fog's noise
+          # texture is named on its own above and checked here.
+          fog=$(find build/main.dist -path '*/assets/noise_3d.bin' | head -1)
+          [ -n "$fog" ] || { echo "Packaged volumetric fog texture not found"; exit 1; }
+          [ "$(wc -c < "$fog")" -eq 32768 ] || { echo "Packaged volumetric fog texture has the wrong size"; exit 1; }
           [[ $packaged == *"$VERSION_SUFFIX" ]] || { echo "Packaged version does not end with$VERSION_SUFFIX: '$packaged'"; exit 1; }
           echo "Packaged version: $packaged"
 

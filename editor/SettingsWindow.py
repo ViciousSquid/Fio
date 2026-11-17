@@ -707,36 +707,25 @@ class SettingsWindow(QDialog):
     def keyPressEvent(self, event):
         super().keyPressEvent(event)
 
-    def _has_unsaved_work(self):
-        if not self.main_window:
-            return False
-        
-        has_content = False
-        if hasattr(self.main_window, 'state'):
-            state = self.main_window.state
-            has_content = (len(getattr(state, 'brushes', [])) > 0 or 
-                          len(getattr(state, 'things', [])) > 0)
-        
-        no_file = not getattr(self.main_window, 'file_path', None)
-        
-        has_undo_history = False
-        if hasattr(self.main_window, 'undo_stack'):
-            has_undo_history = len(self.main_window.undo_stack) > 0
-        
-        return (has_content and no_file) or has_undo_history
+    def _confirm_restart(self):
+        """Settle unsaved work before a restart; False means "do not restart".
+
+        The restart replaces the process, so this is the only prompt the user
+        gets. It is the editor's own Save / Discard / Cancel, after leaving
+        Play so that "Save" writes the authored map.
+        """
+        window = self.main_window
+        if not window:
+            return True
+        view = getattr(window, 'view_3d', None)
+        if view is not None and getattr(view, 'play_mode', False):
+            window._exit_play_mode()
+        return bool(window.check_unsaved_changes())
 
     def _apply_and_restart(self):
-        if self._has_unsaved_work():
-            reply = QMessageBox.warning(
-                self,
-                "Unsaved Work",
-                "Unsaved work will be lost!\n\nAre you sure you want to restart?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
-        
+        if not self._confirm_restart():
+            return
+
         self._save_settings()
         
         if self.main_window and hasattr(self.main_window, 'save_config'):

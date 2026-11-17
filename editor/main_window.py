@@ -601,7 +601,27 @@ class MainWindow(QMainWindow):
         """Background autosave to a specific autosave file."""
         if not self.unsaved_changes:
             return # Nothing to save
+        if self._in_play_mode():
+            # The scene is the running game's world, not the authored map.
+            return
         self._write_autosave()
+
+    def _in_play_mode(self):
+        view = getattr(self, 'view_3d', None)
+        return view is not None and bool(view.play_mode)
+
+    def _refuse_file_command_in_play(self, what):
+        """True (with a toast) when *what* must not run because Play is on.
+
+        During Play the scene holds the running game's world: monsters have
+        moved, doors are open, runtime keys sit on the entities. Writing it
+        would replace the authored map with that, and clearing it would pull
+        the world out from under the session.
+        """
+        if not self._in_play_mode():
+            return False
+        self.show_toast(f"Stop Play to {what}", is_error=True)
+        return True
 
     def _write_autosave(self):
         """Write the open level to its ``maps/*_autosave.json`` file.
@@ -1268,6 +1288,9 @@ class MainWindow(QMainWindow):
             # Store terrain data in state so the scene hierarchy can see it
             self.state.terrain_data = self.terrain.to_dict()
             self.scene_hierarchy.refresh_list()
+            # A new terrain is an edit: without this, closing the map dropped
+            # it with no prompt and autosave skipped it.
+            self.mark_as_modified()
         
         # Show the terrain editor as an overlay in the Properties dock (bottom
         # left pane), the same way as the procedural map generator — not a
@@ -1305,6 +1328,10 @@ class MainWindow(QMainWindow):
         """Handle terrain changes."""
         if self.terrain:
             self.state.terrain_data = self.terrain.to_dict()
+            # The panel emits this for its edits only (appearance, grass,
+            # palette, generation); they are part of the map, so the map is
+            # now unsaved.
+            self.mark_as_modified()
         self.update_all_ui()
 
     def clone_selected_object(self):
@@ -2696,7 +2723,18 @@ class MainWindow(QMainWindow):
             self._exit_play_mode()
             return
 
-        self._start_play(self.state.resolve_player_start())
+        player_start = self.state.resolve_player_start()
+        if player_start:
+            # A Play the author starts is a new game: every LogicState begins
+            # at its authored values, not at what the last playtest left.
+            # (A level change during Play restarts through _start_play and
+            # keeps the stores: that carry is what they are for.)
+            self._reset_logic_state_stores()
+        self._start_play(player_start)
+
+    def _reset_logic_state_stores(self):
+        from editor.things import LogicState
+        LogicState.reset_stores(self.state.things)
 
     def _start_play(self, player_start):
         """Enter play mode with the player at *player_start* (a PlayerStart)."""
@@ -2879,12 +2917,20 @@ class MainWindow(QMainWindow):
             if self.state.set_editor_whole_world(shown, self.view_3d.camera.pos):
                 self.update_all_ui()
 
-    def _exit_play_mode(self):
-        """Exit play mode and return to editor."""
+    def _exit_play_mode(self, *, level_change=False):
+        """Exit play mode and return to editor.
+
+        *level_change* marks the stop half of a level change during Play,
+        where the LogicState stores carry over to the next level.
+        """
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
+            restoring = self._pre_play_world is not None
             self._restore_pre_play_world()
+            if restoring and not level_change:
+                # The restored world is the authored one; so are its stores.
+                self._reset_logic_state_stores()
             stream = self.state.editor_stream
             if stream is not None and stream.suspended:
                 # Back to the cells around the editor camera.
@@ -3406,12 +3452,15 @@ class MainWindow(QMainWindow):
             # Error already shown in exporter
 
     def new_map(self):
+        if self._refuse_file_command_in_play("start a new map"):
+            return
         # Check for unsaved changes
         if not self.check_unsaved_changes():
             return
 
         self._clear_terrain()
         self.state.clear_scene()
+        self._reset_logic_state_stores()
         update_all_counters_from_entities([])
         self.reset_camera_mode()
 
@@ -4764,6 +4813,8 @@ class MainWindow(QMainWindow):
         return count
 
     def save_level_as(self):
+        if self._refuse_file_command_in_play("save the map"):
+            return
         filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
         if filePath:
             self.file_path = filePath
@@ -4771,6 +4822,8 @@ class MainWindow(QMainWindow):
             self.save_level()
 
     def save_level(self):
+        if self._refuse_file_command_in_play("save the map"):
+            return
         if not self.file_path:
             self.save_level_as()
             return
@@ -5004,8 +5057,13 @@ class MainWindow(QMainWindow):
                 # The world captured at Play belongs to the map being left.
                 captured = self._pre_play_world
                 self._pre_play_world = None
-                self._exit_play_mode()
+                self._exit_play_mode(level_change=True)
                 self._keep_unsaved_work_on_level_change(captured)
+            else:
+                # Opening a map in the editor: the previous map's (or a
+                # playtest's) store values are not this map's.
+                from editor.things import LogicState
+                LogicState.reset_stores()
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
@@ -5868,6 +5926,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            # Leave Play first, so the prompt's "Save" writes the authored
+            # map (the pre-play world is put back) and not the running game.
+            if self._in_play_mode():
+                try:
+                    self._exit_play_mode()
+                except Exception as e:
+                    print(f"Leaving Play on close failed: {e}")
             if (not getattr(self, '_quit_without_prompt', False)
                     and not self.check_unsaved_changes()):
                 event.ignore()

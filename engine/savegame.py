@@ -475,7 +475,36 @@ def _thing_state(t_data: dict) -> dict:
         k: v for k, v in (t_data.get("properties") or {}).items()
         if not str(k).startswith("_") and k != "_io_connections"
     }
-    return {"pos": _jsonify(t_data.get("pos")), "properties": _jsonify(props)}
+    state = {"pos": _jsonify(t_data.get("pos")), "properties": _jsonify(props)}
+    if _is_store_record(t_data):
+        # A LogicState's values are not properties, and they are most of what
+        # a save is for: compared here so a changed store is in the delta.
+        state["store"] = _jsonify(_store_values(t_data))
+    return state
+
+
+def _is_store_record(t_data: dict) -> bool:
+    return (t_data.get("properties") or {}).get("type") == "logic_state"
+
+
+def _store_values(t_data: dict) -> dict:
+    """The values a serialized LogicState holds: its ``runtime_data``, or its
+    authored ``initial_data`` when the record carries none."""
+    runtime = t_data.get("runtime_data")
+    if isinstance(runtime, dict):
+        return runtime
+    initial = (t_data.get("properties") or {}).get("initial_data")
+    return initial if isinstance(initial, dict) else {}
+
+
+def _restore_store(live, t_data: dict) -> None:
+    """Put a saved LogicState's values back on the live entity and into the
+    process-wide registry the I/O handlers and plugins read."""
+    if not (_is_store_record(t_data) and hasattr(live, "_sync_to_persistent")):
+        return
+    from editor import state_values
+    live._runtime_data = state_values.load_store(_store_values(t_data))
+    live._sync_to_persistent()
 
 
 def _brush_overlay(b_data: dict) -> dict:
@@ -584,9 +613,15 @@ def normalize_base_level(raw_level: dict) -> dict:
         from editor.editor_state import EditorState
         st = EditorState()
         st.load_from_data(raw_level or {})
-        return st.get_level_data()
+        level = st.get_level_data()
     except Exception:
         return raw_level or {}
+    # A store built here reads the live registry, so its record would hold
+    # the running game's values. The base map's values are the authored ones.
+    for t_data in level.get("things", []):
+        if _is_store_record(t_data):
+            t_data.pop("runtime_data", None)
+    return level
 
 
 def build_snapshot(logic, *, map_name: str = "",
@@ -724,6 +759,7 @@ def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
             # restore leaves visibly wrong.
             for k in _PARKABLE_KEYS:
                 _overlay_parkable(live.properties, k, props)
+            _restore_store(live, t_data)
         except Exception:
             continue
         finally:
