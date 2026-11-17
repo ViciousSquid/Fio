@@ -11,6 +11,8 @@ Fio's physics engine: a subsystem of the engine, registered as ``"Soma"``
 (:mod:`engine.physics.registry`) and reached by the rest of the engine only
 through the contract (:class:`engine.physics.Physics`).
 """
+import math
+
 import numpy as np
 import glm
 
@@ -231,7 +233,7 @@ class PhysicsBody:
         i = self._index
         if i is None:
             return (0.0, 0.0, 0.0)
-        return tuple(float(v) for v in self.world._half[i])
+        return tuple(self.world._half[i].tolist())
 
     @property
     def size(self):
@@ -923,10 +925,13 @@ class Soma:
         if not rows.size:
             return []
         away = self._position[rows] + self._offset[rows] - centre
-        distance = np.linalg.norm(away, axis=1)
-        rows, away, distance = rows[distance < radius], away[distance < radius], distance[distance < radius]
-        if not rows.size:
-            return []
+        distance = np.sqrt(away[:, 0] * away[:, 0] + away[:, 1] * away[:, 1]
+                           + away[:, 2] * away[:, 2])
+        inside = distance < radius
+        if not inside.all():
+            rows, away, distance = rows[inside], away[inside], distance[inside]
+            if not rows.size:
+                return []
         # Straight up for one exactly at the centre.
         direction = np.where(distance[:, None] > 1e-6,
                              away / np.maximum(distance[:, None], 1e-6),
@@ -995,53 +1000,73 @@ class Soma:
         rows = self._rows_in_box(point - float(radius), point + float(radius))
         if not rows.size:
             return []
-        centre = self._position[rows] + self._offset[rows]
-        near = np.linalg.norm(centre - point, axis=1) <= float(radius)
-        return [self._entities[i] for i in rows[near].tolist()]
+        away = self._position[rows] + self._offset[rows] - point
+        near = (away[:, 0] * away[:, 0] + away[:, 1] * away[:, 1]
+                + away[:, 2] * away[:, 2]) <= float(radius) ** 2
+        entities = self._entities
+        return [entities[i] for i in rows[near].tolist()]
 
     def raycast(self, origin, direction, reach):
         """The first body a ray meets: ``(entity, distance)`` or None.
 
-        Against the bodies' boxes, all at once (no loop over bodies); the
+        Against the boxes of the bodies filed along the ray -- found through
+        the body index, then tested all at once (no loop over bodies). The
         world's brushes are the spatial grid's to ask about, not physics'.
         """
         self._pack()
-        self._index_bodies()
-        rows = self._body_rows
+        if not self._entities:
+            return None
+        try:
+            origin = [float(v) for v in origin]
+            ray = [float(v) for v in direction]
+            reach = float(reach)
+        except (TypeError, ValueError):
+            return None
+        if len(origin) != 3 or len(ray) != 3:
+            return None
+        length = math.sqrt(ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2])
+        if not (0.0 < length < math.inf) or not all(math.isfinite(v) for v in origin):
+            return None
+        if not reach >= 0.0:
+            return None
+        lo = np.empty(3, dtype=np.float32)
+        hi = np.empty(3, dtype=np.float32)
+        for axis in range(3):
+            step = ray[axis] / length
+            end = origin[axis] + step * reach if step else origin[axis]
+            lo[axis] = min(origin[axis], end) - 1.0
+            hi[axis] = max(origin[axis], end) + 1.0
+        rows = self._rows_in_box(lo, hi)
         if not rows.size:
             return None
-        rows = rows[~self._inactive[rows]]
-        if not rows.size:
-            return None
-        origin = np.asarray(origin, dtype=np.float64).reshape(3)
-        ray = np.asarray(direction, dtype=np.float64).reshape(3)
-        length = float(np.linalg.norm(ray))
-        if not length > 0.0 or not np.isfinite(ray).all():
-            return None
-        ray = ray / length
         centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
         half = self._half[rows].astype(np.float64)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            inverse = 1.0 / ray
-            near = (centre - half - origin) * inverse
-            far = (centre + half - origin) * inverse
-        # A ray along an axis is inside or outside that slab for good.
-        flat = ray == 0.0
-        beside = np.zeros(len(rows), dtype=np.bool_)
-        if flat.any():
-            inside = ((origin >= centre - half) & (origin <= centre + half))[:, flat]
-            beside = ~inside.all(axis=1)
-            near[:, flat] = -np.inf
-            far[:, flat] = np.inf
-        enter = np.minimum(near, far).max(axis=1)
-        leave = np.maximum(near, far).min(axis=1)
-        hit = (~beside & (enter <= leave) & (leave >= 0.0)
-               & (enter <= float(reach)))
-        if not hit.any():
+        # Slab by slab. A ray along an axis is inside or outside that slab
+        # for good, and never divides by it.
+        enter = leave = hit = None
+        for axis in range(3):
+            step = ray[axis] / length
+            low = centre[:, axis] - half[:, axis] - origin[axis]
+            high = centre[:, axis] + half[:, axis] - origin[axis]
+            if step == 0.0:
+                inside = (low <= 0.0) & (high >= 0.0)
+                hit = inside if hit is None else hit & inside
+                continue
+            if step > 0.0:
+                near, far = low / step, high / step
+            else:
+                near, far = high / step, low / step
+            enter = near if enter is None else np.maximum(enter, near)
+            leave = far if leave is None else np.minimum(leave, far)
+        met = (enter <= leave) & (leave >= 0.0) & (enter <= reach)
+        if hit is not None:
+            met &= hit
+        which = np.flatnonzero(met)
+        if not which.size:
             return None
-        distance = np.where(hit, np.maximum(enter, 0.0), np.inf)
-        first = int(np.argmin(distance))
-        return self._entities[int(rows[first])], float(distance[first])
+        distance = np.maximum(enter[which], 0.0)
+        first = int(distance.argmin())
+        return self._entities[int(rows[which[first]])], float(distance[first])
 
     # -- events ----------------------------------------------------------------
 
@@ -1738,20 +1763,56 @@ class Soma:
             other_lo, other_hi = other_lo[keep], other_hi[keep]
         return query, other_lo, other_hi, other
 
+    #: Past this many grid columns across, a query box is the whole world
+    #: and every body is simply read.
+    _WIDE_QUERY_COLUMNS = 64
+
     def _bodies_at(self, lo, hi):
         """The obstacle rows whose box overlaps the box ``lo..hi`` (float32
-        triples), in row order: what the player is touching."""
+        triples), in row order: what the player is touching, and what a
+        plugin's query finds.
+
+        One box, so no pair lists: the index is sorted by column and then by
+        row along it, so the cells the box touches are one run of the index
+        for each column across -- two binary searches for all of them.
+        """
         self._index_bodies()
-        if not self._body_rows.size:
-            return self._body_rows
-        _query, other = self._bodies_near(
-            lo[None].astype(np.float64), hi[None].astype(np.float64))
+        rows = self._body_rows
+        if not rows.size:
+            return rows
+        size = float(self.spatial_grid.cell_size)
+        reach = self._body_reach
+        limit = float(self._KEY_BIAS - 1)
+        x0, x1 = float(lo[0]) - reach, float(hi[0]) + reach
+        z0, z1 = float(lo[2]) - reach, float(hi[2]) + reach
+        if not (x0 <= x1 and z0 <= z1):     # empty, or not a number
+            return rows[:0]
+        cx0 = math.floor(min(max(x0 / size, -limit), limit))
+        cx1 = math.floor(min(max(x1 / size, -limit), limit))
+        cz0 = math.floor(min(max(z0 / size, -limit), limit)) + self._KEY_BIAS
+        cz1 = math.floor(min(max(z1 / size, -limit), limit)) + self._KEY_BIAS
+        keys = self._body_keys
+        if cx1 == cx0:
+            other = rows[keys.searchsorted(cx0 * self._KEY_STRIDE + cz0, 'left'):
+                         keys.searchsorted(cx0 * self._KEY_STRIDE + cz1, 'right')]
+        elif cx1 - cx0 >= self._WIDE_QUERY_COLUMNS:
+            other = rows
+        else:
+            column = np.arange(cx0, cx1 + 1, dtype=np.int64) * self._KEY_STRIDE
+            first = keys.searchsorted(column + cz0, 'left').tolist()
+            last = keys.searchsorted(column + cz1, 'right').tolist()
+            runs = [rows[f:l] for f, l in zip(first, last) if l > f]
+            if not runs:
+                return rows[:0]
+            other = runs[0] if len(runs) == 1 else np.concatenate(runs)
         if not other.size:
             return other
-        other = np.unique(other)
         centre = self._position[other] + self._offset[other]
         half = self._half[other]
-        return other[np.all((centre + half > lo) & (centre - half < hi), axis=1)]
+        over = (centre + half > lo) & (centre - half < hi)
+        other = other[over[:, 0] & over[:, 1] & over[:, 2]]
+        other.sort()
+        return other
 
     def _wake_dependents(self, rows):
         """Wake whatever rests on the body rows *rows*, and whatever rests on

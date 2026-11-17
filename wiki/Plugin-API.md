@@ -484,11 +484,15 @@ authored object, and a renderer writes nothing on what it is handed:
   `live`; keep your state under `frame.key` and free it when the key changes.
   Streaming, LOD and chunk building are done before the frame
   (`Terrain.advance`, by the host): a renderer computes no height.
-- `decals`: projected decals (blood), or `None`: `(models, params)`, float32
-  `(n, 16)` and `(n, 4)`, from the logic thread's `DecalTable`
-  (`engine/decal_table.py`). Each is a box -- the unit cube's column-major
-  model matrix -- with `(texture variant, opacity, kind, mirrored)`; `kind`
-  is 0 for what landed on a wall, 1 on a floor. Draw the box and paint its
+- `decals`: projected decals (blood and placed), or `None`:
+  `(models, params, inverses)`, float32 `(n, 16)`, `(n, 4)` and `(n, 16)`,
+  from the logic thread's `DecalTable` (`engine/decal_table.py`). Each is a
+  box -- the unit cube's column-major model matrix -- with
+  `(texture layer/variant, opacity, kind, flags)` and the box's inverse;
+  `kind` is 0 for blood on a wall, 1 on a floor, 2 a placed image, 3 a placed
+  wet patch. A placed decal's `tint`, less one, is in the inverse's bottom
+  row (elements 3, 7, 11 -- zero, so white, for an untinted decal and for
+  blood): multiply the image by `1 + that`. Draw the box and paint its
   texture onto whatever the frame has drawn inside it (the built-in pass
   reconstructs the surface from depth: `engine/renderer/forward/decals.py`,
   `decal.frag`). A renderer that ignores the key simply shows no blood.
@@ -885,6 +889,29 @@ rules come with it: the world is the `SpatialGrid`'s — Soma keeps no copy —
 and a moved body is handed back by *assigning* `entity.pos`. To improve
 Soma, work in `engine/physics/soma.py`; nothing outside `engine/physics/`
 names it (`tests/physics/test_physics_contract.py` holds that line).
+
+**What the calls cost.** Measured on the development container with 500
+bodies (and, in brackets, 4,096) -- `rt` is a `RuntimeAPI`; the machine moves
+the numbers, the proportions much less:
+
+| Call | Microseconds |
+| :--- | ---: |
+| `rt.physics`, `rt.player`, `rt.physics_enabled`, `rt.state(name)` | 0.03 – 0.1 |
+| `rt.body(entity)`, and reading any one thing from a `Body` or the player | 0.1 – 0.3 |
+| `StateStore.get` | 0.25 |
+| `StateStore.set` (the map's `LogicState` reacts) | 3 – 6 |
+| `set_flag` / `clear_flag` | 1 |
+| `rt.impulse` | 2.5 |
+| `rt.bodies_in_box` (a 400-unit cube) | 12 (13) |
+| `rt.bodies_near` (radius 200) | 18 (20) |
+| `rt.bodies_near` (radius 2,000) | 31 (86) |
+| `rt.raycast_bodies` (reach 2,000) | 38 (40) |
+| `rt.explode` (radius 300) | 36 (44) |
+| `rt.things_near` / `rt.entities_of_type`, for scale: they read every entity | 53 / 61 (more with more entities) |
+
+A body query costs what is near it, not how many bodies there are; prefer one
+to `things_near` when it is physics Props you are after. The `physics.*`
+events cost nothing while no plugin subscribes.
 
 <a id="logicstate-api-200"></a>
 ### LogicState (API 2.0.0)

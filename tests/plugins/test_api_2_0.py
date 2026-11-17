@@ -491,3 +491,64 @@ def test_the_api_surface_is_locked_at_2_0():
     assert not removed, f"removed from API {API_VERSION}: {removed}"
     assert not added, (f"added to API {API_VERSION} without a new version: {added}")
     assert API_VERSION == "2.0.0"
+
+
+def test_a_store_finds_its_entity_once_and_again_when_the_level_changes():
+    """A read must not walk every thing in the level -- and must still see a
+    store entity that arrives, leaves or is replaced."""
+    class Store:
+        def __init__(self, name):
+            self.store_name, self._runtime_data = name, {}
+
+        def apply_value(self, key, value, value_type=None):
+            changed = self._runtime_data.get(key) != value
+            self._runtime_data[key] = value
+            return True, changed, value
+
+    class Things(list):
+        walks = 0
+
+        def __iter__(self):
+            Things.walks += 1
+            return super().__iter__()
+
+    things = Things(object() for _ in range(50))
+    logic = type('Logic', (), {
+        'io_manager': None, 'editor_state': type('E', (), {'things': things})(),
+        'session_runtime': type('S', (), {'physics_world': None, 'spatial_grid': None})()})()
+    registry = api.StateStore._registry()
+    saved = dict(registry)
+    try:
+        store = RuntimeAPI(None, logic, None).state('cached_store')
+        assert store.get('k') is None
+        walks = Things.walks
+        for _ in range(10):
+            store.get('k')
+        assert Things.walks == walks                    # no entity: remembered
+
+        first = Store('cached_store')
+        first._runtime_data['k'] = 1
+        things.append(first)                            # one arrives
+        assert store.get('k') == 1
+        walks = Things.walks
+        for _ in range(10):
+            assert store.get('k') == 1
+        assert Things.walks == walks                    # found: remembered
+
+        second = Store('cached_store')
+        second._runtime_data['k'] = 2
+        things[things.index(first)] = second            # replaced in place
+        assert store.get('k') == 2
+        things.insert(0, object())                      # moved along
+        assert store.get('k') == 2
+        second.store_name = 'renamed'                   # no longer this store
+        assert store.get('k') is None
+        second.store_name = 'cached_store'
+        things.remove(second)                           # gone
+        assert store.get('k') is None
+        logic.editor_state.things = Things([Store('cached_store')])   # a new level
+        logic.editor_state.things[0]._runtime_data['k'] = 3
+        assert store.get('k') == 3
+    finally:
+        registry.clear()
+        registry.update(saved)

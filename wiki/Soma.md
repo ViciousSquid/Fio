@@ -87,7 +87,7 @@ Set in the [Property editor](https://github.com/ViciousSquid/Fio/wiki/Property-e
 | 1,024 | 21,409 | ~3,100 |
 | 4,096 | 35,954 | ~15,400 |
 
-A world of 4,096 sleeping bodies costs about 7 µs a step, and about 25 µs with the player in it.
+A world of 4,096 sleeping bodies costs about 7 µs a step, and about 14 µs with the player in it.
 
 ## For plugins
 

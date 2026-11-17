@@ -405,11 +405,14 @@ class StateStore:
     Reached as :meth:`RuntimeAPI.state`.
     """
 
-    __slots__ = ('_logic', 'name')
+    __slots__ = ('_logic', 'name', '_found', '_found_in', '_found_at')
 
     def __init__(self, logic, name):
         self._logic = logic
         self.name = str(name)
+        self._found = None          # the store's entity, as last found
+        self._found_in = None       # ... in this things list
+        self._found_at = -1         # ... at this index (or its length, if none)
 
     @staticmethod
     def _registry() -> dict:
@@ -420,10 +423,27 @@ class StateStore:
             return GlobalStore._fallback
 
     def _entity(self):
-        """The level's LogicState entity for this store, or None."""
-        state = getattr(self._logic, 'editor_state', None)
-        for thing in getattr(state, 'things', ()) or ():
+        """The level's LogicState entity for this store, or None.
+
+        Found once and remembered: a read or a write must not cost a walk
+        over every thing in the level. What was found is checked each time
+        -- the entity is still at its place in the same list and still
+        names this store; or, where there was none, the list is the same
+        list at the same length -- and looked for again when it is not.
+        """
+        things = getattr(getattr(self._logic, 'editor_state', None), 'things', None)
+        if things is self._found_in and things is not None:
+            found, at = self._found, self._found_at
+            if found is None:
+                if len(things) == at:
+                    return None
+            elif (at < len(things) and things[at] is found
+                    and found.store_name == self.name):
+                return found
+        self._found, self._found_in, self._found_at = None, things, len(things or ())
+        for at, thing in enumerate(things or ()):
             if getattr(thing, 'store_name', None) == self.name and hasattr(thing, 'apply_value'):
+                self._found, self._found_at = thing, at
                 return thing
         return None
 

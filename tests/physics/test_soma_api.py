@@ -283,3 +283,64 @@ def test_a_player_whose_physics_is_off_is_not_handed_to_physics():
     assert prop.pos[0] == 0.0 and world.get_body(prop).awake is False
     world.step(1.0 / 60.0, player)
     assert prop.pos[0] > 0.0
+
+
+def test_queries_agree_with_reading_every_body_whatever_their_size():
+    """The index is an optimisation: a box of a few cells, of many columns,
+    or of the whole world finds exactly the bodies whose boxes it overlaps."""
+    rng = np.random.default_rng(11)
+    props = [_prop((float(x), 0.0, float(z)))
+             for x, z in rng.uniform(-6000.0, 6000.0, size=(150, 2))]
+    world = _build(*props)
+    centre = world._position + world._offset
+    half = world._half
+    for _ in range(60):
+        middle = rng.uniform(-6000.0, 6000.0, size=3) * (1.0, 0.0, 1.0)
+        reach = float(rng.choice([30.0, 400.0, 3000.0, 40000.0, 1e9]))
+        lo = (middle - reach).astype(np.float32)
+        hi = (middle + reach).astype(np.float32)
+        expected = np.flatnonzero(np.all((centre + half > lo) & (centre - half < hi), axis=1))
+        found = world.bodies_in_box(lo, hi)
+        assert [id(e) for e in found] == [id(props[i]) for i in expected]   # in row order
+        near = np.flatnonzero(np.linalg.norm(centre - middle, axis=1) <= reach)
+        assert {id(e) for e in world.bodies_near(middle, reach)} >= {
+            id(props[i]) for i in near if np.linalg.norm(centre[i] - middle) < reach - 1.0}
+
+
+def test_a_query_that_makes_no_sense_finds_nothing_and_raises_nothing():
+    world = _build(_prop((0.0, 0.0, 0.0)))
+    nan, inf = float('nan'), float('inf')
+    assert world.bodies_in_box([nan, 0, 0], [1, 1, 1]) == []
+    assert world.bodies_in_box([50, 0, 0], [-50, 100, 100]) == []      # inside out
+    assert world.bodies_near([nan, 0.0, 0.0], 100.0) == []
+    assert len(world.bodies_in_box([-inf] * 3, [inf] * 3)) == 1        # everywhere
+    assert world.raycast([nan, 0, 0], [1, 0, 0], 100.0) is None
+    assert world.raycast([0, 0, 0], [inf, 0, 0], 100.0) is None
+    assert world.raycast([0, 0, 0], [1, 0, 0], nan) is None
+    assert world.raycast([0, 0], [1, 0, 0], 100.0) is None
+    assert world.raycast('here', [1, 0, 0], 100.0) is None
+    entity, _d = world.raycast([-300.0, HEIGHT * 0.5, 0.0], [1, 0, 0], inf)
+    assert entity is not None                                          # no end to it
+
+
+def test_a_ray_meets_the_nearest_of_the_bodies_along_it_at_any_angle():
+    rng = np.random.default_rng(5)
+    props = [_prop((float(x), 0.0, float(z)))
+             for x, z in rng.uniform(-1500.0, 1500.0, size=(80, 2))]
+    world = _build(*props)
+    centre = (world._position + world._offset).astype(np.float64)
+    half = world._half.astype(np.float64)
+    for _ in range(80):
+        origin = rng.uniform(-1500.0, 1500.0, size=3) * (1.0, 0.0, 1.0) + (0.0, HEIGHT * 0.5, 0.0)
+        ray = rng.normal(size=3) * (1.0, 0.05, 1.0)
+        ray /= np.linalg.norm(ray)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            near, far = (centre - half - origin) / ray, (centre + half - origin) / ray
+        enter, leave = np.minimum(near, far).max(axis=1), np.maximum(near, far).min(axis=1)
+        hit = (enter <= leave) & (leave >= 0.0) & (enter <= 2000.0)
+        found = world.raycast(origin, ray, 2000.0)
+        if not hit.any():
+            assert found is None
+            continue
+        distance = np.where(hit, np.maximum(enter, 0.0), np.inf)
+        assert found is not None and found[1] == pytest.approx(distance.min(), abs=1e-3)
