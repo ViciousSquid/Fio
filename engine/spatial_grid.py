@@ -36,6 +36,7 @@ import glm
 import numpy as np
 
 from . import brush_placement as _placement
+from . import mesh_columns
 from .brush_placement import collision_shape, shared_bulk_boxes, world_bounds
 from .mover_table import travel_range
 from .constants import is_water_brush, brush_aabb_bounds
@@ -151,6 +152,7 @@ class _CellRows:
         #: What it is now is asked of it (SpatialGrid.columns).
         self.shaped = np.fromiter(
             ('geometry' in b or bool(b.get('is_mover') or b.get('is_door'))
+             or b.get('_collision_mode') == 'mesh'
              for b in brushes), dtype=np.bool_, count=count)
         self.movers = []
         for row, brush in enumerate(brushes):
@@ -571,10 +573,24 @@ class SpatialGrid:
             return bottom, top
         brushes = rows.brushes
         for brush_row in np.unique(row[shaped]).tolist():
-            planes = _world_planes(brushes[brush_row])
+            brush = brushes[brush_row]
+            at = np.flatnonzero(row == brush_row)
+            if brush.get('_collision_mode') == 'mesh':
+                # A Prop whose Collision Shape is Mesh: its model's triangles
+                # (engine.mesh_columns), prepared once and kept on the proxy.
+                mesh = brush.get('_mesh_columns')
+                if mesh is None:
+                    mesh = brush['_mesh_columns'] = (
+                        mesh_columns.prepare(brush.get('_mesh_triangles')),)
+                if mesh[0] is None:
+                    continue                # nothing usable: its box
+                b, t = mesh_columns.column(mesh[0], x[at], z[at])
+                bottom[at] = b
+                top[at] = t
+                continue
+            planes = _world_planes(brush)
             if planes is None:
                 continue                    # its box is its shape
-            at = np.flatnonzero(row == brush_row)
             b, t = _column(planes, x[at], z[at])
             bottom[at] = b
             top[at] = t

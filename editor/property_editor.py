@@ -2615,19 +2615,24 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Bounciness:", bounciness_spin)
         self._widgets['prop_bounciness_spin'] = bounciness_spin
 
-        shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
+        # Two shapes, both taken from the model: a box around it (AABB, the
+        # default and the cheap one) or its actual triangles (Mesh). Physics
+        # honours the choice. 'auto', which older maps hold, is AABB.
+        shape_mode = str(thing.properties.get('collision_shape', 'aabb')).lower()
         shape_labels = {
-            'auto': 'Automatic',
             'aabb': 'AABB',
             'mesh': 'Mesh',
         }
         shape_combo = _make_combo(
             list(shape_labels.values()),
-            shape_labels.get(shape_mode, 'Automatic'),
+            shape_labels.get(shape_mode, 'AABB'),
             None,
             tooltip=(
-                "Automatic uses mesh collision where supported and otherwise "
-                "uses the model bounds. AABB always uses a box around the model."
+                "AABB: collisions use a box derived from the model's bounds. "
+                "Cheap, and the steady choice for anything stacked.\n"
+                "Mesh: collisions use the model's actual shape -- other physics "
+                "objects rest on its real surface and are stopped by its real "
+                "sides. Costs more, in proportion to the model's triangles."
             ),
         )
         reverse_shape_labels = {label: value for value, label in shape_labels.items()}
@@ -2635,7 +2640,7 @@ class PropertyEditor(QWidget):
         def on_shape_changed(label):
             self.update_object_prop(
                 'collision_shape',
-                reverse_shape_labels.get(label, 'auto'),
+                reverse_shape_labels.get(label, 'aabb'),
             )
 
         shape_combo.currentTextChanged.connect(on_shape_changed)

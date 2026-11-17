@@ -267,7 +267,7 @@ def test_prop_exposes_mass_and_collision_shape_defaults():
     assert prop.properties['mass'] == 1.0
     assert prop.properties['no_collision'] is True
     assert prop.properties['physics_enabled'] is False
-    assert prop.properties['collision_shape'] == 'auto'
+    assert prop.properties['collision_shape'] == 'aabb'     # the default, and the cheap one
 
 
 def test_aabb_collision_shape_skips_mesh_collision(real_logic):

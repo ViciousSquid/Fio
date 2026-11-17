@@ -124,11 +124,15 @@ def test_the_scene_hierarchy_row_selects_the_terrain_even_when_locked(window):
     window.set_terrain_locked(True)
     window.set_selected_objects([])
     tree = window.scene_hierarchy.tree
-    row = next(item for item in tree.findItems("", Qt.MatchContains | Qt.MatchRecursive)
-               if item.data(0, Qt.UserRole) == ('terrain', 0))
+
+    def terrain_row():
+        return next(item for item in tree.findItems("", Qt.MatchContains | Qt.MatchRecursive)
+                    if item.data(0, Qt.UserRole) == ('terrain', 0))
 
     tree.clearSelection()
-    row.setSelected(True)
+    # Looked up again: a selection change rebuilds the list, and a row held
+    # from before it is a deleted item.
+    terrain_row().setSelected(True)
 
     assert window.terrain_selected, "the row is how a locked terrain is reached"
     assert _panel(window)[0].isChecked()

@@ -36,7 +36,7 @@ def test_no_brush_is_a_light_unless_it_is_an_emissive_glow_brush():
 
     assert len(table.emissive_slots) == 0
     assert table.brush_lights() is None
-    assert not table.emit_params[:table.count].any()
+    assert not table._emissive_of, "a brush that is not a light was recorded as one"
 
 
 def test_an_emissive_glow_brush_lights_in_the_colour_it_glows():
@@ -82,7 +82,7 @@ def test_amounts_that_make_no_light_make_no_light():
     # Not-a-number and not-a-number-at-all read as the default amount; zero
     # and a negative reach are no light.
     assert table.emissive_slots.tolist() == [2, 3]
-    assert np.isfinite(table.emit_params[:table.count]).all()
+    assert np.isfinite(table.brush_lights()[2]).all()
 
 
 def test_ticking_emissive_on_an_open_map_makes_the_brush_a_light():
@@ -251,3 +251,10 @@ def test_the_water_shader_is_unchanged_for_water_that_does_not_glow():
     assert 'uniform float waterEmissive;' in source
     assert 'if (waterEmissive > 0.0) {' in source, (
         "the emissive term is not guarded: it would touch all water")
+
+
+def test_a_brush_that_is_not_a_light_pays_no_bytes_for_one():
+    """The emissive data is kept apart from the per-row columns."""
+    names = {name for name, *_ in rt._COLUMNS}
+
+    assert not {name for name in names if 'emit' in name}, names

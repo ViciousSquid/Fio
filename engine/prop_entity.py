@@ -123,7 +123,7 @@ PROP_DEFAULTS = {
     'collision_size': [0.0, 0.0, 0.0],
     'physics_enabled': False,
     'no_collision': True,
-    'collision_shape': 'auto',
+    'collision_shape': 'aabb',
     'gravity': True,
     'friction': 0.55,
     'linear_damping': 0.08,
@@ -165,7 +165,7 @@ LEGACY_MODEL_DEFAULTS = {
 #: player's hands.
 OIL_BARREL_SETTINGS = {
     'model_path': DEFAULT_MODEL_PATH,
-    'collision_shape': 'auto',
+    'collision_shape': 'aabb',
     'rolls': False,
     'topples': True,
     'bounciness': 0.0,

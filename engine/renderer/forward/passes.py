@@ -931,7 +931,7 @@ class PassesMixin:
         emissive = None
         lights_loc, lights_on, lights_now = -1, 0, 0
         if len(table.emissive_slots):
-            emissive = table.emit_params[brushes, 0] > 0.0
+            emissive = table.is_emissive(brushes)
             if emissive.any():
                 # The count _upload_lights_once just set (and remembers).
                 lights_loc = uniforms['active_lights']
@@ -2281,7 +2281,7 @@ class PassesMixin:
         tints = table.water_tint[brushes]
         # Emissive water glows in its tint. The uniform is touched only when
         # the map has such water, or had and it must be put back.
-        emissive = (table.emit_params[brushes, 0] > 0.0
+        emissive = (table.is_emissive(brushes)
                     if len(table.emissive_slots) else None)
         emissive_loc = uniforms['waterEmissive']
         if emissive_loc is None:

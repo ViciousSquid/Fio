@@ -18,6 +18,7 @@ import glm
 
 from ..change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
 from ..brush_placement import world_box
+from .. import mesh_columns
 from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points
 from ..spatial_grid import SpatialGrid
 from . import api
@@ -146,6 +147,11 @@ class PhysicsBody:
         #: Registered or re-registered since the rows were last packed: its
         #: descriptor is taken as it is, not carried over.
         self._fresh = True
+        #: A body whose Collision Shape is Mesh: its model's triangles as
+        #: engine.mesh_columns reads them, and where the body was when they
+        #: were taken. None for a box (AABB), which is every other body.
+        self._mesh = None
+        self._mesh_origin = (0.0, 0.0, 0.0)
 
     @property
     def _index(self):
@@ -567,6 +573,11 @@ class Soma:
         # Set at pack time: a world with nothing rolling, bouncy or heavy --
         # most maps -- never enters that code.
         self._any_rolls = False
+        #: Whether any body's Collision Shape is Mesh; while none is, nothing
+        #: here looks at a mesh.
+        self._any_mesh = False
+        self._meshed = np.zeros(0, dtype=np.bool_)
+        self._steep_bodies = None
         self._any_spin = False
         self._any_bounce = False
         self._any_heavy = False
@@ -608,6 +619,13 @@ class Soma:
         half, offset = self._shape_from_brush(entity, brush)
         body.rest_callback = rest_callback
         body._fresh = True
+        body._mesh = None
+        if brush.get('_collision_mode') == 'mesh':
+            # Collision Shape: Mesh. Other bodies meet this one's actual
+            # surface (see _pair_columns), not the box around it.
+            body._mesh = mesh_columns.prepare(brush.get('_mesh_triangles'))
+            origin = getattr(entity, 'pos', (0.0, 0.0, 0.0))
+            body._mesh_origin = (float(origin[0]), float(origin[1]), float(origin[2]))
 
         # Keep registration descriptors on the handle until packing. This is
         # construction-time Python work, not physics work.
@@ -688,6 +706,7 @@ class Soma:
         self._tier = np.zeros(n, dtype=np.int8)
         self._pending_settle = np.empty(n, dtype=np.bool_)
         self._rolls = np.zeros(n, dtype=np.bool_)
+        self._meshed = np.zeros(n, dtype=np.bool_)
         self._bounce = np.zeros(n, dtype=np.float32)
         self._orientation = np.zeros((n, 4), dtype=np.float64)
         self._orientation[:, 0] = 1.0
@@ -734,6 +753,7 @@ class Soma:
             self._solid[i] = solid
             self._physics_enabled[i] = physics_enabled
             self._rolls[i] = rolls
+            self._meshed[i] = body._mesh is not None
             self._bounce[i] = bounce
             if rolls:
                 # A rolling body's turn comes from its rolling, not a fixed spin.
@@ -745,6 +765,7 @@ class Soma:
                 self._orientation[i] = self._entity_orientation(entity)
 
         self._any_topples = bool(self._topples.any())
+        self._any_mesh = bool(self._meshed.any())
         if self._any_topples:
             self._lie_as_placed()
         if carried is not None:
@@ -1898,8 +1919,51 @@ class Soma:
                 pair_hi = np.concatenate((pair_hi, bodies[2]))
                 other = np.concatenate((other, bodies[3]))
                 row = np.concatenate((row, np.full(count, -1, dtype=np.int64)))
-                shaped = np.concatenate((shaped, np.zeros(count, dtype=np.bool_)))
+                if self._any_mesh:
+                    # A body whose Collision Shape is Mesh is met as its
+                    # model's surface -- while it stands as it was made: one
+                    # that has been knocked over, or rolls, is its box.
+                    them = bodies[3]
+                    meshed = self._meshed[them] & (self._lying[them] == 0)
+                    if self._any_rolls:
+                        meshed &= ~self._rolls[them]
+                else:
+                    meshed = np.zeros(count, dtype=np.bool_)
+                shaped = np.concatenate((shaped, meshed))
         return _Pairs(query, pair_lo, pair_hi, offset, half, other, row, shaped, boxes)
+
+    def _pair_columns(self, pairs, mask, x, z):
+        """``(bottom, top)``: the solid column of each shaped pair in *mask*
+        over its points ``(x[k, j], z[k, j])`` -- the world's brushes and
+        Mesh props from the grid (:meth:`SpatialGrid.columns`), another
+        body's from its own mesh, where that body is now."""
+        row = pairs.row[mask]
+        if not self._any_mesh:
+            return self.spatial_grid.columns(pairs.rows, row, x, z)
+        world = row >= 0
+        if world.all():
+            return self.spatial_grid.columns(pairs.rows, row, x, z)
+        x = np.asarray(x, dtype=np.float64)
+        z = np.asarray(z, dtype=np.float64)
+        bottom = np.full(x.shape, np.nan)
+        top = np.full(x.shape, np.nan)
+        if world.any():
+            b, t = self.spatial_grid.columns(pairs.rows, row[world], x[world], z[world])
+            bottom[world], top[world] = b, t
+        others = pairs.other[mask]
+        entities = self._entities
+        for them in np.unique(others[~world]).tolist():
+            body = self.bodies.get(id(entities[them]))
+            if body is None or body._mesh is None:
+                continue
+            at = np.flatnonzero(~world & (others == them))
+            now = self._position[them]
+            origin = body._mesh_origin
+            shift = (float(now[0]) - origin[0], float(now[1]) - origin[1],
+                     float(now[2]) - origin[2])
+            b, t = mesh_columns.column(body._mesh, x[at], z[at], shift)
+            bottom[at], top[at] = b, t
+        return bottom, top
 
     def _support_points(self, centre, half):
         """The five points a body stands on -- its centre and four inside its
@@ -2044,6 +2108,10 @@ class Soma:
                 incoming = velocity[query[met], axis].copy()
             else:
                 met = None
+        steep_bodies = self._steep_bodies if steep is not None else None
+        if steep_bodies is not None:
+            # Read before the wall's answer below changes its speed.
+            steep_incoming = velocity[steep_bodies[0], axis].copy()
         if self._any_bounce:
             # Bounce off the wall if bouncy enough.
             hit_velocity = velocity[hit, axis]
@@ -2063,6 +2131,19 @@ class Soma:
             # keeps its speed (and its distance). The rest met a wall.
             walled = ~knocked & (closing > 0.0)
             velocity[mine[walled], axis] = answered[walled]
+        if steep_bodies is not None:
+            # Stopped by a Mesh body's surface rather than a box's face: the
+            # same sharing of momentum, with the body whose surface it was.
+            mine, others = steep_bodies
+            moving = steep_incoming != 0.0
+            if moving.any():
+                mine, others, incoming = mine[moving], others[moving], steep_incoming[moving]
+                answered = velocity[mine, axis].copy()
+                velocity[mine, axis] = incoming
+                knocked, closing = self._knock(axis, incoming > 0.0, mine, others,
+                                               velocity, indices)
+                walled = ~knocked & (closing > 0.0)
+                velocity[mine[walled], axis] = answered[walled]
 
     def _report_contacts(self, axis, hit_rows, speeds, indices, query, other,
                          ahead, behind, lo, hi, stop, back_stop):
@@ -2111,12 +2192,20 @@ class Soma:
         x, z = self._support_points(centre, half)
         blocked = np.zeros(len(centre), dtype=np.bool_)
         grid = self.spatial_grid
+        self._steep_bodies = None
         if shaped is not None:
             query = pairs.query[shaped]
-            bottom, top = grid.columns(pairs.rows, pairs.row[shaped], x[query], z[query])
+            bottom, top = self._pair_columns(pairs, shaped, x[query], z[query])
             in_way = ((top > limit[query, None])
                       & (bottom < bmax[query, 1:2] - self.CONTACT_SKIN)).any(axis=1)
             blocked[query[in_way]] = True
+            if self._any_mesh and in_way.any():
+                # Stopped by another body's surface: that body is knocked
+                # on, as one met at its box's face is (_sweep_axis).
+                others = pairs.other[shaped][in_way]
+                struck = others >= 0
+                if struck.any():
+                    self._steep_bodies = (query[in_way][struck], others[struck])
         if terrain is not None:
             heights = grid.terrain_heights(x, z)
             blocked |= (heights > limit[:, None]).any(axis=1)
@@ -2227,6 +2316,7 @@ class Soma:
         px, pz, bottom = self._support_offsets(indices)
         ray_y = np.maximum(bottom, previous_bottom.astype(np.float64)) + 1.0
         uneven = pairs.any_shaped or terrain is not None
+        body_top = body_under = None
         # The ground under each support point, where anything uneven is near;
         # for boxes alone the highest top is all there is to know.
         under_point = np.full(px.shape, -np.inf) if uneven else None
@@ -2262,8 +2352,20 @@ class Soma:
             if pairs.any_shaped:
                 shaped = pairs.shaped
                 q = query[shaped]
-                _base, top = grid.columns(pairs.rows, pairs.row[shaped], px[q], pz[q])
+                _base, top = self._pair_columns(pairs, shaped, px[q], pz[q])
                 top = np.where(top <= reach[q, None], top, -np.inf)     # NaN: a miss
+                if self._any_mesh:
+                    # The highest of it that is another body's surface: what
+                    # stands there stands on that body (below).
+                    on = other[shaped] >= 0
+                    if on.any():
+                        body_top = np.full(count, -np.inf)
+                        body_under = np.full(count, -1, dtype=np.int64)
+                        tops = np.nan_to_num(top[on], nan=-np.inf).max(axis=1)
+                        for k, row_top, them in zip(q[on].tolist(), tops.tolist(),
+                                                    other[shaped][on].tolist()):
+                            if row_top > body_top[k]:
+                                body_top[k], body_under[k] = row_top, them
                 np.maximum.at(under_point.reshape(-1),
                               (q[:, None] * px.shape[1] + np.arange(px.shape[1])).reshape(-1),
                               top.reshape(-1))
@@ -2274,6 +2376,11 @@ class Soma:
             ground = under_point.max(axis=1)
             # Uneven ground higher than a body's top is the world's.
             support[ground > best] = -1
+            if body_under is not None:
+                # Unless that ground is a Mesh body's own surface.
+                on_body = ((ground > best) & (body_under >= 0)
+                           & (body_top >= ground - 1e-6) & np.isfinite(ground))
+                support[on_body] = body_under[on_body]
             best = np.maximum(best, ground)
             slope = self._slope_under(under_point, pairs.half)
         floors[:] = best
