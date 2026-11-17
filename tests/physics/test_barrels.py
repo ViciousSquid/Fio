@@ -4,14 +4,12 @@ A body that ``topples`` is a box standing up until something knocks it over
 and the same box on its side after. Nothing about tipping is simulated: going
 over is a decision, a swap of two of the box's dimensions, and a quarter turn
 played over a few frames -- so a barrel costs what any other body costs.
-Soma's full tier only; the crude tier is Fio's physics as it was.
 """
 import glm
 import numpy as np
 import pytest
 
-from engine.physics import soma
-from engine.physics.soma.full import Soma, quat_from_rotation
+from engine.physics.soma import Soma, quat_from_rotation
 from engine.prop_entity import (BALL_MODEL_PATH, DEFAULT_MODEL_PATH, Prop,
                                 model_settings, topples_by_default)
 from tests.helpers.worlds import box_brush
@@ -324,15 +322,3 @@ def test_a_rolling_ball_is_not_a_barrel():
     world.wake(ball, [600.0, 0.0, 0.0])
     _run(world, 60)
     assert _lying(world, ball) == 0
-
-
-def test_the_crude_tier_knows_nothing_of_barrels():
-    barrel = _barrel()
-    world = soma.tier_class('crude')(_world(_floor()).spatial_grid)
-    world.rebuild([_drum_brush(barrel)])
-    world.step(1.0 / 60.0)
-    world.wake(barrel, [600.0, 0.0, 0.0])
-    _run(world, 120)
-    assert barrel.properties['rotation'] == [0.0, 0.0, 0.0]
-    assert world.get_body(barrel).half_extents == pytest.approx(
-        (RADIUS, HEIGHT * 0.5, RADIUS))

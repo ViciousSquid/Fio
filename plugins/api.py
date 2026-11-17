@@ -1093,8 +1093,7 @@ class RuntimeAPI:
     @property
     def soma(self) -> Optional[Physics]:
         """:attr:`physics` when the session's physics engine is Soma, else
-        None: for what is Soma's own rather than the contract's -- ``tier``
-        (``'full'`` or ``'crude'``), how much Soma is doing."""
+        None: for what is Soma's own rather than the contract's."""
         physics = self.physics
         if physics is not None and type(physics).__module__.startswith('engine.physics.soma'):
             return physics

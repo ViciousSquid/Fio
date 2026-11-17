@@ -2168,9 +2168,6 @@ class MainWindow(QMainWindow):
 
     def load_config(self):
         self.config.read(self.config_path)
-        # Soma's tier ([Physics] tier, or FIO_PHYSICS_TIER): full or crude.
-        from engine.physics.soma import configure_tier
-        configure_tier(self.config)
         self.apply_window_colours()
 
     def save_config(self):

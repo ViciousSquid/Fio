@@ -2487,7 +2487,7 @@ class PropertyEditor(QWidget):
             "Knocked hard enough -- run into, hit by another prop, dropped, "
             "or stood on a steep slope -- it goes over and lies on its side, "
             "rolling across its length. Picking it up stands it up again. "
-            "Full physics tier only; a prop that rolls like a ball does not."
+            "A prop that rolls like a ball does not."
         )
         physics_form.addRow("", topples_cb)
         self._widgets['prop_topples_cb'] = topples_cb

@@ -61,7 +61,7 @@ def test_soma_is_a_subsystem_of_the_engine_not_a_plugin():
     soma = physics_factory(DEFAULT_PHYSICS)
     assert DEFAULT_PHYSICS == "Soma"
     assert soma.__module__ == 'engine.physics.soma'
-    assert (ROOT / 'engine' / 'physics' / 'soma' / 'full.py').is_file()
+    assert (ROOT / 'engine' / 'physics' / 'soma.py').is_file()
     assert not list((ROOT / 'plugins').rglob('*physics*.py'))
 
 
@@ -129,9 +129,8 @@ def test_a_plugin_communicates_with_soma_through_the_runtime_api(session):
     physics = runtime.physics
     assert physics is logic.session_runtime.physics_world
     assert isinstance(physics, Physics)
-    # It is Soma, so it is also reachable as Soma, with what is Soma's own.
+    # It is Soma, so it is also reachable as Soma.
     assert runtime.soma is physics
-    assert runtime.soma.tier in ('full', 'crude')
     assert runtime.spatial_grid is logic.session_runtime.spatial_grid
 
     physics.gravity = -100.0

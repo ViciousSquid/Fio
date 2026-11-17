@@ -789,7 +789,7 @@ is how a plugin communicates with it. `physics` is the play session's physics
 engine — Soma, unless another was [registered](#register_physics-api-200) and
 selected — or `None` outside play; fetch it when you use it, since each play
 session has its own. `soma` is the same object when the engine is Soma, for
-what is Soma's own (`tier`). `body(entity)` is the simulated body of a
+what is Soma's own rather than the contract's. `body(entity)` is the simulated body of a
 physics Prop, a live handle. `spatial_grid` is the session's
 `engine.spatial_grid.SpatialGrid`: where the world is (solid brushes and
 their true surfaces, the terrain, movers and doors where they are now, water)
@@ -803,7 +803,6 @@ their true surfaces, the terrain, movers and doors where they are now, water)
 | `set_kinematic(entity, value)` | take a body out of the simulation (you move it) or hand it back |
 | `sync_entity_position(entity, wake=False)` | you moved an entity: take its `pos` as the body's |
 | `set_rest_callback(entity, callback)` | be told when a body comes to rest |
-| `tier` (Soma) | how much Soma is doing: `'full'` or `'crude'` |
 
 ```python
 def on_explosion(self, centre, strength):
@@ -814,18 +813,6 @@ def on_explosion(self, centre, strength):
             physics.wake(prop, [strength * a / 300.0 for a in away])
 ```
 
-**Soma's tiers.** How much Soma does for a body is its tier, chosen for a
-play session:
-
-| Tier | |
-|------|---|
-| `full` (default) | everything: true surfaces (slopes, the terrain), bodies meeting bodies, swept contact |
-| `crude` | Fio's physics exactly as it was before Soma, kept unchanged: boxes against boxes |
-
-It is set in `settings.ini` (`[Physics] tier = crude`), with the
-`FIO_PHYSICS_TIER` environment variable, or with `phys_tier <name>` in the
-console, and takes effect with the next play session.
-
 **Where Soma sits.** Fio's core is modular: the renderer and the physics
 engine are each a subsystem behind a contract, and the rest of the engine
 drives them through it and nothing else, so either can be worked on -- or
@@ -834,7 +821,7 @@ swapped out -- without the rest of the engine knowing. Soma's contract is `engin
 game's rules Soma honours (`SV_GRAVITY`, `HEAVY_MASS`, `CRUSH_DAMAGE`). Two
 rules come with it: the world is the `SpatialGrid`'s — Soma keeps no copy —
 and a moved body is handed back by *assigning* `entity.pos`. To improve
-Soma, work in `engine/physics/soma/`; nothing outside `engine/physics/`
+Soma, work in `engine/physics/soma.py`; nothing outside `engine/physics/`
 names it (`tests/physics/test_physics_contract.py` holds that line).
 
 ### Runtime spawn / despawn

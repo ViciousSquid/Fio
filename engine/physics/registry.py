@@ -1,8 +1,6 @@
 """The physics registry: name -> factory.
 
-``"Soma"`` is Fio's built-in physics; how much it does is its tier
-(:mod:`engine.physics.soma`: ``full`` or ``crude``), not another entry here.
-A plugin or developer adds another physics
+``"Soma"`` is Fio's built-in physics. A plugin or developer adds another
 with :func:`register_physics`; a play session creates the selected one with
 :func:`create_physics`. A factory is any callable ``factory(spatial_grid)``
 that returns an object satisfying :class:`engine.physics.api.Physics` --
@@ -18,7 +16,7 @@ import importlib
 DEFAULT_PHYSICS = "Soma"
 
 _factories = {
-    "Soma": "engine.physics.soma:create",
+    "Soma": "engine.physics.soma:Soma",
 }
 
 _selected = DEFAULT_PHYSICS
