@@ -475,7 +475,7 @@ all accumulated time when it runs, so simulation time is not lost.
         t.phase_ms = phase_ms
 
     def _gravity(self):
-        """Gravity from the live PhysicsWorld, the one authority for it."""
+        """Gravity from the live physics, the one authority for it."""
         session = getattr(self.lt, 'session_runtime', None)
         return world_gravity(getattr(session, 'physics_world', None))
 

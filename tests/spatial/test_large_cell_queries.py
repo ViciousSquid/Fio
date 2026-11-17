@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from engine.physics import SpatialGrid, _CellRows, _CELL_OFFSET, _CELL_STRIDE
+from engine.spatial_grid import SpatialGrid, _CellRows, _CELL_OFFSET, _CELL_STRIDE
 from tests.helpers.worlds import box_brush
 
 

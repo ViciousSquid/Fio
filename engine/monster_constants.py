@@ -116,7 +116,7 @@ MONSTER_PROJECTILE_SPRITE_SIZE = (40.0, 40.0)   # billboard size in world units
 # ---------------------------------------------------------------------------
 # Monster physics & collision
 # ---------------------------------------------------------------------------
-# Monsters fall by the live PhysicsWorld's gravity (engine.physics.world_gravity).
+# Monsters fall by the live physics' gravity (engine.physics.world_gravity).
 MONSTER_TERMINAL_VEL   = -500.0
 MONSTER_MIN_WIDTH      = 200.0    # monsters are always at least 200px wide
 MONSTER_WALL_MARGIN    = 100.0    # half of MONSTER_MIN_WIDTH — keep this far from wall surfaces

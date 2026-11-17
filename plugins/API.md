@@ -61,8 +61,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.9.0"` |
-| `API_VERSION_INFO` | `(1, 9, 0)` |
+| `API_VERSION` | `"1.10.0"` |
+| `API_VERSION_INFO` | `(1, 10, 0)` |
 
 History:
 
@@ -120,6 +120,14 @@ History:
   A renderer written for 1.6-1.8 that draws the terrain or implements those
   three members must be updated and declare `api_version = "1.9.0"`; there
   is no shim. Every other plugin loads and behaves unchanged.
+- **1.10.0** — **physics is a plugin boundary**, as the renderer is.
+  [`register_physics`](#register_physics-api-1100) registers an implementation
+  of the `engine.physics.Physics` protocol; the engine drives whichever is
+  selected through that contract and nothing else. `SpatialGrid` -- the solid
+  world, engine core -- moved to `engine.spatial_grid` and is what a physics
+  asks for walls and floors; `from engine.physics import SpatialGrid,
+  PhysicsWorld` still works. Every existing plugin loads and behaves
+  unchanged.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -372,6 +380,41 @@ def register_menu_action(self, label: str, callback, tooltip: str = "") -> None
 ```
 Add an action to the top of the plugin's editor menu. The callback is dispatched
 only while the plugin is enabled.
+
+<a id="register_physics-api-1100"></a>
+```python
+def register_physics(self, name: str, cls) -> bool
+```
+Register a physics under *name* in Fio's physics registry (`"Batched"` is the
+built-in one). API 1.10.0. *cls* is a factory called as `cls(spatial_grid)`
+once per play session — usually the physics class itself — and what it returns
+must satisfy the `engine.physics.Physics` protocol (`engine/physics/api.py` is
+the whole contract, stdlib-only):
+
+- **world controls** — `gravity`, `time_scale`, `friction_scale`,
+  `damping_scale`, `sleep_enabled` (the console's `phys_*` commands), and
+  `player_crushed`, which `step` raises and the engine answers with
+  `CRUSH_DAMAGE`;
+- **lifecycle** — `rebuild(brushes)` over the collision runtime's body brushes
+  (`BODY_BRUSH`), `clear()`, `reset_controls()`;
+- **the tick** — `step(delta, player)`, on the logic thread at 60 Hz;
+- **bodies** — `get_body`, `wake`, `wake_all`, `set_kinematic`,
+  `sync_entity_position`, `set_rest_callback`, `entities_that_changed_cell`.
+
+Two rules come with it:
+
+- **The world is the grid's.** The `SpatialGrid` the factory receives is the
+  single source of truth for the solid world, movers and doors where they are
+  now (`WORLD_QUERIES` lists what it answers). A physics keeps no copy.
+- **Bodies are the engine's entities.** A moved body is handed back by
+  *assigning* `entity.pos`; a changed rotation is written to
+  `properties['rotation']` and journalled with `touch`. Authored properties
+  (`BODY_PROPERTIES`) are read, never rewritten.
+
+`engine.physics.select_physics(name)` — or `phys_engine <name>` in the console
+— makes a registered physics the one the next play session is created with; a
+running session keeps its own. `tests/helpers/physics.py` has the smallest
+conforming implementation.
 
 ```python
 def register_renderer(self, name: str, cls) -> bool

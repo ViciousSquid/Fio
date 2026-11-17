@@ -2,14 +2,14 @@
 
 Fio has always bucketed the world into integer ``(cell_x, cell_z)`` columns of
 :data:`CELL_SIZE` units using ``floor(coord / cell_size)`` — that is what
-:class:`engine.physics.SpatialGrid` does for collision queries and what Big
+:class:`engine.spatial_grid.SpatialGrid` does for collision queries and what Big
 World's streaming lifecycle sits on top of.  The maths used to be written out
 twice, once in each place, which is how two systems that are *supposed* to agree
 about which cell a brush is in end up disagreeing.  It lives here now, and both
 read it from here.
 
-Deliberately stdlib-only — no NumPy, no PyGLM, no Qt.  ``engine.physics`` needs
-PyGLM and the standalone player does not, so putting the shared convention in
+Deliberately stdlib-only — no NumPy, no PyGLM, no Qt.  ``engine.spatial_grid`` needs
+NumPy and PyGLM and the standalone player does not, so putting the shared convention in
 its own module is what lets the player, a plugin and a head-less test all use it
 without dragging the renderer in.
 

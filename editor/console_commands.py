@@ -13,6 +13,7 @@ from engine.change_journal import touch
 from engine.items import ITEM_IDS
 from engine.spatial import set_authored_flag
 from engine.renderer import WATER_QUALITIES, available_renderers
+from engine.physics import available_physics, select_physics, selected_physics
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -90,6 +91,7 @@ class ConsoleCommandHandler:
             'phys_sleep': self.cmd_phys_sleep,
             'phys_info': self.cmd_phys_info,
             'phys_reset': self.cmd_phys_reset,
+            'phys_engine': self.cmd_phys_engine,
             'phys': self.cmd_phys_info,
             'setpos': self.cmd_setpos,
             'pos': self.cmd_pos,
@@ -205,7 +207,7 @@ class ConsoleCommandHandler:
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
     #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
     #: without asking, so a map could throw away the user's unsaved work.
-    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'vsync', 'r_vsync', 'quit', 'botdebug',
+    USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'phys_engine', 'vsync', 'r_vsync', 'quit', 'botdebug',
                                     'monsterdebug'})
 
     def cmd_botdebug(self, args):
@@ -1055,6 +1057,7 @@ entity to drive them from the I/O system.</i><br>
 <b style="color:orange;">phys_sleep</b> on/off/toggle — Automatic body sleeping<br>
 <b style="color:orange;">phys_info</b> — Show global physics controls<br>
 <b style="color:orange;">phys_reset</b> — Restore physics defaults<br>
+<b style="color:orange;">phys_engine</b> [name] — List the registered physics, or choose the one the next Play uses<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
 <b style="color:orange;">cam</b>{sep}<b style="color:orange;">camera</b> [overhead|fp] [seconds] — Tween between overhead &amp; first person (e.g. 'cam 2')<br>
 <b style="color:cyan;">=== Portals ===</b><br>
@@ -2293,7 +2296,7 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info", f"Physics set to {state}")
 
     def _get_physics_world(self):
-        """Return the live PhysicsWorld, or None when play mode is unavailable."""
+        """Return the live physics (engine.physics.Physics), or None when play mode is unavailable."""
         try:
             view_3d = self.main_window.view_3d
             world = view_3d.logic_thread.session_runtime.physics_world
@@ -2379,12 +2382,7 @@ entity to drive them from the I/O system.</i><br>
         world = self._get_physics_world()
         if world is None:
             return
-        world.gravity = float(world.GRAVITY)
-        world.time_scale = float(world.DEFAULT_TIME_SCALE)
-        world.friction_scale = float(world.DEFAULT_FRICTION_SCALE)
-        world.damping_scale = float(world.DEFAULT_DAMPING_SCALE)
-        world.sleep_enabled = bool(world.DEFAULT_SLEEP_ENABLED)
-        world.wake_all()
+        world.reset_controls()
         self.main_window.show_toast("Physics controls reset")
         debug_log(
             "Info",
@@ -2394,6 +2392,27 @@ entity to drive them from the I/O system.</i><br>
             f"damping_scale={world.damping_scale:g}, "
             f"sleep={'ON' if world.sleep_enabled else 'OFF'})"
         )
+
+    def cmd_phys_engine(self, args):
+        """List the registered physics, or choose one: ``phys_engine [name]``.
+
+        Names match case-insensitively. The choice is the next play session's:
+        a running one keeps the physics it was created with.
+        """
+        names = available_physics()
+        wanted = args.split()[0] if args.split() else ""
+        if not wanted:
+            listing = ", ".join(
+                f"<b>{name}</b> (selected)" if name == selected_physics() else name
+                for name in names)
+            debug_log("Info", f"Physics: {listing}")
+            return
+        match = next((name for name in names if name.lower() == wanted.lower()), None)
+        if match is None:
+            debug_log("Warning", f"No physics '{wanted}'. Registered: {', '.join(names)}")
+            return
+        select_physics(match)
+        debug_log("Info", f"Physics: {match} (from the next Play)")
 
     def cmd_pos(self, args):
         """pos — Open the live camera-position floating window."""

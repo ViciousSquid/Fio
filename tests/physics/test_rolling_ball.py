@@ -319,11 +319,11 @@ def test_the_numbered_ball_is_a_ball_at_twice_the_size():
     assert p['scale'] == [2.0, 2.0, 2.0]
 
 
-@pytest.mark.parametrize('count', [8, PhysicsWorld.FLOOR_BATCH_MIN_BODIES],
+@pytest.mark.parametrize('count', [8, PhysicsWorld.FLOOR_BATCH_MIN_POINTS],
                          ids=['few-scalar', 'many-grouped'])
 def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
     """Few bodies settle by raycasts; from the measured crossover on, by one
-    grouped query per cell, never a raycast per body."""
+    batched query of the grid, never a raycast per body."""
     grid = SpatialGrid(cell_size=512.0)
     grid.populate([_floor()])
     calls = []
@@ -336,7 +336,7 @@ def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
     world.rebuild([{'pos': list(b.pos), 'size': [50.0] * 3, '_physics_body': True,
                     '_physics_entity': b, '_collision_mode': 'aabb'} for b in balls])
     assert all(b.pos[1] == pytest.approx(25.0) for b in balls)
-    if count >= PhysicsWorld.FLOOR_BATCH_MIN_BODIES:
+    if 2 * count >= PhysicsWorld.FLOOR_BATCH_MIN_POINTS:
         assert calls == []
     else:
         assert len(calls) == 2 * count

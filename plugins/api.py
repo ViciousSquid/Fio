@@ -86,8 +86,12 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-API_VERSION = "1.9.0"
-API_VERSION_INFO = (1, 9, 0)
+#: * 1.10.0 — physics is a plugin boundary: :meth:`EditorAPI.register_physics`
+#:   registers an implementation of ``engine.physics.Physics``. ``SpatialGrid``
+#:   lives in ``engine.spatial_grid`` (still importable from ``engine.physics``).
+#:   Every existing plugin loads unchanged.
+API_VERSION = "1.10.0"
+API_VERSION_INFO = (1, 10, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -654,6 +658,30 @@ class EditorAPI:
             return False
         from engine.renderer import register_renderer
         return register_renderer(name, cls)
+
+    def register_physics(self, name: str, cls) -> bool:
+        """Register a physics under *name* in Fio's physics registry (API 1.10.0).
+
+        *cls* is a factory called as ``cls(spatial_grid)`` once per play
+        session -- usually the physics class itself. What it returns must
+        satisfy :class:`engine.physics.Physics`: the world controls, the
+        lifecycle (``rebuild`` over the collision runtime's body brushes,
+        ``clear``), the tick (``step``) and the per-body operations the
+        engine's Prop, trigger and cutscene code call. How it simulates is
+        entirely its own; it need not inherit anything from Fio.
+
+        Two rules come with the contract. The solid world is the
+        ``SpatialGrid`` the factory is given, asked live -- a physics keeps
+        no copy of it. And a moved body is handed back by assigning
+        ``entity.pos``, which is what the renderer and every index hear.
+
+        Registering makes it available; ``engine.physics.select_physics(name)``
+        (the console's ``phys_engine``) makes it the one the next play
+        session uses. Works in the editor and the standalone player alike.
+        Returns True.
+        """
+        from engine.physics import register_physics
+        return register_physics(name, cls)
 
     def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
         """Register a Tools-menu action for an editor/developer plugin."""

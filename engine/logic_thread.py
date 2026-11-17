@@ -23,6 +23,7 @@ from .logic_collision import LogicCollision
 from .logic_world import LogicWorld
 from .logic_render import LogicRender
 from .logic_session import LogicSession
+from .physics import CRUSH_DAMAGE
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
 from .prop_runtime import PropSession
@@ -621,7 +622,7 @@ class LogicThread(threading.Thread):
             if getattr(physics_world, 'player_crushed', False):
                 # A heavy body pinned the player against a wall.
                 physics_world.player_crushed = False
-                self.trigger_runtime._apply_player_damage(physics_world.CRUSH_DAMAGE)
+                self.trigger_runtime._apply_player_damage(CRUSH_DAMAGE)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
             self.prop_runtime.sync_physics_positions()

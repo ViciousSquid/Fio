@@ -199,13 +199,16 @@ class LogicSession:
             # Build entity caches before constructing session-local physics.
             logic.world_runtime.build_entity_caches()
 
-            from .physics import PhysicsWorld, SpatialGrid
+            from .physics import create_physics
+            from .spatial_grid import SpatialGrid
 
             self.spatial_grid = SpatialGrid(cell_size=512.0)
             self.spatial_grid.populate(
                 logic.editor_state.brushes + logic.collision_runtime._model_collision_brushes
             )
-            self.physics_world = PhysicsWorld(self.spatial_grid)
+            # Whichever physics is selected (engine.physics.registry): the
+            # engine drives it through the contract and nothing else.
+            self.physics_world = create_physics(self.spatial_grid)
             self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
             logic.monster_ai.set_spatial_grid(self.spatial_grid)
 

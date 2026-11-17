@@ -1,6 +1,6 @@
 """Runtime interaction domain for the unified Prop primitive.
 
-Physics simulation lives in engine.physics. PropSession owns all Prop
+Physics simulation lives behind engine.physics (the contract). PropSession owns all Prop
 interaction state: carrying, collecting, dropping, collection respawns,
 and the Prop spatial index.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .physics import PhysicsWorld, world_gravity
+from .physics import HEAVY_MASS, world_gravity
 from .change_journal import touch
 from .spatial import CellIndex, cell_of_point
 
@@ -328,9 +328,9 @@ class PropSession:
     def _too_heavy(properties):
         """A Prop at the heaviest mass is never picked up, whatever its Carry
         setting says: it is the mass at which the player cannot push it
-        either (PhysicsWorld.HEAVY_MASS)."""
+        either (engine.physics.HEAVY_MASS)."""
         try:
-            return float(properties.get("mass", 1.0)) >= PhysicsWorld.HEAVY_MASS
+            return float(properties.get("mass", 1.0)) >= HEAVY_MASS
         except (TypeError, ValueError):
             return False
 
@@ -657,7 +657,7 @@ class PropSession:
         if raycast_down is None and physics is not None:
             raycast_down = getattr(physics, "raycast_down", None)
 
-        # Dropped props fall by the live PhysicsWorld's gravity, as bodies do.
+        # Dropped props fall by the live physics' gravity, as bodies do.
         drop_gravity = -world_gravity(physics)
         finished = []
         for pid, state in tuple(self._falling.items()):

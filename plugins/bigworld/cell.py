@@ -2,7 +2,7 @@
 Cell abstraction and the streaming lifecycle for Big World.
 
 The 512-unit grid coordinate maths is *not* here: it is the engine's, imported
-from :mod:`engine.spatial`, the same module :class:`engine.physics.SpatialGrid`
+from :mod:`engine.spatial`, the same module :class:`engine.spatial_grid.SpatialGrid`
 buckets collision brushes with. A Big World cell and a spatial-grid cell with
 the same ``(cell_x, cell_z)`` therefore cover the same 512x512 patch of world by
 construction, not by two copies of ``floor(coord / 512)`` happening to agree.
