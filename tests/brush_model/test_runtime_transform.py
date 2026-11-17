@@ -492,6 +492,13 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
         _tick(crowd, ticks)
         rows.refresh_movers()
         _same_rows(rows, CollisionRows(brushes, 1))
+    # A mover table an earlier test left for the collector moves the runtime
+    # stamp when it is finally collected (brush_placement._source_gone): that
+    # is a change, and where in this test it lands depends on what ran before.
+    # Collect now, and look once, so "nothing moved" below is true.
+    import gc
+    gc.collect()
+    rows.refresh_movers()
     gathers = {'n': 0}
     real_boxes = bp.BulkBoxes.boxes
 
