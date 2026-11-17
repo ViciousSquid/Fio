@@ -18,6 +18,14 @@ class StubBody:
         self.awake = False
         self.kinematic = False
         self.rest_callback = None
+        self.rest_listeners = []
+        self.friction = float(entity.properties.get('friction', 0.55))
+        self.grounded = False
+        self.resting_on = None
+
+    @property
+    def position(self):
+        return list(self.entity.pos)
 
 
 class StubPhysics:
@@ -29,6 +37,7 @@ class StubPhysics:
         self.bodies = {}
         self.steps = []
         self.player_crushed = False
+        self.events_wanted = False
         self.reset_controls()
 
     # -- lifecycle
@@ -89,3 +98,54 @@ class StubPhysics:
 
     def entities_that_changed_cell(self):
         return ()
+
+    # -- bodies that come and go
+    def add_body(self, brush):
+        body = StubBody(brush['_physics_entity'], brush)
+        self.bodies[id(body.entity)] = body
+        return body
+
+    def remove_body(self, entity):
+        return self.bodies.pop(id(entity), None) is not None
+
+    # -- pushing
+    def impulse(self, entity, impulse):
+        body = self.get_body(entity)
+        if body is None:
+            return False
+        body.velocity = [v + j / body.mass for v, j in zip(body.velocity, impulse)]
+        body.awake = True
+        return True
+
+    def impulse_radial(self, centre, radius, strength):
+        pushed = self.bodies_near(centre, radius)
+        for entity in pushed:
+            away = [p - c for p, c in zip(entity.pos, centre)]
+            self.impulse(entity, [strength * a / radius for a in away])
+        return pushed
+
+    # -- being told
+    def on_rest(self, entity, callback):
+        body = self.get_body(entity)
+        if body is not None:
+            body.rest_listeners.append(callback)
+
+    def off_rest(self, entity, callback):
+        body = self.get_body(entity)
+        if body is not None and callback in body.rest_listeners:
+            body.rest_listeners.remove(callback)
+
+    def drain_events(self):
+        return []
+
+    # -- asking
+    def bodies_in_box(self, lo, hi):
+        return [body.entity for body in self.bodies.values()
+                if all(l <= p <= h for l, p, h in zip(lo, body.entity.pos, hi))]
+
+    def bodies_near(self, point, radius):
+        return [body.entity for body in self.bodies.values()
+                if sum((p - c) ** 2 for p, c in zip(body.entity.pos, point)) <= radius ** 2]
+
+    def raycast(self, origin, direction, reach):
+        return None

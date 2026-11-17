@@ -23,7 +23,7 @@ from .logic_collision import LogicCollision
 from .logic_world import LogicWorld
 from .logic_render import LogicRender
 from .logic_session import LogicSession
-from .physics import CRUSH_DAMAGE
+from .physics import CRUSH_DAMAGE, PHYSICS_EVENTS
 from .logic_interaction import LogicInteraction
 from .logic_editor import LogicEditor
 from .prop_runtime import PropSession
@@ -619,11 +619,25 @@ class LogicThread(threading.Thread):
         self.prop_runtime.tick(delta, use_key)
         physics_world = self.session_runtime.physics_world
         if physics_world is not None:
-            physics_world.step(delta, self.player_runtime.player)
+            # A player whose own physics is off -- noclip, a spectator's free
+            # camera -- touches no body: it pushes nothing and is pushed by
+            # nothing.
+            player = self.player_runtime.player
+            if not getattr(player, 'physics_enabled', True):
+                player = None
+            # Events are recorded only while a plugin is subscribed to one.
+            plugins = self.plugins
+            wanted = plugins is not None and any(
+                plugins.has_listeners(event) for event in PHYSICS_EVENTS)
+            physics_world.events_wanted = wanted
+            physics_world.step(delta, player)
             if getattr(physics_world, 'player_crushed', False):
                 # A heavy body pinned the player against a wall.
                 physics_world.player_crushed = False
                 self.trigger_runtime._apply_player_damage(CRUSH_DAMAGE)
+            if wanted:
+                for kind, entity, data in physics_world.drain_events():
+                    self._plugin_emit('physics.' + kind, entity=entity, **data)
             # Physics owned those positions for the duration of the step; the
             # Prop domain takes its index back into line now that it is over.
             self.prop_runtime.sync_physics_positions()

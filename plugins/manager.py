@@ -229,6 +229,20 @@ class PluginManager:
     def _load_one(self, mod_name: str):
         try:
             module = importlib.import_module(f"plugins.{mod_name}")
+        except ImportError as exc:
+            # Discovery can start while a *host* module is still importing --
+            # ``engine.prop_entity`` reaches ``editor``, whose initialiser
+            # loads plugins, and a plugin that imports ``Prop`` then meets
+            # the half-built module. That is the order things were imported
+            # in, not a broken plugin: it is retried by the next call, when
+            # the outer import has finished, instead of being dropped for
+            # the life of the process.
+            if 'partially initialized module' in str(exc):
+                self._deferred.add(mod_name)
+                self._debug(f"Plugin '{mod_name}' met a module still importing; will retry")
+                return
+            self._log(f"Failed to import plugin '{mod_name}':\n{traceback.format_exc()}")
+            return
         except Exception:
             self._log(f"Failed to import plugin '{mod_name}':\n{traceback.format_exc()}")
             return

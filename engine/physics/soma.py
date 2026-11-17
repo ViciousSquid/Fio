@@ -138,7 +138,12 @@ class PhysicsBody:
         self.world = world
         self.entity = entity
         self.entity_id = entity_id
+        #: The engine's own rest handler (a Prop's OnRest), and anyone else's.
         self.rest_callback = None
+        self.rest_listeners = []
+        #: Registered or re-registered since the rows were last packed: its
+        #: descriptor is taken as it is, not carried over.
+        self._fresh = True
 
     @property
     def _index(self):
@@ -167,6 +172,46 @@ class PhysicsBody:
     def mass(self):
         i = self._index
         return float(self.world._mass[i]) if i is not None else 1.0
+
+    @mass.setter
+    def mass(self, value):
+        i = self._index
+        if i is not None:
+            world = self.world
+            world._mass[i] = max(0.01, float(value))
+            world._any_heavy = bool(np.any(
+                world._physics_enabled & world._solid
+                & (world._mass >= world.HEAVY_MASS)))
+
+    @property
+    def position(self):
+        """The body's origin (its entity's ``pos``), as physics has it."""
+        i = self._index
+        if i is None:
+            return [0.0, 0.0, 0.0]
+        return self.world._position[i].tolist()
+
+    @property
+    def grounded(self):
+        """Whether it was on the ground when it was last stepped."""
+        i = self._index
+        return bool(self.world._grounded[i]) if i is not None else False
+
+    @property
+    def resting_on(self):
+        """The entity whose body this one stands on, or None (the world, or
+        nothing)."""
+        i = self._index
+        if i is None:
+            return None
+        support = int(self.world._support[i])
+        return self.world._entities[support] if support >= 0 else None
+
+    @property
+    def toppled(self):
+        """Whether it is lying on its side (a body that ``topples``)."""
+        i = self._index
+        return bool(self.world._lying[i]) if i is not None else False
 
     # ------------------------------------------------------------------
     # Shape and authored-material accessors.
@@ -220,10 +265,23 @@ class PhysicsBody:
         i = self._index
         return bool(self.world._gravity[i]) if i is not None else True
 
+    @gravity.setter
+    def gravity(self, value):
+        i = self._index
+        if i is not None:
+            self.world._gravity[i] = 1.0 if value else 0.0
+            self.world._wake_index(i)
+
     @property
     def friction(self):
         i = self._index
         return float(self.world._friction[i]) if i is not None else 0.55
+
+    @friction.setter
+    def friction(self, value):
+        i = self._index
+        if i is not None:
+            self.world._friction[i] = max(0.0, min(1.0, float(value)))
 
     @property
     def linear_damping(self):
@@ -270,6 +328,7 @@ class PhysicsBody:
 
     def clear(self):
         self.rest_callback = None
+        self.rest_listeners = []
 
 
 class Soma:
@@ -383,6 +442,11 @@ class Soma:
         self._indices = {}
 
         self._entities = []
+        #: The entities as last packed, by row (see _pack).
+        self._entities_before = []
+        #: Whether anyone wants to be told what happens (drain_events).
+        self.events_wanted = False
+        self._events = []
         self._velocity = np.empty((0, 3), dtype=np.float32)
         self._position = np.empty((0, 3), dtype=np.float32)
         self._offset = np.empty((0, 3), dtype=np.float32)
@@ -429,8 +493,10 @@ class Soma:
         for body in self.bodies.values():
             body.clear()
         self.bodies.clear()
-        self._indices.clear()
+        self._indices = {}
         self._entities.clear()
+        self._entities_before = []
+        self._events = []
         self._velocity = np.empty((0, 3), dtype=np.float32)
         self._position = np.empty((0, 3), dtype=np.float32)
         self._offset = np.empty((0, 3), dtype=np.float32)
@@ -508,6 +574,12 @@ class Soma:
         #: Set by rebuild(): the first step wakes floating NEAR bodies.
         self._wake_floating_pending = False
 
+    #: The columns the simulation writes: carried over a repack for every
+    #: body that was not registered afresh.
+    _CARRIED = ('_position', '_velocity', '_awake', '_kinematic', '_orientation',
+                '_half', '_offset', '_lying', '_stand_half', '_stand_offset',
+                '_tip_left', '_tip_sign', '_tip_from', '_grounded')
+
     @staticmethod
     def _shape_from_brush(entity, brush):
         # The body is the brush's derived box (brush_placement) -- an angled
@@ -533,6 +605,7 @@ class Soma:
         props = getattr(entity, 'properties', {})
         half, offset = self._shape_from_brush(entity, brush)
         body.rest_callback = rest_callback
+        body._fresh = True
 
         # Keep registration descriptors on the handle until packing. This is
         # construction-time Python work, not physics work.
@@ -576,6 +649,25 @@ class Soma:
             for i, entity in enumerate(self._entities)
             if i < len(self._pending_settle)
         }
+
+        # Bodies that were packed before and have not been registered again
+        # keep everything about them that the simulation has changed: adding
+        # or removing one body must not stop the others where they are.
+        old_index = self._indices
+        self._indices = {}
+        kept_new, kept_old = [], []
+        for i, entity in enumerate(self._entities):
+            was = old_index.get(id(entity))
+            if was is not None and not self.bodies[id(entity)]._fresh:
+                kept_new.append(i)
+                kept_old.append(was)
+        carried = None
+        if kept_new:
+            kept_old = np.asarray(kept_old, dtype=np.int64)
+            carried = {name: getattr(self, name)[kept_old] for name in self._CARRIED}
+            # What each stood on, by entity: rows are renumbered below.
+            stood_on = [self._entities_before[int(row)] if row >= 0 else None
+                        for row in self._support[kept_old]]
 
         self._position = np.empty((n, 3), dtype=np.float32)
         self._offset = np.empty((n, 3), dtype=np.float32)
@@ -653,6 +745,18 @@ class Soma:
         self._any_topples = bool(self._topples.any())
         if self._any_topples:
             self._lie_as_placed()
+        if carried is not None:
+            kept_new = np.asarray(kept_new, dtype=np.int64)
+            for name, values in carried.items():
+                getattr(self, name)[kept_new] = values
+            for row, entity in zip(kept_new.tolist(), stood_on):
+                support = self._indices.get(id(entity), -1) if entity is not None else -1
+                self._support[row] = support
+                if support >= 0:
+                    self._any_support = True
+        for body in self.bodies.values():
+            body._fresh = False
+        self._entities_before = list(self._entities)
         self._any_rolls = bool(self._rolls.any())
         self._any_spin = bool(self._angular_velocity.any())
         self._any_bounce = bool(self._bounce.any())
@@ -744,9 +848,217 @@ class Soma:
             self._velocity[index] = 0.0
 
     def set_rest_callback(self, entity, callback):
+        """The engine's own rest handler for *entity* (a Prop's OnRest). One
+        slot, and the engine's: anything else listens with :meth:`on_rest`."""
         body = self.get_body(entity)
         if body is not None:
             body.set_rest_callback(callback)
+
+    def on_rest(self, entity, callback):
+        """Also call ``callback(entity)`` each time *entity*'s body comes to
+        rest. Any number may listen; none replaces another."""
+        body = self.get_body(entity)
+        if body is not None and callback not in body.rest_listeners:
+            body.rest_listeners.append(callback)
+
+    def off_rest(self, entity, callback):
+        body = self.get_body(entity)
+        if body is not None and callback in body.rest_listeners:
+            body.rest_listeners.remove(callback)
+
+    def add_body(self, brush):
+        """Add one body while the session runs (a physics Prop spawned in
+        play). The others carry on as they are. Returns its body."""
+        entity = brush.get('_physics_entity')
+        if entity is None:
+            return None
+        body = self.register_body(entity, brush)
+        self._bodies_dirty = True
+        return body
+
+    def remove_body(self, entity):
+        """Remove *entity*'s body (it was despawned). What stood on it falls.
+        Returns whether it had one."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None:
+            return False
+        self._wake_dependents(index)
+        self.bodies.pop(id(entity)).clear()
+        self._entities.pop(index)
+        if not self._entities:
+            self.clear()
+            return True
+        # Rows are renumbered by the repack; nothing reads them in between.
+        self._dirty = True
+        self._bodies_dirty = True
+        self._pack()
+        return True
+
+    def impulse(self, entity, impulse):
+        """Push *entity*'s body: its velocity changes by ``impulse / mass``,
+        so the same push moves a heavy body less. It wakes, with whatever
+        rests on it. Returns whether it had a body to push."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None or self._kinematic[index] or self._inactive[index]:
+            return False
+        push = np.asarray(impulse, dtype=np.float32).reshape(3)
+        if not np.isfinite(push).all():
+            return False
+        self._velocity[index] += push / self._mass[index]
+        self._wake_index(index)
+        return True
+
+    def impulse_radial(self, centre, radius, strength):
+        """Push every body within *radius* of *centre* away from it: an
+        explosion. *strength* is the impulse at the centre, falling to
+        nothing at the radius. Returns the entities pushed."""
+        self._pack()
+        centre = np.asarray(centre, dtype=np.float32).reshape(3)
+        radius = float(radius)
+        if radius <= 0.0 or not self._entities:
+            return []
+        rows = self._rows_in_box(centre - radius, centre + radius)
+        if not rows.size:
+            return []
+        away = self._position[rows] + self._offset[rows] - centre
+        distance = np.linalg.norm(away, axis=1)
+        rows, away, distance = rows[distance < radius], away[distance < radius], distance[distance < radius]
+        if not rows.size:
+            return []
+        # Straight up for one exactly at the centre.
+        direction = np.where(distance[:, None] > 1e-6,
+                             away / np.maximum(distance[:, None], 1e-6),
+                             np.array([0.0, 1.0, 0.0], dtype=np.float32))
+        push = float(strength) * (1.0 - distance / radius)
+        self._velocity[rows] += (direction * (push / self._mass[rows])[:, None]).astype(np.float32)
+        asleep = rows[~self._awake[rows]]
+        self._awake[rows] = True
+        if asleep.size:
+            self._wake_dependents(asleep)
+        return [self._entities[i] for i in rows.tolist()]
+
+    def topple(self, entity, direction=(1.0, 0.0, 0.0)):
+        """Knock *entity*'s body over toward *direction* (its larger
+        horizontal part decides), if it is one that ``topples``, is upright
+        and has room to lie. Returns whether it went over."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None or not self._topples[index] or self._lying[index]:
+            return False
+        along_x = abs(float(direction[0])) >= abs(float(direction[2]))
+        way = float(direction[0] if along_x else direction[2])
+        self._topple(np.array([index]), np.array([0 if along_x else 2]),
+                     np.array([1.0 if way >= 0.0 else -1.0]))
+        if not self._lying[index]:
+            return False
+        self._wake_index(index)
+        return True
+
+    def stand(self, entity):
+        """Stand *entity*'s body up again if it is lying. Returns whether it
+        was."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None or not self._lying[index]:
+            return False
+        self._stand(index)
+        self._bodies_dirty = True
+        self._wake_index(index)
+        return True
+
+    # -- queries ---------------------------------------------------------------
+
+    def _rows_in_box(self, lo, hi):
+        """The simulated, solid, undormant body rows whose box overlaps the
+        box ``lo..hi``, in row order."""
+        rows = self._bodies_at(np.asarray(lo, dtype=np.float32),
+                               np.asarray(hi, dtype=np.float32))
+        return rows[~self._inactive[rows]] if rows.size else rows
+
+    def bodies_in_box(self, lo, hi):
+        """The entities whose (solid, simulated) body overlaps the box
+        ``lo..hi``. Found through the body index: the cost is what is near,
+        not how many bodies there are."""
+        self._pack()
+        if not self._entities:
+            return []
+        return [self._entities[i] for i in self._rows_in_box(lo, hi).tolist()]
+
+    def bodies_near(self, point, radius):
+        """The entities whose body's centre is within *radius* of *point*."""
+        self._pack()
+        if not self._entities:
+            return []
+        point = np.asarray(point, dtype=np.float32).reshape(3)
+        rows = self._rows_in_box(point - float(radius), point + float(radius))
+        if not rows.size:
+            return []
+        centre = self._position[rows] + self._offset[rows]
+        near = np.linalg.norm(centre - point, axis=1) <= float(radius)
+        return [self._entities[i] for i in rows[near].tolist()]
+
+    def raycast(self, origin, direction, reach):
+        """The first body a ray meets: ``(entity, distance)`` or None.
+
+        Against the bodies' boxes, all at once (no loop over bodies); the
+        world's brushes are the spatial grid's to ask about, not physics'.
+        """
+        self._pack()
+        self._index_bodies()
+        rows = self._body_rows
+        if not rows.size:
+            return None
+        rows = rows[~self._inactive[rows]]
+        if not rows.size:
+            return None
+        origin = np.asarray(origin, dtype=np.float64).reshape(3)
+        ray = np.asarray(direction, dtype=np.float64).reshape(3)
+        length = float(np.linalg.norm(ray))
+        if not length > 0.0 or not np.isfinite(ray).all():
+            return None
+        ray = ray / length
+        centre = (self._position[rows] + self._offset[rows]).astype(np.float64)
+        half = self._half[rows].astype(np.float64)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inverse = 1.0 / ray
+            near = (centre - half - origin) * inverse
+            far = (centre + half - origin) * inverse
+        # A ray along an axis is inside or outside that slab for good.
+        flat = ray == 0.0
+        beside = np.zeros(len(rows), dtype=np.bool_)
+        if flat.any():
+            inside = ((origin >= centre - half) & (origin <= centre + half))[:, flat]
+            beside = ~inside.all(axis=1)
+            near[:, flat] = -np.inf
+            far[:, flat] = np.inf
+        enter = np.minimum(near, far).max(axis=1)
+        leave = np.maximum(near, far).min(axis=1)
+        hit = (~beside & (enter <= leave) & (leave >= 0.0)
+               & (enter <= float(reach)))
+        if not hit.any():
+            return None
+        distance = np.where(hit, np.maximum(enter, 0.0), np.inf)
+        first = int(np.argmin(distance))
+        return self._entities[int(rows[first])], float(distance[first])
+
+    # -- events ----------------------------------------------------------------
+
+    def drain_events(self):
+        """What happened since the last call, for whoever set
+        :attr:`events_wanted`: ``(kind, entity, data)`` tuples --
+
+        * ``'rest'``: a body came to rest;
+        * ``'landed'``: it came down onto the ground (``speed``);
+        * ``'contact'``: it ran into something (``other``: the entity it
+          met, or None for the world; ``axis``; ``speed``);
+        * ``'toppled'``: it went over (``axis``, ``sign``).
+
+        Nothing is recorded, at any cost, while nobody wants it.
+        """
+        events, self._events = self._events, []
+        return events
 
     def entities_that_changed_cell(self):
         """Bodies that crossed a cell boundary since the last call.
@@ -1225,6 +1537,10 @@ class Soma:
             self._tip_left[group] = self.TOPPLE_TIME
             self._tip_from[group] = self._orientation[group]
             self._bodies_dirty = True
+            if self.events_wanted:
+                for i, way in zip(group.tolist(), self._tip_sign[group].tolist()):
+                    self._events.append(('toppled', self._entities[i],
+                                         {'axis': along, 'sign': way}))
             # What stood on it has nothing under it now.
             self._wake_dependents(group)
 
@@ -1652,6 +1968,10 @@ class Soma:
         hit_indices = indices[hit]
         target = target[hit].astype(np.float32)
         position[hit, axis] = target
+        if self.events_wanted:
+            self._report_contacts(axis, hit_indices, velocity[hit, axis],
+                                  indices, query, other, ahead, behind, lo, hi,
+                                  stop, back_stop)
         # What it met, if that was another body: the ones at the face it
         # stopped at. Read before the wall's answer below changes its speed.
         met = None
@@ -1682,6 +2002,26 @@ class Soma:
             # keeps its speed (and its distance). The rest met a wall.
             walled = ~knocked & (closing > 0.0)
             velocity[mine[walled], axis] = answered[walled]
+
+    def _report_contacts(self, axis, hit_rows, speeds, indices, query, other,
+                         ahead, behind, lo, hi, stop, back_stop):
+        """Record a ``contact`` for each body row that ran into something on
+        *axis* -- only ever called while somebody wants events."""
+        met = {}
+        soft = other >= 0
+        if soft.any():
+            front = ahead & soft & (lo == stop[query])
+            back = behind & soft & (hi == back_stop[query])
+            for k in np.flatnonzero(front | back).tolist():
+                met[int(indices[query[k]])] = int(other[k])
+        entities = self._entities
+        for row, speed in zip(hit_rows.tolist(), speeds.tolist()):
+            if speed == 0.0:
+                continue                    # stood against it, not run into it
+            against = met.get(row)
+            self._events.append(('contact', entities[row], {
+                'other': entities[against] if against is not None else None,
+                'axis': axis, 'speed': abs(speed)}))
 
     def _blocked_by_surfaces(self, axis, position, old, centre, half, bmin, bmax,
                              pairs, touching, terrain):
@@ -2169,6 +2509,12 @@ class Soma:
             # going downhill is not a series of small falls.
             stick = np.where(self._grounded[rows] & (velocity[:, 1] <= 0.0), follow, 0.0)
             landed = np.isfinite(floors) & (new_bottom <= floors + 1.0 + stick)
+            if self.events_wanted:
+                touched_down = np.flatnonzero(landed & ~self._grounded[rows])
+                entities = self._entities
+                for k in touched_down.tolist():
+                    self._events.append(('landed', entities[int(rows[k])],
+                                         {'speed': max(0.0, -float(velocity[k, 1]))}))
             self._grounded[rows] = landed
             toppling = None
             if landed.any():
@@ -2334,11 +2680,16 @@ class Soma:
                 # body is: a callback may ask anything of this world.
                 bodies = self.bodies
                 entities = self._entities
+                wanted = self.events_wanted
                 for i in rest.tolist():
                     body = bodies[id(entities[i])]
                     callback = body.rest_callback
                     if callback is not None:
                         callback(body.entity)
+                    for listener in tuple(body.rest_listeners):
+                        listener(body.entity)
+                    if wanted:
+                        self._events.append(('rest', body.entity, {}))
 
         if pushed is not None and player is not None:
             # A body the player pushed but a wall held: the player stops at it.

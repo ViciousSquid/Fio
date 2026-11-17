@@ -126,6 +126,20 @@ WORLD_QUERIES = {
 }
 
 
+#: What a physics reports through :meth:`Physics.drain_events`, as the engine
+#: publishes it on the plugin event bus: the event name -> its payload. The
+#: engine asks for events only while something is subscribed to one of
+#: these, so they cost nothing unused.
+PHYSICS_EVENTS = {
+    'physics.rest': 'entity: a body came to rest',
+    'physics.landed': 'entity, speed: a body came down onto the ground',
+    'physics.contact': 'entity, other (the entity it met, or None for the '
+                       'world), axis (0, 1 or 2), speed: a body ran into '
+                       'something',
+    'physics.toppled': 'entity, axis, sign: a body that topples went over',
+}
+
+
 @runtime_checkable
 class Body(Protocol):
     """One simulated body, as :meth:`Physics.get_body` returns it.
@@ -144,6 +158,14 @@ class Body(Protocol):
     awake: bool
     #: Moved by something else (carried, scripted): not simulated, not pushed.
     kinematic: bool
+    #: The body's origin -- its entity's ``pos`` -- as the physics has it.
+    position: Sequence[float]
+    #: Whether it was on the ground when it was last stepped.
+    grounded: bool
+    #: The entity whose body it stands on, or None (the world, or nothing).
+    resting_on: Any
+    #: 0..1 surface friction; assignable, as ``mass`` is.
+    friction: float
 
 
 @runtime_checkable
@@ -218,11 +240,62 @@ class Physics(Protocol):
     def set_rest_callback(self, entity: Any,
                           callback: Optional[Callable[[Any], None]]) -> None:
         """Call ``callback(entity)`` each time *entity*'s body comes to rest
-        (the Prop's OnRest output); None removes it."""
+        (the Prop's OnRest output); None removes it. One slot, and the
+        engine's: anything else listens with :meth:`on_rest`."""
 
     def entities_that_changed_cell(self) -> Sequence[Any]:
         """The entities whose body crossed a grid-column boundary since the
         last call, for indexes filed by cell. Usually empty."""
+
+    # -- bodies that come and go -------------------------------------------------
+    def add_body(self, brush: Mapping[str, Any]) -> Optional[Body]:
+        """Add one body while the session runs (:data:`BODY_BRUSH`): a
+        physics Prop spawned in play. The others carry on as they are."""
+
+    def remove_body(self, entity: Any) -> bool:
+        """Remove *entity*'s body (it was despawned). True if it had one."""
+
+    # -- pushing ----------------------------------------------------------------
+    def impulse(self, entity: Any, impulse: Sequence[float]) -> bool:
+        """Push *entity*'s body: its velocity changes by ``impulse / mass``,
+        and it wakes. True if it had a body to push."""
+
+    def impulse_radial(self, centre: Sequence[float], radius: float,
+                       strength: float) -> Sequence[Any]:
+        """Push every body within *radius* of *centre* away from it, by
+        *strength* at the centre falling to nothing at the radius: an
+        explosion. Returns the entities pushed."""
+
+    # -- being told -------------------------------------------------------------
+    def on_rest(self, entity: Any, callback: Callable[[Any], None]) -> None:
+        """Also call ``callback(entity)`` each time *entity*'s body comes to
+        rest. Any number may listen; none replaces another, nor the engine's
+        own (:meth:`set_rest_callback`)."""
+
+    def off_rest(self, entity: Any, callback: Callable[[Any], None]) -> None:
+        """Stop a listener :meth:`on_rest` added."""
+
+    #: Set by the engine while something is subscribed to a physics event
+    #: (:data:`PHYSICS_EVENTS`): record what happens for :meth:`drain_events`.
+    #: While it is False a physics records nothing.
+    events_wanted: bool
+
+    def drain_events(self) -> Sequence[Tuple[str, Any, Mapping[str, Any]]]:
+        """What happened since the last call: ``(kind, entity, data)``, where
+        ``'physics.' + kind`` is one of :data:`PHYSICS_EVENTS` and *data* its
+        payload beyond the entity."""
+
+    # -- asking -----------------------------------------------------------------
+    def bodies_in_box(self, lo: Sequence[float], hi: Sequence[float]) -> Sequence[Any]:
+        """The entities whose solid, simulated body overlaps the box."""
+
+    def bodies_near(self, point: Sequence[float], radius: float) -> Sequence[Any]:
+        """The entities whose body's centre is within *radius* of *point*."""
+
+    def raycast(self, origin: Sequence[float], direction: Sequence[float],
+                reach: float) -> Optional[Tuple[Any, float]]:
+        """The first body a ray meets within *reach*: ``(entity, distance)``,
+        or None. Bodies only: the world is the spatial grid's to ask."""
 
 
 def world_gravity(world: Optional[Physics] = None) -> float:
