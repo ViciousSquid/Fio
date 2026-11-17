@@ -48,7 +48,7 @@ def test_every_staged_engine_module_is_the_checkouts(staged):
 def test_the_only_modules_staging_adds_are_the_desktops_own_relocated(staged):
     destination, _receipt = staged
     checkout = set(stage_runtime.engine_sources(ROOT))
-    extra = {str(path.relative_to(destination))
+    extra = {path.relative_to(destination).as_posix()
              for path in (destination / 'engine').rglob('*.py')} - checkout
     assert extra == {f'engine/{new}.py' for new in stage_runtime.RUNTIME_MODULES.values()}
     for old, new in stage_runtime.RUNTIME_MODULES.items():
