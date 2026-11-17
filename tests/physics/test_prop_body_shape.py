@@ -2,9 +2,8 @@
 
 Two solid physics Props meet at their models' bounds -- stacked, the upper one
 rests a model's height above the lower; side by side, one stops against the
-other's face -- in both collision shapes a Prop can choose (its model's shape,
-or a box derived from the model). The property editor offers that choice as
-one checkbox.
+other's face -- in every Collision Shape a Prop can choose (Automatic, AABB,
+Mesh), which the property editor offers as a three-way list.
 """
 import pytest
 
@@ -75,21 +74,21 @@ def test_a_pushed_prop_stops_at_the_other_s_face(fio_session):
     session.window.unsaved_changes = False
 
 
-def test_the_collision_shape_is_one_checkbox(main_window):
+def test_the_collision_shape_is_a_three_way_list(main_window):
     from editor.things import Thing
-    from PyQt5.QtWidgets import QCheckBox
+    from PyQt5.QtWidgets import QComboBox
 
     prop = Thing.from_dict(_prop("p", (0, 0, 0)))
     main_window.state.things.append(prop)
     main_window.set_selected_objects([prop])
-    box = main_window.property_editor._widgets.get('prop_collision_shape_cb')
+    combo = main_window.property_editor._widgets.get('prop_collision_shape_combo')
 
-    assert isinstance(box, QCheckBox)
-    assert box.isChecked(), "Automatic (the model's shape where it has one) reads as ticked"
-    box.setChecked(False)
+    assert isinstance(combo, QComboBox)
+    assert [combo.itemText(i) for i in range(combo.count())] == ['Automatic', 'AABB', 'Mesh']
+    assert combo.currentText() == 'Automatic'
+    combo.setCurrentText('AABB')
     assert prop.properties['collision_shape'] == 'aabb'
-    box = main_window.property_editor._widgets.get('prop_collision_shape_cb')
-    box.setChecked(True)
+    combo = main_window.property_editor._widgets.get('prop_collision_shape_combo')
+    combo.setCurrentText('Mesh')
     assert prop.properties['collision_shape'] == 'mesh'
-    assert main_window.property_editor._widgets.get('prop_collision_shape_combo') is None
     main_window.unsaved_changes = False
