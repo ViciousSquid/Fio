@@ -717,6 +717,13 @@ class Decal(Thing):
     text_offset_x, text_offset_y
                 Text Offset: the words moved from the centre, right and up,
                 by up to half the box (-0.5 to 0.5) -- into a plate's panel.
+    emissive    Glows: the decal lights its surroundings from its forward
+                face (the one it is seen from), in the average colour of its
+                image times its tint -- a lit sign, a screen, a lava crack.
+                Off (the default) it is not a light at all and costs nothing.
+    emissive_intensity, emissive_radius
+                How bright that light is and how far it reaches, as a
+                Light's intensity and radius. Read only while emissive.
     """
     #: No icon and no box: what the decal paints is how the editor shows it
     #: (placed, selected, dragged and nudged with the Decal tool).
@@ -727,6 +734,7 @@ class Decal(Thing):
         'texture', 'width', 'height', 'depth',
         'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'tint', 'text', 'font', 'text_colour',
         'text_scale', 'text_offset_x', 'text_offset_y',
+        'emissive', 'emissive_intensity', 'emissive_radius',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -751,6 +759,9 @@ class Decal(Thing):
         self.properties.setdefault('text_scale', 1.0)
         self.properties.setdefault('text_offset_x', 0.0)
         self.properties.setdefault('text_offset_y', 0.0)
+        self.properties.setdefault('emissive', False)
+        self.properties.setdefault('emissive_intensity', 1.0)
+        self.properties.setdefault('emissive_radius', 256.0)
 
     @staticmethod
     def default_texture():

@@ -3393,7 +3393,7 @@ class PropertyEditor(QWidget):
 
         presets = (
             ("None", ""),
-            ("Cloudy sky", "assets/backgrounds/cloudy-sky-panorama.webp"),
+            ("Clouds", "assets/backgrounds/cloudy-sky-panorama.webp"),
             ("Space", "assets/backgrounds/void-panorama-q80.webp"),
         )
         preset_paths = {path for _label, path in presets}
@@ -3405,7 +3405,7 @@ class PropertyEditor(QWidget):
         sky_combo = QComboBox()
         sky_combo.setToolTip(
             "Background panorama used in the editor and Play mode. Choose "
-            "Cloudy sky or Space, or Browse for a custom 360-degree image."
+            "Clouds or Space, or Browse for a custom 360-degree image."
         )
         for label, path in presets:
             sky_combo.addItem(label, path)
@@ -3835,6 +3835,21 @@ class PropertyEditor(QWidget):
                     lambda text: self.update_object_prop('text_colour', text),
                     tooltip="Black lettering, or white (which brightens the surface)")
                 form.addRow(QLabel("Text Colour:"), combo)
+                continue
+
+            # A decal that glows (engine.entity_table: _decal_light).
+            if isinstance(thing, Decal) and key == 'emissive':
+                cb = _make_checkbox(
+                    "Emissive", bool(value),
+                    lambda checked, k=key: self.update_object_prop(k, bool(checked)),
+                    _Style.CHECKBOX)
+                cb.setToolTip(
+                    "The decal lights its surroundings from its forward face, in the\n"
+                    "average colour of its image (times its tint).\n"
+                    "Emissive Intensity and Emissive Radius set how bright and how far.\n"
+                    "Off, the decal is not a light and costs nothing extra.")
+                form.addRow("", cb)
+                self._widgets['decal_emissive'] = cb
                 continue
 
             # Logic gate type.

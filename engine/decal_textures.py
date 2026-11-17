@@ -90,6 +90,51 @@ def read_image(name):
         return None
 
 
+_average = {}
+
+
+def average_colour(name):
+    """The average colour of decal image *name*, ``(r, g, b)`` in 0..1.
+
+    What an emissive decal glows: its pixels weighed by how opaque they are,
+    so a sign's transparent surround does not grey its light. White for no
+    image, or one that cannot be read. Worked out once per image and project
+    (the image is read small, not at full size), and only when a decal asks:
+    a map with no emissive decal never decodes anything here.
+    """
+    white = (1.0, 1.0, 1.0)
+    if not name:
+        return white
+    key = (_where(), str(name))
+    cached = _average.get(key)
+    if cached is not None:
+        return cached
+    colour = white
+    data = read_image(str(name))
+    if data:
+        try:
+            import io
+            import numpy as np
+            from PIL import Image
+            with Image.open(io.BytesIO(data)) as image:
+                image.draft('RGB', (64, 64))          # a JPEG decodes small
+                image = image.convert('RGBA')
+                image.thumbnail((64, 64))
+                pixels = np.asarray(image, dtype=np.float64) / 255.0
+            alpha = pixels[..., 3]
+            weight = float(alpha.sum())
+            if weight > 1e-6:
+                rgb = (pixels[..., :3] * alpha[..., None]).sum(axis=(0, 1)) / weight
+                colour = tuple(float(min(max(v, 0.0), 1.0)) for v in rgb)
+        except Exception:
+            colour = white
+    with _lock:
+        if len(_average) > 512:                       # other projects' images
+            _average.clear()
+        _average[key] = colour
+    return colour
+
+
 def _where():
     """The project the list belongs to: the asset index's root and the
     working directory a relative asset path is read from (or the source)."""
@@ -133,6 +178,7 @@ def _publish():
 
 def refresh():
     """Read the folder again (an image was added); returns ``images()``."""
+    _average.clear()
     where = _where()
     names = _read()
     with _lock:

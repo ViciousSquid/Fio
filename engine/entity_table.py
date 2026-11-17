@@ -71,6 +71,7 @@ head-less test -- still imports this module.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from itertools import chain
@@ -152,6 +153,8 @@ ENT_PROBE           = 1 << 14
 #: rendering are unaffected by the cull, which is deliberate and predates this
 #: projection.
 ENT_CULL_EXEMPT = ENT_LIGHT | ENT_PORTAL
+#: Rows of the frame's light list: Lights, emissive decals and Effects.
+_LIGHT_ROW = ENT_LIGHT | ENT_EFFECT
 
 # Numeric portal direction codes.  3 means both directions.
 PORTAL_DIRECTION_FORWARD = 1
@@ -386,6 +389,11 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_PROP
     if Light is not None and isinstance(thing, Light):
         bits |= ENT_LIGHT
+    elif _is_emissive_decal(props):
+        # A decal that glows is a row of the light list, like an Effect's
+        # fire. One that does not is not a light in any sense: no bit, no
+        # row in light_slots, nothing read or computed for it.
+        bits |= ENT_LIGHT
     if ReflectionProbe is not None and isinstance(thing, ReflectionProbe):
         bits |= ENT_PROBE
     if Effect is not None and isinstance(thing, Effect):
@@ -461,6 +469,42 @@ def _model_transform_columns(thing):
         normal[2][0], normal[2][1], normal[2][2], 0.0,
     ], dtype=np.float32)
     return model, normal_np
+
+
+def _is_emissive_decal(props):
+    if props.get('type') != 'decal':
+        return False
+    value = props.get('emissive', False)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def _decal_light(thing):
+    """``(colour, (intensity, radius), offset)`` of an emissive decal.
+
+    The colour is the average colour of its image (``decal_textures.
+    average_colour``) times its tint; the light stands at the middle of the
+    box's forward face -- the one the decal is seen from, half its depth back
+    along the throw -- so it lights the surface it is on and the room in
+    front, as a lit sign does.
+    """
+    props = _light_props(thing)
+    from engine.decal_table import tint_of
+    from engine.decal_textures import average_colour
+    colour = np.asarray(average_colour(props.get('texture')), dtype=np.float32)
+    colour = colour * np.asarray(tint_of(props.get('tint')), dtype=np.float32)
+    intensity = max(0.0, _light_float(thing, 'emissive_intensity', 1.0))
+    radius = max(0.01, _light_float(thing, 'emissive_radius', 256.0))
+    yaw = math.radians(_light_float(thing, 'yaw', 0.0))
+    pitch = math.radians(_light_float(thing, 'pitch', -90.0))
+    depth = max(0.0, _light_float(thing, 'depth', 32.0))
+    throw = (math.cos(pitch) * math.cos(yaw), math.sin(pitch),
+             -math.cos(pitch) * math.sin(yaw))
+    offset = tuple(-0.5 * depth * axis for axis in throw)
+    if not all(math.isfinite(v) for v in offset + (intensity, radius)):
+        return colour, (0.0, 0.01), (0.0, 0.0, 0.0)
+    return colour, (intensity, radius), offset
 
 
 def _light_props(thing):
@@ -607,6 +651,11 @@ _COLUMNS = (
     ('light_params', (2,), np.float32, 0.0),
     ('light_enabled', (), bool, False),
     ('light_casts_shadows', (), bool, False),
+    #: Where a row's light stands relative to its entity: zero for all but an
+    #: emissive decal, whose light is at the face of its box it shows from.
+    #: Folded into ``pos`` wherever that is written (the row draws nothing
+    #: itself), so every reader of a light's position is unchanged.
+    ('light_offset', (3,), np.float64, 0.0),
     #: Portal topology/render columns. Target links are resolved to integer
     #: entity slots at reconcile.
     ('portal_target_slot', (), np.int32, -1),
@@ -696,7 +745,7 @@ class EntityTable:
         '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
         '_effect_custom_ids', '_effect_custom_paths',
         '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', '_row_list',
-        '_row_list_version', 'rows_read',
+        '_row_list_version', 'rows_read', '_light_offsets',
         '_effect_published', '_effect_static',
         '__weakref__'))
 
@@ -724,6 +773,9 @@ class EntityTable:
         #: Every row, as a slot vector; rebuilt only when the rows change.
         self.all_slots = np.empty(0, dtype=np.int32)
         self.light_slots = np.empty(0, dtype=np.int32)
+        #: Whether any row has ever had a light_offset: while none has, the
+        #: position writes skip the offset altogether.
+        self._light_offsets = False
         self.portal_slots = np.empty(0, dtype=np.int32)
         self.path_node_slots = np.empty(0, dtype=np.int32)
         self.monster_slots = np.empty(0, dtype=np.int32)
@@ -944,6 +996,7 @@ class EntityTable:
         for name, *_ in _COLUMNS:
             setattr(self, name, getattr(peer, name).copy())
         self.count = peer.count
+        self._light_offsets = peer._light_offsets
         self.ids = list(peer.ids)
         self.slot_of_id = dict(peer.slot_of_id)
         self.things = list(peer.things)
@@ -1023,6 +1076,8 @@ class EntityTable:
             moved_slots_array = np.asarray(moved_slots, dtype=np.intp)
             self.pos[moved_slots_array] = np.asarray(
                 moved_values, dtype=np.float64)
+            if self._light_offsets:
+                self.pos[moved_slots_array] += self.light_offset[moved_slots_array]
             if effect_store is not None:
                 effect_mask = (
                     self.class_bits[moved_slots_array] & ENT_EFFECT
@@ -1056,6 +1111,8 @@ class EntityTable:
         self.pos[slots] = np.fromiter(
             chain.from_iterable(_pos_of(things[s]) for s in slots.tolist()),
             dtype=np.float64, count=len(slots) * 3).reshape(-1, 3)
+        if self._light_offsets:
+            self.pos[slots] += self.light_offset[slots]
 
     def _poll(self, things):
         """Rows whose objects cannot journal: read what may have changed."""
@@ -1543,7 +1600,16 @@ class EntityTable:
             self.model_normal_matrix[slot, 5] = 1.0
             self.model_normal_matrix[slot, 10] = 1.0
 
-        if (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
+        offset = None
+        if ((self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT
+                and _is_emissive_decal(props)):
+            colour, params, offset = _decal_light(thing)
+            self.light_color[slot] = colour
+            self.light_params[slot] = params
+            # A hidden decal paints nothing, in the editor too: nor does it glow.
+            self.light_enabled[slot] = not self.hidden[slot]
+            self.light_casts_shadows[slot] = False
+        elif (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
             self.light_color[slot] = _light_color_of(thing)
             self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
                                        _light_float(thing, 'radius', 512.0))
@@ -1556,6 +1622,12 @@ class EntityTable:
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
+
+        if offset is not None:
+            self.light_offset[slot] = offset
+            self._light_offsets = True
+        elif self._light_offsets:
+            self.light_offset[slot] = 0.0
 
         self.probe_radius[slot] = (thing.get_radius()
                                    if self.class_bits[slot] & ENT_PROBE else 0.0)
@@ -1604,14 +1676,26 @@ class EntityTable:
         """Re-resolve every column of *slots* from their entities."""
         slots = list(slots)
         self.rows_read += len(slots)
+        lights_changed = False
         for slot in slots:
             slot = int(slot)
             thing = things[slot]
             self.pos[slot] = _pos_of(thing)
+            was_light = self.class_bits[slot] & _LIGHT_ROW
             if effect_store is None:
                 self._resolve_row(slot, thing)
             else:
                 self._resolve_row(slot, thing, effect_store=effect_store)
+            if self._light_offsets:
+                self.pos[slot] += self.light_offset[slot]
+            if (self.class_bits[slot] & _LIGHT_ROW) != was_light:
+                lights_changed = True
+        if lights_changed:
+            # A decal's Emissive box ticked or cleared: the one way a row
+            # joins or leaves the light list without the row set changing.
+            self.light_slots = np.flatnonzero(
+                self.class_bits[:self.count] & _LIGHT_ROW).astype(np.int32)
+            self.generation += 1
 
 
 _EMPTY: dict = {}

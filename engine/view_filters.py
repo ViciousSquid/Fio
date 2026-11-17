@@ -84,7 +84,8 @@ def entity_group(thing):
         return 'pathnodes'
     if bits & et.ENT_MONSTER:
         return 'monsters'
-    if bits & et.ENT_LIGHT:
+    if bits & et.ENT_LIGHT and type(thing).__name__ != 'Decal':
+        # An emissive decal is in the light list; it is still a decal.
         return 'lights'
     # A private editor model (the spawn sign) is presentation, not a prop.
     if bits & (et.ENT_PROP | et.ENT_HAS_MODEL) and not bits & et.ENT_EDITOR_MODEL:
