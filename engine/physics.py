@@ -425,6 +425,20 @@ class SpatialGrid:
             self._box_rows = rows
         return rows
 
+    def _rows_now(self):
+        """The current :class:`_CellRows`, for a batched query: rebuilt after
+        an authored edit (as :meth:`_boxes` rebuilds the per-query rows, so
+        both read the same world), its movers and doors where they are now.
+        Two integer reads when nothing has changed."""
+        rows = self._cell_rows
+        stamp = _placement.authored_generation
+        if self._cell_stamp != stamp:
+            rows = _CellRows(self.cells)
+            self._cell_rows = rows
+            self._cell_stamp = stamp
+        rows.refresh_movers()
+        return rows
+
     # ------------------------------------------------------------------
     # Line-of-sight rows
     # ------------------------------------------------------------------
@@ -778,8 +792,7 @@ class SpatialGrid:
         x = np.asarray(x, dtype=np.float64)
         z = np.asarray(z, dtype=np.float64)
         start_y = np.broadcast_to(np.asarray(start_y, dtype=np.float64), x.shape)
-        rows = self._cell_rows
-        rows.refresh_movers()
+        rows = self._rows_now()
         cs = self.cell_size
         query, row = rows.pairs(np.floor(x / cs), np.floor(z / cs))
         best = np.full(len(x), -np.inf)
@@ -809,8 +822,7 @@ class SpatialGrid:
         result = np.zeros(count, dtype=bool)
         if not count:
             return result
-        rows = self._cell_rows
-        rows.refresh_movers()
+        rows = self._rows_now()
         cs = self.cell_size
         xmin, xmax = mx - margin, mx + margin
         zmin, zmax = mz - margin, mz + margin
@@ -840,6 +852,55 @@ class SpatialGrid:
             result[i] = self.overlaps_wall(float(mx[i]), float(my[i]),
                                            float(mz[i]), margin)
         return result
+
+    def box_pairs(self, lo, hi):
+        """``(query, row, rows)``: for each box ``lo[i]..hi[i]`` (``(n, 3)``),
+        every brush filed in a cell its XZ footprint touches -- box ``query[k]``
+        with ``rows.lo[row[k]]..rows.hi[row[k]]``, the float64 boxes every
+        other query of this grid reads, movers and doors where they are now.
+
+        The broad phase only: which pairs overlap, and what follows from it,
+        is the caller's test. A brush is filed in every cell it spans, so the
+        cells a box's own corners are in are all that can hold what it
+        touches -- one lookup for a box inside one cell -- and a brush that
+        shares two of them with a box is paired with it twice, which no test
+        that asks "any" or "nearest" can tell.
+        """
+        lo = np.asarray(lo, dtype=np.float64)
+        hi = np.asarray(hi, dtype=np.float64)
+        rows = self._rows_now()
+        count = len(lo)
+        if not count:
+            empty = np.empty(0, dtype=np.int64)
+            return empty, empty, rows
+        cs = self.cell_size
+        cx0 = np.floor(lo[:, 0] / cs)
+        cz0 = np.floor(lo[:, 2] / cs)
+        # Every query's own cell, and the off-range movers and doors for each.
+        query, row = rows.pairs(cx0, cz0)
+        more_x = np.floor(hi[:, 0] / cs) - cx0
+        more_z = np.floor(hi[:, 2] / cs) - cz0
+        span_x = int(more_x.max())
+        span_z = int(more_z.max())
+        if span_x or span_z:
+            queries, found = [query], [row]
+            for dx in range(span_x + 1):
+                for dz in range(span_z + 1):
+                    if not (dx or dz):
+                        continue
+                    which = np.flatnonzero((more_x >= dx) & (more_z >= dz))
+                    if not which.size:
+                        continue
+                    q, r = rows._pairs_filed(cx0[which] + dx, cz0[which] + dz)
+                    if len(r):
+                        queries.append(which[q])
+                        found.append(r)
+            if len(found) > 1:
+                query = np.concatenate(queries)
+                row = np.concatenate(found)
+                if _placement.asleep:
+                    rows._resolve_asleep(row)
+        return query, row, rows
 
     def raycast_down(self, x, z, start_y=10000.0):
         """Return Y of the highest solid brush surface below (x, z), or None.
@@ -1303,13 +1364,17 @@ class PhysicsWorld:
     #: ``phys_gravity`` changes it) is what bodies, the player, monsters and
     #: dropped props all fall by; see :func:`world_gravity`.
     GRAVITY = np.float32(-SV_GRAVITY)
-    #: Active-body count from which the grouped floor query is worth its setup.
-    #: Below it the NumPy assembly costs more than the scalar raycasts it saves
-    #: -- measured crossover is around 56-64 bodies on this scene shape, so the
-    #: grouped path is only taken where it is demonstrably faster. Both paths
-    #: are bit-identical (tests/physics/test_dynamic_bodies.py), so this is
+    #: Active-body count from which one batched floor query
+    #: (:meth:`SpatialGrid.raycast_down_batch`) is cheaper than a
+    #: ``raycast_down`` per support point. The batched query is a fixed fee
+    #: of a few dozen NumPy calls however many points it answers; a raycast
+    #: costs per point, and per brush in the point's cell. Measured with
+    #: ``tools/bench_physics.py`` (about ten brushes a cell) the two cross at
+    #: around 16 bodies -- 190 against 250 microseconds a step for one body,
+    #: 440 against 440 for sixteen, 560 against 500 for thirty-two. Both
+    #: answer identically (tests/physics/test_dynamic_bodies.py), so this is
     #: purely a cost choice and never a behavioural one.
-    FLOOR_BATCH_MIN_BODIES = 64
+    FLOOR_BATCH_MIN_BODIES = 16
     MAX_STEP = np.float32(0.05)
     REST_SPEED = np.float32(1.0)
 
@@ -1381,8 +1446,6 @@ class PhysicsWorld:
         self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
         self._dirty = False
-        self._static_cells = {}
-        self._static_query_cache = {}
         # Baseline for entities_that_changed_cell(): one (N, 2) cell array.
         self._reported_cell = None
 
@@ -1421,8 +1484,6 @@ class PhysicsWorld:
         self._was_inactive = np.empty(0, dtype=np.bool_)
         self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
-        self._static_cells.clear()
-        self._static_query_cache.clear()
         self._reported_cell = None
         self._dirty = False
 
@@ -1841,18 +1902,14 @@ class PhysicsWorld:
 
     def _player_in_wall(self, ppos, player_half):
         """Whether the player's box, short of its feet and head, is in a wall."""
-        cell_size = float(self.spatial_grid.cell_size)
-        aabbs = self._candidate_aabbs(int(math.floor(float(ppos[0]) / cell_size)),
-                                      int(math.floor(float(ppos[2]) / cell_size)))
-        if aabbs is None:
-            return False
         # Trimmed top and bottom so the floor stood on and a low ceiling are
         # not walls.
-        lo = np.array([ppos[0] - player_half[0], ppos[1] - player_half[1] + 8.0,
-                       ppos[2] - player_half[2]], dtype=np.float32)
-        hi = np.array([ppos[0] + player_half[0], ppos[1] + player_half[1] - 8.0,
-                       ppos[2] + player_half[2]], dtype=np.float32)
-        return bool(np.any(np.all((aabbs[:, 3:] > lo) & (aabbs[:, :3] < hi), axis=1)))
+        lo = np.array([[ppos[0] - player_half[0], ppos[1] - player_half[1] + 8.0,
+                        ppos[2] - player_half[2]]], dtype=np.float64)
+        hi = np.array([[ppos[0] + player_half[0], ppos[1] + player_half[1] - 8.0,
+                        ppos[2] + player_half[2]]], dtype=np.float64)
+        _query, row, rows = self.spatial_grid.box_pairs(lo, hi)
+        return bool(np.any(np.all((rows.hi[row] > lo) & (rows.lo[row] < hi), axis=1)))
 
     def _roll(self, rows, dt):
         """Turn rolling bodies by how far they rolled this step."""
@@ -1877,21 +1934,6 @@ class PhysicsWorld:
             # render projection the entity moved.
             self._entities[int(i)].pos = self._position[int(i)].tolist()
 
-    def _rebuild_static_cells(self):
-        """Cache static collision AABBs as contiguous NumPy arrays per grid cell."""
-        cells = {}
-        for key, brushes in self.spatial_grid.cells.items():
-            if not brushes:
-                continue
-            rows = []
-            for brush in brushes:
-                if brush.get('_physics_body'):
-                    continue
-                rows.append(world_bounds(brush))
-            if rows:
-                cells[key] = np.asarray(rows, dtype=np.float32)
-        self._static_cells = cells
-
     def rebuild(self, brushes):
         self.clear()
 
@@ -1903,7 +1945,6 @@ class PhysicsWorld:
                 self.register_body(entity, brush)
 
         self._pack()
-        self._rebuild_static_cells()
         self._settle_sunk_bodies()
         # Waking what floats waits for the first step: simulation tiers are
         # stamped after the world is built (Big World's play_start).
@@ -1977,7 +2018,7 @@ class PhysicsWorld:
         """The highest floor top at or below each point, or -inf; None without
         a grid that can answer. Grouped only where it pays: below the measured
         crossover (FLOOR_BATCH_MIN_BODIES) a raycast per point is cheaper than
-        assembling the grouped query."""
+        the batched query."""
         if xs.size >= self.FLOOR_BATCH_MIN_BODIES and self._can_group_floor_queries():
             return self._floor_tops(xs, zs, ys)
         return self._floor_tops_scalar(xs, zs, ys)
@@ -1998,34 +2039,12 @@ class PhysicsWorld:
                 tops[k] = float(floor)
         return tops
 
-    def _candidate_aabbs(self, cell_x, cell_z):
-        key = (cell_x, cell_z)
-        cached = self._static_query_cache.get(key)
-        if cached is False:
-            return None
-        if cached is not None:
-            return cached
-
-        parts = []
-        cells = self._static_cells
-        for dx in (-1, 0, 1):
-            for dz in (-1, 0, 1):
-                aabbs = cells.get((cell_x + dx, cell_z + dz))
-                if aabbs is not None:
-                    parts.append(aabbs)
-
-        if not parts:
-            self._static_query_cache[key] = False
-            return None
-        if len(parts) == 1:
-            result = parts[0]
-        else:
-            result = np.concatenate(parts, axis=0)
-        self._static_query_cache[key] = result
-        return result
-
     def _batch_static_collision(self, axis, old_position, rows=None, pushed_from=None):
-        """Resolve one axis with vectorised AABB tests per cell group.
+        """Resolve one axis against the world: one broad phase for every body.
+
+        The world is the spatial grid's -- its boxes, its movers and doors
+        where they are now (:meth:`SpatialGrid.box_pairs`); nothing of it is
+        kept here.
 
         A body that ends up in a wall goes back to *old_position* on this axis
         and stops, or bounces off by its bounciness. *rows* limits the test to
@@ -2050,72 +2069,48 @@ class PhysicsWorld:
         if indices.size == 0:
             return
 
-        cell_size = np.float32(self.spatial_grid.cell_size)
-        cell_keys = np.column_stack((
-            np.floor(self._position[indices, 0] / cell_size).astype(np.int64),
-            np.floor(self._position[indices, 2] / cell_size).astype(np.int64),
-        ))
-        unique_cells, inverse = np.unique(
-            cell_keys, axis=0, return_inverse=True
-        )
-
+        centre = (self._position[indices] + self._offset[indices]).astype(np.float64)
+        half = self._half[indices].astype(np.float64)
+        bmin = centre - half
+        bmax = centre + half
+        grid = self.spatial_grid
+        query, row, boxes = grid.box_pairs(bmin, bmax)
+        if not len(query):
+            return
+        overlap = np.all((bmax[query] > boxes.lo[row])
+                         & (bmin[query] < boxes.hi[row]), axis=1)
         collision = np.zeros(indices.size, dtype=np.bool_)
-        # Pushed bodies that were clear of every wall before the push.
-        clear_before_push = np.zeros(indices.size, dtype=np.bool_)
+        collision[query[overlap]] = True
+        if not collision.any():
+            return
 
-        for group_id, key in enumerate(unique_cells):
-            local_indices = np.flatnonzero(inverse == group_id)
-            bi = indices[local_indices]
-            aabbs = self._candidate_aabbs(int(key[0]), int(key[1]))
-            if aabbs is None:
-                continue
-
-            pos = self._position[bi] + self._offset[bi]
-            half = self._half[bi]
-
-            bmin = pos - half
-            bmax = pos + half
-
-            cmin = aabbs[:, :3]
-            cmax = aabbs[:, 3:]
-
-            overlap = (
-                (bmax[:, None, 0] > cmin[None, :, 0]) &
-                (bmin[:, None, 0] < cmax[None, :, 0]) &
-                (bmax[:, None, 1] > cmin[None, :, 1]) &
-                (bmin[:, None, 1] < cmax[None, :, 1]) &
-                (bmax[:, None, 2] > cmin[None, :, 2]) &
-                (bmin[:, None, 2] < cmax[None, :, 2])
-            )
-            hit = overlap.any(axis=1)
-
-            collision[local_indices] |= hit
-
-            if pushed_from is not None:
-                was_pushed = hit & ~np.isnan(pushed_from[bi, 0])
-                if np.any(was_pushed):
-                    pmin = pushed_from[bi] + self._offset[bi] - half
-                    pmax = pushed_from[bi] + self._offset[bi] + half
-                    before = (
-                        (pmax[:, None, :] > cmin[None, :, :])
-                        & (pmin[:, None, :] < cmax[None, :, :])
-                    ).all(axis=2).any(axis=1)
-                    clear_before_push[local_indices] |= was_pushed & ~before
-
-        if np.any(collision):
-            hit_indices = indices[collision]
-            target = old_position[hit_indices, axis]
-            if pushed_from is not None:
-                undo = clear_before_push[collision]
-                target = np.where(undo, pushed_from[hit_indices, axis], target)
-            self._position[hit_indices, axis] = target
-            if self._any_bounce:
-                # Bounce off the wall if bouncy enough.
-                hit_velocity = self._velocity[hit_indices, axis]
-                self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * self._bounce_speed(
-                    np.abs(hit_velocity), self._bounce[hit_indices])
-            else:
-                self._velocity[hit_indices, axis] = 0.0
+        hit_indices = indices[collision]
+        target = old_position[hit_indices, axis]
+        if pushed_from is not None:
+            # Pushed bodies that were clear of every wall before the push go
+            # back to where the push found them.
+            start = pushed_from[hit_indices]
+            was_pushed = np.flatnonzero(~np.isnan(start[:, 0]))
+            if was_pushed.size:
+                pcentre = (start[was_pushed]
+                           + self._offset[hit_indices[was_pushed]]).astype(np.float64)
+                phalf = half[collision][was_pushed]
+                pmin = pcentre - phalf
+                pmax = pcentre + phalf
+                q, r, boxes = grid.box_pairs(pmin, pmax)
+                before = np.zeros(was_pushed.size, dtype=np.bool_)
+                before[q[np.all((pmax[q] > boxes.lo[r])
+                                & (pmin[q] < boxes.hi[r]), axis=1)]] = True
+                undo = was_pushed[~before]
+                target[undo] = start[undo, axis]
+        self._position[hit_indices, axis] = target
+        if self._any_bounce:
+            # Bounce off the wall if bouncy enough.
+            hit_velocity = self._velocity[hit_indices, axis]
+            self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * self._bounce_speed(
+                np.abs(hit_velocity), self._bounce[hit_indices])
+        else:
+            self._velocity[hit_indices, axis] = 0.0
 
     def _batch_floor(self, previous_bottom=None):
         """Find the floor beneath each active dynamic body.
@@ -2124,24 +2119,18 @@ class PhysicsWorld:
         so a body straddling a seam between floor brushes cannot lose contact
         just because its centre crossed the gap.
 
-        That is 5N downward queries per step. Done one at a time they were the
-        largest remaining scalar section of the dynamic path: each
-        ``raycast_down`` call re-derives the cell and then walks that cell's
-        brush dicts in Python, so the cost is 5N x (brushes per cell) Python
-        iterations. :meth:`_batch_floor_grouped` instead groups all 5N sample
-        points by grid cell and tests every point in a cell against every brush
-        in it with one broadcast, which makes the Python work proportional to
-        the number of *distinct cells* rather than to the number of samples.
+        That is 5N downward queries per step, and the spatial grid answers
+        them: one :meth:`SpatialGrid.raycast_down` each for a few bodies, one
+        :meth:`SpatialGrid.raycast_down_batch` for many (the same brushes, the
+        same boxes and the same comparisons, so the answers are identical and
+        the choice is only a cost one: :data:`FLOOR_BATCH_MIN_BODIES`).
+        Either way a mover or door is where it is now: a prop riding a
+        platform sees the platform's current height.
 
-        Brush positions are still read live on every step. Movers and doors sit
-        in the grid and move without it being repopulated, so a prop riding a
-        platform depends on seeing the platform's current height; caching the
-        AABBs would quietly break that.
-
-        The grouped path is used only for a stock :class:`SpatialGrid`. Anything
-        that overrides ``raycast_down`` -- a test double, or a future grid with
-        its own tracing -- keeps the scalar path, because its answers are not
-        derivable from ``cells`` alone.
+        The batched query is used only for a stock :class:`SpatialGrid`.
+        Anything that overrides ``raycast_down`` -- a test double, or a future
+        grid with its own tracing -- is asked point by point, because its
+        answers are its own.
         """
         active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
         if (int(active.sum()) >= self.FLOOR_BATCH_MIN_BODIES
@@ -2150,15 +2139,13 @@ class PhysicsWorld:
         return self._batch_floor_scalar(previous_bottom)
 
     def _can_group_floor_queries(self):
+        """Whether the grid's batched floor query answers as its
+        ``raycast_down`` does: true of a stock grid, not of one that traces
+        its own way."""
         grid = self.spatial_grid
-        if type(grid).__dict__.get('raycast_down') is None:
-            # Inherited from SpatialGrid rather than overridden.
-            if not isinstance(grid, SpatialGrid):
-                return False
-        elif type(grid).raycast_down is not SpatialGrid.raycast_down:
-            return False
-        return (isinstance(getattr(grid, 'cells', None), dict)
-                and getattr(grid, 'cell_size', None))
+        return (isinstance(grid, SpatialGrid)
+                and type(grid).raycast_down is SpatialGrid.raycast_down
+                and type(grid).raycast_down_batch is SpatialGrid.raycast_down_batch)
 
     def _support_offsets(self, indices):
         """Per-body support-point offsets and ray origins, in float64.
@@ -2200,82 +2187,10 @@ class PhysicsWorld:
         return floors
 
     def _floor_tops(self, flat_x, flat_z, flat_y):
-        """The highest brush top at or below each point (x, z, y), or -inf.
-
-        What ``SpatialGrid.raycast_down`` answers for one point, for many at
-        once: the points are grouped by grid cell and each cell's brushes are
-        tested against all its points in one broadcast, so the Python work is
-        one step per distinct cell. Only for a stock grid
-        (:meth:`_can_group_floor_queries`).
-        """
-        samples = flat_x.size
-        cell_size = float(self.spatial_grid.cell_size)
-        cx = np.floor(flat_x / cell_size).astype(np.int64)
-        cz = np.floor(flat_z / cell_size).astype(np.int64)
-
-        best = np.full(samples, -np.inf, dtype=np.float64)
-        cells = self.spatial_grid.cells
-
-        # Sort once, then walk contiguous runs: one pass per distinct cell
-        # instead of one boolean scan of every sample per cell.
-        order = np.lexsort((cz, cx))
-        s_cx = cx[order]
-        s_cz = cz[order]
-        starts = np.flatnonzero(
-            np.r_[True, (s_cx[1:] != s_cx[:-1]) | (s_cz[1:] != s_cz[:-1])]
-        )
-        ends = np.r_[starts[1:], samples]
-
-        for start, end in zip(starts, ends):
-            brushes = cells.get((int(s_cx[start]), int(s_cz[start])))
-            if not brushes:
-                continue
-            bounds = self._cell_bounds(brushes)
-            if bounds is None:
-                continue
-            lo_x, hi_x, lo_z, hi_z, top_y = bounds
-
-            sel = order[start:end]
-            X = flat_x[sel][:, None]
-            Z = flat_z[sel][:, None]
-            Y = flat_y[sel][:, None]
-            inside = (
-                (X >= lo_x) & (X <= hi_x)
-                & (Z >= lo_z) & (Z <= hi_z)
-                & (top_y[None, :] <= Y)
-            )
-            if not inside.any():
-                continue
-            best[sel] = np.where(inside, top_y[None, :], -np.inf).max(axis=1)
-        return best
-
-    @staticmethod
-    def _cell_bounds(brushes):
-        """Live XZ extents and top surface of every brush in one grid cell.
-
-        Read from the dicts on every call, not cached: see _batch_floor.
-        """
-        count = len(brushes)
-        lo_x = np.empty(count, dtype=np.float64)
-        hi_x = np.empty(count, dtype=np.float64)
-        lo_z = np.empty(count, dtype=np.float64)
-        hi_z = np.empty(count, dtype=np.float64)
-        top_y = np.empty(count, dtype=np.float64)
-        kept = 0
-        for brush in brushes:
-            try:
-                b = world_bounds(brush)
-            except (KeyError, TypeError, ValueError, IndexError):
-                continue
-            lo_x[kept] = b[0]
-            hi_x[kept] = b[3]
-            lo_z[kept] = b[2]
-            hi_z[kept] = b[5]
-            top_y[kept] = b[4]
-            kept += 1
-        if kept == 0:
-            return None
-        return (lo_x[:kept], hi_x[:kept], lo_z[:kept], hi_z[:kept], top_y[:kept])
+        """The highest brush top at or below each point (x, z, y), or -inf:
+        the grid's batched floor query (:meth:`_can_group_floor_queries`)."""
+        tops = self.spatial_grid.raycast_down_batch(flat_x, flat_z, flat_y)
+        return np.where(np.isnan(tops), -np.inf, tops)
 
     def _previous_bottom(self, previous_bottom):
         if previous_bottom is None:

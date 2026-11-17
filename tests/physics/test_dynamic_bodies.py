@@ -207,7 +207,6 @@ def test_clear_releases_all_body_state():
     assert world._position.shape == (0, 3)
     assert world._was_inactive.shape == (0,)
     assert world._pending_settle.shape == (0,)
-    assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
 
 
@@ -333,7 +332,6 @@ def test_a_sleeping_hidden_body_is_settled_after_a_platform_moves_under_it():
     # The dormant body does not move while the platform rises into it.
     raised_platform = _floor((0.0, 390.0, 0.0), (2000.0, 60.0, 2000.0))
     world.spatial_grid.populate([raised_platform])
-    world._rebuild_static_cells()
     set_authored_flag(prop, 'hidden', False)
     world.wake(prop)  # same wake performed by the Show I/O handler
     world.step(1.0 / 60.0)
@@ -480,9 +478,12 @@ def test_grouped_floor_query_reads_mover_heights_live():
     """A platform that moves without the grid being repopulated.
 
     populate() runs on play-start, not per frame, so a mover's cell membership
-    is a snapshot while its height is not. Caching the cell AABBs would make a
-    prop ride a platform that is no longer there.
+    is a snapshot while its height is not: the grid re-derives a mover's box
+    when its runtime transform changes, and physics asks the grid, so a prop
+    never rides a platform that is no longer there.
     """
+    from tests.helpers.runtime import drive, release
+
     platform = {'pos': [0.0, 0.0, 0.0], 'size': [400.0, 20.0, 400.0],
                 'is_mover': True}
     world = _world(platform)
@@ -493,10 +494,39 @@ def test_grouped_floor_query_reads_mover_heights_live():
 
     assert world._batch_floor_grouped()[0] == pytest.approx(10.0)
 
-    platform['pos'][1] = 100.0          # rises; grid NOT repopulated
-    assert world._batch_floor_grouped()[0] == pytest.approx(110.0)
-    assert np.array_equal(world._batch_floor_grouped(),
-                          world._batch_floor_scalar())
+    try:
+        drive(platform, offset=(0.0, 100.0, 0.0))   # rises; grid NOT repopulated
+        assert world._batch_floor_grouped()[0] == pytest.approx(110.0)
+        assert np.array_equal(world._batch_floor_grouped(),
+                              world._batch_floor_scalar())
+    finally:
+        release(platform)
+
+
+def test_a_door_that_opens_stops_being_a_wall():
+    """Walls are the grid's, live: a door is a wall where it is now, not
+    where it stood when play began."""
+    from tests.helpers.runtime import drive, release
+
+    door = {'pos': [200.0, 100.0, 0.0], 'size': [20.0, 400.0, 400.0],
+            'is_door': True}
+
+    def slide(opened):
+        world = _world(_floor(), door)
+        prop = _prop(friction=0.0, linear_damping=0.0)
+        world.rebuild([_drum_brush(prop)])
+        world.step(1.0 / 60.0)
+        if opened:
+            drive(door, offset=(0.0, 1000.0, 0.0))
+        world.wake(prop, [600.0, 0.0, 0.0])
+        _run(world, 60)
+        return prop.pos[0]
+
+    try:
+        assert slide(opened=False) < 200.0
+        assert slide(opened=True) > 500.0
+    finally:
+        release(door)
 
 
 def test_a_custom_grid_keeps_the_scalar_path():
