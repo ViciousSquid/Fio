@@ -13,8 +13,8 @@ follower is entered in the mover table as a mover that never moves by itself
 its leader has carried it (:meth:`MoverTable.restore_placement`, the call a
 saved game places a mover with): its authored offset from the leader, turned
 by the leader's spin about the leader's centre, and turned by the same spin
-itself. A follower whose leader has not moved since the last tick costs one
-position read and a comparison.
+itself. A group whose leader has not moved since the last tick costs one
+position read and a comparison, however many brushes it carries.
 
 What play writes into a follower's dict is put back when play stops
 (:func:`detach`); ``group_follower`` marks one in a saved game, so loading
@@ -99,47 +99,47 @@ class LogicGroups:
 
     def __init__(self, logic):
         self.logic = logic
-        #: (follower, leader, offset from the leader's authored centre)
+        #: One entry per leader: [leader, [(follower, offset from the
+        #: leader's authored centre)], where it was last seen (centre, angle)]
         self._links = []
-        self._seen = {}
 
     def attach(self):
         """Before the mover rows are built: enter the followers as movers."""
         links = attach(self.logic.editor_state.brushes)
-        self._links = []
-        self._seen = {}
+        by_leader = {}
         for follower, leader in links:
             home = brush_placement.authored_box(follower)
             lead = brush_placement.authored_box(leader)
-            self._links.append((follower, leader, (
+            entry = by_leader.setdefault(id(leader), [leader, [], None])
+            entry[1].append((follower, (
                 home[0] - lead[0], home[1] - lead[1], home[2] - lead[2])))
+        self._links = list(by_leader.values())
         return bool(links)
 
     def detach(self):
         self._links = []
-        self._seen = {}
         detach(self.logic.editor_state.brushes)
 
     def update(self):
         if not self._links:
             return
         table = self.logic.mover_runtime._movers()
-        seen = self._seen
-        for follower, leader, offset in self._links:
+        for entry in self._links:
+            leader, followers, seen = entry
             now = table.position_of(leader)
             spin = brush_placement.runtime_spin(leader)
             angle = float(spin[3]) if spin is not None else 0.0
             key = (now, angle)
-            if seen.get(id(follower)) == key:
-                continue
-            seen[id(follower)] = key
-            dx, dy, dz = offset
-            if angle:
-                turn = brush_placement.rotation_matrix(spin[:3], angle)
+            if key == seen:
+                continue                # the leader is still: so is its group
+            entry[2] = key
+            turn = brush_placement.rotation_matrix(spin[:3], angle) if angle else None
+            for follower, offset in followers:
+                dx, dy, dz = offset
                 if turn is not None:
                     dx, dy, dz = (
                         turn[0][0] * offset[0] + turn[0][1] * offset[1] + turn[0][2] * offset[2],
                         turn[1][0] * offset[0] + turn[1][1] * offset[1] + turn[1][2] * offset[2],
                         turn[2][0] * offset[0] + turn[2][1] * offset[1] + turn[2][2] * offset[2])
-            table.restore_placement(
-                follower, (now[0] + dx, now[1] + dy, now[2] + dz), angle)
+                table.restore_placement(
+                    follower, (now[0] + dx, now[1] + dy, now[2] + dz), angle)

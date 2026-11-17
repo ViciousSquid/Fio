@@ -135,3 +135,45 @@ def test_stopping_play_leaves_the_grouped_brush_as_it_was_authored(
     assert after == {k: v for k, v in before.items() if not k.startswith("_")}
     assert _centre(glass) == pytest.approx((40.0, 130.0, 0.0))
     session.window.unsaved_changes = False
+
+
+def _hollow_box(centre=(0.0, 200.0, 0.0), half=64.0, wall=8.0):
+    """Six slabs making a hollow box; the first is a rotating mover."""
+    slabs = []
+    for axis in range(3):
+        for sign in (-1, 1):
+            pos = list(centre)
+            pos[axis] += sign * (half - wall / 2)
+            size = [2 * half] * 3
+            size[axis] = wall
+            slabs.append({"id": "slab%d" % len(slabs), "name": "slab%d" % len(slabs),
+                          "pos": pos, "size": size, "brush_group": "crate"})
+    slabs[0].update(is_mover=True, start_on=True, rotate=True, rot_axis=[0, 1, 0],
+                    speed=75.0, distance=0.0)
+    return slabs
+
+
+def test_a_hollow_box_of_grouped_brushes_turns_as_one_rigid_body(
+        fio_session, monkeypatch):
+    """Every slab is carried by the one rotation about the leader's centre:
+    the walls stay square to one another and keep meeting at the corners."""
+    import numpy as np
+
+    slabs = _hollow_box()
+    session = fio_session(_level(*slabs))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    brushes = [_brush(session, "slab%d" % i) for i in range(6)]
+    homes = [np.array(brush_placement.authored_box(b)[:3]) for b in brushes]
+    session.start_play()
+    for _ in range(6):                       # checked at several angles
+        session.step(7)
+        spin = brush_placement.runtime_spin(brushes[0])
+        turn = np.array(brush_placement.rotation_matrix(spin[:3], spin[3]))
+        lead_now = np.array(_centre(brushes[0]))
+        for brush, home in zip(brushes[1:], homes[1:]):
+            expected = lead_now + turn @ (home - homes[0])
+            assert np.allclose(_centre(brush), expected, atol=1e-6), (
+                "a wall drifted out of the box")
+            assert brush_placement.runtime_spin(brush) == pytest.approx(spin), (
+                "a wall is not turned by the box's rotation")
+    session.stop_play()
