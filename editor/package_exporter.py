@@ -156,6 +156,10 @@ class PackageExporter:
                             player_copy = self._read_map(map_file)
                         if player_copy is None:
                             zf.write(map_file, archive_path)
+                        elif self._is_minified(map_file):
+                            # A map kept minified is packaged minified.
+                            zf.writestr(archive_path, json.dumps(
+                                player_copy, separators=(",", ":")))
                         else:
                             zf.writestr(archive_path, json.dumps(player_copy, indent=2))
                     for arcname, src_path in sorted(cutscene_entries.items()):
@@ -221,6 +225,15 @@ class PackageExporter:
         # (<map name>.terrainstamps); a packaged map carries them itself.
         from engine import terrain_stamp
         return terrain_stamp.join_level(data, map_file)
+
+    @staticmethod
+    def _is_minified(map_file) -> bool:
+        """Whether a map file is minified JSON: all on one line."""
+        try:
+            with open(map_file, 'rb') as f:
+                return b"\n" not in f.read().strip()
+        except OSError:
+            return False
 
     @staticmethod
     def _has_stamp_file(map_file) -> bool:

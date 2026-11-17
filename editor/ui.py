@@ -532,6 +532,10 @@ class Ui_MainWindow(object):
         
         MainWindow.file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
         MainWindow.file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
+        minified_action = QAction('Save As &Minified...', MainWindow,
+                                  triggered=MainWindow.save_level_as_minified)
+        minified_action.setToolTip("Save the map as minified JSON: the same map, a smaller file")
+        MainWindow.file_menu.addAction(minified_action)
         MainWindow.file_menu.addSeparator()
         MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
         MainWindow.file_menu.addSeparator()

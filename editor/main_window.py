@@ -217,6 +217,9 @@ class MainWindow(QMainWindow):
         self._package = None
         self._previous_tab_index = None
         self.file_path = None
+        #: The open map is saved as minified JSON (File > Save As Minified...,
+        #: or a map that was opened minified).
+        self.map_minified = False
         self.recent_files = []
         self.load_level_signal.connect(self._on_level_change_requested)
         self.generate_level_signal.connect(self._on_generate_level_requested)
@@ -3735,6 +3738,7 @@ class MainWindow(QMainWindow):
         self.reset_camera_mode()
 
         self.file_path = None
+        self.map_minified = False
         self._generated_level_marker = None
         self._close_package()
         self.unsaved_changes = False
@@ -5087,25 +5091,57 @@ class MainWindow(QMainWindow):
             self.state.discard_last_checkpoint()
         return count
 
-    def save_level_as(self):
+    #: The Save As dialog's two ways to write a map: the same JSON, indented
+    #: to be read and diffed, or minified (one line, no spaces) to be small.
+    MAP_FILTER = "Map (*.json)"
+    MAP_FILTER_MINIFIED = "Map, minified JSON (*.json)"
+
+    @staticmethod
+    def _is_minified_json(text):
+        """Whether a map file's text is minified: all on one line."""
+        return "\n" not in text.strip()
+
+    def _ask_save_path(self, minified):
+        """The Save As dialog: ``(path, minified)``; an empty path cancels."""
+        first = self.MAP_FILTER_MINIFIED if minified else self.MAP_FILTER
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Save Level As", "maps",
+            ";;".join((self.MAP_FILTER, self.MAP_FILTER_MINIFIED)), first)
+        return path, chosen == self.MAP_FILTER_MINIFIED
+
+    def save_level_as(self, minified=None):
+        """Save the map under a new name. *minified* picks the dialog's
+        starting format (None: the map's current one); the format chosen in
+        the dialog is the one the map is saved in from then on."""
         if self._refuse_file_command_in_play("save the map"):
             return
-        filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
+        if not isinstance(minified, bool):          # a menu action's "checked"
+            minified = getattr(self, 'map_minified', False)
+        filePath, minified = self._ask_save_path(minified)
         if filePath:
             if not os.path.splitext(filePath)[1]:
                 # A bare name: without the extension the Open dialog's
                 # "*.json" filter hides the map that was just saved.
                 filePath += '.json'
             self.file_path = filePath
+            self.map_minified = bool(minified)
             self.stop_mover_preview()
             self.save_level()
 
+    def save_level_as_minified(self):
+        """File > Save As Minified...: Save As, with minified JSON chosen."""
+        self.save_level_as(minified=True)
+
     def _write_map(self, path):
-        """Write the map to *path*, and its placed terrain stamps beside it
-        in ``<map name>.terrainstamps`` (they are not kept in the map's JSON)."""
+        """Write the map to *path* -- indented, or minified when the map is
+        kept that way -- and its placed terrain stamps beside it in
+        ``<map name>.terrainstamps`` (they are not kept in the map's JSON)."""
         from engine import terrain_stamp
         level, stamps = terrain_stamp.split_level(self.state.get_level_data())
-        write_json_atomic(path, level, indent=4)
+        if getattr(self, 'map_minified', False):
+            write_json_atomic(path, level, separators=(",", ":"))
+        else:
+            write_json_atomic(path, level, indent=4)
         terrain_stamp.write_map_stamps(path, stamps)
 
     def save_level(self):
@@ -5123,7 +5159,7 @@ class MainWindow(QMainWindow):
             self.unsaved_changes = False
             self.update_title()
             self.add_recent_file(self.file_path)
-            self.show_toast("Saved!")
+            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved!")
         except Exception as e:
             self.show_toast(f"Error saving: {e}", is_error=True)
             print(f"Error saving level: {e}")
@@ -5256,7 +5292,10 @@ class MainWindow(QMainWindow):
                 # utf-8-sig: a map saved by an editor that writes a
                 # byte-order mark is still a map (packages read theirs so).
                 with open(filePath, 'r', encoding='utf-8-sig') as f:
-                    level_data = json.load(f)
+                    text = f.read()
+                level_data = json.loads(text)
+                # A map saved minified is saved minified again.
+                minified = self._is_minified_json(text)
                 # Placed terrain stamps are kept beside the map.
                 from engine import terrain_stamp
                 level_data = terrain_stamp.join_level(level_data, filePath)
@@ -5265,6 +5304,8 @@ class MainWindow(QMainWindow):
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
                 return False
             loaded = self._load_level(level_data, filePath, destination_spawn, from_game)
+            if loaded:
+                self.map_minified = minified
             if loaded and not self.view_3d.play_mode:
                 # The first frame of a new map uploads it to the GPU, which
                 # is a long paint of its own: draw it under the loading bar.
@@ -5405,6 +5446,9 @@ class MainWindow(QMainWindow):
 
             # Update file path and UI state
             self.file_path = file_path
+            # Indented unless the file it was read from says otherwise
+            # (load_level_file, once this returns).
+            self.map_minified = False
             self._generated_level_marker = None
             if file_path is not None:
                 # A map opened from disk ends the package session.
@@ -5762,6 +5806,7 @@ class MainWindow(QMainWindow):
             # failure below can leave the previous map's path attached to
             # this scene.  The first save goes through Save As.
             self.file_path = None
+            self.map_minified = False
             self._apply_level_data(level_data)
 
             # One package at a time.
