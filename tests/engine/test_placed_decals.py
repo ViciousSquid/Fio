@@ -234,3 +234,51 @@ def test_decals_off_screen_or_too_small_are_not_drawn():
         box_matrix((0, 0, 0), (0, -1, 0), 4000, 32),        # the camera inside: drawn
     ])
     assert visible_decals(boxes, projection, view, eye, 540).tolist() == [0, 4, 5]
+
+
+# -- tint ----------------------------------------------------------------------
+
+def test_tint_of_reads_a_colour_however_it_is_written():
+    from engine.decal_table import tint_of
+    assert tint_of(None) == tint_of('') == tint_of('nonsense') == (1.0, 1.0, 1.0)
+    assert tint_of([1.0, 0.5, 0.0]) == (1.0, 0.5, 0.0)
+    assert tint_of([255, 0, 0]) == (1.0, 0.0, 0.0)
+    assert tint_of('255 0 0') == tint_of('255,0,0') == tint_of('#ff0000') == (1.0, 0.0, 0.0)
+    assert tint_of([float('nan'), 0, 0]) == (1.0, 1.0, 1.0)
+    assert tint_of([-1.0, 0.5, 0.25]) == (0.0, 0.5, 0.25)
+
+
+def test_a_decal_is_white_unless_tinted_and_its_tint_rides_in_the_inverse():
+    from engine.decal_table import TINT_SLOTS
+    plain, red = _decal('a'), _decal('b', (100, 0, 0), tint=[1.0, 0.25, 0.0])
+    assert plain.properties['tint'] == [1.0, 1.0, 1.0]
+    table = DecalTable()
+    table.place([plain, red])
+    table.add((5, 5, 5), (0, -1, 0), 32.0, 16.0, 3, now=1.0, kind=FLOOR)
+    _models, _params, inverses = table.frame(now=1.0, lifetime=10.0, fade=1.0)
+    slots = list(TINT_SLOTS)
+    # The shader adds one: white for the untinted decal and for blood.
+    assert inverses[0, slots].tolist() == [0.0, 0.0, 0.0]
+    assert inverses[2, slots].tolist() == [0.0, 0.0, 0.0]
+    np.testing.assert_allclose(inverses[1, slots] + 1.0, [1.0, 0.25, 0.0])
+    # Nothing the shader takes a point into the box with has moved.
+    untinted = DecalTable()
+    red.properties['tint'] = [1.0, 1.0, 1.0]
+    untinted.place([plain, red])
+    keep = [i for i in range(16) if i not in slots]
+    np.testing.assert_array_equal(untinted.placed_inverse[1, keep], inverses[1, keep])
+
+
+def test_changing_a_tint_remakes_that_one_row():
+    from engine.decal_table import TINT_SLOTS
+    from engine.change_journal import touch
+    things = [_decal(str(i), (i * 10.0, 0, 0)) for i in range(20)]
+    table = DecalTable()
+    table.place(things, epoch=1)
+    made = table.rows_made
+    things[7].properties['tint'][1] = 0.5               # in place: still a change
+    touch(things[7])
+    assert table.place(things, epoch=1)
+    assert table.rows_made == made + 1
+    np.testing.assert_allclose(table.placed_inverse[7, list(TINT_SLOTS)] + 1.0, [1.0, 0.5, 1.0])
+    assert not table.place(things, epoch=1)

@@ -80,7 +80,9 @@ FRAME_INPUT = {
               'inverses (n, 16)) float32 from the logic thread\'s DecalTable -- '
               'each a box (the unit cube\'s model matrix, column-major), '
               '(texture layer/variant, opacity, kind, flags) and the box\'s '
-              'inverse; drawn onto whatever lies inside the box',
+              'inverse, whose bottom row (elements 3, 7, 11) holds a placed '
+              'decal\'s tint less one (zero: white); drawn onto whatever '
+              'lies inside the box',
     # Selection (same object as render_scene's primary_selection argument)
     'primary_selection': 'SelectionOverlay or None',
     # View settings

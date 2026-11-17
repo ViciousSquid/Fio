@@ -690,6 +690,9 @@ class Decal(Thing):
     roll        The image's rotation about the throw, degrees.
     mirrored    Flip the image left to right.
     opacity     How strongly it paints (for 'wet', how wet).
+    tint        A colour the image is multiplied by, ``[r, g, b]`` 0..1:
+                white (the default) leaves it as it is. A wet decal's tint
+                colours the wet surface. IO: SetTint.
     text        Words painted on, centred over the image (engine.decal_text);
                 empty for none. ``\\n`` starts a new line. With no image
                 (``texture`` empty) the words are painted alone. IO: SetText,
@@ -712,7 +715,7 @@ class Decal(Thing):
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
         'texture', 'width', 'height', 'depth',
-        'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'text', 'font', 'text_colour',
+        'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'tint', 'text', 'font', 'text_colour',
         'text_scale', 'text_offset_x', 'text_offset_y',
     )
 
@@ -731,6 +734,7 @@ class Decal(Thing):
         self.properties.setdefault('roll', 0.0)
         self.properties.setdefault('mirrored', False)
         self.properties.setdefault('opacity', 1.0)
+        self.properties.setdefault('tint', [1.0, 1.0, 1.0])
         self.properties.setdefault('text', '')
         self.properties.setdefault('font', 'Fio UI')
         self.properties.setdefault('text_colour', 'Black')

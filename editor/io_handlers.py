@@ -1857,6 +1857,13 @@ def register_all_input_handlers(io_manager: IOManager):
         from engine.decal_text import text_colour
         entity.properties['text_colour'] = text_colour(param)
 
+    def decal_set_tint(entity, param, logic):
+        """Tint the decal: ``r g b`` (0-255 or 0-1) or ``#rrggbb``; nothing,
+        or anything else, is white -- no tint."""
+        from engine.decal_table import tint_of
+        entity.properties['tint'] = list(tint_of(param))
+
+    io_manager.register_input_handler('decal', 'settint', decal_set_tint)
     io_manager.register_input_handler('decal', 'settext', decal_set_text)
     io_manager.register_input_handler('decal', 'cleartext', decal_clear_text)
     io_manager.register_input_handler('decal', 'setfont', decal_set_font)

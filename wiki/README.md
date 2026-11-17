@@ -6,6 +6,7 @@ Pages written or updated for this release, ready to paste into the wiki.
 | :--- | :--- | :--- |
 | `Soma.md` | **Soma** (new) | The physics engine: what bodies do, barrels, Prop physics properties, how it is built, measurements, the plugin surface, swapping it out |
 | `Plugin-API.md` | **Plugin API** (replace) | The full reference at API 2.0 — a copy of `plugins/API.md`. New: the physics engine (Soma), player state, LogicState, flags, physics events |
+| `Decal.md` | **Decal** (add section) | The new Tint property and `SetTint` input |
 | `Changelog-API-2.0.md` | **Changelog** (add entry) | The 2.0 entry |
 
 Pages that mention these and may want a line or a link:

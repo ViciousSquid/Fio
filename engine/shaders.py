@@ -2715,6 +2715,10 @@ void main() {
     // left is on the viewer's left, and text reads the right way round.
     float across = mirrored ? at.x : -at.x;
     vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
+    // A placed decal's tint, less one, rides in the bottom row of its box's
+    // inverse -- (0, 0, 0, 1) for any box, and read by nothing above -- so
+    // an untinted decal, and blood, multiply by white.
+    vec3 tint = vec3(1.0) + vec3(WorldToBox[0].w, WorldToBox[1].w, WorldToBox[2].w);
     const vec3 PICKED = vec3(1.0, 0.55, 0.1);
     // Fade at the box's near and far ends rather than cut.
     float ends = 1.0 - smoothstep(0.38, 0.5, abs(local.z));
@@ -2729,7 +2733,7 @@ void main() {
         // reflection fades out with distance and past that is not traced.
         float puddle = smoothstep(0.45, 0.9, texel.a);
         vec3 base = texture(sceneColor, uv).rgb;
-        vec3 colour = base * mix(0.6, 0.45, puddle);
+        vec3 colour = base * mix(0.6, 0.45, puddle) * tint;
         highp vec3 surfaceView = (view * world).xyz;
         // Full strength to two thirds of the fade distance, none from it on.
         float fade = reflectionsOn == 1 && decalFadeEnd > 0.0
@@ -2768,7 +2772,7 @@ void main() {
     // instead of going to black. A placed image modulates 2x: grey leaves
     // the surface alone, darker parts darken it, lighter parts lighten it.
     float strength = Params.z > 1.5 ? IMAGE_STRENGTH : BLOOD_STRENGTH;
-    vec3 stain = picked ? mix(texel.rgb, PICKED, 0.5) : texel.rgb;
+    vec3 stain = picked ? mix(texel.rgb * tint, PICKED, 0.5) : texel.rgb * tint;
     vec3 colour = stain * (amount * strength);
     float over = max(colour.r, max(colour.g, colour.b)) - 1.0;
     if (lighten && !picked && over > 0.0) {

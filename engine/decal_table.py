@@ -60,7 +60,44 @@ WALL, FLOOR, IMAGE, WET = 0, 1, 2, 3
 #: The ``Decal`` entity properties a placed row is made from.
 PLACED_KEYS = ('texture', 'width', 'height', 'depth', 'yaw',
                'pitch', 'roll', 'mirrored', 'opacity', 'hidden', 'text', 'font',
-               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y')
+               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y', 'tint')
+
+#: Where a decal's tint rides: the bottom row of its box's inverse, which is
+#: (0, 0, 0, 1) for every box and which nothing reads -- the shader takes a
+#: point into the box with the other three rows. It holds ``tint - 1``, so
+#: an untinted decal's inverse is exactly its inverse, and a tint costs no
+#: instance data, no attribute and nothing in either renderer.
+TINT_SLOTS = (3, 7, 11)
+
+
+def tint_of(value):
+    """A decal's ``tint`` as ``(r, g, b)`` in 0..1; white for none or one
+    that makes no sense. Takes three numbers (0..1, or 0..255), the same as
+    text (``"255 128 0"``, commas or spaces), or ``#rrggbb``."""
+    white = (1.0, 1.0, 1.0)
+    if value is None or value == '':
+        return white
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith('#'):
+            try:
+                number = int(text[1:], 16)
+            except ValueError:
+                return white
+            if len(text) != 7:
+                return white
+            return ((number >> 16 & 255) / 255.0, (number >> 8 & 255) / 255.0,
+                    (number & 255) / 255.0)
+        value = text.replace(',', ' ').split()
+    try:
+        rgb = [float(v) for v in value][:3]
+    except (TypeError, ValueError):
+        return white
+    if len(rgb) != 3 or not all(math.isfinite(v) for v in rgb):
+        return white
+    if any(v > 1.0 for v in rgb):
+        rgb = [v / 255.0 for v in rgb]
+    return tuple(min(max(v, 0.0), 1.0) for v in rgb)
 
 
 def placed_row(pos, props, layer):
@@ -268,8 +305,9 @@ class DecalTable:
             entry[1] = key
             if row is not None:
                 i = entry[2]
-                self.placed_model[i], _, self.placed_params[i] = row
+                self.placed_model[i], tint, self.placed_params[i] = row
                 self.placed_inverse[i] = box_inverse(row[0])
+                self.placed_inverse[i, TINT_SLOTS] = tint
             changed = True
         if changed:
             self.version += 1
@@ -279,11 +317,14 @@ class DecalTable:
     def _key(thing, show):
         """What a placed row is made from."""
         props = thing.properties
-        return (tuple(thing.pos), tuple([props.get(k) for k in PLACED_KEYS]),
+        # A list (the tint) by value: one changed in place is a change.
+        return (tuple(thing.pos),
+                tuple([tuple(v) if type(v) is list else v
+                       for v in map(props.get, PLACED_KEYS)]),
                 show and bool(getattr(thing, 'editor_selected', False)))
 
     def _row(self, thing, key, names):
-        """``(model, inverse, params)`` for *thing*, or None when it is not
+        """``(model, tint - 1, params)`` for *thing*, or None when it is not
         drawn (hidden, no size, or an image the list does not have)."""
         from engine import decal_textures
         from engine import decal_text
@@ -305,7 +346,9 @@ class DecalTable:
         model, params = row
         if key[2]:
             params[3] += 2.0
-        return model, None, params          # the inverse: by the caller, batched
+        r, g, b = tint_of(props.get('tint'))
+        # The inverse: by the caller, batched; the tint goes in its spare row.
+        return model, (r - 1.0, g - 1.0, b - 1.0), params
 
     def _reconcile(self, things, show, epoch):
         """The rows for every decal in *things*, reusing unchanged ones."""
@@ -359,7 +402,9 @@ class DecalTable:
                 at = np.fromiter((i for i, _row in made), dtype=np.intp, count=len(made))
                 model[at] = np.stack([row[0] for _i, row in made])
                 params[at] = np.stack([row[2] for _i, row in made])
-                inverse[at] = box_inverse(model[at])           # one batched inverse
+                made_inverse = box_inverse(model[at])          # one batched inverse
+                made_inverse[:, TINT_SLOTS] = [row[1] for _i, row in made]
+                inverse[at] = made_inverse
             self.placed_model, self.placed_inverse, self.placed_params = (
                 model, inverse, params)
             self.version += 1
@@ -411,7 +456,8 @@ class DecalTable:
         the renderer, or None when nothing is alive. ``params`` is
         ``(variant, opacity, kind, flags)``; opacity falls to 0 over the
         last *fade* seconds of *lifetime*. ``inverses`` are the boxes'
-        (:func:`box_inverse`).
+        (:func:`box_inverse`), a placed decal's ``tint - 1`` in the bottom
+        row (:data:`TINT_SLOTS`).
         Copies: the logic thread goes on writing the table."""
         rows = self.live(now, lifetime)
         placed = len(self.placed_model)

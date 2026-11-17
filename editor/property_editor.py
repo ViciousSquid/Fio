@@ -3807,6 +3807,12 @@ class PropertyEditor(QWidget):
                             _hbox(slider, label, stretch=False))
                 continue
 
+            if isinstance(thing, Decal) and key == 'tint':
+                self._add_tint_widget(
+                    form, thing, key='decal_tint_button',
+                    tooltip="Multiplies the decal's colour. White leaves it as it is.")
+                continue
+
             if isinstance(thing, Decal) and key == 'text_colour':
                 from engine import decal_text
                 combo = _make_combo(
@@ -5512,10 +5518,12 @@ class PropertyEditor(QWidget):
         h.addWidget(swatch)
         form_layout.addRow(label, widget)
 
-    def _add_tint_widget(self, form_layout, thing):
-        """A model's Tint: a swatch that multiplies the model's colour.
+    def _add_tint_widget(self, form_layout, thing, key='prop_tint_button',
+                         tooltip="Multiplies the model's colour. White leaves it as it is."):
+        """A Tint: a swatch that multiplies a model's -- or a decal's --
+        colour.
 
-        Stored as 0..1 floats; white (the default) leaves the model as it is.
+        Stored as 0..1 floats; white (the default) leaves it as it is.
         """
         widget = QWidget()
         h = QHBoxLayout(widget)
@@ -5542,7 +5550,7 @@ class PropertyEditor(QWidget):
                 set_tint([color.redF(), color.greenF(), color.blueF()])
 
         swatch = self._color_button(current(), pick, size=(140, 28))
-        swatch.setToolTip("Multiplies the model's colour. White leaves it as it is.")
+        swatch.setToolTip(tooltip)
         reset = QPushButton("Reset")
         reset.setToolTip("No tint (white)")
         reset.clicked.connect(lambda: set_tint([1.0, 1.0, 1.0]))
@@ -5550,7 +5558,7 @@ class PropertyEditor(QWidget):
         h.addWidget(reset)
         h.addStretch()
         form_layout.addRow("Tint:", widget)
-        self._widgets['prop_tint_button'] = swatch
+        self._widgets[key] = swatch
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])
