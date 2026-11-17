@@ -594,14 +594,24 @@ class TerrainGL:
         """*paint* (n, n, 4 uint8) at half the side, colour weighted by alpha
         (an unpainted texel is black, and must not darken its neighbours)."""
         n = paint.shape[0] // 2
-        blocks = paint[:n * 2, :n * 2].reshape(n, 2, n, 2, 4).astype(np.float32)
-        alpha = blocks[..., 3:4]
-        weight = alpha.sum(axis=(1, 3))
-        colour = (blocks[..., :3] * alpha).sum(axis=(1, 3))
-        np.divide(colour, weight, out=colour, where=weight > 0.0)
+        texels = paint[:n * 2, :n * 2]
+        # In integers, a 2x2 block at a time: the same values the float
+        # version rounded to, several times quicker (this runs three times
+        # for every chunk a stamp touches, on the frame that shows it).
+        alpha = texels[..., 3].astype(np.uint32)
+        weight = (alpha[0::2, 0::2] + alpha[0::2, 1::2]
+                  + alpha[1::2, 0::2] + alpha[1::2, 1::2])
         out = np.empty((n, n, 4), dtype=np.uint8)
-        out[..., :3] = np.clip(colour + 0.5, 0, 255)
-        out[..., 3:4] = np.clip(weight * 0.25 + 0.5, 0, 255)
+        if not weight.any():
+            out[:] = 0
+            return out
+        divisor = np.maximum(weight, 1)
+        for channel in range(3):
+            scaled = texels[..., channel] * alpha
+            total = (scaled[0::2, 0::2] + scaled[0::2, 1::2]
+                     + scaled[1::2, 0::2] + scaled[1::2, 1::2])
+            out[..., channel] = (2 * total + divisor) // (2 * divisor)
+        out[..., 3] = (weight + 2) >> 2
         return out
 
     def _upload_paint_chunk(self, slot: int):

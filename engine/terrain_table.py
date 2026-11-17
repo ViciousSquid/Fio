@@ -118,7 +118,7 @@ class TerrainTable:
     # Debug Tables instrument discovers a table's columns.
     __slots__ = tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'slot_of_coord', '_free', '_next_order',
-        '_capacity')
+        '_capacity', 'grass_epoch')
 
     def __init__(self):
         #: Bumped whenever the columns are reallocated, so a reader on another
@@ -132,6 +132,10 @@ class TerrainTable:
         self._free: list = []
         self._next_order = 0
         self._capacity = 0
+        #: Moves on whenever grass is marked due for anything but a stamp
+        #: added over it (Terrain._thin_grass trusts the grass it has only
+        #: while this stands still).
+        self.grass_epoch = 0
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -459,11 +463,13 @@ class TerrainTable:
         self.seq[slot] += 1                         # even: consistent
 
     def mark_all_dirty(self):
+        self.grass_epoch += 1
         live = self.live[:self._capacity]
         self.dirty[:self._capacity][live] = True
         self.grass_dirty[:self._capacity][live] = True
 
     def mark_grass_dirty(self):
+        self.grass_epoch += 1
         live = self.live[:self._capacity]
         self.grass_dirty[:self._capacity][live] = True
 
@@ -479,6 +485,7 @@ class TerrainTable:
         cz = self.world[slots, 1] + size / 2
         half = size / 2 + radius
         hit = (np.abs(cx - world_x) < half) & (np.abs(cz - world_z) < half)
+        self.grass_epoch += 1
         self.dirty[slots[hit]] = True
         self.grass_dirty[slots[hit]] = True
 

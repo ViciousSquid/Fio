@@ -103,3 +103,62 @@ def test_moving_a_stamp_moves_the_clearing_when_the_drag_ends(texture):
     terrain.finish_stamp_edit()
     after = _blades(terrain)
     assert at(after, 180.0) == 0 and at(after, 70.0) > 0
+
+
+# -- adding a stamp thins the grass it has instead of growing it again ------
+
+def _published(terrain):
+    table = terrain.table
+    slot = table.slot_of_coord[(0, 0)]
+    return terrain.products.grass[int(slot)][2]
+
+
+def _settle(terrain):
+    return _resident(terrain)
+
+
+def test_a_stamp_thins_the_published_grass_to_exactly_what_a_rebuild_grows(
+        texture, monkeypatch):
+    terrain = _settle(_meadow()[0])
+    grown = []
+    real = terrain._generate_grass_blades
+    monkeypatch.setattr(terrain, "_generate_grass_blades",
+                        lambda slot: grown.append(slot) or real(slot))
+
+    terrain.add_paint_stamp(128.0, 128.0, 70.0, texture, feather=0.5)
+    terrain.add_paint_stamp(60.0, 200.0, 40.0, texture, feather=0.0)
+    _settle(terrain)
+
+    assert not grown, "the chunk's grass was grown again for a stamp"
+    thinned = _published(terrain)
+    assert np.array_equal(thinned, real(terrain.table.slot_of_coord[(0, 0)])), (
+        "thinning left different grass than growing it again does")
+    assert np.hypot(thinned[:, 0] - 60.0, thinned[:, 2] - 200.0).min() > 38.0
+
+
+def test_anything_but_an_added_stamp_still_grows_the_grass_again(
+        texture, monkeypatch):
+    terrain = _settle(_meadow()[0])
+    stamp = terrain.add_paint_stamp(128.0, 128.0, 70.0, texture, feather=0.0)
+    _settle(terrain)
+    grown = []
+    real = terrain._generate_grass_blades
+    monkeypatch.setattr(terrain, "_generate_grass_blades",
+                        lambda slot: grown.append(slot) or real(slot))
+
+    # A stamp moved away uncovers ground: its grass must come back.
+    terrain.move_paint_stamps([stamp['id']], 400.0, 0.0)
+    _settle(terrain)
+    assert grown, "moving a stamp did not regrow the grass it uncovered"
+    blades = _published(terrain)
+    assert (np.hypot(blades[:, 0] - 128.0, blades[:, 2] - 128.0) < 50.0).sum() > 20
+
+    # A stamp added while the grass is already due for another reason
+    # (density changed) is not thinned from the stale grass.
+    grown.clear()
+    terrain.set_grass(True, 0.03)
+    terrain.add_paint_stamp(128.0, 128.0, 30.0, texture, feather=0.0)
+    _settle(terrain)
+    assert grown
+    assert np.array_equal(_published(terrain),
+                          real(terrain.table.slot_of_coord[(0, 0)]))
