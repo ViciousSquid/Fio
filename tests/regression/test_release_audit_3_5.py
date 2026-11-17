@@ -3,13 +3,14 @@
 * A file command during Play must not write or clear the running game's world.
 * Terrain edits made in the Terrain Editor panel are edits: the map is unsaved.
 * Settings -> Apply & Restart settles unsaved work first, like closing does.
-* A LogicState's values belong to a play session: a new Play starts from the
-  authored ``initial_data``, Stop leaves no trace, and another map does not
-  inherit them. A level change during Play still carries them.
+* With "Restore the world when leaving Play" on, a LogicState's values belong
+  to the play session: a new Play starts from the authored ``initial_data``
+  and Stop leaves no trace. With it off they are kept, as the world is.
+  Either way another map opened in the editor does not inherit them, and a
+  level change during Play still carries them.
 * Load Game restores LogicState values, from a full save and from a delta.
 """
 import json
-import os
 
 import pytest
 
@@ -56,7 +57,7 @@ def clean_registry():
 # ---------------------------------------------------------------------------
 
 def test_save_during_play_does_not_write_the_running_world(
-        fio_session, tmp_path, clean_registry):
+        fio_session, tmp_path, clean_registry, monkeypatch):
     session = fio_session(_level({"kills": 0}))
     window = session.window
     path = str(tmp_path / "authored.json")
@@ -68,14 +69,16 @@ def test_save_during_play_does_not_write_the_running_world(
     session.step(2)
     _increment(session, 3)
     window.save_level()
+    autosaves = []
+    monkeypatch.setattr(window, "_write_autosave",
+                        lambda: autosaves.append(True))
     window.unsaved_changes = True
     window.autosave()
     session.stop_play()
 
     assert open(path, encoding="utf-8").read() == authored, (
         "Save during Play replaced the authored map with the play world")
-    autosave = os.path.join(window.root_dir, "maps", "authored_autosave.json")
-    assert not os.path.exists(autosave), "autosave ran during Play"
+    assert not autosaves, "the autosave timer wrote the play world"
     window.unsaved_changes = False
 
 
@@ -199,6 +202,29 @@ def test_a_playtest_leaves_no_logic_state_behind(fio_session, clean_registry):
     session.stop_play()
 
 
+def test_with_restore_world_off_the_stores_are_kept_like_the_world(
+        fio_session, clean_registry):
+    session = fio_session(_level({"kills": 0}))
+    config = session.window.config
+    if not config.has_section("Settings"):
+        config.add_section("Settings")
+    config.set("Settings", "restore_world_on_stop", "False")
+
+    session.start_play()
+    session.step(2)
+    _increment(session, 3)
+    session.stop_play()
+    assert _store(session).get_value("kills") == 3, (
+        "Stop reset the stores although the world is not restored")
+
+    session.start_play()
+    session.step(1)
+    assert _store(session).get_value("kills") == 3, (
+        "Play reset the stores although the world is not restored")
+    session.stop_play()
+    session.window.unsaved_changes = False
+
+
 def test_play_starts_from_the_initial_data_as_last_edited(
         fio_session, clean_registry):
     session = fio_session(_level({"kills": 0}))
@@ -230,8 +256,11 @@ def test_another_map_does_not_inherit_a_store_of_the_same_name(
 
 
 def test_a_level_change_during_play_still_carries_the_stores(
-        fio_session, clean_registry):
+        fio_session, clean_registry, monkeypatch):
     session = fio_session(_level({"kills": 0}))
+    # The in-memory level counts as unsaved work, which a level change
+    # autosaves into maps/: not this test's subject, and not to be left there.
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
     session.start_play()
     session.step(1)
     _increment(session, 3)

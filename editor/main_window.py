@@ -2724,13 +2724,19 @@ class MainWindow(QMainWindow):
             return
 
         player_start = self.state.resolve_player_start()
-        if player_start:
-            # A Play the author starts is a new game: every LogicState begins
-            # at its authored values, not at what the last playtest left.
+        if player_start and self._restores_world_on_stop():
+            # With "Restore the world when leaving Play" on, a Play the author
+            # starts is a new game: every LogicState begins at its authored
+            # values (as last edited), not at what a playtest left. With it
+            # off the stores are kept, exactly as the world is.
             # (A level change during Play restarts through _start_play and
             # keeps the stores: that carry is what they are for.)
             self._reset_logic_state_stores()
         self._start_play(player_start)
+
+    def _restores_world_on_stop(self):
+        return self.config.getboolean('Settings', 'restore_world_on_stop',
+                                      fallback=False)
 
     def _reset_logic_state_stores(self):
         from editor.things import LogicState
@@ -2803,8 +2809,7 @@ class MainWindow(QMainWindow):
         dead monsters, killed or hidden objects -- as it always has.
         """
         self._pre_play_world = None
-        if not self.config.getboolean('Settings', 'restore_world_on_stop',
-                                      fallback=False):
+        if not self._restores_world_on_stop():
             return
         self._pre_play_world = (
             self.state.snapshot(),
@@ -2917,19 +2922,17 @@ class MainWindow(QMainWindow):
             if self.state.set_editor_whole_world(shown, self.view_3d.camera.pos):
                 self.update_all_ui()
 
-    def _exit_play_mode(self, *, level_change=False):
-        """Exit play mode and return to editor.
-
-        *level_change* marks the stop half of a level change during Play,
-        where the LogicState stores carry over to the next level.
-        """
+    def _exit_play_mode(self):
+        """Exit play mode and return to editor."""
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
-            restoring = self._pre_play_world is not None
+            restoring = getattr(self, '_pre_play_world', None) is not None
             self._restore_pre_play_world()
-            if restoring and not level_change:
+            if restoring:
                 # The restored world is the authored one; so are its stores.
+                # (A level change during Play takes the captured world away
+                # before it stops the session, so its stores carry over.)
                 self._reset_logic_state_stores()
             stream = self.state.editor_stream
             if stream is not None and stream.suspended:
@@ -5057,7 +5060,7 @@ class MainWindow(QMainWindow):
                 # The world captured at Play belongs to the map being left.
                 captured = self._pre_play_world
                 self._pre_play_world = None
-                self._exit_play_mode(level_change=True)
+                self._exit_play_mode()
                 self._keep_unsaved_work_on_level_change(captured)
             else:
                 # Opening a map in the editor: the previous map's (or a
