@@ -2615,32 +2615,25 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Bounciness:", bounciness_spin)
         self._widgets['prop_bounciness_spin'] = bounciness_spin
 
+        # One checkbox, two shapes -- both taken from the model itself: its
+        # actual triangles, or a box around them. ("Automatic", the old
+        # third choice, was the model's shape where it has one: ticked.)
         shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
-        shape_labels = {
-            'auto': 'Automatic',
-            'aabb': 'AABB',
-            'mesh': 'Mesh',
-        }
-        shape_combo = _make_combo(
-            list(shape_labels.values()),
-            shape_labels.get(shape_mode, 'Automatic'),
-            None,
-            tooltip=(
-                "Automatic uses mesh collision where supported and otherwise "
-                "uses the model bounds. AABB always uses a box around the model."
-            ),
-        )
-        reverse_shape_labels = {label: value for value, label in shape_labels.items()}
-
-        def on_shape_changed(label):
-            self.update_object_prop(
-                'collision_shape',
-                reverse_shape_labels.get(label, 'auto'),
-            )
-
-        shape_combo.currentTextChanged.connect(on_shape_changed)
-        physics_form.addRow("Collision Shape:", shape_combo)
-        self._widgets['prop_collision_shape_combo'] = shape_combo
+        shape_cb = _make_checkbox(
+            "Collide with the model's shape", shape_mode != 'aabb',
+            lambda checked: self.update_object_prop(
+                'collision_shape', 'mesh' if checked else 'aabb'),
+            _Style.CHECKBOX)
+        shape_cb.setToolTip(
+            "Ticked: collisions use the model's actual shape (its triangles).\n"
+            "Unticked: they use a box derived from the model -- its bounds at\n"
+            "its scale. A box is the steadier choice for barrels, crates and\n"
+            "anything that is stacked.\n"
+            "A model with no collision mesh (an OBJ today) uses the box either\n"
+            "way, and while a Prop is a moving physics body the other bodies\n"
+            "meet it as that box. Collision Size, when set, overrides both.")
+        physics_form.addRow("", shape_cb)
+        self._widgets['prop_collision_shape_cb'] = shape_cb
 
         collision_size = thing.properties.get('collision_size')
         cs_widget, cs_inputs = self._vec3_row(
