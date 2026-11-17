@@ -2279,6 +2279,14 @@ class PassesMixin:
         spreads = table.water_wave_spread[brushes].tolist()
         spread_loc = uniforms['waveSpread']
         tints = table.water_tint[brushes]
+        # Emissive water glows in its tint. The uniform is touched only when
+        # the map has such water, or had and it must be put back.
+        emissive = (table.emit_params[brushes, 0] > 0.0
+                    if len(table.emissive_slots) else None)
+        emissive_loc = uniforms['waterEmissive']
+        if emissive_loc is None:
+            emissive_loc = -1
+        glowing = bool(getattr(self, '_water_emissive_on', False))
         planes = table.water_plane[brushes]
         bits = table.class_bits[brushes]
         geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
@@ -2326,6 +2334,12 @@ class PassesMixin:
             gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
             gl.glUniform1f(spread_loc, spreads[i])
             upload_tint(tint_loc, i)
+            if emissive_loc != -1:
+                wanted = bool(emissive is not None and emissive[i])
+                if wanted != glowing:
+                    gl.glUniform1f(emissive_loc, 1.0 if wanted else 0.0)
+                    glowing = wanted
+                    self._water_emissive_on = wanted
             gl.glUniform3f(
                 brush_size_loc,
                 float(sizes[i, 0]),

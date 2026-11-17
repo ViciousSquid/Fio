@@ -1,0 +1,81 @@
+"""The Emissive controls are the same wherever something can glow.
+
+A decal, a Glow brush and water each get the Emissive checkbox with two
+numeric fields -- Light Intensity and Light Radius -- so the amount of light
+is always there to set, and always set the same way.
+"""
+import pytest
+from PyQt5.QtWidgets import QCheckBox, QDoubleSpinBox, QLabel, QSlider
+
+pytestmark = pytest.mark.qt
+
+
+def _controls(editor, prefix):
+    widgets = editor._widgets
+    return (widgets.get(prefix + '_emissive_cb'),
+            widgets.get(prefix + '_emissive_intensity'),
+            widgets.get(prefix + '_emissive_radius'))
+
+
+def _labels(editor):
+    return {label.text() for label in editor.findChildren(QLabel)}
+
+
+def _select(main_window, obj):
+    main_window.set_selected_objects([obj])
+    main_window.property_editor.set_object(obj)
+    return main_window.property_editor
+
+
+def _brush(shader):
+    return {'id': 'b-' + shader, 'name': shader, 'pos': [0, 0, 0],
+            'size': [64, 64, 64], 'shader': shader}
+
+
+def _subjects(main_window):
+    from editor.things import Decal
+    glow, water = _brush('Glow'), _brush('Water')
+    decal = Decal(pos=[0, 0, 0], properties={'id': 'd-1'})
+    main_window.state.brushes += [glow, water]
+    main_window.state.things.append(decal)
+    return (('glow', glow, glow), ('water', water, water),
+            ('decal', decal, decal.properties))
+
+
+def test_every_emissive_thing_has_the_same_numeric_controls(main_window):
+    seen = {}
+    for prefix, obj, props in _subjects(main_window):
+        editor = _select(main_window, obj)
+        checkbox, intensity, radius = _controls(editor, prefix)
+
+        assert isinstance(checkbox, QCheckBox), prefix + ": no Emissive checkbox"
+        assert isinstance(intensity, QDoubleSpinBox), (
+            prefix + ": the amount of light is not a numeric field")
+        assert isinstance(radius, QDoubleSpinBox), prefix
+        assert not isinstance(intensity, QSlider)
+        seen[prefix] = ((intensity.minimum(), intensity.maximum(), intensity.decimals()),
+                        (radius.minimum(), radius.maximum(), radius.decimals()))
+        assert {"Light Intensity:", "Light Radius:"} <= _labels(editor), (
+            prefix, sorted(_labels(editor)))
+        assert "Emissive Intensity:" not in _labels(editor), (
+            prefix + ": a second, differently named amount field")
+
+    assert len(set(seen.values())) == 1, f"the controls differ: {seen}"
+
+
+def test_the_amount_fields_write_the_properties_the_light_reads(main_window):
+    for prefix, obj, props in _subjects(main_window):
+        editor = _select(main_window, obj)
+        checkbox, intensity, radius = _controls(editor, prefix)
+
+        checkbox.setChecked(True)
+        editor = main_window.property_editor
+        _, intensity, radius = _controls(editor, prefix)
+        intensity.setValue(3.5)
+        _, intensity, radius = _controls(main_window.property_editor, prefix)
+        radius.setValue(400.0)
+
+        assert props.get('emissive') is True, prefix
+        assert props.get('emissive_intensity') == pytest.approx(3.5), prefix
+        assert props.get('emissive_radius') == pytest.approx(400.0), prefix
+    main_window.unsaved_changes = False

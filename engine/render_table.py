@@ -331,10 +331,11 @@ _COLUMNS = (
     #: The Glow pass's overbright colour -- base colour times intensity,
     #: clamped.
     ('glow_colour', (3,), np.float32, 0.0),
-    #: An emissive Glow brush's light: its colour (the tint if it has one,
-    #: else its colour -- what the brush glows, before the overbright), and
-    #: ``(intensity, radius)``. Intensity 0 for every other brush, which is
-    #: what :attr:`RenderTable.emissive_slots` is found from.
+    #: An emissive Glow or Water brush's light: its colour (a Glow brush's
+    #: tint if it has one, else its colour -- what it glows, before the
+    #: overbright; water's Water Tint), and ``(intensity, radius)``.
+    #: Intensity 0 for every other brush, which is what
+    #: :attr:`RenderTable.emissive_slots` is found from.
     ('emit_colour', (3,), np.float32, 0.0),
     ('emit_params', (2,), np.float32, 0.0),
     #: The brush's geometry epoch when the row was resolved, so a stale mesh
@@ -890,12 +891,16 @@ class RenderTable:
             glow_base = normalize_color(tint or brush.get('colour'),
                                         default=[1.0, 1.0, 1.0])
             glow[row] = [min(c * intensity, 10.0) for c in glow_base]
-            if b & CLASS_GLOW and brush.get('emissive'):
-                # Neon: the brush lights its surroundings in the colour it
-                # glows. Only an emissive Glow brush is read any further.
+            if b & (CLASS_GLOW | CLASS_WATER) and brush.get('emissive'):
+                # Neon, or glowing water: the brush lights its surroundings
+                # in the colour it glows -- a Glow brush's tint or colour,
+                # water's Water Tint. Only an emissive brush of those two
+                # kinds is read any further.
                 emit = _emissive_light(brush)
                 if emit is not None:
-                    emit_colour[row] = [min(max(c, 0.0), 1.0) for c in glow_base]
+                    base = (normalize_color(brush.get('water_tint', [0.0, 0.4, 0.6]))
+                            if b & CLASS_WATER else glow_base)
+                    emit_colour[row] = [min(max(c, 0.0), 1.0) for c in base]
                     emit_params[row] = emit
 
             # The brush's own geometry epoch, which every change to its shape
@@ -1097,9 +1102,15 @@ class RenderTable:
         slots = self.emissive_slots
         if not len(slots):
             return None
-        return (self.center[slots], self.emit_colour[slots],
+        positions = self.center[slots]              # a copy: fancy-indexed
+        half = self.half[slots]
+        water = (self.class_bits[slots] & CLASS_WATER) != 0
+        if water.any():
+            # Water glows from its surface, not from the middle of its depth.
+            positions[water, 1] += half[water, 1]
+        return (positions, self.emit_colour[slots],
                 self.emit_params[slots], ~self.hidden[slots],
-                self.half[slots].max(axis=1).astype(np.float32))
+                half.max(axis=1).astype(np.float32))
 
     def shown(self):
         """``(mask, slots)`` of the rows not hidden, over the live rows.

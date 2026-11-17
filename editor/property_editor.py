@@ -1753,18 +1753,30 @@ class PropertyEditor(QWidget):
         form.addRow("Intensity:", _hbox(slider, label, stretch=False))
         self._widgets['glow_intensity_slider'] = slider
 
-        # Neon: a Glow brush that lights its surroundings (engine.render_table:
-        # brush_lights), in the colour it glows -- its tint, if it has one.
+        self._add_emissive_rows(
+            form, brush, 'glow',
+            "The brush lights its surroundings in the colour it glows: its tint,\n"
+            "if it has one, else its colour. This is how neon is made.\n"
+            "Off, the brush is not a light and costs nothing extra.")
+
+        layout.addLayout(form)
+        return group
+
+    def _add_emissive_rows(self, form, brush, prefix, tooltip):
+        """The Emissive checkbox with its Light Intensity and Light Radius.
+
+        The one set of controls for everything that can glow -- a decal, a
+        Glow brush, water -- so the amount of light is always set the same
+        way: two numeric fields, never a slider in one place and a number in
+        another. *brush* is the object's properties (a brush is its own).
+        """
         emissive_cb = _make_checkbox(
             "Emissive", bool(brush.get('emissive', False)),
             lambda checked: self.update_object_prop('emissive', bool(checked)),
             _Style.CHECKBOX)
-        emissive_cb.setToolTip(
-            "The brush lights its surroundings in the colour it glows: its tint,\n"
-            "if it has one, else its colour. This is how neon is made.\n"
-            "Off, the brush is not a light and costs nothing extra.")
+        emissive_cb.setToolTip(tooltip)
         form.addRow("", emissive_cb)
-        self._widgets['glow_emissive_cb'] = emissive_cb
+        self._widgets[prefix + '_emissive_cb'] = emissive_cb
         for key, label_text, default, top, tip in (
                 ('emissive_intensity', "Light Intensity:", 1.0, 100.0,
                  "How bright the emitted light is, as a Light's intensity."),
@@ -1782,10 +1794,7 @@ class PropertyEditor(QWidget):
             spin.valueChanged.connect(
                 lambda value, k=key: self.update_object_prop(k, float(value)))
             form.addRow(label_text, spin)
-            self._widgets['glow_' + key] = spin
-
-        layout.addLayout(form)
-        return group
+            self._widgets[prefix + '_' + key] = spin
 
     def _create_water_properties(self, brush):
         group = QGroupBox("Water Properties")
@@ -1832,6 +1841,11 @@ class PropertyEditor(QWidget):
             form.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
 
+        self._add_emissive_rows(
+            form, brush, 'water',
+            "The water glows in its Water Tint and lights its surroundings\n"
+            "in that colour, from its surface: lava, toxic waste, a lit pool.\n"
+            "Off, the water is not a light and costs nothing extra.")
         layout.addLayout(form)
 
         dist_group = QGroupBox("Distortion Effects")
@@ -3868,21 +3882,20 @@ class PropertyEditor(QWidget):
                 form.addRow(QLabel("Text Colour:"), combo)
                 continue
 
-            # A decal that glows (engine.entity_table: _decal_light).
+            # A decal that glows (engine.entity_table: _decal_light): the
+            # same three controls a Glow brush and water have.
             if isinstance(thing, Decal) and key == 'emissive':
-                cb = _make_checkbox(
-                    "Emissive", bool(value),
-                    lambda checked, k=key: self.update_object_prop(k, bool(checked)),
-                    _Style.CHECKBOX)
-                cb.setToolTip(
+                self._add_emissive_rows(
+                    form, thing.properties, 'decal',
                     "The decal glows like a screen: its whole face is equally bright,\n"
                     "and its face emits light into the room in the main colour of its\n"
                     "image (times its tint).\n"
-                    "Emissive Intensity and Emissive Radius set how bright and how far.\n"
+                    "Light Intensity and Light Radius set how bright and how far.\n"
                     "Off, the decal is not a light and costs nothing extra.")
-                form.addRow("", cb)
-                self._widgets['decal_emissive'] = cb
                 continue
+            if isinstance(thing, Decal) and key in ('emissive_intensity',
+                                                     'emissive_radius'):
+                continue                    # added with the checkbox, above
 
             # Logic gate type.
             if isinstance(thing, LogicGate) and key == 'logic_type':

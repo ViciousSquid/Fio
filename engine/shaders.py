@@ -998,6 +998,9 @@ uniform float roughness;
 uniform float fresnelIntensity;
 uniform vec2 screenSize;
 uniform vec3 waterTint;
+// 1 for emissive water (it glows in its tint, whatever light falls on it);
+// 0 for all other water, which this then leaves exactly as it was.
+uniform float waterEmissive;
 
 // Scene depth, copied once per water pass alongside sceneColor. With it the
 // water knows how much of it lies in front of the bed: colour absorption by
@@ -1552,6 +1555,13 @@ void main()
             waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
         );
         alpha = min(alpha + 0.15, 1.0);
+    }
+
+    if (waterEmissive > 0.0) {
+        // Glowing water: its own colour shows through the reflections and
+        // the dark, strongest where the surface is seen square on.
+        color = mix(color, waterTint * 1.6 + vec3(0.04), 0.7 * waterEmissive);
+        alpha = min(alpha + 0.3 * waterEmissive, 1.0);
     }
 
     FragColor = vec4(applyFog(color, FragPos), alpha);

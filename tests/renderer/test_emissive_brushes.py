@@ -208,3 +208,46 @@ def test_only_a_light_with_a_source_size_fades_in():
     assert 'fioSourceFade(' in source and 'params.z' in source
     assert 'if (size <= 0.0) return 1.0;' in source
     assert '.intensity' not in source
+
+
+# ---------------------------------------------------------------------------
+# Emissive water
+# ---------------------------------------------------------------------------
+
+def _water(name, pos=(0, 0, 0), size=(200, 40, 100), **props):
+    return box_brush(name, pos, size, shader='Water', **props)
+
+
+def test_water_is_not_a_light_unless_it_is_emissive():
+    table = _brushes(_water('pond'), _water('lava', water_tint=[1.0, 0.3, 0.0]))
+
+    assert table.brush_lights() is None
+
+
+def test_emissive_water_lights_in_its_tint_from_its_surface():
+    table = _brushes(
+        _water('plain', (0, 50, 0), emissive=True),
+        _water('lava', (500, 10, 0), emissive=True, water_tint=[1.0, 0.25, 0.0],
+               emissive_intensity=2.0, emissive_radius=320.0))
+
+    positions, colours, params, on, sizes = table.brush_lights()
+
+    np.testing.assert_allclose(colours[0], (0.0, 0.4, 0.6), atol=1e-6,
+                               err_msg="untinted water glows the default water colour")
+    np.testing.assert_allclose(colours[1], (1.0, 0.25, 0.0), atol=1e-6,
+                               err_msg="the Water Tint is the light")
+    # The surface: the top of the brush, not the middle of its depth.
+    np.testing.assert_allclose(positions, [(0, 70, 0), (500, 30, 0)])
+    np.testing.assert_allclose(params[1], (2.0, 320.0))
+    np.testing.assert_allclose(sizes, [100.0, 100.0])
+    assert on.all()
+
+
+def test_the_water_shader_is_unchanged_for_water_that_does_not_glow():
+    from engine import shaders
+
+    source = shaders.DEFAULT_SHADERS['water.frag']
+
+    assert 'uniform float waterEmissive;' in source
+    assert 'if (waterEmissive > 0.0) {' in source, (
+        "the emissive term is not guarded: it would touch all water")
