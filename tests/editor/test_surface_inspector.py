@@ -329,6 +329,36 @@ def test_applying_the_browser_texture(inspector):
     assert ft.get_transform(brush, 'north')['texture'] == name
 
 
+def test_whole_brush_scope_textures_every_face_of_the_brush(inspector):
+    host, panel, brush = inspector
+    name = _select_shipped_texture(host)
+    panel.scope_brush.setChecked(True)
+
+    panel._apply_selected_texture()
+
+    faces = ft.face_keys(brush)
+    assert len(faces) == 6
+    assert {key: ft.get_transform(brush, key)['texture'] for key in faces} == {
+        key: name for key in faces}
+    assert set(brush['textures'].values()) == {name}, brush['textures']
+
+
+def test_whole_brush_scope_textures_every_selected_brush(inspector):
+    host, panel, brush = inspector
+    other, outsider = make_box(pos=(1000, 0, 0)), make_box(pos=(2000, 0, 0))
+    host.state.brushes.extend([other, outsider])
+    host.set_selected_objects([brush, other])
+    name = _select_shipped_texture(host)
+    panel.scope_brush.setChecked(True)
+
+    panel._apply_selected_texture()
+
+    for box in (brush, other):
+        assert {ft.get_transform(box, key)['texture']
+                for key in ft.face_keys(box)} == {name}
+    assert name not in outsider['textures'].values()
+
+
 def test_applying_with_no_texture_selected_says_so(inspector):
     host, panel, brush = inspector
     for tab in (host.asset_browser.tab_textures,):
