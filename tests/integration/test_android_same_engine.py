@@ -30,7 +30,7 @@ def staged(tmp_path_factory):
 
 def test_nothing_patches_the_engine_for_android():
     assert not list((ROOT / 'player').rglob('*.patch'))
-    source = (ROOT / 'player' / 'tools' / 'stage_runtime.py').read_text()
+    source = (ROOT / 'player' / 'tools' / 'stage_runtime.py').read_text(encoding='utf-8')
     assert 'subprocess' not in source and "'patch'" not in source
 
 
@@ -42,7 +42,7 @@ def test_every_staged_engine_module_is_the_checkouts(staged):
         assert _digest(destination / source) == _digest(ROOT / source), source
         assert receipt['source_sha256'][source] == _digest(ROOT / source)
     assert receipt['same_engine'] is True
-    assert json.loads((destination / 'player/runtime-build.json').read_text()) == receipt
+    assert json.loads((destination / 'player/runtime-build.json').read_text(encoding='utf-8')) == receipt
 
 
 def test_the_only_modules_staging_adds_are_the_desktops_own_relocated(staged):
@@ -74,8 +74,8 @@ def test_what_android_needs_of_the_engine_is_the_engines_own():
     assert state.get_movement_axes() == (1.0, -0.25)    # clamped
     # Read, not imported: the model loaders need a GL binding to import.
     engine = ROOT / 'engine'
-    assert 'def load_bytes(' in (engine / 'glb_loader.py').read_text()
-    assert 'def load_text(' in (engine / 'obj_loader.py').read_text()
-    assert 'def load_model(' in (engine / 'model_source.py').read_text()
-    assert 'threaded_ai' in (engine / 'logic_thread.py').read_text()
-    assert 'request_level_change' in (ROOT / 'editor' / 'io_handlers.py').read_text()
+    assert 'def load_bytes(' in (engine / 'glb_loader.py').read_text(encoding='utf-8')
+    assert 'def load_text(' in (engine / 'obj_loader.py').read_text(encoding='utf-8')
+    assert 'def load_model(' in (engine / 'model_source.py').read_text(encoding='utf-8')
+    assert 'threaded_ai' in (engine / 'logic_thread.py').read_text(encoding='utf-8')
+    assert 'request_level_change' in (ROOT / 'editor' / 'io_handlers.py').read_text(encoding='utf-8')

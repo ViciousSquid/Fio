@@ -273,7 +273,7 @@ def test_a_player_whose_physics_is_off_is_not_handed_to_physics():
     """Noclip, a spectator's free camera: the engine passes no player, so it
     pushes nothing. (What the deathmatch spectator used to patch ``step``
     for.)"""
-    source = open(__import__('engine.logic_thread', fromlist=['x']).__file__).read()
+    source = open(__import__('engine.logic_thread', fromlist=['x']).__file__, encoding='utf-8').read()
     assert "if not getattr(player, 'physics_enabled', True):" in source
 
     prop = _prop()

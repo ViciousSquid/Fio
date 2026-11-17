@@ -117,7 +117,7 @@ def test_soma_satisfies_the_contract():
 def test_soma_reads_only_contract_properties():
     """Every authored property the built-in physics reads is in the contract,
     so another implementation knows the whole of what a body is."""
-    source = (ROOT / 'engine' / 'physics' / 'soma.py').read_text()
+    source = (ROOT / 'engine' / 'physics' / 'soma.py').read_text(encoding='utf-8')
     read = set()
     for node in ast.walk(ast.parse(source)):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -141,7 +141,7 @@ def test_the_boundary_imports_without_numpy_or_glm():
 def _imports(path):
     """Every module *path* imports, as dotted names relative imports resolved."""
     package = '.'.join(path.relative_to(ROOT).with_suffix('').parts[:-1])
-    for node in ast.walk(ast.parse(path.read_text())):
+    for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name, ()
@@ -181,7 +181,7 @@ def test_the_built_in_physics_keeps_no_copy_of_the_world():
     modules = {module for module, _names in _imports(path)}
     assert 'engine.mover_table' not in modules
     assert 'engine.constants' not in modules
-    source = path.read_text()
+    source = path.read_text(encoding='utf-8')
     assert '.cells' not in source
     assert 'world_bounds' not in source
 

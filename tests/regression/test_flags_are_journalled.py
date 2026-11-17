@@ -70,12 +70,12 @@ def test_no_code_writes_hidden_or_disabled_behind_the_journals_back():
 
 def test_the_streaming_layer_journals_what_it_writes():
     """The one allowed direct writer on live entities does say so."""
-    source = (ROOT / 'plugins/bigworld/runtime.py').read_text()
+    source = (ROOT / 'plugins/bigworld/runtime.py').read_text(encoding='utf-8')
     for function in ('_set_thing_active', '_set_light_active', '_restore_thing'):
         body = source[source.index(f"def {function}("):]
         body = body[:body.index("\n    def ", 1)]
         assert 'touch(' in body, function
-    tiers = (ROOT / 'plugins/bigworld/tiers.py').read_text()
+    tiers = (ROOT / 'plugins/bigworld/tiers.py').read_text(encoding='utf-8')
     assert tiers.count('touch(obj)') >= 4          # every stamp it writes or drops
 
 

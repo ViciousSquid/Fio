@@ -31,7 +31,7 @@ RUNTIME_MODULES = {
 def engine_sources(project):
     """Every engine source the player runs, relative to the checkout."""
     project = Path(project).resolve()
-    return sorted(str(path.relative_to(project))
+    return sorted(path.relative_to(project).as_posix()
                   for path in (project / 'engine').rglob('*.py')
                   if '__pycache__' not in path.parts)
 
@@ -39,7 +39,7 @@ def engine_sources(project):
 def player_source_hashes(project):
     """Build receipt for player code, excluding tests and host/build tools."""
     project = Path(project).resolve()
-    return {str(path.relative_to(project)): hashlib.sha256(path.read_bytes()).hexdigest()
+    return {path.relative_to(project).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((project / 'player').rglob('*.py'))
             if path.relative_to(project / 'player').parts[0]
             not in ('tests', 'tools', 'p4a-recipes', '.buildozer', 'bin')}
@@ -80,7 +80,7 @@ def prepare_runtime(private, project=None):
     # tree has is one of the relocated five.
     relocated = {f'engine/{new}.py' for new in RUNTIME_MODULES.values()}
     for path in sorted((private / 'engine').rglob('*.py')):
-        name = str(path.relative_to(private))
+        name = path.relative_to(private).as_posix()
         if name not in sources and name not in relocated:
             raise RuntimeError(f'Staged engine has a module the checkout does not: {name}')
 

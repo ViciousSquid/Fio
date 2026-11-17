@@ -34,7 +34,7 @@ def test_the_physics_contract_is_importable_from_the_api():
 
 @pytest.mark.parametrize('plugin', ['bigworld', 'deathmatch', 'tidy'])
 def test_the_shipped_plugins_are_built_against_2_0(plugin):
-    source = (ROOT / 'plugins' / plugin / 'plugin.py').read_text()
+    source = (ROOT / 'plugins' / plugin / 'plugin.py').read_text(encoding='utf-8')
     assert re.search(r'^\s+api_version = "2\.0\.0"', source, re.M)
 
 
@@ -43,7 +43,7 @@ def test_nothing_in_api_1_9_is_missing_from_2_0():
     public member of every class -- recorded from the 1.9 source, is still
     here. 2.0 only adds."""
     surface = json.loads(
-        (ROOT / 'tests/plugins/fixtures/api_1_9_surface.json').read_text())
+        (ROOT / 'tests/plugins/fixtures/api_1_9_surface.json').read_text(encoding='utf-8'))
     missing = [name for name in surface['module'] if not hasattr(api, name)]
     for cls, members in surface['classes'].items():
         current = getattr(api, cls, None)
@@ -450,7 +450,7 @@ def _surface():
     public member of every public class."""
     import ast
 
-    tree = ast.parse((ROOT / 'plugins' / 'api.py').read_text())
+    tree = ast.parse((ROOT / 'plugins' / 'api.py').read_text(encoding='utf-8'))
     module, classes = set(), {}
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and not node.name.startswith('_'):
@@ -480,7 +480,7 @@ def test_the_api_surface_is_locked_at_2_0():
     either way this fails until ``API_VERSION`` moves and the recorded
     surface (``fixtures/api_2_0_surface.json``) moves with it."""
     locked = json.loads(
-        (ROOT / 'tests/plugins/fixtures/api_2_0_surface.json').read_text())
+        (ROOT / 'tests/plugins/fixtures/api_2_0_surface.json').read_text(encoding='utf-8'))
     now = _surface()
     removed = sorted(set(locked['module']) - set(now['module']))
     added = sorted(set(now['module']) - set(locked['module']))
