@@ -3844,8 +3844,9 @@ class PropertyEditor(QWidget):
                     lambda checked, k=key: self.update_object_prop(k, bool(checked)),
                     _Style.CHECKBOX)
                 cb.setToolTip(
-                    "The decal lights its surroundings from its forward face, in the\n"
-                    "average colour of its image (times its tint).\n"
+                    "The decal glows like a screen: its whole face is equally bright,\n"
+                    "and its face emits light into the room in the main colour of its\n"
+                    "image (times its tint).\n"
                     "Emissive Intensity and Emissive Radius set how bright and how far.\n"
                     "Off, the decal is not a light and costs nothing extra.")
                 form.addRow("", cb)

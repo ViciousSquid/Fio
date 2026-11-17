@@ -60,7 +60,8 @@ WALL, FLOOR, IMAGE, WET = 0, 1, 2, 3
 #: The ``Decal`` entity properties a placed row is made from.
 PLACED_KEYS = ('texture', 'width', 'height', 'depth', 'yaw',
                'pitch', 'roll', 'mirrored', 'opacity', 'hidden', 'text', 'font',
-               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y', 'tint')
+               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y', 'tint',
+               'emissive')
 
 #: Where a decal's tint rides: the bottom row of its box's inverse, which is
 #: (0, 0, 0, 1) for every box and which nothing reads -- the shader takes a
@@ -100,6 +101,19 @@ def tint_of(value):
     return tuple(min(max(v, 0.0), 1.0) for v in rgb)
 
 
+#: A placed row's flag for an emissive decal (``params[3]``, with 1 mirrored,
+#: 2 selected and 4 white words).
+EMISSIVE_FLAG = 8.0
+
+
+def is_emissive(props):
+    """Whether a ``Decal``'s properties say it glows."""
+    value = props.get('emissive', False)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
 def placed_row(pos, props, layer):
     """``(model (16,), params (4,))`` of a placed decal at *pos* with
     *props*, painting image *layer*; None when it has no size. Its inverse
@@ -122,10 +136,13 @@ def placed_row(pos, props, layer):
     kind = WET if is_wet_image(props.get('texture')) else IMAGE
     opacity = min(max(_number(props.get('opacity'), 1.0), 0.0), 1.0)
     from engine.decal_text import entry, text_colour
-    # Flags: 1 mirrored, 4 white words (decal.frag lets them lighten).
+    # Flags: 1 mirrored, 4 white words (decal.frag lets them lighten),
+    # 8 emissive (painted in its own colours, unlit; never a wet patch).
     flags = 1.0 if props.get('mirrored') else 0.0
     if text_colour(props.get('text_colour')) == 'White' and entry(props) is not None:
         flags += 4.0
+    if kind == IMAGE and is_emissive(props):
+        flags += EMISSIVE_FLAG
     params = np.array((float(layer), opacity, float(kind), flags), dtype=np.float32)
     return model, params
 

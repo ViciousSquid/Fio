@@ -717,9 +717,11 @@ class Decal(Thing):
     text_offset_x, text_offset_y
                 Text Offset: the words moved from the centre, right and up,
                 by up to half the box (-0.5 to 0.5) -- into a plate's panel.
-    emissive    Glows: the decal lights its surroundings from its forward
-                face (the one it is seen from), in the average colour of its
-                image times its tint -- a lit sign, a screen, a lava crack.
+    emissive    Glows, as a screen or a lit sign does: the whole image is
+                painted in its own colours whatever light falls on it, and
+                its face emits light -- into the room in front of it, not onto
+                the wall it is on -- in the main colour of its image (the one
+                most of it is) times its tint.
                 Off (the default) it is not a light at all and costs nothing.
     emissive_intensity, emissive_radius
                 How bright that light is and how far it reaches, as a

@@ -471,37 +471,41 @@ def _model_transform_columns(thing):
     return model, normal_np
 
 
+#: How far in front of its surface an emissive decal's light stands, world
+#: units: on the face, to all intents, but not in the wall.
+DECAL_LIGHT_STANDOFF = 1.0
+
+
 def _is_emissive_decal(props):
     if props.get('type') != 'decal':
         return False
-    value = props.get('emissive', False)
-    if isinstance(value, str):
-        return value.strip().lower() in ('1', 'true', 'yes', 'on')
-    return bool(value)
+    from engine.decal_table import is_emissive
+    return is_emissive(props)
 
 
 def _decal_light(thing):
     """``(colour, (intensity, radius), offset)`` of an emissive decal.
 
-    The colour is the average colour of its image (``decal_textures.
-    average_colour``) times its tint; the light stands at the middle of the
-    box's forward face -- the one the decal is seen from, half its depth back
-    along the throw -- so it lights the surface it is on and the room in
-    front, as a lit sign does.
+    The colour is the main colour of its image (``decal_textures.
+    dominant_colour``) times its tint. The light is emitted from the decal's
+    face: it stands on the surface the decal is painted on, at its middle
+    (a hair's breadth -- :data:`DECAL_LIGHT_STANDOFF` -- in front, so it is
+    not inside the wall). Light from there reaches everything in front of
+    the face and only grazes the wall the decal is on, as a screen's does:
+    the room is lit, the wall around the screen is not.
     """
     props = _light_props(thing)
     from engine.decal_table import tint_of
-    from engine.decal_textures import average_colour
-    colour = np.asarray(average_colour(props.get('texture')), dtype=np.float32)
+    from engine.decal_textures import dominant_colour
+    colour = np.asarray(dominant_colour(props.get('texture')), dtype=np.float32)
     colour = colour * np.asarray(tint_of(props.get('tint')), dtype=np.float32)
     intensity = max(0.0, _light_float(thing, 'emissive_intensity', 1.0))
     radius = max(0.01, _light_float(thing, 'emissive_radius', 256.0))
     yaw = math.radians(_light_float(thing, 'yaw', 0.0))
     pitch = math.radians(_light_float(thing, 'pitch', -90.0))
-    depth = max(0.0, _light_float(thing, 'depth', 32.0))
     throw = (math.cos(pitch) * math.cos(yaw), math.sin(pitch),
              -math.cos(pitch) * math.sin(yaw))
-    offset = tuple(-0.5 * depth * axis for axis in throw)
+    offset = tuple(-DECAL_LIGHT_STANDOFF * axis for axis in throw)
     if not all(math.isfinite(v) for v in offset + (intensity, radius)):
         return colour, (0.0, 0.01), (0.0, 0.0, 0.0)
     return colour, (intensity, radius), offset
@@ -652,7 +656,7 @@ _COLUMNS = (
     ('light_enabled', (), bool, False),
     ('light_casts_shadows', (), bool, False),
     #: Where a row's light stands relative to its entity: zero for all but an
-    #: emissive decal, whose light is at the face of its box it shows from.
+    #: emissive decal, whose light is just off the surface it is painted on.
     #: Folded into ``pos`` wherever that is written (the row draws nothing
     #: itself), so every reader of a light's position is unchanged.
     ('light_offset', (3,), np.float64, 0.0),

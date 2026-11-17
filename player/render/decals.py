@@ -266,9 +266,11 @@ class PlayerDecals:
         inverses = (np.asarray(decals[2], np.float32) if len(decals) > 2
                     else box_inverse(models))
         wet = params[keep, 2] > 2.5
-        order = np.concatenate((keep[~wet], keep[wet]))
+        glow = (params[keep, 3] > 7.5) & ~wet          # emissive: its own draw
+        order = np.concatenate((keep[~(wet | glow)], keep[glow], keep[wet]))
         wet_count = int(wet.sum())
-        plain_count = len(order) - wet_count
+        glow_count = int(glow.sum())
+        plain_count = len(order) - wet_count - glow_count
         if len(self.staging) < len(order):
             self.staging = np.empty((max(64, len(order), 2 * len(self.staging)),
                                      _INSTANCE_FLOATS), dtype=np.float32)
@@ -331,10 +333,16 @@ class PlayerDecals:
                 gl.glBlendFunc(gl.GL_DST_COLOR, gl.GL_ONE_MINUS_SRC_ALPHA)
                 self._point(0)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, plain_count)
+            if glow_count:
+                # Emissive decals: their own colours, over what is there.
+                gl.glUniform1i(u['wetPass'], 2)
+                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                self._point(plain_count)
+                gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, glow_count)
             if wet_count:
                 gl.glUniform1i(u['wetPass'], 1)
                 gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-                self._point(plain_count)
+                self._point(plain_count + glow_count)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
         finally:
             self._point(0)

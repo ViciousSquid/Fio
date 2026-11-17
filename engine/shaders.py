@@ -2671,7 +2671,9 @@ highp vec3 hash3(highp vec3 p) {
 
 void main() {
     bool wetRow = Params.z > 2.5;
-    if (wetRow != (wetPass == 1)) discard;              // the other draw's rows
+    // Flag 8: an emissive decal. Its own draw (wetPass 2), painted as it is.
+    bool glow = !wetRow && Params.w > 7.5;
+    if ((wetRow ? 1 : (glow ? 2 : 0)) != wetPass) discard;   // another draw's rows
     vec2 uv = (gl_FragCoord.xy - viewport.xy) / viewport.zw;
     float depth = texture(sceneDepth, uv).r;
     if (depth >= 0.99999) discard;                      // sky: no surface
@@ -2706,10 +2708,11 @@ void main() {
         layer = range.x + mod(Params.x, max(range.y, 1.0));
     }
     // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted),
-    // 4 a sign's white words (they lighten past the framebuffer's 1; below).
+    // 4 a sign's white words (they lighten past the framebuffer's 1; below),
+    // 8 emissive (above).
     bool mirrored = mod(Params.w, 2.0) > 0.5;
     bool picked = mod(floor(Params.w * 0.5), 2.0) > 0.5;
-    bool lighten = Params.w > 3.5;
+    bool lighten = mod(floor(Params.w * 0.25), 2.0) > 0.5;
     // The box's x runs to the left of someone looking along the throw (its
     // up is up, its z into the surface), so the image is read along -x: its
     // left is on the viewer's left, and text reads the right way round.
@@ -2764,6 +2767,15 @@ void main() {
         }
         if (picked) colour = mix(colour, PICKED, 0.35);
         FragColor = vec4(colour, amount);               // over what is there
+        return;
+    }
+    if (glow) {
+        // Emissive: a screen, a lit sign. Painted over the surface in its
+        // own colours, whatever light falls there -- the whole face equally
+        // bright, in a dark room as in a lit one -- not stained into it.
+        vec3 lit = texel.rgb * tint;
+        if (picked) lit = mix(lit, PICKED, 0.5);
+        FragColor = vec4(lit, amount);                  // over what is there
         return;
     }
     // Stained, not painted: the blend is dst * (src.rgb + 1 - src.a), so

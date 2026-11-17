@@ -1,7 +1,7 @@
 """Emissive decals: a decal that glows is a row of the frame's light list.
 
-Its light takes the average colour of its image (times its tint), the
-intensity and radius it names, and stands at the box's forward face. A decal
+Its light takes the main colour of its image (times its tint), the
+intensity and radius it names, and is emitted from the decal's face. A decal
 that is not emissive is not a light in any sense: no class bit, no row in the
 light list, no image decoded and no position arithmetic.
 """
@@ -100,7 +100,7 @@ def test_a_plain_decal_costs_nothing(images):
 # Emissive: colour, amount and place
 # ---------------------------------------------------------------------------
 
-def test_an_emissive_decal_is_a_light_in_its_images_average_colour(images):
+def test_an_emissive_decal_is_a_light_in_its_images_colour(images):
     table = _table([_decal("sign", emissive=True, emissive_intensity=2.5,
                            emissive_radius=300.0)])
 
@@ -115,6 +115,36 @@ def test_transparent_pixels_do_not_colour_the_light(images):
 
     np.testing.assert_allclose(table.light_color[0], (0.0, 0.0, 1.0), atol=0.02,
                                err_msg="the transparent half's colour leaked in")
+
+
+def test_the_light_is_the_images_main_colour_not_its_average(images):
+    """A yellow sign with black lettering lights yellow: an average would be
+    a darker, muddier yellow."""
+    from PIL import Image
+    sign = Image.new("RGBA", (64, 64), (255, 230, 0, 255))
+    for x in range(64):
+        for y in range(40, 64):                 # more than a third is black
+            sign.putpixel((x, y), (0, 0, 0, 255))
+    out = io.BytesIO()
+    sign.save(out, "PNG")
+    decal_textures.use_source(decal_textures.DecalSource({"sign.png": out.getvalue}))
+
+    table = _table([_decal("sign", texture="sign.png", emissive=True)])
+
+    np.testing.assert_allclose(table.light_color[0], (1.0, 230 / 255.0, 0.0), atol=0.01)
+
+
+def test_an_emissive_decal_is_flagged_for_its_own_draw():
+    from engine.decal_table import EMISSIVE_FLAG, placed_row
+
+    props = dict(texture="red.png", width=64.0, height=64.0, depth=32.0)
+    plain = placed_row((0, 0, 0), props, 0)[1]
+    glowing = placed_row((0, 0, 0), dict(props, emissive=True, mirrored=True), 0)[1]
+    wet = placed_row((0, 0, 0), dict(props, texture="puddle.png", emissive=True), 0)[1]
+
+    assert plain[3] == 0.0
+    assert glowing[3] == EMISSIVE_FLAG + 1.0
+    assert wet[3] < EMISSIVE_FLAG, "a wet patch is drawn by the wet pass, emissive or not"
 
 
 def test_the_tint_multiplies_the_light(images):
@@ -133,11 +163,13 @@ def test_a_decal_with_no_image_glows_its_tint(images):
 
 
 @pytest.mark.parametrize("yaw,pitch,expected", [
-    (0.0, -90.0, (0.0, 16.0, 0.0)),      # thrown down onto a floor: light above it
-    (0.0, 0.0, (-16.0, 0.0, 0.0)),       # thrown along +X onto a wall: light at -X
-    (90.0, 0.0, (0.0, 0.0, 16.0)),       # thrown along -Z: light at +Z
+    (0.0, -90.0, (0.0, 1.0, 0.0)),       # thrown down onto a floor: light above it
+    (0.0, 0.0, (-1.0, 0.0, 0.0)),        # thrown along +X onto a wall: light at -X
+    (90.0, 0.0, (0.0, 0.0, 1.0)),        # thrown along -Z: light at +Z
 ])
-def test_the_light_stands_at_the_forward_face(images, yaw, pitch, expected):
+def test_the_light_is_emitted_from_the_decals_face(images, yaw, pitch, expected):
+    """On the surface the decal is painted on (its position), a unit in
+    front: whatever the box's depth."""
     centre = (100.0, 50.0, -20.0)
     table = _table([_decal("sign", pos=centre, emissive=True, depth=32.0,
                            yaw=yaw, pitch=pitch)])
@@ -154,7 +186,7 @@ def test_a_moved_emissive_decal_keeps_its_light_at_the_face(images):
     decal.pos = [10.0, 20.0, 30.0]              # journalled, as the Decal tool's drag is
     table.begin_frame(things, 1)
 
-    np.testing.assert_allclose(table.pos[0], (10.0, 36.0, 30.0), atol=1e-6)
+    np.testing.assert_allclose(table.pos[0], (10.0, 21.0, 30.0), atol=1e-6)
     np.testing.assert_allclose(table.pos[1], (0.0, 64.0, 0.0), atol=1e-6,
                                err_msg="another row was offset")
 
@@ -188,7 +220,7 @@ def test_ticking_emissive_joins_the_light_list_and_clearing_it_leaves(images):
     touch(decal)                                # as an edit of the entity does
     table.begin_frame(things, 1)
     assert _light_ids(table) == ["sign"]
-    np.testing.assert_allclose(table.pos[0], (0.0, 16.0, 0.0), atol=1e-6)
+    np.testing.assert_allclose(table.pos[0], (0.0, 1.0, 0.0), atol=1e-6)
 
     decal.properties["emissive"] = False
     touch(decal)
@@ -208,7 +240,7 @@ def test_the_offset_travels_with_a_row_that_changes_slot(images):
     table.sync([lamp, decal], epoch=2)          # the decal is now row 1
 
     assert sorted(_light_ids(table)) == ["lamp", "sign"]
-    np.testing.assert_allclose(table.pos[1], (5.0, 16.0, 0.0), atol=1e-6)
+    np.testing.assert_allclose(table.pos[1], (5.0, 1.0, 0.0), atol=1e-6)
     np.testing.assert_allclose(table.pos[0], (0.0, 64.0, 0.0), atol=1e-6)
 
 

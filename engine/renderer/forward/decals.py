@@ -276,10 +276,14 @@ class DecalsMixin:
         inverses = decals[2] if len(decals) > 2 else box_inverse(models)
         # Image and blood decals first, in their order (blood over placed);
         # the wet ones after, drawn by the second draw.
+        # Emissive ones between: painted over the stained surface, and in
+        # the frame the wet patches reflect.
         wet = params[keep, 2] > 2.5
-        order = np.concatenate((keep[~wet], keep[wet]))
+        glow = (params[keep, 3] > 7.5) & ~wet
+        order = np.concatenate((keep[~(wet | glow)], keep[glow], keep[wet]))
         wet_count = int(wet.sum())
-        plain_count = count - wet_count
+        glow_count = int(glow.sum())
+        plain_count = count - wet_count - glow_count
         u = self._decal_uniforms
         gl.glUseProgram(program)
         self._current_shader = program
@@ -339,6 +343,13 @@ class DecalsMixin:
                 self._decal_point(0)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, plain_count)
                 self.render_stats.draw_calls += 1
+            if glow_count:
+                # Emissive decals: their own colours, over what is there.
+                gl.glUniform1i(u['wetPass'], 2)
+                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                self._decal_point(plain_count)
+                gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, glow_count)
+                self.render_stats.draw_calls += 1
             if wet_count:
                 # Wet patches: over a copy of the frame so far (blood and
                 # images included), drawn plainly over what is there.
@@ -358,7 +369,7 @@ class DecalsMixin:
                         gl.glUseProgram(program)
                         gl.glUniform1i(u['wetPass'], 1)
                         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-                        self._decal_point(plain_count)
+                        self._decal_point(plain_count + glow_count)
                         gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
                         self.render_stats.draw_calls += 1
                     finally:
