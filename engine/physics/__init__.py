@@ -12,9 +12,9 @@ package exports:
   :func:`select_physics`, :func:`available_physics`, :data:`DEFAULT_PHYSICS`
 
 Implementations are reached through the registry: ``soma`` is Fio's
-built-in physics: Soma. The solid world is not physics' to hold: it is
-:class:`engine.spatial_grid.SpatialGrid`, engine core, which a physics is
-created with and asks. Importing this package needs neither NumPy nor PyGLM.
+built-in physics: Soma. The world is not physics' to hold: where its brushes, movers,
+doors and water are is :class:`engine.spatial_grid.SpatialGrid`'s to say --
+engine core, which a physics is created with and asks. Importing this package needs neither NumPy nor PyGLM.
 
 ``SpatialGrid``, ``PhysicsWorld`` (now ``Soma``) and ``PhysicsBody`` used to
 live in a module of this name; they are still importable from here (resolved on first use) so

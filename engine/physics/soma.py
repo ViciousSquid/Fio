@@ -1,10 +1,14 @@
-"""Soma (Greek: "body"): Fio's built-in physics. Batched dynamic bodies
-over NumPy rows.
+"""Soma (Greek: "body") simulates bodies.
 
-Registered as ``"Soma"`` (:mod:`engine.physics.registry`) and reached by
-the engine only through the contract (:class:`engine.physics.Physics`). It
-keeps no copy of the world: walls and floors are asked of the
-:class:`engine.spatial_grid.SpatialGrid` it is created with.
+That is the whole of what it does. The world is not Soma's: walls and
+floors are asked of the :class:`engine.spatial_grid.SpatialGrid` it is
+created with, and it keeps no copy. The game's rules are not Soma's either:
+what is heavy and what crushing costs are the contract's. Soma holds the
+bodies -- their state as NumPy rows -- and moves the awake ones.
+
+Fio's built-in physics, registered as ``"Soma"``
+(:mod:`engine.physics.registry`) and reached by the engine only through the
+contract (:class:`engine.physics.Physics`).
 """
 import numpy as np
 import glm
@@ -228,7 +232,7 @@ class PhysicsBody:
 
 
 class Soma:
-    """Fio's batched dynamic-body simulation.
+    """Soma simulates bodies: batched, over NumPy rows.
 
     Body state is stored as structure-of-arrays NumPy buffers. The per-tick
     integration, damping, gravity, push response, sleep test and position
@@ -382,6 +386,7 @@ class Soma:
         # Set at pack time: a world with nothing rolling, bouncy or heavy --
         # most maps -- never enters that code.
         self._any_rolls = False
+        self._any_spin = False
         self._any_bounce = False
         self._any_heavy = False
         #: Set when a heavy body pins the player against a wall; the logic
@@ -510,6 +515,7 @@ class Soma:
                 self._orientation[i] = self._entity_orientation(entity)
 
         self._any_rolls = bool(self._rolls.any())
+        self._any_spin = bool(self._angular_velocity.any())
         self._any_bounce = bool(self._bounce.any())
         self._any_heavy = bool(np.any(
             self._physics_enabled & self._solid & (self._mass >= self.HEAVY_MASS)))
@@ -705,10 +711,11 @@ class Soma:
         indices = np.flatnonzero(rows)
         if indices.size == 0:
             return mask
-        for i in indices:
-            props = getattr(self._entities[int(i)], 'properties', None)
+        entities = self._entities
+        for i in indices.tolist():
+            props = getattr(entities[i], 'properties', None)
             if (isinstance(props, dict)
-                    and (props.get('disabled', False) or props.get('hidden', False))):
+                    and (props.get('disabled') or props.get('hidden'))):
                 mask[i] = True
         return mask
 
@@ -821,12 +828,16 @@ class Soma:
     def _sync_entities(self, indices=None):
         # Position only. Rotation is integrated (angular * dt) in step();
         # applying angular velocity here as well spun bodies ~61x too fast.
+        entities = self._entities
         if indices is None:
-            indices = range(len(self._entities))
-        for i in indices:
+            rows, positions = range(len(entities)), self._position.tolist()
+        else:
+            indices = np.asarray(indices)
+            rows, positions = indices.tolist(), self._position[indices].tolist()
+        for i, position in zip(rows, positions):
             # Assigned, not written in place: assignment is what tells the
             # render projection the entity moved.
-            self._entities[int(i)].pos = self._position[int(i)].tolist()
+            entities[i].pos = position
 
     def rebuild(self, brushes):
         self.clear()
@@ -933,50 +944,85 @@ class Soma:
                 tops[k] = float(floor)
         return tops
 
-    def _batch_static_collision(self, axis, old_position, rows=None, pushed_from=None):
-        """Resolve one axis against the world: one broad phase for every body.
+    def _world_pairs(self, indices, old, ahead, pushed_from=None):
+        """This step's one broad phase: ``(query, lo, hi)``, body ``query[k]``
+        of *indices* with a brush whose float64 world box is ``lo[k]..hi[k]``
+        (and the bodies' own offsets and half-extents) -- every brush filed in a cell the body's move touches, from *old* to
+        *ahead* (where it would be with nothing in its way).
+
+        The grid's cells are columns, so one footprint answers for all three
+        axes' walls and for the floor under the body wherever in that move it
+        ends up: the grid is asked once a step, not once a question.
+        """
+        offset = self._offset[indices].astype(np.float64)
+        half = self._half[indices].astype(np.float64)
+        was = old.astype(np.float64) + offset
+        now = ahead.astype(np.float64) + offset
+        lo = np.minimum(was, now) - half
+        hi = np.maximum(was, now) + half
+        if pushed_from is not None:
+            # A push that is undone puts the body back where it began.
+            start = pushed_from[indices].astype(np.float64) + offset
+            pushed = ~np.isnan(start[:, 0])
+            if pushed.any():
+                lo[pushed] = np.minimum(lo[pushed], start[pushed] - half[pushed])
+                hi[pushed] = np.maximum(hi[pushed], start[pushed] + half[pushed])
+        query, row, boxes = self.spatial_grid.box_pairs(lo, hi)
+        # With the bodies' own boxes (float64 offset and half-extents), which
+        # every test of these pairs needs.
+        return query, boxes.lo[row], boxes.hi[row], offset, half
+
+    @staticmethod
+    def _pairs_of(pairs, chosen, count):
+        """*pairs* for the bodies in *chosen* only (positions among *count*),
+        renumbered to index them."""
+        query, lo, hi, offset, half = pairs
+        renumber = np.full(count, -1, dtype=np.int64)
+        renumber[chosen] = np.arange(len(chosen))
+        to = renumber[query]
+        keep = to >= 0
+        return to[keep], lo[keep], hi[keep], offset[chosen], half[chosen]
+
+    def _collide_axis(self, axis, indices, position, velocity, old, pairs,
+                      pushed_from=None):
+        """Resolve one axis against the world, for every body at once.
 
         The world is the spatial grid's -- its boxes, its movers and doors
-        where they are now (:meth:`SpatialGrid.box_pairs`); nothing of it is
-        kept here.
+        where they are now; nothing of it is kept here. *pairs* is this
+        step's one broad phase (:meth:`_world_pairs`): every body with every
+        brush near its move.
+
+        *indices* are the body rows to test, and *position*, *velocity* and
+        *old* their rows of working state -- where each is now, how fast, and
+        where it was before this step -- changed in place. Only awake rows
+        reach here, and nothing here is the size of the world.
 
         The test is swept: each body is asked about the whole of this axis's
-        move, from *old_position* to where it is now, so a fast body cannot
+        move, from *old* to where it is now, so a fast body cannot
         step over a thin wall, and one that meets a wall stops *at* it --
         :data:`CONTACT_SKIN` short of the face it first reaches -- not back
         where the step began, which left a gap the size of the step. It then
         stops on this axis, or bounces off by its bounciness. A body that is
         inside a wall both before and after the move (it started there) has
-        no face to stop at: it goes back to *old_position*, as it always did.
-
-        *rows* limits the test to some bodies: the vertical axis is tested
-        only for bodies on their way up, so nothing rises into a ceiling.
+        no face to stop at: it goes back to *old*, as it always did.
 
         *pushed_from* is where the player's push this step started each body
         from (NaN where it did not push it): a push into a wall is undone with
         the rest of the move -- unless the body was already in a wall before
         it, when it may still be pushed out.
         """
-        active = (
-            self._physics_enabled
-            & self._awake
-            & ~self._kinematic
-            & self._solid
-        )
-        if rows is not None:
-            active &= rows
-        active &= ~self._inactive_mask(active)
-        indices = np.flatnonzero(active)
         if indices.size == 0:
             return
-
-        offset = self._offset[indices].astype(np.float64)
-        half = self._half[indices].astype(np.float64)
-        centre = self._position[indices].astype(np.float64) + offset
+        query, lo, hi, offset, half = pairs
+        if not len(query) or not (position[:, axis] != old[:, axis]).any():
+            # Nothing near, or nothing moved on this axis: a body that has
+            # not moved has met nothing new, and one inside a wall stays put.
+            return
+        centre = position.astype(np.float64) + offset
         bmin = centre - half
         bmax = centre + half
         # This axis only: where the body's two faces were before the move.
-        was = old_position[indices, axis].astype(np.float64) + offset[:, axis]
+        was = old[:, axis].astype(np.float64) + offset[:, axis]
         old_min = was - half[:, axis]
         old_max = was + half[:, axis]
         swept_min = bmin.copy()
@@ -992,12 +1038,6 @@ class Soma:
                 swept_min[:, across] += skin
                 swept_max[:, across] -= skin
 
-        grid = self.spatial_grid
-        query, row, boxes = grid.box_pairs(swept_min, swept_max)
-        if not len(query):
-            return
-        lo = boxes.lo[row]
-        hi = boxes.hi[row]
         touching = np.all((swept_max[query] > lo) & (swept_min[query] < hi), axis=1)
         if not touching.any():
             return
@@ -1045,29 +1085,30 @@ class Soma:
                 phalf = half[hit[was_pushed]]
                 pmin = pcentre - phalf
                 pmax = pcentre + phalf
-                q, r, boxes = grid.box_pairs(pmin, pmax)
+                q, r, boxes = self.spatial_grid.box_pairs(pmin, pmax)
                 before = np.zeros(was_pushed.size, dtype=np.bool_)
                 before[q[np.all((pmax[q] > boxes.lo[r])
                                 & (pmin[q] < boxes.hi[r]), axis=1)]] = True
                 undo = was_pushed[~before]
                 target[undo] = start[undo, axis]
-        self._position[hit_indices, axis] = target
+        position[hit, axis] = target
         if self._any_bounce:
             # Bounce off the wall if bouncy enough.
-            hit_velocity = self._velocity[hit_indices, axis]
-            self._velocity[hit_indices, axis] = -np.sign(hit_velocity) * self._bounce_speed(
+            hit_velocity = velocity[hit, axis]
+            velocity[hit, axis] = -np.sign(hit_velocity) * self._bounce_speed(
                 np.abs(hit_velocity), self._bounce[hit_indices])
         else:
-            self._velocity[hit_indices, axis] = 0.0
+            velocity[hit, axis] = 0.0
 
-    def _batch_floor(self, previous_bottom=None):
-        """Find the floor beneath each active dynamic body.
+    def _floors_under(self, indices, previous_bottom):
+        """The floor beneath each body row in *indices*: float32, -inf where
+        there is none.
 
         Five support points per body -- centre plus four in-footprint samples --
         so a body straddling a seam between floor brushes cannot lose contact
         just because its centre crossed the gap.
 
-        That is 5N downward queries per step, and the spatial grid answers
+        That is five downward queries a body, and the spatial grid answers
         them: one :meth:`SpatialGrid.raycast_down` each for a few bodies, one
         :meth:`SpatialGrid.raycast_down_batch` for many (the same brushes, the
         same boxes and the same comparisons, so the answers are identical and
@@ -1075,16 +1116,19 @@ class Soma:
         Either way a mover or door is where it is now: a prop riding a
         platform sees the platform's current height.
 
+        *previous_bottom* is each body's bottom before this step: the ray
+        starts from the higher of that and its bottom now, so a body that
+        integration has already carried through a floor still sees it.
+
         The batched query is used only for a stock :class:`SpatialGrid`.
         Anything that overrides ``raycast_down`` -- a test double, or a future
         grid with its own tracing -- is asked point by point, because its
         answers are its own.
         """
-        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
-        if (int(active.sum()) >= self.FLOOR_BATCH_MIN_BODIES
+        if (indices.size >= self.FLOOR_BATCH_MIN_BODIES
                 and self._can_group_floor_queries()):
-            return self._batch_floor_grouped(previous_bottom)
-        return self._batch_floor_scalar(previous_bottom)
+            return self._floors_batched(indices, previous_bottom)
+        return self._floors_scalar(indices, previous_bottom)
 
     def _can_group_floor_queries(self):
         """Whether the grid's batched floor query answers as its
@@ -1114,24 +1158,40 @@ class Soma:
         bottom = centers[:, 1] - half[:, 1]
         return px, pz, bottom
 
-    def _batch_floor_grouped(self, previous_bottom=None):
-        n = len(self._entities)
-        floors = np.full(n, -np.inf, dtype=np.float32)
-        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
-        indices = np.flatnonzero(active)
+    def _floors_batched(self, indices, previous_bottom):
+        floors = np.full(indices.size, -np.inf, dtype=np.float32)
         if indices.size == 0:
             return floors
-
-        previous_bottom = self._previous_bottom(previous_bottom)
         px, pz, bottom = self._support_offsets(indices)
-        ray_y = np.maximum(bottom, previous_bottom[indices].astype(np.float64)) + 1.0
-
+        ray_y = np.maximum(bottom, previous_bottom.astype(np.float64)) + 1.0
         best = self._floor_tops(px.ravel(), pz.ravel(), np.repeat(ray_y, px.shape[1]))
-
         per_body = best.reshape(px.shape).max(axis=1)
         hit = per_body > -np.inf
         if hit.any():
-            floors[indices[hit]] = per_body[hit].astype(np.float32)
+            floors[hit] = per_body[hit].astype(np.float32)
+        return floors
+
+    def _floors_from_pairs(self, indices, previous_bottom, pairs):
+        """:meth:`_floors_batched` from this step's broad phase rather than a
+        query of its own: a support point is inside its body's footprint, so
+        the brushes filed in the point's cell are among the body's pairs.
+        The same brushes, boxes and comparisons; the same answers."""
+        floors = np.full(indices.size, -np.inf, dtype=np.float32)
+        query, lo, hi = pairs[:3]
+        if not len(query):
+            return floors
+        px, pz, bottom = self._support_offsets(indices)
+        ray_y = np.maximum(bottom, previous_bottom.astype(np.float64)) + 1.0
+        below = hi[:, 1] <= ray_y[query]
+        query, lo, hi = query[below], lo[below], hi[below]
+        x = px[query]
+        z = pz[query]
+        under = ((lo[:, 0:1] <= x) & (x <= hi[:, 0:1])
+                 & (lo[:, 2:3] <= z) & (z <= hi[:, 2:3])).any(axis=1)
+        if under.any():
+            best = np.full(indices.size, -np.inf)
+            np.maximum.at(best, query[under], hi[under, 1])
+            floors[:] = best
         return floors
 
     def _floor_tops(self, flat_x, flat_z, flat_y):
@@ -1140,67 +1200,70 @@ class Soma:
         tops = self.spatial_grid.raycast_down_batch(flat_x, flat_z, flat_y)
         return np.where(np.isnan(tops), -np.inf, tops)
 
-    def _previous_bottom(self, previous_bottom):
-        if previous_bottom is None:
-            return (self._position + self._offset)[:, 1] - self._half[:, 1]
-        return np.asarray(previous_bottom, dtype=np.float32)
-
-    def _batch_floor_scalar(self, previous_bottom=None):
-        """One raycast_down per support point. Fallback for a custom grid."""
-        n = len(self._entities)
-        floors = np.full(n, -np.inf, dtype=np.float32)
-        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
-        indices = np.flatnonzero(active)
-        if indices.size == 0:
-            return floors
-
+    def _floors_scalar(self, indices, previous_bottom):
+        """One raycast_down per support point: for few bodies, or a grid that
+        traces its own way."""
+        floors = np.full(indices.size, -np.inf, dtype=np.float32)
         raycast = getattr(self.spatial_grid, 'raycast_down', None)
-        if raycast is None:
+        if raycast is None or indices.size == 0:
             return floors
 
-        # Use the body's previous bottom as the ray origin while it is falling.
-        # If integration has already carried the body slightly through the
-        # floor this keeps the ray above the surface, allowing raycast_down()
-        # to see it instead of starting underneath it.
-        previous_bottom = self._previous_bottom(previous_bottom)
-
-        for i in indices:
-            i = int(i)
-            center = self._position[i] + self._offset[i]
-            current_bottom = float(center[1] - self._half[i, 1])
-            ray_y = max(current_bottom, float(previous_bottom[i])) + 1.0
-
+        centres = (self._position[indices] + self._offset[indices]).tolist()
+        halves = self._half[indices].tolist()
+        previous = previous_bottom.tolist()
+        for k, (centre, half) in enumerate(zip(centres, halves)):
+            cx, cy, cz = centre
+            # From the body's previous bottom while it is falling: if
+            # integration has already carried it slightly through the floor
+            # this keeps the ray above the surface.
+            ray_y = max(cy - half[1], previous[k]) + 1.0
             # A pushed barrel can straddle a floor seam while its centre is
-            # briefly over the seam itself.  Sample the centre plus four
-            # in-footprint support points so horizontal motion cannot make a
-            # grounded body lose contact just because its centre crossed a
-            # small gap between floor brushes.
-            hx = float(self._half[i, 0]) * 0.75
-            hz = float(self._half[i, 2]) * 0.75
-            support_points = (
-                (float(center[0]), float(center[2])),
-                (float(center[0] - hx), float(center[2])),
-                (float(center[0] + hx), float(center[2])),
-                (float(center[0]), float(center[2] - hz)),
-                (float(center[0]), float(center[2] + hz)),
-            )
-
+            # briefly over the seam itself: the centre plus four in-footprint
+            # support points.
+            hx = half[0] * 0.75
+            hz = half[2] * 0.75
             best_floor = None
-            for ray_x, ray_z in support_points:
+            for ray_x, ray_z in ((cx, cz), (cx - hx, cz), (cx + hx, cz),
+                                 (cx, cz - hz), (cx, cz + hz)):
                 try:
                     floor = raycast(ray_x, ray_z, ray_y)
                 except Exception:
                     floor = None
-                if floor is not None and (
-                    best_floor is None or floor > best_floor
-                ):
+                if floor is not None and (best_floor is None or floor > best_floor):
                     best_floor = float(floor)
-
             if best_floor is not None:
-                floors[i] = best_floor
-
+                floors[k] = best_floor
         return floors
 
+    # The same queries for every active body at once, as arrays the size of
+    # the world: what tests and tools ask. The step asks for its awake rows.
+
+    def _floor_rows(self, previous_bottom):
+        indices = np.flatnonzero(
+            self._physics_enabled & self._awake & ~self._kinematic & self._solid)
+        if previous_bottom is None:
+            previous = ((self._position[indices] + self._offset[indices])[:, 1]
+                        - self._half[indices, 1])
+        else:
+            previous = np.asarray(previous_bottom, dtype=np.float32)[indices]
+        return indices, previous
+
+    def _spread(self, indices, floors):
+        spread = np.full(len(self._entities), -np.inf, dtype=np.float32)
+        spread[indices] = floors
+        return spread
+
+    def _batch_floor(self, previous_bottom=None):
+        indices, previous = self._floor_rows(previous_bottom)
+        return self._spread(indices, self._floors_under(indices, previous))
+
+    def _batch_floor_grouped(self, previous_bottom=None):
+        indices, previous = self._floor_rows(previous_bottom)
+        return self._spread(indices, self._floors_batched(indices, previous))
+
+    def _batch_floor_scalar(self, previous_bottom=None):
+        indices, previous = self._floor_rows(previous_bottom)
+        return self._spread(indices, self._floors_scalar(indices, previous))
 
     def step(self, delta, player=None):
         self._pack()
@@ -1307,121 +1370,152 @@ class Soma:
                 self._awake[pushable] = True
                 pushed = pushable
 
-        moving = active & self._awake
-        if np.any(moving):
-            if np.any(moving & (self._gravity != 0.0)):
-                self._velocity[moving, 1] += (
-                    self._gravity[moving] * np.float32(self.gravity) * dt
-                )
+        # Everything below is the size of what is awake, not of the world:
+        # the awake rows' state is gathered once, worked on, and put back.
+        rows = np.flatnonzero(active & self._awake)
+        if rows.size:
+            velocity = self._velocity[rows]
+            position = self._position[rows]
+            weight = self._gravity[rows]
+            if weight.any():
+                velocity[:, 1] += weight * np.float32(self.gravity) * dt
 
-            damping = self._damping * np.float32(max(0.0, float(self.damping_scale)))
-            self._velocity[moving, 1] *= np.maximum(
-                0.0, 1.0 - damping[moving] * dt
-            )
+            damping = self._damping[rows] * np.float32(max(0.0, float(self.damping_scale)))
+            velocity *= np.maximum(0.0, 1.0 - damping * dt)[:, None]
 
-            horizontal_damp = np.maximum(
-                0.0,
-                1.0 - damping * dt,
-            )
-            self._velocity[moving, 0] *= horizontal_damp[moving]
-            self._velocity[moving, 2] *= horizontal_damp[moving]
+            old = position.copy()
+            previous_bottom = old[:, 1] + self._offset[rows, 1] - self._half[rows, 1]
 
-            old_position = self._position.copy()
-            old_center = old_position + self._offset
-            previous_bottom = old_center[:, 1] - self._half[:, 1]
+            # Walls and floors are for solid bodies; all of them, usually.
+            solid = self._solid[rows]
+            everything = bool(solid.all())
+            if everything:
+                hard = None
+                hard_rows, hard_pos, hard_vel, hard_old = rows, position, velocity, old
+            else:
+                hard = np.flatnonzero(solid)
+                hard_rows = rows[hard]
+                hard_pos, hard_vel, hard_old = position[hard], velocity[hard], old[hard]
 
-            self._position[moving, 0] += self._velocity[moving, 0] * dt
-            self._batch_static_collision(0, old_position, pushed_from=pushed_from)
+            # The grid is asked once, about each body's whole move.
+            ahead = hard_old.copy()
+            ahead[:, 0] += hard_vel[:, 0] * dt
+            ahead[:, 2] += hard_vel[:, 2] * dt
+            pairs = self._world_pairs(hard_rows, hard_old, ahead, pushed_from)
 
-            self._position[moving, 2] += self._velocity[moving, 2] * dt
-            self._batch_static_collision(2, old_position, pushed_from=pushed_from)
+            hard_pos[:, 0] += hard_vel[:, 0] * dt
+            self._collide_axis(0, hard_rows, hard_pos, hard_vel, hard_old, pairs,
+                               pushed_from)
+            hard_pos[:, 2] += hard_vel[:, 2] * dt
+            self._collide_axis(2, hard_rows, hard_pos, hard_vel, hard_old, pairs,
+                               pushed_from)
+            if not everything:
+                position[hard] = hard_pos
+                velocity[hard] = hard_vel
+                ghost = np.flatnonzero(~solid)
+                position[ghost, 0] += velocity[ghost, 0] * dt
+                position[ghost, 2] += velocity[ghost, 2] * dt
 
-            self._position[moving, 1] += self._velocity[moving, 1] * dt
-            rising = moving & (self._velocity[:, 1] > 0.0)
-            if np.any(rising):
+            position[:, 1] += velocity[:, 1] * dt
+            rising = solid & (velocity[:, 1] > 0.0)
+            if rising.any():
                 # Nothing rises into a ceiling.
-                self._batch_static_collision(1, old_position, rising)
-            floors = self._batch_floor(previous_bottom)
-            new_center = self._position + self._offset
-            new_bottom = new_center[:, 1] - self._half[:, 1]
-            landed = moving & np.isfinite(floors) & (
-                new_bottom <= floors + 1.0
-            )
-            if np.any(landed):
-                self._position[landed, 1] = (
-                    floors[landed]
-                    - self._offset[landed, 1]
-                    + self._half[landed, 1]
-                )
+                up = np.flatnonzero(rising)
+                up_pos, up_vel = position[up], velocity[up]
+                among = up if everything else np.searchsorted(hard, up)
+                self._collide_axis(1, rows[up], up_pos, up_vel, old[up],
+                                   self._pairs_of(pairs, among, hard_rows.size))
+                position[up] = up_pos
+                velocity[up] = up_vel
+
+            # The floor queries read the packed rows: put the moved ones back.
+            self._position[rows] = position
+            if not everything:
+                previous_hard = previous_bottom[hard]
+            else:
+                previous_hard = previous_bottom
+            if self._can_group_floor_queries():
+                under = self._floors_from_pairs(hard_rows, previous_hard, pairs)
+            else:
+                under = self._floors_scalar(hard_rows, previous_hard)
+            if everything:
+                floors = under
+            else:
+                floors = np.full(rows.size, -np.inf, dtype=np.float32)
+                floors[hard] = under
+            new_bottom = position[:, 1] + self._offset[rows, 1] - self._half[rows, 1]
+            landed = np.isfinite(floors) & (new_bottom <= floors + 1.0)
+            if landed.any():
+                on = np.flatnonzero(landed)
+                on_rows = rows[on]
+                position[on, 1] = (
+                    floors[on] - self._offset[on_rows, 1] + self._half[on_rows, 1])
                 if self._any_bounce:
                     # Bounce back up if bouncy enough.
-                    self._velocity[landed, 1] = self._bounce_speed(
-                        np.maximum(-self._velocity[landed, 1], 0.0),
-                        self._bounce[landed])
+                    velocity[on, 1] = self._bounce_speed(
+                        np.maximum(-velocity[on, 1], 0.0), self._bounce[on_rows])
                 else:
-                    self._velocity[landed, 1] = 0.0
+                    velocity[on, 1] = 0.0
 
                 # Treat friction as a surface coefficient rather than a tiny
                 # per-frame damping term. Apply it only while grounded. A
                 # rolling body loses only a little of its speed to the ground.
                 friction_accel = (
-                    self._friction[landed]
+                    self._friction[on_rows]
                     * np.float32(max(0.0, float(self.friction_scale)))
                     * np.float32(abs(float(self.gravity)))
                 )
                 if self._any_rolls:
                     friction_accel = friction_accel * np.where(
-                        self._rolls[landed],
+                        self._rolls[on_rows],
                         np.float32(self.ROLLING_FRICTION_SCALE),
                         np.float32(1.0))
-                ground_speed = np.hypot(
-                    self._velocity[landed, 0],
-                    self._velocity[landed, 2],
-                )
+                ground_speed = np.hypot(velocity[on, 0], velocity[on, 2])
                 friction_delta = friction_accel * dt
                 scale = np.maximum(
                     0.0,
                     1.0 - friction_delta / np.maximum(ground_speed, 1e-6),
                 )
-                self._velocity[landed, 0] *= scale
-                self._velocity[landed, 2] *= scale
+                velocity[on, 0] *= scale
+                velocity[on, 2] *= scale
+                self._position[on_rows, 1] = position[on, 1]
 
-            angular = self._angular_velocity
-            if np.any(angular):
-                self._integrate_rotation(angular, dt)
+            rest = None
+            if self.sleep_enabled:
+                sleeping = np.max(np.abs(velocity), axis=1) < self.REST_SPEED
+                if sleeping.any():
+                    # At rest means on something. A body that gravity pulls
+                    # is also momentarily still at the top of an arc -- a
+                    # throw, a bounce -- and one put to sleep there hung in
+                    # the air.
+                    if self.gravity != 0.0:
+                        sleeping &= landed | (weight == 0.0)
+                    rest = rows[sleeping]
+                    velocity[sleeping] = 0.0
+            self._velocity[rows] = velocity
+
+            if self._any_spin:
+                self._integrate_rotation(self._angular_velocity, dt)
 
             if self._any_rolls:
-                rolling_rows = np.flatnonzero(
-                    moving & self._rolls
-                    & ((self._velocity[:, 0] != 0.0) | (self._velocity[:, 2] != 0.0)))
+                rolling_rows = rows[self._rolls[rows]
+                                    & ((velocity[:, 0] != 0.0) | (velocity[:, 2] != 0.0))]
                 if rolling_rows.size:
                     self._roll(rolling_rows, dt)
 
-            speed = np.max(np.abs(self._velocity), axis=1)
-            sleeping = (
-                self.sleep_enabled
-                & moving
-                & (speed < self.REST_SPEED)
-            )
-            if np.any(sleeping):
-                # At rest means on something. A body that gravity pulls is
-                # also momentarily still at the top of an arc -- a throw, a
-                # bounce -- and one put to sleep there hung in the air.
-                weightless = self._gravity == 0.0
-                if self.gravity == 0.0:
-                    weightless = np.ones_like(weightless)
-                sleeping &= landed | weightless
-            if np.any(sleeping):
-                self._velocity[sleeping] = 0.0
-                rest_indices = np.flatnonzero(sleeping)
-                self._awake[sleeping] = False
-                for i in rest_indices:
-                    body = self.bodies[id(self._entities[int(i)])]
+            self._sync_entities(rows)
+
+            if rest is not None and rest.size:
+                self._awake[rest] = False
+                # Last, with every row put back and every entity where its
+                # body is: a callback may ask anything of this world.
+                bodies = self.bodies
+                entities = self._entities
+                for i in rest.tolist():
+                    body = bodies[id(entities[i])]
                     callback = body.rest_callback
                     if callback is not None:
                         callback(body.entity)
-
-            self._sync_entities(np.flatnonzero(moving))
 
         if pushed is not None and player is not None:
             # A body the player pushed but a wall held: the player stops at it.

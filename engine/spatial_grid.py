@@ -1,14 +1,27 @@
-"""The world's collision index: every solid brush's box, by 512-unit cell.
+"""The world's spatial index: where everything in the world is, by 512-unit cell.
 
-Engine core, and the single source of truth for where the solid world is
-during play. Everything that asks "what is here?" asks this grid -- player
-movement, monster AI, line of sight, and whichever physics implementation is
-active (:mod:`engine.physics`): none of them keeps a copy of the world.
+Engine core, and the single source of truth for where the world is during
+play. Everything that asks "what is here?" asks this grid -- player movement,
+monster AI, line of sight, and whichever physics is active
+(:mod:`engine.physics`): none of them keeps a copy of the world.
 
-Static brushes are resolved once per populate; movers and doors are re-derived
-when a placement stamp says something may have moved
-(:mod:`engine.brush_placement`), so every query sees them where they are now.
-The cell convention itself is :mod:`engine.spatial`'s.
+What it holds:
+
+* **solid brushes**, each filed under every cell its footprint touches --
+  including ones a streaming layer has parked out of range, which come back,
+  and excluding what the map itself hides (:func:`engine.spatial.authored_hidden`);
+* **movers and doors**, filed for the whole of their travel and read where
+  they are *now*: their boxes are re-derived when a placement stamp says
+  something may have moved (:mod:`engine.brush_placement`), the parked and
+  the off-range ones included;
+* **water volumes** (:attr:`SpatialGrid.water_brushes`): not solid, kept
+  apart, for whatever swims or floats;
+* **line of sight's rows**, a view of the same buckets the AI thread can read
+  while the logic thread works.
+
+What it leaves out is what is not a place in the world: fog, triggers that do
+not move, and dynamic bodies' own boxes, which the physics that moves them
+answers for. The cell convention itself is :mod:`engine.spatial`'s.
 """
 import math
 import threading

@@ -5,9 +5,10 @@
 A floor with 1500 pillars scattered over it and N physics bodies sliding
 among them, never allowed to sleep, so every one pays the whole step: the
 wall test on each axis, the floor query, the integration and the hand-back
-to its entity. Two more rows bound the range: every body asleep (what a
-world at rest costs), and one body awake among 4096 asleep (what touching
-one costs in a full world).
+to its entity. Three more rows bound the range: every body asleep (what a
+world at rest costs), the same with the player in it (what a session pays
+every tick: the player is tested against the bodies), and one body awake
+among 4096 asleep (what touching one costs in a full world).
 
 Reports the median step in microseconds, and microseconds a body. Run the
 trees to compare interleaved (``taskset -c 3``): the numbers move with the
@@ -62,16 +63,26 @@ def build(count, rng, statics):
     return world, [b['_physics_entity'] for b in bodies]
 
 
-def _median_step(world, steps, warm):
+def _player():
+    import glm
+    from engine.player import Player
+
+    player = Player(9000.0, 9000.0)
+    player.pos = glm.vec3(9000.0, 50.0, 9000.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    return player
+
+
+def _median_step(world, steps, warm, player=None):
     for _ in range(warm):
-        world.step(DT)
+        world.step(DT, player)
     samples = []
     gc.collect()
     gc.disable()
     try:
         for _ in range(steps):
             start = time.perf_counter()
-            world.step(DT)
+            world.step(DT, player)
             samples.append(time.perf_counter() - start)
     finally:
         gc.enable()
@@ -99,6 +110,9 @@ def run():
     micros = _median_step(world, 400, 10)
     rows.append({'scenario': 'asleep', 'bodies': 4096, 'awake': 0,
                  'step_us': micros, 'body_us': micros / 4096})
+    micros = _median_step(world, 400, 10, _player())
+    rows.append({'scenario': 'asleep+player', 'bodies': 4096, 'awake': 0,
+                 'step_us': micros, 'body_us': micros / 4096})
     world.sleep_enabled = False
     world.wake(props[0], [150.0, 0.0, 90.0])
     micros = _median_step(world, 400, 10)
@@ -116,10 +130,10 @@ def main():
     sys.path.insert(0, os.path.abspath(args.tree))
 
     rows = run()
-    print('%-10s %7s %7s %12s %10s' % ('scenario', 'bodies', 'awake',
+    print('%-14s %7s %7s %12s %10s' % ('scenario', 'bodies', 'awake',
                                        'step (us)', 'us/body'))
     for row in rows:
-        print('%-10s %7d %7d %12.1f %10.2f' % (
+        print('%-14s %7d %7d %12.1f %10.2f' % (
             row['scenario'], row['bodies'], row['awake'], row['step_us'],
             row['body_us']))
     if args.json:

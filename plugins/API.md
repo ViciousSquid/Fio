@@ -404,7 +404,8 @@ the whole contract, stdlib-only):
 Two rules come with it:
 
 - **The world is the grid's.** The `SpatialGrid` the factory receives is the
-  single source of truth for the solid world, movers and doors where they are
+  single source of truth for where the world is -- solid brushes, water, and
+  movers and doors where they are
   now (`WORLD_QUERIES` lists what it answers). A physics keeps no copy.
 - **Bodies are the engine's entities.** A moved body is handed back by
   *assigning* `entity.pos`; a changed rotation is written to

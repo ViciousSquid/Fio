@@ -13,9 +13,10 @@ What crosses the boundary, and in which direction::
     Physics.step   -> entity.pos / properties['rotation'] -> ChangeJournal
 
 **The world is the grid's.** A physics is created with the session's
-:class:`engine.spatial_grid.SpatialGrid` and asks it where the solid world is
-(:data:`WORLD_QUERIES`). It keeps no copy of that world: the grid is the
-single source of truth, movers and doors included, and a physics that
+:class:`engine.spatial_grid.SpatialGrid` and asks it where the world is
+(:data:`WORLD_QUERIES`): its solid brushes, its movers and doors where they
+are now, its water. It keeps no copy of that world: the grid is the single
+source of truth, and a physics that
 snapshots it is wrong the moment a door opens. The engine never hands a
 physics the editor's brushes, the mover table or another system's internals.
 
@@ -92,7 +93,7 @@ BODY_PROPERTIES = {
 }
 
 #: What a physics may ask of the :class:`engine.spatial_grid.SpatialGrid` it
-#: was created with -- the whole of its view of the solid world.
+#: was created with -- the whole of its view of the world.
 WORLD_QUERIES = {
     'cell_size': 'float: the edge of a grid column (engine.spatial.CELL_SIZE)',
     'box_pairs(lo, hi)': '(query, row, rows): every filed brush sharing a cell '
@@ -104,6 +105,8 @@ WORLD_QUERIES = {
                                          'there is none',
     'overlaps_wall(x, y, z, margin)': 'whether a monster-sized box is in a wall',
     'has_line_of_sight(start, end)': 'whether a segment is clear of the world',
+    'water_brushes': 'the water volumes: brushes, not solid, never among the '
+                     'rows above',
 }
 
 

@@ -575,6 +575,28 @@ def test_grouped_and_scalar_floor_queries_agree_exactly(n_bodies, seed):
     assert np.array_equal(grouped, scalar)
 
 
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+@pytest.mark.parametrize("n_bodies", [1, 7, 40, 130])
+def test_the_steps_floors_are_the_grids_floors_exactly(n_bodies, seed):
+    """A step asks the grid once, about each body's whole move, and reads the
+    floors out of that answer. They are the floors a raycast per support
+    point finds, bit for bit -- wherever in the move the body is."""
+    world = _scattered_world(n_bodies, seed)
+    for _ in range(3):
+        world.step(1.0 / 60.0)
+    rows = np.flatnonzero(world._awake)
+    old = world._position[rows].copy()
+    ahead = old + np.float32(40.0)                  # a move across cells
+    previous = (old + world._offset[rows])[:, 1] - world._half[rows, 1]
+    pairs = world._world_pairs(rows, old, ahead)
+
+    for at in (old, (old + ahead) * np.float32(0.5), ahead):
+        world._position[rows, 0] = at[:, 0]
+        world._position[rows, 2] = at[:, 2]
+        assert np.array_equal(world._floors_from_pairs(rows, previous, pairs),
+                              world._floors_scalar(rows, previous))
+
+
 def test_grouped_floor_query_reads_mover_heights_live():
     """A platform that moves without the grid being repopulated.
 

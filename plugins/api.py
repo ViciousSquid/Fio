@@ -670,7 +670,7 @@ class EditorAPI:
         engine's Prop, trigger and cutscene code call. How it simulates is
         entirely its own; it need not inherit anything from Fio.
 
-        Two rules come with the contract. The solid world is the
+        Two rules come with the contract. The world is the
         ``SpatialGrid`` the factory is given, asked live -- a physics keeps
         no copy of it. And a moved body is handed back by assigning
         ``entity.pos``, which is what the renderer and every index hear.
