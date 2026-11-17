@@ -194,3 +194,44 @@ def test_a_body_run_into_a_mesh_body_s_side_knocks_it_on():
     # face (x = 50 from the ramp's origin), give or take its support points.
     assert drum.pos[0] - ramp.pos[0] > 50.0 + 10.0, (
         "the drum went into the ramp's back face", drum.pos, ramp.pos)
+
+
+# -- world brushes are never a Prop's business --------------------------------
+
+@pytest.mark.parametrize("shape", ["aabb", "mesh"])
+def test_a_ramp_brush_is_a_ramp_whatever_the_prop_s_collision_shape(shape):
+    """Collision Shape is about the Prop's own model. A world brush collides
+    as the shape it is: a Prop set to AABB stands on a ramp brush's slope,
+    never on the box the ramp is filed by."""
+    from tests.physics.test_slopes_and_terrain import _ramp, _surface
+
+    rise = 0.25                                     # gentle: it stays where it lands
+    grid = SpatialGrid(cell_size=512.0)
+    grid.populate([_floor((0, -50, 0), (4000, 100, 4000)), _ramp(rise)])
+    world = PhysicsWorld(grid)
+    prop = _prop((-100.0, 300.0, 0.0), friction=1.0)
+    body = _drum_brush(prop)
+    body['_collision_mode'] = shape
+    if shape == 'mesh':
+        # A Mesh body: its own triangles (a drum-sized block here).
+        hx, hz = DRUM_SIZE[0] / 2.0, DRUM_SIZE[2] / 2.0
+        x, y, z = prop.pos
+        a, b, c, d = ((x - hx, y, z - hz), (x + hx, y, z - hz),
+                      (x + hx, y, z + hz), (x - hx, y, z + hz))
+        top = [(px, py + DRUM_SIZE[1], pz) for px, py, pz in (a, b, c, d)]
+        faces = [(a, b, c), (a, c, d), (top[0], top[1], top[2]), (top[0], top[2], top[3])]
+        body['_mesh_triangles'] = [(face, (0.0, 1.0, 0.0)) for face in faces]
+        body['_mesh_bounds'] = ([x - hx, y, z - hz], [x + hx, y + DRUM_SIZE[1], z + hz])
+        body.update(pos=list(prop.pos), size=[1, 1, 1])
+
+    world.rebuild([body])
+    world.wake(prop)
+    _run(world, 400)
+
+    ramp_box_top = 400.0 * rise
+    surface = _surface(prop.pos[0], rise)
+    assert prop.pos[1] < ramp_box_top - 20.0, (
+        "the prop is resting %.1f up: on the ramp brush's box (%.0f), not its slope"
+        % (prop.pos[1], ramp_box_top))
+    assert prop.pos[1] == pytest.approx(surface, abs=12.0), (
+        "the prop is not on the ramp's surface", prop.pos, surface)
