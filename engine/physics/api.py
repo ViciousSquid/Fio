@@ -298,12 +298,84 @@ class Physics(Protocol):
         or None. Bodies only: the world is the spatial grid's to ask."""
 
 
+class NoPhysics:
+    """The physics engine there is when there is none: physics switched off,
+    or no play session.
+
+    Every member of the contract is here and does nothing, quietly: a query
+    finds no bodies, a push pushes nothing, a control is accepted and
+    forgotten. So code that talks to the physics engine -- a plugin, most of
+    all -- does not have to ask first whether there is one, and cannot fail
+    for want of asking. It is falsy, for code that does want to know::
+
+        if api.physics:            # an engine is running
+            ...
+
+    Anything else asked of it (a member that is one engine's own) answers
+    with a function that does nothing and returns None.
+    """
+
+    __slots__ = ()
+
+    gravity = -SV_GRAVITY
+    time_scale = 1.0
+    friction_scale = 1.0
+    damping_scale = 1.0
+    sleep_enabled = True
+    player_crushed = False
+    events_wanted = False
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __setattr__(self, name, value) -> None:
+        pass                                    # accepted and forgotten
+
+    def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError(name)
+        return _nothing
+
+    def rebuild(self, brushes) -> None: pass
+    def clear(self) -> None: pass
+    def reset_controls(self) -> None: pass
+    def step(self, delta, player=None) -> None: pass
+    def get_body(self, entity): return None
+    def wake(self, entity, velocity=None) -> None: pass
+    def wake_all(self) -> None: pass
+    def set_kinematic(self, entity, value) -> None: pass
+    def sync_entity_position(self, entity, wake=False) -> None: pass
+    def set_rest_callback(self, entity, callback) -> None: pass
+    def entities_that_changed_cell(self): return ()
+    def add_body(self, brush): return None
+    def remove_body(self, entity) -> bool: return False
+    def impulse(self, entity, impulse) -> bool: return False
+    def impulse_radial(self, centre, radius, strength): return []
+    def on_rest(self, entity, callback) -> None: pass
+    def off_rest(self, entity, callback) -> None: pass
+    def drain_events(self): return []
+    def bodies_in_box(self, lo, hi): return []
+    def bodies_near(self, point, radius): return []
+    def raycast(self, origin, direction, reach): return None
+
+    def __repr__(self) -> str:
+        return '<NoPhysics>'
+
+
+def _nothing(*args, **kwargs):
+    return None
+
+
+#: The one :class:`NoPhysics`.
+NO_PHYSICS = NoPhysics()
+
+
 def world_gravity(world: Optional[Physics] = None) -> float:
     """Signed vertical gravity (negative is down) from the live physics.
 
     *world* is the session's physics, or None outside a play session (or
     when the caller has none), which gives the default, Quake 2's 800.
     """
-    if world is not None:
+    if world:
         return float(world.gravity)
     return -SV_GRAVITY

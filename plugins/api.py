@@ -63,7 +63,8 @@ from typing import Any, Callable, List, Optional, Tuple
 # The physics contract (API 2.0). ``engine.physics`` is the boundary package:
 # stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
 from engine.physics import (  # noqa: F401 -- re-exported for plugins
-    CRUSH_DAMAGE, HEAVY_MASS, SV_GRAVITY, Body, Physics, world_gravity)
+    CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS, PHYSICS_EVENTS, SV_GRAVITY, Body,
+    Physics, world_gravity)
 from engine.spatial import clear_live_flag as _clear_live_flag
 from engine.spatial import set_live_flag as _set_live_flag
 
@@ -97,26 +98,34 @@ from engine.spatial import set_live_flag as _set_live_flag
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-#: * 2.0.0 — **1.9 extended to expose Soma and the player.** Nothing in 1.9
-#:   is changed or removed: every plugin written for 1.x loads and behaves as
-#:   it did (``tests/plugins/test_api_2_0.py`` pins the whole 1.9 surface).
-#:   Soma is Fio's physics engine -- a subsystem of the engine, as the
-#:   Forward renderer is, not a plugin -- and what is added is how a plugin
-#:   communicates with it, and with the player:
+#: * 2.0.0 — **1.9 extended to expose Soma, the player and LogicState.**
+#:   Nothing in 1.9 is changed or removed: every plugin written for 1.x loads
+#:   and behaves as it did. The surface is locked at this version
+#:   (``tests/plugins/test_api_2_0.py`` pins both the whole of 1.9 and the
+#:   whole of 2.0). Soma is Fio's physics engine -- a subsystem of the
+#:   engine, as the Forward renderer is, not a plugin -- and what is added is
+#:   how a plugin communicates with it, with the player and with map state:
 #:
-#:   - :attr:`RuntimeAPI.physics` -- the physics engine of the play session,
-#:     live (its controls, waking and moving bodies, taking one over and
-#:     handing it back); :attr:`RuntimeAPI.soma` when that engine is Soma;
-#:     :meth:`RuntimeAPI.body`; :attr:`RuntimeAPI.spatial_grid`;
-#:   - :attr:`RuntimeAPI.player`, a :class:`PlayerState`: where the player
-#:     is, how it moves, its health and armour -- read and written;
+#:   - the physics engine: :attr:`RuntimeAPI.physics` (:attr:`RuntimeAPI.soma`
+#:     when it is Soma), :meth:`RuntimeAPI.body`, :meth:`RuntimeAPI.impulse`,
+#:     :meth:`RuntimeAPI.explode`, :meth:`RuntimeAPI.bodies_near`,
+#:     :meth:`RuntimeAPI.bodies_in_box`, :meth:`RuntimeAPI.raycast_bodies`,
+#:     :attr:`RuntimeAPI.spatial_grid`; the events in :data:`PHYSICS_EVENTS`
+#:     on the bus; a physics Prop spawned in play gets a body. With physics
+#:     switched off none of it fails: ``physics`` is :data:`NO_PHYSICS`, on
+#:     which everything does nothing (:attr:`RuntimeAPI.physics_enabled`);
+#:   - the player: :attr:`RuntimeAPI.player` and :attr:`RuntimeAPI.player2`,
+#:     each a :class:`PlayerState`;
+#:   - LogicState: :meth:`RuntimeAPI.state` (a typed :class:`StateStore`
+#:     whose writes fire the map's outputs), :meth:`RuntimeAPI.state_stores`,
+#:     and the ``state_changed`` event;
+#:   - flags: :func:`set_flag` / :func:`clear_flag`, the only way to change
+#:     an entity's ``hidden`` or ``disabled`` (they are journalled);
 #:   - the physics contract, importable from here: :class:`Physics`,
-#:     :class:`Body`, and the game's rules a physics honours
-#:     (:data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`, :data:`SV_GRAVITY`,
-#:     :func:`world_gravity`);
+#:     :class:`Body`, :data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`,
+#:     :data:`SV_GRAVITY`, :func:`world_gravity`;
 #:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`:
-#:     the physics engine can be swapped out the way the renderer can
-#:     (:meth:`EditorAPI.register_renderer`).
+#:     the physics engine can be swapped out the way the renderer can.
 #:
 #:   ``SpatialGrid`` lives in ``engine.spatial_grid`` (still importable from
 #:   ``engine.physics``, as ``PhysicsWorld`` is).
@@ -375,6 +384,110 @@ def prop(name: str, type: str = "string", label: str = "", default: Any = None,
     return PropertySpec(name=name, type=type, label=label, default=default,
                         min=min, max=max, choices=choices, help=help,
                         group=group)
+
+
+# ---------------------------------------------------------------------------
+# LogicState: typed values, and the events a write makes (API 2.0)
+# ---------------------------------------------------------------------------
+class StateStore:
+    """One LogicState store, by name, as the map sees it (API 2.0).
+
+    :class:`GlobalStore` reaches the same registry but speaks strings and
+    writes silently. This is the store itself: values are **typed** (an
+    integer counter is an ``int``, a flag a ``bool``), and a write goes
+    through the map's own ``LogicState`` entity for the store when there is
+    one -- so it fires ``OnValueSet`` / ``OnValueChanged`` and the map's logic
+    reacts, exactly as if an I/O connection had written it. With no such
+    entity in the level the value is written to the registry directly.
+
+    Every change to any store, whoever makes it, is also the engine event
+    ``state_changed`` (``store``, ``key``, ``value``, ``entity``) on the bus.
+    Reached as :meth:`RuntimeAPI.state`.
+    """
+
+    __slots__ = ('_logic', 'name')
+
+    def __init__(self, logic, name):
+        self._logic = logic
+        self.name = str(name)
+
+    @staticmethod
+    def _registry() -> dict:
+        try:
+            from editor.things import LogicState
+            return LogicState._persistent_registry
+        except Exception:
+            return GlobalStore._fallback
+
+    def _entity(self):
+        """The level's LogicState entity for this store, or None."""
+        state = getattr(self._logic, 'editor_state', None)
+        for thing in getattr(state, 'things', ()) or ():
+            if getattr(thing, 'store_name', None) == self.name and hasattr(thing, 'apply_value'):
+                return thing
+        return None
+
+    def _data(self) -> dict:
+        entity = self._entity()
+        if entity is not None:
+            return getattr(entity, '_runtime_data', {})
+        return self._registry().get(self.name, {})
+
+    def get(self, key, default=None):
+        """The typed value under *key*, or *default*."""
+        return self._data().get(str(key), default)
+
+    def set(self, key, value, value_type=None) -> Tuple[bool, bool]:
+        """Store *value* under *key*: ``(accepted, changed)``.
+
+        Text is typed as an I/O parameter would be (``"5"`` is an integer)
+        unless *value_type* names the type; any other Python value is stored
+        as it is. Refused when the key is blank, the store is full, or the
+        text is not of *value_type*.
+        """
+        entity = self._entity()
+        if entity is None:
+            key = str(key).strip()
+            if not key:
+                return False, False
+            data = self._registry().setdefault(self.name, {})
+            changed = key not in data or data[key] != value or type(data[key]) is not type(value)
+            data[key] = value
+            if changed:
+                emit = getattr(self._logic, '_plugin_emit', None)
+                if emit is not None:
+                    emit('state_changed', store=self.name, key=key, value=value, entity=None)
+            return True, changed
+        ok, changed, stored = entity.apply_value(key, value, value_type)
+        try:
+            from editor.io_handlers import report_state_write
+            report_state_write(entity, self._logic, str(key).strip(), ok, changed, stored)
+        except Exception:
+            pass
+        return ok, changed
+
+    def delete(self, key) -> bool:
+        """Remove *key*. True if it was there."""
+        entity = self._entity()
+        if entity is not None:
+            return bool(entity.clear_key(key))
+        data = self._registry().get(self.name)
+        if data and str(key) in data:
+            del data[str(key)]
+            return True
+        return False
+
+    def keys(self) -> list:
+        return list(self._data().keys())
+
+    def items(self) -> list:
+        return list(self._data().items())
+
+    def __contains__(self, key) -> bool:
+        return str(key) in self._data()
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"<StateStore {self.name!r} {dict(self._data())!r}>"
 
 
 # ---------------------------------------------------------------------------
@@ -830,17 +943,27 @@ class PlayerState:
       :attr:`swimming`, :attr:`size`, :meth:`teleport`
     * where it looks -- :attr:`yaw`, :attr:`pitch`, :attr:`eye`, :attr:`forward`
     * how it is -- :attr:`health`, :attr:`max_health`, :attr:`armor`,
-      :attr:`max_armor`, :attr:`dead`, :attr:`god_mode`, :meth:`damage`,
-      :meth:`give_armor`
+      :attr:`max_armor`, :attr:`dead`, :attr:`god_mode`, :attr:`notarget`,
+      :meth:`damage`, :meth:`give_armor`
+    * how it moves -- :attr:`speed`, :attr:`noclip`
+    * what it carries -- :attr:`holding`, :meth:`drop`, :attr:`keys`,
+      :meth:`has_key`, :meth:`give_key`, :meth:`take_key`, :attr:`weapons`
+
+    The second, split-screen player is :attr:`RuntimeAPI.player2`: the same
+    members, where the engine keeps them per player (position, motion, view,
+    health); armour, keys, weapons and what is carried are the first
+    player's.
 
     :attr:`object` is the engine's own ``Player`` for anything not here; what
     is here keeps its meaning when the engine's internals change.
     """
 
-    __slots__ = ('_logic',)
+    __slots__ = ('_logic', '_second')
 
-    def __init__(self, logic):
+    def __init__(self, logic, second=False):
         self._logic = logic
+        #: The second, split-screen player rather than the first.
+        self._second = bool(second)
 
     @property
     def _runtime(self):
@@ -848,12 +971,19 @@ class PlayerState:
 
     @property
     def object(self):
-        """The engine's ``Player`` object, or None before play starts."""
-        return self._runtime.player
+        """The engine's ``Player`` object, or None before play starts (or,
+        for the second player, when nobody is playing split-screen)."""
+        runtime = self._runtime
+        return runtime.player2 if self._second else runtime.player
+
+    @property
+    def index(self) -> int:
+        """0 for the first player, 1 for the second."""
+        return 1 if self._second else 0
 
     @property
     def exists(self) -> bool:
-        return self._runtime.player is not None
+        return self.object is not None
 
     # -- where it is and how it moves ---------------------------------------
     @property
@@ -954,23 +1084,108 @@ class PlayerState:
         """The look direction, pitch included."""
         return _player_forward(self.object)
 
+    # -- how it moves ---------------------------------------------------------
+    @property
+    def speed(self) -> float:
+        """Walking speed, in units per second."""
+        return float(getattr(self.object, 'speed', 0.0))
+
+    @speed.setter
+    def speed(self, value):
+        if self.object is not None:
+            self.object.speed = max(0.0, float(value))
+
+    @property
+    def noclip(self) -> bool:
+        """Whether the player's own physics is off: it flies, passes through
+        the world, and neither pushes nor is pushed by physics bodies."""
+        player = self.object
+        return player is not None and not getattr(player, 'physics_enabled', True)
+
+    @noclip.setter
+    def noclip(self, value):
+        player = self.object
+        if player is not None:
+            player.physics_enabled = not bool(value)
+            if value:
+                player.on_ground = False
+                player.ground_object = None
+
+    # -- what it carries ------------------------------------------------------
+    @property
+    def holding(self):
+        """The Prop the first player is carrying, or None."""
+        if self._second:
+            return None
+        return getattr(self._logic.prop_runtime, 'held', None)
+
+    def drop(self) -> bool:
+        """Make the player put down what it is carrying, on the next tick.
+        True if it was carrying something."""
+        held = self.holding
+        if held is None:
+            return False
+        held.properties['_drop_requested'] = True
+        return True
+
+    @property
+    def keys(self) -> frozenset:
+        """The names of the keys the player has collected."""
+        return frozenset(self._runtime.collected_keys)
+
+    def has_key(self, name) -> bool:
+        return str(name) in self._runtime.collected_keys
+
+    def give_key(self, name) -> None:
+        self._runtime.collected_keys.add(str(name))
+
+    def take_key(self, name) -> bool:
+        """Take a key away. True if the player had it."""
+        keys = self._runtime.collected_keys
+        if str(name) in keys:
+            keys.discard(str(name))
+            return True
+        return False
+
+    @property
+    def weapons(self) -> frozenset:
+        """The weapons the player holds, by item id."""
+        return frozenset(getattr(self._logic.combat_runtime, 'weapons', ()))
+
+    @property
+    def notarget(self) -> bool:
+        """Whether monsters ignore the player."""
+        return bool(self._runtime.notarget)
+
+    @notarget.setter
+    def notarget(self, value):
+        self._runtime.notarget = bool(value)
+
     # -- how it is ------------------------------------------------------------
     @property
     def health(self) -> int:
-        return self._runtime.player_health
+        runtime = self._runtime
+        return runtime.player2_health if self._second else runtime.player_health
 
     @health.setter
     def health(self, value):
         runtime = self._runtime
-        runtime.player_health = max(0, min(int(value), int(runtime.player_max_health)))
+        if self._second:
+            runtime.player2_health = max(0, min(int(value), int(runtime.player2_max_health)))
+        else:
+            runtime.player_health = max(0, min(int(value), int(runtime.player_max_health)))
 
     @property
     def max_health(self) -> int:
-        return self._runtime.player_max_health
+        runtime = self._runtime
+        return runtime.player2_max_health if self._second else runtime.player_max_health
 
     @max_health.setter
     def max_health(self, value):
-        self._runtime.player_max_health = max(1, int(value))
+        if self._second:
+            self._runtime.player2_max_health = max(1, int(value))
+        else:
+            self._runtime.player_max_health = max(1, int(value))
 
     @property
     def armor(self) -> int:
@@ -987,7 +1202,8 @@ class PlayerState:
 
     @property
     def dead(self) -> bool:
-        return bool(self._runtime.player_dead)
+        runtime = self._runtime
+        return bool(runtime.player2_dead if self._second else runtime.player_dead)
 
     @property
     def god_mode(self) -> bool:
@@ -1024,10 +1240,13 @@ class RuntimeAPI:
 
     * scene queries — :meth:`entities_of_type`, :meth:`things_near`,
       :meth:`raycast_from_crosshair`
-    * the player — :attr:`player` (a :class:`PlayerState`), and the older
-      :meth:`player_eye`, :meth:`player_forward`
-    * the physics engine — :attr:`physics` (:attr:`soma`, when it is Soma),
-      :meth:`body`, :attr:`spatial_grid`
+    * the player — :attr:`player` and :attr:`player2` (a :class:`PlayerState`
+      each), and the older :meth:`player_eye`, :meth:`player_forward`
+    * LogicState — :meth:`state` (a typed :class:`StateStore`),
+      :meth:`state_stores`
+    * the physics engine — :attr:`physics` (:attr:`soma`, when it is Soma;
+      never None: see :attr:`physics_enabled`), :meth:`body`, :meth:`impulse`, :meth:`explode`, :meth:`bodies_near`,
+      :meth:`bodies_in_box`, :meth:`raycast_bodies`, :attr:`spatial_grid`
     * runtime spawn/despawn — :meth:`spawn`, :meth:`despawn`
     * cross-level storage — :meth:`global_get` / :meth:`global_set`
     """
@@ -1037,6 +1256,9 @@ class RuntimeAPI:
         self._plugin = plugin
         self.logic = logic
         self.io_manager = logic.io_manager
+        # Views, made once: they read the engine live.
+        self._player = PlayerState(logic)
+        self._player2 = PlayerState(logic, second=True)
 
     # -- I/O ----------------------------------------------------------------
     def register_input_handler(self, entity_type: str, input_name: str, handler: Callable):
@@ -1094,13 +1316,29 @@ class RuntimeAPI:
     @property
     def player(self) -> PlayerState:
         """The player's state, live: see :class:`PlayerState`."""
-        return PlayerState(self.logic)
+        return self._player
+
+    @property
+    def player2(self) -> PlayerState:
+        """The second, split-screen player's state; its ``exists`` is False
+        when nobody is playing split-screen."""
+        return self._player2
+
+    # -- LogicState (API 2.0) -------------------------------------------------
+    def state(self, store: str) -> "StateStore":
+        """The LogicState store named *store*: typed values, and writes the
+        map's logic hears. See :class:`StateStore`."""
+        return StateStore(self.logic, store)
+
+    def state_stores(self) -> list:
+        """The names of every LogicState store that holds anything."""
+        return sorted(StateStore._registry().keys())
 
     # -- the physics engine (API 2.0) -----------------------------------------
     @property
-    def physics(self) -> Optional[Physics]:
+    def physics(self) -> Physics:
         """The physics engine of this play session -- Soma, unless another
-        was registered and selected -- or None outside play.
+        was registered and selected.
 
         This is how a plugin communicates with it. Read or set the world
         controls (``gravity``, ``time_scale``, ``friction_scale``,
@@ -1110,26 +1348,69 @@ class RuntimeAPI:
         told when one comes to rest. Its members are the :class:`Physics`
         contract, whichever engine it is.
 
+        **It is never None.** With physics switched off (Settings > Enable
+        physics), or outside play, this is :data:`NO_PHYSICS`: every member
+        is there and does nothing, quietly -- a query finds no bodies, a push
+        pushes nothing, a control is accepted and forgotten -- so a plugin
+        need not ask first, and cannot fail for want of asking. It is falsy
+        (``if api.physics:``), and :attr:`physics_enabled` says the same.
+
         Fetch it when you use it rather than keeping it: each play session
         has its own.
         """
-        return getattr(self.logic.session_runtime, 'physics_world', None)
+        physics = getattr(self.logic.session_runtime, 'physics_world', None)
+        return physics if physics is not None else NO_PHYSICS
 
     @property
-    def soma(self) -> Optional[Physics]:
-        """:attr:`physics` when the session's physics engine is Soma, else
-        None: for what is Soma's own rather than the contract's."""
+    def physics_enabled(self) -> bool:
+        """Whether a physics engine is running: False with physics switched
+        off, and outside play."""
+        return getattr(self.logic.session_runtime, 'physics_world', None) is not None
+
+    @property
+    def soma(self) -> Physics:
+        """:attr:`physics` when the session's physics engine is Soma, for
+        what is Soma's own rather than the contract's (``topple``,
+        ``stand``); otherwise :data:`NO_PHYSICS`, on which those too do
+        nothing."""
         physics = self.physics
-        if physics is not None and type(physics).__module__.startswith('engine.physics.soma'):
+        if physics and type(physics).__module__.startswith('engine.physics.soma'):
             return physics
-        return None
+        return NO_PHYSICS
+
+    def impulse(self, entity, impulse) -> bool:
+        """Push a physics Prop: its velocity changes by ``impulse / mass``,
+        so the same push moves a heavy one less, and it wakes. False if it
+        has no body, is being carried, or play is not running."""
+        return bool(self.physics.impulse(entity, impulse))
+
+    def explode(self, centre, radius: float, strength: float) -> list:
+        """Push every physics Prop within *radius* of *centre* away from it,
+        by an impulse of *strength* at the centre falling to nothing at the
+        radius. Returns the entities pushed."""
+        return list(self.physics.impulse_radial(centre, radius, strength))
+
+    def bodies_near(self, point, radius: float) -> list:
+        """The physics Props whose body is within *radius* of *point*, found
+        through the physics engine's own index rather than by scanning every
+        entity."""
+        return list(self.physics.bodies_near(point, radius))
+
+    def bodies_in_box(self, lo, hi) -> list:
+        """The physics Props whose body overlaps the box ``lo..hi``."""
+        return list(self.physics.bodies_in_box(lo, hi))
+
+    def raycast_bodies(self, origin, direction, reach: float = 4096.0):
+        """The first physics Prop a ray meets within *reach*:
+        ``(entity, distance)``, or None. Bodies only -- for the world, ask
+        :attr:`spatial_grid`."""
+        return self.physics.raycast(origin, direction, reach)
 
     def body(self, entity) -> Optional[Body]:
         """The simulated :class:`Body` of *entity* (a physics Prop), or None
         if it has none or play is not running. A live handle: ``velocity``,
         ``mass``, ``half_extents``, ``awake``, ``kinematic``."""
-        physics = self.physics
-        return physics.get_body(entity) if physics is not None else None
+        return self.physics.get_body(entity)
 
     @property
     def spatial_grid(self):
@@ -1229,11 +1510,20 @@ class RuntimeAPI:
         if runtime is None or not logic.session_runtime.play_mode:
             return
         lock = logic._tick_lock
-        if lock is None:
+
+        def rebuild():
             runtime.build_entity_caches()
+            # A physics Prop that was spawned gets its body, and one that was
+            # despawned loses it; the bodies already there carry on.
+            sync = getattr(logic.collision_runtime, 'sync_bodies', None)
+            if sync is not None:
+                sync()
+
+        if lock is None:
+            rebuild()
         else:
             with lock:
-                runtime.build_entity_caches()
+                rebuild()
 
     # -- global store -------------------------------------------------------
     @property

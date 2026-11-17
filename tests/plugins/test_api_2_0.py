@@ -109,7 +109,7 @@ def session():
     state.things = [prop]
     logic = LogicThread(ThreadedGameState(), state)
     runtime = RuntimeAPI(None, logic, None)
-    assert runtime.physics is None                      # not playing yet
+    assert not runtime.physics and not runtime.physics_enabled   # not playing yet
     assert runtime.spatial_grid is None
     assert runtime.body(prop) is None
     logic.session_runtime.apply_play_mode(True)
@@ -129,6 +129,7 @@ def test_a_plugin_communicates_with_soma_through_the_runtime_api(session):
     physics = runtime.physics
     assert physics is logic.session_runtime.physics_world
     assert isinstance(physics, Physics)
+    assert physics and runtime.physics_enabled
     # It is Soma, so it is also reachable as Soma.
     assert runtime.soma is physics
     assert runtime.spatial_grid is logic.session_runtime.spatial_grid
@@ -198,3 +199,294 @@ def test_the_players_health_and_armour_go_through_the_engines_rules(session):
     player.god_mode = False
     assert player.dead is False
     assert logic.player_runtime.player_health == player.health
+
+
+# -- what a plugin does with Soma ---------------------------------------------
+
+def _give_body(runtime, prop):
+    if runtime.body(prop) is None:
+        runtime.physics.rebuild([{
+            'pos': [prop.pos[0], prop.pos[1] + 20.0, prop.pos[2]],
+            'size': [40.0, 40.0, 40.0],
+            '_physics_body': True, '_physics_entity': prop}])
+    return runtime.body(prop)
+
+
+@pytest.mark.qt
+def test_a_plugin_pushes_and_finds_bodies_through_the_runtime_api(session):
+    runtime, _logic, prop = session
+    body = _give_body(runtime, prop)
+
+    assert runtime.impulse(prop, [80.0, 0.0, 0.0]) is True
+    assert body.velocity[0] == pytest.approx(80.0 / body.mass)
+    assert runtime.bodies_near(prop.pos, 100.0) == [prop]
+    assert runtime.bodies_in_box([prop.pos[0] - 50, -500, prop.pos[2] - 50],
+                                 [prop.pos[0] + 50, 500, prop.pos[2] + 50]) == [prop]
+    entity, distance = runtime.raycast_bodies(
+        [prop.pos[0] - 300.0, prop.pos[1] + 20.0, prop.pos[2]], [1.0, 0.0, 0.0])
+    assert entity is prop and distance == pytest.approx(280.0)
+    pushed = runtime.explode([prop.pos[0] - 50.0, prop.pos[1] + 20.0, prop.pos[2]], 200.0, 500.0)
+    assert pushed == [prop] and body.velocity[0] > 80.0
+
+
+def test_with_physics_off_nothing_a_plugin_asks_fails():
+    """Physics switched off, or no play session: there is no engine, and a
+    plugin that talks to one anyway is answered quietly, never with an
+    error."""
+    from plugins.api import NO_PHYSICS
+
+    class NoSession:
+        io_manager = None
+        session_runtime = type('S', (), {'physics_world': None, 'spatial_grid': None})()
+    runtime = RuntimeAPI(None, NoSession(), None)
+    thing = object()
+
+    assert runtime.physics_enabled is False
+    physics = runtime.physics
+    assert physics is NO_PHYSICS and not physics            # never None; falsy
+    assert isinstance(physics, Physics)                     # the whole contract
+    assert runtime.soma is NO_PHYSICS
+
+    # The API's own calls.
+    assert runtime.body(thing) is None
+    assert runtime.impulse(thing, [1.0, 0.0, 0.0]) is False
+    assert runtime.explode([0, 0, 0], 100.0, 100.0) == []
+    assert runtime.bodies_near([0, 0, 0], 100.0) == []
+    assert runtime.bodies_in_box([0, 0, 0], [1, 1, 1]) == []
+    assert runtime.raycast_bodies([0, 0, 0], [1, 0, 0]) is None
+
+    # The engine itself, as a plugin would use it without asking first.
+    physics.wake(thing, [0.0, 100.0, 0.0])
+    physics.set_kinematic(thing, True)
+    physics.sync_entity_position(thing, wake=True)
+    physics.on_rest(thing, print)
+    physics.off_rest(thing, print)
+    physics.wake_all()
+    physics.reset_controls()
+    physics.step(1.0 / 60.0)
+    assert physics.get_body(thing) is None
+    assert physics.impulse(thing, [1.0, 0.0, 0.0]) is False
+    assert physics.impulse_radial([0, 0, 0], 10.0, 10.0) == []
+    assert physics.bodies_near([0, 0, 0], 10.0) == []
+    assert physics.raycast([0, 0, 0], [1, 0, 0], 10.0) is None
+    assert physics.drain_events() == [] and physics.remove_body(thing) is False
+    # Controls are accepted and forgotten; reads are the defaults.
+    physics.gravity = -5.0
+    physics.time_scale = 0.0
+    assert physics.gravity == -api.SV_GRAVITY and physics.time_scale == 1.0
+    assert api.world_gravity(physics) == -api.SV_GRAVITY
+    # What is one engine's own does nothing too.
+    assert runtime.soma.topple(thing, [1.0, 0.0, 0.0]) is None
+    assert runtime.soma.stand(thing) is None
+
+
+@pytest.mark.qt
+def test_physics_events_reach_a_subscribed_plugin(session):
+    from engine.physics import PHYSICS_EVENTS
+
+    runtime, logic, prop = session
+    _give_body(runtime, prop)
+    heard = []
+
+    class Plugins:
+        """The manager's two members the engine uses for events."""
+        def has_listeners(self, event):
+            return event == 'physics.rest'
+
+        def emit(self, event, **data):
+            heard.append((event, data.get('entity')))
+
+        def __getattr__(self, name):                   # the rest: nothing to do
+            return lambda *args, **kwargs: None
+
+    assert set(PHYSICS_EVENTS) == {'physics.rest', 'physics.landed',
+                                   'physics.contact', 'physics.toppled'}
+    plugins = logic.plugins
+    logic.plugins = Plugins()
+    prop.pos = [200.0, 300.0, 0.0]
+    runtime.physics.sync_entity_position(prop, wake=True)
+    for _ in range(400):
+        logic._tick_play_mode(1.0 / 60.0)
+        if any(event == 'physics.rest' for event, _entity in heard):
+            break
+    logic.plugins = plugins
+    assert ('physics.rest', prop) in heard
+    assert ('physics.landed', prop) in heard          # wanted is all or nothing
+
+
+@pytest.mark.qt
+def test_a_physics_prop_spawned_in_play_gets_a_body_and_despawned_loses_it(session):
+    from engine.prop_entity import Prop
+
+    runtime, logic, prop = session
+    runtime._manager = type('M', (), {'emit': lambda self, *a, **k: None,
+                                      '_log': lambda self, m: None})()
+    runtime._plugin = type('P', (), {'name': 'test'})()
+    spawned = runtime.spawn(Prop, pos=[0.0, 300.0, 300.0], properties={
+        'physics_enabled': True, 'no_collision': False, 'collision_shape': 'aabb',
+        'model_path': 'assets/models/Oil_Drum.obj'})
+    assert spawned is not None
+    body = runtime.body(spawned)
+    assert body is not None                             # it is simulated
+    runtime.physics.wake(spawned)
+    for _ in range(5):
+        runtime.physics.step(1.0 / 60.0)
+    assert spawned.pos[1] < 300.0
+
+    assert runtime.despawn(spawned) is True
+    assert runtime.body(spawned) is None
+
+
+# -- LogicState ----------------------------------------------------------------
+
+def test_logicstate_values_are_typed_and_writes_are_events():
+    from editor.things import LogicState
+
+    heard = []
+
+    class Logic:
+        io_manager = None
+        session_runtime = type('S', (), {'physics_world': None, 'spatial_grid': None})()
+        editor_state = type('E', (), {'things': []})()
+
+        def _plugin_emit(self, event, **data):
+            heard.append((event, data['store'], data['key'], data['value']))
+
+    saved = dict(LogicState._persistent_registry)
+    try:
+        runtime = RuntimeAPI(None, Logic(), None)
+        store = runtime.state('api2_test')
+        assert store.set('kills', 5) == (True, True)
+        assert store.set('kills', 5) == (True, False)          # nothing changed
+        assert store.get('kills') == 5 and isinstance(store.get('kills'), int)
+        assert store.set('open', True) == (True, True)
+        assert store.get('open') is True
+        assert 'kills' in store and sorted(store.keys()) == ['kills', 'open']
+        assert 'api2_test' in runtime.state_stores()
+        assert heard == [('state_changed', 'api2_test', 'kills', 5),
+                         ('state_changed', 'api2_test', 'open', True)]
+        # The string-speaking store of 1.x sees the same values.
+        assert api.GlobalStore().get('kills', store='api2_test') == '5'
+        assert store.delete('kills') is True and store.get('kills', 'gone') == 'gone'
+        assert store.set('  ', 1) == (False, False)
+    finally:
+        LogicState._persistent_registry.clear()
+        LogicState._persistent_registry.update(saved)
+
+
+@pytest.mark.qt
+def test_a_write_through_the_maps_logicstate_fires_its_outputs(session):
+    from editor.things import LogicState
+
+    runtime, logic, _prop = session
+    saved = dict(LogicState._persistent_registry)
+    io_manager = logic.io_manager
+    fired = []
+    try:
+        entity = LogicState(pos=[0, 0, 0], properties={'store_name': 'doors'})
+        logic.editor_state.things.append(entity)
+        logic.io_manager = type('IO', (), {
+            'fire_output': lambda self, e, name, value=None: fired.append((name, value))})()
+        store = runtime.state('doors')
+        assert store.set('code', '007', 'string') == (True, True)
+        assert store.get('code') == '007'
+        assert store.set('count', '3') == (True, True)         # typed as I/O would
+        assert store.get('count') == 3
+        assert ('OnValueChanged', 'count=3') in fired
+        assert ('OnValueSet', 'code=007') in fired
+    finally:
+        logic.io_manager = io_manager
+        LogicState._persistent_registry.clear()
+        LogicState._persistent_registry.update(saved)
+
+
+# -- more of the player --------------------------------------------------------
+
+@pytest.mark.qt
+def test_more_of_the_player_is_reachable(session):
+    runtime, logic, _prop = session
+    player = runtime.player
+    assert runtime.player is player                     # one view, made once
+    assert player.index == 0
+
+    player.speed = 123.0
+    assert player.object.speed == 123.0
+    assert player.noclip is False
+    player.noclip = True
+    assert player.object.physics_enabled is False
+    player.noclip = False
+
+    assert player.keys == frozenset()
+    player.give_key('red')
+    assert player.has_key('red') and player.keys == frozenset({'red'})
+    assert player.take_key('red') is True and player.take_key('red') is False
+    assert isinstance(player.weapons, frozenset)
+    player.notarget = True
+    assert logic.player_runtime.notarget is True
+    assert player.holding is None and player.drop() is False
+
+    second = runtime.player2
+    assert second.index == 1 and second.exists is False  # nobody on split-screen
+    assert second.position == (0.0, 0.0, 0.0)
+
+
+def test_flags_are_set_through_the_api():
+    from engine.prop_entity import Prop
+
+    prop = Prop(properties={})
+    assert api.set_flag(prop, 'disabled', True) is True
+    assert prop.properties['disabled'] is True
+    assert api.clear_flag(prop, 'disabled') is True
+    assert 'disabled' not in prop.properties
+    assert api.set_flag(object(), 'disabled', True) is False
+
+
+# -- locked --------------------------------------------------------------------
+
+def _surface():
+    """The public surface of ``plugins/api.py``, read from its source: every
+    module-level name it defines or re-exports from the engine, and every
+    public member of every public class."""
+    import ast
+
+    tree = ast.parse((ROOT / 'plugins' / 'api.py').read_text())
+    module, classes = set(), {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and not node.name.startswith('_'):
+            module.add(node.name)
+            if isinstance(node, ast.ClassDef):
+                members = set()
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and not item.name.startswith('_'):
+                        members.add(item.name)
+                    elif isinstance(item, (ast.Assign, ast.AnnAssign)):
+                        targets = item.targets if isinstance(item, ast.Assign) else [item.target]
+                        members.update(t.id for t in targets
+                                       if isinstance(t, ast.Name) and not t.id.startswith('_'))
+                classes[node.name] = sorted(members)
+        elif isinstance(node, ast.Assign):
+            module.update(t.id for t in node.targets
+                          if isinstance(t, ast.Name) and not t.id.startswith('_'))
+        elif isinstance(node, ast.ImportFrom) and (node.module or '').startswith('engine'):
+            module.update(a.asname or a.name for a in node.names
+                          if not (a.asname or a.name).startswith('_'))
+    return {'module': sorted(module), 'classes': classes}
+
+
+def test_the_api_surface_is_locked_at_2_0():
+    """API 2.0 is this surface, exactly. A name that disappears breaks
+    plugins; a name that appears is a new API and needs a new version:
+    either way this fails until ``API_VERSION`` moves and the recorded
+    surface (``fixtures/api_2_0_surface.json``) moves with it."""
+    locked = json.loads(
+        (ROOT / 'tests/plugins/fixtures/api_2_0_surface.json').read_text())
+    now = _surface()
+    removed = sorted(set(locked['module']) - set(now['module']))
+    added = sorted(set(now['module']) - set(locked['module']))
+    for cls in sorted(set(locked['classes']) | set(now['classes'])):
+        was, is_ = set(locked['classes'].get(cls, ())), set(now['classes'].get(cls, ()))
+        removed += [f'{cls}.{m}' for m in sorted(was - is_)]
+        added += [f'{cls}.{m}' for m in sorted(is_ - was)]
+    assert not removed, f"removed from API {API_VERSION}: {removed}"
+    assert not added, (f"added to API {API_VERSION} without a new version: {added}")
+    assert API_VERSION == "2.0.0"

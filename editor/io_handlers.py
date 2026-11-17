@@ -50,6 +50,31 @@ def _finite(param) -> float:
     return value
 
 
+def report_state_write(entity, logic, key, ok, changed, stored):
+    """Fire the outputs one write implies.
+
+    Refused writes fire ``OnStoreFull``: the only ways a write is refused
+    are a full store and a value that does not fit the type the parameter
+    asked for, and both mean "this value did not go in", which is what a
+    map wired to that output is reacting to.
+    """
+    mgr = logic.io_manager if logic is not None else None
+    if mgr is None:
+        return
+    if not ok:
+        mgr.fire_output(entity, 'OnStoreFull', value=key)
+        return
+    payload = "%s=%s" % (key, _sv.format_value(stored))
+    mgr.fire_output(entity, 'OnValueSet', value=payload)
+    if changed:
+        mgr.fire_output(entity, 'OnValueChanged', value=payload)
+        # And for plugins: one event for every change, whatever made it.
+        emit = getattr(logic, '_plugin_emit', None)
+        if emit is not None:
+            emit('state_changed', store=getattr(entity, 'store_name', ''),
+                 key=key, value=stored, entity=entity)
+
+
 def register_all_input_handlers(io_manager: IOManager):
     """Register all input handlers with the I/O manager."""
     
@@ -1486,24 +1511,7 @@ def register_all_input_handlers(io_manager: IOManager):
             return key.strip(), amount.strip()
         return param.strip(), default
 
-    def _state_report(entity, logic, key, ok, changed, stored):
-        """Fire the outputs one write implies.
-
-        Refused writes fire ``OnStoreFull``: the only ways a write is refused
-        are a full store and a value that does not fit the type the parameter
-        asked for, and both mean "this value did not go in", which is what a
-        map wired to that output is reacting to.
-        """
-        mgr = logic.io_manager if logic is not None else None
-        if mgr is None:
-            return
-        if not ok:
-            mgr.fire_output(entity, 'OnStoreFull', value=key)
-            return
-        payload = "%s=%s" % (key, _sv.format_value(stored))
-        mgr.fire_output(entity, 'OnValueSet', value=payload)
-        if changed:
-            mgr.fire_output(entity, 'OnValueChanged', value=payload)
+    _state_report = report_state_write
 
     def _state_branch(entity, logic, result, payload):
         """Fire the true/false pair a query implies, legacy names included."""

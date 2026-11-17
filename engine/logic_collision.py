@@ -718,6 +718,43 @@ class LogicCollision:
         return self.model_collision_enabled
 
 
+    def sync_bodies(self):
+        """Entities came or went while the session runs (a plugin spawned or
+        despawned one): rebuild the model collision brushes, and give the
+        physics engine the bodies that are new and take away those that are
+        gone -- the rest carry on exactly as they are.
+
+        Solid scenery among them is in the spatial grid, which is repopulated
+        only if that changed; a physics Prop is a body, not a grid brush.
+        """
+        logic = self.logic
+        session = logic.session_runtime
+        if not session.play_mode:
+            return
+        before_bodies = {id(b.get('_physics_entity')): b for b in self._physics_body_brushes}
+        before_scenery = {id(b.get('_physics_entity'))
+                          for b in self._model_collision_brushes
+                          if not b.get('_physics_body')}
+        self._model_collision_brushes = (
+            self.build_model_collision_brushes() if self.model_collision_enabled else [])
+        self._physics_body_brushes = [
+            b for b in self._model_collision_brushes if b.get('_physics_body')]
+        scenery = {id(b.get('_physics_entity')) for b in self._model_collision_brushes
+                   if not b.get('_physics_body')}
+        if scenery != before_scenery and session.spatial_grid is not None:
+            session.spatial_grid.populate(
+                logic.editor_state.brushes + self._model_collision_brushes)
+        physics = session.physics_world
+        if physics is not None:
+            now = {id(b.get('_physics_entity')): b for b in self._physics_body_brushes}
+            for key, brush in before_bodies.items():
+                if key not in now:
+                    physics.remove_body(brush.get('_physics_entity'))
+            for key, brush in now.items():
+                if key not in before_bodies:
+                    physics.add_body(brush)
+        self.refresh_collision_brushes_cache()
+
     def refresh_collision_brushes_cache(self):
         """Recompute the combined static+model collision brush list.
 
