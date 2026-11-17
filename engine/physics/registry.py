@@ -15,9 +15,12 @@ import importlib
 #: The physics a session starts with unless another is selected.
 DEFAULT_PHYSICS = "Soma"
 
-_factories = {
+#: The physics Fio ships, by where each lives.
+_BUILT_IN = {
     "Soma": "engine.physics.soma:Soma",
 }
+
+_factories = dict(_BUILT_IN)
 
 _selected = DEFAULT_PHYSICS
 
@@ -72,3 +75,31 @@ def create_physics(spatial_grid, name=None):
     if factory is None:
         raise KeyError(f"no physics registered as {name!r}")
     return factory(spatial_grid)
+
+
+def unload_physics():
+    """Unload the built-in physics: the implementation modules leave
+    ``sys.modules`` and are imported again only if a physics is next created.
+
+    For a host that has physics switched off: nothing of Soma stays in memory.
+    The boundary (this registry, the contract) stays; it is stdlib-only and a
+    few kilobytes. Returns the names of the modules dropped. A physics some
+    session still holds keeps its own module alive until that session ends.
+    """
+    import sys
+    dropped = []
+    for name, target in _BUILT_IN.items():
+        module_name = target.partition(':')[0]
+        factory = _factories.get(name)
+        if not isinstance(factory, str) and getattr(factory, '__module__', '').startswith(module_name):
+            _factories[name] = target
+        for loaded in [m for m in sys.modules
+                       if m == module_name or m.startswith(module_name + '.')]:
+            del sys.modules[loaded]
+            dropped.append(loaded)
+    package = sys.modules.get(__name__.rpartition('.')[0])
+    for name in ('Soma', 'PhysicsWorld', 'PhysicsBody', 'quat_from_rotation',
+                 'rotation_from_quat', 'soma'):
+        if package is not None:
+            vars(package).pop(name, None)
+    return dropped

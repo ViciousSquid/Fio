@@ -319,6 +319,11 @@ class SettingsWindow(QDialog):
         gameplay_layout = QVBoxLayout()
         
         self.physics_checkbox = QCheckBox("Enable physics")
+        self.physics_checkbox.setToolTip(
+            "Physics for Play. Off, the player is not held by gravity or walls, "
+            "and the physics engine (Soma) is switched off altogether: it is not "
+            "loaded, and physics Props are ordinary scenery. Takes effect the "
+            "next time Play starts.")
         gameplay_layout.addWidget(self.physics_checkbox)
         
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")

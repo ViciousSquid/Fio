@@ -343,11 +343,14 @@ class LogicCollision:
         model_collision_enabled = self.model_collision_enabled
         brushes = []
 
+        physics_on = bool(getattr(logic.session_runtime, 'physics_enabled', True))
         for thing in logic.editor_state.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
-            physics_enabled = bool(props.get('physics_enabled', False))
+            # With physics switched off for the session nothing is a body: a
+            # physics Prop collides as the scenery it otherwise is.
+            physics_enabled = physics_on and bool(props.get('physics_enabled', False))
             if not model_collision_enabled and not physics_enabled:
                 continue
             if props.get('no_collision', False) and not physics_enabled:

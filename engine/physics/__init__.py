@@ -28,13 +28,14 @@ from .api import (
     WORLD_QUERIES, Body, Physics, world_gravity)
 from .registry import (
     DEFAULT_PHYSICS, available_physics, create_physics, physics_factory,
-    register_physics, select_physics, selected_physics)
+    register_physics, select_physics, selected_physics, unload_physics)
 
 __all__ = [
     'Physics', 'Body', 'BODY_BRUSH', 'BODY_PROPERTIES', 'WORLD_QUERIES',
     'SV_GRAVITY', 'HEAVY_MASS', 'CRUSH_DAMAGE', 'world_gravity',
     'DEFAULT_PHYSICS', 'register_physics', 'create_physics', 'select_physics',
     'selected_physics', 'available_physics', 'physics_factory',
+    'unload_physics',
 ]
 
 #: Names that moved out of the old ``engine.physics`` module, and where to.

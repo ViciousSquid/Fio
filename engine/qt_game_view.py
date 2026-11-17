@@ -1401,6 +1401,8 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.player_runtime.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
+                # Enable physics, off: no physics engine for this session.
+                self.logic_thread.session_runtime.physics_enabled = bool(physics_enabled)
                 self.logic_thread.session_runtime.apply_play_mode(
                     True, spawn_start=player_start)
 

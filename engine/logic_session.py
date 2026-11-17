@@ -40,6 +40,10 @@ class LogicSession:
         self.play_mode = False
         self._world_pause_owners = frozenset()
         self.physics_world = None
+        #: The global physics switch (Settings > Play Modes > Enable physics):
+        #: off, a session has no physics engine at all -- none is created,
+        #: and Soma is not loaded -- and a physics Prop is ordinary scenery.
+        self.physics_enabled = True
         self.spatial_grid = None
         self._world_pause_lock = threading.Lock()
         self.monster_lock = threading.RLock()
@@ -199,7 +203,7 @@ class LogicSession:
             # Build entity caches before constructing session-local physics.
             logic.world_runtime.build_entity_caches()
 
-            from .physics import create_physics
+            from .physics import create_physics, unload_physics
             from .spatial_grid import SpatialGrid
 
             self.spatial_grid = SpatialGrid(cell_size=512.0)
@@ -210,10 +214,15 @@ class LogicSession:
             # while the session runs: the grid asks for the current one.
             world_runtime = logic.world_runtime
             self.spatial_grid.set_terrain(lambda: world_runtime.terrain)
-            # Whichever physics is selected (engine.physics.registry): the
-            # engine drives it through the contract and nothing else.
-            self.physics_world = create_physics(self.spatial_grid)
-            self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
+            if self.physics_enabled:
+                # Whichever physics is selected (engine.physics.registry):
+                # the engine drives it through the contract and nothing else.
+                self.physics_world = create_physics(self.spatial_grid)
+                self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
+            else:
+                # Switched off: no engine, and nothing of one kept loaded.
+                self.physics_world = None
+                unload_physics()
             logic.monster_ai.set_spatial_grid(self.spatial_grid)
 
             # Reset cinematic state.
