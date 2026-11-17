@@ -79,7 +79,9 @@ def load_stamp_file(path: str) -> dict:
 # (minified JSON), not in the map's JSON. The map still holds the terrain's
 # baked paint, so it draws -- in the editor, in Play, packaged, on Android --
 # with or without the stamp file; the file is what makes each stamp a thing
-# that can still be selected, moved and removed.
+# that can still be selected, moved and removed. A .fiopak keeps the stamp
+# file beside the packaged map, and the engine lays it over the map as a delta
+# when it loads the map (FioPackage.load_map, the editor's package session).
 
 TERRAIN_KEY = 'terrain_data'
 STAMPS_KEY = 'paint_stamps'
@@ -128,21 +130,47 @@ def join_level(level: dict, map_path: Optional[str]) -> dict:
     them. A missing or unreadable stamp file leaves the map as it is: its
     paint is all there, just not as separate stamps.
     """
-    terrain = level.get(TERRAIN_KEY) if isinstance(level, dict) else None
-    if not isinstance(terrain, dict) or terrain.get(STAMPS_KEY) or not map_path:
+    if not _wants_stamps(level) or not map_path:
         return level
     path = default_stamp_path(map_path)
     if not os.path.exists(path):
         return level
     try:
-        stamps = [s for s in load_stamp_file(path).get("stamps", [])
-                  if isinstance(s, dict)]
+        data = load_stamp_file(path)
     except StampError as exc:
         print(f"[Terrain] {os.path.basename(path)} was not used: {exc}")
         return level
+    return apply_stamp_delta(level, data)
+
+
+def _wants_stamps(level) -> bool:
+    """A level with a terrain that does not already carry its stamps."""
+    terrain = level.get(TERRAIN_KEY) if isinstance(level, dict) else None
+    return isinstance(terrain, dict) and not terrain.get(STAMPS_KEY)
+
+
+def apply_stamp_delta(level: dict, data) -> dict:
+    """Lay a stamp file's records over a level document: the map's terrain
+    gets the stamps the file holds. *data* is a parsed stamp file; anything
+    else, or a level that already carries stamps, leaves the level as it is."""
+    if not _wants_stamps(level) or not isinstance(data, dict) \
+            or data.get("format") != STAMP_FORMAT:
+        return level
+    stamps = [s for s in data.get("stamps") or [] if isinstance(s, dict)]
     if stamps:
-        terrain[STAMPS_KEY] = stamps
+        level[TERRAIN_KEY][STAMPS_KEY] = stamps
     return level
+
+
+def stamp_member(map_member: str) -> str:
+    """The archive name of a packaged map's stamp file: beside the map."""
+    base, _ext = os.path.splitext(str(map_member))
+    return base + STAMP_EXTENSION
+
+
+def stamp_file_text(stamps: dict) -> str:
+    """A stamp file's contents: minified JSON."""
+    return json.dumps(stamps, separators=(",", ":"))
 
 
 def apply_stamp(terrain, data: dict) -> int:

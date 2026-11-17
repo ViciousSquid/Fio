@@ -5265,7 +5265,8 @@ class MainWindow(QMainWindow):
         name = os.path.splitext(os.path.basename(str(map_path)))[0]
         with _loading_overlay(self).busy(f"Loading {name}", "Reading the map", 5):
             try:
-                level_data = self._package.load_json(map_path)
+                from editor.package_session import load_map
+                level_data = load_map(self._package, map_path)
             except Exception as e:
                 print(f"ERROR loading level {map_path}: {e}")
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
@@ -5796,9 +5797,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from editor.package_session import PackageSession
+            from editor.package_session import PackageSession, load_map
             session = PackageSession(file_path)
-            level_data = session.load_json(session.start_map)
+            level_data = load_map(session, session.start_map)
 
             # Never point file_path at the package: save_level() writes that
             # path, and writing a map over the .fiopak replaces the archive

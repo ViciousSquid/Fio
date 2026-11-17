@@ -73,6 +73,21 @@ class PackageSession:
             return json.loads(archive.read(info).decode('utf-8-sig'))
 
 
+def load_map(session, member):
+    """A packaged map, with the terrain stamps packaged beside it
+    (``<map name>.terrainstamps``) laid over it as a delta."""
+    from engine import terrain_stamp
+    level = session.load_json(member)
+    stamps = terrain_stamp.stamp_member(member)
+    if stamps not in session.names:
+        return level
+    try:
+        return terrain_stamp.apply_stamp_delta(level, session.load_json(stamps))
+    except (ValueError, KeyError) as exc:
+        print(f"[Package] {stamps} was not used: {exc}")
+        return level
+
+
 def _member(path):
     """*path* as a package member name, or None when it is absolute or
     climbs out (``..``)."""

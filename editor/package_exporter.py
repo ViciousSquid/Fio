@@ -2,6 +2,8 @@ import os
 import posixpath
 import json
 import zipfile
+
+from engine import terrain_stamp
 from typing import Dict, List, Optional, Set
 
 from engine.fileio import atomic_output
@@ -149,11 +151,14 @@ class PackageExporter:
                 with zipfile.ZipFile(handle, 'w', zipfile.ZIP_DEFLATED) as zf:
                     zf.writestr('metadata.json', json.dumps(manifest, indent=2))
                     for map_file, archive_path in map_archive_paths.items():
+                        # The map's placed terrain stamps go in beside it,
+                        # as their own file: the engine lays them over the
+                        # map as a delta when it loads it.
+                        stamps = self._stamp_file(map_file)
+                        if stamps is not None:
+                            zf.writestr(terrain_stamp.stamp_member(archive_path),
+                                        terrain_stamp.stamp_file_text(stamps))
                         player_copy = self._player_layout(map_file)
-                        if player_copy is None and self._has_stamp_file(map_file):
-                            # A package holds no stamp files: the map goes in
-                            # with its stamps back inside it.
-                            player_copy = self._read_map(map_file)
                         if player_copy is None:
                             zf.write(map_file, archive_path)
                         elif self._is_minified(map_file):
@@ -221,10 +226,7 @@ class PackageExporter:
         if not isinstance(data, dict):
             self.errors.append(f"Not a map document: {map_file}")
             return None
-        # A saved map keeps its placed terrain stamps beside it
-        # (<map name>.terrainstamps); a packaged map carries them itself.
-        from engine import terrain_stamp
-        return terrain_stamp.join_level(data, map_file)
+        return data
 
     @staticmethod
     def _is_minified(map_file) -> bool:
@@ -235,10 +237,17 @@ class PackageExporter:
         except OSError:
             return False
 
-    @staticmethod
-    def _has_stamp_file(map_file) -> bool:
-        from engine import terrain_stamp
-        return os.path.exists(terrain_stamp.default_stamp_path(map_file))
+    def _stamp_file(self, map_file) -> Optional[dict]:
+        """The stamp file kept beside *map_file*, parsed; None when the map
+        has none (or it cannot be read, which is reported)."""
+        path = terrain_stamp.default_stamp_path(map_file)
+        if not os.path.exists(path):
+            return None
+        try:
+            return terrain_stamp.load_stamp_file(path)
+        except terrain_stamp.StampError as exc:
+            self.errors.append(f"{os.path.basename(path)}: {exc}")
+            return None
 
     def _asset_references(self, data: dict) -> Set[str]:
         """Every asset name a map's brushes and things refer to."""

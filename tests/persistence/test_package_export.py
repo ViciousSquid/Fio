@@ -433,7 +433,8 @@ def _stamped_map(project, name, version):
 
 @pytest.mark.qt
 @pytest.mark.parametrize("version", [5, 3])
-def test_a_packaged_map_carries_its_terrain_stamps(project, tmp_path, version):
+def test_a_package_keeps_the_stamp_file_and_the_engine_lays_it_over_the_map(
+        project, tmp_path, version):
     from engine.terrain import Terrain
 
     current, terrain = _stamped_map(project, "start.json", version)
@@ -442,17 +443,63 @@ def test_a_packaged_map_carries_its_terrain_stamps(project, tmp_path, version):
     assert ok, errors
 
     with zipfile.ZipFile(out) as zf:
-        assert not [n for n in zf.namelist() if n.endswith(".terrainstamps")]
+        assert "maps/start.terrainstamps" in zf.namelist()
         packaged = json.loads(zf.read("maps/start.json"))
-    saved = terrain.to_dict()
-    assert [s["id"] for s in packaged["terrain_data"]["paint_stamps"]] == [
+        stamp_text = zf.read("maps/start.terrainstamps").decode("utf-8")
+    # The stamps are in their own file, minified, not in the packaged map.
+    assert "paint_stamps" not in packaged["terrain_data"]
+    assert "\n" not in stamp_text and ": " not in stamp_text
+    assert [s["id"] for s in json.loads(stamp_text)["stamps"]] == [
         s["id"] for s in terrain.paint_stamps]
-    assert packaged["terrain_data"]["texture_paint"] == saved["texture_paint"]
 
-    # What the player builds from the packaged map is the terrain as saved.
+    # The engine (the player reads maps this way) applies them as a delta.
+    with FioPackage.open(str(out)) as package:
+        assert package.list_maps() == ["maps/start.json"]
+        loaded = package.load_start_map()
+    assert [s["id"] for s in loaded["terrain_data"]["paint_stamps"]] == [
+        s["id"] for s in terrain.paint_stamps]
     played = Terrain(seed=5)
-    played.from_dict(packaged["terrain_data"])
+    played.from_dict(loaded["terrain_data"])
     assert len(played.paint_stamps) == 2
     assert set(played.texture_paint_maps) == set(terrain.texture_paint_maps)
     for key, paint in terrain.texture_paint_maps.items():
         assert (played.texture_paint_maps[key] == paint).all()
+
+
+@pytest.mark.qt
+def test_the_editor_s_package_session_lays_the_stamps_over_the_map(project, tmp_path):
+    from editor.package_session import PackageSession, load_map
+
+    current, terrain = _stamped_map(project, "start.json", 5)
+    out = tmp_path / "game.fiopak"
+    assert _export(project, current, out)[0]
+
+    session = PackageSession(str(out))
+    level = load_map(session, session.start_map)
+
+    assert [s["id"] for s in level["terrain_data"]["paint_stamps"]] == [
+        s["id"] for s in terrain.paint_stamps]
+
+
+def test_a_map_with_no_stamp_file_is_packaged_without_one(project, tmp_path):
+    current = _write_json(project / "maps" / "start.json", _level())
+    out = tmp_path / "game.fiopak"
+    assert _export(project, current, out)[0]
+    with zipfile.ZipFile(out) as zf:
+        assert not [n for n in zf.namelist() if n.endswith(".terrainstamps")]
+    with FioPackage.open(str(out)) as package:
+        assert package.load_start_map()["brushes"]
+
+
+@pytest.mark.qt
+def test_a_damaged_packaged_stamp_file_leaves_the_map_playable(project, tmp_path):
+    current, terrain = _stamped_map(project, "start.json", 5)
+    (project / "maps" / "start.terrainstamps").write_text(
+        json.dumps({"format": "terrain_stamp", "version": 1, "stamps": "nonsense"}))
+    out = tmp_path / "game.fiopak"
+    _export(project, current, out)
+    if out.exists():
+        with FioPackage.open(str(out)) as package:
+            loaded = package.load_start_map()
+        assert loaded["terrain_data"]["texture_paint"]
+        assert not loaded["terrain_data"].get("paint_stamps")
