@@ -22,6 +22,26 @@ PALETTE = (
 )
 
 
+#: A group moves as one body in Play, carried by its one mover or door.
+MAX_MOVERS_MESSAGE = "Maximum of 1 mover per group"
+
+
+def is_mover(brush):
+    """A brush that moves by itself in Play: a mover or a door."""
+    return bool(isinstance(brush, dict)
+                and (brush.get('is_mover') or brush.get('is_door')))
+
+
+def too_many_movers(brushes):
+    """Whether *brushes*, as one group, would hold more than one mover."""
+    seen, count = set(), 0
+    for brush in brushes:
+        if id(brush) not in seen and is_mover(brush):
+            seen.add(id(brush))
+            count += 1
+    return count > 1
+
+
 def group_of(brush):
     """The name of the group *brush* is in, or ``''``."""
     if not isinstance(brush, dict):

@@ -385,3 +385,110 @@ def test_renaming_in_the_dialog_renames_the_group(scene):
     assert panel.brush_group_tree.topLevelItem(0).text(0) == 'Front door'
     panel.hide()
     window.unsaved_changes = False
+
+
+# -- at most one mover per group ---------------------------------------------
+
+@pytest.fixture
+def toasts(scene):
+    window, _ = scene
+    shown = []
+    real = window.show_toast
+
+    def show_toast(message, *args, **kwargs):
+        shown.append(str(message))
+        return real(message, *args, **kwargs)
+
+    window.show_toast = show_toast
+    return shown
+
+
+def test_a_group_cannot_be_made_with_two_movers(scene, toasts):
+    window, brushes = scene
+    brushes['wall']['is_mover'] = True
+    brushes['pillar']['is_door'] = True
+
+    assert not window.set_brush_group([brushes['wall'], brushes['pillar']], 'Both')
+
+    assert toasts == ["Maximum of 1 mover per group"]
+    assert brush_groups.group_of(brushes['wall']) == ''
+    assert brush_groups.group_of(brushes['pillar']) == ''
+
+
+def test_a_second_mover_cannot_join_a_group_that_has_one(scene, toasts):
+    window, brushes = scene
+    brushes['door']['is_door'] = True
+    brushes['wall']['is_mover'] = True
+
+    assert not window.set_brush_group([brushes['wall']], 'Door')
+    assert toasts == ["Maximum of 1 mover per group"]
+    assert brush_groups.group_of(brushes['wall']) == ''
+    # One mover and any number of plain brushes is what a group is for.
+    assert window.set_brush_group([brushes['pillar']], 'Door')
+    window.unsaved_changes = False
+
+
+def test_the_dialog_will_not_accept_two_movers(scene, toasts):
+    window, brushes = scene
+    brushes['door']['is_door'] = True
+    brushes['wall']['is_mover'] = True
+    dialog = _dialog(window, [brushes['wall']])
+    dialog.name_box.setCurrentText('Door')
+
+    dialog.accept()
+
+    assert dialog.result() != dialog.Accepted
+    assert "Maximum of 1 mover per group" in dialog.hint.text()
+    assert not dialog.apply()
+    assert brush_groups.group_of(brushes['wall']) == ''
+    # Unticking one of the movers makes it a group again.
+    dialog.member_list.item(0).setCheckState(Qt.Unchecked)       # 'door'
+    assert dialog.allowed()
+
+
+def test_renaming_a_group_onto_another_with_a_mover_is_refused(scene, toasts):
+    window, brushes = scene
+    brushes['door']['is_door'] = True
+    brushes['lift']['is_mover'] = True
+
+    assert not window.rename_brush_group('Lift', 'Door')
+
+    assert toasts == ["Maximum of 1 mover per group"]
+    assert brush_groups.group_of(brushes['lift']) == 'Lift'
+
+
+def test_a_grouped_brush_cannot_become_the_group_s_second_mover(scene, toasts):
+    window, brushes = scene
+    brushes['door']['is_door'] = True
+    editor = window.property_editor
+    window.set_selected_objects([brushes['glass']])
+    editor.set_object(brushes['glass'])
+
+    editor.on_mover_changed(True)
+    assert not brushes['glass'].get('is_mover')
+    editor.on_door_changed(True)
+    assert not brushes['glass'].get('is_door')
+    assert toasts == ["Maximum of 1 mover per group"] * 2
+
+    # The group's own mover may still be switched between door and mover.
+    editor.set_object(brushes['door'])
+    editor.on_mover_changed(True)
+    assert brushes['door'].get('is_mover')
+    window.unsaved_changes = False
+
+
+def test_the_property_field_cannot_put_a_second_mover_in_a_group(scene, toasts):
+    window, brushes = scene
+    brushes['door']['is_door'] = True
+    brushes['wall']['is_mover'] = True
+    editor = window.property_editor
+    window.set_selected_objects([brushes['wall']])
+    editor.set_object(brushes['wall'])
+    field = editor._widgets['brush_group_input']
+
+    field.setText('Door')
+    editor._on_brush_group_edited(field)
+
+    assert toasts == ["Maximum of 1 mover per group"]
+    assert brush_groups.group_of(brushes['wall']) == '' and field.text() == ''
+    window.unsaved_changes = False

@@ -2789,10 +2789,24 @@ class MainWindow(QMainWindow):
         from editor import brush_groups
         brushes = [b for b in brushes if isinstance(b, dict)]
         if not brushes:
-            return
+            return False
+        name = str(name or '').strip()
+        if name and not self.brush_group_allowed(brushes, name):
+            return False
         self.save_state()
         brush_groups.set_group(brushes, name)
         self._brush_groups_changed()
+        return True
+
+    def brush_group_allowed(self, brushes, name):
+        """Whether *brushes* may join group *name*: a group holds at most
+        one mover (or door). Says so when they may not."""
+        from editor import brush_groups
+        joined = brush_groups.members(self.state.brushes, name) + list(brushes)
+        if brush_groups.too_many_movers(joined):
+            self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
+            return False
+        return True
 
     def ungroup_brushes(self, brushes):
         """Take *brushes* (only those) out of their groups: one undo step.
@@ -2826,6 +2840,10 @@ class MainWindow(QMainWindow):
         new = str(new or '').strip()
         if not new or new == old:
             return False
+        # A name already in use merges the two groups.
+        if not self.brush_group_allowed(
+                brush_groups.members(self.state.brushes, old), new):
+            return False
         self.save_state()
         brush_groups.rename(self.state.brushes, old, new)
         self._brush_groups_changed()
@@ -2838,6 +2856,7 @@ class MainWindow(QMainWindow):
 
     def open_brush_group_dialog(self, brushes):
         """Scene Hierarchy > Add to Group... / Edit Group..."""
+        from editor import brush_groups
         from editor.brush_group_dialog import BrushGroupDialog
         brushes = [b for b in brushes if isinstance(b, dict)]
         if not brushes:
@@ -2854,6 +2873,9 @@ class MainWindow(QMainWindow):
 
         dialog = BrushGroupDialog(self, all_brushes, brushes, display_name)
         if self._run_brush_group_dialog(dialog):
+            if not dialog.allowed():
+                self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
+                return dialog
             self.save_state()
             if dialog.apply():
                 self._brush_groups_changed()

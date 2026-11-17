@@ -1252,7 +1252,7 @@ class PropertyEditor(QWidget):
         group_inp = QLineEdit(brush.get('brush_group', ''))
         group_inp.setPlaceholderText("e.g. front_door")
         group_inp.setToolTip("Assign the same group name to a door/mover and its companion brushes.")
-        group_inp.editingFinished.connect(lambda: self.update_object_prop('brush_group', group_inp.text().strip()))
+        group_inp.editingFinished.connect(lambda: self._on_brush_group_edited(group_inp))
         type_layout.addLayout(_hbox(QLabel("Brush Group:"), group_inp, stretch=False))
         self._widgets['brush_group_input'] = group_inp
 
@@ -5187,8 +5187,45 @@ class PropertyEditor(QWidget):
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
 
+    def _on_brush_group_edited(self, field):
+        """The Brush Group field: join the named group, if it has room for
+        this brush (a group holds at most one mover)."""
+        brush = self.current_object
+        if not isinstance(brush, dict):
+            return
+        name = field.text().strip()
+        if name == str(brush.get('brush_group') or ''):
+            return
+        if name and not self.editor.brush_group_allowed([brush], name):
+            field.setText(str(brush.get('brush_group') or ''))
+            return
+        self.update_object_prop('brush_group', name)
+        self.editor._brush_groups_changed()
+
+    def _second_mover_refused(self, key):
+        """Refuse to make this brush a mover or a door when its group has
+        one already: untick the box and say why."""
+        from editor import brush_groups
+        brush = self.current_object
+        group = brush_groups.group_of(brush)
+        if not group or brush_groups.is_mover(brush):
+            return False
+        others = [b for b in brush_groups.members(self.editor.state.brushes, group)
+                  if b is not brush]
+        if not any(brush_groups.is_mover(b) for b in others):
+            return False
+        box = self._widgets.get(key)
+        if box is not None:
+            box.blockSignals(True)
+            box.setChecked(False)
+            box.blockSignals(False)
+        self.editor.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
+        return True
+
     def on_mover_changed(self, is_mover):
         if self.current_object is None:
+            return
+        if is_mover and self._second_mover_refused('is_mover_cb'):
             return
         if is_mover and self.current_object.get('is_door', False):
             self.current_object['is_door'] = False
@@ -5215,6 +5252,8 @@ class PropertyEditor(QWidget):
 
     def on_door_changed(self, is_door):
         if self.current_object is None:
+            return
+        if is_door and self._second_mover_refused('is_door_cb'):
             return
         if is_door and self.current_object.get('is_mover', False):
             self.current_object['is_mover'] = False

@@ -94,6 +94,7 @@ class BrushGroupDialog(QDialog):
     def _refresh(self, *_args):
         name = self.name()
         existing = brush_groups.groups(self._brushes)
+        self.hint.setStyleSheet("color: #aaa;")
         if not name:
             self.hint.setText("Give the group a name.")
         elif self.renaming():
@@ -127,6 +128,18 @@ class BrushGroupDialog(QDialog):
         return [self._listed[item.data(Qt.UserRole)] for item in items
                 if item.checkState() != Qt.Checked]
 
+    def allowed(self):
+        """A group holds at most one mover."""
+        return self.ungroup or not brush_groups.too_many_movers(self.kept())
+
+    def accept(self):
+        if not self.allowed():
+            self.hint.setStyleSheet("color: #ff6b6b;")
+            self.hint.setText(brush_groups.MAX_MOVERS_MESSAGE
+                              + ": untick one of the movers.")
+            return
+        super().accept()
+
     def _ungroup(self):
         self.ungroup = True
         self.accept()
@@ -139,7 +152,7 @@ class BrushGroupDialog(QDialog):
                 brush_groups.members(self._brushes, self.editing), '')
             return True
         name = self.name()
-        if not name:
+        if not name or not self.allowed():
             return False
         brush_groups.set_group(self.dropped(), '')
         brush_groups.set_group(self.kept(), name)
