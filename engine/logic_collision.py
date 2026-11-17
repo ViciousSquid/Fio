@@ -529,7 +529,8 @@ class LogicCollision:
         full_path = os.path.join('assets', 'models', model_path)
         if not asset_exists(full_path):
             full_path = model_path
-        if not asset_exists(full_path):
+        package = getattr(logic, 'package', None)
+        if not package and not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
@@ -542,7 +543,10 @@ class LogicCollision:
 
             loader = GLBLoader()
             loader._filepath_hint = full_path
-            if not loader.load(full_path):
+            from .model_source import load_model
+            if package:
+                loader = load_model(model_path, package)
+            if loader is None or (not package and not loader.load(full_path)):
                 debug_log("Collision", f"GLBLoader failed to load {model_path}")
                 return None
 
@@ -623,7 +627,8 @@ class LogicCollision:
         full_path = os.path.join('assets', 'models', model_path)
         if not asset_exists(full_path):
             full_path = model_path
-        if not asset_exists(full_path):
+        package = getattr(logic, 'package', None)
+        if not package and not asset_exists(full_path):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
@@ -632,7 +637,10 @@ class LogicCollision:
                 from .glb_loader import GLBLoader
                 loader = GLBLoader()
                 loader._filepath_hint = full_path
-                if loader.load(full_path):
+                from .model_source import load_model
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is not None and (package or loader.load(full_path)):
                     verts = loader.get_flattened_vertices()
                 else:
                     verts = None
@@ -641,7 +649,10 @@ class LogicCollision:
                 # OpenGL-backed OBJ model on the logic thread.
                 from .obj_loader import OBJLoader
                 loader = OBJLoader()
-                if loader.load(full_path):
+                from .model_source import load_model
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is not None and (package or loader.load(full_path)):
                     source_vertices = np.asarray(loader.vertices, dtype=np.float32)
                     if source_vertices.size == 0:
                         verts = None

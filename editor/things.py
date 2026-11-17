@@ -21,8 +21,17 @@ from engine.portal_transform import (
     corners as _portal_corners,
     contains_point as _portal_contains_point,
 )
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt
+if __name__.startswith('editor.'):
+    # The editor tier. It is PyQt-backed, and the headless boundary is this
+    # import: without Qt the module does not load, and a headless desktop
+    # host falls back to plugins.entitybase.
+    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtCore import Qt
+else:
+    # The same file staged as ``engine.entities`` for the standalone player
+    # (player/tools/stage_runtime.py), which ships no Qt and draws no editor
+    # icon: the entity classes load, their 2D pixmaps are never asked for.
+    QPixmap = Qt = None
 import ast
 import posixpath
 
@@ -938,6 +947,17 @@ class Monster(Thing):
         variant     = self.properties.get('variant', '<None>')
         is_dead     = self.properties.get('dead', False)
         is_shooting = self.properties.get('is_shooting', False)
+
+        source = getattr(self, '_asset_source', None)
+        if source is not None:
+            state = 'dead' if is_dead else 'shoot' if is_shooting else 'idle'
+            custom = self.properties.get('custom_' + state, '')
+            base = f'assets/sprites/monsters/{mtype}'
+            candidates = [custom]
+            if variant and variant != '<None>':
+                candidates.append(f'{base}/{variant}/{state}.png')
+            candidates += [f'{base}/{state}.png', f'{base}/idle.png']
+            return next((p for p in candidates if p and source.has_asset(p)), f'{base}/idle.png')
 
         project_root = Monster._get_project_root()
         default_idle, default_dead, default_shoot = Monster._get_default_paths(mtype, variant)

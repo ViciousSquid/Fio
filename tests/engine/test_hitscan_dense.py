@@ -101,6 +101,10 @@ def _walk_monsters(things, ray_origin, ray_dir, reach, closest_brush_dist):
         disc = b * b - 4 * a * c
         if disc >= 0:
             t = (-b - math.sqrt(disc)) / (2.0 * a)
+            # A point-blank shot begins inside the target's sphere: its entry
+            # root is behind the eye, and where it stands is the hit.
+            if c <= 0 and (-b + math.sqrt(disc)) / (2.0 * a) >= 0:
+                t = 0.0
             if 0 <= t <= reach and t < closest_monster_dist:
                 if t < closest_brush_dist:
                     closest_monster_dist = t

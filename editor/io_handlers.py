@@ -1128,6 +1128,12 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
     
     def levelchanger_changelevel(entity, param, logic):
+        callback = getattr(logic, "request_level_change", None)
+        if callback is not None:
+            target, spawn = entity.destination(param)
+            if target:
+                callback(target, spawn)
+            return
         # We route to change_level() because it is more robust
         if hasattr(entity, 'change_level'):
             entity.change_level(param)

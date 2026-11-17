@@ -127,6 +127,14 @@ class GLBLoader:
             print(f"[GLBLoader] Failed to load: {filepath}")
             return False
 
+        return self.load_bytes(data, filepath)
+
+    def load_bytes(self, data: bytes, source="", read_asset=None) -> bool:
+        """Parse a streamed model; external buffers use the same asset source."""
+        if len(data) > MAX_GLB_FILE_BYTES:
+            return False
+        self._filepath_hint = source
+        self._asset_reader = read_asset
         try:
             self._parse_glb(data)
             self._parse_json_structure()
@@ -215,7 +223,8 @@ class GLBLoader:
             else:
                 # External file reference, relative to the model.
                 ext_path = os.path.join(os.path.dirname(self._filepath_hint or ''), uri)
-                self.buffers.append(_read_bounded(ext_path) or b'')
+                reader = getattr(self, "_asset_reader", None)
+                self.buffers.append((reader(ext_path) if reader else _read_bounded(ext_path)) or b'')
 
     def _parse_materials(self):
         """Extract material properties (PBR, textures, colors)."""

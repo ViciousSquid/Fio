@@ -189,8 +189,9 @@ class LogicThread(threading.Thread):
         ),
     }
 
-    def __init__(self, game_state: ThreadedGameState, editor_state):
+    def __init__(self, game_state: ThreadedGameState, editor_state, *, threaded_ai=True):
         super().__init__(daemon=True)
+        self.threaded_ai = threaded_ai
         # Serialises the simulation with everything that rebuilds or reads the
         # world from another thread.  The run loop holds it for each frame's
         # ticks and render-state projection; entering or leaving play mode and

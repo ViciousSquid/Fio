@@ -464,6 +464,8 @@ class LogicSession:
     def start_monster_ai(self):
         logic = self.logic
         self.stop_monster_ai()
+        if not getattr(logic, "threaded_ai", True):
+            return
         self.monster_ai_thread = MonsterAIThread(
             logic,
             logic.monster_ai,
