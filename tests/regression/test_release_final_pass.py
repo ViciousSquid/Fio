@@ -376,8 +376,14 @@ def _shipped_maps():
 
     from tests.helpers.paths import REPO_ROOT
     folder = os.path.join(REPO_ROOT, "maps")
+    # The maps that ship, not what a session leaves beside them: the editor
+    # writes ``<map>_autosave.json`` here when a level changes under unsaved
+    # work, and the end-to-end tests their ``_e2e_*`` scratch maps. Counting
+    # those made the number of cases depend on which tests had run before.
     return sorted(os.path.join(folder, name) for name in os.listdir(folder)
-                  if name.endswith(".json"))
+                  if name.endswith(".json")
+                  and not name.endswith("_autosave.json")
+                  and not name.startswith("_e2e_"))
 
 
 @pytest.mark.parametrize("path", _shipped_maps(),
