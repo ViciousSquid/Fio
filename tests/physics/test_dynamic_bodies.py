@@ -588,6 +588,7 @@ def test_the_steps_floors_are_the_grids_floors_exactly(n_bodies, seed):
     old = world._position[rows].copy()
     ahead = old + np.float32(40.0)                  # a move across cells
     previous = (old + world._offset[rows])[:, 1] - world._half[rows, 1]
+    world._index_bodies = lambda: False             # the world's floors only
     pairs = world._world_pairs(rows, old, ahead)
 
     for at in (old, (old + ahead) * np.float32(0.5), ahead):

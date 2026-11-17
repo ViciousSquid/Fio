@@ -207,6 +207,8 @@ class PhysicsBody:
     def awake(self, value):
         i = self._index
         if i is not None:
+            if value and not self.world._awake[i]:
+                self.world._wake_dependents(i)
             self.world._awake[i] = bool(value)
 
     @property
@@ -334,6 +336,7 @@ class Soma:
         # one-time placement correction before their first active movement.
         self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
+        self._clear_body_index()
         self._dirty = False
         # Baseline for entities_that_changed_cell(): one (N, 2) cell array.
         self._reported_cell = None
@@ -373,8 +376,30 @@ class Soma:
         self._was_inactive = np.empty(0, dtype=np.bool_)
         self._pending_settle = np.empty(0, dtype=np.bool_)
         self._clear_rolling()
+        self._clear_body_index()
         self._reported_cell = None
         self._dirty = False
+
+    def _clear_body_index(self):
+        """Where the bodies are, for bodies meeting bodies (see
+        :meth:`_index_bodies`), and what each rests on."""
+        #: Row of the body each body rests on, or -1 (the world, or nothing).
+        self._support = np.empty(0, dtype=np.int64)
+        #: Whether any body has ever rested on another: until one does, no
+        #: wake has anything to pass on.
+        self._any_support = False
+        #: The cell each body was filed under when the index was last built.
+        self._body_key = np.empty(0, dtype=np.int64)
+        #: The index: obstacle rows sorted by cell key, and their keys.
+        self._body_rows = np.empty(0, dtype=np.int64)
+        self._body_keys = np.empty(0, dtype=np.int64)
+        #: The widest obstacle's horizontal half-extent: how far outside its
+        #: own cell a body filed by its centre can reach.
+        self._body_reach = 0.0
+        self._bodies_dirty = True
+        #: This step's knocks: ``(rows, axis, velocity)`` for bodies another
+        #: body ran into, applied when the step's rows are put back.
+        self._knocks = []
 
     def _clear_rolling(self):
         #: Turns by the distance it travels (``rolls``).
@@ -482,6 +507,9 @@ class Soma:
         self._bounce = np.zeros(n, dtype=np.float32)
         self._orientation = np.zeros((n, 4), dtype=np.float64)
         self._orientation[:, 0] = 1.0
+        self._support = np.full(n, -1, dtype=np.int64)
+        self._any_support = False
+        self._bodies_dirty = True
 
         for i, entity in enumerate(self._entities):
             props = getattr(entity, 'properties', None)
@@ -550,6 +578,10 @@ class Soma:
         )
 
         self._kinematic[index] = value
+        # In or out of what other bodies meet; and no longer under anything.
+        self._bodies_dirty = True
+        if value:
+            self._wake_dependents(index)
         if self._any_rolls and self._rolls[index]:
             # Carrying turns a model with the player; roll on from there.
             self._orientation[index] = self._entity_orientation(entity)
@@ -567,8 +599,13 @@ class Soma:
         self._pack()
         if velocity is not None:
             self._velocity[index] = np.asarray(velocity, dtype=np.float32)
+        was_awake = bool(self._awake[index])
+        if self._kinematic[index]:
+            self._bodies_dirty = True
         self._awake[index] = True
         self._kinematic[index] = False
+        if not was_awake:
+            self._wake_dependents(index)
 
     def wake(self, entity, velocity=None):
         self._pack()
@@ -584,6 +621,8 @@ class Soma:
             getattr(entity, 'pos', self._position[index]),
             dtype=np.float32,
         )
+        self._bodies_dirty = True
+        self._wake_dependents(index)
         if wake:
             self._awake[index] = True
             self._kinematic[index] = False
@@ -677,6 +716,9 @@ class Soma:
                 and (props.get('disabled', False) or props.get('hidden', False)))
             if self._was_inactive[index] and not inactive:
                 self._pending_settle[index] = True
+            elif inactive and not self._was_inactive[index]:
+                # Hidden or disabled: gone from under whatever rested on it.
+                self._wake_dependents(index)
             self._was_inactive[index] = inactive
 
     def _settle_pending_bodies(self, eligible):
@@ -764,16 +806,16 @@ class Soma:
                 touch(entity)
 
     def _bodies_block_player(self, player, ppos, player_half, rows):
-        """Move the player out of the bodies in *rows* they still overlap."""
-        center = self._position + self._offset
-        overlap = rows & np.all(
-            (center + self._half > ppos - player_half)
-            & (center - self._half < ppos + player_half), axis=1)
-        if np.any(overlap):
-            self._push_player_out(player, ppos, player_half, center,
-                                  np.flatnonzero(overlap), carry=False)
+        """Move the player out of the body rows *rows* they still overlap."""
+        centre = self._position[rows] + self._offset[rows]
+        half = self._half[rows]
+        overlap = np.all(
+            (centre + half > ppos - player_half)
+            & (centre - half < ppos + player_half), axis=1)
+        if overlap.any():
+            self._push_player_out(player, ppos, player_half, rows[overlap], carry=False)
 
-    def _push_player_out(self, player, ppos, player_half, center, rows, carry=True):
+    def _push_player_out(self, player, ppos, player_half, rows, carry=True):
         """Bodies in *rows* overlapping the player shove the player out.
 
         The player goes out along whichever horizontal axis overlaps least, and
@@ -781,11 +823,13 @@ class Soma:
         that leaves the player inside a wall, the body has pinned them there:
         :attr:`player_crushed`. Without *carry* the player is only stopped.
         """
-        for i in rows:
-            dx = float(ppos[0] - center[i, 0])
-            dz = float(ppos[2] - center[i, 2])
-            overlap_x = float(player_half[0] + self._half[i, 0]) - abs(dx)
-            overlap_z = float(player_half[2] + self._half[i, 2]) - abs(dz)
+        centres = (self._position[rows] + self._offset[rows]).tolist()
+        halves = self._half[rows].tolist()
+        for i, centre, half in zip(rows.tolist(), centres, halves):
+            dx = float(ppos[0]) - centre[0]
+            dz = float(ppos[2]) - centre[2]
+            overlap_x = float(player_half[0]) + half[0] - abs(dx)
+            overlap_z = float(player_half[2]) + half[2] - abs(dz)
             axis, delta, out = ((0, dx, overlap_x) if overlap_x <= overlap_z
                                 else (2, dz, overlap_z))
             direction = 1.0 if delta >= 0.0 else -1.0
@@ -881,6 +925,23 @@ class Soma:
         support = self._floor_tops_at(centre[:, 0], centre[:, 2], bottom + 1.0)
         if support is None:
             return
+        if self._index_bodies():
+            # Standing on another body is not floating: it is what holds it
+            # up, and what wakes it if it goes.
+            half = self._half[rows].astype(np.float64)
+            pairs = self._body_pairs(rows, centre - half, centre + half)
+            if pairs is not None:
+                query, lo, hi, other = pairs
+                under = ((lo[:, 0] <= centre[query, 0]) & (centre[query, 0] <= hi[:, 0])
+                         & (lo[:, 2] <= centre[query, 2]) & (centre[query, 2] <= hi[:, 2])
+                         & (hi[:, 1] <= bottom[query] + 1.0)
+                         & (hi[:, 1] >= bottom[query] - 1.0))
+                if under.any():
+                    query, top, other = query[under], hi[under, 1], other[under]
+                    held = top > support[query]
+                    self._support[rows[query[held]]] = other[held]
+                    self._any_support = True
+                    np.maximum.at(support, query, top)
         self._awake[rows[support < bottom - 1.0]] = True
 
     def _settle_sunk_bodies(self, eligible=None):
@@ -944,11 +1005,227 @@ class Soma:
                 tops[k] = float(floor)
         return tops
 
+    # ------------------------------------------------------------------
+    # Bodies meeting bodies
+    #
+    # To an awake body every other solid body is one more box in its way:
+    # something to stop at, to bounce off, to come to rest on. So the other
+    # bodies near it join the step's pairs beside the world's brushes, and
+    # the same tests answer for both. What is different about a body is
+    # that it can be moved: one that is run into is knocked on, by the
+    # momentum the two share, and one that is rested on wakes what rests on
+    # it when it goes.
+    #
+    # Sleeping bodies cost nothing here. The index of where bodies are is
+    # rebuilt only when an awake body crosses into another cell (or a body
+    # is added, carried or put down), and it is asked only about the awake.
+    # ------------------------------------------------------------------
+
+    _KEY_STRIDE = 1 << 32
+    _KEY_BIAS = 1 << 31
+
+    def _cell_key(self, rows):
+        """The grid column each body row's centre is in, as one int64."""
+        size = float(self.spatial_grid.cell_size)
+        centre = np.nan_to_num(
+            (self._position[rows] + self._offset[rows]).astype(np.float64),
+            nan=0.0, posinf=0.0, neginf=0.0)
+        limit = float(self._KEY_BIAS - 1)
+        cx = np.clip(np.floor(centre[:, 0] / size), -limit, limit).astype(np.int64)
+        cz = np.clip(np.floor(centre[:, 2] / size), -limit, limit).astype(np.int64)
+        return cx * self._KEY_STRIDE + (cz + self._KEY_BIAS)
+
+    def _index_bodies(self):
+        """Bring the body index up to date; whether there are two bodies to
+        meet at all.
+
+        The obstacles are the solid, simulated bodies nothing else is
+        carrying. Each is filed under the one cell its centre is in -- the
+        spatial grid's columns (:mod:`engine.spatial`) -- and a query looks
+        :attr:`_body_reach` further than its box, which is as far outside
+        its cell as any of them reaches.
+        """
+        if self._bodies_dirty:
+            self._bodies_dirty = False
+            count = len(self._entities)
+            self._body_key = self._cell_key(slice(None)) if count else np.empty(0, np.int64)
+            rows = np.flatnonzero(self._physics_enabled & self._solid & ~self._kinematic)
+            if rows.size:
+                keys = self._body_key[rows]
+                order = np.argsort(keys, kind='stable')
+                self._body_rows = rows[order]
+                self._body_keys = keys[order]
+                self._body_reach = float(self._half[rows][:, (0, 2)].max())
+            else:
+                self._body_rows = np.empty(0, dtype=np.int64)
+                self._body_keys = np.empty(0, dtype=np.int64)
+                self._body_reach = 0.0
+        return self._body_rows.size > 1
+
+    def _bodies_near(self, lo, hi):
+        """``(query, other)``: for each box ``lo[i]..hi[i]`` (float64), every
+        obstacle row filed in a cell the box, grown by the reach, touches.
+        The broad phase only; boxes are read live by the caller."""
+        keys = self._body_keys
+        size = float(self.spatial_grid.cell_size)
+        reach = self._body_reach
+        cx0 = np.floor((lo[:, 0] - reach) / size).astype(np.int64)
+        cz0 = np.floor((lo[:, 2] - reach) / size).astype(np.int64)
+        more_x = np.floor((hi[:, 0] + reach) / size).astype(np.int64) - cx0
+        more_z = np.floor((hi[:, 2] + reach) / size).astype(np.int64) - cz0
+        queries, others = [], []
+        for dx in range(int(more_x.max()) + 1):
+            for dz in range(int(more_z.max()) + 1):
+                if dx or dz:
+                    which = np.flatnonzero((more_x >= dx) & (more_z >= dz))
+                    if not which.size:
+                        continue
+                    key = ((cx0[which] + dx) * self._KEY_STRIDE
+                           + (cz0[which] + dz + self._KEY_BIAS))
+                else:
+                    which = None
+                    key = cx0 * self._KEY_STRIDE + (cz0 + self._KEY_BIAS)
+                first = np.searchsorted(keys, key, side='left')
+                counts = np.searchsorted(keys, key, side='right') - first
+                total = int(counts.sum())
+                if not total:
+                    continue
+                within = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+                others.append(self._body_rows[np.repeat(first, counts) + within])
+                query = np.repeat(np.arange(len(key)), counts)
+                queries.append(query if which is None else which[query])
+        if not queries:
+            empty = np.empty(0, dtype=np.int64)
+            return empty, empty
+        if len(queries) == 1:
+            return queries[0], others[0]
+        return np.concatenate(queries), np.concatenate(others)
+
+    def _body_pairs(self, indices, lo, hi):
+        """The other bodies near each body row's move ``lo..hi``:
+        ``(query, lo, hi, other)`` -- their boxes where they are now, and
+        their rows. Never itself, never one that is hidden or disabled."""
+        query, other = self._bodies_near(lo, hi)
+        if not len(query):
+            return None
+        keep = other != indices[query]
+        if not keep.any():
+            return None                     # alone in its cells: the usual case
+        query, other = query[keep], other[keep]
+        keep = np.ones(len(query), dtype=np.bool_)
+        centre = self._position[other].astype(np.float64) + self._offset[other]
+        half = self._half[other].astype(np.float64)
+        other_lo = centre - half
+        other_hi = centre + half
+        # Beside or under it: a column's width apart is not near.
+        keep &= ((hi[query, 0] > other_lo[:, 0]) & (lo[query, 0] < other_hi[:, 0])
+                 & (hi[query, 2] > other_lo[:, 2]) & (lo[query, 2] < other_hi[:, 2]))
+        if not keep.any():
+            return None
+        query, other = query[keep], other[keep]
+        other_lo, other_hi = other_lo[keep], other_hi[keep]
+        # A dormant body is in nobody's way. Asked of the few bodies that are
+        # near something awake, asleep or not: their flags are not journalled
+        # by every writer.
+        dormant = self._dormant(other)
+        if dormant.any():
+            keep = ~dormant
+            if not keep.any():
+                return None
+            query, other = query[keep], other[keep]
+            other_lo, other_hi = other_lo[keep], other_hi[keep]
+        return query, other_lo, other_hi, other
+
+    def _dormant(self, rows):
+        """Which of the body rows *rows* are hidden or disabled.
+
+        An awake body's flags were read when this step began, and a dormant
+        one is not awake; so only the sleeping rows are asked, each once,
+        from their entities -- not every writer of those flags journals.
+        """
+        out = np.zeros(len(rows), dtype=np.bool_)
+        asleep = np.flatnonzero(~self._awake[rows])
+        if asleep.size:
+            unique, where = np.unique(rows[asleep], return_inverse=True)
+            entities = self._entities
+            flags = np.zeros(unique.size, dtype=np.bool_)
+            for k, i in enumerate(unique.tolist()):
+                props = getattr(entities[i], 'properties', None)
+                if isinstance(props, dict) and (props.get('disabled') or props.get('hidden')):
+                    flags[k] = True
+            out[asleep] = flags[where]
+        return out
+
+    def _bodies_at(self, lo, hi):
+        """The obstacle rows whose box overlaps the box ``lo..hi`` (float32
+        triples), in row order: what the player is touching."""
+        self._index_bodies()
+        if not self._body_rows.size:
+            return self._body_rows
+        _query, other = self._bodies_near(
+            lo[None].astype(np.float64), hi[None].astype(np.float64))
+        if not other.size:
+            return other
+        other = np.unique(other)
+        centre = self._position[other] + self._offset[other]
+        half = self._half[other]
+        return other[np.all((centre + half > lo) & (centre - half < hi), axis=1)]
+
+    def _wake_dependents(self, rows):
+        """Wake whatever rests on the body rows *rows*, and whatever rests on
+        that: what held them up is moving, or gone."""
+        if not self._any_support:
+            return
+        rows = np.atleast_1d(np.asarray(rows, dtype=np.int64))
+        while rows.size:
+            rows = np.flatnonzero(
+                np.isin(self._support, rows) & ~self._awake
+                & self._physics_enabled & ~self._kinematic)
+            self._awake[rows] = True
+
+    def _knock(self, axis, forward, mine, others, velocity, into):
+        """Share momentum between bodies and the bodies they ran into.
+
+        *mine* are positions in this step's working rows, *others* the body
+        rows each met along *axis* (*forward*: in the positive direction),
+        *into* its rows. The two leave at the velocity their momentum gives
+        them together -- so a heavy body barely notices a light one -- and
+        apart again by their bounciness. A body that would not be moved to
+        speak of is a wall, and is left asleep. Returns which pairs knocked, and
+        how fast each pair was closing.
+        """
+        mine_rows = into[mine]
+        v_mine = velocity[mine, axis].astype(np.float64)
+        v_other = self._velocity[others, axis].astype(np.float64)
+        closing = (v_mine - v_other) * np.where(forward, 1.0, -1.0)
+        m_mine = self._mass[mine_rows].astype(np.float64)
+        m_other = self._mass[others].astype(np.float64)
+        total = m_mine + m_other
+        shared = (m_mine * v_mine + m_other * v_other) / total
+        if self._any_bounce:
+            spring = np.maximum(self._bounce[mine_rows], self._bounce[others]).astype(np.float64)
+            spring = np.where(closing * spring > self.MIN_BOUNCE_SPEED, spring, 0.0)
+        else:
+            spring = 0.0
+        apart = spring * (v_mine - v_other) / total
+        new_mine = shared - m_other * apart
+        new_other = shared + m_mine * apart
+        knocked = (closing > 0.0) & (self._awake[others]
+                                     | (np.abs(new_other) >= self.REST_SPEED))
+        if knocked.any():
+            velocity[mine[knocked], axis] = new_mine[knocked]
+            self._knocks.append((others[knocked], axis,
+                                 new_other[knocked].astype(np.float32)))
+        return knocked, closing
+
     def _world_pairs(self, indices, old, ahead, pushed_from=None):
-        """This step's one broad phase: ``(query, lo, hi)``, body ``query[k]``
-        of *indices* with a brush whose float64 world box is ``lo[k]..hi[k]``
-        (and the bodies' own offsets and half-extents) -- every brush filed in a cell the body's move touches, from *old* to
-        *ahead* (where it would be with nothing in its way).
+        """This step's one broad phase: ``(query, lo, hi, offset, half,
+        other)``. Body ``query[k]`` of *indices* is paired with a box
+        ``lo[k]..hi[k]`` (float64, in the world): every brush filed in a cell
+        the body's move touches, from *old* to *ahead* (where it would be with
+        nothing in its way), and every other body near it -- ``other[k]`` is
+        that body's row, -1 for a brush. ``offset`` and ``half`` are the
+        bodies' own boxes, which every test of the pairs needs.
 
         The grid's cells are columns, so one footprint answers for all three
         axes' walls and for the floor under the body wherever in that move it
@@ -968,29 +1245,39 @@ class Soma:
                 lo[pushed] = np.minimum(lo[pushed], start[pushed] - half[pushed])
                 hi[pushed] = np.maximum(hi[pushed], start[pushed] + half[pushed])
         query, row, boxes = self.spatial_grid.box_pairs(lo, hi)
+        pair_lo, pair_hi = boxes.lo[row], boxes.hi[row]
+        # Which body each pair is with: none, for the world's brushes.
+        other = np.full(len(query), -1, dtype=np.int64)
+        if self._index_bodies():
+            bodies = self._body_pairs(indices, lo, hi)
+            if bodies is not None:
+                query = np.concatenate((query, bodies[0]))
+                pair_lo = np.concatenate((pair_lo, bodies[1]))
+                pair_hi = np.concatenate((pair_hi, bodies[2]))
+                other = np.concatenate((other, bodies[3]))
         # With the bodies' own boxes (float64 offset and half-extents), which
         # every test of these pairs needs.
-        return query, boxes.lo[row], boxes.hi[row], offset, half
+        return query, pair_lo, pair_hi, offset, half, other
 
     @staticmethod
     def _pairs_of(pairs, chosen, count):
         """*pairs* for the bodies in *chosen* only (positions among *count*),
         renumbered to index them."""
-        query, lo, hi, offset, half = pairs
+        query, lo, hi, offset, half, other = pairs
         renumber = np.full(count, -1, dtype=np.int64)
         renumber[chosen] = np.arange(len(chosen))
         to = renumber[query]
         keep = to >= 0
-        return to[keep], lo[keep], hi[keep], offset[chosen], half[chosen]
+        return to[keep], lo[keep], hi[keep], offset[chosen], half[chosen], other[keep]
 
     def _collide_axis(self, axis, indices, position, velocity, old, pairs,
-                      pushed_from=None):
-        """Resolve one axis against the world, for every body at once.
+                      start=None):
+        """Resolve one axis against what is in the way, for every body at once.
 
         The world is the spatial grid's -- its boxes, its movers and doors
         where they are now; nothing of it is kept here. *pairs* is this
         step's one broad phase (:meth:`_world_pairs`): every body with every
-        brush near its move.
+        brush near its move, and every other body.
 
         *indices* are the body rows to test, and *position*, *velocity* and
         *old* their rows of working state -- where each is now, how fast, and
@@ -1006,23 +1293,29 @@ class Soma:
         inside a wall both before and after the move (it started there) has
         no face to stop at: it goes back to *old*, as it always did.
 
-        *pushed_from* is where the player's push this step started each body
-        from (NaN where it did not push it): a push into a wall is undone with
-        the rest of the move -- unless the body was already in a wall before
-        it, when it may still be pushed out.
+        *start* is where the move is swept from, where that is not *old*: a
+        body the player pushed this step was moved by the push before the
+        step began, and the push is part of what must not carry it through a
+        wall or into another body. Pushed into a wall, it stops at the wall.
+        One that was already in a wall keeps the push (it may be pushed out)
+        and loses only the rest of the move.
         """
         if indices.size == 0:
             return
-        query, lo, hi, offset, half = pairs
-        if not len(query) or not (position[:, axis] != old[:, axis]).any():
+        if start is None:
+            start = old
+        query, lo, hi, offset, half, other = pairs
+        if not len(query) or not (position[:, axis] != start[:, axis]).any():
             # Nothing near, or nothing moved on this axis: a body that has
             # not moved has met nothing new, and one inside a wall stays put.
             return
         centre = position.astype(np.float64) + offset
         bmin = centre - half
         bmax = centre + half
-        # This axis only: where the body's two faces were before the move.
-        was = old[:, axis].astype(np.float64) + offset[:, axis]
+        # This axis only: where the body's two faces were before the move,
+        # and where it stays if it has no face to stop at.
+        was = start[:, axis].astype(np.float64) + offset[:, axis]
+        stay = old[:, axis].astype(np.float64) + offset[:, axis]
         old_min = was - half[:, axis]
         old_max = was + half[:, axis]
         swept_min = bmin.copy()
@@ -1042,6 +1335,8 @@ class Soma:
         if not touching.any():
             return
         query, lo, hi = query[touching], lo[touching, axis], hi[touching, axis]
+        other = other[touching]
+        soft = other >= 0
 
         # A wall ahead is one whose near face the body's leading face had not
         # passed before the move and has passed now. The nearest decides.
@@ -1054,7 +1349,10 @@ class Soma:
         back_stop = np.full(indices.size, -np.inf)
         np.maximum.at(back_stop, query[behind], hi[behind])
         # Anything else it touches now, it was already in: no face to stop at.
-        inside = ~(ahead | behind) & (bmax[query, axis] > lo) & (bmin[query, axis] < hi)
+        # (Another body it is inside is not a wall: bodies placed
+        # overlapping stay free of each other, as they always were.)
+        inside = (~(ahead | behind) & ~soft
+                  & (bmax[query, axis] > lo) & (bmin[query, axis] < hi))
         embedded = np.zeros(indices.size, dtype=np.bool_)
         embedded[query[inside]] = True
 
@@ -1070,28 +1368,23 @@ class Soma:
             met_ahead, np.maximum(stop - skin - half[:, axis], was),
             np.where(met_behind, np.minimum(back_stop + skin + half[:, axis], was),
                      was))
-        target = np.where(embedded, was, target) - offset[:, axis]
+        target = np.where(embedded, stay, target) - offset[:, axis]
 
         hit = np.flatnonzero(collision)
         hit_indices = indices[hit]
         target = target[hit].astype(np.float32)
-        if pushed_from is not None:
-            # Pushed bodies that were clear of every wall before the push go
-            # back to where the push found them.
-            start = pushed_from[hit_indices]
-            was_pushed = np.flatnonzero(~np.isnan(start[:, 0]))
-            if was_pushed.size:
-                pcentre = start[was_pushed].astype(np.float64) + offset[hit[was_pushed]]
-                phalf = half[hit[was_pushed]]
-                pmin = pcentre - phalf
-                pmax = pcentre + phalf
-                q, r, boxes = self.spatial_grid.box_pairs(pmin, pmax)
-                before = np.zeros(was_pushed.size, dtype=np.bool_)
-                before[q[np.all((pmax[q] > boxes.lo[r])
-                                & (pmin[q] < boxes.hi[r]), axis=1)]] = True
-                undo = was_pushed[~before]
-                target[undo] = start[undo, axis]
         position[hit, axis] = target
+        # What it met, if that was another body: the ones at the face it
+        # stopped at. Read before the wall's answer below changes its speed.
+        met = None
+        if soft.any():
+            front = ahead & soft & (lo == stop[query])
+            back = behind & soft & (hi == back_stop[query])
+            met = np.flatnonzero(front | back)
+            if met.size:
+                incoming = velocity[query[met], axis].copy()
+            else:
+                met = None
         if self._any_bounce:
             # Bounce off the wall if bouncy enough.
             hit_velocity = velocity[hit, axis]
@@ -1099,6 +1392,18 @@ class Soma:
                 np.abs(hit_velocity), self._bounce[hit_indices])
         else:
             velocity[hit, axis] = 0.0
+        if met is not None:
+            # A body run into is knocked on rather than stood against; one
+            # too heavy to notice stays the wall it was treated as above.
+            mine = query[met]
+            answered = velocity[mine, axis].copy()
+            velocity[mine, axis] = incoming
+            knocked, closing = self._knock(axis, front[met], mine, other[met],
+                                           velocity, indices)
+            # One that is not closing on what it met is following it: it
+            # keeps its speed (and its distance). The rest met a wall.
+            walled = ~knocked & (closing > 0.0)
+            velocity[mine[walled], axis] = answered[walled]
 
     def _floors_under(self, indices, previous_bottom):
         """The floor beneath each body row in *indices*: float32, -inf where
@@ -1176,23 +1481,37 @@ class Soma:
         query of its own: a support point is inside its body's footprint, so
         the brushes filed in the point's cell are among the body's pairs.
         The same brushes, boxes and comparisons; the same answers."""
+        return self._floors_and_support(indices, previous_bottom, pairs)[0]
+
+    def _floors_and_support(self, indices, previous_bottom, pairs):
+        """The floors (:meth:`_floors_from_pairs`), and for each body the row
+        of the body whose top that floor is -- -1 where it is the world's, or
+        there is none. Another body's top is a floor like any other."""
         floors = np.full(indices.size, -np.inf, dtype=np.float32)
-        query, lo, hi = pairs[:3]
+        support = np.full(indices.size, -1, dtype=np.int64)
+        query, lo, hi, other = pairs[0], pairs[1], pairs[2], pairs[5]
         if not len(query):
-            return floors
+            return floors, support
         px, pz, bottom = self._support_offsets(indices)
         ray_y = np.maximum(bottom, previous_bottom.astype(np.float64)) + 1.0
         below = hi[:, 1] <= ray_y[query]
-        query, lo, hi = query[below], lo[below], hi[below]
+        query, lo, hi, other = query[below], lo[below], hi[below], other[below]
         x = px[query]
         z = pz[query]
         under = ((lo[:, 0:1] <= x) & (x <= hi[:, 0:1])
                  & (lo[:, 2:3] <= z) & (z <= hi[:, 2:3])).any(axis=1)
         if under.any():
+            query, top, other = query[under], hi[under, 1], other[under]
             best = np.full(indices.size, -np.inf)
-            np.maximum.at(best, query[under], hi[under, 1])
+            np.maximum.at(best, query, top)
             floors[:] = best
-        return floors
+            highest = top == best[query]
+            on_body = highest & (other >= 0)
+            if on_body.any():
+                support[query[on_body]] = other[on_body]
+                # Level with the world's floor, it is the world it stands on.
+                support[query[highest & (other < 0)]] = -1
+        return floors, support
 
     def _floor_tops(self, flat_x, flat_z, flat_y):
         """The highest brush top at or below each point (x, z, y), or -inf:
@@ -1315,60 +1634,49 @@ class Soma:
                 float(getattr(pvel, 'z', 0.0)),
             ], dtype=np.float32)
 
-            center = self._position + self._offset
-            body_min = center - self._half
-            body_max = center + self._half
-            player_min = ppos - player_half
-            player_max = ppos + player_half
-
-            overlap = (
-                (body_max[:, 0] > player_min[0]) &
-                (body_min[:, 0] < player_max[0]) &
-                (body_max[:, 1] > player_min[1]) &
-                (body_min[:, 1] < player_max[1]) &
-                (body_max[:, 2] > player_min[2]) &
-                (body_min[:, 2] < player_max[2])
-            )
-            pushable = active & self._solid & ~self._kinematic & overlap
-            # Sleeping bodies are excluded from the normal per-frame state
-            # scan, but an overlapping sleeping body can still be pushed.
-            pushable &= ~self._inactive_mask(pushable, awake_only=False)
-            if self._any_heavy:
+            # The bodies the player is touching, by the body index: nothing
+            # here is the size of the world either. Dormant ones are not
+            # touched; a sleeping one still is, and can be pushed awake.
+            touched = self._bodies_at(ppos - player_half, ppos + player_half)
+            if touched.size:
+                touched = touched[~self._dormant(touched)]
+            if touched.size and self._any_heavy:
                 # The player cannot push a heavy body: it pushes the player.
-                heavy = pushable & (self._mass >= self.HEAVY_MASS)
-                if np.any(heavy):
-                    pushable &= ~heavy
-                    self._push_player_out(player, ppos, player_half, center,
-                                          np.flatnonzero(heavy))
+                heavy = self._mass[touched] >= self.HEAVY_MASS
+                if heavy.any():
+                    self._push_player_out(player, ppos, player_half, touched[heavy])
+                    touched = touched[~heavy]
             speed = float(np.hypot(player_velocity[0], player_velocity[2]))
-            if speed >= 0.01 and np.any(pushable):
-                dx = center[:, 0] - ppos[0]
-                dz = center[:, 2] - ppos[2]
-                overlap_x = player_half[0] + self._half[:, 0] - np.abs(dx)
-                overlap_z = player_half[2] + self._half[:, 2] - np.abs(dz)
+            if speed >= 0.01 and touched.size:
+                centre = self._position[touched] + self._offset[touched]
+                half = self._half[touched]
+                dx = centre[:, 0] - ppos[0]
+                dz = centre[:, 2] - ppos[2]
+                overlap_x = player_half[0] + half[:, 0] - np.abs(dx)
+                overlap_z = player_half[2] + half[:, 2] - np.abs(dz)
                 use_x = overlap_x <= overlap_z
-
-                x_indices = pushable & use_x
-                z_indices = pushable & ~use_x
-
-                x_dir = np.where(dx >= 0.0, 1.0, -1.0).astype(np.float32)
-                z_dir = np.where(dz >= 0.0, 1.0, -1.0).astype(np.float32)
+                use_z = ~use_x
+                x_rows = touched[use_x]
+                z_rows = touched[use_z]
+                x_dir = np.where(dx >= 0.0, 1.0, -1.0).astype(np.float32)[use_x]
+                z_dir = np.where(dz >= 0.0, 1.0, -1.0).astype(np.float32)[use_z]
 
                 pushed_from = np.full_like(self._position, np.nan)
-                pushed_from[pushable] = self._position[pushable]
-                self._position[x_indices, 0] += x_dir[x_indices] * (overlap_x[x_indices] + 0.5)
-                self._position[z_indices, 2] += z_dir[z_indices] * (overlap_z[z_indices] + 0.5)
+                pushed_from[touched] = self._position[touched]
+                self._position[x_rows, 0] += x_dir * (overlap_x[use_x] + 0.5)
+                self._position[z_rows, 2] += z_dir * (overlap_z[use_z] + 0.5)
 
-                target_x = np.abs(player_velocity[0]) / self._mass * 0.85
-                target_z = np.abs(player_velocity[2]) / self._mass * 0.85
-                self._velocity[x_indices, 0] = x_dir[x_indices] * np.maximum(
-                    target_x[x_indices], np.abs(self._velocity[x_indices, 0])
-                )
-                self._velocity[z_indices, 2] = z_dir[z_indices] * np.maximum(
-                    target_z[z_indices], np.abs(self._velocity[z_indices, 2])
-                )
-                self._awake[pushable] = True
-                pushed = pushable
+                target_x = np.abs(player_velocity[0]) / self._mass[x_rows] * 0.85
+                target_z = np.abs(player_velocity[2]) / self._mass[z_rows] * 0.85
+                self._velocity[x_rows, 0] = x_dir * np.maximum(
+                    target_x, np.abs(self._velocity[x_rows, 0]))
+                self._velocity[z_rows, 2] = z_dir * np.maximum(
+                    target_z, np.abs(self._velocity[z_rows, 2]))
+                asleep = touched[~self._awake[touched]]
+                self._awake[touched] = True
+                if asleep.size:
+                    self._wake_dependents(asleep)
+                pushed = touched
 
         # Everything below is the size of what is awake, not of the world:
         # the awake rows' state is gathered once, worked on, and put back.
@@ -1402,13 +1710,19 @@ class Soma:
             ahead[:, 0] += hard_vel[:, 0] * dt
             ahead[:, 2] += hard_vel[:, 2] * dt
             pairs = self._world_pairs(hard_rows, hard_old, ahead, pushed_from)
+            start = None
+            if pushed_from is not None:
+                # A pushed body's move began where the push found it.
+                began = pushed_from[hard_rows]
+                was_pushed = ~np.isnan(began[:, 0])
+                if was_pushed.any():
+                    start = hard_old.copy()
+                    start[was_pushed] = began[was_pushed]
 
             hard_pos[:, 0] += hard_vel[:, 0] * dt
-            self._collide_axis(0, hard_rows, hard_pos, hard_vel, hard_old, pairs,
-                               pushed_from)
+            self._collide_axis(0, hard_rows, hard_pos, hard_vel, hard_old, pairs, start)
             hard_pos[:, 2] += hard_vel[:, 2] * dt
-            self._collide_axis(2, hard_rows, hard_pos, hard_vel, hard_old, pairs,
-                               pushed_from)
+            self._collide_axis(2, hard_rows, hard_pos, hard_vel, hard_old, pairs, start)
             if not everything:
                 position[hard] = hard_pos
                 velocity[hard] = hard_vel
@@ -1435,14 +1749,17 @@ class Soma:
             else:
                 previous_hard = previous_bottom
             if self._can_group_floor_queries():
-                under = self._floors_from_pairs(hard_rows, previous_hard, pairs)
+                under, held = self._floors_and_support(hard_rows, previous_hard, pairs)
             else:
                 under = self._floors_scalar(hard_rows, previous_hard)
+                held = np.full(hard_rows.size, -1, dtype=np.int64)
             if everything:
-                floors = under
+                floors, support = under, held
             else:
                 floors = np.full(rows.size, -np.inf, dtype=np.float32)
                 floors[hard] = under
+                support = np.full(rows.size, -1, dtype=np.int64)
+                support[hard] = held
             new_bottom = position[:, 1] + self._offset[rows, 1] - self._half[rows, 1]
             landed = np.isfinite(floors) & (new_bottom <= floors + 1.0)
             if landed.any():
@@ -1480,6 +1797,14 @@ class Soma:
                 velocity[on, 2] *= scale
                 self._position[on_rows, 1] = position[on, 1]
 
+            # What each stands on, for whoever moves that next.
+            support[~landed] = -1
+            self._support[rows] = support
+            on_body = support >= 0
+            stacked = bool(on_body.any())
+            if stacked:
+                self._any_support = True
+
             rest = None
             if self.sleep_enabled:
                 sleeping = np.max(np.abs(velocity), axis=1) < self.REST_SPEED
@@ -1490,9 +1815,33 @@ class Soma:
                     # the air.
                     if self.gravity != 0.0:
                         sleeping &= landed | (weight == 0.0)
+                    if stacked:
+                        # And on something that is itself at rest: a body
+                        # asleep on one still moving would be left behind.
+                        sleeping &= ~(on_body & self._awake[np.maximum(support, 0)])
                     rest = rows[sleeping]
                     velocity[sleeping] = 0.0
             self._velocity[rows] = velocity
+
+            if self._knocks:
+                # The bodies that were run into: moving now, at the velocity
+                # their share of the momentum gives them, and awake -- with
+                # whatever rests on them.
+                knocks, self._knocks = self._knocks, []
+                for struck, axis, speed in knocks:
+                    self._velocity[struck, axis] = speed
+                    asleep = struck[~self._awake[struck]]
+                    self._awake[struck] = True
+                    if asleep.size:
+                        self._wake_dependents(asleep)
+                    if rest is not None and rest.size:
+                        rest = rest[~np.isin(rest, struck)]
+
+            # A body that crossed into another column is filed under the old
+            # one: the index is rebuilt before it is next asked.
+            if not self._bodies_dirty and self._body_key.size:
+                if (self._cell_key(rows) != self._body_key[rows]).any():
+                    self._bodies_dirty = True
 
             if self._any_spin:
                 self._integrate_rotation(self._angular_velocity, dt)
