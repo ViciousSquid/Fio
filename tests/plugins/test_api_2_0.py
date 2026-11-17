@@ -339,6 +339,7 @@ def test_a_physics_prop_spawned_in_play_gets_a_body_and_despawned_loses_it(sessi
 
 # -- LogicState ----------------------------------------------------------------
 
+@pytest.mark.qt          # LogicState is an editor entity (editor.things needs Qt)
 def test_logicstate_values_are_typed_and_writes_are_events():
     from editor.things import LogicState
 
