@@ -177,3 +177,30 @@ def test_a_hollow_box_of_grouped_brushes_turns_as_one_rigid_body(
             assert brush_placement.runtime_spin(brush) == pytest.approx(spin), (
                 "a wall is not turned by the box's rotation")
     session.stop_play()
+
+
+def test_a_player_standing_on_a_carried_brush_is_carried(fio_session, monkeypatch):
+    """A deck grouped with a sideways mover: the player rides the deck."""
+    engine_ = {"id": "engine", "name": "engine", "pos": [0, 300, 0], "size": [32, 32, 32],
+               "is_mover": True, "start_on": True, "direction": [1, 0, 0],
+               "distance": 400.0, "speed": 100.0, "brush_group": "ferry"}
+    deck = {"id": "deck", "name": "deck", "pos": [0, 100, 600], "size": [256, 16, 256],
+            "brush_group": "ferry"}
+    session = fio_session(_level(engine_, deck))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    deck = _brush(session, "deck")
+    session.start_play()
+    player = session.logic.player_runtime.player
+    player.pos.x, player.pos.y, player.pos.z = 0.0, 160.0, 600.0
+    session.step(40)                               # land on the deck
+    assert player.ground_object is deck, "the test needs the player on the deck"
+    start_x, deck_x = float(player.pos.x), _centre(deck)[0]
+
+    session.step(60)
+
+    travelled = _centre(deck)[0] - deck_x
+    assert travelled > 20.0, "the deck should have been carried sideways"
+    assert float(player.pos.x) - start_x == pytest.approx(travelled, abs=2.0), (
+        "the player was left behind by the deck they stand on")
+    assert player.ground_object is deck
+    session.stop_play()

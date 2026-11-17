@@ -14,7 +14,8 @@ its leader has carried it (:meth:`MoverTable.restore_placement`, the call a
 saved game places a mover with): its authored offset from the leader, turned
 by the leader's spin about the leader's centre, and turned by the same spin
 itself. A group whose leader has not moved since the last tick costs one
-position read and a comparison, however many brushes it carries.
+position read and a comparison, however many brushes it carries. A player
+standing on a follower is carried with it, as one on the mover itself is.
 
 What play writes into a follower's dict is put back when play stops
 (:func:`detach`); ``group_follower`` marks one in a saved game, so loading
@@ -22,6 +23,8 @@ it does not mistake the follower for a mover of its own.
 """
 
 from __future__ import annotations
+
+import glm
 
 from . import brush_placement
 
@@ -124,6 +127,10 @@ class LogicGroups:
         if not self._links:
             return
         table = self.logic.mover_runtime._movers()
+        # A player standing on a carried brush goes with it, as one standing
+        # on the mover itself does.
+        player = self.logic.player_runtime.player
+        ground = getattr(player, 'ground_object', None) if player else None
         for entry in self._links:
             leader, followers, seen = entry
             now = table.position_of(leader)
@@ -141,5 +148,8 @@ class LogicGroups:
                         turn[0][0] * offset[0] + turn[0][1] * offset[1] + turn[0][2] * offset[2],
                         turn[1][0] * offset[0] + turn[1][1] * offset[1] + turn[1][2] * offset[2],
                         turn[2][0] * offset[0] + turn[2][1] * offset[1] + turn[2][2] * offset[2])
-                table.restore_placement(
-                    follower, (now[0] + dx, now[1] + dy, now[2] + dz), angle)
+                x, y, z = now[0] + dx, now[1] + dy, now[2] + dz
+                if follower is ground:
+                    was = table.position_of(follower)
+                    player.pos += glm.vec3(x - was[0], y - was[1], z - was[2])
+                table.restore_placement(follower, (x, y, z), angle)
