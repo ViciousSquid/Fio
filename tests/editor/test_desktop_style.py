@@ -138,6 +138,40 @@ def test_message_box_keeps_content_and_buttons_in_the_shared_layout(qt_app):
         box.deleteLater()
 
 
+def test_a_message_box_is_tall_enough_for_all_of_its_text(qt_app):
+    """The one-line floor on labels replaced the label's own minimum, and a
+    message box is sized from minimums: Debug > Project Overview showed the
+    map's name and none of its counts."""
+    from editor.project_overview import OVERVIEW_ROWS, format_overview
+
+    stats = {key: 1 for row in OVERVIEW_ROWS if row for key in row[1:]}
+    stats.update(created='today', modified='today')
+    box = QMessageBox()
+    box.setTextFormat(Qt.RichText)
+    box.setText(format_overview(stats, 'map.json'))
+    box.show()
+    qt_app.processEvents()
+    try:
+        label = box.findChild(QLabel, 'qt_msgbox_label')
+        rows = sum(1 for row in OVERVIEW_ROWS if row)
+        assert label.height() >= label.sizeHint().height(), (
+            'the report is cut off: %d of %d px' % (label.height(), label.sizeHint().height()))
+        assert label.height() > rows * label.fontMetrics().height()
+    finally:
+        box.close()
+        box.deleteLater()
+
+    plain = QMessageBox(QMessageBox.Warning, 'Title', 'First line.\n\nSecond.\nThird.', QMessageBox.Ok)
+    plain.show()
+    qt_app.processEvents()
+    try:
+        label = plain.findChild(QLabel, 'qt_msgbox_label')
+        assert label.height() >= 4 * label.fontMetrics().height()
+    finally:
+        plain.close()
+        plain.deleteLater()
+
+
 def test_message_box_uses_the_windows_wrap_width_after_any_platform_sizing(qt_app):
     # Qt wraps message text at 420px on macOS and 500px elsewhere.
     box = QMessageBox(QMessageBox.Warning, 'Title', 'A long explanation of a problem. ' * 30, QMessageBox.Ok)
