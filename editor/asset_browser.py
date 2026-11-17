@@ -253,6 +253,20 @@ def audio_thumbnail(path, size):
     return pixmap
 
 
+#: The frame of a selected wet decal in the grid (any other tile: orange).
+WET_DECAL_ACCENT = '#4CAF50'
+
+
+def is_wet_decal(path):
+    """Whether *path* is a wet decal: an image in a ``decals`` folder with
+    "wet" or "puddle" in its name (engine.decal_textures.is_wet_image)."""
+    folder = os.path.basename(os.path.dirname(str(path or ''))).lower()
+    if folder != 'decals':
+        return False
+    from engine.decal_textures import is_wet_image
+    return bool(is_wet_image(os.path.basename(str(path))))
+
+
 class AssetItem:
     """One asset in a tab's grid: its name, path, kind and shape -- a row of
     the tab's model (:class:`AssetGridModel`), painted by
@@ -734,6 +748,11 @@ class AssetDelegate(QStyledItemDelegate):
             return
         cell = QRect(option.rect)
         selected = item is tab.selected_item
+        # A wet decal (a mask of where the surface is wet, not a picture that
+        # is painted) is framed green when picked, so the two kinds of decal
+        # are told apart at the moment one is chosen.
+        accent = QColor(WET_DECAL_ACCENT if selected and is_wet_decal(item.file_path)
+                        else '#F08000')
         painter.save()
         # A flat tile, square-cornered, the picture filling it -- its own
         # shape kept and centred, so a 4:3 texture shows thin bars.
@@ -762,14 +781,14 @@ class AssetDelegate(QStyledItemDelegate):
         font.setPixelSize(10)
         font.setBold(selected)
         painter.setFont(font)
-        painter.setPen(QColor('#F08000') if selected else QColor('#eee'))
+        painter.setPen(accent if selected else QColor('#eee'))
         text_rect = strip.adjusted(4, 0, -3, 0)
         text = QFontMetrics(font).elidedText(item.name_text, Qt.ElideRight, text_rect.width())
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, text)
         if selected:
             painter.setRenderHint(QPainter.Antialiasing, False)
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(QColor('#F08000'), 2))
+            painter.setPen(QPen(accent, 2))
             painter.drawRect(cell.adjusted(1, 1, -1, -1))
         painter.restore()
 

@@ -30,21 +30,22 @@ from PyQt5.QtGui import QImageReader
 from editor import face_texture as ft
 
 
-# The Face Mode toggle's look, carried over verbatim from the Asset Browser so
-# the button a user already knows keeps its colour after the move.
+# The Face Mode toggle's look, shared with the Asset Browser's INSPECTOR
+# button: Fio's accent orange (it was purple, the one thing in the editor
+# that was), brighter with a white rim while Face Mode is on.
 FACE_BUTTON_STYLE = """
     QPushButton {
-        background-color: #7B1FA2;
+        background-color: #F08000;
         color: white;
         font: 9pt;
         font-weight: bold;
         padding: 6px 12px;
-        border: 1px solid #4A148C;
+        border: 1px solid #B35F00;
         border-radius: 5px;
     }
-    QPushButton:hover { background-color: #8E24AA; }
-    QPushButton:pressed { background-color: #4A148C; }
-    QPushButton:checked { background-color: #D500F9; border: 1px solid white; }
+    QPushButton:hover { background-color: #FF8C00; }
+    QPushButton:pressed { background-color: #B35F00; }
+    QPushButton:checked { background-color: #FFA726; border: 1px solid white; }
     QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
 """
 

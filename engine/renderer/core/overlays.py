@@ -369,7 +369,8 @@ class OverlaysMixin:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9)
+        # Fio's accent orange (#F08000), as every other selection is.
+        gl.glUniform3f(uniforms['color'], 0.94, 0.5, 0.0)
         gl.glUniform1f(uniforms['alpha'], 0.4)
         self._draw_face_highlight_verts(
             np.ascontiguousarray(triangles, dtype=np.float32).ravel(), uniforms)

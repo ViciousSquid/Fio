@@ -79,3 +79,26 @@ def test_the_amount_fields_write_the_properties_the_light_reads(main_window):
         assert props.get('emissive_intensity') == pytest.approx(3.5), prefix
         assert props.get('emissive_radius') == pytest.approx(400.0), prefix
     main_window.unsaved_changes = False
+
+
+# ---------------------------------------------------------------------------
+# Editor accents
+# ---------------------------------------------------------------------------
+
+def test_a_wet_decal_is_told_from_a_painted_one_in_the_asset_browser():
+    from editor.asset_browser import WET_DECAL_ACCENT, is_wet_decal
+
+    assert is_wet_decal('assets/textures/decals/puddle_01.png')
+    assert is_wet_decal('assets/textures/decals/Wet_Patch.PNG')
+    assert not is_wet_decal('assets/textures/decals/Signage.png')
+    assert not is_wet_decal('assets/textures/wet_concrete.png'), (
+        "a texture outside the decals folder is not a decal")
+    assert WET_DECAL_ACCENT.lower() != '#f08000'
+
+
+def test_face_mode_wears_fio_s_orange_not_purple():
+    from editor.surface_inspector import FACE_BUTTON_STYLE
+
+    assert '#F08000' in FACE_BUTTON_STYLE
+    for purple in ('#7B1FA2', '#8E24AA', '#4A148C', '#D500F9'):
+        assert purple not in FACE_BUTTON_STYLE

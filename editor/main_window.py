@@ -2452,7 +2452,7 @@ class MainWindow(QMainWindow):
             self.surface_inspector.sync_face_button(active)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Orange) — Page Up/Down rotates it", duration=3000)
             self.set_selected_objects([]) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
