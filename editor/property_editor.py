@@ -2477,6 +2477,21 @@ class PropertyEditor(QWidget):
         physics_form.addRow("", rolls_cb)
         self._widgets['prop_rolls_cb'] = rolls_cb
 
+        topples_cb = _make_checkbox(
+            "Falls over like a barrel",
+            bool(thing.properties.get('topples', False)),
+            lambda checked: self.update_object_prop('topples', bool(checked)),
+            _Style.CHECKBOX,
+        )
+        topples_cb.setToolTip(
+            "Knocked hard enough -- run into, hit by another prop, dropped, "
+            "or stood on a steep slope -- it goes over and lies on its side, "
+            "rolling across its length. Picking it up stands it up again. "
+            "Full physics tier only; a prop that rolls like a ball does not."
+        )
+        physics_form.addRow("", topples_cb)
+        self._widgets['prop_topples_cb'] = topples_cb
+
         bounciness = min(1.0, max(0.0, float(thing.properties.get('bounciness', 0.0) or 0.0)))
         bounciness_spin = QDoubleSpinBox()
         bounciness_spin.setRange(0.0, 1.0)

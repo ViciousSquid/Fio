@@ -86,6 +86,9 @@ BODY_PROPERTIES = {
     'linear_damping': '(0.08) velocity lost per second, grounded or not',
     'bounciness': '(0.0) 0..1 share of impact speed kept, faded by mass',
     'rolls': '(False) turns by the distance it travels, as a ball does',
+    'topples': '(False) falls over when knocked hard enough, and then lies '
+               'on its side, rolling across its length: a barrel. Picking '
+               'it up stands it up again',
     'drop_angular_velocity': '([0, 0, 0]) degrees per second of spin',
     'rotation': '([0, 0, 0]) Euler degrees; written back when it changes',
     'hidden': '(False) live: dormant while set',

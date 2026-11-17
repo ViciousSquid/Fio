@@ -313,15 +313,17 @@ class PropSession:
                 best._carry_sprite_yaw = float(self.logic.player_runtime.player.angle)
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
+            self._falling.pop(id(best), None)
+            if self.physics is not None:
+                # Before its turn is remembered: taking a body over may turn
+                # it (a barrel on its side is stood up in the hands).
+                self.physics.set_kinematic(best, True)
             # A model turns with the player instead, so the side facing the
             # player stays facing them: without it the player's view swung
             # round a model that kept its world facing.
             if self._is_model(best):
                 best._carry_turn = (best._carry_sprite_yaw,
                                     list(best.properties.get('rotation') or (0.0, 0.0, 0.0)))
-            self._falling.pop(id(best), None)
-            if self.physics is not None:
-                self.physics.set_kinematic(best, True)
             self._fire(best, "OnCarried")
 
     @staticmethod

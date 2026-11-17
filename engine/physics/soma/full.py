@@ -299,6 +299,24 @@ class Soma:
     #: The same crossover in query points: a body asks about five.
     FLOOR_BATCH_MIN_POINTS = 5 * FLOOR_BATCH_MIN_BODIES
     MAX_STEP = np.float32(0.05)
+    #: A body that ``topples`` goes over when it is moving this fast along
+    #: the ground (units per second). The player's push gives a body 0.85 of
+    #: the player's speed: a walk (200) slides a barrel along upright, a run
+    #: (300) knocks it over.
+    TOPPLE_SPEED = 200.0
+    #: ...or when it lands this hard while moving at all...
+    TOPPLE_IMPACT = 400.0
+    TOPPLE_NUDGE = 40.0
+    #: ...or stands on ground this steep (rise over run): about where a
+    #: barrel's weight is past its rim.
+    TOPPLE_SLOPE = 0.7
+    #: How long going over takes, in seconds: what is seen. The body's box is
+    #: the lying one from the moment it starts.
+    TOPPLE_TIME = 0.25
+    #: The share of its ``friction`` a body lying on its side loses across
+    #: its length, where it rolls. Along its length it slides, by all of it.
+    LYING_ROLL_FRICTION = 0.12
+
     #: The steepest ground a body moves up: rise over run. 1 is 45 degrees,
     #: Quake's walkable limit near enough (a floor normal of 0.7). Steeper
     #: ground is in the way, as a wall is.
@@ -451,6 +469,19 @@ class Soma:
         self._bounce = np.empty(0, dtype=np.float32)
         #: Rolling bodies' orientation, (w, x, y, z); identity for the rest.
         self._orientation = np.empty((0, 4), dtype=np.float64)
+        #: Falls over and lies on its side (``topples``): a barrel.
+        self._topples = np.empty(0, dtype=np.bool_)
+        #: 0 upright; 1 lying along x; 2 lying along z.
+        self._lying = np.empty(0, dtype=np.int8)
+        #: The upright box of a body that is lying, to stand it up again.
+        self._stand_half = np.empty((0, 3), dtype=np.float32)
+        self._stand_offset = np.empty((0, 3), dtype=np.float32)
+        #: Going over: seconds left of it, the way it fell (+1/-1 along the
+        #: axis it lies on) and how it was turned when it began.
+        self._tip_left = np.empty(0, dtype=np.float32)
+        self._tip_sign = np.empty(0, dtype=np.float32)
+        self._tip_from = np.empty((0, 4), dtype=np.float64)
+        self._any_topples = False
         # Set at pack time: a world with nothing rolling, bouncy or heavy --
         # most maps -- never enters that code.
         self._any_rolls = False
@@ -506,6 +537,7 @@ class Soma:
             float(self.restitution(_float(props.get('bounciness'), 0.0),
                                    _float(props.get('mass'), 1.0)))
             if props.get('bounciness') else 0.0,
+            bool(props.get('topples', False)) and not bool(props.get('rolls', False)),
         )
         self._dirty = True
         return body
@@ -550,6 +582,13 @@ class Soma:
         self._bounce = np.zeros(n, dtype=np.float32)
         self._orientation = np.zeros((n, 4), dtype=np.float64)
         self._orientation[:, 0] = 1.0
+        self._topples = np.zeros(n, dtype=np.bool_)
+        self._lying = np.zeros(n, dtype=np.int8)
+        self._stand_half = np.zeros((n, 3), dtype=np.float32)
+        self._stand_offset = np.zeros((n, 3), dtype=np.float32)
+        self._tip_left = np.zeros(n, dtype=np.float32)
+        self._tip_sign = np.ones(n, dtype=np.float32)
+        self._tip_from = np.zeros((n, 4), dtype=np.float64)
         self._support = np.full(n, -1, dtype=np.int64)
         self._grounded = np.zeros(n, dtype=np.bool_)
         self._any_support = False
@@ -566,7 +605,7 @@ class Soma:
             body = self.bodies[id(entity)]
             (
                 position, half, offset, mass, friction, damping, gravity,
-                angular_velocity, solid, physics_enabled, rolls, bounce,
+                angular_velocity, solid, physics_enabled, rolls, bounce, topples,
             ) = body._initial
             self._indices[id(entity)] = i
             self._position[i] = position
@@ -585,7 +624,14 @@ class Soma:
                 # A rolling body's turn comes from its rolling, not a fixed spin.
                 self._angular_velocity[i] = 0.0
                 self._orientation[i] = self._entity_orientation(entity)
+            elif topples:
+                self._topples[i] = True
+                self._angular_velocity[i] = 0.0
+                self._orientation[i] = self._entity_orientation(entity)
 
+        self._any_topples = bool(self._topples.any())
+        if self._any_topples:
+            self._lie_as_placed()
         self._any_rolls = bool(self._rolls.any())
         self._any_spin = bool(self._angular_velocity.any())
         self._any_bounce = bool(self._bounce.any())
@@ -622,6 +668,9 @@ class Soma:
         )
 
         self._kinematic[index] = value
+        if value and self._any_topples and self._lying[index]:
+            # Picked up: stood up again, in the hands.
+            self._stand(index)
         # In or out of what other bodies meet; and no longer under anything.
         self._bodies_dirty = True
         if value:
@@ -1057,6 +1106,179 @@ class Soma:
             if floor is not None:
                 tops[k] = float(floor)
         return tops
+
+    # ------------------------------------------------------------------
+    # Falling over
+    #
+    # A body that ``topples`` -- a barrel -- is a box standing up until
+    # something knocks it over, and the same box on its side after: it rolls
+    # across its length and slides along it. Nothing about how it tips is
+    # simulated. Going over is a decision (it is moving too fast, it landed
+    # too hard, the ground is too steep), a swap of the box's two dimensions,
+    # and a quarter turn played over a few frames; picking it up stands it
+    # up again. A body upright or lying costs what any other body costs.
+    # ------------------------------------------------------------------
+
+    def _lay(self, rows, axis, sign, lift=True):
+        """Put the body rows *rows* on their side along *axis* (0: x, 2: z),
+        fallen toward ``sign`` of it: the box that was upright, turned a
+        quarter about its base, and lifted so it lies on what it stood on."""
+        half = self._half[rows].copy()
+        offset = self._offset[rows].copy()
+        self._stand_half[rows] = half
+        self._stand_offset[rows] = offset
+        bottom = offset[:, 1] - half[:, 1]
+        lying_half = half.copy()
+        lying_half[:, axis] = half[:, 1]
+        lying_half[:, 1] = half[:, axis]
+        lying_offset = offset.copy()
+        lying_offset[:, axis] = sign * offset[:, 1]
+        lying_offset[:, 1] = -sign * offset[:, axis]
+        self._half[rows] = lying_half
+        self._offset[rows] = lying_offset
+        if lift:
+            self._position[rows, 1] += bottom - (lying_offset[:, 1] - lying_half[:, 1])
+        self._lying[rows] = 1 if axis == 0 else 2
+        self._tip_sign[rows] = sign
+
+    def _lie_as_placed(self):
+        """Bodies the map (or a saved game) has lying on their side already:
+        told by how the entity is turned, so a barrel knocked over before a
+        save is still one after it."""
+        rows = np.flatnonzero(self._topples)
+        q = self._orientation[rows]
+        # Where the body's own up points, in the world.
+        up_x = 2.0 * (q[:, 1] * q[:, 2] - q[:, 0] * q[:, 3])
+        up_y = 1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 3] ** 2)
+        up_z = 2.0 * (q[:, 2] * q[:, 3] + q[:, 0] * q[:, 1])
+        down = np.abs(up_y) < 0.5
+        for axis, along, across in ((0, up_x, up_z), (2, up_z, up_x)):
+            lying = down & (np.abs(along) >= np.abs(across) if axis == 0
+                            else np.abs(along) > np.abs(across))
+            if not lying.any():
+                continue
+            chosen = rows[lying]
+            sign = np.where(along[lying] >= 0.0, 1.0, -1.0).astype(np.float32)
+            # A box derived from the turned model is lying already: only
+            # what it is upright has to be worked out. One derived from the
+            # model as authored is laid down here.
+            shaped = self._half[chosen, axis] > self._half[chosen, 1]
+            if (~shaped).any():
+                self._lay(chosen[~shaped], axis, sign[~shaped], lift=False)
+            if shaped.any():
+                done = chosen[shaped]
+                half = self._half[done].copy()
+                offset = self._offset[done].copy()
+                stand_half = half.copy()
+                stand_half[:, 1] = half[:, axis]
+                stand_half[:, axis] = half[:, 1]
+                stand_offset = offset.copy()
+                stand_offset[:, 1] = sign[shaped] * offset[:, axis]
+                stand_offset[:, axis] = -sign[shaped] * offset[:, 1]
+                self._stand_half[done] = stand_half
+                self._stand_offset[done] = stand_offset
+                self._lying[done] = 1 if axis == 0 else 2
+                self._tip_sign[done] = sign[shaped]
+
+    def _topple(self, rows, axis, sign):
+        """Knock the upright body rows *rows* over, each along ``axis[k]``
+        (0 or 2) toward ``sign[k]`` of it -- those with room to lie there."""
+        for along in (0, 2):
+            chosen = axis == along
+            if not chosen.any():
+                continue
+            group = rows[chosen]
+            self._lay(group, along, sign[chosen].astype(np.float32))
+            # Room to lie: asked of the grid, of the few going over. The
+            # floor it lies on is not in its way.
+            centre = (self._position[group] + self._offset[group]).astype(np.float64)
+            half = self._half[group].astype(np.float64) - self.CONTACT_SKIN
+            lo = centre - half
+            hi = centre + half
+            lo[:, 1] += 1.0
+            query, row, boxes = self.spatial_grid.box_pairs(lo, hi)
+            if len(query):
+                # Against boxes: an angled brush's box is not where it is,
+                # and what it stands on is often one.
+                blocked = np.zeros(group.size, dtype=np.bool_)
+                blocked[query[np.all((hi[query] > boxes.lo[row])
+                                     & (lo[query] < boxes.hi[row]), axis=1)
+                              & ~boxes.shaped[row]]] = True
+                if blocked.any():
+                    self._stand_rows(group[blocked])
+                    group = group[~blocked]
+            if not group.size:
+                continue
+            self._tip_left[group] = self.TOPPLE_TIME
+            self._tip_from[group] = self._orientation[group]
+            self._bodies_dirty = True
+            # What stood on it has nothing under it now.
+            self._wake_dependents(group)
+
+    def _stand_rows(self, rows):
+        """The upright box back, for body rows that are lying."""
+        bottom = self._offset[rows, 1] - self._half[rows, 1]
+        self._half[rows] = self._stand_half[rows]
+        self._offset[rows] = self._stand_offset[rows]
+        self._position[rows, 1] += bottom - (self._offset[rows, 1] - self._half[rows, 1])
+        self._lying[rows] = 0
+        self._tip_left[rows] = 0.0
+
+    def _stand(self, index):
+        """Stand one lying body up: its box, and how it is turned."""
+        self._stand_rows(np.array([index]))
+        self._orientation[index] = (1.0, 0.0, 0.0, 0.0)
+        entity = self._entities[index]
+        props = getattr(entity, 'properties', None)
+        if isinstance(props, dict):
+            props['rotation'] = [0.0, 0.0, 0.0]
+            touch(entity)
+
+    def _turn_lying(self, rows, velocity, dt):
+        """Turn the body rows *rows* that are going over or lying: the
+        quarter turn of the fall, then the roll across their length.
+        *velocity* is their rows of this step's working velocity."""
+        lying = self._lying[rows]
+        sign = self._tip_sign[rows].astype(np.float64)
+        left = self._tip_left[rows]
+        tipping = left > 0.0
+        orientation = self._orientation[rows]
+        changed = tipping.copy()
+        if tipping.any():
+            left = np.maximum(left - dt, 0.0)
+            self._tip_left[rows] = left
+            fallen = (0.5 * np.pi) * (1.0 - left / self.TOPPLE_TIME)
+            # Up goes toward the way it fell: about z for a fall along x,
+            # about x for one along z.
+            for along, about, way in ((1, 2, -1.0), (2, 0, 1.0)):
+                group = np.flatnonzero(tipping & (lying == along))
+                if group.size:
+                    turn = _axis_quat(about, way * sign[group] * fallen[group])
+                    orientation[group] = _quat_multiply(turn, self._tip_from[rows[group]])
+        rolling = ~tipping
+        if rolling.any():
+            # Across its length only: along it, it slides.
+            across = velocity[rolling].copy()
+            across[:, 1] = 0.0
+            across[lying[rolling] == 1, 0] = 0.0
+            across[lying[rolling] == 2, 2] = 0.0
+            moving = (across[:, 0] != 0.0) | (across[:, 2] != 0.0)
+            if moving.any():
+                which = np.flatnonzero(rolling)[moving]
+                orientation[which] = _rolled(
+                    orientation[which], across[moving],
+                    self._half[rows[which], 1], dt)
+                changed[which] = True
+        if not changed.any():
+            return
+        self._orientation[rows[changed]] = orientation[changed]
+        turned = rotation_from_quat(orientation[changed]).tolist()
+        for i, rotation in zip(rows[changed].tolist(), turned):
+            entity = self._entities[i]
+            props = getattr(entity, 'properties', None)
+            if isinstance(props, dict):
+                props['rotation'] = rotation
+                touch(entity)
 
     # ------------------------------------------------------------------
     # Bodies meeting bodies
@@ -1960,11 +2182,13 @@ class Soma:
             stick = np.where(self._grounded[rows] & (velocity[:, 1] <= 0.0), follow, 0.0)
             landed = np.isfinite(floors) & (new_bottom <= floors + 1.0 + stick)
             self._grounded[rows] = landed
+            toppling = None
             if landed.any():
                 on = np.flatnonzero(landed)
                 on_rows = rows[on]
                 position[on, 1] = (
                     floors[on] - self._offset[on_rows, 1] + self._half[on_rows, 1])
+                impact = -velocity[on, 1]            # how hard it came down
                 if self._any_bounce:
                     # Bounce back up if bouncy enough.
                     velocity[on, 1] = self._bounce_speed(
@@ -2003,6 +2227,46 @@ class Soma:
                     0.0,
                     1.0 - friction_delta / np.maximum(ground_speed, 1e-6),
                 )
+                if self._any_topples:
+                    lying = self._lying[on_rows]
+                    down = np.flatnonzero(lying != 0)
+                    if down.size:
+                        # On its side a body rolls across its length and
+                        # slides along it: friction by the axis, not by the
+                        # speed.
+                        k = on[down]
+                        grip = friction_delta[down]
+                        across = np.where(lying[down] == 1, 2, 0)
+                        along = 2 - across
+                        for column, share in ((along, 1.0), (across, self.LYING_ROLL_FRICTION)):
+                            speed = velocity[k, column]
+                            velocity[k, column] = np.sign(speed) * np.maximum(
+                                np.abs(speed) - grip * np.float32(share), 0.0)
+                        scale[down] = 1.0
+                    upright = self._topples[on_rows] & (lying == 0)
+                    if upright.any():
+                        # Going over: moving too fast, landed too hard, or
+                        # stood on ground too steep. Along whichever of x
+                        # and z it is mostly going (or the ground mostly
+                        # falls), for the box it will lie in.
+                        speed_x = velocity[on, 0] * scale
+                        speed_z = velocity[on, 2] * scale
+                        speed = np.hypot(speed_x, speed_z)
+                        knocked = upright & (
+                            (speed >= self.TOPPLE_SPEED)
+                            | ((impact >= self.TOPPLE_IMPACT) & (speed >= self.TOPPLE_NUDGE)))
+                        tilted = (upright & ~knocked
+                                  & (np.abs(lean).max(axis=1) > self.TOPPLE_SLOPE))
+                        over = knocked | tilted
+                        if over.any():
+                            # Downhill is against the rise.
+                            way_x = np.where(tilted, -lean[:, 0], speed_x)[over]
+                            way_z = np.where(tilted, -lean[:, 1], speed_z)[over]
+                            along_x = np.abs(way_x) >= np.abs(way_z)
+                            toppling = (
+                                on_rows[over],
+                                np.where(along_x, 0, 2),
+                                np.where(np.where(along_x, way_x, way_z) >= 0.0, 1.0, -1.0))
                 velocity[on, 0] *= scale
                 velocity[on, 2] *= scale
                 self._position[on_rows, 1] = position[on, 1]
@@ -2029,6 +2293,11 @@ class Soma:
                         # And on something that is itself at rest: a body
                         # asleep on one still moving would be left behind.
                         sleeping &= ~(on_body & self._awake[np.maximum(support, 0)])
+                    if self._any_topples:
+                        # And not half way over.
+                        sleeping &= self._tip_left[rows] <= 0.0
+                        if toppling is not None:
+                            sleeping &= ~np.isin(rows, toppling[0])
                     rest = rows[sleeping]
                     velocity[sleeping] = 0.0
             self._velocity[rows] = velocity
@@ -2052,6 +2321,13 @@ class Soma:
             if not self._bodies_dirty and self._body_key.size:
                 if (self._cell_key(rows) != self._body_key[rows]).any():
                     self._bodies_dirty = True
+
+            if self._any_topples:
+                if toppling is not None:
+                    self._topple(*toppling)
+                down = np.flatnonzero(self._lying[rows] != 0)
+                if down.size:
+                    self._turn_lying(rows[down], velocity[down], dt)
 
             if self._any_spin:
                 self._integrate_rotation(self._angular_velocity, dt)
