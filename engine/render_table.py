@@ -1085,16 +1085,21 @@ class RenderTable:
 
     def brush_lights(self):
         """The lights the emissive Glow brushes are, or None when there are
-        none: ``(positions (k, 3), colours (k, 3), params (k, 2), on (k,))``.
+        none: ``(positions (k, 3), colours (k, 3), params (k, 2), on (k,),
+        sizes (k,))``.
 
         A brush's light stands at its centre, where it is now (a mover's
-        neon moves with it), and is off while the brush is hidden.
+        neon moves with it), and is off while the brush is hidden. Its size
+        is half the brush's longest side: the light comes from the length of
+        the tube, not from a point at its middle, so it fades in over that
+        distance instead of making a bright spot on whatever is nearest.
         """
         slots = self.emissive_slots
         if not len(slots):
             return None
         return (self.center[slots], self.emit_colour[slots],
-                self.emit_params[slots], ~self.hidden[slots])
+                self.emit_params[slots], ~self.hidden[slots],
+                self.half[slots].max(axis=1).astype(np.float32))
 
     def shown(self):
         """``(mask, slots)`` of the rows not hidden, over the live rows.

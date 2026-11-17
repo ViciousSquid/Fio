@@ -47,7 +47,7 @@ def test_an_emissive_glow_brush_lights_in_the_colour_it_glows():
               emissive_intensity=2.5, emissive_radius=300.0),
         _glow('green', (200, 0, 0), emissive=True, tint=[0.0, 1.0, 0.0]))
 
-    positions, colours, params, on = table.brush_lights()
+    positions, colours, params, on, sizes = table.brush_lights()
 
     assert table.emissive_slots.tolist() == [1, 2, 3]
     np.testing.assert_allclose(positions, [(10, 20, 30), (100, 0, 0), (200, 0, 0)])
@@ -56,6 +56,8 @@ def test_an_emissive_glow_brush_lights_in_the_colour_it_glows():
     np.testing.assert_allclose(colours[2], (0.0, 1.0, 0.0))
     np.testing.assert_allclose(params, [(1.0, 256.0), (2.5, 300.0), (1.0, 256.0)])
     assert on.all()
+    # Half the longest side: the tube is the source, not a point in it.
+    np.testing.assert_allclose(sizes, [64.0, 64.0, 64.0])
 
 
 def test_a_brush_with_no_tint_emits_its_own_colour():
@@ -107,7 +109,8 @@ def _lights(k, start=0.0):
     return (np.arange(k * 3, dtype=np.float64).reshape(k, 3) + start,
             np.tile((1.0, 0.5, 0.0), (k, 1)).astype(np.float32),
             np.tile((2.0, 300.0), (k, 1)).astype(np.float32),
-            np.ones(k, dtype=bool))
+            np.ones(k, dtype=bool),
+            np.full(k, 48.0, dtype=np.float32))
 
 
 def test_with_no_emissive_brush_the_light_list_is_left_alone():
@@ -133,6 +136,7 @@ def test_brush_lights_are_rows_past_the_entities():
     np.testing.assert_allclose(table.light_color[2], (1.0, 0.5, 0.0))
     np.testing.assert_allclose(table.light_params[0], (2.0, 300.0))
     assert table.light_enabled[:3].all() and not table.light_casts_shadows[:3].any()
+    np.testing.assert_allclose(table.light_size[:3], 48.0)
 
 
 def test_brush_lights_follow_every_frame_and_go_when_the_brushes_do():
@@ -178,3 +182,29 @@ def test_a_brush_light_is_not_filtered_by_the_entities_hidden_mask():
         'thing_hidden': np.zeros(table.count, dtype=bool)})
 
     assert slots.tolist() == [0]
+
+
+def test_the_light_list_is_uploaded_again_only_when_a_brush_light_changes():
+    """The renderer keys its light upload on the table's generation."""
+    table = EntityTable()
+    table.sync([], epoch=1)
+    table.set_aux_lights(_lights(2))
+    generation = table.generation
+
+    table.set_aux_lights(_lights(2))
+    assert table.generation == generation, "an unchanged neon moved the generation"
+
+    table.set_aux_lights(_lights(2, start=5.0))
+    assert table.generation > generation, "a neon that moved was not uploaded again"
+
+
+def test_only_a_light_with_a_source_size_fades_in():
+    """Every lit shader gets the same rewrite; a point light (size 0) is
+    multiplied by exactly 1."""
+    from engine import shaders
+
+    source = shaders.light_ubo_source(shaders.DEFAULT_SHADERS['lit_arm.frag'])
+
+    assert 'fioSourceFade(' in source and 'params.z' in source
+    assert 'if (size <= 0.0) return 1.0;' in source
+    assert '.intensity' not in source

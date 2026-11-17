@@ -170,6 +170,20 @@ _LIGHT_DECL_RE = re.compile(
 )
 
 
+#: A light whose source has a size is not a point. A point light is at its
+#: brightest on whatever is nearest it -- a spot on the wall behind a neon
+#: tube -- where a tube lights that wall evenly and faintly along its length.
+#: So such a light fades in over its source's half-size: what is right next
+#: to it gets little, what is a tube-length away gets all of it. Size 0 (every
+#: Light, Effect and decal) is a point, exactly as before.
+LIGHT_SOURCE_SIZE_GLSL = """
+float fioSourceFade(float size, highp vec3 toLight) {
+    if (size <= 0.0) return 1.0;
+    return smoothstep(0.0, size, length(toLight));
+}
+"""
+
+
 def light_ubo_source(source):
     """Rewrite a legacy Light[] fragment shader to the shared std140 UBO.
 
@@ -189,18 +203,26 @@ def light_ubo_source(source):
         "struct Light {\n"
         "    highp vec4 position;\n"
         "    vec4 color;\n"
-        "    vec4 params;       // x=intensity, y=radius\n"
+        "    vec4 params;       // x=intensity, y=radius, z=source size\n"
         "    ivec4 indices;     // x=shadow index\n"
         "};\n"
         "layout(std140) uniform FioLightBlock {\n"
         f"    Light lights[{count}];\n"
-        "};"
+        "};\n"
+        + LIGHT_SOURCE_SIZE_GLSL
     )
     result = _LIGHT_DECL_RE.sub(block, source, count=1)
 
     result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
     result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
+    # A light with a source size (an emissive brush: a tube, not a point)
+    # fades in over that distance. Every light loop takes the fragment's
+    # offset from the light as ``lights[i].position - FragPos``.
+    result = re.sub(
+        r"lights\[([^]]+)\]\.intensity\b",
+        r"(lights[\1].params.x * fioSourceFade("
+        r"lights[\1].params.z, lights[\1].position.xyz - FragPos))",
+        result)
     result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
     result = re.sub(
         r"lights\[([^]]+)\]\.shadowIndex\b",

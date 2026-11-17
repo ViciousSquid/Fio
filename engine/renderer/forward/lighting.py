@@ -198,6 +198,11 @@ class LightingMixin:
         active['color'][:, :3] = table.light_color[active_lights]
         active['color'][:, 3] = 1.0
         active['params'][:, :2] = table.light_params[active_lights]
+        # z: the source's size (an emissive brush); 0 for a point, and for
+        # a light table that has no such column.
+        sizes = getattr(table, 'light_size', None)
+        if sizes is not None:
+            active['params'][:, 2] = sizes[active_lights]
         # Shared by brush, model, terrain and water shaders. Never change the
         # table's authored intensity (which also drives flicker and I/O).
         active['params'][:, 0] *= weights

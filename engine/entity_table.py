@@ -660,6 +660,10 @@ _COLUMNS = (
     #: Folded into ``pos`` wherever that is written (the row draws nothing
     #: itself), so every reader of a light's position is unchanged.
     ('light_offset', (3,), np.float64, 0.0),
+    #: The size of a light's source, world units: 0 for a point (every Light,
+    #: Effect and decal), half its length for an emissive brush, whose light
+    #: fades in over that distance (shaders.LIGHT_SOURCE_SIZE_GLSL).
+    ('light_size', (), np.float32, 0.0),
     #: Portal topology/render columns. Target links are resolved to integer
     #: entity slots at reconcile.
     ('portal_target_slot', (), np.int32, -1),
@@ -1303,7 +1307,7 @@ class EntityTable:
     def set_aux_lights(self, lights):
         """Put the lights that are not entities into the frame's light list.
 
-        *lights* is ``(positions, colours, (intensity, radius), on)`` -- what
+        *lights* is ``(positions, colours, (intensity, radius), on, sizes)`` -- what
         ``RenderTable.brush_lights`` gives for the emissive Glow brushes --
         or None for none. They are written as rows past ``count``: no entity
         owns them, nothing draws them, and every reader of the light list
@@ -1323,19 +1327,31 @@ class EntityTable:
         if k:
             self._resize(n + k)
             rows = slice(n, n + k)
-            positions, colours, params, on = lights
+            positions, colours, params, on, sizes = lights
+            # The renderer uploads the light list again when the table's
+            # generation moves: a neon that moved, or changed colour, has to
+            # move it. One that did not must not.
+            changed = (k != self._aux_lights
+                       or not np.array_equal(self.pos[rows], positions)
+                       or not np.array_equal(self.light_color[rows], colours)
+                       or not np.array_equal(self.light_params[rows], params)
+                       or not np.array_equal(self.light_enabled[rows], on)
+                       or not np.array_equal(self.light_size[rows], sizes))
             self.pos[rows] = positions
             self.light_color[rows] = colours
             self.light_params[rows] = params
             self.light_enabled[rows] = on
+            self.light_size[rows] = sizes
             self.light_casts_shadows[rows] = False
             self.hidden[rows] = False
             self.class_bits[rows] = 0
             slots = np.concatenate(
                 (slots, np.arange(n, n + k, dtype=np.int32))).astype(np.int32)
+        else:
+            changed = True
         self.light_slots = slots
-        if k != self._aux_lights:
-            self._aux_lights = k
+        self._aux_lights = k
+        if changed:
             self.generation += 1
 
     def sync(self, things, epoch=None, dirty_objects=None) -> bool:
