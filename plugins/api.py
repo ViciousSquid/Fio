@@ -18,7 +18,10 @@ Object / helper             Purpose
 ==========================  ========================================================
 :class:`FioPlugin`          Base class you subclass; expose an instance as ``PLUGIN``.
 :class:`EditorAPI`          Load-time: register entities, I/O, schemas, UI, renderers.
-:class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast.
+:class:`RuntimeAPI`         Per-session: I/O handlers, scene queries, spawn, raycast,
+                            the live physics and the player.
+:class:`PlayerState`        The player: position, motion, view, health and armour.
+:class:`Physics`            The physics contract (:class:`Body`: one simulated body).
 :class:`TickContext`        Per-tick: read input, drive the HUD.
 :class:`PropertySpec`       Declare a typed, self-documenting entity property.
 :class:`GlobalStore`        Cross-level key/value storage (shared with map KV stores).
@@ -56,6 +59,12 @@ import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
+# The physics contract (API 2.0). ``engine.physics`` is the boundary package:
+# stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
+from engine.physics import (  # noqa: F401 -- re-exported for plugins
+    CRUSH_DAMAGE, HEAVY_MASS, SV_GRAVITY, Body, Physics, available_physics,
+    selected_physics, world_gravity)
+
 
 #: Version of the plugin API surface this module implements. Compare against
 #: :attr:`FioPlugin.api_version` (see :func:`version_tuple`).
@@ -86,12 +95,28 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   Terrain object); ``draw_face_highlight``, ``draw_connection_lines`` and
 #:   ``draw_collision_visualization`` take vertex arrays. Only renderer
 #:   implementations are affected; every other plugin loads unchanged.
-#: * 1.10.0 — physics is a plugin boundary (the built-in one is Soma): :meth:`EditorAPI.register_physics`
-#:   registers an implementation of ``engine.physics.Physics``. ``SpatialGrid``
-#:   lives in ``engine.spatial_grid`` (still importable from ``engine.physics``).
-#:   Every existing plugin loads unchanged.
-API_VERSION = "1.10.0"
-API_VERSION_INFO = (1, 10, 0)
+#: * 2.0.0 — **physics and the player are part of the API.** Fio's core is
+#:   modular: the renderer and the physics are each an engine module behind a
+#:   contract, and either can be replaced without the rest of the engine
+#:   knowing. Physics is engine core, not a plugin -- the built-in one is Soma
+#:   (``engine.physics.soma``) -- and this surface is how anything outside
+#:   the engine reaches it:
+#:
+#:   - :attr:`RuntimeAPI.physics` (the live :class:`Physics`),
+#:     :meth:`RuntimeAPI.body`, :attr:`RuntimeAPI.spatial_grid`;
+#:   - :attr:`RuntimeAPI.player`, a :class:`PlayerState`: where the player
+#:     is, how it moves, its health and armour -- read and written;
+#:   - the contract itself, importable from here: :class:`Physics`,
+#:     :class:`Body`, :data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`,
+#:     :data:`SV_GRAVITY`, :func:`world_gravity`;
+#:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`
+#:     to supply and choose another implementation.
+#:
+#:   ``SpatialGrid`` lives in ``engine.spatial_grid`` (still importable from
+#:   ``engine.physics``, as ``PhysicsWorld`` is). Every existing plugin loads
+#:   and behaves unchanged.
+API_VERSION = "2.0.0"
+API_VERSION_INFO = (2, 0, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -660,28 +685,46 @@ class EditorAPI:
         return register_renderer(name, cls)
 
     def register_physics(self, name: str, cls) -> bool:
-        """Register a physics under *name* in Fio's physics registry (API 1.10.0).
+        """Register a physics under *name* in Fio's physics registry (API 2.0).
+
+        Physics is an engine module, not a plugin: the built-in one, Soma,
+        lives in ``engine.physics.soma`` and is what every map runs on. It
+        sits behind a contract so that it can be worked on -- or replaced --
+        without touching the rest of the engine, and this is the door for a
+        replacement that ships outside the engine.
 
         *cls* is a factory called as ``cls(spatial_grid)`` once per play
         session -- usually the physics class itself. What it returns must
-        satisfy :class:`engine.physics.Physics`: the world controls, the
-        lifecycle (``rebuild`` over the collision runtime's body brushes,
-        ``clear``), the tick (``step``) and the per-body operations the
-        engine's Prop, trigger and cutscene code call. How it simulates is
-        entirely its own; it need not inherit anything from Fio.
+        satisfy :class:`Physics` (``engine/physics/api.py`` is the whole
+        contract): the world controls, the lifecycle (``rebuild`` over the
+        collision runtime's body brushes, ``clear``), the tick (``step``) and
+        the per-body operations the engine's Prop, trigger and cutscene code
+        call. How it simulates is entirely its own. It may start from Soma
+        (``from engine.physics.soma import Soma`` and subclass it) or share
+        nothing with it.
 
-        Two rules come with the contract. The world is the
-        ``SpatialGrid`` the factory is given, asked live -- a physics keeps
-        no copy of it. And a moved body is handed back by assigning
-        ``entity.pos``, which is what the renderer and every index hear.
+        Two rules come with the contract. The world is the ``SpatialGrid``
+        the factory is given, asked live -- a physics keeps no copy of it.
+        And a moved body is handed back by assigning ``entity.pos``, which is
+        what the renderer and every index hear.
 
-        Registering makes it available; ``engine.physics.select_physics(name)``
-        (the console's ``phys_engine``) makes it the one the next play
-        session uses. Works in the editor and the standalone player alike.
-        Returns True.
+        Registering makes it available; :meth:`select_physics` (the console's
+        ``phys_engine``) makes it the one the next play session uses. Works
+        in the editor and the standalone player alike. Returns True.
         """
         from engine.physics import register_physics
         return register_physics(name, cls)
+
+    def select_physics(self, name: str) -> bool:
+        """Make the physics registered as *name* the one the next play
+        session is created with (API 2.0). A running session keeps its own.
+        Returns False for a name nothing is registered under."""
+        from engine.physics import select_physics
+        try:
+            select_physics(name)
+        except KeyError:
+            return False
+        return True
 
     def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
         """Register a Tools-menu action for an editor/developer plugin."""
@@ -731,6 +774,217 @@ class EditorAPI:
 # Runtime API (passed to FioPlugin.register_runtime)
 # ---------------------------------------------------------------------------
 
+def _like(old, xyz):
+    """*xyz* as whatever type *old* is, so a write keeps the host's vector
+    type (``glm.vec3`` on the desktop, a list where there is no PyGLM)."""
+    x, y, z = float(xyz[0]), float(xyz[1]), float(xyz[2])
+    kind = type(old)
+    if kind in (list, tuple) or old is None:
+        return [x, y, z]
+    try:
+        return kind(x, y, z)
+    except TypeError:
+        return kind((x, y, z))
+
+
+class PlayerState:
+    """The player, as a plugin reads and changes it (API 2.0).
+
+    A live view, not a snapshot: every member reads the engine's state now
+    and every assignment changes it, on the logic thread. Positions,
+    velocities and directions are plain ``(x, y, z)`` tuples -- no PyGLM --
+    whatever the host stores them as. Reached as :attr:`RuntimeAPI.player`.
+
+    * where and how it moves -- :attr:`position`, :attr:`velocity`,
+      :attr:`on_ground`, :attr:`ground`, :attr:`ducked`, :attr:`in_water`,
+      :attr:`swimming`, :attr:`size`, :meth:`teleport`
+    * where it looks -- :attr:`yaw`, :attr:`pitch`, :attr:`eye`, :attr:`forward`
+    * how it is -- :attr:`health`, :attr:`max_health`, :attr:`armor`,
+      :attr:`max_armor`, :attr:`dead`, :attr:`god_mode`, :meth:`damage`,
+      :meth:`give_armor`
+
+    :attr:`object` is the engine's own ``Player`` for anything not here; what
+    is here keeps its meaning when the engine's internals change.
+    """
+
+    __slots__ = ('_logic',)
+
+    def __init__(self, logic):
+        self._logic = logic
+
+    @property
+    def _runtime(self):
+        return self._logic.player_runtime
+
+    @property
+    def object(self):
+        """The engine's ``Player`` object, or None before play starts."""
+        return self._runtime.player
+
+    @property
+    def exists(self) -> bool:
+        return self._runtime.player is not None
+
+    # -- where it is and how it moves ---------------------------------------
+    @property
+    def position(self) -> Tuple[float, float, float]:
+        """The centre of the player's hull, in world units."""
+        player = self.object
+        return _xyz(player.pos) if player is not None else (0.0, 0.0, 0.0)
+
+    @position.setter
+    def position(self, value):
+        player = self.object
+        if player is not None:
+            player.pos = _like(player.pos, value)
+
+    @property
+    def velocity(self) -> Tuple[float, float, float]:
+        """Units per second."""
+        player = self.object
+        return _xyz(player.velocity) if player is not None else (0.0, 0.0, 0.0)
+
+    @velocity.setter
+    def velocity(self, value):
+        player = self.object
+        if player is not None:
+            player.velocity = _like(player.velocity, value)
+
+    def teleport(self, position, velocity=(0.0, 0.0, 0.0)) -> None:
+        """Put the player at *position*, moving at *velocity* (at rest by
+        default), standing on nothing until the next tick finds the floor."""
+        player = self.object
+        if player is None:
+            return
+        self.position = position
+        self.velocity = velocity
+        player.on_ground = False
+        player.ground_object = None
+
+    @property
+    def on_ground(self) -> bool:
+        return bool(getattr(self.object, 'on_ground', False))
+
+    @property
+    def ground(self):
+        """The brush the player stands on, or None."""
+        return getattr(self.object, 'ground_object', None)
+
+    @property
+    def ducked(self) -> bool:
+        return bool(getattr(self.object, 'ducked', False))
+
+    @property
+    def in_water(self) -> bool:
+        """Wading or deeper."""
+        return bool(getattr(self.object, 'in_water', False))
+
+    @property
+    def swimming(self) -> bool:
+        """Deep enough that swimming has taken over from walking."""
+        return bool(getattr(self.object, 'swimming', False))
+
+    @property
+    def size(self) -> Tuple[float, float, float]:
+        """The hull's full ``(width, height, depth)``, as it is now (a ducked
+        player is shorter)."""
+        player = self.object
+        if player is None:
+            return (0.0, 0.0, 0.0)
+        return (float(player.width), float(player.height), float(player.depth))
+
+    # -- where it looks -----------------------------------------------------
+    @property
+    def yaw(self) -> float:
+        """Heading in radians; :attr:`forward` is ``(sin yaw, ., cos yaw)``."""
+        return float(getattr(self.object, 'angle', 0.0))
+
+    @yaw.setter
+    def yaw(self, value):
+        if self.object is not None:
+            self.object.angle = float(value)
+
+    @property
+    def pitch(self) -> float:
+        """Radians above the horizon."""
+        return float(getattr(self.object, 'pitch', 0.0))
+
+    @pitch.setter
+    def pitch(self, value):
+        if self.object is not None:
+            self.object.pitch = float(value)
+
+    @property
+    def eye(self) -> Tuple[float, float, float]:
+        """Where the camera is: the position raised by the eye height."""
+        return _player_eye(self.object)
+
+    @property
+    def forward(self) -> Tuple[float, float, float]:
+        """The look direction, pitch included."""
+        return _player_forward(self.object)
+
+    # -- how it is ------------------------------------------------------------
+    @property
+    def health(self) -> int:
+        return self._runtime.player_health
+
+    @health.setter
+    def health(self, value):
+        runtime = self._runtime
+        runtime.player_health = max(0, min(int(value), int(runtime.player_max_health)))
+
+    @property
+    def max_health(self) -> int:
+        return self._runtime.player_max_health
+
+    @max_health.setter
+    def max_health(self, value):
+        self._runtime.player_max_health = max(1, int(value))
+
+    @property
+    def armor(self) -> int:
+        return self._runtime.player_armor
+
+    @armor.setter
+    def armor(self, value):
+        runtime = self._runtime
+        runtime.player_armor = max(0, min(int(value), int(runtime.player_max_armor)))
+
+    @property
+    def max_armor(self) -> int:
+        return self._runtime.player_max_armor
+
+    @property
+    def dead(self) -> bool:
+        return bool(self._runtime.player_dead)
+
+    @property
+    def god_mode(self) -> bool:
+        return bool(self._runtime.god_mode)
+
+    @god_mode.setter
+    def god_mode(self, value):
+        self._runtime.god_mode = bool(value)
+
+    def damage(self, amount, source=None) -> None:
+        """Hurt the player by *amount*, exactly as the world does: armour
+        takes it first, god mode stops it, and dying is the engine's to
+        handle. *source* is an optional ``(x, y, z)`` the hit came from, for
+        the damage indicator."""
+        runtime = self._runtime
+        if source is not None:
+            runtime.damage_source = _xyz(source)
+        self._logic.trigger_runtime._apply_player_damage(amount)
+
+    def give_armor(self, amount) -> None:
+        self._runtime.give_armor(amount)
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (f"<PlayerState pos={self.position} health={self.health} "
+                f"armor={self.armor}>")
+
+
 class RuntimeAPI:
     """Handed to :meth:`FioPlugin.register_runtime` when a logic thread starts.
 
@@ -740,7 +994,10 @@ class RuntimeAPI:
 
     * scene queries — :meth:`entities_of_type`, :meth:`things_near`,
       :meth:`raycast_from_crosshair`
-    * player geometry — :meth:`player_eye`, :meth:`player_forward`
+    * the player — :attr:`player` (a :class:`PlayerState`), and the older
+      :meth:`player_eye`, :meth:`player_forward`
+    * physics — :attr:`physics` (the live :class:`Physics`), :meth:`body`,
+      :attr:`spatial_grid`
     * runtime spawn/despawn — :meth:`spawn`, :meth:`despawn`
     * cross-level storage — :meth:`global_get` / :meth:`global_set`
     """
@@ -802,6 +1059,41 @@ class RuntimeAPI:
             if dx * dx + dy * dy + dz * dz <= r2:
                 out.append(t)
         return out
+
+    # -- the player (API 2.0) -------------------------------------------------
+    @property
+    def player(self) -> PlayerState:
+        """The player's state, live: see :class:`PlayerState`."""
+        return PlayerState(self.logic)
+
+    # -- physics (API 2.0) ----------------------------------------------------
+    @property
+    def physics(self) -> Optional[Physics]:
+        """The play session's physics -- whichever implementation is active,
+        Soma unless another was selected -- or None outside play.
+
+        Everything in the :class:`Physics` contract is yours to call: read or
+        set the world controls (``gravity``, ``time_scale``, ...), ``wake`` a
+        body at a velocity, hand one to your own code with ``set_kinematic``
+        and back, tell it you moved one with ``sync_entity_position``. Fetch
+        it when you use it rather than keeping it: each play session has its
+        own.
+        """
+        return getattr(self.logic.session_runtime, 'physics_world', None)
+
+    def body(self, entity) -> Optional[Body]:
+        """The simulated :class:`Body` of *entity* (a physics Prop), or None
+        if it has none or play is not running. A live handle: ``velocity``,
+        ``mass``, ``half_extents``, ``awake``, ``kinematic``."""
+        physics = self.physics
+        return physics.get_body(entity) if physics is not None else None
+
+    @property
+    def spatial_grid(self):
+        """The session's :class:`engine.spatial_grid.SpatialGrid`: where the
+        world is -- solid brushes, movers and doors where they are now,
+        water -- or None outside play. The same grid the physics asks."""
+        return getattr(self.logic.session_runtime, 'spatial_grid', None)
 
     def player_eye(self):
         """The player's eye position as an ``(x, y, z)`` tuple."""

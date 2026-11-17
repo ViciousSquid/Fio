@@ -19,7 +19,7 @@ class DeferredRendererPlugin(FioPlugin):
     name = "deferred_renderer"
     version = "1.0.0"
     description = "Example: a deferred renderer (r_renderer Deferred)"
-    api_version = "1.6.0"          # the Renderer protocol contract
+    api_version = "2.0.0"          # the Renderer protocol contract (API 1.6+)
 
     def register(self, api):
         api.register_renderer("Deferred", _create_deferred_renderer)

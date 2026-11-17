@@ -20,6 +20,7 @@ from .runtime import TidySession
 class TidyPlugin(FioPlugin):
     name = "tidy"
     version = "2.0.0"
+    api_version = "2.0.0"
     description = "Put core Props away into categorized receptacles and goals."
     category = "Tidy"
     enabled = False
