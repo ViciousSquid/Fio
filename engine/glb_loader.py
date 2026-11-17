@@ -221,8 +221,14 @@ class GLBLoader:
                 # a drive letter or another scheme is not resolved.
                 self.buffers.append(b'')
             else:
-                # External file reference, relative to the model.
-                ext_path = os.path.join(os.path.dirname(self._filepath_hint or ''), uri)
+                # External file reference, relative to the model and confined
+                # to the model's assets folder: no '..' escape, UNC or drive.
+                from engine.asset_paths import companion_path, warn_refused
+                ext_path = companion_path(self._filepath_hint or '', uri)
+                if ext_path is None:
+                    warn_refused(uri, 'model buffer')
+                    self.buffers.append(b'')
+                    continue
                 reader = getattr(self, "_asset_reader", None)
                 self.buffers.append((reader(ext_path) if reader else _read_bounded(ext_path)) or b'')
 

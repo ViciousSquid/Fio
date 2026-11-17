@@ -15,6 +15,8 @@ import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
 from engine.asset_archives import asset_bytes, asset_exists, asset_source
+from engine.asset_paths import (
+    companion_path, confined_path, project_asset_path, warn_refused)
 from PyQt5.QtGui import QImage, QImageReader
 
 from engine import shaders
@@ -207,20 +209,31 @@ class ResourcesMixin:
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
             return tex_id
 
-        texture_path = os.path.join('assets', subfolder, texture_name)
+        # Both names can come from a map: never leave the assets folder.
+        texture_path = confined_path('assets', subfolder, texture_name)
+        if texture_path is None:
+            if not str(texture_name).startswith('data:'):
+                warn_refused(os.path.join(str(subfolder), str(texture_name)), 'texture')
+            return self.load_texture('default.png', 'textures')
         if not asset_exists(texture_path):
             return self.load_texture('default.png', 'textures')
 
         try:
             from PIL import Image
-            from engine.animated_texture import cumulative, decode_gif_frames, is_animated_gif
+            from engine.animated_texture import (
+                cumulative, decode_gif_frames, is_animated_gif, open_still_rgba)
             frames = None
             if is_animated_gif(texture_path):
+                # Size-capped: an over-budget GIF comes back as one frame.
                 images, seconds = decode_gif_frames(texture_path)
-                frames = [im.transpose(Image.FLIP_TOP_BOTTOM).tobytes() for im in images]
                 img = images[0].transpose(Image.FLIP_TOP_BOTTOM)
+                if len(images) > 1:
+                    frames = [img.tobytes()]
+                    for index in range(1, len(images)):
+                        frames.append(images[index].transpose(Image.FLIP_TOP_BOTTOM).tobytes())
+                        images[index] = None      # one copy of a frame at a time
             else:
-                img = Image.open(asset_source(texture_path)).convert("RGBA")
+                img = open_still_rgba(texture_path)
                 img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
@@ -336,7 +349,12 @@ class ResourcesMixin:
     # --------------------------------------------------------------------------
     def _fire_asset_bytes(self, asset_path):
         """Read an effect asset's bytes: the loose file, or the archive's."""
-        return asset_bytes(os.path.join(os.getcwd(), asset_path))
+        # A custom effect GIF is a path from the map: project assets only.
+        safe_path = project_asset_path(asset_path)
+        if safe_path is None:
+            warn_refused(asset_path, 'effect texture')
+            return None
+        return asset_bytes(os.path.join(os.getcwd(), safe_path))
 
     def _upload_fire_frame(self, cache_key, image):
         """Upload one already-decoded FIRE frame and return its GL texture id."""
@@ -398,12 +416,18 @@ class ResourcesMixin:
         # Primary animated-GIF path. ImageSequence.Iterator handles GIF
         # disposal/compositing, so each uploaded texture is the complete frame
         # the player should actually display.
+        from engine.animated_texture import (
+            TextureTooLarge, frame_budget, frames_allowed)
         try:
             from PIL import Image, ImageSequence
 
             with Image.open(io.BytesIO(data)) as gif:
+                # Every frame becomes a full-canvas GL texture: budgeted.
+                allowed = frame_budget(gif, asset_path)
                 if getattr(gif, 'is_animated', False):
                     for frame_index, frame in enumerate(ImageSequence.Iterator(gif)):
+                        if frame_index >= allowed:
+                            break
                         rgba = frame.convert("RGBA")
                         qimage = QImage(
                             rgba.tobytes(),
@@ -448,6 +472,9 @@ class ResourcesMixin:
                     np.asarray(durations, dtype=np.float32),
                     dtype=np.float32,
                 )
+        except TextureTooLarge as exc:
+            print(f"{_RENDERER_PREFIX} FIRE texture refused: {exc}")
+            return [], np.empty(0, dtype=np.float32)
         except Exception as exc:
             print(
                 f"{_RENDERER_PREFIX} Error decoding FIRE GIF "
@@ -466,6 +493,9 @@ class ResourcesMixin:
             image_count = reader.imageCount()
             if image_count < 0:
                 image_count = 0
+            size = reader.size()
+            image_count = min(image_count, frames_allowed(
+                size.width(), size.height(), image_count, asset_path))
 
             for frame_index in range(image_count):
                 if not reader.jumpToImage(frame_index):
@@ -589,13 +619,19 @@ class ResourcesMixin:
             self.loaded_models[filename] = model
             return model
 
-        full_path = normalized_filename
-        if not os.path.isabs(full_path):
-            candidate = os.path.join('assets', 'models', full_path)
-            if asset_exists(candidate):
-                full_path = candidate
-            elif asset_exists(original_filename):
-                full_path = original_filename
+        # A model path is map data: a bare name is looked up in
+        # assets/models, anything else must be a project asset path. An
+        # absolute path is taken only when it lies inside the project.
+        bare = (None if os.path.isabs(normalized_filename)
+                else confined_path('assets', 'models', original_filename))
+        if bare and asset_exists(bare):
+            full_path = bare
+        else:
+            full_path = project_asset_path(original_filename)
+            if full_path is None:
+                if not bare:
+                    warn_refused(original_filename, 'model')
+                return self._model_load_failed(filename)
 
         if not asset_exists(full_path):
             return self._model_load_failed(filename)
@@ -716,7 +752,8 @@ class ResourcesMixin:
             return tex_id
         try:
             from PIL import Image
-            img = Image.open(asset_source(resolved_path)).convert('RGBA')
+            from engine.animated_texture import open_still_rgba
+            img = open_still_rgba(resolved_path)
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
@@ -746,39 +783,27 @@ class ResourcesMixin:
         if not texture_name:
             return None
 
-        # Normalise separators from MTL files authored on another platform.
-        texture_name = (
-            str(texture_name)
-            .strip()
-            .strip('"')
-            .replace('\\', os.sep)
-            .replace('/', os.sep)
-        )
+        # The name comes from a model file (or a map's manual texture): it
+        # is resolved only inside the model's own assets folder or the
+        # project's, never as an absolute, drive, UNC or '..'-escaping path.
+        texture_name = str(texture_name).strip().strip('"')
 
         # 1. Try relative to the MTL file's directory (most correct for MTL refs)
         mtl_dir = material.get('mtl_dir', '')
         if mtl_dir:
-            mtl_dir = (
-                str(mtl_dir)
-                .replace('\\', os.sep)
-                .replace('/', os.sep)
-            )
-            resolved = os.path.normpath(os.path.join(mtl_dir, texture_name))
-            if asset_exists(resolved):
-                return resolved
+            resolved = companion_path(os.path.join(str(mtl_dir), '_'), texture_name)
+            if resolved and asset_exists(resolved):
+                return os.path.normpath(resolved)
 
-        # 2. Try assets/textures/ (global fallback)
-        resolved = os.path.normpath(os.path.join('assets', 'textures', texture_name))
-        if asset_exists(resolved):
-            return resolved
+        # 2. assets/textures/ (global fallback), 3. assets/models/ (legacy)
+        for folder in ('textures', 'models'):
+            resolved = confined_path('assets', folder, texture_name)
+            if resolved and asset_exists(resolved):
+                return os.path.normpath(resolved)
 
-        # 3. Try assets/models/ (legacy fallback)
-        resolved = os.path.normpath(os.path.join('assets', 'models', texture_name))
-        if asset_exists(resolved):
-            return resolved
-
-        # 4. Return as-is and let the loader handle errors
-        return texture_name
+        # 4. A project path as authored (assets/..., plugins/<name>/assets/...)
+        resolved = project_asset_path(texture_name)
+        return os.path.normpath(resolved) if resolved else None
 
     def _compile_overlay_shader(self):
         """Compile the ``simple`` program the core overlays draw with.

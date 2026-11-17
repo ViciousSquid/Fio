@@ -255,17 +255,27 @@ class Thing:
         return self.__class__.get_pixmap()
 
     def _pixmap_for_path(self, sprite_path):
-        """Cached QPixmap for an authored sprite path (project-relative or absolute).
+        """Cached QPixmap for an authored, project-relative sprite path.
 
-        Returns None when the file is missing or unreadable. Shared by any
-        entity whose 2D icon comes from an authored path rather than its class.
+        Returns None when the file is missing or unreadable, or when the path
+        (map data) is absolute, a drive or UNC path, or leaves the project's
+        ``assets``/``plugins`` folders. Shared by any entity whose 2D icon
+        comes from an authored path rather than its class.
         """
         cache_key = ('sprite_path', sprite_path)
         if cache_key in self._pixmap_cache:
             return self._pixmap_cache[cache_key]
+        from engine.asset_paths import confined_path, safe_relative, warn_refused
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
-        pixmap = load_pixmap(absolute_path) if asset_exists(absolute_path) else None
+        relative = safe_relative(sprite_path)
+        absolute_path = None
+        if relative is not None and relative.split('/')[0] in ('assets', 'plugins'):
+            top, _, rest = relative.partition('/')
+            absolute_path = confined_path(os.path.join(project_root, top), rest)
+        if absolute_path is None:
+            warn_refused(sprite_path, 'sprite')
+        pixmap = (load_pixmap(absolute_path)
+                  if absolute_path and asset_exists(absolute_path) else None)
         if pixmap is not None and pixmap.isNull():
             pixmap = None
         self._pixmap_cache[cache_key] = pixmap

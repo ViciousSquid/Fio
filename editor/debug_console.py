@@ -11,6 +11,85 @@ import html
 import re
 
 
+#: Marks a buffered console line whose text is Fio's own HTML. Only
+#: :meth:`DebugLogger.log_markup` puts it there; ``log``/``log_raw`` remove
+#: these control characters from what they are given, so text from a map (an
+#: entity name, a LogicCommand's command) can never claim to be markup.
+_MARKUP = '\x02fio-markup\x03'
+_MARKUP_CHARS = str.maketrans('', '', '\x00\x02\x03')
+
+
+def console_escape(text) -> str:
+    """*text* made inert for the console: use it for every value (an entity
+    name, a file name) placed inside a :func:`debug_log_markup` message."""
+    return html.escape(str(text), quote=True)
+
+
+def console_entity_link(name, color='#F08000') -> str:
+    """The console's clickable entity-filter link for *name*, escaped."""
+    safe = console_escape(name)
+    return (f'<a href="filter:{safe}" style="color: {color}; font-weight: bold; '
+            f'text-decoration: none;">{safe}</a>')
+
+
+#: Categories whose callers still write formatting straight into
+#: ``debug_log`` (MonsterAI's coloured names, the console's help and listing
+#: text). In these, and only these, the inert tags below survive; any other
+#: tag -- ``<img>``, a link to anywhere, an attribute not listed -- is shown
+#: as text, as it is in every other category. A caller that moves to
+#: :func:`debug_log_markup` no longer needs its category here.
+_INERT_MARKUP_CATEGORIES = frozenset({'MonsterAI', 'Info'})
+
+_INERT_STYLE = (r'(?:\s*(?:color\s*:\s*(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]{1,20})'
+                r'|font-weight\s*:\s*bold|text-decoration\s*:\s*none)\s*;?)+')
+#: Formatting only: no tag here can load a resource or lead anywhere but
+#: the console's own entity filter.
+_RE_INERT_TAG = re.compile(
+    r'<(?:(?P<void>br)\s*/?'
+    r'|(?P<close>/(?:b|i|u|span|a))'
+    r'|(?P<open>b|i|u)'
+    r'|(?P<styled>b|i|span) style="' + _INERT_STYLE + r'"'
+    r'|(?P<link>a) href="filter:[^"<>&\x00]{0,80}" style="' + _INERT_STYLE + r'"'
+    r')>')
+_RE_BARE_AMP = re.compile(r'&(?!(?:[a-zA-Z]{2,8}|#[0-9]{1,6}|#x[0-9a-fA-F]{1,5});)')
+
+
+def _escape_text(text) -> str:
+    """Escape ``<``, ``>`` and any ``&`` that is not a character reference."""
+    return _RE_BARE_AMP.sub('&amp;', text).replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _inert_markup(message, protect) -> str:
+    """*message* with everything escaped except balanced inert formatting.
+
+    *protect* is called with each surviving tag and returns what stands in
+    for it. A closing tag with nothing open is text; a tag left open is
+    closed at the end, so one line cannot restyle the lines after it.
+    """
+    out, stack, pos = [], [], 0
+    for match in _RE_INERT_TAG.finditer(message):
+        out.append(_escape_text(message[pos:match.start()]))
+        pos = match.end()
+        tag = match.group(0)
+        closing = match.group('close')
+        if closing:
+            if not stack or stack[-1] != closing[1:]:
+                out.append(_escape_text(tag))
+                continue
+            stack.pop()
+        elif not match.group('void'):
+            stack.append(match.group('open') or match.group('styled') or match.group('link'))
+        out.append(protect(tag))
+    out.append(_escape_text(message[pos:]))
+    out.extend(protect(f'</{name}>') for name in reversed(stack))
+    return ''.join(out)
+
+
+def _plain(message) -> str:
+    """Untrusted console text: without the characters reserved for markup."""
+    return str(message).translate(_MARKUP_CHARS)
+
+
 class DebugLogger(QObject):
     """
     Global singleton that collects debug messages and emits signals.
@@ -46,7 +125,24 @@ class DebugLogger(QObject):
         if not self._enabled:
             return
 
-        full_msg = f"[{category}] {message}"
+        # Plain text: the console shows any HTML in it literally.
+        full_msg = f"[{category}] {_plain(message)}"
+
+        self._buffer.append((category, full_msg))
+        self.message_logged.emit(category, full_msg)
+
+    def log_markup(self, category: str, markup: str):
+        """Log a line that is Fio's own HTML (colours, entity-filter links).
+
+        Only for markup written in code. Every value interpolated into it
+        must go through :func:`console_escape` (or
+        :func:`console_entity_link`); a message that merely contains outside
+        text belongs in :meth:`log`, which the console escapes as a whole.
+        """
+        if not self._enabled:
+            return
+
+        full_msg = f"{_MARKUP}[{console_escape(category)}] {_plain(markup)}"
 
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
@@ -56,6 +152,7 @@ class DebugLogger(QObject):
         if not self._enabled:
             return
 
+        message = _plain(message)
         self._buffer.append(('', message))
         self.message_logged.emit('', message)
 
@@ -88,6 +185,11 @@ def get_debug_logger() -> DebugLogger:
 def debug_log(category: str, message: str):
     """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
+
+
+def debug_log_markup(category: str, markup: str):
+    """Log a line of Fio's own console HTML; see :meth:`DebugLogger.log_markup`."""
+    get_debug_logger().log_markup(category, markup)
 
 
 def debug_log_raw(message: str):
@@ -262,7 +364,7 @@ class DebugConsole(QWidget):
     _RE_FIRE_OUTPUT  = re.compile(r'\b(fire_output)\b')
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
-    _RE_ARROW        = re.compile(r' -> ')
+    _RE_ARROW        = re.compile(r' -(?:>|&gt;) ')
     _instance = None
 
     @classmethod
@@ -716,7 +818,8 @@ class DebugConsole(QWidget):
         # Echo the command to the console exactly like Quake
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] {cmd}</span><br>")
+        cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] "
+                          f"{html.escape(cmd, quote=False)}</span><br>")
 
         # Add to local history and clear the line
         self.command_input.add_history(cmd)
@@ -835,7 +938,17 @@ class DebugConsole(QWidget):
         self._insert_lines(lines)
 
     def _format_message(self, category: str, message: str):
-        """One message as a highlighted HTML line, or ``None`` if filtered out."""
+        """One message as a highlighted HTML line, or ``None`` if filtered out.
+
+        A message is plain text: every ``<``, ``>`` and ``&`` in it is shown
+        literally, so a map-controlled string (an entity name, a command)
+        cannot place an image, a link or any other tag in the console. Only
+        a line logged with :func:`debug_log_markup` keeps its own tags.
+        """
+        message = str(message)
+        is_markup = message.startswith(_MARKUP)
+        # The reserved characters mean nothing anywhere else in a line.
+        message = (message[len(_MARKUP):] if is_markup else message).translate(_MARKUP_CHARS)
 
         # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
@@ -932,13 +1045,29 @@ class DebugConsole(QWidget):
             return (f'<span style="color: {color};">'
                     f'{html.escape(message, quote=False)}</span><br>')
 
-        # Protect any pre-existing HTML tags in the message so our regexes
-        # don't corrupt entity links / colours injected by MonsterAI.
+        # Placeholders: NUL, which no message can contain (removed above),
+        # around private-use characters, which no highlighting regex matches.
+        def _placeholder(kind, index):
+            base = 0xE000 if kind == "H" else 0xE100
+            return '\x00' + ''.join(chr(base + int(d)) for d in str(index)) + '\x00'
         _protected_tags = []
-        def _protect_tag(m):
-            _protected_tags.append(m.group(0))
-            return f"__HTML_{len(_protected_tags)-1}__"
-        _msg_temp = re.sub(r'</?[a-zA-Z][^>]*>', _protect_tag, message)
+        if is_markup:
+            # Fio's own markup (debug_log_markup): keep its tags out of the
+            # way of the highlighting regexes below.
+            def _protect_tag(m):
+                _protected_tags.append(m.group(0))
+                return _placeholder("H", len(_protected_tags) - 1)
+            _msg_temp = re.sub(r'</?[a-zA-Z][^>]*>', _protect_tag, message)
+        elif filter_category in _INERT_MARKUP_CATEGORIES:
+            # Older internal lines (MonsterAI's coloured names, the help
+            # text) carry inert formatting; everything else is escaped.
+            def _protect_inert(tag):
+                _protected_tags.append(tag)
+                return _placeholder("H", len(_protected_tags) - 1)
+            _msg_temp = _inert_markup(message, _protect_inert)
+        else:
+            # Plain text, possibly from a map: nothing in it is a tag.
+            _msg_temp = html.escape(message, quote=False)
 
         # Define styles
         ENT_STYLE = 'color: #F08000; font-weight: bold; text-decoration: none;'
@@ -949,10 +1078,15 @@ class DebugConsole(QWidget):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
         def get_external_link_html(url):
+            # The matched text is already escaped; make it attribute-safe.
+            url = html.escape(html.unescape(url), quote=True)
+            title = ('Open Fio on GitHub'
+                     if url.startswith('https://github.com/vicioussquid/Fio')
+                     else 'Open this link in your browser')
             return (
                 f'<a href="{url}" '
                 f'style="color: #26A69A; text-decoration: underline;" '
-                f'title="Open Fio on GitHub">{url}</a>'
+                f'title="{title}">{url}</a>'
             )
 
         # A raw startup URL is a real clickable link, not an entity filter.
@@ -965,10 +1099,12 @@ class DebugConsole(QWidget):
                     m.group(0) if m.group(0).startswith('http') else
                     'https://' + m.group(0))
             )
-            return f"__EXTERNAL_LINK_{len(_external_links) - 1}__"
+            return _placeholder("L", len(_external_links) - 1)
 
+        # A URL ends at white space, a tag, a quote or an escaped < or >.
+        _url_tail = r'(?:(?!&lt;|&gt;)[^\s<>"\'\x00])+'
         _msg_temp = re.sub(
-            r'(?<![\w/])https?://[^\s<]+|(?<![\w/])github\.com/[^\s<]+',
+            r'(?<![\w/])https?://' + _url_tail + r'|(?<![\w/])github\.com/' + _url_tail,
             _protect_external_link,
             _msg_temp
         )
@@ -1020,9 +1156,9 @@ class DebugConsole(QWidget):
 
         # Restore protected HTML tags and generated external anchors.
         for _i, _tag in enumerate(_protected_tags):
-            _msg_temp = _msg_temp.replace(f"__HTML_{_i}__", _tag)
+            _msg_temp = _msg_temp.replace(_placeholder("H", _i), _tag)
         for _i, _tag in enumerate(_external_links):
-            _msg_temp = _msg_temp.replace(f"__EXTERNAL_LINK_{_i}__", _tag)
+            _msg_temp = _msg_temp.replace(_placeholder("L", _i), _tag)
         message = _msg_temp
 
         # ---------------------------
