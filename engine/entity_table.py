@@ -749,7 +749,7 @@ class EntityTable:
         '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
         '_effect_custom_ids', '_effect_custom_paths',
         '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', '_row_list',
-        '_row_list_version', 'rows_read', '_light_offsets',
+        '_row_list_version', 'rows_read', '_light_offsets', '_aux_lights',
         '_effect_published', '_effect_static',
         '__weakref__'))
 
@@ -780,6 +780,9 @@ class EntityTable:
         #: Whether any row has ever had a light_offset: while none has, the
         #: position writes skip the offset altogether.
         self._light_offsets = False
+        #: How many rows past ``count`` are lights that are not entities
+        #: (:meth:`set_aux_lights`): emissive brushes.
+        self._aux_lights = 0
         self.portal_slots = np.empty(0, dtype=np.int32)
         self.path_node_slots = np.empty(0, dtype=np.int32)
         self.monster_slots = np.empty(0, dtype=np.int32)
@@ -1001,6 +1004,7 @@ class EntityTable:
             setattr(self, name, getattr(peer, name).copy())
         self.count = peer.count
         self._light_offsets = peer._light_offsets
+        self._aux_lights = peer._aux_lights
         self.ids = list(peer.ids)
         self.slot_of_id = dict(peer.slot_of_id)
         self.things = list(peer.things)
@@ -1295,6 +1299,44 @@ class EntityTable:
             self.effect_alive[effect_ls] = fire | explosion_active
         else:
             self.effect_alive[effect_ls] = fire | preview_explosion
+
+    def set_aux_lights(self, lights):
+        """Put the lights that are not entities into the frame's light list.
+
+        *lights* is ``(positions, colours, (intensity, radius), on)`` -- what
+        ``RenderTable.brush_lights`` gives for the emissive Glow brushes --
+        or None for none. They are written as rows past ``count``: no entity
+        owns them, nothing draws them, and every reader of the light list
+        (which reads these columns by slot) lights from them unchanged. They
+        cast no shadows.
+
+        Called after :meth:`begin_frame`, every frame. With none now and none
+        before -- any map without an emissive brush -- it returns at once.
+        """
+        k = 0 if lights is None else len(lights[0])
+        if not k and not self._aux_lights:
+            return
+        n = self.count
+        slots = self.light_slots
+        if self._aux_lights or (len(slots) and int(slots[-1]) >= n):
+            slots = slots[slots < n]
+        if k:
+            self._resize(n + k)
+            rows = slice(n, n + k)
+            positions, colours, params, on = lights
+            self.pos[rows] = positions
+            self.light_color[rows] = colours
+            self.light_params[rows] = params
+            self.light_enabled[rows] = on
+            self.light_casts_shadows[rows] = False
+            self.hidden[rows] = False
+            self.class_bits[rows] = 0
+            slots = np.concatenate(
+                (slots, np.arange(n, n + k, dtype=np.int32))).astype(np.int32)
+        self.light_slots = slots
+        if k != self._aux_lights:
+            self._aux_lights = k
+            self.generation += 1
 
     def sync(self, things, epoch=None, dirty_objects=None) -> bool:
         """Reconcile without the frame's journal step.  Returns whether it did.

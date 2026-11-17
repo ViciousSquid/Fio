@@ -155,6 +155,18 @@ def test_the_tint_multiplies_the_light(images):
     np.testing.assert_allclose(table.light_color[0], (grey, grey * 0.5, 0.0), atol=0.01)
 
 
+def test_a_white_decal_with_a_green_tint_emits_exactly_that_green(images):
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGBA", (16, 16), (255, 255, 255, 255)).save(out, "PNG")
+    decal_textures.use_source(decal_textures.DecalSource({"white.png": out.getvalue}))
+    green = [0.1, 0.9, 0.25]
+
+    table = _table([_decal("panel", texture="white.png", emissive=True, tint=green)])
+
+    np.testing.assert_allclose(table.light_color[0], green, atol=1e-6)
+
+
 def test_a_decal_with_no_image_glows_its_tint(images):
     table = _table([_decal("words", texture="", text="EXIT", emissive=True,
                            tint=[0.0, 1.0, 0.0])])

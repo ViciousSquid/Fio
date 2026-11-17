@@ -924,6 +924,25 @@ class PassesMixin:
         geo_meshes = self._prepare_geo_meshes(table, brushes)
 
 
+        # An emissive brush (neon) is a light source, not a lit surface: it
+        # is drawn with no lights, so it is the same brightness end to end
+        # instead of brightest next to its own light. Looked at only when the
+        # map has one.
+        emissive = None
+        lights_loc, lights_on, lights_now = -1, 0, 0
+        if len(table.emissive_slots):
+            emissive = table.emit_params[brushes, 0] > 0.0
+            if emissive.any():
+                # The count _upload_lights_once just set (and remembers).
+                lights_loc = uniforms['active_lights']
+                if lights_loc is None:
+                    lights_loc = -1
+                if lights_loc != -1:
+                    lights_on = lights_now = int(
+                        getattr(uniforms, 'active_lights', 0) or 0)
+            else:
+                emissive = None
+
         upload_model = uniform_rows('mat4', models)
         upload_normal = uniform_rows('mat3', normals)
         upload_colour = uniform_rows('vec3', colours)
@@ -933,6 +952,11 @@ class PassesMixin:
             if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, index)
             upload_colour(color_loc, index)
+            if emissive is not None and lights_loc != -1:
+                wanted = 0 if emissive[index] else lights_on
+                if wanted != lights_now:
+                    gl.glUniform1i(lights_loc, wanted)
+                    lights_now = wanted
             has_geometry = bool(geometry[index])
             gl.glUniform1f(alpha_loc, 1.0)
             mesh = None
@@ -949,6 +973,8 @@ class PassesMixin:
                     bound_vao = cube_vao
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
+        if lights_now != lights_on:
+            gl.glUniform1i(lights_loc, lights_on)       # as the pass found it
         gl.glBindVertexArray(0)
 
     def _debug_textured_brush_gl_state(self):

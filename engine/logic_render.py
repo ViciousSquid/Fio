@@ -674,6 +674,8 @@ class LogicRender:
                 snapshot_epoch,
             ),
         )
+        # Emissive Glow brushes (neon) are lights that are not entities.
+        etable.set_aux_lights(table.brush_lights())
         erefs = etable.refs
         entity_things = etable.things
         thing_count = etable.count

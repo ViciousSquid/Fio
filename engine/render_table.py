@@ -331,6 +331,12 @@ _COLUMNS = (
     #: The Glow pass's overbright colour -- base colour times intensity,
     #: clamped.
     ('glow_colour', (3,), np.float32, 0.0),
+    #: An emissive Glow brush's light: its colour (the tint if it has one,
+    #: else its colour -- what the brush glows, before the overbright), and
+    #: ``(intensity, radius)``. Intensity 0 for every other brush, which is
+    #: what :attr:`RenderTable.emissive_slots` is found from.
+    ('emit_colour', (3,), np.float32, 0.0),
+    ('emit_params', (2,), np.float32, 0.0),
     #: The brush's geometry epoch when the row was resolved, so a stale mesh
     #: can be told from a live one without re-deriving the signature.
     ('geo_epoch', (), np.int64, 0),
@@ -422,6 +428,18 @@ def _can_adopt(peer, rows, epoch, dirty_objects, peer_dirty):
     return peer._epoch == epoch or peer_dirty is not None
 
 
+def _emissive_light(brush):
+    """``(intensity, radius)`` of an emissive Glow brush's light, or None for
+    amounts that make no light (zero, or not numbers)."""
+    intensity = _num(brush.get('emissive_intensity'), 1.0)
+    radius = _num(brush.get('emissive_radius'), 256.0)
+    if not (math.isfinite(intensity) and math.isfinite(radius)):
+        return None
+    if intensity <= 0.0 or radius <= 0.0:
+        return None
+    return (intensity, radius)
+
+
 class RenderTable:
     """A dense projection of a brush list, kept current by change, not polling.
 
@@ -433,7 +451,7 @@ class RenderTable:
 
     __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
-        'dynamic_slots', 'geometry_records', 'geometry_serial',
+        'dynamic_slots', 'emissive_slots', 'geometry_records', 'geometry_serial',
         'geometry_version',
         '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
@@ -488,6 +506,9 @@ class RenderTable:
         #: re-read per frame.  Recomputed whenever the table reconciles, from
         #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
         self.dynamic_slots = np.empty(0, dtype=np.int32)
+        #: Slots of the emissive Glow brushes: the rows that are lights.
+        #: Empty in a map with none, and then nothing looks at them again.
+        self.emissive_slots = np.empty(0, dtype=np.int32)
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
@@ -829,6 +850,8 @@ class RenderTable:
         uv_has = np.empty((count, 6), dtype=bool)
         colour = np.empty((count, 3), dtype=np.float32)
         glow = np.empty((count, 3), dtype=np.float32)
+        emit_colour = np.zeros((count, 3), dtype=np.float32)
+        emit_params = np.zeros((count, 2), dtype=np.float32)
         geo_epoch = np.empty(count, dtype=np.int64)
         special = []                     # (row, slot, brush, class bits)
         intern = self.intern_texture
@@ -867,6 +890,13 @@ class RenderTable:
             glow_base = normalize_color(tint or brush.get('colour'),
                                         default=[1.0, 1.0, 1.0])
             glow[row] = [min(c * intensity, 10.0) for c in glow_base]
+            if b & CLASS_GLOW and brush.get('emissive'):
+                # Neon: the brush lights its surroundings in the colour it
+                # glows. Only an emissive Glow brush is read any further.
+                emit = _emissive_light(brush)
+                if emit is not None:
+                    emit_colour[row] = [min(max(c, 0.0), 1.0) for c in glow_base]
+                    emit_params[row] = emit
 
             # The brush's own geometry epoch, which every change to its shape
             # bumps (brush_geometry._invalidate) whether or not anything marks
@@ -887,6 +917,8 @@ class RenderTable:
         self.uv_has_scale[idx] = uv_has
         self.colour[idx] = colour
         self.glow_colour[idx] = glow
+        self.emit_colour[idx] = emit_colour
+        self.emit_params[idx] = emit_params
         self.geo_epoch[idx] = geo_epoch
         self._resolve_special_rows(idx, special)
 
@@ -1051,6 +1083,19 @@ class RenderTable:
             self.refresh_edited(brushes, edited)
         return self.hidden[:n]
 
+    def brush_lights(self):
+        """The lights the emissive Glow brushes are, or None when there are
+        none: ``(positions (k, 3), colours (k, 3), params (k, 2), on (k,))``.
+
+        A brush's light stands at its centre, where it is now (a mover's
+        neon moves with it), and is off while the brush is hidden.
+        """
+        slots = self.emissive_slots
+        if not len(slots):
+            return None
+        return (self.center[slots], self.emit_colour[slots],
+                self.emit_params[slots], ~self.hidden[slots])
+
     def shown(self):
         """``(mask, slots)`` of the rows not hidden, over the live rows.
 
@@ -1083,6 +1128,7 @@ class RenderTable:
         self.brushes = list(peer.brushes)
         self.refs = peer.refs.copy()
         self.dynamic_slots = peer.dynamic_slots.copy()
+        self.emissive_slots = peer.emissive_slots.copy()
         self.geometry_records = list(peer.geometry_records)
         self.geometry_serial = peer.geometry_serial.copy()
         self.geometry_version = peer.geometry_version   # same records
@@ -1243,6 +1289,8 @@ class RenderTable:
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
+        self.emissive_slots = np.flatnonzero(
+            self.emit_params[:n, 0] > 0.0).astype(np.int32)
         self._forget_row_changes()    # mapping or row set may have changed
         self.generation += 1
         self.material_version += 1
@@ -1313,6 +1361,8 @@ class RenderTable:
         if slots:
             self.dynamic_slots = np.flatnonzero(
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
+            self.emissive_slots = np.flatnonzero(
+                self.emit_params[:self.count, 0] > 0.0).astype(np.int32)
 
     def _refresh_in_place(self, brushes, n, epoch, dirty_objects, rows_known=False):
         """Apply a precise journal without a reconcile, when that is exact.

@@ -1753,6 +1753,37 @@ class PropertyEditor(QWidget):
         form.addRow("Intensity:", _hbox(slider, label, stretch=False))
         self._widgets['glow_intensity_slider'] = slider
 
+        # Neon: a Glow brush that lights its surroundings (engine.render_table:
+        # brush_lights), in the colour it glows -- its tint, if it has one.
+        emissive_cb = _make_checkbox(
+            "Emissive", bool(brush.get('emissive', False)),
+            lambda checked: self.update_object_prop('emissive', bool(checked)),
+            _Style.CHECKBOX)
+        emissive_cb.setToolTip(
+            "The brush lights its surroundings in the colour it glows: its tint,\n"
+            "if it has one, else its colour. This is how neon is made.\n"
+            "Off, the brush is not a light and costs nothing extra.")
+        form.addRow("", emissive_cb)
+        self._widgets['glow_emissive_cb'] = emissive_cb
+        for key, label_text, default, top, tip in (
+                ('emissive_intensity', "Light Intensity:", 1.0, 100.0,
+                 "How bright the emitted light is, as a Light's intensity."),
+                ('emissive_radius', "Light Radius:", 256.0, 100000.0,
+                 "How far the emitted light reaches, in world units.")):
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, top)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.1 if top <= 100.0 else 16.0)
+            try:
+                spin.setValue(float(brush.get(key, default)))
+            except (TypeError, ValueError):
+                spin.setValue(default)
+            spin.setToolTip(tip)
+            spin.valueChanged.connect(
+                lambda value, k=key: self.update_object_prop(k, float(value)))
+            form.addRow(label_text, spin)
+            self._widgets['glow_' + key] = spin
+
         layout.addLayout(form)
         return group
 
@@ -4989,6 +5020,7 @@ class PropertyEditor(QWidget):
             self.current_object['is_fog'] = False
             shader_keys = ('glass_color', 'glass_opacity', 'glass_distortion', 'glass_refraction',
                            'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
+                           'emissive', 'emissive_intensity', 'emissive_radius',
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
                            'water_wave_height', 'water_wave_spread', 'water_plane', 'water_high_quality', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
