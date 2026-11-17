@@ -74,6 +74,26 @@ def test_version_banner_is_rendered_once(qt_app):
     console.deleteLater()
 
 
+def test_the_startup_opengl_line_has_no_filter_links(qt_app):
+    """Its version numbers ("4.1", "90.5", "@1.5x") are hardware text, not
+    entity names. Only this line: numbers elsewhere still become filters."""
+    console = DebugConsole()
+    console.clear()
+
+    console._append_message(
+        "Info",
+        "[Info] OpenGL 4.1 Metal - 90.5 | Apple M5 | Apple | 3D view 573x506 @1.5x")
+    html = console.console.toHtml()
+    assert "OpenGL 4.1 Metal - 90.5 | Apple M5 | Apple | 3D view 573x506 @1.5x" in html
+    assert "filter:" not in html
+    assert "Click to filter by" not in html
+
+    console._append_message("Info", "[IO] Door1.Open fired")
+    assert 'href="filter:Door1"' in console.console.toHtml()
+
+    console.deleteLater()
+
+
 def test_startup_banner_source_matches_requested_shape():
     source = Path("editor/io_handlers.py").read_text(encoding="utf-8")
 

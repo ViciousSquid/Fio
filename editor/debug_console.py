@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5 import sip
 from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
+import html
 import re
 
 
@@ -923,6 +924,13 @@ class DebugConsole(QWidget):
             if version_match:
                 version_html = self._version_banner_html(version_match.group(1))
                 return f'<span style="color: {color};">{version_html}</span><br>'
+
+        # The startup OpenGL line ("OpenGL 4.1 Metal - 90.5 | Apple M5 | ...")
+        # is hardware text: its version numbers are not entities, so nothing
+        # in it becomes a filter link. This line only.
+        if message.startswith("[Info] OpenGL "):
+            return (f'<span style="color: {color};">'
+                    f'{html.escape(message, quote=False)}</span><br>')
 
         # Protect any pre-existing HTML tags in the message so our regexes
         # don't corrupt entity links / colours injected by MonsterAI.
