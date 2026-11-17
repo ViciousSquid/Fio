@@ -199,6 +199,11 @@ def light_ubo_source(source):
         return source
 
     count = int(match.group(1))
+    # The name the shader gives the fragment's world position: every light
+    # loop takes ``lights[i].position - <that>``. FragPos here; the Android
+    # player's adaptation of these shaders renames it first.
+    where = re.search(r"lights\[[^]]+\]\.position\s*-\s*([A-Za-z_]\w*)", source)
+    fragment_position = where.group(1) if where else "FragPos"
     block = (
         "struct Light {\n"
         "    highp vec4 position;\n"
@@ -221,7 +226,7 @@ def light_ubo_source(source):
     result = re.sub(
         r"lights\[([^]]+)\]\.intensity\b",
         r"(lights[\1].params.x * fioSourceFade("
-        r"lights[\1].params.z, lights[\1].position.xyz - FragPos))",
+        r"lights[\1].params.z, lights[\1].position.xyz - " + fragment_position + "))",
         result)
     result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
     result = re.sub(

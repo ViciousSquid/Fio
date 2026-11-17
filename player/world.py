@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import glm
 
-from engine.entities import Thing
+from engine.entities import Thing, UnresolvedThing
 from player.runtime.fiopak import PackageError
 from engine.io_system import OutputConnection
 from engine.items import ItemDefinitions
@@ -115,6 +115,13 @@ class PlayerWorld:
             version = int(data.get('version') or 0)
         except (TypeError, ValueError):
             version = 0
+        if version > brush_placement.MAP_VERSION:
+            # As the desktop refuses it (EditorState.validate_level_data): a
+            # newer layout read as this one plays wrong, silently.
+            raise PackageError(
+                "This world was made with a newer version of Fio (map format "
+                f"{version}; this player reads up to {brush_placement.MAP_VERSION}). "
+                "Update Fio Player to open it.")
         legacy_faces = version < brush_faces.CANONICAL_MAP_VERSION
         world_planes = version < brush_placement.MAP_VERSION
         for record in data.get('brushes', []):
@@ -133,7 +140,10 @@ class PlayerWorld:
             self.state.brushes.append(brush)
         for record in data.get('things', []):
             thing = Thing.from_dict(record)
-            if thing is None:
+            # An entity type nothing here knows is kept by the editor as an
+            # opaque record (so a save does not lose it), never as None: in a
+            # player that is a world that would run with part of it missing.
+            if thing is None or isinstance(thing, UnresolvedThing):
                 raise PackageError(f"Unknown entity type: {record.get('type')}")
             thing._asset_source = package
             self.state.things.append(thing)

@@ -429,6 +429,46 @@ def _can_adopt(peer, rows, epoch, dirty_objects, peer_dirty):
     return peer._epoch == epoch or peer_dirty is not None
 
 
+def emissive_brushes(brushes):
+    """The brushes of *brushes* that are lights: emissive Glow and Water
+    brushes whose amounts make light. For a host that draws without a
+    :class:`RenderTable` (the Android player); looks at every brush, so it is
+    called when the world changes, not every frame."""
+    return [brush for brush in brushes
+            if isinstance(brush, dict) and brush.get('emissive')
+            and _brush_class_bits(brush) & (CLASS_GLOW | CLASS_WATER)
+            and _emissive_light(brush) is not None]
+
+
+def brush_lights_of(emissive):
+    """:meth:`RenderTable.brush_lights` for the brushes
+    :func:`emissive_brushes` found: the same five arrays, read from the
+    brushes where they are now. None for none."""
+    if not emissive:
+        return None
+    from engine import brush_placement
+    k = len(emissive)
+    positions = np.empty((k, 3), dtype=np.float64)
+    colours = np.empty((k, 3), dtype=np.float32)
+    params = np.empty((k, 2), dtype=np.float32)
+    on = np.empty(k, dtype=bool)
+    sizes = np.empty(k, dtype=np.float32)
+    for row, brush in enumerate(emissive):
+        cx, cy, cz, hx, hy, hz = brush_placement.world_box(brush)
+        water = bool(_brush_class_bits(brush) & CLASS_WATER)
+        positions[row] = (cx, cy + (hy if water else 0.0), cz)
+        if water:
+            base = normalize_color(brush.get('water_tint', [0.0, 0.4, 0.6]))
+        else:
+            base = normalize_color(brush.get('tint') or brush.get('colour'),
+                                   default=[1.0, 1.0, 1.0])
+        colours[row] = [min(max(c, 0.0), 1.0) for c in base]
+        params[row] = _emissive_light(brush)
+        on[row] = not brush.get('hidden', False)
+        sizes[row] = max(hx, hy, hz)
+    return positions, colours, params, on, sizes
+
+
 def _emissive_light(brush):
     """``(intensity, radius)`` of an emissive Glow brush's light, or None for
     amounts that make no light (zero, or not numbers)."""

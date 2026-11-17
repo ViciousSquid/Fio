@@ -1,4 +1,5 @@
 """Desktop lighting and shadow formulas, with an ES-compatible atlas lookup."""
+import re
 from engine.shaders import DEFAULT_SHADERS, SHADOW_GLSL, MAX_SHADOW_LIGHTS, light_ubo_source
 from player.gles_shaders import translate
 
@@ -56,7 +57,13 @@ for _old, _new in (('FragPos','worldPos'), ('Normal','worldNormal'),
 _fragment = light_ubo_source(_fragment)
 _fragment = _fragment.replace('highp vec4 position;', 'highp vec4 position_radius;')
 _fragment = _fragment.replace('vec4 color;', 'vec4 color_intensity;')
-_fragment = _fragment.replace('    vec4 params;       // x=intensity, y=radius\n', '')
+# The params member goes (whatever its comment says): its values ride in the
+# other members' spare components.
+_fragment, _dropped = re.subn(r"    vec4 params;[^\n]*\n", '', _fragment)
+assert _dropped == 1, "the shared light block changed shape"
+# A light's source size (an emissive brush) rides in the indices' second
+# component, as a whole number of world units.
+_fragment = re.sub(r"lights\[([^]]+)\]\.params\.z", r"float(lights[\1].indices.y)", _fragment)
 for _old, _new in (('.position.xyz','.position_radius.xyz'),
                   ('.color.xyz','.color_intensity.xyz'),
                   ('.params.x','.color_intensity.w'), ('.params.y','.position_radius.w')):

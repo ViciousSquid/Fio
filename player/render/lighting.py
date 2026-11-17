@@ -42,6 +42,8 @@ class LightBuffer:
             self.data['color_intensity'][row,:3] = light['color']
             self.data['color_intensity'][row,3] = light['intensity']
             self.data['indices'][row,0] = shadows.get(row,-1)
+            # The source's size (an emissive brush; 0 for a point light).
+            self.data['indices'][row,1] = int(round(float(light.get('size', 0.0))))
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self.buffer)
         gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, self.data.nbytes, self.data)
         gl.glBindBufferBase(gl.GL_UNIFORM_BUFFER, LIGHT_UBO_BINDING, self.buffer)
