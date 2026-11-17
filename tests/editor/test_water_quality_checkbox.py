@@ -91,3 +91,55 @@ def test_the_render_table_reads_the_flag_per_brush():
     table.begin_frame([hq, cheap])
     assert (table.class_bits[:2] & CLASS_WATER).all()
     assert table.water_high_quality[:2].tolist() == [True, False]
+
+
+def _probes(host):
+    from editor.things import ReflectionProbe
+    return [t for t in host.state.things if isinstance(t, ReflectionProbe)]
+
+
+def test_switching_it_on_places_a_probe_over_the_water_and_off_deletes_it(main_window):
+    """High quality on gives the water a reflection probe above its surface;
+    off deletes that probe -- never one the author placed themselves."""
+    from editor.things import ReflectionProbe, WATER_PROBE_HEIGHT, water_probe_of
+
+    host, editor = _panel(main_window, water_high_quality=False)
+    placed = ReflectionProbe(pos=[900.0, 200.0, 900.0])
+    host.state.things.append(placed)
+    box = editor._widgets['water_quality_cb']
+
+    box.setChecked(True)
+    brush = host.state.brushes[0]
+    probe = water_probe_of(brush, host.state.things)
+    assert brush['water_high_quality'] is True and probe is not None
+    assert probe.pos == [0.0, 32.0 + WATER_PROBE_HEIGHT, 0.0]     # over the top surface
+    assert probe.get_radius() >= 512.0
+    assert len(_probes(host)) == 2
+
+    box.setChecked(False)
+    assert brush['water_high_quality'] is False
+    assert water_probe_of(brush, host.state.things) is None
+    assert _probes(host) == [placed]
+
+
+def test_the_flag_and_its_probe_are_one_undo_step(main_window):
+    from editor.things import water_probe_of
+
+    host, editor = _panel(main_window, water_high_quality=False)
+    editor._widgets['water_quality_cb'].setChecked(True)
+    assert water_probe_of(host.state.brushes[0], host.state.things) is not None
+    host.undo()
+    brush = host.state.brushes[0]
+    assert brush.get('water_high_quality') is False
+    assert water_probe_of(brush, host.state.things) is None
+
+
+def test_ticking_it_again_never_makes_a_second_probe(main_window):
+    from editor.things import water_probe_of
+
+    host, editor = _panel(main_window, water_high_quality=False)
+    box = editor._widgets['water_quality_cb']
+    box.setChecked(True)
+    first = water_probe_of(host.state.brushes[0], host.state.things)
+    editor._set_water_high_quality(True)        # already on: nothing more
+    assert _probes(host) == [first]

@@ -117,7 +117,12 @@ def water_high_quality(brush):
     cheap look (waves, refraction, sky reflection). Authored per brush, so
     hand-edited maps may hold strings like ``"false"`` or ``"0"``.
     """
-    value = brush.get('water_high_quality', True)
+    return _flag(brush.get('water_high_quality', True))
+
+
+def _flag(value):
+    """An authored on/off value: hand-edited maps may hold strings like
+    ``"false"`` or ``"0"``."""
     if isinstance(value, str):
         return value.strip().lower() not in ('0', 'false', 'no', 'off', '')
     return bool(value)

@@ -345,61 +345,97 @@ highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
     return p.xyz / p.w;
 }
 
-highp vec2 viewToUV(highp vec3 p) {
-    highp vec4 c = projection * vec4(p, 1.0);
-    return c.xy / c.w * 0.5 + 0.5;
-}
-
 // Screen-space reflection: march the reflected ray through the copied depth
-// buffer and return the scene colour it hits (rgb) and a confidence (a).
-// 10 linear steps with a growing stride, then a short binary refinement.
-vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
-                           highp float firstStride) {
+// buffer for the surface it hits. True with the hit's uv in the frame copy,
+// how far along the ray it lies (view units) and a confidence; false for a
+// miss. 10 linear steps with a growing stride, then a short binary
+// refinement.
+bool marchReflection(highp vec3 originView, highp vec3 dirView,
+                     highp float firstStride, out highp vec2 hitUV,
+                     out highp float hitS, out float hitFade) {
+    hitUV = vec2(0.0);
+    hitS = 0.0;
+    hitFade = 0.0;
+    // The ray's clip-space position is affine in the distance travelled
+    // along it, so a step is a multiply-add, not a matrix multiply: the same
+    // points as stepping the view-space position and projecting each.
+    highp vec4 clipOrigin = projection * vec4(originView, 1.0);
+    highp vec4 clipDir = projection * vec4(dirView, 0.0);
     highp float stride = firstStride;
-    highp vec3 p = originView;
-    highp vec3 prev = p;
+    highp float s = 0.0;
+    highp float prevS = 0.0;
     for (int i = 0; i < 10; i++) {
-        prev = p;
-        p += dirView * stride;
+        prevS = s;
+        s += stride;
         stride *= 1.22;
-        if (p.z > -0.5) break;
-        highp vec2 uv = viewToUV(p);
+        highp float pz = originView.z + dirView.z * s;
+        if (pz > -0.5) break;
+        highp vec4 c = clipOrigin + clipDir * s;
+        highp vec2 uv = c.xy / c.w * 0.5 + 0.5;
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
         // textureLod: no implicit derivatives inside the loop.
         highp float d = textureLod(sceneDepth, uv, 0.0).r;
         if (d >= 0.99999) continue;
         highp float sceneZ = viewPosFromDepth(uv, d).z;
-        highp float gap = sceneZ - p.z;
+        highp float gap = sceneZ - pz;
         // Only a ray that has just gone behind a surface hits it. Without a
         // cap on how far behind, a ray passing behind a thin object (a box
         // standing in the water) counted as hitting it and smeared a long
         // streak of it across the water.
         highp float thickness = clamp(stride * 1.5, 2.0, 48.0);
         if (gap > 0.0 && gap < thickness) {
-            highp vec3 lo = prev;
-            highp vec3 hi = p;
+            highp float lo = prevS;
+            highp float hi = s;
             for (int j = 0; j < 5; j++) {
-                highp vec3 mid = (lo + hi) * 0.5;
-                highp vec2 muv = viewToUV(mid);
+                highp float mid = (lo + hi) * 0.5;
+                highp vec4 mc = clipOrigin + clipDir * mid;
+                highp vec2 muv = mc.xy / mc.w * 0.5 + 0.5;
                 highp float mz = viewPosFromDepth(muv, textureLod(sceneDepth, muv, 0.0).r).z;
-                if (mz > mid.z) hi = mid; else lo = mid;
+                if (mz > originView.z + dirView.z * mid) hi = mid; else lo = mid;
             }
-            highp vec2 huv = viewToUV(hi);
+            highp vec4 hc = clipOrigin + clipDir * hi;
+            highp vec2 huv = hc.xy / hc.w * 0.5 + 0.5;
             highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
-            if (hz - hi.z > thickness) return vec4(0.0);
+            if (hz - (originView.z + dirView.z * hi) > thickness) return false;
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
                       * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
-            float fade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
-            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
+            hitUV = huv;
+            hitS = hi;
+            hitFade = edge.x * edge.y * (1.0 - smoothstep(7.0, 10.0, float(i)));
+            return true;
         }
     }
-    return vec4(0.0);
+    return false;
+}
+
+// The scene colour the reflected ray hits (rgb), sharp, and a confidence
+// (a); 0 for a miss.
+vec4 traceReflectionStride(highp vec3 originView, highp vec3 dirView,
+                           highp float firstStride) {
+    highp vec2 uv;
+    highp float s;
+    float fade;
+    if (!marchReflection(originView, dirView, firstStride, uv, s, fade))
+        return vec4(0.0);
+    return vec4(textureLod(sceneColor, uv, 0.0).rgb, fade);
 }
 
 // The water's march: its first stride grows with distance. A decal that
 // must reach a few hundred units starts with a longer one.
 vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
     return traceReflectionStride(originView, dirView, max(2.0, -originView.z * 0.02));
+}
+"""
+
+#: The sky panorama's equirectangular lookup, shared by the sky pass
+#: (``void_background.frag``) and the water that reflects it, so a reflection
+#: samples the very texel the sky shows in that direction.
+PANORAMA_GLSL = """
+const float PANORAMA_PI = 3.14159265358979323846;
+// Texture coordinates of the panorama in the unit world direction *dir*.
+highp vec2 panoramaUV(highp vec3 dir) {
+    return vec2(atan(dir.x, -dir.z) / (2.0 * PANORAMA_PI) + 0.5,
+                0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PANORAMA_PI);
 }
 """
 
@@ -790,6 +826,8 @@ out mediump vec3 Normal;
 out mediump float WaveCrest;
 out mediump float ShoreDist;
 out highp float RestY;       // height of the still surface under this vertex
+out highp vec3 LocalPos;     // the vertex in the brush's unit box (box water)
+out highp vec2 SkyUV;        // the sky panorama texel this vertex reflects
 
 uniform mat4 model;
 uniform mat4 view;
@@ -798,9 +836,11 @@ uniform highp float time;
 uniform mat3 normalMatrix;
 
 uniform float waveAmp;    // total wave amplitude in world units
-uniform vec3 brushSize;   // world-space brush dimensions
+uniform highp vec3 brushSize;   // world-space brush dimensions (also water.frag)
+uniform highp int reflectSky;   // 1: the map has a sky panorama to reflect (also water.frag)
 uniform float waveSpread; // "Wave Spacing": 0 tight and choppy, 1 broad
 
+""" + PANORAMA_GLSL + """
 // One Gerstner wave: displaces the vertex and accumulates normal derivatives.
 void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
              inout float dy, inout vec2 dxz, inout vec3 n)
@@ -861,6 +901,24 @@ void main()
     TexCoords = aTexCoords;
     WaveCrest = clamp(dy / max(waveAmp * 0.85, 0.001) * 0.5 + 0.5, 0.0, 1.0);
     ShoreDist = edgeWorld;
+    LocalPos  = aPos;
+    SkyUV     = vec2(0.0);
+    if (reflectSky == 1) {
+        // Where in the panorama this vertex's reflection points, by the sky
+        // pass's own mapping: worked out here, per vertex, so a pixel pays
+        // one texture read and no trigonometry (water.frag skyColor). The
+        // horizontal coordinate is taken relative to the camera's heading,
+        // so the texture's seam (GL_REPEAT wraps it) stays behind the
+        // camera instead of cutting across a triangle in view.
+        vec3 eyePos = -transpose(mat3(view)) * view[3].xyz;
+        vec3 reflected = reflect(normalize(worldPos - eyePos), Normal);
+        vec3 forward = -vec3(view[0][2], view[1][2], view[2][2]);
+        highp vec2 uv = panoramaUV(reflected);
+        highp float headingU = panoramaUV(forward).x;
+        highp float relative = uv.x - headingU;
+        relative -= floor(relative + 0.5);
+        SkyUV = vec2(headingU + relative, uv.y);
+    }
 
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }""",
@@ -875,6 +933,8 @@ in vec3 Normal;
 in float WaveCrest;
 in float ShoreDist;
 in highp float RestY;
+in highp vec3 LocalPos;
+in highp vec2 SkyUV;
 
 struct Light {
     highp vec3 position;
@@ -894,6 +954,18 @@ uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
 uniform highp float time;
+// The map's sky panorama, reflected instead of the procedural sky whenever
+// the map has one (reflectSky 1, high quality and cheap alike); 0 is the
+// procedural sky, as always.
+uniform sampler2D skyPanorama;
+uniform highp int reflectSky;
+// Box water's side walls, high quality: localEye is the camera in the box's
+// unit space, sideSkipMargin the highest crest above its still top (box
+// units). See main().
+uniform int skipCoveredSides;
+uniform highp vec3 localEye;
+uniform float sideSkipMargin;
+uniform highp vec3 brushSize;   // world size of the brush (shared with water.vert)
 
 uniform highp float waveSpread;   // "Wave Spacing": 0 tight and choppy, 1 broad
 uniform float waterOpacity;
@@ -998,8 +1070,19 @@ vec4 reflectEffects(highp vec3 P, vec3 R) {
     return vec4(0.0);
 }
 
-// Procedural sky remains the zero-cost fallback when reflections are disabled.
+// The ripple of this pixel (main), which nudges the reflected panorama.
+vec2 skyRipple = vec2(0.0);
+
+// The sky the water reflects: the map's panorama when it has one, else the
+// procedural sky it has always reflected. The
+// panorama is looked up where the vertices worked out (SkyUV), shimmering
+// with the ripple: one texture read and no trigonometry, cheaper than the
+// procedural sky itself -- not the exact per-pixel direction, and nobody
+// can tell on moving water.
 vec3 skyColor(vec3 dir) {
+    if (reflectSky == 1) {
+        return textureLod(skyPanorama, SkyUV + skyRipple * 0.03, 0.0).rgb;
+    }
     float h = clamp(dir.y, 0.0, 1.0);
     vec3 sky = mix(vec3(0.66, 0.76, 0.83),
                    vec3(0.19, 0.38, 0.66),
@@ -1014,6 +1097,46 @@ vec3 skyColor(vec3 dir) {
 
 void main()
 {
+    if (skipCoveredSides == 1) {
+        // A high-quality top surface is opaque and drawn after the walls: a
+        // wall fragment the view ray reaches through the top is overwritten
+        // by it, so it is not worth shading (it writes nothing instead). The ray from the eye enters the
+        // box's column (|x|, |z| <= 0.5) at tEnter; above the highest crest
+        // there, it must pass the top surface before it reaches this wall --
+        // and, to leave the top's own edge pixels alone, cross the still top
+        // plane at least two of the top's pixels inside the column (its
+        // footprint, which at a grazing angle is far more than the wall's).
+        highp vec3 ray = LocalPos - localEye;
+        highp vec2 top = localEye.xz
+            + ray.xz * ((0.5 - localEye.y) / min(ray.y, -1.0e-6));
+        highp vec2 topPerPixel = fwidth(top);
+        highp float tEnter = 0.0;
+        if (abs(localEye.x) > 0.5 && abs(ray.x) > 1.0e-6)
+            tEnter = max(tEnter, (sign(localEye.x) * 0.5 - localEye.x) / ray.x);
+        if (abs(localEye.z) > 0.5 && abs(ray.z) > 1.0e-6)
+            tEnter = max(tEnter, (sign(localEye.z) * 0.5 - localEye.z) / ray.z);
+        highp float twoPixels = 2.0 * max(topPerPixel.x, topPerPixel.y);
+        highp float inset = 0.5 - twoPixels;
+        // Wave troughs dip below the still top: the ray must also be below
+        // the deepest of them two pixels before it reaches this wall, or it
+        // could pass over a trough and see the wall's upper strip.
+        highp float before = LocalPos.y
+            - ray.y * twoPixels / max(length(ray.xz), 1.0e-6);
+        // Not at a grazing angle (under about 11 degrees): seen that flat,
+        // the wave mesh can leave pixel-wide cracks the wall shows through.
+        highp vec3 worldRay = ray * brushSize;
+        bool steep = -worldRay.y > 0.2 * length(worldRay.xz);
+        if (steep && localEye.y + tEnter * ray.y > 0.5 + sideSkipMargin
+                && before < 0.5 - sideSkipMargin
+                && abs(top.x) < inset && abs(top.y) < inset) {
+            // Not discard: a shader that can discard loses early depth
+            // testing for every draw made with it, the top surface's too.
+            // Alpha 0 under SRC_ALPHA / ONE_MINUS_SRC_ALPHA leaves the
+            // pixel exactly as it was.
+            FragColor = vec4(0.0);
+            return;
+        }
+    }
     highp vec3 toView = viewPos - FragPos;
     highp float viewDist = length(toView);
     vec3 viewDir = toView / max(viewDist, 0.0001);
@@ -1056,6 +1179,7 @@ void main()
         vnoise(FragPos.xz * 0.0051 + vec2(time * 0.001, time * 0.002))
     ) - 0.5) * 0.55;
     ripple += broadNoise * 0.55;
+    skyRipple = ripple;
 
     float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
     float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
@@ -1148,13 +1272,16 @@ void main()
     highp vec3 bedWorld = FragPos - vec3(0.0, 1.0e4, 0.0);
     bool bedVisible = false;
     if (haveDepth) {
-        highp float dRefract = textureLod(sceneDepth, refractUV, 0.0).r;
-        if (viewPosFromDepth(refractUV, dRefract).z > surfaceView.z) {
-            refractUV = clamp(screenUV, vec2(0.001), vec2(0.999));
-        }
+        // The refracted sample is the bed unless it lies in front of the
+        // surface; only then is the unrefracted pixel read instead.
         highp float dBed = textureLod(sceneDepth, refractUV, 0.0).r;
+        highp vec3 bedView = viewPosFromDepth(refractUV, dBed);
+        if (bedView.z > surfaceView.z) {
+            refractUV = clamp(screenUV, vec2(0.001), vec2(0.999));
+            dBed = textureLod(sceneDepth, refractUV, 0.0).r;
+            bedView = viewPosFromDepth(refractUV, dBed);
+        }
         if (dBed < 0.99999) {
-            highp vec3 bedView = viewPosFromDepth(refractUV, dBed);
             thickness = max(length(bedView) - length(surfaceView), 0.0);
             bedWorld = viewPos - viewDir * length(bedView);
             bedDepth = max(FragPos.y - bedWorld.y, 0.0);
@@ -1212,15 +1339,19 @@ void main()
 
     vec3 transmission;
     // Caustics: light focused by the ripples dances over the bed, strongest
-    // in the shallows. Sampled unconditionally so the mipmapped lookups stay
-    // in uniform control flow.
-    highp vec2 cuv = bedWorld.xz * 0.03;
-    float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
-    float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
+    // in the shallows. Sampled on the top surface only, where they are used:
+    // haveDepth and topFace hold for a whole primitive, so the mipmapped
+    // lookups stay in uniform control flow (bedVisible does not, and stays
+    // inside).
     if (haveDepth) {
-        if (bedVisible && topFace > 0.5) {
-            float caustic = pow(1.0 - abs(c1 + c2 - 1.0), 10.0);
-            transmitted *= 1.0 + caustic * 0.55 * exp(-bedDepth * 0.03) * detailFade;
+        if (topFace > 0.5) {
+            highp vec2 cuv = bedWorld.xz * 0.03;
+            float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
+            float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
+            if (bedVisible) {
+                float caustic = pow(1.0 - abs(c1 + c2 - 1.0), 10.0);
+                transmitted *= 1.0 + caustic * 0.55 * exp(-bedDepth * 0.03) * detailFade;
+            }
         }
         // Beer-Lambert absorption: red goes first, so the shallows stay clear
         // and deeper water turns to the tint colour.
@@ -1330,33 +1461,35 @@ void main()
     vec3 specular =
         SUN_COLOR * sunSpec * 2.2 + specAcc;
 
-    float foamNoise =
-        vnoise(wuv * 0.16 +
-               vec2(time * 0.05, -time * 0.04)) * 0.6 +
-        vnoise(wuv * 0.45 -
-               vec2(time * 0.07, time * 0.06)) * 0.4;
-    float crestFoam =
-        smoothstep(0.68, 0.92, WaveCrest) *
-        smoothstep(0.35, 0.75, foamNoise);
-    float shoreWave =
-        0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
-    float shoreFoam =
-        (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
-        (0.30 + 0.70 * shoreWave) *
-        smoothstep(0.25, 0.60, foamNoise + 0.15);
-    if (haveDepth) {
-        // Foam along the line where the water touches anything, not only at
-        // the brush edges. Measured vertically, so a shallow flat stays clear
-        // and only the waterline itself foams.
-        float contact = 1.0 - smoothstep(0.0, 2.5, bedDepth);
-        float lapping = 0.5 + 0.5 * sin(bedDepth * 2.5 - time * 2.2);
-        shoreFoam = max(shoreFoam,
-                        contact * (0.35 + 0.65 * lapping) *
-                        smoothstep(0.2, 0.55, foamNoise + 0.1));
+    // Only the top surface foams (topFace is 0 or 1): the walls skip it.
+    float foam = 0.0;
+    if (topFace > 0.5) {
+        float foamNoise =
+            vnoise(wuv * 0.16 +
+                   vec2(time * 0.05, -time * 0.04)) * 0.6 +
+            vnoise(wuv * 0.45 -
+                   vec2(time * 0.07, time * 0.06)) * 0.4;
+        float crestFoam =
+            smoothstep(0.68, 0.92, WaveCrest) *
+            smoothstep(0.35, 0.75, foamNoise);
+        float shoreWave =
+            0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
+        float shoreFoam =
+            (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
+            (0.30 + 0.70 * shoreWave) *
+            smoothstep(0.25, 0.60, foamNoise + 0.15);
+        if (haveDepth) {
+            // Foam along the line where the water touches anything, not only at
+            // the brush edges. Measured vertically, so a shallow flat stays clear
+            // and only the waterline itself foams.
+            float contact = 1.0 - smoothstep(0.0, 2.5, bedDepth);
+            float lapping = 0.5 + 0.5 * sin(bedDepth * 2.5 - time * 2.2);
+            shoreFoam = max(shoreFoam,
+                            contact * (0.35 + 0.65 * lapping) *
+                            smoothstep(0.2, 0.55, foamNoise + 0.1));
+        }
+        foam = clamp(crestFoam + shoreFoam, 0.0, 1.0);
     }
-    float foam =
-        clamp(crestFoam + shoreFoam, 0.0, 1.0) *
-        topFace;
 
     color += specular * (0.35 + 0.65 * waterReflectivity);
     color = mix(
@@ -2508,6 +2641,25 @@ uniform highp mat4 view;
 uniform highp mat4 projection;
 uniform highp mat4 invProjection;
 """ + SSR_GLSL + """
+// A wet surface's reflection of the hit at *uv*, *travelled* view units up
+// the ray from *originView*: glossy, not a mirror. A cone of half-angle
+// atan(coneTan) widens along the ray, so the reflection is sharp where the
+// reflected thing meets the surface and softer the further away it is --
+// read from the frame copy's mip chain at the cone's width on screen -- and
+// smeared upright, as light on a wet floor is.
+vec3 glossyReflection(highp vec2 uv, highp float travelled,
+                      highp vec3 originView, highp vec3 dirView, float coneTan) {
+    highp vec3 hit = originView + dirView * travelled;
+    highp float height = float(textureSize(sceneColor, 0).y);
+    highp float radiusPx = travelled * coneTan * projection[1][1] * 0.5 * height
+                         / max(-hit.z, 1.0);
+    float lod = clamp(log2(max(radiusPx, 1.0)), 0.0, 7.0);
+    highp vec2 smear = vec2(0.0, radiusPx * 1.2 / height);
+    return (textureLod(sceneColor, uv, lod).rgb * 2.0
+            + textureLod(sceneColor, clamp(uv + smear, 0.0, 1.0), lod).rgb
+            + textureLod(sceneColor, clamp(uv - smear, 0.0, 1.0), lod).rgb) * 0.25;
+}
+
 const float BLOOD_STRENGTH = 2.6;
 const float IMAGE_STRENGTH = 2.0;   // modulate 2x: mid grey leaves it as it is
 
@@ -2553,10 +2705,15 @@ void main() {
         vec2 range = Params.z > 0.5 ? decalRanges.zw : decalRanges.xy;
         layer = range.x + mod(Params.x, max(range.y, 1.0));
     }
-    // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted).
+    // Flags: 1 mirrored, 2 selected by the editor's Decal tool (tinted),
+    // 4 a sign's white words (they lighten past the framebuffer's 1; below).
     bool mirrored = mod(Params.w, 2.0) > 0.5;
-    bool picked = Params.w > 1.5;
-    float across = mirrored ? -at.x : at.x;
+    bool picked = mod(floor(Params.w * 0.5), 2.0) > 0.5;
+    bool lighten = Params.w > 3.5;
+    // The box's x runs to the left of someone looking along the throw (its
+    // up is up, its z into the surface), so the image is read along -x: its
+    // left is on the viewer's left, and text reads the right way round.
+    float across = mirrored ? at.x : -at.x;
     vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
     const vec3 PICKED = vec3(1.0, 0.55, 0.1);
     // Fade at the box's near and far ends rather than cut.
@@ -2565,8 +2722,9 @@ void main() {
     if (amount <= 0.004) discard;
 
     if (wetRow) {
-        // Wet: where the mask is strongest, standing water -- flat, a sharp
-        // mirror; towards its edges, damp -- a dull, broken-up reflection.
+        // Wet: where the mask is strongest, standing water -- flat, a glossy
+        // reflection, sharp at contact and softening with distance; towards
+        // its edges, damp -- a duller, broken-up, blurrier one.
         // Either way the surface darkens, which is most of looking wet. The
         // reflection fades out with distance and past that is not traced.
         float puddle = smoothstep(0.45, 0.9, texel.a);
@@ -2587,9 +2745,18 @@ void main() {
             float strength = mix(0.3, 0.95, puddle) * mix(0.6, 1.0, fresnel);
             // A longer first stride than the water's: a puddle reflects the
             // crate standing a few hundred units off, not just its own rim.
-            vec4 ssr = traceReflectionStride(surfaceView, reflect(toSurface, nView),
-                                             max(6.0, -surfaceView.z * 0.06));
-            colour = mix(colour, ssr.rgb, ssr.a * strength * fade);
+            highp vec3 dirView = reflect(toSurface, nView);
+            highp vec2 hitUV;
+            highp float hitS;
+            float hitFade;
+            if (marchReflection(surfaceView, dirView, max(6.0, -surfaceView.z * 0.06),
+                                hitUV, hitS, hitFade)) {
+                vec3 glossy = glossyReflection(hitUV, hitS, surfaceView, dirView,
+                                               mix(0.30, 0.12, puddle));
+                // Far things reflect fainter, as they do on a wet floor.
+                float reach = 1.0 - 0.6 * smoothstep(0.0, 900.0, hitS);
+                colour = mix(colour, glossy, hitFade * strength * fade * reach);
+            }
         }
         if (picked) colour = mix(colour, PICKED, 0.35);
         FragColor = vec4(colour, amount);               // over what is there
@@ -2602,7 +2769,16 @@ void main() {
     // the surface alone, darker parts darken it, lighter parts lighten it.
     float strength = Params.z > 1.5 ? IMAGE_STRENGTH : BLOOD_STRENGTH;
     vec3 stain = picked ? mix(texel.rgb, PICKED, 0.5) : texel.rgb;
-    FragColor = vec4(stain * (amount * strength), amount);
+    vec3 colour = stain * (amount * strength);
+    float over = max(colour.r, max(colour.g, colour.b)) - 1.0;
+    if (lighten && !picked && over > 0.0) {
+        // A sign's white words: the framebuffer stops src.rgb at 1, so the
+        // part past 1 goes in alpha -- dst * (rgb + 1 - a) is unchanged, up
+        // to twice the surface's own brightness, its light still kept.
+        FragColor = vec4(max(colour - over, 0.0), amount - over);
+        return;
+    }
+    FragColor = vec4(colour, amount);
 }"""
 
 
@@ -2698,6 +2874,40 @@ def _terrain_indexed_sources():
 # The optional 360-degree panorama is kept in the central shader registry so
 # desktop and GLES portability checks compile it with every other shader.
 DEFAULT_SHADERS['void_background.vert'] = """#version 330 core
+// The sky: a full-screen triangle at the far plane. The view ray is linear
+// across the screen, so each vertex works out its world direction and the
+// rasteriser interpolates it exactly; a pixel only reads the cube map.
+uniform mat4 u_inverse_projection;
+uniform mat4 u_inverse_view;
+out vec3 v_direction;
+void main() {
+    vec2 p;
+    if (gl_VertexID == 0) {
+        p = vec2(-1.0, -1.0);
+    } else if (gl_VertexID == 1) {
+        p = vec2(3.0, -1.0);
+    } else {
+        p = vec2(-1.0, 3.0);
+    }
+    vec4 view_h = u_inverse_projection * vec4(p, 1.0, 1.0);
+    v_direction = mat3(u_inverse_view) * (view_h.xyz / view_h.w);
+    gl_Position = vec4(p, 1.0, 1.0);
+}
+"""
+DEFAULT_SHADERS['void_background.frag'] = """#version 330 core
+in vec3 v_direction;
+out vec4 frag_colour;
+// The panorama as a cube map (sky_cube.frag made it once, at load): one
+// read a pixel, no trigonometry.
+uniform samplerCube u_sky;
+void main() {
+    frag_colour = vec4(texture(u_sky, v_direction).rgb, 1.0);
+}
+"""
+# Made once when a panorama loads: each face of the sky's cube map drawn
+# from the equirectangular image, by the mapping the water reflects it with
+# (panoramaUV), so the sky and its reflection agree.
+DEFAULT_SHADERS['sky_cube.vert'] = """#version 330 core
 out vec2 v_uv;
 void main() {
     vec2 p;
@@ -2709,23 +2919,45 @@ void main() {
         p = vec2(-1.0, 3.0);
     }
     v_uv = p * 0.5 + 0.5;
-    gl_Position = vec4(p, 1.0, 1.0);
+    gl_Position = vec4(p, 0.0, 1.0);
 }
 """
-DEFAULT_SHADERS['void_background.frag'] = """#version 330 core
+# A reflection probe's snapshot (ForwardRenderer._capture_reflection_probe):
+# its cube map drawn out as an equirectangular image, the inverse of
+# panoramaUV, so water reads it exactly as it reads the sky panorama.
+DEFAULT_SHADERS['probe_equirect.frag'] = """#version 330 core
 in vec2 v_uv;
 out vec4 frag_colour;
-uniform mat4 u_inverse_projection;
-uniform mat4 u_inverse_view;
-uniform sampler2D u_panorama;
-const float PI = 3.14159265358979323846;
+uniform samplerCube u_cube;
 void main() {
-    vec4 view_h = u_inverse_projection * vec4(v_uv * 2.0 - 1.0, 1.0, 1.0);
-    vec3 view_direction = normalize(view_h.xyz / view_h.w);
-    vec3 world_direction = normalize(mat3(u_inverse_view) * view_direction);
-    float u = atan(world_direction.x, -world_direction.z) / (2.0 * PI) + 0.5;
-    float v = 0.5 - asin(clamp(world_direction.y, -1.0, 1.0)) / PI;
-    frag_colour = vec4(texture(u_panorama, vec2(u, v)).rgb, 1.0);
+    // Texel row 0 is straight up, as in an uploaded panorama (panoramaUV).
+    float yaw = (v_uv.x - 0.5) * 6.28318531;
+    float pitch = (0.5 - v_uv.y) * 3.14159265;
+    float across = cos(pitch);
+    // Mirrored about the horizon: the water reads this, and a reflection
+    // looks up -- one a wave tips below the horizon finds the walls just
+    // above it, not the floor and the pool itself.
+    vec3 d = vec3(across * sin(yaw), abs(sin(pitch)), -across * cos(yaw));
+    frag_colour = vec4(texture(u_cube, d).rgb, 1.0);
+}
+"""
+DEFAULT_SHADERS['sky_cube.frag'] = """#version 330 core
+in vec2 v_uv;
+out vec4 frag_colour;
+uniform sampler2D u_panorama;
+uniform int u_face;       // GL_TEXTURE_CUBE_MAP_POSITIVE_X + u_face
+""" + PANORAMA_GLSL + """
+void main() {
+    // The face's texel to its direction (the GL cube map convention).
+    vec2 st = v_uv * 2.0 - 1.0;
+    vec3 d;
+    if (u_face == 0)      d = vec3( 1.0, -st.y, -st.x);
+    else if (u_face == 1) d = vec3(-1.0, -st.y,  st.x);
+    else if (u_face == 2) d = vec3( st.x,  1.0,  st.y);
+    else if (u_face == 3) d = vec3( st.x, -1.0, -st.y);
+    else if (u_face == 4) d = vec3( st.x, -st.y,  1.0);
+    else                  d = vec3(-st.x, -st.y, -1.0);
+    frag_colour = vec4(textureLod(u_panorama, panoramaUV(normalize(d)), 0.0).rgb, 1.0);
 }
 """
 

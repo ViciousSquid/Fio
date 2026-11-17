@@ -37,6 +37,9 @@ class StubRenderer:
     def set_background_image(self, path):
         self.background_image = str(path or "")
 
+    def invalidate_reflection_probes(self):
+        self.probe_invalidations = getattr(self, 'probe_invalidations', 0) + 1
+
     def set_grid(self, world_size, grid_size):
         pass
 

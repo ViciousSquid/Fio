@@ -24,7 +24,10 @@ two arrays and painted by the same pass. They differ only in living until
 the entity changes rather than fading, and in naming their image: ``IMAGE``
 rows paint one (``engine.decal_textures`` gives its layer), ``WET`` rows use
 it as a mask of where the surface is wet (an image with "wet" or
-"puddle" in its name).
+"puddle" in its name). A decal with ``text`` paints a layer of its own --
+its image with the words drawn on (``engine.decal_text``); the table sets
+the image list's text layers (``decal_textures.use_texts``) whenever the
+decals change, so new words -- edited, or set by an IO input -- get theirs.
 
 :meth:`DecalTable.place` keeps them in step with the entities, and -- as
 every table in Fio -- rebuilds only what changed. It is told what changed
@@ -56,7 +59,8 @@ WALL, FLOOR, IMAGE, WET = 0, 1, 2, 3
 
 #: The ``Decal`` entity properties a placed row is made from.
 PLACED_KEYS = ('texture', 'width', 'height', 'depth', 'yaw',
-               'pitch', 'roll', 'mirrored', 'opacity', 'hidden')
+               'pitch', 'roll', 'mirrored', 'opacity', 'hidden', 'text', 'font',
+               'text_colour', 'text_scale', 'text_offset_x', 'text_offset_y')
 
 
 def placed_row(pos, props, layer):
@@ -80,8 +84,12 @@ def placed_row(pos, props, layer):
     # Wet or Image by the image's name (wet / puddle): nothing else says so.
     kind = WET if is_wet_image(props.get('texture')) else IMAGE
     opacity = min(max(_number(props.get('opacity'), 1.0), 0.0), 1.0)
-    params = np.array((float(layer), opacity, float(kind),
-                       1.0 if props.get('mirrored') else 0.0), dtype=np.float32)
+    from engine.decal_text import entry, text_colour
+    # Flags: 1 mirrored, 4 white words (decal.frag lets them lighten).
+    flags = 1.0 if props.get('mirrored') else 0.0
+    if text_colour(props.get('text_colour')) == 'White' and entry(props) is not None:
+        flags += 4.0
+    params = np.array((float(layer), opacity, float(kind), flags), dtype=np.float32)
     return model, params
 
 
@@ -148,7 +156,7 @@ class DecalTable:
 
     __slots__ = ('model', 'inverse', 'variant', 'kind', 'flip', 'born', '_next',
                  'count', 'version', 'placed_model', 'placed_inverse',
-                 'placed_params', '_entries', '_stamp', '_missing',
+                 'placed_params', '_entries', '_stamp', '_layout', '_missing',
                  'rows_made', '__weakref__')
 
     def __init__(self, capacity: int = CAPACITY):
@@ -173,6 +181,8 @@ class DecalTable:
         self._entries = {}
         #: What the placed rows were last reconciled against; see place().
         self._stamp = None
+        #: decal_textures.layout() the rows' layers were found in.
+        self._layout = None
         self._missing = set()
         #: Placed rows made (not reused) since the table was built: what
         #: tests and the benchmark read to see only changed rows remade.
@@ -219,7 +229,7 @@ class DecalTable:
         A decal naming an image that is not in ``textures/decals`` is left
         out, and said once.
         """
-        from engine import decal_textures
+        from engine import decal_text, decal_textures
         # Drained first: a change made while this runs is seen next tick.
         pending = JOURNAL.drain(self)
         version, _names = decal_textures.images()
@@ -245,6 +255,11 @@ class DecalTable:
             key = self._key(thing, show)
             if key == entry[1]:
                 continue
+            text = decal_text.entry(thing.properties)
+            if text is not None and text not in _names:
+                # New words (edited, or an IO input): their layer is made
+                # by a reconcile, which sets the list's text layers.
+                return self._reconcile(things, show, epoch)
             row = self._row(thing, key, _names)
             if (row is None) != (entry[2] < 0):
                 # Drawn now and not before, or the other way: the rows'
@@ -271,10 +286,16 @@ class DecalTable:
         """``(model, inverse, params)`` for *thing*, or None when it is not
         drawn (hidden, no size, or an image the list does not have)."""
         from engine import decal_textures
+        from engine import decal_text
         props = thing.properties
         if props.get('hidden'):
             return None
-        layer = decal_textures.layer_of(props.get('texture'), names)
+        text = decal_text.entry(props)
+        if text is not None:
+            # A sign: its own layer -- its image (if any) with the words on.
+            layer = names.index(text) if text in names else -1
+        else:
+            layer = decal_textures.layer_of(props.get('texture'), names)
         if layer < 0:
             return None
         row = placed_row(thing.pos, props, layer)
@@ -288,14 +309,19 @@ class DecalTable:
 
     def _reconcile(self, things, show, epoch):
         """The rows for every decal in *things*, reusing unchanged ones."""
-        from engine import decal_textures
+        from engine import decal_text, decal_textures
         version, names = decal_textures.images()
         decals = [t for t in list(things) if _is_decal(t)]
         if any(decal_textures.layer_of(t.properties.get('texture'), names) < 0
                for t in decals if t.properties.get('texture')):
             version, names = decal_textures.refresh()       # an image was added?
+        # Every sign's words are a layer -- hidden ones too, so Show (an IO
+        # input) draws nothing new mid-game.
+        texts = [decal_text.entry(t.properties) for t in decals]
+        version, names = decal_textures.use_texts(e for e in texts if e is not None)
         old = self._entries
-        if self._stamp is not None and self._stamp[3] != version:
+        layout = decal_textures.layout()
+        if layout != self._layout:
             old = {}            # the layers moved: every row names a new one
         entries, sources, made = {}, [], []
         for thing in decals:
@@ -339,6 +365,7 @@ class DecalTable:
             self.version += 1
         self._entries = entries
         self._stamp = (epoch, id(things), len(things), version, show)
+        self._layout = layout
         return changed
 
     def release_placed(self):

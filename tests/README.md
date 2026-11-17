@@ -1,6 +1,6 @@
 # Fio test suite
 
-The desktop suite has four tiers, selected by marker. Run `pytest` from the
+The desktop suite has four tiers, selected by marker, plus two opt-in ones. Run `pytest` from the
 repository root; `pytest.ini` selects `tests/` and `plugins/`.
 The Android player suite runs separately against its staged private runtime,
 as required by its engine adapters. Android CI runs every `player/tests` test
@@ -22,6 +22,7 @@ python -m pytest                     # everything except the benchmarks
 | Integration workflows | `python -m pytest -m integration` |
 | Performance guards | `python -m pytest -m perf` |
 | Renderer benchmark (reports timings) | `xvfb-run -a python -m pytest -m benchmark --run-benchmarks -s` |
+| Soak (long repeated cycles; leaks, growth) | `LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a python -m pytest tests/soak --run-soak -s` |
 | One area | `python -m pytest tests/geometry` |
 
 On a machine with no GPU, `LIBGL_ALWAYS_SOFTWARE=1` in front of the `xvfb-run`
@@ -61,6 +62,15 @@ separately from the steady state. It fails only against a stored baseline from
 the *same* machine (`FIO_BENCH_BASELINE=path.json`), never on an absolute
 number.
 
+**`soak` — nothing accumulates.** Excluded from every normal run; `--run-soak`
+opts in. Each test repeats one realistic cycle (a Play/Stop, an edit and its
+undo, a flag toggled on a sleeping body, a sky switched) hundreds of times and
+fails if, after warm-up, the traced Python heap, a named resource count (GL
+textures, journal subscribers, threads) or the per-cycle time keeps climbing.
+`FIO_SOAK_SCALE` multiplies the cycle counts (5-10 for a pre-release run, 0.2 to
+smoke the tier); `FIO_SOAK_TRACE_FRAMES` deepens `tracemalloc` tracebacks when a
+failure needs diagnosing. The modules carry the usual `qt`/`gl` tier markers.
+
 Two more markers are orthogonal to the tiers: `integration` (several subsystems
 driven together) and `perf` (guards that count work rather than timing it, e.g.
 "this array is built once per session, not once per frame"). `slow` marks the
@@ -88,6 +98,7 @@ handful of tests that use real threads and real time.
 | `tests/regression/` | One test per fixed defect, stating the invariant that was broken |
 | `tests/visual/` | The `gl` tier: a lit cube, its shadow, and a moving light |
 | `tests/performance/` | Work-per-frame guards and the renderer benchmark |
+| `tests/soak/` | Opt-in soak tier: Play/Stop sessions, editor history, map round trips, physics activation, decals, sky panoramas |
 | `tests/helpers/` | Shared factories and fakes (not collected) |
 
 The plugin and player packages keep their own tests next to the code

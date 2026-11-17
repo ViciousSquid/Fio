@@ -334,9 +334,12 @@ class ViewPause:
         """The current frame, blurred, or None (no GL frame to grab).
 
         The world is paused while the menu is open, so one grab serves the
-        whole time it is shown. Shrinking with smooth filtering in two steps
-        and drawing it back at full size with smooth filtering is a cheap,
-        even blur.
+        whole time it is shown. Shrinking it (by averaging blocks of pixels:
+        ``engine.asset_qt.shrink_image``), smoothing it a little larger and
+        drawing it back at full size with smooth filtering is a cheap, even
+        blur. The shrink is not Qt's smooth scaling: on a whole frame that
+        splits across Qt's thread pool and waits, which on Windows ARM64
+        sometimes never returned.
         """
         try:
             image = self.view.grabFramebuffer()
@@ -346,8 +349,9 @@ class ViewPause:
             return None
         w, h = image.width(), image.height()
         f = self.PAUSE_BLUR_FACTOR
-        small = image.scaled(max(1, w // f), max(1, h // f),
-                             Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        from engine.asset_qt import shrink_image
+        small = shrink_image(image, f)
+        # From a picture this small Qt scales on this thread alone.
         return small.scaled(max(1, w // 4), max(1, h // 4),
                             Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 

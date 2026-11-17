@@ -71,7 +71,7 @@ FIELDS: List[Field] = [
           "band only appears for cells kept resident well past the activation "
           "radius — set a deactivation radius more than an eighth beyond it.)",
           min=0.0, max=65536.0),
-    Field("show_cell_debug", "bool", "Show debug overlay", True,
+    Field("show_cell_debug", "bool", "Show debug overlay", False,
           "Draw the Big World stats panel and active-cell minimap in play mode."),
     Field("terrain_fill", "bool", "Fill world with terrain", False,
           "If the map has a procedural terrain, expand it to cover every cell "

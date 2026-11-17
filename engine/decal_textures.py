@@ -1,12 +1,17 @@
 """The decal images: one sorted list both sides of a frame agree on.
 
-Every ``.png`` in ``assets/textures/decals`` -- loose, archived or in an end
-user's ``.fiopak`` pack -- is a layer of the renderer's decal texture array,
+Every image (``.png``, ``.jpg``, ``.jpeg``) in ``assets/textures/decals`` --
+loose, archived or in an end user's ``.fiopak`` pack -- is a layer of the renderer's decal texture array,
 in this order. The logic side names a placed decal's image by its layer
 (:func:`layer_of`); blood picks a variant within the wall or floor range
 (:func:`blood_ranges`). The list is read once and kept; a placed decal that
 names an image the list does not have yet re-reads it (:func:`refresh`), and
 the renderer rebuilds its array when :func:`images` reports a new version.
+
+After the image files come the text layers (``engine.decal_text``): one per
+different text a ``Decal`` paints, set by the decal table each time the
+decals change (:func:`use_texts`), so a sign's words are a layer like any
+image's.
 """
 
 from __future__ import annotations
@@ -15,9 +20,13 @@ import os
 import threading
 
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
+#: The image files a decal can paint. A JPEG has no transparency: it paints
+#: its whole rectangle (a sign's plate, say).
+IMAGE_SUFFIXES = ('.png', '.jpg', '.jpeg')
 
 _lock = threading.Lock()
-_state = {'version': 0, 'names': None, 'where': None}
+_state = {'version': 0, 'names': None, 'where': None, 'texts': (), 'all': None,
+          'layout': 0}
 #: A source set by :func:`use_source` (the Android player: its images come
 #: from the played package, not a project's assets folder), or None.
 _source = {'source': None}
@@ -25,17 +34,27 @@ _source = {'source': None}
 
 class DecalSource:
     """Decal images that are not in a project's ``assets`` folder: *images*
-    maps each file name to a callable returning its bytes (or None)."""
+    maps each file name to a callable returning its bytes (or None); *fonts*
+    does the same for the font files a decal's text may be drawn in, by
+    their paths under ``assets/fonts``."""
 
-    def __init__(self, images):
+    def __init__(self, images, fonts=None):
         self.images = dict(images)
+        self.fonts = dict(fonts or {})
 
     def names(self):
-        return tuple(sorted((n for n in self.images if n.lower().endswith('.png')),
+        return tuple(sorted((n for n in self.images if n.lower().endswith(IMAGE_SUFFIXES)),
                             key=str.casefold))
 
     def read(self, name):
         reader = self.images.get(name)
+        return reader() if reader is not None else None
+
+    def font_files(self):
+        return sorted(self.fonts, key=str.casefold)
+
+    def read_font(self, path):
+        reader = self.fonts.get(path)
         return reader() if reader is not None else None
 
 
@@ -47,6 +66,11 @@ def use_source(source):
     with _lock:
         _source['source'] = source
     return refresh()
+
+
+def current_source():
+    """The :class:`DecalSource` set by :func:`use_source`, or None."""
+    return _source['source']
 
 
 def read_image(name):
@@ -83,17 +107,28 @@ def _read():
         return source.names()
     from engine.asset_archives import asset_listdir
     return tuple(sorted((n for n in asset_listdir(DECAL_FOLDER)
-                         if n.lower().endswith('.png')), key=str.casefold))
+                         if n.lower().endswith(IMAGE_SUFFIXES)), key=str.casefold))
 
 
 def images():
-    """``(version, names)``: the decal images in layer order -- read again
-    when the project changes (another map's folder, a test's)."""
+    """``(version, names)``: the decal images in layer order, then the text
+    layers -- the folder read again when the project changes (another map's
+    folder, a test's)."""
     where = _where()
     with _lock:
         if _state['names'] is not None and _state['where'] == where:
-            return _state['version'], _state['names']
+            return _state['version'], _state['all']
     return refresh()
+
+
+def _publish():
+    """The list as it now stands (the lock held): a new version when it
+    differs from the last one handed out."""
+    combined = _state['names'] + _state['texts']
+    if combined != _state['all']:
+        _state['all'] = combined
+        _state['version'] += 1
+    return _state['version'], _state['all']
 
 
 def refresh():
@@ -103,9 +138,56 @@ def refresh():
     with _lock:
         _state['where'] = where
         if names != _state['names']:
-            _state['names'] = names
-            _state['version'] += 1
-        return _state['version'], _state['names']
+            _state['layout'] += 1               # every later layer may move
+        _state['names'] = names
+        return _publish()
+
+
+def layout():
+    """A number that changes whenever a layer already handed out may now be
+    another image's (the files changed, or the text layers were tidied):
+    then every row naming a layer is remade. New words for a sign do not
+    change it -- they take the layer their old words freed."""
+    return _state['layout']
+
+
+#: How many freed text layers are kept for new words to take before the
+#: text layers are tidied up (when they are also over half of them).
+_FREE_KEPT = 8
+
+
+def use_texts(entries):
+    """Make the text layers *entries* (``engine.decal_text.entry`` of each
+    decal with text, any order, repeats allowed); returns ``images()``.
+
+    They come after the image files, and each keeps its layer for as long as
+    it is wanted: new words take a layer freed by words no longer wanted, so
+    a sign whose words change (an edit, an IO input) changes that one layer
+    and no other sign's moves (:func:`layout` stays). Freed layers are blank
+    until taken; when too many are, the text layers are packed again."""
+    from engine.decal_text import FREE
+    wanted = set(entries)
+    wanted.discard(None)
+    version, _names = images()
+    with _lock:
+        texts = list(_state['texts'])
+        if set(texts) - {FREE} == wanted:
+            return _state['version'], _state['all']
+        if not wanted:
+            slots = []                          # no sign left names a text layer
+        else:
+            slots = [t if t in wanted else FREE for t in texts]
+            new = sorted(wanted - set(slots))
+            free = [i for i, t in enumerate(slots) if t == FREE]
+            for i, entry in zip(free, new):
+                slots[i] = entry
+            slots.extend(new[len(free):])
+            unused = slots.count(FREE)
+            if unused > _FREE_KEPT and unused * 2 > len(slots):
+                slots = sorted(wanted)
+                _state['layout'] += 1           # packed: the signs' layers move
+        _state['texts'] = tuple(slots)
+        return _publish()
 
 
 def is_wet_image(name):
@@ -143,6 +225,8 @@ def blood_ranges(names):
     if not walls[1] or not floors[1]:
         both = run('blood_')
         if not both[1]:
-            both = (0.0, float(len(names)))
+            # No blood images at all: any image file, never a sign's text.
+            from engine.decal_text import is_entry
+            both = (0.0, float(sum(1 for n in names if not is_entry(n))))
         return both + both
     return walls + floors

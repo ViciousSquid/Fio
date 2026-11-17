@@ -43,6 +43,34 @@ def test_a_world_plays_with_the_bundled_blood_and_its_package_decals():
             decal_textures.use_source(None)
 
 
+def test_a_package_brings_the_fonts_its_signs_are_drawn_in():
+    # The desktop exporter packs the font each sign names (engine.decal_text);
+    # the player draws the sign's words in it, as the desktop does.
+    from PIL import ImageFont
+    from engine import decal_text
+    face = ImageFont.load_default(size=12).path.getvalue()     # a real TrueType face
+    raw = build_package({'map_path': 'maps/a.json'}, {'maps/a.json': {}}, {
+        'assets/fonts/editor/FioUI-Regular.ttf': face,
+        'assets/fonts/Stencil.otf': face,
+        'assets/fonts/readme.txt': b'not a font',
+        'assets/textures/decals/stain.png': _png()})
+    with FioPackage.from_bytes(raw) as package:
+        source = decal_source(package)
+        assert source.font_files() == ['editor/FioUI-Regular.ttf', 'Stencil.otf']
+        assert source.read_font('editor/FioUI-Regular.ttf') == face
+        try:
+            decal_textures.use_source(source)
+            sign = decal_text.entry({'texture': 'stain.png', 'text': 'EXIT'})
+            version, names = decal_textures.use_texts([sign])
+            assert names[-1] == sign and 'stain.png' in names
+            layer = decal_text.layer_pixels(sign, 64)
+            assert (layer[..., 0] < 8).sum() > 40                 # black words...
+            assert (layer[..., 3] == 255).all()                    # ...on the stain
+        finally:
+            decal_textures.use_texts(())
+            decal_textures.use_source(None)
+
+
 def test_only_decals_in_view_and_big_enough_are_drawn():
     eye = np.array((0.0, 0.0, 0.0))
     view = glmath.look_at(eye, (0, 0, -1))

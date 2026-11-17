@@ -1816,6 +1816,39 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('portal', 'setheight', portal_set_height)
 
     # ==========================================================================
+    # DECAL HANDLERS
+    # ==========================================================================
+    # A decal's words are a property like any other: change it and the decal
+    # table draws the new words into a layer of their own (engine.decal_text)
+    # -- the executor touches the decal after the handler, so its row is
+    # remade next tick. Stop puts back the authored text with the rest of
+    # the world.
+
+    def decal_set_text(entity, param, logic):
+        """Paint *param* on the decal (``\\n`` starts a new line)."""
+        entity.properties['text'] = '' if param is None else str(param)
+        name = entity.properties.get('name', 'unnamed')
+        debug_log('IO', f"Decal '{name}' text set to '{entity.properties['text']}'")
+
+    def decal_clear_text(entity, param, logic):
+        entity.properties['text'] = ''
+
+    def decal_set_font(entity, param, logic):
+        """Draw the decal's words in font *param* (a name, any case)."""
+        from engine.decal_text import font_name
+        entity.properties['font'] = font_name(param)
+
+    def decal_set_text_colour(entity, param, logic):
+        """Black or White lettering (any case; anything else is black)."""
+        from engine.decal_text import text_colour
+        entity.properties['text_colour'] = text_colour(param)
+
+    io_manager.register_input_handler('decal', 'settext', decal_set_text)
+    io_manager.register_input_handler('decal', 'cleartext', decal_clear_text)
+    io_manager.register_input_handler('decal', 'setfont', decal_set_font)
+    io_manager.register_input_handler('decal', 'settextcolor', decal_set_text_colour)
+
+    # ==========================================================================
     # LOG SUMMARY
     # ==========================================================================
 

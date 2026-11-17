@@ -15,7 +15,7 @@ from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState, PlayerStart, LevelChanger)
+                           LogicState, PlayerStart, LevelChanger, Decal)
 from engine import player_starts as start_rules
 from editor import state_values as _sv
 from editor.sky_assets import store_sky_image_in_project
@@ -729,8 +729,16 @@ class PropertyEditor(QWidget):
             if page is not None:
                 page.deleteLater()
             return
-        self._page_cache = [e for e in self._page_cache
-                            if e[0] is not self.current_object]
+        # A page already parked for this object was built for an older
+        # signature and is superseded; destroy it rather than just forgetting
+        # it, or it stays parented to _parking for the rest of the session.
+        kept = []
+        for entry in self._page_cache:
+            if entry[0] is self.current_object:
+                entry[2].deleteLater()
+            else:
+                kept.append(entry)
+        self._page_cache = kept
         self._page_cache.append((self.current_object, self._signature, page,
                                  self._capture_page_state()))
         while len(self._page_cache) > self.PAGE_CACHE_SIZE:
@@ -1757,7 +1765,7 @@ class PropertyEditor(QWidget):
         quality_cb = _make_checkbox(
             "High quality",
             water_high_quality(brush),
-            lambda c: self.update_object_prop('water_high_quality', c),
+            self._set_water_high_quality,
             _Style.CHECKBOX)
         quality_cb.setToolTip(
             "This water brush only.\n"
@@ -3737,6 +3745,62 @@ class PropertyEditor(QWidget):
                 )
                 continue
 
+            # A decal's words, and the font they are drawn in (by name).
+            if isinstance(thing, Decal) and key == 'text':
+                edit = QLineEdit(str(value or ''))
+                edit.setPlaceholderText(r"Words to paint on  (\n: new line)")
+                edit.setToolTip(
+                    "Painted over the decal's image, centred; with no image, alone.\n"
+                    "Type \\n for a new line. IO: SetText, ClearText, SetFont, SetTextColor.")
+                edit.editingFinished.connect(
+                    lambda e=edit: e.text() != str(thing.properties.get('text') or '')
+                    and self.update_object_prop('text', e.text()))
+                form.addRow(QLabel("Text:"), edit)
+                continue
+
+            if isinstance(thing, Decal) and key == 'font':
+                from engine import decal_text
+                combo = _make_combo(
+                    decal_text.font_names(), decal_text.font_name(value),
+                    lambda text: self.update_object_prop('font', text),
+                    tooltip="The font the decal's text is drawn in")
+                form.addRow(QLabel("Font:"), combo)
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_scale':
+                from engine import decal_text
+                slider, label = _make_slider(
+                    self, decal_text.text_scale(value), 10, 100, fmt="{:.0%}",
+                    callback=lambda v: self.update_object_prop('text_scale', v),
+                    tooltip="How big the words are: 100% fills as much of the decal "
+                            "as they can; smaller, to fit inside its image")
+                self._widgets['decal_text_scale'] = slider
+                form.addRow("Text Size:", _hbox(slider, label, stretch=False))
+                continue
+
+            if isinstance(thing, Decal) and key in ('text_offset_x', 'text_offset_y'):
+                from engine import decal_text
+                across = key == 'text_offset_x'
+                slider, label = _make_slider(
+                    self, decal_text.text_offset(value), -50, 50, fmt="{:+.0%}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=("Move the words right (+) or left (-)" if across else
+                             "Move the words up (+) or down (-)")
+                            + ", by up to half the decal")
+                self._widgets['decal_' + key] = slider
+                form.addRow("Text Offset X:" if across else "Text Offset Y:",
+                            _hbox(slider, label, stretch=False))
+                continue
+
+            if isinstance(thing, Decal) and key == 'text_colour':
+                from engine import decal_text
+                combo = _make_combo(
+                    list(decal_text.TEXT_COLOURS), decal_text.text_colour(value),
+                    lambda text: self.update_object_prop('text_colour', text),
+                    tooltip="Black lettering, or white (which brightens the surface)")
+                form.addRow(QLabel("Text Colour:"), combo)
+                continue
+
             # Logic gate type.
             if isinstance(thing, LogicGate) and key == 'logic_type':
                 combo = QComboBox()
@@ -5481,6 +5545,38 @@ class PropertyEditor(QWidget):
             size = list(size)
         size[index] = float(value)
         self.update_object_prop('sprite_size', size)
+
+    def _set_water_high_quality(self, checked):
+        """The water's High quality checkbox. Switching it on also places a
+        reflection probe above the water's surface; switching it off deletes
+        that probe -- only the one it made, never one the author placed. The
+        flag and the probe are one undo step."""
+        from editor.things import make_water_probe, water_probe_of
+        brush = self.current_object
+        checked = bool(checked)
+        if not isinstance(brush, dict) or checked == water_high_quality(brush):
+            self.update_object_prop('water_high_quality', checked)
+            return
+        self.editor.save_state()
+        self.update_object_prop('water_high_quality', checked)
+        things = self.editor.state.things
+        probe = water_probe_of(brush, things)
+        if checked and probe is None:
+            things.append(make_water_probe(brush))
+        elif not checked and probe is not None:
+            things.remove(probe)
+            selected = list(self.editor.state.selected_objects)
+            if any(obj is probe for obj in selected):
+                self.editor.set_selected_objects(
+                    [obj for obj in selected if obj is not probe])
+        else:
+            return
+        if hasattr(self.editor, 'scene_hierarchy'):
+            self.editor.scene_hierarchy.refresh_list()
+        self.editor.view_3d.update()
+        for name in ('view_top', 'view_front', 'view_side'):
+            if hasattr(self.editor, name):
+                getattr(self.editor, name).update()
 
     def update_object_prop(self, key, value):
         if self.current_object is None:

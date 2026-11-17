@@ -990,6 +990,20 @@ def register_default_io():
         ]
     )
     
+    # === DECAL ===
+    register_io('decal',
+        inputs=[
+            IODef('SetText', 'Paint these words on the decal (\\n: new line)', 'string'),
+            IODef('ClearText', 'Remove the words'),
+            IODef('SetFont', 'Draw the words in this font (by name, e.g. Fio UI)', 'string'),
+            IODef('SetTextColor', 'Make the words Black or White', 'string'),
+            IODef('Hide', 'Hide this decal'),
+            IODef('Show', 'Show this decal'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+        ],
+        outputs=[]
+    )
+
     # === BRUSH (generic solid) ===
     register_io('brush',
         inputs=[

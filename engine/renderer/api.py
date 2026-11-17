@@ -238,6 +238,12 @@ class Renderer(Protocol):
         path disables the panorama and restores the renderer's clear colour.
         """
 
+    def invalidate_reflection_probes(self) -> None:
+        """Retake the snapshots of the map's reflection probes (EntityTable
+        rows with ``ENT_PROBE``) on the next frame. The host calls it when a
+        map has loaded and when Play starts. A renderer that does not draw
+        probe reflections does nothing."""
+
     def set_grid(self, world_size: int, grid_size: int) -> None:
         """Size the editor grid (drawn when ``grid_visible``); 0 removes it."""
 

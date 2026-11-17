@@ -14,7 +14,10 @@ from PyQt5.QtWidgets import (QDialogButtonBox, QFileDialog, QFormLayout, QLabel,
 from editor.desktop_style import MONO_FONT, UI_FONT, keep_message_box_titles, message_box_size
 from main import dark_stylesheet
 
-pytestmark = pytest.mark.qt
+# Its message boxes are real ones: on Windows the Qt shard runner runs this
+# module on the windows platform (Qt 5.15.2's offscreen one crashes in
+# QMessageBox's show; see tools/run_qt_suite_shard.py).
+pytestmark = [pytest.mark.qt, pytest.mark.native_message_box]
 
 
 def test_tabs_stay_at_the_left_even_when_a_dialog_has_its_own_stylesheet(qt_app):

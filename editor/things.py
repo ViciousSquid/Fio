@@ -597,6 +597,70 @@ class Speaker(Thing):
         return float(self.properties.get('radius', 512.0))
 
 
+class ReflectionProbe(Thing):
+    """Local reflections for water: Source's ``env_cubemap``, done Fio's way.
+
+    Water reflects the map's sky, plus whatever is on screen (high quality's
+    screen-space reflections). Under a roof the sky is the wrong thing to see
+    where those miss. Water whose centre is inside a probe's radius reflects
+    a 360-degree snapshot taken from the probe instead -- the room around it.
+
+    The snapshot is taken by the renderer, not baked into the map: when the
+    map loads, when Play starts, and when the probe is moved or its radius
+    changed. Nothing is redrawn per frame, and reading it costs the water
+    what reading the sky does. A map without probes renders as before.
+    """
+    pixmap_path = "assets/sprites/reflection_probe.png"
+    #: Its icon in the 3D view, while editing (never in Play).
+    editor_sprite_path = pixmap_path
+    EDITOR_PRIMARY_PROPERTIES = ('radius', 'show_radius')
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties.setdefault('type', 'reflection_probe')
+        self.properties.setdefault('radius', 512.0)
+        self.properties.setdefault('show_radius', True)
+
+    def get_radius(self):
+        try:
+            return max(16.0, float(self.properties.get('radius', 512.0)))
+        except (TypeError, ValueError):
+            return 512.0
+
+
+#: How far above a water brush's top surface the probe its High quality
+#: checkbox creates stands: a standing player's height, about where a viewer
+#: sees the water from.
+WATER_PROBE_HEIGHT = float(PLAYER_HULL_SIZE[1])
+
+
+def water_probe_of(brush, things):
+    """The ReflectionProbe the *brush*'s High quality checkbox created
+    (its ``water_brush`` property is the brush's id), or None. A probe the
+    author placed has no ``water_brush`` and is never this."""
+    brush_id = brush.get('id') if isinstance(brush, dict) else None
+    if not brush_id:
+        return None
+    return next((t for t in things if isinstance(t, ReflectionProbe)
+                 and t.properties.get('water_brush') == brush_id), None)
+
+
+def make_water_probe(brush):
+    """A new ReflectionProbe for a water *brush*: centred over it,
+    WATER_PROBE_HEIGHT above its top surface, its radius reaching the brush's
+    centre (which is what decides which water a probe serves) and at least the
+    brush's half-width. The brush is given an id if it has none."""
+    brush_id = brush.setdefault('id', str(uuid.uuid4()))
+    pos = [float(v) for v in brush.get('pos', (0.0, 0.0, 0.0))]
+    size = [abs(float(v)) for v in brush.get('size', (64.0, 64.0, 64.0))]
+    top = pos[1] + size[1] / 2.0
+    radius = max(512.0, 0.5 * math.hypot(size[0], size[2]),
+                 size[1] / 2.0 + WATER_PROBE_HEIGHT + 16.0)
+    return ReflectionProbe(pos=[pos[0], top + WATER_PROBE_HEIGHT, pos[2]],
+                           properties={'radius': round(radius, 1),
+                                       'water_brush': brush_id})
+
+
 class Decal(Thing):
     """A decal: an image painted onto whatever surfaces its box meets.
 
@@ -617,6 +681,20 @@ class Decal(Thing):
     roll        The image's rotation about the throw, degrees.
     mirrored    Flip the image left to right.
     opacity     How strongly it paints (for 'wet', how wet).
+    text        Words painted on, centred over the image (engine.decal_text);
+                empty for none. ``\\n`` starts a new line. With no image
+                (``texture`` empty) the words are painted alone. IO: SetText,
+                ClearText, SetFont, SetTextColor.
+    font        The font the text is drawn in, by name (the property
+                editor's dropdown): Fio UI unless another is chosen.
+    text_colour Black (the default) or White. Like the image, the words
+                tint the surface: black is black, white doubles its
+                brightness (white on a mid-tone wall).
+    text_scale  Text Size: 1.0 (the default) fills as much of the box as the
+                words can; down to 0.1, smaller, to fit inside an image.
+    text_offset_x, text_offset_y
+                Text Offset: the words moved from the centre, right and up,
+                by up to half the box (-0.5 to 0.5) -- into a plate's panel.
     """
     #: No icon and no box: what the decal paints is how the editor shows it
     #: (placed, selected, dragged and nudged with the Decal tool).
@@ -625,7 +703,8 @@ class Decal(Thing):
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
         'texture', 'width', 'height', 'depth',
-        'yaw', 'pitch', 'roll', 'mirrored', 'opacity',
+        'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'text', 'font', 'text_colour',
+        'text_scale', 'text_offset_x', 'text_offset_y',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -643,6 +722,12 @@ class Decal(Thing):
         self.properties.setdefault('roll', 0.0)
         self.properties.setdefault('mirrored', False)
         self.properties.setdefault('opacity', 1.0)
+        self.properties.setdefault('text', '')
+        self.properties.setdefault('font', 'Fio UI')
+        self.properties.setdefault('text_colour', 'Black')
+        self.properties.setdefault('text_scale', 1.0)
+        self.properties.setdefault('text_offset_x', 0.0)
+        self.properties.setdefault('text_offset_y', 0.0)
 
     @staticmethod
     def default_texture():
@@ -653,9 +738,11 @@ class Decal(Thing):
             names = images()[1]
         except Exception:
             return ''
-        plain = [n for n in names
+        from engine.decal_text import is_entry
+        files = [n for n in names if not is_entry(n)]      # not a sign's text
+        plain = [n for n in files
                  if not n.lower().startswith('blood_') and not is_wet_image(n)]
-        return (plain or list(names) or [''])[0]
+        return (plain or files or [''])[0]
 
     def throw_direction(self):
         """The unit direction the decal is thrown in (into the surface)."""
@@ -2118,6 +2205,7 @@ ENTITY_TYPES = {
     'PlayerStart': PlayerStart,
     'Light': Light,
     'Speaker': Speaker,
+    'ReflectionProbe': ReflectionProbe,
     'Decal': Decal,
     'Monster': Monster,
     'LogicRelay': LogicRelay,
@@ -2144,7 +2232,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'Portal', 'Decal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

@@ -37,7 +37,7 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import shaders
-from engine import decal_textures
+from engine import decal_text, decal_textures
 from engine.decal_table import box_inverse
 from engine.asset_archives import asset_source
 
@@ -53,6 +53,19 @@ _INSTANCE_VEC4S = _INSTANCE_FLOATS // 4
 #: A decal covering less than this many pixels across (its radius, on
 #: screen) is not drawn.
 MIN_PIXEL_RADIUS = 0.5
+
+
+def _mip_chain(layer):
+    """*layer* (side x side RGBA bytes, side a power of two) and each mipmap
+    level below it, halved by averaging -- as glGenerateMipmap makes them --
+    for updating one layer of the array in place."""
+    level = np.ascontiguousarray(layer, dtype=np.uint8)
+    yield level
+    wide = level.astype(np.uint16)
+    while wide.shape[0] > 1:
+        wide = (wide[0::2, 0::2] + wide[1::2, 0::2] + wide[0::2, 1::2]
+                + wide[1::2, 1::2] + 2) // 4
+        yield np.ascontiguousarray(wide, dtype=np.uint8)
 
 
 def visible_decals(models, projection, view, camera_pos, viewport_height):
@@ -91,6 +104,13 @@ class DecalsMixin:
         self._decal_textures = 0
         self._decal_layers = 0
         self._decal_images_version = None
+        #: Each layer's pixels by name, kept between rebuilds: new words on
+        #: a sign draw that one layer, not every image again (decoding the
+        #: wet masks alone is half a second). Image files are read afresh
+        #: whenever the list of files changes.
+        self._decal_layer_pixels = {}
+        self._decal_layer_files = None
+        self._decal_layer_names = None
         self._decal_ranges = (0.0, 1.0, 0.0, 1.0)
         self._decal_staging = np.zeros((0, _INSTANCE_FLOATS), dtype=np.float32)
         self._decal_base = None
@@ -126,23 +146,53 @@ class DecalsMixin:
         if version == self._decal_images_version:
             return self._decal_textures
         from PIL import Image
-        if self._decal_textures:
-            gl.glDeleteTextures(1, [self._decal_textures])
-            self._decal_textures = 0
         self._decal_images_version = version
         self._decal_ranges = decal_textures.blood_ranges(names)
         layers = []
         size = DECAL_TEXTURE_SIZE
         blank = np.zeros((size, size, 4), dtype=np.uint8)
+        files = tuple(n for n in names if not decal_text.is_entry(n))
+        kept = self._decal_layer_pixels if files == self._decal_layer_files else {}
+        pixels = {}
         for name in names:
-            try:
-                image = Image.open(asset_source(os.path.join(DECAL_FOLDER, name)))
-                layers.append(np.asarray(
-                    image.convert('RGBA').resize((size, size), Image.LANCZOS), dtype=np.uint8))
-            except Exception as exc:
-                # Kept as a blank layer: every later image keeps its layer.
-                print(f'[Renderer] decal texture {name} not loaded: {exc}')
-                layers.append(blank)
+            layer = kept.get(name)
+            if layer is None:
+                try:
+                    if decal_text.is_entry(name):
+                        layer = decal_text.layer_pixels(name, size)
+                    else:
+                        image = Image.open(asset_source(os.path.join(DECAL_FOLDER, name)))
+                        layer = np.asarray(image.convert('RGBA').resize(
+                            (size, size), Image.LANCZOS), dtype=np.uint8)
+                except Exception as exc:
+                    # Kept as a blank layer: every later image keeps its layer.
+                    print(f'[Renderer] decal texture {name} not loaded: {exc}')
+                    layer = blank
+            pixels[name] = layer
+            layers.append(layer)
+        previous = self._decal_layer_names
+        same_files = files == self._decal_layer_files
+        self._decal_layer_pixels, self._decal_layer_files = pixels, files
+        self._decal_layer_names = names
+        if (self._decal_textures and same_files and previous is not None
+                and len(previous) == len(names)):
+            # Only signs' words changed (an edit, an IO input): those layers,
+            # in place, with their own mipmaps -- not the whole array again.
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+            gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+            for index, (was, name) in enumerate(zip(previous, names)):
+                if was != name:
+                    for level, data in enumerate(_mip_chain(layers[index])):
+                        side = data.shape[0]
+                        gl.glTexSubImage3D(gl.GL_TEXTURE_2D_ARRAY, level, 0, 0, index,
+                                           side, side, 1, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE,
+                                           data)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            return self._decal_textures
+        if self._decal_textures:
+            gl.glDeleteTextures(1, [self._decal_textures])
+            self._decal_textures = 0
         if not layers:
             self._decal_layers = 0
             return 0
@@ -293,16 +343,29 @@ class DecalsMixin:
                 # Wet patches: over a copy of the frame so far (blood and
                 # images included), drawn plainly over what is there.
                 if self._capture_glass_scene() is not None:
-                    gl.glActiveTexture(gl.GL_TEXTURE0)
-                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
-                    gl.glBindVertexArray(self._decal_vao)
-                    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
-                    gl.glUseProgram(program)
-                    gl.glUniform1i(u['wetPass'], 1)
-                    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-                    self._decal_point(plain_count)
-                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
-                    self.render_stats.draw_calls += 1
+                    # Glossy reflections read a blurred copy: its mip chain,
+                    # made now (the capture left the copy bound on its unit),
+                    # and plain filtering again after the draw, so the glass
+                    # and the water still read level 0 alone.
+                    gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
+                                       gl.GL_LINEAR_MIPMAP_LINEAR)
+                    try:
+                        gl.glActiveTexture(gl.GL_TEXTURE0)
+                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                        gl.glBindVertexArray(self._decal_vao)
+                        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
+                        gl.glUseProgram(program)
+                        gl.glUniform1i(u['wetPass'], 1)
+                        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                        self._decal_point(plain_count)
+                        gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
+                        self.render_stats.draw_calls += 1
+                    finally:
+                        gl.glActiveTexture(gl.GL_TEXTURE0 + self._glass_scene_texture_unit)
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+                        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
+                                           gl.GL_LINEAR)
         finally:
             gl.glCullFace(cull_mode)
             if not cull:
@@ -331,3 +394,5 @@ class DecalsMixin:
         self._decal_capacity = 0
         self._decal_base = None
         self._decal_layers = 0
+        self._decal_layer_pixels, self._decal_layer_files = {}, None
+        self._decal_layer_names = None

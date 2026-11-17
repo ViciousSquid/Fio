@@ -70,12 +70,16 @@ jobs:
   windows_qt_no_gpu:
     name: Qt / no-GPU suite on Windows x64 (offscreen, shard ${{ matrix.shard }})
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Measured on the 3.5.0.1611 run: the Qt suite is ~260 runner-minutes on
+    # Windows and the shards are balanced by test count, not time. Four shards
+    # needed 52-71 min (three hit the old 60-min limit); six are simulated at
+    # 26-60 min from those timings, so the limit keeps ~25% headroom.
+    timeout-minutes: 75
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -92,7 +96,7 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python tools/run_qt_suite_shard.py --shard-count 4 --shard-index ${{ matrix.shard }}
+        run: python tools/run_qt_suite_shard.py --shard-count 6 --shard-index ${{ matrix.shard }}
 
   windows_arm64_no_gpu:
     name: No-GPU fast core on Windows ARM64 (native, CPython 3.14)
@@ -172,12 +176,13 @@ jobs:
   windows_arm64_qt_no_gpu:
     name: Qt / no-GPU suite on Windows ARM64 (offscreen, PyQt5-WinARM64 wheel, shard ${{ matrix.shard }})
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 75
+    # Same split as x64 (see there); ARM64 runners take a little longer.
+    timeout-minutes: 90
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -257,4 +262,4 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python tools/run_qt_suite_shard.py --shard-count 4 --shard-index ${{ matrix.shard }}
+        run: python tools/run_qt_suite_shard.py --shard-count 6 --shard-index ${{ matrix.shard }}

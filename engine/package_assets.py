@@ -22,6 +22,11 @@ def map_assets(node):
     result = set()
     def visit(value, key=''):
         if isinstance(value, dict):
+            text = value.get('text')
+            if value.get('type') == 'decal' and isinstance(text, str) and text.strip():
+                # A sign is drawn in its font: the package carries the file.
+                from engine.decal_text import font_file
+                result.add('fonts/' + font_file(value.get('font')))
             for k, v in value.items():
                 if k == 'textures' and isinstance(v, dict):
                     result.update(x for x in v.values() if isinstance(x, str) and x)

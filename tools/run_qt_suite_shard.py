@@ -18,22 +18,86 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-DEFAULT_MARKER = "qt and not gl and not benchmark"
+# Opt-in tiers (benchmark, soak) are deselected rather than collected and
+# skipped: each selected module costs this runner a whole interpreter start.
+DEFAULT_MARKER = "qt and not gl and not benchmark and not soak"
+
+#: Wall-clock limit for one module's pytest process. The slowest module on
+#: the Windows ARM64 runners takes ~23 min; a hung test otherwise holds the
+#: whole shard until the job timeout and every later module goes unreported.
+MODULE_TIMEOUT_SECONDS = 30 * 60
+
+#: A single test running this long gets every thread's stack dumped (pytest's
+#: faulthandler_timeout; it does not stop the test), so a hang names its
+#: cause. The slowest single tests take well under a minute.
+TEST_STACK_DUMP_SECONDS = 5 * 60
+
+#: Marks a test module that shows real QMessageBoxes (pytest.ini).
+NATIVE_MESSAGE_BOX_MARKER = "native_message_box"
+
+#: The first Qt whose offscreen platform has a native interface (0x050F0A).
+OFFSCREEN_NATIVE_INTERFACE_QT = (5, 15, 10)
+
+
+def message_boxes_need_native_platform(platform=None, qpa=None, qt_version=None):
+    """Whether modules marked ``native_message_box`` must leave offscreen.
+
+    On Windows, ``QMessageBox::showEvent`` asks the platform's native
+    interface for the window's handle (to grey out the title bar's Close
+    item) without checking it has one. Qt 5.15.2's offscreen platform has
+    none -- Qt 5.15.10 added it -- so every message box shown there is an
+    access violation that kills the module's process. 5.15.2 is the Qt every
+    Windows x64 install of PyQt5 gets (PyQt5-Qt5 publishes no newer Windows
+    x64 wheel). The editor runs on the ``windows`` platform, which has the
+    interface; such a module runs on it here too, every test as written.
+    """
+    platform = sys.platform if platform is None else platform
+    qpa = os.environ.get("QT_QPA_PLATFORM", "") if qpa is None else qpa
+    if platform != "win32" or qpa.split(":")[0] != "offscreen":
+        return False
+    if qt_version is None:
+        try:
+            from PyQt5.QtCore import QT_VERSION_STR
+        except ImportError:
+            return False
+        qt_version = QT_VERSION_STR
+    parts = tuple(int(p) for p in str(qt_version).split(".")[:3] if p.isdigit())
+    return parts < OFFSCREEN_NATIVE_INTERFACE_QT
+
+
+def run_module(command, cwd, timeout=MODULE_TIMEOUT_SECONDS, env=None):
+    """Run one module's pytest process; ``(returncode, timed_out)``.
+
+    On timeout the process is killed and the module counts as failed.
+    """
+    try:
+        completed = subprocess.run(command, cwd=cwd,
+                                   env=os.environ.copy() if env is None else env,
+                                   check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, True
+    return completed.returncode, False
 
 
 class _CollectedModules:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.counts: dict[str, int] = {}
+        #: Modules with a test marked native_message_box.
+        self.native: set[str] = set()
 
     def pytest_collection_finish(self, session) -> None:
         for item in session.items:
             path = Path(str(item.path)).resolve()
             relative = path.relative_to(self.root).as_posix()
             self.counts[relative] = self.counts.get(relative, 0) + 1
+            if item.get_closest_marker(NATIVE_MESSAGE_BOX_MARKER) is not None:
+                self.native.add(relative)
 
 
-def collect_modules(root: Path, marker: str) -> dict[str, int]:
+def collect_modules(root: Path, marker: str, native=None) -> dict[str, int]:
+    """Test counts by module; *native*, a set, gets the modules marked
+    ``native_message_box``."""
     import pytest
 
     collector = _CollectedModules(root)
@@ -45,6 +109,8 @@ def collect_modules(root: Path, marker: str) -> dict[str, int]:
         raise RuntimeError(f"pytest collection failed with exit code {int(result)}")
     if not collector.counts:
         raise RuntimeError(f"no tests collected for marker: {marker}")
+    if native is not None:
+        native.update(collector.native)
     return collector.counts
 
 
@@ -87,8 +153,9 @@ def main() -> int:
     os.chdir(root)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+    native_modules: set[str] = set()
     try:
-        counts = collect_modules(root, args.marker)
+        counts = collect_modules(root, args.marker, native_modules)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -110,6 +177,7 @@ def main() -> int:
 
     failed_modules: list[str] = []
     executed_total = 0
+    native_platform = message_boxes_need_native_platform()
 
     with tempfile.TemporaryDirectory(prefix="fio-qt-shard-") as temp_dir:
         temp_root = Path(temp_dir)
@@ -122,6 +190,8 @@ def main() -> int:
                 "-q",
                 "-m",
                 args.marker,
+                "-o",
+                f"faulthandler_timeout={TEST_STACK_DUMP_SECONDS}",
                 "--junitxml",
                 str(report),
                 module,
@@ -131,7 +201,20 @@ def main() -> int:
                 f"({expected_count} tests)",
                 flush=True,
             )
-            completed = subprocess.run(command, cwd=root, env=os.environ.copy(), check=False)
+            env = None
+            if native_platform and module in native_modules:
+                env = dict(os.environ, QT_QPA_PLATFORM="windows")
+                print("  on the windows platform: it shows message boxes, which "
+                      "Qt 5.15.2's offscreen platform cannot (see "
+                      "message_boxes_need_native_platform)", flush=True)
+            returncode, timed_out = run_module(command, root, env=env)
+            if timed_out:
+                print(
+                    f"ERROR: {module} was still running after "
+                    f"{MODULE_TIMEOUT_SECONDS // 60} min and was stopped; the "
+                    f"stack dump above shows where it was.",
+                    flush=True,
+                )
 
             observed_count = 0
             if report.is_file():
@@ -150,9 +233,12 @@ def main() -> int:
                     flush=True,
                 )
                 failed_modules.append(module)
-            if completed.returncode != 0:
+            if timed_out:
+                if module not in failed_modules:
+                    failed_modules.append(module)
+            elif returncode != 0:
                 print(
-                    f"ERROR: pytest process exited with code {completed.returncode}.",
+                    f"ERROR: pytest process exited with code {returncode}.",
                     flush=True,
                 )
                 if module not in failed_modules:
