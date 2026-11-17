@@ -754,7 +754,7 @@ class View2D(QWidget):
         # Depth of the pivot is irrelevant for a rotation about the view axis.
         rad = math.radians(delta)
         cos_a, sin_a = math.cos(rad), math.sin(rad)
-        for o in self._selected_list():
+        for o in self.editor.with_group_mates(self._selected_list()):
             if isinstance(o, dict):
                 bg.rotate_brush(o, delta, axis, pivot=pivot3)
             else:
@@ -1163,6 +1163,7 @@ class View2D(QWidget):
                                      else o.properties.get('lock', False))]
                     if not group:
                         return
+                    group = self.editor.movable_with_mates(group)
                     primary = selected if selected in group else group[0]
                     p_ref = primary['pos'] if isinstance(primary, dict) else primary.pos
 
@@ -3471,11 +3472,8 @@ class View2D(QWidget):
                     group = self.editor.state.selected_objects
                     if clicked_object not in group:
                         group = [clicked_object]
-                    self.drag_group = [
-                        o for o in group
-                        if not (o.get('lock', False) if isinstance(o, dict)
-                                else o.properties.get('lock', False))
-                    ]
+                    # Brushes grouped with a dragged one are attached to it.
+                    self.drag_group = self.editor.movable_with_mates(group)
                     self.drag_primary = clicked_object
 
                     self.is_dragging_object = True

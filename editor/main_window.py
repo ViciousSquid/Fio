@@ -2771,6 +2771,84 @@ class MainWindow(QMainWindow):
         self._refresh_visgroups_window()
         self.show_toast("Removed from visgroup '%s'" % group.name)
 
+    # -- brush groups (attached brushes) --------------------------------------
+
+    def with_group_mates(self, objects):
+        """*objects* plus the brushes grouped with them: what a move carries."""
+        from editor import brush_groups
+        return brush_groups.with_mates(self.state.brushes, objects)
+
+    def movable_with_mates(self, objects):
+        """:meth:`with_group_mates`, without the locked ones."""
+        return [o for o in self.with_group_mates(objects)
+                if not (o.get('lock', False) if isinstance(o, dict)
+                        else o.properties.get('lock', False))]
+
+    def set_brush_group(self, brushes, name):
+        """Put *brushes* in group *name* ('' ungroups them): one undo step."""
+        from editor import brush_groups
+        brushes = [b for b in brushes if isinstance(b, dict)]
+        if not brushes:
+            return
+        self.save_state()
+        brush_groups.set_group(brushes, name)
+        self._brush_groups_changed()
+
+    def ungroup_brushes(self, brushes):
+        """Take *brushes* (only those) out of their groups: one undo step.
+        A group left with a single brush is no group, so that one goes too."""
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.group_of(b)]
+        if not brushes:
+            return
+        self.save_state()
+        brush_groups.set_group(brushes, '')
+        for chosen in brush_groups.groups(self.state.brushes).values():
+            if len(chosen) == 1:
+                brush_groups.set_group(chosen, '')
+        self._brush_groups_changed()
+
+    def rename_brush_group(self, old, new):
+        from editor import brush_groups
+        new = str(new or '').strip()
+        if not new or new == old:
+            return False
+        self.save_state()
+        brush_groups.rename(self.state.brushes, old, new)
+        self._brush_groups_changed()
+        return True
+
+    def _brush_groups_changed(self):
+        self.mark_as_modified()
+        self.update_all_ui()
+        self._refresh_visgroups_window()
+
+    def open_brush_group_dialog(self, brushes):
+        """Scene Hierarchy > Add to Group... / Edit Group..."""
+        from editor.brush_group_dialog import BrushGroupDialog
+        brushes = [b for b in brushes if isinstance(b, dict)]
+        if not brushes:
+            return None
+        all_brushes = self.state.brushes
+        index_of = {id(b): i for i, b in enumerate(all_brushes)}
+        hierarchy = getattr(self, 'scene_hierarchy', None)
+
+        def display_name(brush):
+            index = index_of.get(id(brush), 0)
+            if hierarchy is not None:
+                return hierarchy._get_brush_display_name(brush, index)
+            return brush.get('name') or 'Brush %d' % (index + 1)
+
+        dialog = BrushGroupDialog(self, all_brushes, brushes, display_name)
+        if self._run_brush_group_dialog(dialog):
+            self.save_state()
+            if dialog.apply():
+                self._brush_groups_changed()
+        return dialog
+
+    def _run_brush_group_dialog(self, dialog):
+        return dialog.exec_() == dialog.Accepted
+
     def _refresh_visgroups_window(self):
         window = getattr(self, 'visgroups_window', None)
         if window is not None and window.isVisible():
@@ -4794,7 +4872,7 @@ class MainWindow(QMainWindow):
         whole, so several brushes turn as one rigid body instead of each
         spinning on the spot.
         """
-        selected = self.selected_objects_list()
+        selected = self.with_group_mates(self.selected_objects_list())
         if not selected:
             return None
         lo = np.array([float('inf')] * 3)
@@ -4827,7 +4905,12 @@ class MainWindow(QMainWindow):
         checkpoint; the live drag passes ``False`` for the incremental steps
         and checkpoints once at the start.
         """
-        selected = self.selected_objects_list()
+        chosen = self.selected_objects_list()
+        # Brushes grouped with a turned one are attached: they turn with it,
+        # as one rigid body about the centre of the lot.
+        selected = self.with_group_mates(chosen)
+        if pivot is None and len(selected) != len(chosen):
+            pivot = self.selection_centre()
         brushes = [b for b in selected if isinstance(b, dict)]
         things = [t for t in selected if not isinstance(t, dict)]
         if not brushes and not (things and pivot is not None):

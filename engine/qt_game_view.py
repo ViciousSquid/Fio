@@ -1638,6 +1638,8 @@ class QtGameView(QOpenGLWidget):
                          else o.properties.get('lock', False))]
         if primary not in group:
             group = [primary]
+        # Brushes grouped with a moved one are attached to it.
+        group = self.editor.movable_with_mates(group)
         for obj in group:
             self.editor._translate_object(obj, delta)
         self.update()

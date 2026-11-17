@@ -2,8 +2,8 @@ from engine.asset_qt import load_icon
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
                              QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
-                             QLineEdit, QStyle)
-from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
+                             QLineEdit, QStyle, QStyledItemDelegate)
+from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap, QPen
 from PyQt5 import QtCore
 import re
 from PyQt5.QtCore import Qt, QTimer, QEvent
@@ -11,6 +11,47 @@ from PyQt5.QtCore import Qt, QTimer, QEvent
 from engine.change_journal import touch
 from engine.spatial import set_live_flag
 from editor.selection import SelectionLookup
+from editor import brush_groups
+
+#: Item data: a grouped brush row's group colour ('#rrggbb') and which edges
+#: of its group's outline box it carries (1: first row, 2: last row).
+GROUP_COLOUR_ROLE = Qt.UserRole + 1
+GROUP_EDGE_ROLE = Qt.UserRole + 2
+GROUP_FIRST, GROUP_LAST = 1, 2
+#: How strongly a group's colour tints its rows' background.
+GROUP_TINT_ALPHA = 46
+
+
+def group_tint(colour):
+    """The row background for a group of *colour* (transparent for none)."""
+    if not colour:
+        return QBrush(Qt.transparent)
+    tint = QColor(colour)
+    tint.setAlpha(GROUP_TINT_ALPHA)
+    return QBrush(tint)
+
+
+class GroupOutlineDelegate(QStyledItemDelegate):
+    """Draws one box, in the group's colour, round the rows of each brush
+    group: sides on every member, the top on the first, the bottom on the
+    last."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        colour = index.data(GROUP_COLOUR_ROLE)
+        if not colour:
+            return
+        edges = index.data(GROUP_EDGE_ROLE) or 0
+        rect = option.rect.adjusted(1, 0, -1, 0)
+        painter.save()
+        painter.setPen(QPen(QColor(colour), 2))
+        painter.drawLine(rect.topLeft(), rect.bottomLeft())
+        painter.drawLine(rect.topRight(), rect.bottomRight())
+        if edges & GROUP_FIRST:
+            painter.drawLine(rect.left(), rect.top() + 1, rect.right(), rect.top() + 1)
+        if edges & GROUP_LAST:
+            painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+        painter.restore()
 
 
 try:
@@ -158,6 +199,7 @@ class SceneHierarchy(QWidget):
         self.tree = QTreeWidget()
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(12)
+        self.tree.setItemDelegate(GroupOutlineDelegate(self.tree))
         content_layout.addWidget(self.tree, stretch=2)
         
         # Configure tree widget
@@ -393,7 +435,7 @@ class SceneHierarchy(QWidget):
                     obj = None
                 matched = obj is not None and id(obj) in self._search_matches
                 background = (QBrush(QColor("#4a4320")) if matched
-                              else QBrush(Qt.transparent))
+                              else group_tint(item.data(0, GROUP_COLOUR_ROLE)))
                 if item is self._highlighted_item:
                     # A search can change before the temporary highlight's
                     # timer expires. Its cleanup must keep the new styling.
@@ -435,6 +477,26 @@ class SceneHierarchy(QWidget):
             lambda _checked=False: main_window.show_visgroup(groups[0] if groups else None))
         return sub
 
+    def _add_group_action(self, menu, brushes):
+        """"Add to Group..." for brushes that are in none, "Edit Group..."
+        when one of them already is: both open the group dialog."""
+        if not brushes:
+            return None
+        grouped = any(brush_groups.group_of(b) for b in brushes)
+        action = menu.addAction("Edit Group..." if grouped else "Add to Group...")
+        action.setToolTip("Grouped brushes are attached: they always move together, "
+                          "in the editor and in Play")
+        action.triggered.connect(
+            lambda _checked=False, chosen=list(brushes):
+            self.main_window.open_brush_group_dialog(chosen))
+        if grouped:
+            ungroup = menu.addAction("Ungroup")
+            ungroup.setToolTip("Take these brushes out of their group")
+            ungroup.triggered.connect(
+                lambda _checked=False, chosen=list(brushes):
+                self.main_window.ungroup_brushes(chosen))
+        return action
+
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""
         self.sort_mode = (self.sort_mode + 1) % self.SORT_MODE_COUNT
@@ -453,6 +515,11 @@ class SceneHierarchy(QWidget):
         return f'Brush {index + 1}'
 
     def _get_sorted_brushes(self):
+        """Brushes in the current sort order, each brush group's members
+        kept together (where the group's first member sorts)."""
+        return brush_groups.ordered(self._sorted_brushes())
+
+    def _sorted_brushes(self):
         """Return brushes in sorted order based on current sort mode."""
         brushes = list(enumerate(self.main_window.state.brushes))
         
@@ -601,12 +668,28 @@ class SceneHierarchy(QWidget):
         brushes_header.setFont(0, header_font)
         brushes_header.setExpanded(True)
         
-        # Add Brushes (sorted)
-        for i, brush_dict in self._get_sorted_brushes():
+        # Add Brushes (sorted; a group's members adjacent, tinted and boxed)
+        sorted_brushes = self._get_sorted_brushes()
+        group_colours = brush_groups.colours(self.main_window.state.brushes)
+        for row, (i, brush_dict) in enumerate(sorted_brushes):
             item_text = self._get_brush_display_name(brush_dict, i)
             item = QTreeWidgetItem(brushes_header, [item_text, ""])
             item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('brush', i))
+
+            group = brush_groups.group_of(brush_dict)
+            if group:
+                colour = group_colours[group]
+                edges = 0
+                if row == 0 or brush_groups.group_of(sorted_brushes[row - 1][1]) != group:
+                    edges |= GROUP_FIRST
+                if (row + 1 == len(sorted_brushes)
+                        or brush_groups.group_of(sorted_brushes[row + 1][1]) != group):
+                    edges |= GROUP_LAST
+                item.setData(0, GROUP_COLOUR_ROLE, colour)
+                item.setData(0, GROUP_EDGE_ROLE, edges)
+                item.setBackground(0, group_tint(colour))
+                item.setToolTip(0, "Group: %s" % group)
             
             if brush_dict.get('hidden', False):
                 item.setForeground(0, QBrush(QColor("#FFAC1C")))
@@ -866,6 +949,7 @@ class SceneHierarchy(QWidget):
                 lambda _checked=False, targets=list(focus_targets):
                 self.focus_on(targets))
             self._add_visgroup_menu(menu, focus_targets)
+            self._add_group_action(menu, [o for o in focus_targets if isinstance(o, dict)])
             menu.addSeparator()
 
         # If multiple items of the same type selected, show bulk operations

@@ -1,0 +1,137 @@
+"""Brush groups in Play: grouped brushes ride their group's mover or door."""
+import math
+
+import pytest
+
+from engine import brush_placement
+
+pytestmark = pytest.mark.qt
+
+
+def _level(leader, *others):
+    floor = {"id": "floor", "name": "floor", "pos": [0, -8, 0], "size": [2048, 16, 2048]}
+    return {
+        "version": 5,
+        "brushes": [floor, leader, *others],
+        "things": [{"type": "playerstart", "pos": [0, 40, 600],
+                    "properties": {"type": "player_start", "name": "start",
+                                   "id": "ps-1", "primary": True}}],
+    }
+
+
+def _brush(session, name):
+    return next(b for b in session.state.brushes if b.get("name") == name)
+
+
+def _centre(brush):
+    return brush_placement.placed_box(brush)[:3]
+
+
+def _mover(**extra):
+    brush = {"id": "lift", "name": "lift", "pos": [0, 100, 0], "size": [128, 16, 128],
+             "is_mover": True, "start_on": True, "direction": [0, 1, 0],
+             "distance": 200.0, "speed": 100.0, "brush_group": "lift"}
+    brush.update(extra)
+    return brush
+
+
+def _glass(**extra):
+    brush = {"id": "glass", "name": "glass", "pos": [40, 130, 0], "size": [16, 32, 16],
+             "brush_group": "lift"}
+    brush.update(extra)
+    return brush
+
+
+def test_a_grouped_brush_rides_its_group_s_mover(fio_session, monkeypatch):
+    session = fio_session(_level(_mover(), _glass()))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    lift, glass = _brush(session, "lift"), _brush(session, "glass")
+    session.start_play()
+    session.step(20)
+
+    moved = _centre(lift)
+    assert moved[1] > 101.0, "the mover should have risen"
+    assert _centre(glass) == pytest.approx(
+        (moved[0] + 40.0, moved[1] + 30.0, moved[2])), (
+        "the grouped brush did not keep its place on the mover")
+    assert glass["pos"] == [40, 130, 0], "play moved the authored placement"
+    session.stop_play()
+
+
+def test_a_brush_in_no_group_or_another_group_stays_put(fio_session, monkeypatch):
+    session = fio_session(_level(_mover(), _glass(brush_group="other"),
+                                 _glass(id="loose", name="loose", brush_group="")))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    session.start_play()
+    session.step(20)
+
+    assert _centre(_brush(session, "glass")) == pytest.approx((40.0, 130.0, 0.0))
+    assert _centre(_brush(session, "loose")) == pytest.approx((40.0, 130.0, 0.0))
+    assert not _brush(session, "glass").get("is_mover")
+    session.stop_play()
+
+
+def test_a_grouped_brush_turns_with_a_rotating_mover(fio_session, monkeypatch):
+    session = fio_session(_level(
+        _mover(rotate=True, rot_axis=[0, 1, 0], speed=90.0, distance=0.0),
+        _glass(pos=[100, 100, 0])))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    lift, glass = _brush(session, "lift"), _brush(session, "glass")
+    session.start_play()
+    session.step(15)
+
+    spin = brush_placement.runtime_spin(lift)
+    assert spin is not None and spin[3], "the mover should be turning"
+    turn = brush_placement.rotation_matrix(spin[:3], spin[3])
+    expected = tuple(_centre(lift)[i] + turn[i][0] * 100.0 for i in range(3))
+    assert _centre(glass) == pytest.approx(expected, abs=1e-3), (
+        "the grouped brush did not orbit the mover's centre")
+    assert brush_placement.runtime_spin(glass)[3] == pytest.approx(spin[3]), (
+        "the grouped brush did not turn with the mover")
+    assert math.hypot(_centre(glass)[0], _centre(glass)[2]) == pytest.approx(100.0, abs=1e-3)
+    session.stop_play()
+
+
+def test_a_grouped_brush_rides_a_door(fio_session, monkeypatch):
+    door = {"id": "door", "name": "door", "pos": [0, 64, 0], "size": [128, 128, 16],
+            "is_door": True, "door_direction": "up", "door_distance": 120.0,
+            "door_speed": 200.0, "brush_group": "front door"}
+    glass = {"id": "glass", "name": "glass", "pos": [0, 90, 0], "size": [64, 32, 4],
+             "brush_group": "front door"}
+    session = fio_session(_level(door, glass))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    door, glass = _brush(session, "door"), _brush(session, "glass")
+    session.start_play()
+    session.step(2)
+    runtime = session.logic.mover_runtime
+    index = next(i for i, b in runtime.doors if b is door)
+    runtime._trigger_door_open(index, door)
+    session.step(30)
+
+    opened = _centre(door)
+    assert opened[1] > 100.0, "the door should have opened"
+    assert _centre(glass) == pytest.approx((opened[0], opened[1] + 26.0, opened[2])), (
+        "the glass was left behind by its door")
+    session.stop_play()
+
+
+def test_stopping_play_leaves_the_grouped_brush_as_it_was_authored(
+        fio_session, monkeypatch):
+    session = fio_session(_level(_mover(), _glass()))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    config = session.window.config
+    if not config.has_section("Settings"):
+        config.add_section("Settings")
+    # The world is not restored on Stop: what play wrote must be undone.
+    config.set("Settings", "restore_world_on_stop", "False")
+    before = dict(_brush(session, "glass"))
+    session.start_play()
+    session.step(10)
+    assert _brush(session, "glass").get("is_mover"), "followers are mover rows in play"
+    session.stop_play()
+
+    glass = _brush(session, "glass")
+    after = {k: v for k, v in glass.items() if not k.startswith("_")}
+    assert after == {k: v for k, v in before.items() if not k.startswith("_")}
+    assert _centre(glass) == pytest.approx((40.0, 130.0, 0.0))
+    session.window.unsaved_changes = False
