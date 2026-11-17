@@ -2528,8 +2528,25 @@ class MainWindow(QMainWindow):
             self.show_toast(f"{face_name}: texture {int(angle)}°")
             return
 
-        # --- Otherwise: rotate every face of the selected brush together ---
+        # --- The Surface Inspector is open on one face of the selection:
+        # that face is what is being worked on, so it is what turns. Without
+        # this, Page Up/Down outside face mode turned all six faces together
+        # and two faces could not be given different rotations.
         selected = self.primary_selection()
+        inspector = getattr(self, 'surface_inspector', None)
+        if (inspector is not None and inspector.isVisible() and inspector.target
+                and inspector.scope_face.isChecked()
+                and inspector.target[0] is selected):
+            brush, face_name = inspector.target
+            self.save_state()
+            angle = self._bump_face_angle(brush, face_name, delta)
+            self.state.mark_lighting_dirty([brush])
+            self.update_views()
+            inspector.refresh_from_face()
+            self.show_toast(f"{face_name}: texture {int(angle)}°")
+            return
+
+        # --- Otherwise: rotate every face of the selected brush together ---
         if isinstance(selected, dict):
             self.save_state()
             # Every face the brush has: a box's six sides, an angled brush's

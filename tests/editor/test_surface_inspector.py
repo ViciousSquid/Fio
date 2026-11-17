@@ -823,6 +823,58 @@ def test_rotation_applies_to_every_face_in_whole_brush_scope(inspector):
         assert ft.get_transform(brush, key)['angle'] == pytest.approx(90.0)
 
 
+def test_two_faces_keep_different_rotations_when_another_value_is_nudged(inspector):
+    """The panel shows one face's numbers. In Whole brush scope a nudge of
+    the shift wrote this face's rotation (and scale) to every face as well,
+    so two faces could not be given different rotations."""
+    host, panel, brush = inspector
+    ft.set_transform(brush, 'north', angle=45.0)
+    ft.set_transform(brush, 'east', angle=90.0, scale=(2.0, 3.0))
+    panel.refresh_from_face()                       # bound to north
+
+    panel.scope_brush.setChecked(True)
+    panel.hshift.setValue(0.5)
+
+    assert ft.get_transform(brush, 'north')['angle'] == pytest.approx(45.0)
+    assert ft.get_transform(brush, 'east')['angle'] == pytest.approx(90.0), (
+        "nudging the shift overwrote another face's rotation")
+    assert ft.get_transform(brush, 'east')['scale'] == pytest.approx((2.0, 3.0)), (
+        "nudging the shift overwrote another face's scale")
+    for key in ft.face_keys(brush):
+        assert ft.get_transform(brush, key)['shift'][0] == pytest.approx(0.5)
+
+
+def test_page_up_turns_the_inspector_s_face_alone_outside_face_mode(inspector):
+    """With the panel open on one face, that face is what is being worked
+    on: Page Up/Down outside face mode turned all six together."""
+    host, panel, brush = inspector
+    host.view_3d.face_mode_active = False
+    panel.scope_face.setChecked(True)
+
+    host.rotate_textures(1)                         # bound to north
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('east'))
+    host.rotate_textures(1)
+    host.rotate_textures(1)
+
+    angles = {key: ft.get_transform(brush, key)['angle'] for key in ft.face_keys(brush)}
+    assert angles['north'] == pytest.approx(90.0)
+    assert angles['east'] == pytest.approx(180.0)
+    assert all(angles[key] == pytest.approx(0.0)
+               for key in angles if key not in ('north', 'east')), angles
+    assert panel.rotate.value() == pytest.approx(180.0), "the panel did not follow"
+
+
+def test_page_up_still_turns_the_whole_brush_in_whole_brush_scope(inspector):
+    host, panel, brush = inspector
+    host.view_3d.face_mode_active = False
+    panel.scope_brush.setChecked(True)
+
+    host.rotate_textures(1)
+
+    for key in ft.face_keys(brush):
+        assert ft.get_transform(brush, key)['angle'] == pytest.approx(90.0)
+
+
 def test_the_rotate_field_shows_the_picked_face_s_rotation(inspector):
     host, panel, brush = inspector
     ft.set_transform(brush, 'east', angle=30.0)

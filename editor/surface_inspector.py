@@ -597,16 +597,17 @@ class SurfaceInspector(QDialog):
         if self._loading or not self.target:
             return
         self._begin_undo_burst()
-        shift = (self.hshift.value(), self.vshift.value())
-        scale = (self.hstretch.value(), self.vstretch.value())
-        angle = self.rotate.value()
+        # Only what was edited is written. The panel shows one face's
+        # numbers; in "Whole brush" scope, writing all three to every face
+        # meant that nudging the shift gave every face this face's rotation
+        # and scale as well -- two faces could not keep different rotations.
+        shift = (self.hshift.value(), self.vshift.value()) \
+            if field in (None, 'shift') else None
+        scale = (self.hstretch.value(), self.vstretch.value()) \
+            if field in (None, 'scale') else None
+        angle = self.rotate.value() if field in (None, 'angle') else None
         for brush, face_key in self.target_faces():
-            # Writing a scale switches Natural off, so only send one when the
-            # scale is what actually changed (or the face was not Natural
-            # anyway).  Nudging the shift must not silently drop the mode.
-            send_scale = scale if (field != 'shift' and field != 'angle') \
-                or not ft.is_natural(brush, face_key) else None
-            ft.set_transform(brush, face_key, shift=shift, scale=send_scale,
+            ft.set_transform(brush, face_key, shift=shift, scale=scale,
                              angle=angle)
         self._commit()
         self._sync_natural_button()
