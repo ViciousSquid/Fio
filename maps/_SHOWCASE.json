@@ -4568,7 +4568,8 @@
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
-                "angular_damping": 0.12
+                "angular_damping": 0.12,
+                "topples": false
             },
             "io_connections": []
         },
@@ -4898,7 +4899,8 @@
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
-                "collect_custom_sprite": ""
+                "collect_custom_sprite": "",
+                "topples": true
             },
             "io_connections": []
         },
@@ -4969,7 +4971,8 @@
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
-                "collect_custom_sprite": ""
+                "collect_custom_sprite": "",
+                "topples": true
             },
             "io_connections": []
         },
@@ -5040,7 +5043,8 @@
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
-                "collect_custom_sprite": ""
+                "collect_custom_sprite": "",
+                "topples": true
             },
             "io_connections": []
         },
@@ -5153,7 +5157,8 @@
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
-                "angular_damping": 0.12
+                "angular_damping": 0.12,
+                "topples": false
             },
             "io_connections": []
         },
@@ -5224,7 +5229,8 @@
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
-                "angular_damping": 0.12
+                "angular_damping": 0.12,
+                "topples": false
             },
             "io_connections": []
         },
@@ -5295,7 +5301,8 @@
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
-                "angular_damping": 0.12
+                "angular_damping": 0.12,
+                "topples": false
             },
             "io_connections": []
         },
@@ -5628,7 +5635,8 @@
                     1,
                     1,
                     1
-                ]
+                ],
+                "topples": false
             },
             "io_connections": []
         },
@@ -5698,7 +5706,8 @@
                     1,
                     1,
                     1
-                ]
+                ],
+                "topples": false
             },
             "io_connections": []
         },
@@ -5768,7 +5777,8 @@
                     1,
                     1,
                     1
-                ]
+                ],
+                "topples": false
             },
             "io_connections": []
         },
@@ -5871,7 +5881,8 @@
                     3.0
                 ],
                 "rolls": true,
-                "bounciness": 0.5
+                "bounciness": 0.5,
+                "topples": false
             },
             "io_connections": []
         },
@@ -5895,7 +5906,18 @@
                 "io_enabled": true,
                 "name": "Decal_1",
                 "id": "b8966fa8-1aea-48a5-93b8-3cd3bb43d6ec",
-                "mirrored": false
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "",
+                "font": "Fio UI",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.0,
+                "text_offset_y": 0.0
             },
             "io_connections": []
         },
@@ -5984,7 +6006,88 @@
                 "io_enabled": true,
                 "name": "Decal_2",
                 "id": "e49d39eb-8c0f-437b-858f-cef304459451",
-                "mirrored": false
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "",
+                "font": "Fio UI",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.0,
+                "text_offset_y": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                -1263.6972774214012,
+                296.1493511306268,
+                -326.76261282425816
+            ],
+            "properties": {
+                "texture": "DecalLong01.jpg",
+                "width": 256.0,
+                "height": 64.0,
+                "depth": 32.0,
+                "yaw": -179.85012815675876,
+                "pitch": -0.18247601079042225,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "type": "decal",
+                "io_enabled": true,
+                "name": "Decal_4",
+                "id": "26a576f3-8685-4d26-9ee7-3dee2e4c90e0",
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "2",
+                "font": "O.K. Retro",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.06,
+                "text_offset_y": 0.05
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                256.0,
+                96.13612846544319,
+                16.0
+            ],
+            "properties": {
+                "texture": "wet_puddle_01.png",
+                "width": 256.0,
+                "height": 256.0,
+                "depth": 32.0,
+                "yaw": 0.0,
+                "pitch": -89.50338934140963,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "type": "decal",
+                "io_enabled": true,
+                "name": "Decal_5",
+                "id": "465c56c1-58c4-4fb4-a790-2b77b2b064a8",
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "",
+                "font": "Fio UI",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.0,
+                "text_offset_y": 0.0
             },
             "io_connections": []
         }
