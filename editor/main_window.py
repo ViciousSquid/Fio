@@ -915,10 +915,7 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.world_runtime.terrain = None
 
         # Close the terrain editor panel if it is open in the Properties dock
-        if self.terrain_editor_window is not None:
-            if self._current_overlay is self.terrain_editor_window:
-                self._close_current_overlay()
-            self.terrain_editor_window = None
+        self.close_terrain_editor()
 
         # Force a UI refresh
         self.update_all_ui()
@@ -1328,7 +1325,13 @@ class MainWindow(QMainWindow):
         if self.terrain is None:
             return
         # Already open → just make sure it's visible and on top.
-        if getattr(self, 'terrain_editor_window', None) is not None:
+        panel = getattr(self, 'terrain_editor_window', None)
+        if panel is not None:
+            if panel.isWindow():
+                panel.show()
+                panel.raise_()
+                panel.activateWindow()
+                return
             self.properties_dock.setVisible(True)
             self.properties_dock.raise_()
             return
@@ -1343,6 +1346,61 @@ class MainWindow(QMainWindow):
 
     def _on_terrain_editor_closed(self):
         """Clear the reference when the terrain editor overlay is closed."""
+        self.terrain_editor_window = None
+
+    def terrain_editor_floating(self):
+        panel = self.terrain_editor_window
+        return panel is not None and panel.isWindow()
+
+    def set_terrain_editor_floating(self, floating):
+        """Move the Terrain Editor between the Properties dock and a window
+        of its own (the button at its top left). The same panel either way:
+        its settings, tab and brush stay as they are."""
+        from PyQt5.QtCore import Qt
+        panel = self.terrain_editor_window
+        floating = bool(floating)
+        if panel is None or floating == panel.isWindow():
+            return
+        view = self.view_3d
+        brush_on = bool(view is not None and view.terrain_sculpt_active)
+        if floating:
+            # Let go of the dock without closing the panel.
+            if self._current_overlay is panel:
+                self._current_overlay = None
+                self._overlay_close_callback = None
+            size = panel.size()
+            panel.setParent(self, Qt.Window)
+            if self._original_properties_widget is not None and \
+                    self._current_overlay is None:
+                self.properties_dock.setWidget(self._original_properties_widget)
+                self._original_properties_widget = None
+            panel.setWindowTitle("Terrain Editor")
+            panel.resize(max(size.width(), 520), max(size.height(), 720))
+            panel.show()
+            panel.raise_()
+        else:
+            self._show_overlay(panel, close_callback=self._on_terrain_editor_closed)
+            self.terrain_editor_window = panel
+            self.properties_dock.setVisible(True)
+            self.properties_dock.raise_()
+            panel.show()
+        # Leaving the dock (or a window) hides the panel for a moment, and a
+        # hidden panel puts its brush down: pick it up again.
+        if brush_on and view is not None:
+            view.set_terrain_sculpt_active(True)
+        panel.sync_float_button()
+
+    def close_terrain_editor(self):
+        """Close the Terrain Editor, docked or floating."""
+        panel = self.terrain_editor_window
+        if panel is None:
+            return
+        if self._current_overlay is panel:
+            self._close_current_overlay()
+        else:
+            panel.hide()
+            panel.setParent(None)
+            panel.deleteLater()
         self.terrain_editor_window = None
 
     def on_terrain_changed(self):
@@ -1677,10 +1735,8 @@ class MainWindow(QMainWindow):
             return
         if locked:
             data['lock'] = True
-            if self.terrain_editor_window is not None:
-                # An editor open on a terrain that may not be edited.
-                self._close_current_overlay()
-                self.terrain_editor_window = None
+            # An editor open on a terrain that may not be edited.
+            self.close_terrain_editor()
         else:
             data.pop('lock', None)
         if self.terrain is not None:

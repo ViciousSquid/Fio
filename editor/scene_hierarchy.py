@@ -923,11 +923,10 @@ class SceneHierarchy(QWidget):
                 self.main_window.state.terrain_data = None
                 # Remove the live terrain object so the 3D view stops rendering it
                 self.main_window.terrain = None
-                panel = self.main_window._current_overlay
-                if panel is not None:
-                    if self.main_window._current_overlay is panel:
-                        self.main_window._close_current_overlay()
-                    self.main_window.terrain_editor_window = None
+                if self.main_window.terrain_editor_window is not None:
+                    self.main_window.close_terrain_editor()
+                elif self.main_window._current_overlay is not None:
+                    self.main_window._close_current_overlay()
                 self.main_window.set_selected_objects([])
                 self.main_window.update_all_ui()
             return

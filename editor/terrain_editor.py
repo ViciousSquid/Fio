@@ -209,6 +209,15 @@ class TerrainEditorPanel(QWidget):
         top_button_layout = QHBoxLayout()
         top_button_layout.setSpacing(10)
 
+        # Top left: pop the panel out into a window of its own, or put it
+        # back in the Properties dock.
+        self.float_btn = QPushButton()
+        self.float_btn.setFixedSize(30, 30)
+        self.float_btn.setCursor(Qt.PointingHandCursor)
+        self.float_btn.clicked.connect(self.toggle_floating)
+        top_button_layout.addWidget(self.float_btn)
+        self.sync_float_button()
+
         regenerate_btn = QPushButton("Regenerate")
         regenerate_btn.setIcon(load_icon("assets/ui/controls/refresh.svg"))
         regenerate_btn.setStyleSheet("""
@@ -2188,16 +2197,40 @@ class TerrainEditorPanel(QWidget):
             editor.show_toast(
                 f"{os.path.basename(path)}: {changed} stamp(s) placed")
 
+    def toggle_floating(self):
+        """Pop out into a floating window, or dock again."""
+        editor = self.editor
+        if editor is not None and hasattr(editor, 'set_terrain_editor_floating'):
+            editor.set_terrain_editor_floating(not self.isWindow())
+
+    def sync_float_button(self):
+        floating = self.isWindow()
+        self.float_btn.setIcon(load_icon(
+            "assets/ui/controls/restore.svg" if floating
+            else "assets/ui/controls/maximize.svg"))
+        self.float_btn.setToolTip(
+            "Dock the Terrain Editor back in the Properties pane" if floating
+            else "Open the Terrain Editor in a floating window")
+
     def request_close(self):
         """Close the panel and disable its 3D brush."""
         view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
         if self.editor:
-            self.editor._close_current_overlay()
+            if hasattr(self.editor, 'close_terrain_editor'):
+                self.editor.close_terrain_editor()
+            else:
+                self.editor._close_current_overlay()
 
     def closeEvent(self, event):
-        """Disable the terrain brush when the panel is closed."""
+        """Disable the terrain brush when the panel is closed. The close box
+        of the floating window puts the panel back in its dock."""
+        if self.isWindow() and self.editor is not None and \
+                getattr(self.editor, 'terrain_editor_window', None) is self:
+            event.ignore()
+            self.editor.set_terrain_editor_floating(False)
+            return
         view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
