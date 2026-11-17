@@ -2808,6 +2808,19 @@ class MainWindow(QMainWindow):
                 brush_groups.set_group(chosen, '')
         self._brush_groups_changed()
 
+    def set_brushes_hidden(self, brushes, hidden):
+        """Hide or show *brushes* (a whole group, from its menu): one undo step."""
+        from engine.change_journal import touch
+        brushes = [b for b in brushes if isinstance(b, dict)]
+        if not brushes:
+            return
+        self.save_state()
+        for brush in brushes:
+            brush['hidden'] = bool(hidden)
+            touch(brush)
+        self.mark_as_modified()
+        self.update_all_ui()
+
     def rename_brush_group(self, old, new):
         from editor import brush_groups
         new = str(new or '').strip()

@@ -111,7 +111,8 @@ def test_ungroup_takes_out_only_the_chosen_brushes(scene):
     from PyQt5.QtWidgets import QMenu
     menu = QMenu()
     window.scene_hierarchy._add_group_action(menu, [brushes['glass']])
-    assert [a.text() for a in menu.actions()] == ["Edit Group...", "Ungroup"]
+    assert [a.text() for a in menu.actions()] == [
+        "Edit Group...", "Ungroup", "Hide Group"]
 
     window.ungroup_brushes([brushes['glass']])
 
@@ -122,6 +123,32 @@ def test_ungroup_takes_out_only_the_chosen_brushes(scene):
     assert rows['glass'].data(0, GROUP_COLOUR_ROLE) is None, "the colour box stayed"
     assert rows['glass'].background(0).style() == Qt.NoBrush
     assert rows['lift'].data(0, GROUP_COLOUR_ROLE)
+    window.unsaved_changes = False
+
+
+def test_the_menu_hides_and_shows_the_whole_group(scene):
+    from PyQt5.QtWidgets import QMenu
+    window, brushes = scene
+
+    def toggle():
+        menu = QMenu()
+        window.scene_hierarchy._add_group_action(menu, [_named(window, 'glass')])
+        action = menu.actions()[-1]
+        action.trigger()
+        return action.text()
+
+    assert toggle() == "Hide Group"
+    assert _named(window, 'door')['hidden'] and _named(window, 'glass')['hidden']
+    assert not _named(window, 'wall').get('hidden')
+    assert not _named(window, 'lift').get('hidden')
+
+    window.undo()
+    assert not _named(window, 'door').get('hidden')
+    window.redo()
+    assert _named(window, 'door')['hidden']
+
+    assert toggle() == "Show Group"
+    assert not _named(window, 'door')['hidden'] and not _named(window, 'glass')['hidden']
     window.unsaved_changes = False
 
 

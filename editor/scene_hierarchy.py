@@ -495,6 +495,14 @@ class SceneHierarchy(QWidget):
             ungroup.triggered.connect(
                 lambda _checked=False, chosen=list(brushes):
                 self.main_window.ungroup_brushes(chosen))
+            every = self.main_window.with_group_mates(
+                [b for b in brushes if brush_groups.group_of(b)])
+            hidden = all(b.get('hidden', False) for b in every)
+            toggle = menu.addAction("Show Group" if hidden else "Hide Group")
+            toggle.setToolTip("Show or hide every brush in the group")
+            toggle.triggered.connect(
+                lambda _checked=False, chosen=every, hide=not hidden:
+                self.main_window.set_brushes_hidden(chosen, hide))
         return action
 
     def cycle_sort_mode(self):
