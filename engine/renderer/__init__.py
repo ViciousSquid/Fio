@@ -15,15 +15,17 @@ renderer may reuse. Importing this package needs no OpenGL.
 """
 
 from .api import (
-    FRAME_INPUT, RENDERER_CONTRACT_VERSION, WATER_QUALITIES, EffectBillboard,
-    Renderer, RenderStats, SelectionOverlay)
+    FRAME_INPUT, RENDERER_CONTRACT_VERSION, RENDERER_CONTRACT_VERSION_INFO,
+    WATER_QUALITIES, EffectBillboard, Renderer, RenderStats, SelectionOverlay,
+    contract_compatible, missing_members)
 from .registry import (
-    DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
+    RendererContractError, RendererInitError, DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
     renderer_factory)
 
 __all__ = [
-    'Renderer', 'RENDERER_CONTRACT_VERSION', 'RenderStats', 'SelectionOverlay',
-    'EffectBillboard',
+    'Renderer', 'RENDERER_CONTRACT_VERSION', 'RENDERER_CONTRACT_VERSION_INFO',
+    'missing_members', 'contract_compatible', 'RendererContractError',
+    'RendererInitError', 'RenderStats', 'SelectionOverlay', 'EffectBillboard',
     'FRAME_INPUT', 'WATER_QUALITIES',
     'DEFAULT_RENDERER', 'register_renderer', 'create_renderer',
     'available_renderers', 'renderer_factory',

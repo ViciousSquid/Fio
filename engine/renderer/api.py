@@ -191,8 +191,23 @@ class SelectionOverlay:
 #: and the descriptors here), apart from the plugin API's
 #: (plugins.api.API_VERSION). A renderer says which it was written against
 #: with a ``contract_version`` attribute, as a physics does
-#: (engine.physics.PHYSICS_CONTRACT_VERSION).
+#: (engine.physics.PHYSICS_CONTRACT_VERSION); the registry refuses one
+#: written for a newer contract or another major version
+#: (contract_compatible).
 RENDERER_CONTRACT_VERSION = "1.0.0"
+
+
+def _version_info(value):
+    parts = []
+    for piece in str(value).strip().split('.')[:3]:
+        digits = ''.join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+RENDERER_CONTRACT_VERSION_INFO = _version_info(RENDERER_CONTRACT_VERSION)
 
 
 @runtime_checkable
@@ -304,3 +319,44 @@ class Renderer(Protocol):
         """Debug wireframes of collision shapes: GL_LINES ``vertices`` (n, 3)
         float32 and ``runs`` of ``(first, count, colour)``
         (``engine.overlay_geometry.collision_wireframes``)."""
+
+
+def missing_members(renderer: Any) -> list:
+    """The members of :class:`Renderer` *renderer* lacks, sorted: an
+    attribute it does not have, or a method it has that cannot be called.
+    Empty for an object that satisfies the contract."""
+    import typing
+    names = (typing.get_protocol_members(Renderer)
+             if hasattr(typing, 'get_protocol_members')
+             else [n for n in vars(Renderer) if not n.startswith('_')]
+             + list(getattr(Renderer, '__annotations__', {})))
+    missing = []
+    for name in sorted(set(names)):
+        try:
+            value = getattr(renderer, name)
+        except AttributeError:
+            missing.append(name)
+            continue
+        except Exception:
+            continue                    # a property that raised: it is there
+        if callable(getattr(Renderer, name, None)) and not callable(value):
+            missing.append(name)
+    return missing
+
+
+def contract_compatible(renderer: Any) -> Optional[str]:
+    """Why *renderer* cannot run on this contract, or None when it can.
+
+    One that does not say (no ``contract_version``) is taken as written for
+    this one. One written for a newer version, or another major version --
+    or, while the major is 0, another minor version -- is refused."""
+    declared = getattr(renderer, 'contract_version', None)
+    if declared is None or callable(declared):
+        return None
+    wanted = _version_info(declared)
+    have = RENDERER_CONTRACT_VERSION_INFO
+    if (wanted[0] != have[0] or wanted > have
+            or (have[0] == 0 and wanted[1] != have[1])):
+        return ("written for renderer contract %s; this Fio has %s"
+                % (declared, RENDERER_CONTRACT_VERSION))
+    return None

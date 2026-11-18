@@ -836,7 +836,7 @@ class EditorAPI:
         self._manager.register_entity_wizard(entity_type, factory)
 
     def register_renderer(self, name: str, cls) -> bool:
-        """Register a renderer under *name* in Fio's renderer registry (API 1.6.0).
+        """Register a renderer under *name* in Fio's renderer registry.
 
         *cls* is a factory called as ``cls(config)`` with the viewport's GL
         context current -- usually the renderer class itself. What it returns
@@ -848,9 +848,14 @@ class EditorAPI:
         Fio, though :class:`engine.renderer.core.RendererCore` offers reusable
         infrastructure.
 
-        A plugin that registers a renderer declares ``api_version = "1.6.0"``:
-        1.3–1.5 hosts construct renderers differently, and renderers written
-        for them are not compatible with this contract.
+        An implementation of the current renderer contract (the tables-only
+        one API 1.9.0 introduced; :data:`engine.renderer.RENDERER_CONTRACT_VERSION`
+        1.0.0) requires ``api_version = "1.9.0"``: a plugin that registers
+        one declares it, and the renderer its ``contract_version``. Renderers
+        written for 1.6-1.8 (which read the ``Terrain`` object and authored
+        brushes) or for the 1.3-1.5 construction are not compatible. The
+        registry checks what the factory returns before the host paints with
+        it (engine.renderer.registry.create_renderer).
 
         The renderer owns its GL resources: no GL resource id survives the
         lifetime of the renderer that owns it. The host discards every handle

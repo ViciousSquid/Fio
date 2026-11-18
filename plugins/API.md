@@ -453,8 +453,12 @@ Either way Play still starts, on Soma, and the console says which it was.
 def register_renderer(self, name: str, cls) -> bool
 ```
 Register a renderer under *name* in Fio's renderer registry (`"Forward"` is
-the built-in one). This contract is API 1.6.0: a plugin that registers a
-renderer declares `api_version = "1.6.0"`. *cls* is a factory called as `cls(config)` with the
+the built-in one). An implementation of the current renderer contract (the
+tables-only one API 1.9.0 introduced; `RENDERER_CONTRACT_VERSION` 1.0.0,
+below) requires `api_version = "1.9.0"`: a plugin that registers one
+declares it. Renderers written for 1.6-1.8 (which read the `Terrain` object
+and authored brushes) or for the 1.3-1.5 construction are not compatible.
+*cls* is a factory called as `cls(config)` with the
 viewport's GL context current — usually the renderer class itself — and what
 it returns must satisfy the `engine.renderer.Renderer` protocol:
 
@@ -468,6 +472,14 @@ from engine.renderer import RENDERER_CONTRACT_VERSION
 class DeferredRenderer:
     contract_version = RENDERER_CONTRACT_VERSION
 ```
+
+When the host creates a renderer, the registry checks what the factory
+returned before anything is painted with it. Not a `Renderer` (a member
+missing or not callable), or written for a newer contract or another major
+version: `RendererContractError`, and the object's `cleanup()` is called so
+its GL objects do not outlive it. The factory could not be imported or
+raised: `RendererInitError`, with the original exception as its cause.
+Either way the view keeps the renderer it has (`r_renderer` says why).
 
 - **lifecycle:** `ready`, `cleanup()`
 - **the frame:** `render_scene(projection, view, camera_pos, primary_selection,

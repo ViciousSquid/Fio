@@ -34,7 +34,7 @@ import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine import render_table
-from engine.renderer import RenderStats
+from engine.renderer import RENDERER_CONTRACT_VERSION, RenderStats
 
 #: Lights the lighting pass accumulates per frame.
 MAX_LIGHTS = 64
@@ -164,6 +164,9 @@ class DeferredRenderer:
     Created by the host as ``DeferredRenderer(config)`` with its GL context
     current; *config* is the application ConfigParser (or None).
     """
+
+    #: The renderer contract this renderer is written against.
+    contract_version = RENDERER_CONTRACT_VERSION
 
     def __init__(self, config=None):
         # -- the settings the host sets; renderer-independent -------------------
