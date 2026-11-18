@@ -63,6 +63,22 @@ CONTEXT_MENU_STYLE = """
 """
 
 
+#: The rotate tool's angle step for each grid size: a finer grid, a finer
+#: step, and every step divides 360 (the default grid, 16, keeps 15 degrees).
+#: [ and ] change the grid -- and with it the step -- mid-rotate.
+ROTATE_STEP_FOR_GRID = {2: 1.0, 4: 5.0, 8: 10.0, 16: 15.0, 32: 30.0,
+                        64: 45.0, 128: 90.0}
+
+
+def rotate_step_for_grid(grid):
+    """The rotate step, in degrees, for a grid size (nearest listed size)."""
+    grid = int(grid or 16)
+    if grid in ROTATE_STEP_FOR_GRID:
+        return ROTATE_STEP_FOR_GRID[grid]
+    nearest = min(ROTATE_STEP_FOR_GRID, key=lambda size: abs(size - grid))
+    return ROTATE_STEP_FOR_GRID[nearest]
+
+
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
         # Only pass 'editor' (which acts as the parent widget) to super().__init__
@@ -174,6 +190,7 @@ class View2D(QWidget):
         # be previewed live and frozen on Enter.
         self.clip_points = []          # list[QPointF] in this view's 2D world coords
         self.clip_hover = None         # QPointF current cursor in 2D world coords
+        self._clip_hover_raw = None    # the cursor before snapping (re-snapped on [ ])
         self.clip_keep_positive = False  # which half-space to keep
 
         # --- Free-rotate tool state (toggled globally by the rotate button) ---
@@ -186,7 +203,10 @@ class View2D(QWidget):
         self.rotate_pivot3 = None      # the same pivot in world space, held fixed
         self.rotate_start_ang = 0.0    # cursor angle (radians) at drag start
         self.rotate_applied = 0.0      # net snapped degrees applied so far
-        self.rotate_snap_deg = 15.0    # step size while grid snap is enabled
+        #: A rotate step set by hand (tests); None: the grid size's step
+        #: (ROTATE_STEP_FOR_GRID), so [ and ] change it mid-drag.
+        self._rotate_snap_override = None
+        self._rotate_last_world = None # the cursor in the last rotate update
 
         # --- Component editing (face / edge / vertex / side stretch) ---
         # The mode, hover and selection live on the main window's shared
@@ -746,6 +766,32 @@ class View2D(QWidget):
         self.group_resize_handle = -1
         self._group_start = None
 
+    @property
+    def rotate_snap_deg(self):
+        """The rotate step: the grid size's (ROTATE_STEP_FOR_GRID)."""
+        if self._rotate_snap_override is not None:
+            return self._rotate_snap_override
+        return rotate_step_for_grid(self.grid_size)
+
+    @rotate_snap_deg.setter
+    def rotate_snap_deg(self, value):
+        self._rotate_snap_override = None if value is None else float(value)
+
+    def grid_size_changed(self):
+        """The grid size moved ([ or ]): the scissor's preview point and an
+        in-progress rotation snap to the new grid at once, without leaving
+        the tool or waiting for the mouse to move."""
+        if self._clip_active() and self._clip_hover_raw is not None:
+            self.clip_hover = self.snap_to_grid(self._clip_hover_raw)
+            self._update_clip_keep_side()
+        last = self._rotate_last_world
+        if last is not None:
+            if self.rotate_dragging:
+                self.update_rotate(last)
+            elif self.is_group_rotating:
+                self._update_group_rotate(last)
+        self.update()
+
     def _begin_group_rotate(self, world_pos):
         """Start a rotate-mode drag spinning the whole selection about the group
         centre."""
@@ -766,6 +812,7 @@ class View2D(QWidget):
         the group pivot to follow the cursor."""
         if not self.is_group_rotating or self.group_rotate_pivot is None:
             return
+        self._rotate_last_world = QPointF(world_pos)
         axis = self._rotate_axis_vec()
         idx = self._axis_indices()
         if axis is None or idx is None:
@@ -837,6 +884,7 @@ class View2D(QWidget):
         """Apply the incremental rotation to reach the cursor's current angle."""
         if not self.rotate_dragging or self.rotate_pivot is None:
             return
+        self._rotate_last_world = QPointF(world_pos)
         axis = self._rotate_axis_vec()
         if axis is None:
             return
@@ -1051,7 +1099,8 @@ class View2D(QWidget):
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        mode = "stepped" if self.snap_to_grid_enabled else "free"
+        mode = (f"{self.rotate_snap_deg:g}° steps, grid {self.grid_size} - [ ] to change"
+                if self.snap_to_grid_enabled else "free")
         painter.drawText(10, 20, f"ROTATE MODE ({mode}) — drag to spin the "
                                  f"selection  (Esc to exit)")
 
@@ -3551,7 +3600,10 @@ class View2D(QWidget):
 
         # Clip tool: track the cursor so the preview line and kept side follow it.
         if self._clip_active():
-            self.clip_hover = world_pos
+            # The preview point snaps as the clicked points do (to the grid
+            # [ and ] set), so the line drawn is the cut that will be made.
+            self._clip_hover_raw = QPointF(world_pos)
+            self.clip_hover = self.snap_to_grid(world_pos)
             self._update_clip_keep_side()
             if self.clip_points:
                 self.update()

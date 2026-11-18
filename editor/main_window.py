@@ -3369,7 +3369,14 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front, self.view_3d]:
             view.grid_size = snapped_size
         self.view_3d.update_grid()
-        self.update_views()
+        # Repaint without update_views(): it resets each 2D view's state,
+        # which ended a cut or a rotate in progress. The scissor and rotate
+        # tools re-snap to the new grid where they are.
+        for view in (self.view_top, self.view_side, self.view_front):
+            changed = getattr(view, 'grid_size_changed', None)
+            if changed is not None:
+                changed()
+        self.refresh_views()
 
     def set_world_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
@@ -4668,7 +4675,10 @@ class MainWindow(QMainWindow):
         # Editor mode key releases below
         if event.key() in self.keys_pressed:
             self.keys_pressed.remove(event.key())
-        self.update_views()
+        # Repaint only: update_views() resets every 2D view's state, so any
+        # key's release -- [ or ] to change the grid among them -- threw
+        # away a half-placed cut and ended a rotate in progress.
+        self.refresh_views()
         super().keyReleaseEvent(event)
 
     def snap_to_grid_enabled(self):
