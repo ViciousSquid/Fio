@@ -90,7 +90,7 @@ def test_the_recorded_inventory_is_the_known_one():
 def test_version5_showcase_uses_local_canonical_convex_records():
     """Version 5 stores convex planes locally and keeps one record per face."""
     brushes = MAPS['_SHOWCASE.json']
-    assert len(brushes) == 87
+    assert len(brushes) == 105
     encodings = {}
     for brush in brushes:
         kind = bs.encoding(brush)
@@ -107,7 +107,7 @@ def test_version5_showcase_uses_local_canonical_convex_records():
         local_centre, local_size = bs.local_rest(brush)
         assert np.allclose(local_centre, (0.0, 0.0, 0.0), atol=1e-8), brush['id']
         assert np.allclose(local_size, brush['size'], atol=1e-9), brush['id']
-    assert encodings == {'box': 69, 'convex': 18}
+    assert encodings == {'box': 78, 'convex': 27}
 
 def test_the_digest_sees_a_visible_change_and_not_float_noise():
     """The oracle's own resolution: 1e-3 of a unit is a change, 1e-9 is not."""
