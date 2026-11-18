@@ -23,7 +23,8 @@ from editor.sky_assets import store_sky_image_in_project
 from editor.portal_links import sync_group_to
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
-from engine.constants import water_high_quality
+from engine.constants import (WATER_FLOW_DIRECTIONS, WATER_FLOW_SPEED_MAX,
+                              WATER_FLOW_SPEED_MIN, water_flow_speed, water_high_quality)
 from editor.tooltips import set_tooltips_enabled
 from editor.form_layout import configure_property_forms
 
@@ -1974,9 +1975,91 @@ class PropertyEditor(QWidget):
         wave_layout.addRow("Wave Spacing:", _hbox(slider, label, stretch=False))
         self._widgets['water_wave_spread_slider'] = slider
 
+        self._add_water_flow_rows(brush, wave_layout)
+
         layout.addWidget(wave_group)
 
         return group
+
+    def _add_water_flow_rows(self, brush, form):
+        """"Direction": ticked, the water flows -- N, S, E or W, at its Flow
+        Speed -- and both controls show; unticked, they hide and the brush's
+        flow keys go, leaving the water exactly as it was before. The
+        controls keep their values while the panel is open, so ticking it
+        again brings the same flow back."""
+        flow = brush.get('water_flow')
+        direction = flow.strip().upper() if isinstance(flow, str) else ''
+        flowing = direction in WATER_FLOW_DIRECTIONS
+        directions = list(WATER_FLOW_DIRECTIONS)
+
+        flow_cb = _make_checkbox("Direction", flowing, None, _Style.CHECKBOX)
+        flow_cb.setToolTip("Make the water flow: its waves, ripples, foam and "
+                           "caustics drift the way chosen beside it.\nOff: still "
+                           "water, exactly as before.")
+        combo = _make_combo(directions, direction if flowing else directions[0],
+                            tooltip="The way the water flows: north (+Z), south, "
+                                    "east (+X) or west")
+        # One letter: as wide as that and its arrow, beside the checkbox.
+        from editor.form_layout import SNUG
+        combo.setProperty(SNUG, True)
+        widest = max(combo.fontMetrics().horizontalAdvance(d) for d in directions)
+        combo.setFixedWidth(widest + 54)
+        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        form.addRow("", _hbox(flow_cb, combo, spacing=10))
+        speed = water_flow_speed(brush)
+        slider, value_label = _make_slider(
+            self, speed, int(WATER_FLOW_SPEED_MIN), int(WATER_FLOW_SPEED_MAX),
+            fmt="{:.0f}", tooltip="How fast the water flows, in world units a "
+                                  "second (a player is about 64 tall)")
+        speed_label = QLabel("Flow Speed:")
+        form.addRow(speed_label, _hbox(slider, value_label, stretch=False))
+        self._widgets['water_flow_cb'] = flow_cb
+        self._widgets['water_flow_combo'] = combo
+        self._widgets['water_flow_speed_slider'] = slider
+
+        flow_rows = (combo, speed_label, slider, value_label)
+
+        def show_rows(on):
+            for widget in flow_rows:
+                widget.setVisible(on)
+
+        def toggled(on):
+            show_rows(on)
+            if on:
+                self.update_object_prop('water_flow', combo.currentText())
+                self.update_object_prop('water_flow_speed', float(slider.value()))
+            else:
+                self._remove_object_props(('water_flow', 'water_flow_speed'))
+
+        def direction_chosen(text):
+            if flow_cb.isChecked():
+                self.update_object_prop('water_flow', text)
+
+        def speed_chosen(value):
+            if flow_cb.isChecked():
+                self.update_object_prop('water_flow_speed', float(value))
+
+        show_rows(flowing)
+        flow_cb.toggled.connect(toggled)
+        combo.currentTextChanged.connect(direction_chosen)
+        slider.valueChanged.connect(speed_chosen)
+
+    def _remove_object_props(self, keys):
+        """Take *keys* off the current brush (back to how it was without
+        them), as a property edit: journalled, repainted, unsaved."""
+        obj = self.current_object
+        if not isinstance(obj, dict):
+            return
+        removed = [obj.pop(key) for key in keys if key in obj]
+        if not removed:
+            return
+        self.editor.state.mark_world_changed([obj])
+        if not self._populating:
+            self.editor.view_3d.update()
+            for v in ('view_top', 'view_front', 'view_side'):
+                if hasattr(self.editor, v):
+                    getattr(self.editor, v).update()
+            self.editor.mark_as_modified()
 
     def _create_fog_properties(self, brush):
         group = QGroupBox("Fog Properties")
@@ -5110,6 +5193,7 @@ class PropertyEditor(QWidget):
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
                            'water_wave_height', 'water_wave_spread', 'water_plane', 'water_high_quality', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
+                           'water_flow', 'water_flow_speed',
                            'fog_color', 'fog_density')
             for key in shader_keys:
                 self.current_object.pop(key, None)

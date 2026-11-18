@@ -1509,6 +1509,19 @@ class PassesMixin:
         params = table.water_params[brushes]
         spreads = table.water_wave_spread[brushes].tolist()
         spread_loc = uniforms['waveSpread']
+        # "Direction": how far each flowing brush's surface has moved (its
+        # velocity, world units a second, times the frame's time). Still
+        # water is (0, 0), what the uniform holds unless a brush flows, so a
+        # map with no flowing water sets it once a frame.
+        flows = table.water_flow[brushes]
+        flow_loc = uniforms['flowOffset']
+        flowing = bool(flows.any())
+        if flowing:
+            travelled = (np.asarray(flows, dtype=np.float64)
+                         * float(config.get('time', 0.0))).tolist()
+        flow_now = (0.0, 0.0)
+        if flow_loc != -1:
+            gl.glUniform2f(flow_loc, 0.0, 0.0)
         tints = table.water_tint[brushes]
         # Emissive water glows in its tint. The uniform is touched only when
         # the map has such water, or had and it must be put back.
@@ -1564,6 +1577,11 @@ class PassesMixin:
             gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
             gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
             gl.glUniform1f(spread_loc, spreads[i])
+            if flowing and flow_loc != -1:
+                wanted_flow = tuple(travelled[i])
+                if wanted_flow != flow_now:
+                    gl.glUniform2f(flow_loc, wanted_flow[0], wanted_flow[1])
+                    flow_now = wanted_flow
             upload_tint(tint_loc, i)
             if emissive_loc != -1:
                 wanted = bool(emissive is not None and emissive[i])

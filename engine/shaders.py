@@ -866,6 +866,10 @@ uniform float waveAmp;    // total wave amplitude in world units
 uniform highp vec3 brushSize;   // world-space brush dimensions (also water.frag)
 uniform highp int reflectSky;   // 1: the map has a sky panorama to reflect (also water.frag)
 uniform float waveSpread; // "Wave Spacing": 0 tight and choppy, 1 broad
+// "Direction": how far the surface has flowed (world x, z), so its pattern
+// is sampled that far upstream. Zero -- still water -- leaves every
+// position exactly as it is (also water.frag).
+uniform highp vec2 flowOffset;
 
 """ + PANORAMA_GLSL + """
 // One Gerstner wave: displaces the vertex and accumulates normal derivatives.
@@ -911,10 +915,11 @@ void main()
         // real water are: a broad, calm swell.
         float longer = mix(1.0, 2.2, clamp(waveSpread, 0.0, 1.0));
         float slower = inversesqrt(longer);
-        addWave(vec2( 0.788,  0.616), 190.0 * longer, amp * 0.42, 1.05 * slower, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.552,  0.834), 118.0 * longer, amp * 0.28, 1.45 * slower, worldPos.xz, dy, dxz, n);
-        addWave(vec2( 0.943, -0.333),  74.0 * longer, amp * 0.19, 1.95 * slower, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.673, -0.740),  38.0 * longer, amp * 0.11, 2.70 * slower, worldPos.xz, dy, dxz, n);
+        highp vec2 wavePos = worldPos.xz - flowOffset;
+        addWave(vec2( 0.788,  0.616), 190.0 * longer, amp * 0.42, 1.05 * slower, wavePos, dy, dxz, n);
+        addWave(vec2(-0.552,  0.834), 118.0 * longer, amp * 0.28, 1.45 * slower, wavePos, dy, dxz, n);
+        addWave(vec2( 0.943, -0.333),  74.0 * longer, amp * 0.19, 1.95 * slower, wavePos, dy, dxz, n);
+        addWave(vec2(-0.673, -0.740),  38.0 * longer, amp * 0.11, 2.70 * slower, wavePos, dy, dxz, n);
         worldPos.y  += dy;
         worldPos.xz += dxz * 0.75 * edgeFade;
     }
@@ -995,6 +1000,7 @@ uniform float sideSkipMargin;
 uniform highp vec3 brushSize;   // world size of the brush (shared with water.vert)
 
 uniform highp float waveSpread;   // "Wave Spacing": 0 tight and choppy, 1 broad
+uniform highp vec2 flowOffset;    // "Direction": how far it has flowed (water.vert)
 uniform float waterOpacity;
 uniform float waterReflectivity;
 uniform float distortionStrength;
@@ -1183,13 +1189,16 @@ void main()
 
     // World-space animated normal-map detail.  This is also the normal used
     // by Snell/Fresnel, so the optical effects follow the visible ripples.
+    // Flowing water ("Direction") samples it all upstream, by flowOffset:
+    // ripples, foam and the broad variation drift with the waves.
+    highp vec2 flowPos = FragPos.xz - flowOffset;
     highp vec2 wuv;
     if (topFace > 0.5) {
-        wuv = FragPos.xz;
+        wuv = flowPos;
     } else if (abs(geoN.x) > abs(geoN.z)) {
-        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);
+        wuv = vec2(flowPos.y, FragPos.y - time * 6.0);
     } else {
-        wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
+        wuv = vec2(flowPos.x, FragPos.y - time * 6.0);
     }
     // The ripple detail is spread with the waves ("Wave Spacing"): the same
     // pattern, up to 1.7x broader.
@@ -1201,12 +1210,12 @@ void main()
 
     // Broad world-space variation breaks up normal-map repetition on large water brushes.
     highp vec2 broadNoise = vec2(
-        vnoise(FragPos.xz * 0.006 + vec2(time * 0.004, -time * 0.003)),
-        vnoise(FragPos.xz * 0.008 + vec2(-time * 0.003, time * 0.005))
+        vnoise(flowPos * 0.006 + vec2(time * 0.004, -time * 0.003)),
+        vnoise(flowPos * 0.008 + vec2(-time * 0.003, time * 0.005))
     ) - 0.5;
     broadNoise += (vec2(
-        vnoise(FragPos.xz * 0.0037 + vec2(-time * 0.002, time * 0.001)),
-        vnoise(FragPos.xz * 0.0051 + vec2(time * 0.001, time * 0.002))
+        vnoise(flowPos * 0.0037 + vec2(-time * 0.002, time * 0.001)),
+        vnoise(flowPos * 0.0051 + vec2(time * 0.001, time * 0.002))
     ) - 0.5) * 0.55;
     ripple += broadNoise * 0.55;
     skyRipple = ripple;
@@ -1375,7 +1384,7 @@ void main()
     // inside).
     if (haveDepth) {
         if (topFace > 0.5) {
-            highp vec2 cuv = bedWorld.xz * 0.03;
+            highp vec2 cuv = (bedWorld.xz - flowOffset) * 0.03;
             float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
             float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
             if (bedVisible) {

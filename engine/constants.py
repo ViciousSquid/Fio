@@ -120,6 +120,54 @@ def water_high_quality(brush):
     return _flag(brush.get('water_high_quality', True))
 
 
+#: Water "Direction": the way its surface flows, as a world-space (x, z)
+#: vector -- north is +z and east is +x, as a box brush's faces are named.
+WATER_FLOW_DIRECTIONS = {
+    'N': (0.0, 1.0),
+    'S': (0.0, -1.0),
+    'E': (1.0, 0.0),
+    'W': (-1.0, 0.0),
+}
+#: How fast flowing water's surface moves by default (``water_flow_speed``),
+#: in world units a second (a player is about 64 tall): its waves, ripples,
+#: foam and caustics all drift with it. The Flow Speed slider's range.
+WATER_FLOW_SPEED = 40.0
+WATER_FLOW_SPEED_MIN = 1.0
+WATER_FLOW_SPEED_MAX = 256.0
+
+
+def water_flow_vector(brush):
+    """``(x, z)``: the way a water brush's surface flows (``water_flow``:
+    ``'N'``, ``'S'``, ``'E'`` or ``'W'``), or ``(0.0, 0.0)`` -- still water,
+    exactly as it is without the property -- when it has none."""
+    direction = brush.get('water_flow')
+    if not isinstance(direction, str):
+        return (0.0, 0.0)
+    return WATER_FLOW_DIRECTIONS.get(direction.strip().upper(), (0.0, 0.0))
+
+
+def water_flow_speed(brush):
+    """A flowing water brush's speed (``water_flow_speed``), world units a
+    second, within the slider's range; :data:`WATER_FLOW_SPEED` without one."""
+    try:
+        speed = float(brush.get('water_flow_speed', WATER_FLOW_SPEED))
+    except (TypeError, ValueError):
+        return WATER_FLOW_SPEED
+    if speed != speed:                       # NaN from a hand-edited map
+        return WATER_FLOW_SPEED
+    return min(max(speed, WATER_FLOW_SPEED_MIN), WATER_FLOW_SPEED_MAX)
+
+
+def water_flow_velocity(brush):
+    """``(x, z)`` world units a second: the water's surface velocity --
+    its Direction times its Flow Speed -- or ``(0.0, 0.0)`` for still water."""
+    x, z = water_flow_vector(brush)
+    if not (x or z):
+        return (0.0, 0.0)
+    speed = water_flow_speed(brush)
+    return (x * speed, z * speed)
+
+
 def _flag(value):
     """An authored on/off value: hand-edited maps may hold strings like
     ``"false"`` or ``"0"``."""
