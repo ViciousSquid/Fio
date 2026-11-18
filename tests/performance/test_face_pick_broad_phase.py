@@ -14,6 +14,10 @@ from engine import brush_geometry, brush_placement
 from engine.view_picking import ViewPicking
 from tests.helpers.worlds import angled_brush, box_brush
 
+# engine.view_picking is the Qt/GL viewport mixin: it imports PyQt5 and
+# PyOpenGL at module level, so this belongs to the Qt tier.
+pytestmark = pytest.mark.qt
+
 
 class _Filters:
     @staticmethod
