@@ -22,6 +22,29 @@ from editor.debug_console import DebugConsole
 
 import math
 
+def snug_width(box):
+    """Fix *box*'s width to what its content needs: a spin box's widest value
+    (its maximum) beside its arrows, a dropdown's longest option beside its
+    arrow. The bottom bar's boxes were several times wider than "16"."""
+    from PyQt5.QtWidgets import QAbstractSpinBox, QComboBox
+    metrics = box.fontMetrics()
+    if isinstance(box, QComboBox):
+        # The longest option, its padding and the drop-down arrow (Qt's own
+        # size hint reserves far more than the editor stylesheet uses).
+        box.ensurePolished()
+        widest = max((metrics.horizontalAdvance(box.itemText(i))
+                      for i in range(box.count())), default=0)
+        width = widest + 62
+    elif isinstance(box, QAbstractSpinBox):
+        text = box.textFromValue(box.maximum()) if hasattr(box, 'textFromValue') \
+            else str(box.maximum())
+        width = metrics.horizontalAdvance(text + box.suffix()) + 38   # arrows (20) + padding
+    else:
+        return
+    box.setFixedWidth(int(width))
+    box.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+
 class PowerOfTwoSpinBox(QSpinBox):
     """SpinBox that only allows power-of-2 values (2, 4, 8, 16, 32 …)."""
 
@@ -1185,6 +1208,13 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(QLabel("Camera:"))
         bottom_layout.addWidget(MainWindow.camera_mode_combobox)
  
+        # Snug: each box as wide as its widest value (a spin box) or option
+        # (a dropdown) needs, rather than whatever the layout hands it.
+        for box in (MainWindow.grid_size_spinbox, MainWindow.world_size_spinbox,
+                    MainWindow.cull_dist_spinbox, MainWindow.display_mode_combobox,
+                    MainWindow.camera_mode_combobox):
+            snug_width(box)
+
         # --- EXPANDING NOTIFICATION AREA (FAR RIGHT) ---
         # Add a small buffer spacing before the label
         bottom_layout.addSpacing(20)
