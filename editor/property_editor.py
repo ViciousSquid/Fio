@@ -16,7 +16,8 @@ from engine.effect_entity import (EFFECT_TYPES, EMITTER_NONE, EMITTER_PRESETS,
                                   PARTICLES_DEFAULT_EMITTER,
                                   PARTICLES_DEFAULT_SIZE)
 from engine.explosions import returns_after_explosion
-from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
+from engine.prop_entity import (MODEL_PRESETS, OIL_BARREL_VARIANTS, oil_barrel_variant,
+                                 model_preset_name, model_settings,
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
@@ -2367,6 +2368,8 @@ class PropertyEditor(QWidget):
                 self._widgets['prop_sprite_size_inputs'] = sprite_inputs
 
                 model_path_row = form.getWidgetPosition(model_path_widget)[0]
+                variant_combo = self._prop_variant_combo
+                variant_row = form.getWidgetPosition(variant_combo)[0]
                 scale_row = scale_before
                 rotation_row = rotation_before
                 tint_row = tint_before
@@ -2387,13 +2390,19 @@ class PropertyEditor(QWidget):
                     # when the field is empty: an authored model is never
                     # replaced, and nothing is added to a billboard Prop.
                     if is_model:
-                        # A Prop model representation always has a concrete mesh.
-                        # Set the path before switching the render mode so the
-                        # dense projection never observes a model row with no recipe.
+                        # A Prop model representation always has a concrete mesh:
+                        # with none chosen yet it is the Oil Barrel -- the whole
+                        # preset, as if picked from Presets (Browse changes it).
                         default_model = getattr(
                             type(thing), 'DEFAULT_MODEL_PATH', '')
                         if not thing.properties.get('model_path') and default_model:
-                            self.update_object_prop('model_path', default_model)
+                            for key, value in (model_settings(default_model)
+                                               or {'model_path': default_model}).items():
+                                self.update_object_prop(key, value)
+                            preset_combo = self._widgets.get('prop_model_preset_combo')
+                            if preset_combo is not None:
+                                preset_combo.setCurrentText('Oil Barrel')
+                            variant_combo.setCurrentText('None')
                     else:
                         # Restore the Prop's resolved visual asset rather than a
                         # generic placeholder: weapon -> gun1, key -> its key,
@@ -2416,12 +2425,20 @@ class PropertyEditor(QWidget):
                         self._set_form_row_visible(form, row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
                         self._set_form_row_visible(form, row, not is_model)
+                    refresh_variant_row()
+
+                def refresh_variant_row():
+                    shown = (thing.properties.get('render_mode', 'model') != 'billboard'
+                             and oil_barrel_variant(thing.properties.get('model_path'))
+                             is not None)
+                    self._set_form_row_visible(form, variant_row, shown)
 
                 mode_combo.currentTextChanged.connect(set_representation)
                 for row in (model_path_row, scale_row, rotation_row, tint_row):
                     self._set_form_row_visible(form, row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
                     self._set_form_row_visible(form, row, not model_mode)
+                refresh_variant_row()
 
                 # Collection type can own the sprite path, so the appearance row
                 # is further narrowed by _refresh_prop_collection_appearance().
@@ -6248,6 +6265,26 @@ class PropertyEditor(QWidget):
         layout.addRow("Presets:", widget)
         self._widgets['prop_model_preset_combo'] = combo
         self._widgets['prop_model_browse_button'] = btn
+
+        # The Oil Barrel's look, always the first row under the model: shown
+        # for an Oil Barrel only (the oil drum models are reached this way and
+        # not through the asset browser).
+        variant_combo = QComboBox()
+        variant_combo.addItems(list(OIL_BARREL_VARIANTS))
+        variant_combo.setToolTip("Which Oil Barrel: the standard drum, or the grey one.")
+        variant_combo.setCurrentText(oil_barrel_variant(current) or 'None')
+
+        def on_variant(index):
+            path = OIL_BARREL_VARIANTS.get(variant_combo.itemText(index))
+            if path:
+                # The same barrel in another finish: only the model changes.
+                self.update_object_prop('model_path', path)
+                combo.setToolTip(path)
+
+        variant_combo.activated.connect(on_variant)
+        layout.addRow("Variant:", variant_combo)
+        self._widgets['prop_model_variant_combo'] = variant_combo
+        self._prop_variant_combo = variant_combo
         return widget
 
     def add_vector3_widget(self, layout, thing, key):

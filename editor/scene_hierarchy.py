@@ -217,6 +217,9 @@ class SceneHierarchy(QWidget):
         self.lock_icon = load_icon("assets/lock.png")
         self.hidden_icon = load_icon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
+        #: True while a selection made in the tree is being applied (its
+        #: rebuild keeps the list still: refresh_list).
+        self._selecting_in_tree = False
         # Double-clicks are read off the viewport, not itemDoubleClicked: the
         # first click of a double-click changes the selection, which rebuilds
         # the tree, so Qt never pairs the two clicks on one item.
@@ -638,18 +641,70 @@ class SceneHierarchy(QWidget):
         return terrain_data is not None
 
     def refresh_list(self):
+        """Rebuild the tree (every selection change does, through the editor's
+        update_all_ui) without the list moving under the cursor.
+
+        The scroll position is kept across the rebuild. A selection made in
+        the tree itself -- a click, a Ctrl-click adding a row, a Shift-click
+        range -- does not scroll at all, and the row clicked stays the current
+        row (the anchor the next Shift-click ranges from). A selection made
+        elsewhere (the 2D or 3D view) scrolls only if its first row is out of
+        sight. Scrolling to the first selected row after every rebuild made
+        the list jump to the top of a Ctrl-click selection on each click.
+        """
+        bar = self.tree.verticalScrollBar()
+        scrolled = bar.value()
+        current_obj = self._object_of(self.tree.currentItem())
+        from_tree = self._selecting_in_tree
         # A failed rebuild must not leave selection notifications disabled,
         # and callers may already have blocked signals for a larger operation.
         was_blocked = self.tree.blockSignals(True)
         try:
             self._rebuild_items()
+            # Lay the new rows out now, so the scroll range is the rebuilt
+            # tree's (rebuilding row by row clamped the position as it went).
+            self.tree.doItemsLayout()
+            bar.setValue(min(scrolled, bar.maximum()))
+            if current_obj is not None:
+                item = self._find_item(current_obj)
+                if item is not None:
+                    self.tree.setCurrentItem(item, 0, QtCore.QItemSelectionModel.NoUpdate)
         finally:
             self.tree.blockSignals(was_blocked)
 
-        # Scroll after restoring signals, as in the original refresh path.
+        if from_tree:
+            return
         first_selected = self.tree.selectedItems()
         if first_selected:
             self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
+
+    def _object_of(self, item):
+        """The brush or Thing a tree row stands for, or None."""
+        if item is None:
+            return None
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return None
+        kind, index = data
+        state = self.main_window.state
+        try:
+            if kind == 'brush':
+                return state.brushes[index]
+            if kind == 'thing':
+                return state.things[index]
+        except (IndexError, TypeError):
+            return None
+        return None
+
+    def _find_item(self, obj):
+        """The row standing for *obj*, at any depth (groups nest), or None."""
+        stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+        while stack:
+            item = stack.pop()
+            if self._object_of(item) is obj:
+                return item
+            stack.extend(item.child(j) for j in range(item.childCount()))
+        return None
 
     def _rebuild_items(self):
         self.tree.clear()
@@ -1179,6 +1234,14 @@ class SceneHierarchy(QWidget):
         self.main_window.show_properties_panel()
 
     def handle_selection_change(self):
+        # The tree made this selection: its rebuild must not scroll.
+        self._selecting_in_tree = True
+        try:
+            self._apply_tree_selection()
+        finally:
+            self._selecting_in_tree = False
+
+    def _apply_tree_selection(self):
         selected_items = self.tree.selectedItems()
         if not selected_items:
             self.main_window.set_selected_objects([])
