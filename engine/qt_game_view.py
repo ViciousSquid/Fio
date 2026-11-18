@@ -1890,6 +1890,8 @@ class QtGameView(QOpenGLWidget):
                     return
         if not self.play_mode and event.button() == Qt.RightButton:
             self._editor_right_mouse_held = True
+            if not self.hasFocus():
+                self.setFocus(Qt.MouseFocusReason)      # WASD comes here
             self._sync_editor_mouselook()
         super().mousePressEvent(event)
 
@@ -1921,7 +1923,7 @@ class QtGameView(QOpenGLWidget):
         is back in the middle every frame and each movement counts once.
         """
         held = (self._mouse_look_captured() and self.window().isActiveWindow()
-                and self.hasFocus())
+                and self._look_has_focus())
         self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
@@ -1941,6 +1943,20 @@ class QtGameView(QOpenGLWidget):
         if dx or dy:
             self.game_state.set_mouse_delta(float(dx), float(dy))
             QCursor.setPos(centre)
+
+    def _look_has_focus(self):
+        """Whether the look may turn the camera, as far as focus goes.
+
+        Play needs this view's focus. Editor look does not: it holds the
+        mouse grab, so every movement is this view's whoever has the keys,
+        and focus moving to a panel mid-drag (a property panel rebuilt, a
+        floating tool window) left right-drag dead until pressed again."""
+        return self.hasFocus() or (not self.play_mode and self.mouselook_active)
+
+    @staticmethod
+    def _right_button_down():
+        """Whether the right button is physically down now."""
+        return bool(QApplication.mouseButtons() & Qt.RightButton)
 
     def _sync_play_mouse_grab(self, held):
         """Play: while the look holds the mouse, every click belongs to this view.
@@ -2000,7 +2016,7 @@ class QtGameView(QOpenGLWidget):
         """
         mouse = self._mac_mouse
         if (not self._mouse_look_captured() or not self.window().isActiveWindow()
-                or not self.hasFocus()):
+                or not self._look_has_focus()):
             self._attach_mac_cursor()
             mouse.take()                       # movement made with the cursor free
             self._skip_next_look_poll = True
@@ -2035,6 +2051,12 @@ class QtGameView(QOpenGLWidget):
             self.game_state.set_mouse_delta(dx, dy)
 
     def mouseMoveEvent(self, event):
+        if (not self.play_mode and self._editor_right_mouse_held
+                and not (event.buttons() & Qt.RightButton)):
+            # The release went somewhere else (another window, another app):
+            # the button is up, so the right-drag look is over.
+            self._editor_right_mouse_held = False
+            self._sync_editor_mouselook()
         if not self.play_mode and self.floating_windows.handle_mouse_move(
                 event, self.width(), self.height()):
             self.update()
@@ -2235,9 +2257,17 @@ class QtGameView(QOpenGLWidget):
             self.game_state.consume_mouse_delta()
             self._skip_next_look_poll = True
         elif self.mouselook_active:
-            self.stop_editor_mouselook()
-            self.editor.keys_pressed.clear()
-            self.game_state.set_keys(set())
+            if (self._editor_right_mouse_held and self._right_button_down()
+                    and event.reason() != Qt.ActiveWindowFocusReason):
+                # Focus moved to another widget of this window while the
+                # right button is still down: the drag goes on (the mouse is
+                # grabbed). A Z latch ends, as it does on any focus loss.
+                self.editor_freelook_active = False
+                self._sync_editor_mouselook()
+            else:
+                self.stop_editor_mouselook()
+                self.editor.keys_pressed.clear()
+                self.game_state.set_keys(set())
         super().focusOutEvent(event)
 
     def leaveEvent(self, event):
