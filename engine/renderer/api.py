@@ -65,6 +65,10 @@ FRAME_INPUT = {
                            'outlines) draws only these rows. The editor\'s view '
                            'filters leave rows out; a light left out still lights',
     'thing_hidden': 'bool per entity row: hidden or collected in the running world',
+    'hide_hidden_lights': 'optional bool: while editing, a light whose thing_hidden '
+                          'row is set (hidden with H) does not light. Off (the '
+                          'default), hidden lights light the editor; in play a '
+                          'hidden light never lights',
     'light_focus': 'optional (x, y, z): only lights within light_range of this '
                    'point light the frame, nearest first, so every shader\'s '
                    'light cap keeps the closest (the host passes the player in play)',

@@ -255,6 +255,10 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
+        #: Settings > Editor > 3D View: a light hidden with H gives no light
+        #: in the editor while it is hidden.
+        self.hide_hidden_lights = self.editor.config.getboolean(
+            'Display', 'hide_hidden_lights', fallback=False)
         # The glasses player 1 wears (Settings > Appearance); player 2
         # always wears the default pair.
         self.player1_glasses = normalize_glasses(self.editor.config.get(
@@ -961,6 +965,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
+        self._render_config["hide_hidden_lights"] = bool(self.hide_hidden_lights)
         from engine.glasses import world_glasses
         self.logic_thread.player_runtime.glasses_style = normalize_glasses(self.player1_glasses)
         (_glass_positions, _glass_sprites, _spectator_positions, _spectator_sprites,
@@ -1171,11 +1176,23 @@ class QtGameView(QOpenGLWidget):
                 _segments, _colours = connection_segments(conn_lines)
                 self.renderer.draw_connection_lines(
                     self.projection_matrix, self.view_matrix, _segments, _colours)
-        if self.face_mode_active and self.face_under_cursor():
-            brush, face_name = self.hovered_face_info
+        # The face being edited -- the Surface Inspector's, which stays put
+        # whatever the cursor passes over -- in orange; in Face Mode the face
+        # under the cursor too: faintly while another face is selected.
+        selected = None if self.play_mode else self.editor.selected_face_target()
+        hovered = self.face_under_cursor() if self.face_mode_active else None
+        if selected is not None:
             self.renderer.draw_face_highlight(
                 self.projection_matrix, self.view_matrix,
-                face_highlight_triangles(brush, face_name))
+                face_highlight_triangles(*selected))
+        if hovered is not None and not (
+                selected is not None and hovered[0] is selected[0]
+                and hovered[1] == selected[1]):
+            draw = (self.renderer.draw_face_highlight if selected is None
+                    else getattr(self.renderer, 'draw_face_hover', None))
+            if draw is not None:
+                draw(self.projection_matrix, self.view_matrix,
+                     face_highlight_triangles(*hovered))
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.

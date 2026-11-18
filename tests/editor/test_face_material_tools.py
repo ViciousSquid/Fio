@@ -179,10 +179,10 @@ def test_applying_a_texture_reaches_a_cut_face(main_window, monkeypatch):
     cut = next(k for k in bf.face_keys(brush) if k.startswith('#'))
     monkeypatch.setattr(host.asset_browser, 'get_selected_filepath',
                         lambda: '/assets/textures/Dev/256.jpg')
-    # Named relative to assets/textures, so the subfolder is kept and the
-    # renderer finds the file (editor.face_texture.texture_name).
     for key in (cut, 'top'):
         host.apply_texture_to_specific_face(brush, key)
+        # Named from assets/textures, folder and all (the renderer loads
+        # assets/textures/<name>).
         assert bf.face_material(brush, key).texture == 'Dev/256.jpg', key
     index = int(cut[1:])
     assert brush['geometry']['planes'][index]['texture'] == 'Dev/256.jpg'

@@ -359,7 +359,19 @@ class OverlaysMixin:
     def draw_face_highlight(self, projection, view, triangles):
         """Highlight a face: *triangles* is ``(n, 3)`` float32, world space
         (``engine.overlay_geometry.face_highlight_triangles``, built by the
-        host from the hovered brush -- the renderer sees no brush)."""
+        host from the brush -- the renderer sees no brush). The selected
+        face: the Surface Inspector's, or the hovered one in Face Mode."""
+        # Fio's accent orange (#F08000), as every other selection is.
+        self._face_overlay(projection, view, triangles, (0.94, 0.5, 0.0), 0.4)
+
+    def draw_face_hover(self, projection, view, triangles):
+        """A faint highlight for the face under the cursor while another is
+        selected (the Surface Inspector's): what a click would pick, drawn
+        so it cannot be mistaken for the face being edited. Optional for a
+        renderer; the host looks it up with ``getattr``."""
+        self._face_overlay(projection, view, triangles, (1.0, 1.0, 1.0), 0.15)
+
+    def _face_overlay(self, projection, view, triangles, colour, alpha):
         if triangles is None or not len(triangles) or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -369,9 +381,8 @@ class OverlaysMixin:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        # Fio's accent orange (#F08000), as every other selection is.
-        gl.glUniform3f(uniforms['color'], 0.94, 0.5, 0.0)
-        gl.glUniform1f(uniforms['alpha'], 0.4)
+        gl.glUniform3f(uniforms['color'], *colour)
+        gl.glUniform1f(uniforms['alpha'], alpha)
         self._draw_face_highlight_verts(
             np.ascontiguousarray(triangles, dtype=np.float32).ravel(), uniforms)
         gl.glDisable(gl.GL_BLEND)

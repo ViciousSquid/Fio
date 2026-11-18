@@ -284,3 +284,29 @@ def test_after_the_camera_moves_under_a_still_cursor_the_new_face_is_edited(
     finally:
         instrument.close()
         instrument.deleteLater()
+
+
+def test_the_inspectors_face_stays_highlighted_while_another_is_hovered(fio_session):
+    """The Surface Inspector's face is drawn as the selection (orange) whatever
+    the cursor is over; the face under the cursor only faintly."""
+    session = fio_session(_level("none"), size=(240, 180))
+    session.view.sysmon.set_active(False)
+    window, state, view = session.window, session.state, session.view
+    floor, wall = state.brushes[0], state.brushes[2]
+    window.toggle_face_mode(True)
+    window.show_surface_inspector(wall, 'south', raise_window=False)
+    view.face_under_cursor = lambda pos=None: (floor, 'top')
+    drawn = []
+    renderer = view.renderer
+    real_highlight, real_hover = renderer.draw_face_highlight, renderer.draw_face_hover
+    renderer.draw_face_highlight = lambda p, v, t: (drawn.append(('selected', len(t))),
+                                                    real_highlight(p, v, t))
+    renderer.draw_face_hover = lambda p, v, t: (drawn.append(('hover', len(t))),
+                                                real_hover(p, v, t))
+    try:
+        _frame(session)
+    finally:
+        del renderer.draw_face_highlight, renderer.draw_face_hover
+    from engine.overlay_geometry import face_highlight_triangles
+    assert ('selected', len(face_highlight_triangles(wall, 'south'))) in drawn
+    assert ('hover', len(face_highlight_triangles(floor, 'top'))) in drawn
