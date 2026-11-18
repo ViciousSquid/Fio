@@ -231,3 +231,60 @@ def test_an_unselected_decal_stays_in_the_level(main_window, tool):
     tool.escape()                              # clears the selection
     tool.escape()                              # leaves the tool
     assert not tool.active and len(decals(main_window)) == 1
+
+
+# -- size: the picked image's, and its shape kept -----------------------------
+
+def test_picking_an_image_sets_the_size_new_decals_get(main_window, tool):
+    """Placing: the panel's Width and Height become the picked image's pixel
+    size (a 512x64 banner: 512 by 64 units), and can be changed."""
+    from editor.decal_tool import image_size
+    assert image_size('Decal02.jpg') == (512, 64)
+    tool.image_chosen('Decal02.jpg')
+    assert (tool.settings['width'], tool.settings['height']) == (512.0, 64.0)
+    panel = tool.panel()
+    assert (panel.width_spin.value(), panel.height_spin.value()) == (512.0, 64.0)
+    tool.keep_aspect = False
+    panel.height_spin.setValue(100.0)                     # changed by hand
+    assert (tool.settings['width'], tool.settings['height']) == (512.0, 100.0)
+
+
+def test_picking_an_image_in_the_asset_browser_tells_the_tool(main_window, tool, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tool, 'image_chosen', seen.append)
+    tab = main_window.asset_browser.tab_textures
+    item = type('Tile', (), {'file_path': 'assets/textures/decals/Banner01.png'})()
+    monkeypatch.setattr(tab.model, 'refresh_path', lambda *_: None)
+    monkeypatch.setattr(tab, 'stop_preview', lambda *_: None, raising=False)
+    tab.select_item(item)
+    assert seen == ['assets/textures/decals/Banner01.png']
+    tool.set_active(False)
+    tab.select_item(None)
+    tab.select_item(item)                                 # tool off: not told
+    assert seen == ['assets/textures/decals/Banner01.png']
+
+
+def test_a_placed_decal_keeps_its_size_when_another_image_is_picked(main_window, tool):
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    tool.settings.update(width=300.0, height=200.0)
+    press(tool, 10, 10)
+    placed, = decals(main_window)
+    tool.image_chosen('Decal02.jpg')
+    assert (placed.properties['width'], placed.properties['height']) == (300.0, 200.0)
+
+
+def test_keep_aspect_ratio_is_on_and_resizing_keeps_the_shape(main_window, tool):
+    panel = tool.panel()
+    assert tool.keep_aspect and panel.keep_aspect_cb.isChecked()
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    tool.settings.update(width=400.0, height=100.0)
+    press(tool, 10, 10)
+    placed, = decals(main_window)                         # selected: 4:1
+    panel.width_spin.setValue(200.0)
+    assert (placed.properties['width'], placed.properties['height']) == (200.0, 50.0)
+    assert panel.height_spin.value() == 50.0
+    panel.height_spin.setValue(80.0)
+    assert (placed.properties['width'], placed.properties['height']) == (320.0, 80.0)
+    panel.keep_aspect_cb.setChecked(False)                # off: one side alone
+    panel.width_spin.setValue(100.0)
+    assert (placed.properties['width'], placed.properties['height']) == (100.0, 80.0)

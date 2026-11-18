@@ -1625,6 +1625,10 @@ class AssetBrowserTab(QWidget):
             if tile is not None:
                 self.model.refresh_path(tile.file_path)
         self.update_buttons_enabled()
+        # Placing decals: the Decal tool takes the picked image's size.
+        tool = getattr(getattr(self.editor, 'view_3d', None), 'decal_tool', None)
+        if item is not None and item is not previous and getattr(tool, 'active', False):
+            tool.image_chosen(item.file_path)
 
     def update_buttons_enabled(self):
         # Only the model and audio tabs have a button that needs a selection.

@@ -34,7 +34,7 @@ import os
 
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (QDialog, QDoubleSpinBox, QFormLayout, QLabel,
+from PyQt5.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QLabel,
                              QVBoxLayout)
 
 from editor.things import Decal
@@ -63,6 +63,53 @@ def decal_box_inverse(decal):
     return np.linalg.inv(model)
 
 
+def keep_aspect(props, key, value):
+    """``{'width': w, 'height': h}``: *props*'s width and height with *key*
+    (``'width'`` or ``'height'``) set to *value* and the other scaled to keep
+    their ratio. A missing or zero side counts as the other (square)."""
+    def number(name, fallback):
+        try:
+            v = float(props.get(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+        return v if v > 0.0 else fallback
+    width = number('width', 128.0)
+    height = number('height', width)
+    value = float(value)
+    if key == 'width':
+        return {'width': value, 'height': value * height / width}
+    return {'width': value * width / height, 'height': value}
+
+
+def image_size(path):
+    """``(width, height)`` in pixels of the decal image at *path* (an Asset
+    Browser file, or a name in textures/decals), or None when it cannot be
+    read -- a sign's words, a missing file."""
+    import io
+    from PIL import Image
+    from engine import decal_textures
+    if not path:
+        return None
+    path = str(path)
+    readers = []
+    if os.path.isfile(path):
+        readers.append(lambda: open(path, 'rb').read())
+    name = os.path.basename(path.replace('\\', '/'))
+    readers.append(lambda: decal_textures.read_image(name))
+    project = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    in_project = os.path.join(project, 'assets', 'textures', 'decals', name)
+    readers.append(lambda: open(in_project, 'rb').read() if os.path.isfile(in_project) else None)
+    for read in readers:
+        try:
+            data = read()
+            if data:
+                with Image.open(io.BytesIO(data)) as image:
+                    return image.size
+        except Exception:
+            continue
+    return None
+
+
 class DecalTool:
     """Owned by the 3D view; see the module docstring."""
 
@@ -74,6 +121,9 @@ class DecalTool:
         #: What new decals get (the panel edits these).
         self.settings = {'width': 128.0, 'height': 128.0,
                          'depth': 32.0, 'roll': 0.0, 'opacity': 1.0}
+        #: Width and height change together, keeping a decal's shape -- in
+        #: this panel and with the 2D views' handles. On by default.
+        self.keep_aspect = True
         self.selected_ids = set()
         self._drag = None
         self._panel = None
@@ -142,6 +192,10 @@ class DecalTool:
         if active:
             self.view.setCursor(Qt.CrossCursor)
             self.panel().show()
+            browser = getattr(self.editor, 'asset_browser', None)
+            path = browser.get_selected_filepath() if browser is not None else None
+            if path:
+                self.image_chosen(path)
         else:
             self.clear_selection()
             self.view.setCursor(Qt.ArrowCursor)
@@ -387,16 +441,36 @@ class DecalTool:
         return self._panel
 
     def apply_setting(self, key, value):
-        """A panel change: new decals get it, and so do the selected ones."""
+        """A panel change: new decals get it, and so do the selected ones.
+        With :attr:`keep_aspect`, a new width or height scales the other
+        too -- each decal keeping its own shape."""
+        other = {'width': 'height', 'height': 'width'}.get(key) if self.keep_aspect else None
+        if other is not None:
+            self.settings[other] = keep_aspect(self.settings, key, value)[other]
         self.settings[key] = value
+        if other is not None and self._panel is not None:
+            self._panel.show_values(self.settings)
         decals = self.selected()
         if not decals:
             return
         self.editor.save_state()
         for decal in decals:
+            if other is not None:
+                decal.properties[other] = keep_aspect(decal.properties, key, value)[other]
             decal.properties[key] = value
             touch(decal)
         self.view.update()
+
+    def image_chosen(self, path):
+        """An image was picked in the Asset Browser while the tool is on: new
+        decals take its size -- a 512x64 banner, 512 units by 64 -- which
+        the panel shows and can change. Decals already placed keep theirs."""
+        size = image_size(path)
+        if size is None:
+            return
+        self.settings['width'], self.settings['height'] = float(size[0]), float(size[1])
+        if self._panel is not None:
+            self._panel.show_values(self.settings)
 
 
 class DecalToolPanel(QDialog):
@@ -436,6 +510,13 @@ class DecalToolPanel(QDialog):
         # wet_full.png) then makes all of it wet and glossy.
         self.width_spin = spin('width', "Width:", 8, 16384, 16, suffix=' u')
         self.height_spin = spin('height', "Height:", 8, 16384, 16, suffix=' u')
+        self.keep_aspect_cb = QCheckBox("Keep aspect ratio")
+        self.keep_aspect_cb.setChecked(tool.keep_aspect)
+        self.keep_aspect_cb.setToolTip(
+            "Width and height change together, keeping the decal's shape -- "
+            "here and with the handles in the 2D views")
+        self.keep_aspect_cb.toggled.connect(lambda on: setattr(tool, 'keep_aspect', bool(on)))
+        form.addRow("", self.keep_aspect_cb)
         self.depth_spin = spin('depth', "Depth:", 4, 1024, 8, suffix=' u')
         self.roll_spin = spin('roll', "Rotation:", -360, 360, 15, suffix='°')
         self.opacity_spin = spin('opacity', "Opacity / wetness:", 0, 1, 0.1, decimals=2)

@@ -2674,6 +2674,10 @@ flat in vec4 Params;
 
 uniform highp sampler2D sceneDepth;
 uniform mediump sampler2DArray decalTextures;
+// Placed images: each sits unstretched in its layer of their own array, from
+// the corner, filling this much of it (useLayerScale 1 while drawing them).
+uniform vec2 imageLayerScale[64];
+uniform int useLayerScale;
 uniform vec4 decalRanges;       // first layer and count: wall images, floor images
 uniform mat4 invViewProjection;
 uniform vec4 viewport;          // x, y, width, height of the depth copy
@@ -2763,7 +2767,12 @@ void main() {
     // up is up, its z into the surface), so the image is read along -x: its
     // left is on the viewer's left, and text reads the right way round.
     float across = mirrored ? at.x : -at.x;
-    vec4 texel = texture(decalTextures, vec3(across + 0.5, 0.5 - at.y, layer));
+    vec2 st = vec2(across + 0.5, 0.5 - at.y);
+    if (useLayerScale == 1) {
+        int index = int(layer + 0.5);
+        if (index < 64) st *= imageLayerScale[index];
+    }
+    vec4 texel = texture(decalTextures, vec3(st, layer));
     // A placed decal's tint, less one, rides in the bottom row of its box's
     // inverse -- (0, 0, 0, 1) for any box, and read by nothing above -- so
     // an untinted decal, and blood, multiply by white.

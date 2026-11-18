@@ -207,6 +207,9 @@ class View2D(QWidget):
         #: (ROTATE_STEP_FOR_GRID), so [ and ] change it mid-drag.
         self._rotate_snap_override = None
         self._rotate_last_world = None # the cursor in the last rotate update
+        #: A selected decal's edge being dragged (decal_handles): the decal,
+        #: which edge, and whether its undo step is saved yet.
+        self._decal_resize = None
 
         # --- Component editing (face / edge / vertex / side stretch) ---
         # The mode, hover and selection live on the main window's shared
@@ -1421,6 +1424,7 @@ class View2D(QWidget):
         self.draw_terrain(painter, visible_bounds)
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
+        self.draw_decal_handles(painter)
         self.draw_camera(painter)
         if self._clip_active():
             self.draw_clip_overlay(painter)
@@ -3060,6 +3064,115 @@ class View2D(QWidget):
         painter.setBrush(QColor(0, 0, 0, 150))
         painter.drawEllipse(screen_pos, 8, 8)
 
+    # -- a selected decal's handles (editor.decal_handles) ---------------------
+
+    def _handle_decal(self):
+        """The decal whose edges have handles: the selected one (or the
+        Decal tool's one selected decal); not a locked one."""
+        from editor.things import Decal
+        decal = self.editor.primary_selection()
+        if not isinstance(decal, Decal):
+            decal = None
+            tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+            if tool is not None and getattr(tool, 'active', False):
+                chosen = tool.selected()
+                if len(chosen) == 1:
+                    decal = chosen[0]
+        if decal is None or decal.properties.get('lock', False):
+            return None
+        return decal
+
+    def _decal_keep_aspect(self):
+        tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+        return bool(getattr(tool, 'keep_aspect', True))
+
+    def draw_decal_handles(self, painter):
+        """The selected decal's face outlined, with a handle on each edge
+        this view can drag."""
+        from editor import decal_handles
+        decal = self._handle_decal()
+        idx = self._axis_indices()
+        if decal is None or idx is None:
+            return
+        i1, i2, _ = idx
+        corners = decal_handles.outline(decal, i1, i2)
+        if corners is None:
+            return
+        polygon = QPolygonF([self.world_to_screen(QPointF(u, v)) for u, v in corners])
+        painter.setPen(QPen(QColor(0xF0, 0x80, 0x00), 1.5))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPolygon(polygon)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        size = 8
+        for _key, _sign, (u, v) in decal_handles.handles(decal, i1, i2):
+            at = self.world_to_screen(QPointF(u, v))
+            painter.drawRect(QRectF(at.x() - size / 2, at.y() - size / 2, size, size))
+
+    def _begin_decal_resize(self, screen_pos):
+        """A press on a selected decal's handle starts dragging that edge."""
+        from editor import decal_handles
+        decal = self._handle_decal()
+        idx = self._axis_indices()
+        if decal is None or idx is None:
+            return False
+        i1, i2, _ = idx
+        world = self.screen_to_world(QPointF(screen_pos))
+        hit = decal_handles.handle_at(decal, i1, i2, (world.x(), world.y()),
+                                      10.0 / max(self.zoom_factor, 1e-9))
+        if hit is None:
+            return False
+        self._decal_resize = {'decal': decal, 'key': hit[0], 'sign': hit[1],
+                              'saved': False}
+        return True
+
+    def _update_decal_resize(self, world_pos):
+        """Move the dragged edge to the cursor: snapped to the grid while
+        grid snap is on, the other side following with Keep aspect ratio."""
+        from editor import decal_handles
+        from engine.change_journal import touch
+        drag = self._decal_resize
+        idx = self._axis_indices()
+        if drag is None or idx is None:
+            return
+        i1, i2, _ = idx
+        decal = drag['decal']
+        result = decal_handles.resize(
+            decal, drag['key'], drag['sign'], (world_pos.x(), world_pos.y()), i1, i2,
+            grid=self.grid_size if self.snap_to_grid_enabled else None,
+            keep_aspect=self._decal_keep_aspect())
+        if result is None:
+            return
+        pos, width, height = result
+        props = decal.properties
+        if (all(abs(a - b) < 1e-6 for a, b in zip(pos, decal.pos))
+                and abs(width - float(props.get('width', 0.0))) < 1e-6
+                and abs(height - float(props.get('height', 0.0))) < 1e-6):
+            return
+        if not drag['saved']:
+            self.main_window.save_state()            # the whole drag: one undo step
+            drag['saved'] = True
+        decal.pos = list(pos)
+        props['width'], props['height'] = width, height
+        touch(decal)
+        self.main_window.refresh_views()
+
+    def _end_decal_resize(self):
+        """The drag is over: the panels show the decal's new size."""
+        drag, self._decal_resize = self._decal_resize, None
+        if drag is None or not drag['saved']:
+            return
+        decal = drag['decal']
+        self.editor.state.mark_world_changed([decal])
+        self.main_window.mark_as_modified()
+        editor = getattr(self.main_window, 'property_editor', None)
+        if editor is not None and editor.current_object is decal:
+            editor.set_object(decal)
+        tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+        panel = getattr(tool, '_panel', None)
+        if panel is not None and decal in tool.selected():
+            panel.show_values(decal.properties)
+
     def draw_resize_handles(self, painter, rect):
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -3437,6 +3550,11 @@ class View2D(QWidget):
                     self.update()
                     return
             
+            # --- A selected decal's edges: drag one to size it ---
+            if self._begin_decal_resize(event.pos()):
+                self.update()
+                return
+
             # --- Group bounding-box handles (multi-selection) take priority ---
             g_handle = self._group_handle_at(event.pos())
             if g_handle != -1:
@@ -3585,6 +3703,13 @@ class View2D(QWidget):
                 return
             self.end_component_drag()   # button released elsewhere
 
+        # A decal's edge being dragged owns the mouse until the button is up.
+        if self._decal_resize is not None:
+            if event.buttons() & Qt.LeftButton:
+                self._update_decal_resize(world_pos)
+                return
+            self._end_decal_resize()
+
         # Clone-and-place: the copies ride the cursor until a click drops them.
         if self.main_window.clone_placement_active():
             self._track_clone_placement(world_pos)
@@ -3727,6 +3852,10 @@ class View2D(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._decal_resize is not None:
+            self._end_decal_resize()
+            self.update()
+            return
         action_taken = self.is_dragging_object or self.is_resizing_brush
 
         # A component drag commits on button-up — one drag, one undo step.
