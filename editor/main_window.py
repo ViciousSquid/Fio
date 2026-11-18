@@ -1203,40 +1203,28 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
-    #: Levels a toast can have (editor.toasts.LEVELS).
+    #: Levels a toast can have (editor.debug_console.TOAST_STYLES).
     TOAST_LEVELS = ('success', 'info', 'warning', 'error')
 
     def show_toast(self, message, is_error=False, duration=None, level=None):
-        """Show a slide-in notification -- for important things only.
+        """Show a toast -- for important things only.
 
         A toast is shown when it is an error (``is_error``) or names its
         *level*: ``'success'`` for loads and saves, ``'warning'``,
         ``'error'`` or ``'info'``. Anything else -- tips, hints, routine
         feedback ("Grid Size: 32", "Applied to north") -- is not toasted.
-        A toast leaves after three seconds; an error lingers longer. Every
-        toast is also written to the Debug Console as a card of its own (its
-        level's tint and accent bar, no click-to-filter links), so there is a
-        history of them; toasts cannot be turned off.
+        A toast is a card in the Debug Console only (no pop-up): its level's
+        tint and accent bar, no click-to-filter links, never hidden by a
+        filter. It turns faint after a few seconds and comes back to full
+        colour, with a tiny close button, when hovered or clicked.
+        *duration* is accepted for callers' sake and not used.
         """
         level = 'error' if is_error else level
         if level not in self.TOAST_LEVELS:
             return None
         from editor.debug_console import debug_log_toast
         debug_log_toast(str(message), level)
-        manager = getattr(self, 'toast_manager', None)
-        if manager is None:
-            from editor.toasts import ToastManager
-            manager = self.toast_manager = ToastManager(
-                self, anchor=self._toast_anchor)
-        return manager.show(message, level, duration)
-
-    def _toast_anchor(self):
-        """Where toasts stack from: just above the bottom bar's right-hand
-        area, where notifications used to be written (under the Play button)."""
-        label = getattr(getattr(self, 'ui', None), 'notification_label', None)
-        if label is None or not label.isVisible():
-            return self.height()
-        return label.mapTo(self, QPoint(0, 0)).y()
+        return None
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
         """Tips are no longer shown as toasts (only loads, saves, warnings

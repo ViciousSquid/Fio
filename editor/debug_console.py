@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer, QEvent
 from PyQt5 import sip
 from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
@@ -22,8 +22,8 @@ _MARKUP = '\x02fio-markup\x03'
 #: outside text can carry it.
 _TOAST = '\x02fio-toast\x03'
 
-#: A console toast's border, text, background and icon, by level (the
-#: colours of editor.toasts.LEVELS).
+#: A console toast's border, text, background and icon, by level (Fio's
+#: colours: success green, warning orange; error red, info blue).
 TOAST_STYLES = {
     'success': ('#4CAF50', '#8fdc98', '#14231a', '\u2714'),
     'info':    ('#3d8ee8', '#82bdf6', '#121f2d', 'i'),
@@ -33,7 +33,23 @@ TOAST_STYLES = {
 #: The copy button's image in the console document, and its link scheme.
 _TOAST_COPY_IMAGE = 'fio-toast-copy'
 _TOAST_COPY_LINK = 'copytoast:'
+_TOAST_CLOSE_LINK = 'closetoast:'
 _toast_serials = __import__('itertools').count(1)
+#: Seconds a console toast stays in full colour before it turns faint (it is
+#: never removed by itself: only its close button removes it).
+TOAST_FADE_SECONDS = 3.0
+#: How far a faint card's colours sink toward the console background.
+TOAST_FAINT = 0.62
+_CONSOLE_BG = '#1a1a1a'
+
+
+def _mix(colour, toward, amount):
+    """*colour* moved *amount* (0..1) of the way to *toward* (hex strings)."""
+    from PyQt5.QtGui import QColor
+    a, b = QColor(colour), QColor(toward)
+    return QColor(round(a.red() + (b.red() - a.red()) * amount),
+                  round(a.green() + (b.green() - a.green()) * amount),
+                  round(a.blue() + (b.blue() - a.blue()) * amount))
 
 
 def _toast_copy_image(size=32):
@@ -278,6 +294,29 @@ class DebugLogger(QObject):
         full_msg = f"{_TOAST}{level}|{next(_toast_serials)}|{_plain(message)}"
         self._buffer.append(('Info', full_msg))
         self.message_logged.emit('Info', full_msg)
+
+    def toasts(self):
+        """``[(serial, level, text)]`` of the toasts in the history, oldest
+        first."""
+        found = []
+        for _category, message in self._buffer:
+            if str(message).startswith(_TOAST):
+                level, serial, text = _toast_parts(message)
+                found.append((serial, level, text))
+        return found
+
+    def remove_toast(self, serial):
+        """Take the toast logged as *serial* out of the history (its close
+        button): a rebuilt console does not bring it back."""
+        serial = str(serial)
+        kept = [entry for entry in self._buffer
+                if not (str(entry[1]).startswith(_TOAST)
+                        and _toast_parts(entry[1])[1] == serial)]
+        if len(kept) != len(self._buffer):
+            self._buffer.clear()
+            self._buffer.extend(kept)
+            return True
+        return False
 
     def toast_text(self, serial) -> str:
         """The message of the toast logged as *serial* (its copy button), or
@@ -792,6 +831,18 @@ class DebugConsole(QWidget):
         self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
+        # Toast cards: full colour when new, faint after TOAST_FADE_SECONDS,
+        # full again (with a close button) while hovered or clicked.
+        self._toast_seen = {}            # serial -> when first drawn
+        self._toast_faint = set()        # serials drawn faint
+        self._toast_highlighted = set()  # serials hovered or clicked
+        self._toast_fader = QTimer(self)
+        self._toast_fader.setInterval(250)
+        self._toast_fader.timeout.connect(self._fade_toasts)
+        self._toast_fader.start()
+        self.console.setMouseTracking(True)
+        self.console.viewport().setMouseTracking(True)
+        self.console.viewport().installEventFilter(self)
         self.console.setStyleSheet("""
             QTextBrowser {
                 background-color: #1a1a1a;
@@ -1024,10 +1075,141 @@ class DebugConsole(QWidget):
         # Pass the raw string to whatever is listening
         self.command_issued.emit(cmd)
 
+    # -- toast cards ---------------------------------------------------------
+
+    def _toast_state(self, serial):
+        if serial in self._toast_highlighted:
+            return 'highlighted'
+        return 'faint' if serial in self._toast_faint else 'new'
+
+    @staticmethod
+    def _toast_colours(level, state):
+        """``(accent, text, body, close button)`` colours of a card."""
+        border, ink, body, _icon = TOAST_STYLES.get(level, TOAST_STYLES['info'])
+        if state == 'faint':
+            border = _mix(border, _CONSOLE_BG, TOAST_FAINT).name()
+            ink = _mix(ink, _CONSOLE_BG, TOAST_FAINT).name()
+            body = _mix(body, _CONSOLE_BG, TOAST_FAINT).name()
+        close = ink if state == 'highlighted' else body
+        return border, ink, body, close
+
+    def _toast_table(self, serial):
+        """The console document's table drawing toast *serial*, or None."""
+        from PyQt5.QtGui import QTextTable
+        wanted = f"fio-toast-{serial}"
+        for frame in self.console.document().rootFrame().childFrames():
+            if not isinstance(frame, QTextTable) or frame.columns() < 2:
+                continue
+            block = frame.cellAt(0, 1).firstCursorPosition().block()
+            it = block.begin()
+            while not it.atEnd():
+                if wanted in it.fragment().charFormat().anchorNames():
+                    return frame
+                it += 1
+        return None
+
+    def _toast_serial_of(self, table):
+        if table is None or table.columns() < 2:
+            return None
+        block = table.cellAt(0, 1).firstCursorPosition().block()
+        it = block.begin()
+        while not it.atEnd():
+            for name in it.fragment().charFormat().anchorNames():
+                if name.startswith("fio-toast-"):
+                    return name[len("fio-toast-"):]
+            it += 1
+        return None
+
+    def _restyle_toast(self, serial):
+        """Recolour toast *serial*'s card in place, for its state."""
+        from PyQt5.QtGui import QColor, QTextCharFormat, QTextCursor
+        table = self._toast_table(serial)
+        if table is None:
+            return
+        level = next((lv for sr, lv, _t in get_debug_logger().toasts() if sr == serial), 'info')
+        border, ink, body, close = self._toast_colours(level, self._toast_state(serial))
+        for column, colour in ((0, border), (1, body)):
+            cell = table.cellAt(0, column)
+            fmt = cell.format()
+            fmt.setBackground(QColor(colour))
+            cell.setFormat(fmt)
+        cell = table.cellAt(0, 1)
+        cursor = cell.firstCursorPosition()
+        cursor.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
+        text_fmt = QTextCharFormat()
+        text_fmt.setForeground(QColor(ink))
+        cursor.mergeCharFormat(text_fmt)
+        # The close button: the cell's last character, the tiny cross.
+        end = cell.lastCursorPosition()
+        mark = QTextCursor(end)
+        mark.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor)
+        if mark.selectedText() == '\u2715':
+            close_fmt = QTextCharFormat()
+            close_fmt.setForeground(QColor(close))
+            mark.mergeCharFormat(close_fmt)
+
+    def _fade_toasts(self):
+        """Turn faint the cards that have been in full colour long enough."""
+        import time
+        now = time.monotonic()
+        for serial, since in list(self._toast_seen.items()):
+            if (serial in self._toast_faint or serial in self._toast_highlighted
+                    or now - since < TOAST_FADE_SECONDS):
+                continue
+            self._toast_faint.add(serial)
+            self._restyle_toast(serial)
+
+    def _highlight_toast(self, serial):
+        """Full colour and a close button for *serial*; the card that was
+        highlighted fades again in TOAST_FADE_SECONDS."""
+        import time
+        for other in list(self._toast_highlighted):
+            if other != serial:
+                self._toast_highlighted.discard(other)
+                self._toast_seen[other] = time.monotonic()
+                self._toast_faint.discard(other)
+                self._restyle_toast(other)
+        if serial is not None and serial not in self._toast_highlighted:
+            self._toast_highlighted.add(serial)
+            self._toast_faint.discard(serial)
+            self._restyle_toast(serial)
+
+    def remove_toast(self, serial):
+        """Remove toast *serial*'s card from the console and its history."""
+        from PyQt5.QtGui import QTextCursor
+        serial = str(serial)
+        table = self._toast_table(serial)
+        if table is not None:
+            cursor = QTextCursor(self.console.document())
+            cursor.setPosition(table.firstPosition() - 1)
+            cursor.setPosition(table.lastPosition() + 1, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+        get_debug_logger().remove_toast(serial)
+        self._toast_seen.pop(serial, None)
+        self._toast_faint.discard(serial)
+        self._toast_highlighted.discard(serial)
+
+    def eventFilter(self, obj, event):
+        if obj is self.console.viewport():
+            kind = event.type()
+            if kind in (QEvent.MouseMove, QEvent.MouseButtonPress):
+                table = self.console.cursorForPosition(event.pos()).currentTable()
+                serial = self._toast_serial_of(table)
+                if serial is not None or self._toast_highlighted:
+                    self._highlight_toast(serial)
+            elif kind == QEvent.Leave and self._toast_highlighted:
+                self._highlight_toast(None)
+        return super().eventFilter(obj, event)
+
     def _on_anchor_clicked(self, url: QUrl):
         """Handle clicking on an entity filter or an external URL."""
         link = url.toString()
-        if link.startswith(_TOAST_COPY_LINK):
+        if link.startswith(_TOAST_CLOSE_LINK):
+            # A toast's close button: only while it shows (highlighted).
+            serial = link[len(_TOAST_CLOSE_LINK):]
+            if serial in self._toast_highlighted:
+                self.remove_toast(serial)
+        elif link.startswith(_TOAST_COPY_LINK):
             # A console toast's copy button: its whole message.
             text = get_debug_logger().toast_text(link[len(_TOAST_COPY_LINK):])
             if text is not None:
@@ -1153,7 +1335,9 @@ class DebugConsole(QWidget):
             # category, an entity, nor any of the hide boxes.
             level, serial, text = _toast_parts(message)
             text = text.translate(_MARKUP_CHARS)
-            border, ink, body, _icon = TOAST_STYLES.get(level, TOAST_STYLES['info'])
+            self._toast_seen.setdefault(serial, __import__('time').monotonic())
+            border, ink, body, close_ink = self._toast_colours(
+                level, self._toast_state(serial))
             document = self.console.document()
             from PyQt5.QtGui import QTextDocument
             if document.resource(QTextDocument.ImageResource, QUrl(_TOAST_COPY_IMAGE)) is None:
@@ -1174,9 +1358,17 @@ class DebugConsole(QWidget):
                     f'<img src="{_TOAST_COPY_IMAGE}" width="16" height="16" '
                     f'style="vertical-align: middle;"></a>'
                     if level == 'error' else '')
+            # The close button: tiny, and shown (in the text's colour) only
+            # while the card is highlighted -- otherwise drawn in the card's
+            # own colour, and a click on it does nothing.
+            close = (f'&nbsp;&nbsp;<a href="{_TOAST_CLOSE_LINK}{serial}" '
+                     f'title="Remove this toast" style="color: {close_ink}; '
+                     f'text-decoration: none; font-size: small;">\u2715</a>')
             paragraphs = ''.join(
-                f'<p style="margin: 0; color: {ink};">{row}'
-                + (copy if i == len(rows) - 1 else '') + '</p>'
+                f'<p style="margin: 0; color: {ink};">'
+                + (f'<a name="fio-toast-{serial}"></a>' if i == 0 else '')
+                + row
+                + (copy + close if i == len(rows) - 1 else '') + '</p>'
                 for i, row in enumerate(rows))
             # A card, as the pop-up toasts are: a tinted body with an accent
             # bar down its left side. (A cell takes a background; Qt ignores
@@ -1467,6 +1659,9 @@ class DebugConsole(QWidget):
 
     def clear(self):
         """Clear the console and buffer."""
+        self._toast_seen.clear()
+        self._toast_faint.clear()
+        self._toast_highlighted.clear()
         self.console.clear()
         self.message_count = 0
         self._document_lines = 0

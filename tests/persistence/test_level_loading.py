@@ -66,7 +66,8 @@ def test_a_load_failing_midway_detaches_the_previous_map(main_window, tmp_path, 
     assert window.file_path is None, (
         "a half-built scene is still attached to %r" % window.file_path)
     assert window.unsaved_changes
-    assert [level for level, _text in window.toast_manager.messages()] == ['error']
+    from editor.debug_console import get_debug_logger
+    assert get_debug_logger().toasts()[-1][1] == 'error'
 
 
 def test_an_unreadable_file_leaves_the_open_level_alone(main_window, tmp_path):

@@ -1,184 +1,173 @@
-"""Slide-in toasts (editor/toasts.py): only loads, saves, warnings and errors.
+"""Toasts: cards in the Debug Console, for important things only.
 
-Tips, hints and routine feedback are not toasted; the bottom bar's
-notification area shows nothing. A toast slides in at the top right, stacks,
-can be pinned by clicking it, and its text can be selected and copied.
+Only loads and saves (success), warnings and errors are toasted; tips, hints
+and routine feedback are not, and there is no pop-up -- a toast is its card
+in the console. A card turns faint after a few seconds (it is never removed
+by itself), comes back to full colour with a tiny close button when hovered
+or clicked, and the close button removes it.
 """
 
 import pytest
 
 pytest.importorskip("PyQt5", reason="toasts are editor-tier")
 
-from PyQt5.QtCore import QPoint, Qt  # noqa: E402
+from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt5.QtGui import QMouseEvent  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
+
+from editor import debug_console as dc  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
 
-def _shown(window):
-    manager = getattr(window, 'toast_manager', None)
-    return [] if manager is None else manager.messages()
+def _toasts():
+    return [(level, text) for _serial, level, text in dc.get_debug_logger().toasts()]
 
 
-def test_routine_feedback_and_tips_are_not_toasted(main_window):
+@pytest.fixture
+def console(main_window, monkeypatch):
+    monkeypatch.setattr(dc, 'TOAST_FADE_SECONDS', 0.4)
+    widget = main_window.debug_console
+    widget.clear()
+    widget.resize(900, 400)
+    widget.show()
+    return widget
+
+
+def _card_colour(console, serial):
+    """The background of toast *serial*'s card body, as drawn."""
+    table = console._toast_table(serial)
+    return table.cellAt(0, 1).format().background().color().name()
+
+
+def _mouse(console, kind, point):
+    viewport = console.console.viewport()
+    button = Qt.LeftButton if kind == QEvent.MouseButtonPress else Qt.NoButton
+    event = QMouseEvent(kind, QPointF(point), button, button, Qt.NoModifier)
+    console.eventFilter(viewport, event)
+
+
+def _point_on(console, serial):
+    from PyQt5.QtGui import QTextCursor
+    table = console._toast_table(serial)
+    cursor = QTextCursor(console.console.document())
+    cursor.setPosition(table.cellAt(0, 1).firstCursorPosition().position() + 2)
+    return console.console.cursorRect(cursor).center()
+
+
+def test_routine_feedback_and_tips_are_not_toasted(main_window, console):
     main_window.show_toast("Grid Size: 32")
     main_window.show_toast("FACE MODE: OFF", duration=3000)
     main_window.show_tooltip("Press Z or hold right mouse to look")
-    assert _shown(main_window) == []
+    assert _toasts() == []
     assert main_window.ui.notification_label.text() == ""     # bottom right: nothing
 
 
-def test_loads_saves_warnings_and_errors_are_toasted(main_window):
+def test_loads_saves_warnings_and_errors_are_console_cards(main_window, console):
     main_window.show_toast("Saved", level='success')
-    main_window.show_toast("Loaded _SHOWCASE.json", level='success')
     main_window.show_toast("The texture could not be read", level='warning')
     main_window.show_toast("Failed to load level", is_error=True)
-    assert _shown(main_window) == [
-        ('success', "Saved"), ('success', "Loaded _SHOWCASE.json"),
-        ('warning', "The texture could not be read"), ('error', "Failed to load level")]
+    QTest.qWait(200)
+    assert _toasts() == [('success', "Saved"),
+                         ('warning', "The texture could not be read"),
+                         ('error', "Failed to load level")]
+    assert console.console.toHtml().count("<table") == 3
 
 
-def test_toasts_stack_at_the_bottom_right_above_the_old_notification_area(main_window):
-    main_window.resize(1200, 800)
-    QTest.qWait(50)
-    first = main_window.show_toast("Saved", level='success')
-    second = main_window.show_toast("Failed", is_error=True)
-    QTest.qWait(400)                                    # the slide-in
-    right = main_window.width() - first.x() - first.width()
-    assert 0 < right <= 40                              # at the right edge
-    old_area = main_window.ui.notification_label.mapTo(main_window, QPoint(0, 0)).y()
-    assert second.y() + second.height() <= old_area     # just above it...
-    assert old_area - (second.y() + second.height()) <= 30
-    assert first.y() + first.height() <= second.y()     # ...the older one above
+def test_there_is_no_pop_up_toast(main_window, console):
+    """Reported: a map load showed its console card and a pop-up toast too."""
+    from PyQt5.QtWidgets import QWidget
+    before = {id(w) for w in main_window.findChildren(QWidget)}
+    main_window.show_toast("Loaded _SHOWCASE.json", level='success')
+    QTest.qWait(400)
+    new = [w for w in main_window.findChildren(QWidget) if id(w) not in before]
+    assert not [w for w in new if w.isVisible()]          # nothing popped up
+    assert not hasattr(main_window, 'toast_manager')
+    import importlib.util
+    assert importlib.util.find_spec('editor.toasts') is None
 
 
-def test_a_toast_goes_after_its_duration(main_window):
-    main_window.show_toast("Saved", level='success', duration=100)
-    QTest.qWait(700)
-    assert _shown(main_window) == []
-
-
-def test_the_same_message_again_does_not_stack(main_window):
+def test_a_card_turns_faint_and_stays(main_window, console):
     main_window.show_toast("Saved", level='success')
+    QTest.qWait(150)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    bright = _card_colour(console, serial)
+    QTest.qWait(900)
+    faint = _card_colour(console, serial)
+    assert faint != bright                                  # faint now...
+    assert _toasts() == [('success', "Saved")]              # ...not removed
+    assert "Saved" in console.console.toPlainText()
+
+
+def test_hover_or_click_highlights_it_with_a_close_button(main_window, console):
+    main_window.show_toast("Failed to save", is_error=True)
+    QTest.qWait(1000)                                        # faint by now
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    faint = _card_colour(console, serial)
+    _mouse(console, QEvent.MouseMove, _point_on(console, serial))
+    assert serial in console._toast_highlighted
+    assert _card_colour(console, serial) != faint           # full colour again
+    _mouse(console, QEvent.Leave if False else QEvent.MouseMove, QPoint(880, 380))
+    console.eventFilter(console.console.viewport(), QEvent(QEvent.Leave))
+    assert serial not in console._toast_highlighted
+    QTest.qWait(900)
+    assert _card_colour(console, serial) == faint           # faint again
+    _mouse(console, QEvent.MouseButtonPress, _point_on(console, serial))
+    assert serial in console._toast_highlighted             # a click too
+
+
+def test_the_close_button_removes_the_card(main_window, console):
+    from PyQt5.QtCore import QUrl
     main_window.show_toast("Saved", level='success')
-    assert _shown(main_window) == [('success', "Saved")]
+    main_window.show_toast("Failed to save", is_error=True)
+    QTest.qWait(200)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    link = QUrl(f"closetoast:{serial}")
+    console._on_anchor_clicked(link)                         # not showing: no-op
+    assert len(_toasts()) == 2
+    _mouse(console, QEvent.MouseMove, _point_on(console, serial))
+    assert "closetoast:%s" % serial in console.console.toHtml()
+    console._on_anchor_clicked(link)                         # highlighted: removes
+    assert _toasts() == [('success', "Saved")]
+    assert "Failed to save" not in console.console.toPlainText()
+    assert console.console.toHtml().count("<table") == 1
 
 
-def test_clicking_a_toast_pins_it(main_window):
-    toast = main_window.show_toast("Failed to save", is_error=True, duration=150)
-    QTest.mouseClick(toast, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
-    QTest.qWait(600)
-    assert _shown(main_window) == [('error', "Failed to save")]   # still there
-    toast.close_button.click()                                    # until closed
-    QTest.qWait(600)
-    assert _shown(main_window) == []
+def test_the_close_button_is_hidden_until_highlighted(main_window, console):
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(150)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    border, ink, body, close = console._toast_colours('success', 'new')
+    assert close == body                                     # drawn in the card's colour
+    border, ink, body, close = console._toast_colours('success', 'highlighted')
+    assert close == ink
 
 
-def test_clicking_its_text_pins_it_too(main_window):
-    toast = main_window.show_toast("Failed to save", is_error=True, duration=150)
-    QTest.mouseClick(toast.label, Qt.LeftButton, Qt.NoModifier, QPoint(3, 3))
-    QTest.qWait(600)
-    assert toast.pinned and _shown(main_window)
-
-
-def test_a_toast_s_text_can_be_copied(main_window):
+def test_an_error_card_can_be_copied(main_window, console):
+    import re
+    from PyQt5.QtCore import QUrl
     from PyQt5.QtWidgets import QApplication
-    message = "C:/maps/level.json could not be written"
-    toast = main_window.show_toast(message, is_error=True)
-    # Selectable, a part at a time...
-    flags = toast.label.textInteractionFlags()
-    assert flags & Qt.TextSelectableByMouse and flags & Qt.TextSelectableByKeyboard
-    toast.label.setSelection(0, 7)
-    assert toast.label.selectedText() == "C:/maps"
-    # ...and all of it with the Copy button.
+    main_window.show_toast("C:/maps/level.json could not be written", is_error=True)
+    QTest.qWait(200)
+    link = re.search(r'href="(copytoast:\d+)"', console.console.toHtml()).group(1)
     QApplication.clipboard().setText("")
-    toast.copy_button.click()
-    assert QApplication.clipboard().text() == message
-    assert toast.pinned                                  # it was wanted: it stays
+    console._on_anchor_clicked(QUrl(link))
+    assert QApplication.clipboard().text() == "C:/maps/level.json could not be written"
 
 
-def test_a_toast_has_no_action_buttons(main_window):
-    from PyQt5.QtWidgets import QPushButton
-    toast = main_window.show_toast("Saved", level='success')
-    assert toast.findChildren(QPushButton) == []        # icon, text, pin, copy, close
-
-
-def test_every_toast_also_goes_to_the_debug_console(main_window):
-    from editor.debug_console import get_debug_logger, console_plain_text
-    logger = get_debug_logger()
-    before = len(logger.get_buffer())
-    main_window.show_toast("Saved", level='success')
-    main_window.show_toast("Failed to load level", is_error=True)
-    main_window.show_toast("Grid Size: 32")             # not a toast at all
-    # Popped up...
-    assert _shown(main_window) == [('success', "Saved"), ('error', "Failed to load level")]
-    # ...and a console card each, in order; routine feedback is not logged.
-    assert [console_plain_text(*entry) for entry in logger.get_buffer()[before:]] == [
-        "Saved", "Failed to load level"]
-
-
-def test_toasts_cannot_be_turned_off(main_window):
-    """The "Disable Toast Notifications" setting is gone: nothing reads it,
-    and the Settings window no longer has it."""
+def test_toasts_cannot_be_turned_off(main_window, console):
     from editor.SettingsWindow import SettingsWindow
     if not main_window.config.has_section('Display'):
         main_window.config.add_section('Display')
     main_window.config.set('Display', 'disable_toasts', 'True')     # an old settings.ini
     try:
         main_window.show_toast("Saved", level='success')
-        assert _shown(main_window) == [('success', "Saved")]
+        assert _toasts() == [('success', "Saved")]
     finally:
         main_window.config.remove_option('Display', 'disable_toasts')
     dialog = SettingsWindow(main_window.config, None)
     try:
-        assert not hasattr(dialog, 'disable_toasts_checkbox')
         from PyQt5.QtWidgets import QCheckBox
         assert not [b for b in dialog.findChildren(QCheckBox) if 'toast' in b.text().lower()]
     finally:
         dialog.deleteLater()
-
-
-def test_toasts_go_after_three_seconds_and_errors_linger(main_window):
-    saved = main_window.show_toast("Saved", level='success')
-    warned = main_window.show_toast("Careful", level='warning')
-    failed = main_window.show_toast("Failed", is_error=True)
-    assert saved.timer.interval() == 3000 and warned.timer.interval() == 3000
-    assert failed.timer.interval() > 3000
-    QTest.qWait(3600)
-    assert _shown(main_window) == [('error', "Failed")]
-
-
-def test_the_little_x_dismisses_it(main_window):
-    toast = main_window.show_toast("Saved", level='success', duration=0)
-    assert toast.close_button.text() == "\u2715"
-    assert toast.close_button.toolTip() == "Dismiss"
-    toast.close_button.click()
-    QTest.qWait(500)
-    assert _shown(main_window) == []
-
-
-def test_a_pinned_toast_shows_a_pin_and_unpinning_lets_it_go(main_window):
-    toast = main_window.show_toast("Failed to save", is_error=True, duration=150)
-    assert toast.pin_button.isHidden()                 # not pinned: no pin
-    QTest.mouseClick(toast, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
-    assert toast.pinned and not toast.pin_button.isHidden()
-    pinned_icon = toast.pin_button.icon().pixmap(16, 16).toImage()
-    assert "unpin" in toast.pin_button.toolTip().lower()
-    QTest.qWait(500)
-    assert _shown(main_window)                          # pinned: still there
-
-    toast.pin_button.click()                            # unpin
-    assert not toast.pinned
-    unpinned_icon = toast.pin_button.icon().pixmap(16, 16).toImage()
-    assert unpinned_icon != pinned_icon                 # the unpinned pin
-    assert "click to pin" in toast.pin_button.toolTip().lower()
-    QTest.qWait(3400)                                   # goes on its own
-    assert _shown(main_window) == []
-
-
-def test_the_unpinned_pin_pins_it_again(main_window):
-    toast = main_window.show_toast("Failed to save", is_error=True)
-    toast.pin()
-    toast.pin_button.click()
-    toast.pin_button.click()
-    assert toast.pinned

@@ -499,8 +499,9 @@ def test_area_selection_needs_exactly_one_brush(editor):
     host.set_selected_objects([a, b])
     host.select_inside()
     assert a in host.state.brushes and b in host.state.brushes
+    from editor.debug_console import get_debug_logger
     assert any('exactly one' in text.lower()
-               for _level, text in host.toast_manager.messages())
+               for _serial, _level, text in get_debug_logger().toasts())
 
 
 def test_area_selection_skips_hidden_geometry(editor):
@@ -810,8 +811,9 @@ def test_rotate_with_nothing_selected_says_so(editor):
 
     press(view, (64, 0))
     assert not view.rotate_dragging
+    from editor.debug_console import get_debug_logger
     assert any('select something' in text.lower()
-               for _level, text in host.toast_manager.messages())
+               for _serial, _level, text in get_debug_logger().toasts())
 
 
 # ---------------------------------------------------------------------------
