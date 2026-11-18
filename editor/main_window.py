@@ -5781,7 +5781,7 @@ class MainWindow(QMainWindow):
                 # Deferred: this runs from __init__, before the window is up,
                 # and a toast shown then is never seen.
                 self._after(0, lambda: self.show_toast(
-                    "Dock layout reset to the new default", duration=4000))
+                    "Dock layout reset to the new default", level='warning'))
             return
 
         if self.config.has_option('Layout', 'state'):
