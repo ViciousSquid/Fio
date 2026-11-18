@@ -195,8 +195,6 @@ class SettingsWindow(QDialog):
         self.always_show_io_debug_checkbox.setToolTip("If enabled, the debug console will open automatically when the app starts.")
         layout.addWidget(self.always_show_io_debug_checkbox)
         
-        self.disable_toasts_checkbox = QCheckBox("Disable Toast Notifications")
-        layout.addWidget(self.disable_toasts_checkbox)
 
         font_layout = QHBoxLayout()
         font_layout.addWidget(QLabel("UI Font Size:"))
@@ -638,7 +636,6 @@ class SettingsWindow(QDialog):
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
-        self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
         ui_scale = parse_ui_scale(read_ui_scale_setting(self.config))
         ui_scale_key = 'auto' if ui_scale is None else str(ui_scale)
@@ -759,7 +756,6 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
         self.config.set('Display', 'always_show_io_debug', str(self.always_show_io_debug_checkbox.isChecked()))
-        self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
         self.config.set('Display', 'ui_scale', self.ui_scale_combo.currentData())
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))

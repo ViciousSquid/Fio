@@ -2803,7 +2803,7 @@ class ConsoleCommandHandler:
                                   save_mode=save_mode, base_level=base_level)
         debug_log("Info" if ok else "Error", msg)
         if ok:
-            self.main_window.show_toast(f"Saved: {os.path.basename(path)}")
+            self.main_window.show_toast(f"Saved: {os.path.basename(path)}", level='success')
         return ok
 
     def cmd_quicksave(self, args):
@@ -2832,7 +2832,7 @@ class ConsoleCommandHandler:
                                        base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
-                self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+                self.main_window.show_toast(f"Loaded: {os.path.basename(path)}", level='success')
                 self.main_window.sync_camera_mode_combo()
                 self.main_window.update_all_ui()
             return ok
@@ -2904,7 +2904,7 @@ class ConsoleCommandHandler:
                     ok, msg = False, f"Load failed: {exc}"
         debug_log("Info" if ok else "Error", msg)
         if ok:
-            self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+            self.main_window.show_toast(f"Loaded: {os.path.basename(path)}", level='success')
             self.main_window.sync_camera_mode_combo()
             self.main_window.update_all_ui()
         return ok

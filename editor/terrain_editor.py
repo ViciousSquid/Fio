@@ -2156,7 +2156,7 @@ class TerrainEditorPanel(QWidget):
             QMessageBox.warning(self, "Export Stamp", f"Could not save stamp:\n{exc}")
             return
         if self.editor and self.editor.show_toast:
-            self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}")
+            self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}", level='success')
 
     def import_stamp(self):
         """Merge a .paint file's stamps into the current terrain."""

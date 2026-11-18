@@ -1,7 +1,7 @@
 from engine.asset_qt import load_pixmap
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
-    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
+    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5 import sip
@@ -17,6 +17,59 @@ import re
 #: these control characters from what they are given, so text from a map (an
 #: entity name, a LogicCommand's command) can never claim to be markup.
 _MARKUP = '\x02fio-markup\x03'
+#: Marks a toast written to the console (every toast is): ``_TOAST``,
+#: then ``level|serial|message``. Reserved characters, like _MARKUP: no
+#: outside text can carry it.
+_TOAST = '\x02fio-toast\x03'
+
+#: A console toast's border, text, background and icon, by level (the
+#: colours of editor.toasts.LEVELS).
+TOAST_STYLES = {
+    'success': ('#4CAF50', '#8fdc98', '#14231a', '\u2714'),
+    'info':    ('#3d8ee8', '#82bdf6', '#121f2d', 'i'),
+    'warning': ('#F08000', '#f7b866', '#2a1e0f', '!'),
+    'error':   ('#e5533d', '#f3836f', '#2b1613', '\u2716'),
+}
+#: The copy button's image in the console document, and its link scheme.
+_TOAST_COPY_IMAGE = 'fio-toast-copy'
+_TOAST_COPY_LINK = 'copytoast:'
+_toast_serials = __import__('itertools').count(1)
+
+
+def _toast_copy_image(size=32):
+    """The console toast's copy button: an orange "i" in an orange circle."""
+    from PyQt5.QtGui import QImage, QPainter, QPen, QColor
+    from PyQt5.QtCore import Qt, QPointF, QRectF
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    orange = QColor('#F08000')
+    unit = size / 16.0
+    pen = QPen(orange, 1.4 * unit)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    painter.drawEllipse(QRectF(1.2 * unit, 1.2 * unit, 13.6 * unit, 13.6 * unit))
+    painter.drawLine(QPointF(8 * unit, 7 * unit), QPointF(8 * unit, 11.6 * unit))
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(orange)
+    painter.drawEllipse(QPointF(8 * unit, 4.6 * unit), 1.0 * unit, 1.0 * unit)
+    painter.end()
+    return image
+
+
+def _toast_parts(message):
+    """``(level, serial, text)`` of a logged toast entry's message."""
+    level, _, rest = message[len(_TOAST):].partition('|')
+    serial, _, text = rest.partition('|')
+    return level, serial, text
+
+
+#: Marks a line whose words are never links (no click-to-filter on its
+#: names, numbers or values): a toast written to the console. Like _MARKUP it
+#: is made of reserved characters, so no outside text can carry it.
+_NO_LINKS = '\x02fio-no-links\x03'
 _MARKUP_CHARS = str.maketrans('', '', '\x00\x02\x03')
 
 
@@ -130,6 +183,10 @@ def console_plain_text(category, message) -> str:
     message = str(message)
     if category == ECHO_CATEGORY:
         return message
+    if message.startswith(_TOAST):
+        return _toast_parts(message)[2].translate(_MARKUP_CHARS)
+    if message.startswith(_NO_LINKS):
+        return message[len(_NO_LINKS):].translate(_MARKUP_CHARS)
     if message.startswith(_MARKUP):
         return _html_to_text(message[len(_MARKUP):].translate(_MARKUP_CHARS), _RE_ANY_TAG)
     message = message.translate(_MARKUP_CHARS)
@@ -201,6 +258,36 @@ class DebugLogger(QObject):
 
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
+
+    def log_unlinked(self, category: str, message: str):
+        """Log a plain line the console draws without links: nothing in it
+        (a number, a name, a value) becomes a click-to-filter link. For
+        toasts written to the console when toasts are off."""
+        if not self._enabled:
+            return
+        full_msg = f"{_NO_LINKS}[{category}] {_plain(message)}"
+        self._buffer.append((category, full_msg))
+        self.message_logged.emit(category, full_msg)
+
+    def log_toast(self, message: str, level: str = 'info'):
+        """Log a toast: drawn in the console as a card in its level's colour,
+        a block of its own, an error's with a copy button, no links in it."""
+        if not self._enabled:
+            return
+        level = level if level in TOAST_STYLES else 'info'
+        full_msg = f"{_TOAST}{level}|{next(_toast_serials)}|{_plain(message)}"
+        self._buffer.append(('Info', full_msg))
+        self.message_logged.emit('Info', full_msg)
+
+    def toast_text(self, serial) -> str:
+        """The message of the toast logged as *serial* (its copy button), or
+        None once it has left the history."""
+        for category, message in reversed(self._buffer):
+            if str(message).startswith(_TOAST):
+                _level, number, text = _toast_parts(message)
+                if number == str(serial):
+                    return text
+        return None
 
     def log_markup(self, category: str, markup: str):
         """Log a line that is Fio's own HTML (colours, entity-filter links).
@@ -282,6 +369,13 @@ def get_debug_logger() -> DebugLogger:
 def debug_log(category: str, message: str):
     """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
+
+
+def debug_log_toast(message: str, level: str = 'info'):
+    """A toast in the console: a card in *level*'s colour (red errors, green
+    successes...) -- a tinted body and an accent bar -- a block of its own, an
+    error's with a copy button, and no click-to-filter links in it."""
+    get_debug_logger().log_toast(message, level)
 
 
 def debug_log_markup(category: str, markup: str):
@@ -933,7 +1027,12 @@ class DebugConsole(QWidget):
     def _on_anchor_clicked(self, url: QUrl):
         """Handle clicking on an entity filter or an external URL."""
         link = url.toString()
-        if link.startswith("filter:"):
+        if link.startswith(_TOAST_COPY_LINK):
+            # A console toast's copy button: its whole message.
+            text = get_debug_logger().toast_text(link[len(_TOAST_COPY_LINK):])
+            if text is not None:
+                QApplication.clipboard().setText(text)
+        elif link.startswith("filter:"):
             entity_name = link.split(":", 1)[1]
             self._apply_entity_filter(entity_name)
         elif link.startswith(("http://", "https://")):
@@ -1047,7 +1146,51 @@ class DebugConsole(QWidget):
             # A typed command, drawn as it was when entered (whatever the
             # filters: the live echo ignores them too).
             return _ECHO_HTML.format(html.escape(message[len(_ECHO_PREFIX):], quote=False))
+        if message.startswith(_TOAST):
+            # A toast: a card in its colour -- its words (an error's with a
+            # copy button), no icon in front -- and
+            # no links in its words. No filter hides a toast: not the
+            # category, an entity, nor any of the hide boxes.
+            level, serial, text = _toast_parts(message)
+            text = text.translate(_MARKUP_CHARS)
+            border, ink, body, _icon = TOAST_STYLES.get(level, TOAST_STYLES['info'])
+            document = self.console.document()
+            from PyQt5.QtGui import QTextDocument
+            if document.resource(QTextDocument.ImageResource, QUrl(_TOAST_COPY_IMAGE)) is None:
+                document.addResource(QTextDocument.ImageResource,
+                                     QUrl(_TOAST_COPY_IMAGE), _toast_copy_image())
+            # One paragraph a line: with <br> between them, Qt sized the box
+            # as if all the lines were one, far wider than the longest.
+            # Leading spaces (an indented list) are kept.
+            def _line(line):
+                stripped = line.lstrip(' ')
+                return ('&nbsp;' * (len(line) - len(stripped))
+                        + html.escape(stripped, quote=False))
+            rows = [_line(line) for line in text.split('\n')]
+            # Only an error has the copy button (to put it on the clipboard);
+            # a success, warning or note is just its words.
+            copy = (f'&nbsp;&nbsp;<a href="{_TOAST_COPY_LINK}{serial}" '
+                    f'title="Copy the error">'
+                    f'<img src="{_TOAST_COPY_IMAGE}" width="16" height="16" '
+                    f'style="vertical-align: middle;"></a>'
+                    if level == 'error' else '')
+            paragraphs = ''.join(
+                f'<p style="margin: 0; color: {ink};">{row}'
+                + (copy if i == len(rows) - 1 else '') + '</p>'
+                for i, row in enumerate(rows))
+            # A card, as the pop-up toasts are: a tinted body with an accent
+            # bar down its left side. (A cell takes a background; Qt ignores
+            # a table's.)
+            return (
+                f'<table cellspacing="0" cellpadding="0" border="0" '
+                f'style="margin-top: 2px; margin-bottom: 2px;"><tr>'
+                f'<td width="3" bgcolor="{border}"></td>'
+                f'<td bgcolor="{body}" style="padding: 2px 8px 2px 7px;">'
+                f'{paragraphs}</td></tr></table>')
         is_markup = message.startswith(_MARKUP)
+        no_links = not is_markup and message.startswith(_NO_LINKS)
+        if no_links:
+            message = message[len(_NO_LINKS):]
         # The reserved characters mean nothing anywhere else in a line.
         message = (message[len(_MARKUP):] if is_markup else message).translate(_MARKUP_CHARS)
 
@@ -1138,6 +1281,12 @@ class DebugConsole(QWidget):
             if version_match:
                 version_html = self._version_banner_html(version_match.group(1))
                 return f'<span style="color: {color};">{version_html}</span><br>'
+
+        # A toast written to the console: plain words, none of them a
+        # click-to-filter link -- not its numbers, names or values.
+        if no_links:
+            return (f'<span style="color: {color};">'
+                    f'{html.escape(message, quote=False)}</span><br>')
 
         # The startup OpenGL line ("OpenGL 4.1 Metal - 90.5 | Apple M5 | ...")
         # is hardware text: its version numbers are not entities, so nothing

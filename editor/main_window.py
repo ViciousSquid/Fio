@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout, QStyle, QStatusBar, QTabWidget
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize, QPoint
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, Prop, update_all_counters_from_entities
@@ -358,9 +358,10 @@ class MainWindow(QMainWindow):
         self.tooltip_interval = 30  # Seconds between occasional tooltips
         
         # Timer for occasional tooltips
+        # The occasional-tip timer: tips are no longer toasted (show_tooltip),
+        # so it is kept, stopped, for whatever reads it.
         self.tooltip_timer = QTimer(self)
         self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
-        self.tooltip_timer.start(10000)  # Check every 10 seconds (tooltip_interval throttles display)
         
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
@@ -699,7 +700,7 @@ class MainWindow(QMainWindow):
             # user saves it, so it opens untitled and unsaved.
             if self._load_level(map_data, None):
                 self._generated_level_marker = (self._undo_top(),)
-                self.show_toast("Generated map loaded – use Save As to keep it")
+                self.show_toast("Generated map loaded (not saved yet)", level='success')
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
@@ -1202,48 +1203,45 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
-    def show_toast(self, message, is_error=False, duration=None):
-        """Displays a notification"""
-        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
-            return
-        
-        # Set the style based on the message type
-        if is_error:
-            bg = "#8B0000" # Dark Red
-            fg = "white"
-        else:
-            bg = "#2b2b2b"
-            fg = "white"
+    #: Levels a toast can have (editor.toasts.LEVELS).
+    TOAST_LEVELS = ('success', 'info', 'warning', 'error')
 
-        self.ui.notification_label.setStyleSheet(f"""
-            background-color: {bg};
-            color: {fg};
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        
-        self.ui.notification_label.setTextFormat(Qt.PlainText)
-        self.ui.notification_label.setText(message.upper())
-        
-        # Auto-clear timer
-        final_duration = duration if duration is not None else (4000 if is_error else 2500)
-        self._schedule_notification_clear(final_duration)
+    def show_toast(self, message, is_error=False, duration=None, level=None):
+        """Show a slide-in notification -- for important things only.
+
+        A toast is shown when it is an error (``is_error``) or names its
+        *level*: ``'success'`` for loads and saves, ``'warning'``,
+        ``'error'`` or ``'info'``. Anything else -- tips, hints, routine
+        feedback ("Grid Size: 32", "Applied to north") -- is not toasted.
+        A toast leaves after three seconds; an error lingers longer. Every
+        toast is also written to the Debug Console as a card of its own (its
+        level's tint and accent bar, no click-to-filter links), so there is a
+        history of them; toasts cannot be turned off.
+        """
+        level = 'error' if is_error else level
+        if level not in self.TOAST_LEVELS:
+            return None
+        from editor.debug_console import debug_log_toast
+        debug_log_toast(str(message), level)
+        manager = getattr(self, 'toast_manager', None)
+        if manager is None:
+            from editor.toasts import ToastManager
+            manager = self.toast_manager = ToastManager(
+                self, anchor=self._toast_anchor)
+        return manager.show(message, level, duration)
+
+    def _toast_anchor(self):
+        """Where toasts stack from: just above the bottom bar's right-hand
+        area, where notifications used to be written (under the Play button)."""
+        label = getattr(getattr(self, 'ui', None), 'notification_label', None)
+        if label is None or not label.isVisible():
+            return self.height()
+        return label.mapTo(self, QPoint(0, 0)).y()
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
-        """Displays teal-styled tooltips in the same area."""
-        # Re-use the toast logic with teal styling
-        self.ui.notification_label.setStyleSheet("""
-            background-color: #2b2b2b;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        self.ui.notification_label.setText(message.upper())
-        self._schedule_notification_clear(duration)
+        """Tips are no longer shown as toasts (only loads, saves, warnings
+        and errors are). Kept so callers and plugins need no change."""
+        return None
 
     def _after(self, delay_ms, callback):
         """Run *callback* once after *delay_ms*, but never after this window.
@@ -1258,24 +1256,6 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(timer.deleteLater)
         timer.start(int(delay_ms))
         return timer
-
-    def _schedule_notification_clear(self, duration_ms):
-        """Clear the notification area *duration_ms* from now (<= 0: never).
-
-        One window-owned timer, restarted by every toast: a timer per toast let
-        an earlier, shorter toast blank a later one early, and a bare lambda
-        could fire on the label after the window was destroyed.
-        """
-        timer = getattr(self, '_notification_clear_timer', None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(self.ui.notification_label.clear)
-            self._notification_clear_timer = timer
-        if duration_ms and duration_ms > 0:
-            timer.start(int(duration_ms))
-        else:
-            timer.stop()
 
     def _show_startup_tooltip(self):
         """Show the camera movement tooltip on startup if not yet learned."""
@@ -2955,7 +2935,8 @@ class MainWindow(QMainWindow):
         """Whether *brushes* may join group *name*: a group holds at most
         one mover (or door). Says so when they may not."""
         from editor import brush_groups
-        joined = brush_groups.members(self.state.brushes, name) + list(brushes)
+        joined = brush_groups.members(
+            brush_groups.scene_objects(self.state), name) + list(brushes)
         if brush_groups.too_many_movers(joined):
             self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
             return False
@@ -3813,7 +3794,7 @@ class MainWindow(QMainWindow):
             dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
             dialog.export_btn.setText("Done")
             dialog.export_btn.setEnabled(False)
-            self.show_toast(f"Package exported: {os.path.basename(output_path)}")
+            self.show_toast(f"Package exported: {os.path.basename(output_path)}", level='success')
         else:
             dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
             dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
@@ -5254,7 +5235,8 @@ class MainWindow(QMainWindow):
             self.unsaved_changes = False
             self.update_title()
             self.add_recent_file(self.file_path)
-            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved!")
+            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved",
+                            level='success')
         except Exception as e:
             self.show_toast(f"Error saving: {e}", is_error=True)
             print(f"Error saving level: {e}")
@@ -5582,9 +5564,9 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Successfully loaded {name}")
             if play_stopped:
                 self.show_toast(f"Loaded {name}; Play stopped: it has no "
-                                f"Player Start", is_error=True)
+                                f"Player Start", level='warning')
             else:
-                self.show_toast(f"Loaded {name}")
+                self.show_toast(f"Loaded {name}", level='success')
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()
@@ -5630,7 +5612,8 @@ class MainWindow(QMainWindow):
         path = self._write_autosave()
         if path:
             self.show_toast(
-                f"Unsaved changes kept in maps/{os.path.basename(path)}")
+                f"Unsaved changes kept in maps/{os.path.basename(path)}",
+                level='success')
         else:
             self.show_toast("Could not keep unsaved changes before the "
                             "level change", is_error=True)
@@ -5924,7 +5907,7 @@ class MainWindow(QMainWindow):
 
             launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
             if launch_in_editor:
-                self.show_toast(f"Loaded package: {os.path.basename(file_path)}")
+                self.show_toast(f"Loaded package: {os.path.basename(file_path)}", level='success')
             else:
                 self.enter_kiosk_mode()
 
