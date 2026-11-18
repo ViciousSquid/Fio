@@ -187,6 +187,14 @@ class SelectionOverlay:
     gizmo_pos: Optional[Vec3] = None
 
 
+#: The version of the renderer contract (:class:`Renderer`, the frame input
+#: and the descriptors here), apart from the plugin API's
+#: (plugins.api.API_VERSION). A renderer says which it was written against
+#: with a ``contract_version`` attribute, as a physics does
+#: (engine.physics.PHYSICS_CONTRACT_VERSION).
+RENDERER_CONTRACT_VERSION = "1.0.0"
+
+
 @runtime_checkable
 class Renderer(Protocol):
     """The renderer contract the host (QtGameView) drives.

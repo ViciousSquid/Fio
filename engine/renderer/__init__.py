@@ -2,7 +2,8 @@
 
 The host (``QtGameView``) depends only on what this package exports:
 
-* :class:`Renderer` -- the contract every renderer implements (``api``)
+* :class:`Renderer` -- the contract every renderer implements (``api``),
+  versioned by :data:`RENDERER_CONTRACT_VERSION`
 * the frame input (:data:`FRAME_INPUT`), :class:`RenderStats` and the
   selection descriptor (:class:`SelectionOverlay`, :class:`EffectBillboard`)
 * the registry: :func:`register_renderer`, :func:`create_renderer`,
@@ -14,14 +15,15 @@ renderer may reuse. Importing this package needs no OpenGL.
 """
 
 from .api import (
-    FRAME_INPUT, WATER_QUALITIES, EffectBillboard, Renderer, RenderStats,
-    SelectionOverlay)
+    FRAME_INPUT, RENDERER_CONTRACT_VERSION, WATER_QUALITIES, EffectBillboard,
+    Renderer, RenderStats, SelectionOverlay)
 from .registry import (
     DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
     renderer_factory)
 
 __all__ = [
-    'Renderer', 'RenderStats', 'SelectionOverlay', 'EffectBillboard',
+    'Renderer', 'RENDERER_CONTRACT_VERSION', 'RenderStats', 'SelectionOverlay',
+    'EffectBillboard',
     'FRAME_INPUT', 'WATER_QUALITIES',
     'DEFAULT_RENDERER', 'register_renderer', 'create_renderer',
     'available_renderers', 'renderer_factory',

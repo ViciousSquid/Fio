@@ -458,6 +458,17 @@ renderer declares `api_version = "1.6.0"`. *cls* is a factory called as `cls(con
 viewport's GL context current — usually the renderer class itself — and what
 it returns must satisfy the `engine.renderer.Renderer` protocol:
 
+The renderer contract has a version of its own, `RENDERER_CONTRACT_VERSION`
+(`"1.0.0"`, from `engine.renderer`), apart from `API_VERSION`, as the physics
+contract does. A renderer says which it was written against:
+
+```python
+from engine.renderer import RENDERER_CONTRACT_VERSION
+
+class DeferredRenderer:
+    contract_version = RENDERER_CONTRACT_VERSION
+```
+
 - **lifecycle:** `ready`, `cleanup()`
 - **the frame:** `render_scene(projection, view, camera_pos, primary_selection,
   config, clear=True, brush_slots=None)`. `config` is the frame input

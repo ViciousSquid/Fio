@@ -15,6 +15,8 @@ import weakref
 import numpy as np
 import OpenGL.GL as gl
 
+from engine.renderer.api import RENDERER_CONTRACT_VERSION
+
 from engine import entity_table as entity_projection
 from engine import shaders
 from engine.constants import (
@@ -53,6 +55,9 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
     optionally replaces how unseen brush textures are resolved; the GL tests
     use it to serve a fixed texture.
     """
+
+    #: The renderer contract Forward is written against.
+    contract_version = RENDERER_CONTRACT_VERSION
 
     #: Texture unit of the angled brushes' transform buffer texture, read by
     #: the batched convex path's vertex shader. Units in use elsewhere: 0
