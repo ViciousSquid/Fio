@@ -168,33 +168,42 @@ def test_no_collision_body_still_falls():
     assert prop.pos[1] < 40.0
 
 
-def _convex_body_brush(prop, lo, hi):
-    """A physics-body brush whose planes enclose *lo*..*hi*, carrying a
-    stale ``size`` copy that says otherwise: the planes are the shape
-    (Stage 2a, ``engine.brush_placement``), placed by ``pos`` (Stage 2d)."""
-    from engine import brush_geometry as bg
-    lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
-    brush = {'pos': ((lo + hi) / 2).tolist(), 'size': (hi - lo).tolist()}
-    bg.box_to_geometry(brush)
-    brush.update({
+def _mesh_body_brush(prop, lo, hi):
+    """A Collision Shape: Mesh body brush whose triangles' bounds are
+    *lo*..*hi*, carrying the stale ``size`` the collision runtime gives one:
+    the bounds are its box (BODY_BRUSH ``_mesh_bounds``)."""
+    return {
+        'pos': list(prop.pos),
         'size': [1.0, 1.0, 1.0],
         '_physics_body': True,
         '_physics_entity': prop,
         '_collision_mode': 'mesh',
-    })
-    return brush
+        '_mesh_bounds': (list(lo), list(hi)),
+    }
 
 
-def test_the_planes_define_body_shape_relative_to_origin():
-    # The body is the planes' box where pos places them, relative to the
-    # entity's origin -- never the stale size copy.
+def test_the_mesh_bounds_define_body_shape_relative_to_origin():
+    # The body is its triangles' box, relative to the entity's origin --
+    # never the stale size copy.
     prop = _prop((10.0, 20.0, 30.0))
-    brush = _convex_body_brush(prop, [5.0, 20.0, 27.0], [15.0, 30.0, 33.0])
+    brush = _mesh_body_brush(prop, [5.0, 20.0, 27.0], [15.0, 30.0, 33.0])
 
     half, offset = Soma._shape_from_brush(prop, brush)
 
     assert tuple(half.tolist()) == (5.0, 5.0, 3.0)
     assert tuple(offset.tolist()) == (0.0, 5.0, 0.0)
+
+
+def test_a_box_body_is_its_pos_and_size():
+    prop = _prop((10.0, 20.0, 30.0))
+    brush = {'pos': [10.0, 24.0, 30.0], 'size': [8.0, 8.0, 4.0],
+             '_physics_body': True, '_physics_entity': prop,
+             '_collision_mode': 'aabb'}
+
+    half, offset = Soma._shape_from_brush(prop, brush)
+
+    assert tuple(half.tolist()) == (4.0, 4.0, 2.0)
+    assert tuple(offset.tolist()) == (0.0, 4.0, 0.0)
 
 
 def test_clear_releases_all_body_state():
@@ -366,7 +375,7 @@ def test_body_reports_its_shape_from_the_packed_row():
     world = _world()
     prop = _prop()
     prop.pos = [10.0, 20.0, 30.0]
-    brush = _convex_body_brush(prop, [-5.0, 0.0, -3.0], [5.0, 10.0, 3.0])
+    brush = _mesh_body_brush(prop, [-5.0, 0.0, -3.0], [5.0, 10.0, 3.0])
     body = world.register_body(prop, brush)
 
     # Bounds (-5,0,-3)..(5,10,3): full extent (10, 10, 6), centre (0, 5, 0);

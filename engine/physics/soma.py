@@ -17,8 +17,6 @@ import numpy as np
 import glm
 
 from ..change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, touch
-from ..brush_placement import world_box
-from .. import mesh_columns
 from ..spatial import SIM_TIER_KEY, TIER_DISTANT, TIER_NEAR, cells_of_points
 from ..spatial_grid import SpatialGrid
 from . import api
@@ -147,9 +145,9 @@ class PhysicsBody:
         #: Registered or re-registered since the rows were last packed: its
         #: descriptor is taken as it is, not carried over.
         self._fresh = True
-        #: A body whose Collision Shape is Mesh: its model's triangles as
-        #: engine.mesh_columns reads them, and where the body was when they
-        #: were taken. None for a box (AABB), which is every other body.
+        #: A body whose Collision Shape is Mesh: its model's triangles as the
+        #: world's prepare_mesh made them ready (WORLD_QUERIES), and where the
+        #: body was when they were taken. None for a box (AABB), which is every other body.
         self._mesh = None
         self._mesh_origin = (0.0, 0.0, 0.0)
 
@@ -411,6 +409,10 @@ class Soma:
     #: or less bounces by its full ``bounciness``; between the two the bounce
     #: fades linearly.
     HEAVY_MASS = api.HEAVY_MASS
+    #: The contract's (:data:`engine.physics.PUSH_SCALE`).
+    PUSH_SCALE = api.PUSH_SCALE
+    #: Every one of the contract's game rules (:data:`engine.physics.GAME_RULES`).
+    rules = frozenset(api.GAME_RULES)
     #: A rebound slower than this (units per second) is not a bounce: the
     #: body settles instead of chattering on the floor.
     MIN_BOUNCE_SPEED = 60.0
@@ -425,7 +427,8 @@ class Soma:
         """The share of impact speed a body keeps when it bounces.
 
         *bounciness* (0..1) is what the author asked for; *mass* takes it away,
-        to nothing at :data:`HEAVY_MASS`. Scalars or arrays.
+        to nothing at :data:`HEAVY_MASS`. Scalars or arrays: the contract's
+        :func:`engine.physics.restitution`, vectorised.
         """
         bounciness = np.clip(np.asarray(bounciness, dtype=np.float32), 0.0, 1.0)
         mass = np.asarray(mass, dtype=np.float32)
@@ -595,12 +598,17 @@ class Soma:
 
     @staticmethod
     def _shape_from_brush(entity, brush):
-        # The body is the brush's derived box (brush_placement) -- an angled
-        # brush's planes, not its pos/size copy. Still a box: a true-shape
-        # body is Stage 2e.
-        box = world_box(brush)
-        center = np.asarray(box[0:3], dtype=np.float32)
-        half = np.asarray(box[3:6], dtype=np.float32)
+        # The body is its box, from the body brush alone (BODY_BRUSH): a
+        # mesh's triangles' bounds, otherwise pos and size. Still a box: a
+        # true-shape body is Stage 2e.
+        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+        if bounds:
+            lo = np.asarray(bounds[0], dtype=np.float32)
+            hi = np.asarray(bounds[1], dtype=np.float32)
+            center, half = (lo + hi) * 0.5, (hi - lo) * 0.5
+        else:
+            center = np.asarray(brush.get('pos') or (0.0, 0.0, 0.0), dtype=np.float32)
+            half = np.asarray(brush.get('size') or (64.0, 64.0, 64.0), dtype=np.float32) * 0.5
         origin = np.asarray(
             getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32
         )
@@ -623,7 +631,7 @@ class Soma:
         if brush.get('_collision_mode') == 'mesh':
             # Collision Shape: Mesh. Other bodies meet this one's actual
             # surface (see _pair_columns), not the box around it.
-            body._mesh = mesh_columns.prepare(brush.get('_mesh_triangles'))
+            body._mesh = self.spatial_grid.prepare_mesh(brush.get('_mesh_triangles'))
             origin = getattr(entity, 'pos', (0.0, 0.0, 0.0))
             body._mesh_origin = (float(origin[0]), float(origin[1]), float(origin[2]))
 
@@ -1961,7 +1969,7 @@ class Soma:
             origin = body._mesh_origin
             shift = (float(now[0]) - origin[0], float(now[1]) - origin[1],
                      float(now[2]) - origin[2])
-            b, t = mesh_columns.column(body._mesh, x[at], z[at], shift)
+            b, t = self.spatial_grid.mesh_columns(body._mesh, x[at], z[at], shift)
             bottom[at], top[at] = b, t
         return bottom, top
 
@@ -2561,8 +2569,8 @@ class Soma:
                 self._position[x_rows, 0] += x_dir * (overlap_x[use_x] + 0.5)
                 self._position[z_rows, 2] += z_dir * (overlap_z[use_z] + 0.5)
 
-                target_x = np.abs(player_velocity[0]) / self._mass[x_rows] * 0.85
-                target_z = np.abs(player_velocity[2]) / self._mass[z_rows] * 0.85
+                target_x = np.abs(player_velocity[0]) / self._mass[x_rows] * self.PUSH_SCALE
+                target_z = np.abs(player_velocity[2]) / self._mass[z_rows] * self.PUSH_SCALE
                 self._velocity[x_rows, 0] = x_dir * np.maximum(
                     target_x, np.abs(self._velocity[x_rows, 0]))
                 self._velocity[z_rows, 2] = z_dir * np.maximum(

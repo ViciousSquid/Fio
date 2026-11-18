@@ -7,7 +7,10 @@ package exports:
   (``api``), with what crosses it: :data:`BODY_BRUSH`, :data:`BODY_PROPERTIES`
   and :data:`WORLD_QUERIES`
 * the game's rules a physics honours: :data:`SV_GRAVITY`, :data:`HEAVY_MASS`,
-  :data:`CRUSH_DAMAGE`, and :func:`world_gravity`
+  :data:`CRUSH_DAMAGE`, :data:`PUSH_SCALE`, :func:`restitution`,
+  :func:`world_gravity`, and :data:`GAME_RULES` / :func:`physics_rules`
+* bookkeeping for a solver that does not keep it: :class:`SupportGraph`,
+  :class:`CellTracker`
 * the registry: :func:`register_physics`, :func:`create_physics`,
   :func:`select_physics`, :func:`available_physics`, :data:`DEFAULT_PHYSICS`
 
@@ -22,9 +25,10 @@ and helpers from :mod:`engine.physics.soma`.
 """
 
 from .api import (
-    BODY_BRUSH, BODY_PROPERTIES, CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS,
-    PHYSICS_EVENTS, SV_GRAVITY, WORLD_QUERIES, Body, NoPhysics, Physics,
-    world_gravity)
+    BODY_BRUSH, BODY_PROPERTIES, CRUSH_DAMAGE, GAME_RULES, HEAVY_MASS,
+    NO_PHYSICS, PHYSICS_EVENTS, PUSH_SCALE, SV_GRAVITY, WORLD_QUERIES, Body,
+    NoPhysics, Physics, physics_rules, restitution, world_gravity)
+from .bookkeeping import CellTracker, SupportGraph
 from .registry import (
     DEFAULT_PHYSICS, available_physics, create_physics, physics_factory,
     register_physics, select_physics, selected_physics, unload_physics)
@@ -33,6 +37,8 @@ __all__ = [
     'Physics', 'Body', 'BODY_BRUSH', 'BODY_PROPERTIES', 'WORLD_QUERIES',
     'PHYSICS_EVENTS', 'NoPhysics', 'NO_PHYSICS',
     'SV_GRAVITY', 'HEAVY_MASS', 'CRUSH_DAMAGE', 'world_gravity',
+    'PUSH_SCALE', 'restitution', 'GAME_RULES', 'physics_rules',
+    'SupportGraph', 'CellTracker',
     'DEFAULT_PHYSICS', 'register_physics', 'create_physics', 'select_physics',
     'selected_physics', 'available_physics', 'physics_factory',
     'unload_physics',

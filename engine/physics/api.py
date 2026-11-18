@@ -20,6 +20,12 @@ source of truth, and a physics that
 snapshots it is wrong the moment a door opens. The engine never hands a
 physics the editor's brushes, the mover table or another system's internals.
 
+A solver fed shapes up front (Bullet and its kind) asks the same grid in
+those terms instead: :meth:`solid_shapes` once, rebuilding its static
+proxies whenever ``world_version`` changes, and each step :meth:`shape_pose`
+for the shapes that move (movers and doors). That is not a snapshot: the
+grid still says, every step, where every moving thing is.
+
 **Bodies are the engine's entities.** :meth:`Physics.rebuild` receives the
 body brushes the collision runtime derived (:data:`BODY_BRUSH`); the entity
 each one names stays the engine's object. A physics owns an awake body's
@@ -34,9 +40,18 @@ and journalled with :func:`engine.change_journal.touch`. Authored properties
 60 Hz tick. A physics may not block, and may not touch Qt or OpenGL.
 
 **Gameplay rules are the engine's.** What "heavy" means and what crushing
-costs are part of the game, not of a solver, so they are constants here
-(:data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`): a physics honours them, the
-engine applies them, and neither asks the other's class for a number.
+costs are part of the game, not of a solver, so they are values here
+(:data:`HEAVY_MASS`, :data:`CRUSH_DAMAGE`, :data:`PUSH_SCALE`,
+:func:`restitution`): a physics honours them, the engine applies them, and
+neither asks the other's class for a number. :data:`GAME_RULES` names each
+rule; a physics says which it honours with a ``rules`` attribute
+(:func:`physics_rules`), so one can be built a rule at a time. Soma honours
+them all.
+
+**Bookkeeping a solver does not keep.** Who rests on whom, waking what
+rests on a body that moves, and which bodies crossed a grid column are the
+contract's, not a solver's: :mod:`engine.physics.bookkeeping` keeps them
+for an implementation that feeds it its contacts and positions.
 
 Everything here is stdlib-only, so the contract can be imported, implemented
 and tested without NumPy, PyGLM or a running session.
@@ -48,6 +63,10 @@ from typing import (Any, Callable, Iterable, Mapping, Optional, Protocol,
 #: Quake 2's sv_gravity, in units per second squared, pulling down: the
 #: world's gravity until something changes it.
 SV_GRAVITY = 800.0
+
+#: The share of the player's speed a body it walks into is given (divided
+#: by the body's mass).
+PUSH_SCALE = 0.85
 
 #: Mass at and above which a body is heavy: the player cannot push or carry
 #: it -- it pushes the player instead, and crushes a player it drives into a
@@ -69,7 +88,13 @@ BODY_BRUSH = {
                        'origin and ``properties`` its authored material',
     'pos': '[x, y, z]: the collision box\'s centre in the world',
     'size': '[x, y, z]: the collision box\'s full extents',
-    '_collision_mode': "optional: how the box was derived ('aabb', ...)",
+    '_collision_mode': "optional: how the box was derived ('aabb', ...); "
+                       "'mesh' for Collision Shape: Mesh",
+    '_mesh_triangles': "'mesh' only: the model's triangles in the world, "
+                       "[((v0, v1, v2), normal), ...], where the entity's "
+                       "``pos`` is now: the surface other bodies meet",
+    '_mesh_bounds': "'mesh' only: ([lo x, y, z], [hi x, y, z]) of those "
+                    "triangles -- the collision box, in place of pos/size",
 }
 
 #: The authored entity properties a physics reads, with the default each has
@@ -123,7 +148,59 @@ WORLD_QUERIES = {
     'has_line_of_sight(start, end)': 'whether a segment is clear of the world',
     'water_brushes': 'the water volumes: brushes, not solid, never among the '
                      'rows above',
+    'world_version': 'changes when the set of solid shapes, or a shape\'s '
+                     'authored form, changes: ask solid_shapes again',
+    'solid_shapes()': '[(key, kind, data, centre, moves)]: every solid brush '
+                      'once. kind \'box\' (data: half extents), \'convex\' '
+                      '(its vertices) or \'mesh\' (its triangles), about its '
+                      'authored centre; moves: a mover or door',
+    'shape_pose(key)': '(centre, axis, angle_degrees): where that shape is '
+                       'now; None for a key the world no longer has',
+    'prepare_mesh(triangles)': 'a body\'s _mesh_triangles (BODY_BRUSH) made '
+                               'ready for mesh_columns, or None when none is '
+                               'usable (the body is then its box)',
+    'mesh_columns(mesh, x, z, shift)': '(bottom, top): that surface over each '
+                                       'point, moved by *shift* since it was '
+                                       'prepared; NaN where the point misses it',
 }
+
+
+#: The game's rules a physics honours, by name. A physics lists the ones it
+#: does in its ``rules`` attribute (:func:`physics_rules`).
+GAME_RULES = {
+    'heavy': 'a body of HEAVY_MASS or more is not pushed by the player; it '
+             'pushes the player instead, and does not bounce',
+    'push': 'a body the player walks into takes PUSH_SCALE of the player\'s '
+            'speed over its mass',
+    'restitution': 'a bounce keeps restitution(bounciness, mass) of the impact '
+                   'speed',
+    'crush': 'a heavy body that pins the player against a wall sets '
+             'player_crushed',
+    'rolls': 'a body that rolls turns by the distance it travels',
+    'topples': 'a body that topples goes over when knocked, then lies and '
+               'rolls across its length (physics.toppled)',
+    'resting_on': 'Body.resting_on names the body under it, and a body '
+                  'resting on one that moves is woken',
+    'events': 'drain_events reports PHYSICS_EVENTS while events_wanted',
+}
+
+
+def restitution(bounciness: float, mass: float) -> float:
+    """The share of impact speed a body keeps when it bounces: *bounciness*
+    (0..1) faded linearly by *mass*, whole at 1 or less, nothing at
+    :data:`HEAVY_MASS`."""
+    bounciness = min(1.0, max(0.0, float(bounciness)))
+    weight = min(1.0, max(0.0, (HEAVY_MASS - float(mass)) / (HEAVY_MASS - 1.0)))
+    return bounciness * weight
+
+
+def physics_rules(physics: Any) -> frozenset:
+    """The :data:`GAME_RULES` *physics* honours: its ``rules``, or all of
+    them for one that does not say (the contract asked for every one)."""
+    if not physics:
+        return frozenset()
+    rules = getattr(physics, 'rules', None)
+    return frozenset(GAME_RULES) if rules is None else frozenset(rules)
 
 
 #: What a physics reports through :meth:`Physics.drain_events`, as the engine
@@ -318,6 +395,7 @@ class NoPhysics:
     __slots__ = ()
 
     gravity = -SV_GRAVITY
+    rules = frozenset()
     time_scale = 1.0
     friction_scale = 1.0
     damping_scale = 1.0

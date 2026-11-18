@@ -512,6 +512,9 @@ class SpatialGrid:
         self._box_rows = _EMPTY_BOX_ROWS
         # The map's terrain, or a callable giving it (see set_terrain).
         self._terrain = None
+        # Bumped by populate/clear: half of world_version (shape queries).
+        self._generation = 0
+        self._shape_keys = {}
 
     def set_terrain(self, terrain):
         """The map's terrain, for :meth:`terrain_heights`: the terrain, a
@@ -540,6 +543,79 @@ class SpatialGrid:
         if terrain is None:
             return None
         return terrain.get_heights_at_safe(x, z)
+
+    # ------------------------------------------------------------------
+    # Shapes (WORLD_QUERIES): the world for a physics fed shapes up front
+    # ------------------------------------------------------------------
+
+    @property
+    def world_version(self):
+        """Changes whenever the set of solid shapes or any shape's authored
+        form changes (a populate, an edit): ask :meth:`solid_shapes` again
+        then. A mover or door moving does not change it (:meth:`shape_pose`)."""
+        return (self._generation, _placement.authored_generation)
+
+    def solid_shapes(self):
+        """Every solid brush once: ``[(key, kind, data, centre, moves)]``.
+
+        *key* is an opaque int for :meth:`shape_pose`; *centre* the shape's
+        authored centre, the origin *data* is given about. *kind* is
+        ``'box'`` (*data*: half extents), ``'convex'`` (*data*: its vertices)
+        or ``'mesh'`` (*data*: its triangles, three vertices each). *moves*:
+        a mover or door, whose pose changes in play."""
+        shapes = []
+        keyed = {}
+        for brush in self._all_solid:
+            box = _placement.authored_box(brush)
+            centre = (float(box[0]), float(box[1]), float(box[2]))
+            triangles = (brush.get('_mesh_triangles')
+                         if brush.get('_collision_mode') == 'mesh' else None)
+            convex = None if triangles is not None else _placement.shape_convex(brush)
+            if triangles is not None and len(triangles):
+                kind = 'mesh'
+                data = tuple(
+                    tuple(tuple(float(v[i]) - centre[i] for i in range(3)) for v in tri)
+                    for tri in (item[0] if hasattr(item[0][0], '__len__') else item
+                                for item in triangles))
+            elif convex is not None:
+                kind = 'convex'
+                local = convex.shape_box
+                data = tuple(tuple(float(p[i]) - local[i] for i in range(3))
+                             for p in convex.verts)
+            else:
+                kind = 'box'
+                data = (float(box[3]), float(box[4]), float(box[5]))
+            keyed[id(brush)] = brush
+            shapes.append((id(brush), kind, data, centre, _placement.is_dynamic(brush)))
+        self._shape_keys = keyed
+        return shapes
+
+    def shape_pose(self, key):
+        """``(centre, axis, angle_degrees)``: where a :meth:`solid_shapes`
+        shape is now, turned by *angle* about *axis* through *centre*; None
+        for a key the world no longer has."""
+        brush = self._shape_keys.get(key)
+        if brush is None:
+            return None
+        runtime = _placement.resolved_runtime(brush)
+        if runtime is None:
+            box = _placement.authored_box(brush)
+            return ((float(box[0]), float(box[1]), float(box[2])), (0.0, 1.0, 0.0), 0.0)
+        return ((float(runtime[0]), float(runtime[1]), float(runtime[2])),
+                (float(runtime[3]), float(runtime[4]), float(runtime[5])),
+                float(runtime[6]))
+
+    @staticmethod
+    def prepare_mesh(triangles):
+        """A physics body's ``_mesh_triangles`` made ready for
+        :meth:`mesh_columns`, or None when none is usable (WORLD_QUERIES)."""
+        return mesh_columns.prepare(triangles)
+
+    @staticmethod
+    def mesh_columns(mesh, x, z, shift=(0.0, 0.0, 0.0)):
+        """``(bottom, top)`` of a :meth:`prepare_mesh` surface over each point,
+        moved by *shift* since it was prepared; NaN where a point misses it."""
+        return mesh_columns.column(mesh, x, z, shift)
 
     def columns(self, rows, row, x, z):
         """``(bottom, top)``: the solid column of brush ``row[k]`` over each
@@ -597,6 +673,8 @@ class SpatialGrid:
         return bottom, top
 
     def clear(self):
+        self._generation += 1
+        self._shape_keys = {}
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
@@ -702,6 +780,8 @@ class SpatialGrid:
         and published in one assignment (:meth:`_build_los_rows`)."""
         # Buckets only: line of sight keeps the rows it has until the new ones
         # are published below.
+        self._generation += 1
+        self._shape_keys = {}
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
