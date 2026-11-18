@@ -128,6 +128,9 @@ def test_an_unhandled_exception_reaches_the_crash_log(tmp_path, monkeypatch):
 # Map format version
 # ---------------------------------------------------------------------------
 
+# editor.editor_state imports editor.things, which is PyQt-backed: the no-Qt
+# tier cannot import it.
+@pytest.mark.qt
 def test_a_map_from_a_newer_fio_is_refused():
     from editor.editor_state import EditorState
     from engine.brush_placement import MAP_VERSION
